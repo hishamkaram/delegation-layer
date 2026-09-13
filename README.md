@@ -50,7 +50,8 @@ conversation, and what `permission: read-only` means on the first adapter.
 
 A third is settled: the runtime was **redecided from Node to Go on 2026-09-13**, after a debate found
 the Node decision's stated reasons were factually wrong. The Go-over-Rust margin was then measured on
-the same machine — Go cross-compiled **6/6** targets in 6.5s with nothing installed, Rust **2/6** in
-58s (every non-Apple target needs a cross-linker) — though Rust's binaries are 5–7× smaller. It stays
-conditional on the implementation never importing C. See *Runtime — how the Node decision fell* in
+the same machine — on an **unprovisioned** machine Go cross-compiled **6/6** targets in 6.5s with
+nothing installed, Rust **2/6** in 58s (missing cross-linkers, not missing capability) — though
+Rust's binaries are 5–7× smaller. Confidence stays LOW: that advantage belongs to whoever builds
+releases, and users of this layer install a binary. See *Runtime — how the Node decision fell* in
 `DESIGN.md`.

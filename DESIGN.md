@@ -24,8 +24,9 @@
 > **The runtime was redecided on 2026-09-13, from Node/TypeScript to Go**, after a second debate
 > whose finding was that the Node decision's stated reasons were factually wrong — not that Node was
 > unworkable. The debate rated Go over Rust a weak, unmeasured preference; **it was then measured on
-> 2026-09-13 — Go cross-compiled 6/6 targets in 6.5s with nothing installed, Rust 2/6 in 58s — and
-> confidence moved LOW → MEDIUM.** See *Runtime — how the Node decision fell*.
+> 2026-09-13 — on an unprovisioned machine Go cross-compiled 6/6 targets in 6.5s with nothing
+> installed, Rust 2/6 in 58s (linkers, not capability). Confidence stays **LOW**: that strengthens one
+> premise without making it more important to a user who installs a binary.** See *Runtime — how the Node decision fell*.
 >
 > Diagrams: `diagrams/components.html` (system components) and `diagrams/lead-interface.html`
 > (how the lead AI talks to the layer) — **both regenerated 2026-09-13** against this revision.
@@ -1076,8 +1077,8 @@ and makes an HTTP surface a serialization layer later rather than a re-architect
 9. **pueue is the supervisor** — chosen over task-spooler after both were installed and tested here;
    the deciding margin was JSON status and output retrieval, not kill reach, which tied.
 10. **Go**, distributed as a static binary (Homebrew tap + `go install`). **Redecided 2026-09-13**,
-    reversing Node/TypeScript-on-npm. The margin over Rust is measured, not narrow (6/6 vs 2/6
-    cross-compiled targets); Node is third on evidence. See
+    reversing Node/TypeScript-on-npm. The margin over Rust is measured but narrow in importance
+    (6/6 vs 2/6 cross-compiled targets on an unprovisioned machine); Node is third on evidence. See
     *Runtime — how the Node decision fell*.
 11. **Config is intent, and an unsupported key fails the dispatch.** Never silently dropped; the
     `--allow-unsupported` escape hatch records a warning instead.
@@ -1163,6 +1164,12 @@ same six targets, same machine, `rustc -O` directly so no build tool is in the w
 | freebsd/amd64 | ✅ 2.6M | ❌ ``linking with `cc` failed`` |
 | **result** | **6 / 6, 6.5s total, nothing installed** | **2 / 6, 58.3s** |
 
+**Read that row precisely.** It says *"2/6 with the tools present on this machine"*, **not** "Rust
+supports 2/6 targets" — Rust supports all six; what was absent were linkers. And the 58.3s includes
+std downloads, so this is not a steady-state build-speed comparison. **What it measures is the first
+build on an unprovisioned machine, and nothing else** — not repeated releases, not provisioned CI,
+not whether the artifacts actually run on their targets, which was never tested.
+
 Rust reached only the two Apple targets, and only because Apple's own `cc` links both Mach-O
 architectures. Every non-Apple target needs a cross-linker — mingw-w64 for Windows, a musl/gnu
 toolchain or `cross`/Docker for Linux and FreeBSD. The std libraries downloaded fine; **linking is
@@ -1177,11 +1184,27 @@ the wall**, and it is per-platform-family, not per-triple.
   against Go's 2.6M with `-ldflags="-s -w"`. Roughly 5–7× smaller. For a binary pueue spawns per
   task, this is real but not load-bearing.
 
-**Effect on the decision:** the runtime debate graded this argument "a weak preference for fewer
-build prerequisites, not a measured claim of fewer failed releases". It is now measured — **6/6
-versus 2/6 out of the box** — so the confidence in Go moves from LOW to **MEDIUM**. The reversal
-condition is unchanged and still live: **if the implementation ever needs cgo, Go's advantage
-disappears** (verified above) and the choice becomes arbitrary again.
+**Effect on the decision: none. Confidence stays LOW, and the attempt to raise it was an error.**
+This measurement was taken back to the debate as round 4, with the explicit question "does this
+justify LOW → MEDIUM?". It does not, and the reasoning is worth keeping because it is the kind of
+mistake this document is prone to:
+
+> *"The confidence in one premise increased; its importance to this product did not automatically
+> increase."*
+
+The experiment measures a **first build on an unprovisioned machine**. It says nothing about
+provisioned release pipelines, repeated releases, or the binary-installing user — who, per this
+document's own distribution plan, never cross-compiles anything. Raising overall confidence on it
+conflated *"this premise is now better evidenced"* with *"the decision is better supported"*. The
+confidence was raised on 2026-09-13 and **reverted the same day**.
+
+**The reversal condition, also corrected — the earlier wording was too categorical.** "If the
+implementation ever needs cgo, Go's advantage disappears" overstates one experiment. What is
+established: a C-dependent cross-build failed with the tools present here, so **requiring C
+reintroduces target-toolchain provisioning** and narrows the gap. It does not establish that Go and
+Rust then have equal provisioning needs for every dependency set. The condition is also about the
+**dependency graph**, transitive dependencies included — not merely a flag or an `import "C"` in our
+own files.
 
 **The argument that killed Rust's case was the one that promoted it.** `pueue-lib` (0.31.1, pinned by
 pueue 4.0.4 itself) lets a Rust layer consume pueue's own types instead of re-deriving them from CLI
@@ -1190,11 +1213,27 @@ under this project's premise that writing code is cheap, that saving is worth li
 runtime compatibility guarantee: the installed `pueue` binary upgrades independently of anything we
 compile.
 
-**Honest confidence: MEDIUM, raised from LOW on 2026-09-13 by the measurement above.** The debate
-ruled LOW precisely because Go's positive case was unmeasured; it is now measured, and the margin is
-6/6 against 2/6. Choosing Rust is still not a *mistake* — the gap is provisioning, not capability,
-and Rust's binaries are 5–7× smaller — but it is no longer a free choice, and the document should
-stop describing the margin as "narrow". What remains firmest is Node third.
+**A third model, consulted blind, found the strongest Rust argument in the record.** `agy` was given
+the identical blind brief against a **pinned pre-ruling copy** of this document, reached the same
+ranking independently, and re-derived the false `claude-code-router` premise on its own — a third
+independent discovery of it. Its one novel point is **for Rust, and it comes from this document's own
+text**:
+
+> *"If `pueue` CLI supervision ever proves inadequate, falling back to process-tree containment
+> requires committing to Rust"* — citing the `processkit` entry above: *"It would commit the project
+> to Rust, or at least a Rust sidecar binary."*
+
+That is the escape hatch if decision 9 fails: a Rust layer absorbs it natively, a Go layer ships a
+Rust sidecar and maintains two toolchains. **It does not move the ranking** — `pueue kill` was tested
+here and the ceiling it hits is an OS limit no crate removes — but no debater raised it across four
+rounds, so it is recorded rather than left to be rediscovered.
+
+**Honest confidence: LOW.** Raised to MEDIUM on the strength of the cross-compilation measurement and
+**reverted the same day** — the measurement strengthened one premise without making that premise more
+important to this product. Go's advantage is real, measured, and confined to *building releases on an
+unprovisioned machine*; the users of this layer install a binary. Choosing Rust is not a mistake: the
+gap is provisioning rather than capability, and Rust's binaries are 5–7× smaller. What remains
+firmest is **Node third**.
 
 ## Explicitly not building in v1
 
@@ -1277,8 +1316,8 @@ by more discussion.
    Node/TypeScript and **its stated reasons were wrong**; see *Runtime — how the Node decision fell*
    below. Distribution is a static binary: Homebrew tap plus `go install`, the pattern already
    running for `ccr`. **Go's margin over Rust was measured on 2026-09-13: 6/6 targets cross-compiled
-   in 6.5s with nothing installed, against Rust's 2/6 in 58s** — still conditional on the
-   implementation staying cgo-free. Node is third on evidence.
+   in 6.5s with nothing installed, against Rust's 2/6 in 58s** — but only for building on an
+   unprovisioned machine, and narrowed if the dependency graph ever requires C. Node is third on evidence.
 
 ## Milestone plan
 
