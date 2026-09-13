@@ -21,6 +21,11 @@
 > control run): it is a real filesystem sandbox after all, but a `workspace-write` one, not
 > read-only. See *`--sandbox` measured*.
 >
+> **The runtime was redecided on 2026-09-13, from Node/TypeScript to Go**, after a second debate
+> whose finding was that the Node decision's stated reasons were factually wrong — not that Node was
+> unworkable. The margin over Rust is narrow and Node's third place is the firmest part of the
+> result. See *Runtime — how the Node decision fell*.
+>
 > Diagrams: `diagrams/components.html` (system components) and `diagrams/lead-interface.html`
 > (how the lead AI talks to the layer) — **both regenerated 2026-09-13** against this revision.
 
@@ -551,6 +556,12 @@ cooperation and nothing signalled:
 3. **CPU-time delta across polls.** `ps -o time`. Rising means something computes. Flat means
    blocked on I/O.
 
+**The `ps` lines above specify the observation, not the implementation.** Read them as "we need the
+descendant tree" and "we need CPU time", and get them from a library for the chosen runtime
+(`gopsutil` for Go) rather than by parsing `ps` output by hand. The distinction matters because an
+earlier draft's wording made a library look like a *runtime requirement*, which is not what any of
+this needs.
+
 Together they discriminate the cases that matter:
 
 | descendants | CPU | last event | diagnosis |
@@ -720,6 +731,21 @@ Two notes:
 no SIGTERM/SIGKILL escalation anywhere in this project. The component flagged as the riskiest thing
 we would build becomes a dependency that has already been through this exact bug.
 
+**Risk: `status --json` is not a promised stable contract, and this design leans on it.** The health
+ladder, admission and cancel all read pueue's JSON. But pueue's own `CHANGELOG.md:117` records a
+**task-state representation break** in 4.0.0, and `:132-133` records serialization and
+message-representation breaks. **[E2, surfaced by the runtime debate 2026-09-13.]** So:
+
+- **pin the supported pueue version range in `capabilities()`** and record the observed version in
+  `meta.json`, exactly as provider CLI versions are recorded;
+- **treat an unrecognised task-state shape as `undetermined`, never as a terminal outcome** — the
+  tri-state rule applies to the supervisor's output as much as to a worker's;
+- **re-probe on a pueue major upgrade** rather than assuming the parse still holds.
+
+This is runtime-independent: no language choice protects against an independently upgraded external
+binary changing its output. A typed Rust binding to `pueue-lib` pins what *we compile*, not what the
+user's installed `pueue` emits.
+
 **The one thing to test before adopting.** Issue **#188**: `pueue kill -c` signalled only *direct*
 children, leaving nested processes dangling. The `--children` flag was deprecated and removed in
 **v3.0.0 as part of redesigning process termination** — which suggests a proper process-group fix.
@@ -735,8 +761,11 @@ isolation — never against a live GUI session.
   that calls `pueue kill <id>` when a ceiling is crossed. Still no signalling.
 - the two-bounds distinction (watch bound detaches; task budget terminates)
 
-For the silence-diagnosis channels, use `psutil` (Python) or `systeminformation` (Node) rather than
-hand-rolled `ps` parsing.
+For the silence-diagnosis channels, the `ps` invocations in *Diagnosing silence* name the
+**observations required**, not the implementation. Obtain them through a library where one exists for
+the chosen runtime; hand-rolled `ps` output parsing is the fallback, not the plan. (An earlier draft
+said "use `psutil` (Python) or `systeminformation` (Node)" and was read as a Node requirement — it
+never was. With Go chosen, `gopsutil` is the equivalent.)
 
 **Honest trade-off:** a new runtime dependency — a Rust binary plus a daemon the user installs and
 keeps running. And pueue states it "is not designed to be a heavy-duty programmable task
@@ -1027,7 +1056,9 @@ and makes an HTTP surface a serialization layer later rather than a re-architect
 8. **Aider is out of scope**, so every worker returns a message and there is one collect path.
 9. **pueue is the supervisor** — chosen over task-spooler after both were installed and tested here;
    the deciding margin was JSON status and output retrieval, not kill reach, which tied.
-10. **Node / TypeScript**, distributed on npm.
+10. **Go**, distributed as a static binary (Homebrew tap + `go install`). **Redecided 2026-09-13**,
+    reversing Node/TypeScript-on-npm. The margin over Rust is narrow; Node is third on evidence. See
+    *Runtime — how the Node decision fell*.
 11. **Config is intent, and an unsupported key fails the dispatch.** Never silently dropped; the
     `--allow-unsupported` escape hatch records a warning instead.
 12. **`status` returns locations, not just state** — result path, transcript descriptor, session id —
@@ -1043,6 +1074,52 @@ and makes an HTTP surface a serialization layer later rather than a re-architect
     *execution with a control run*, which is the bar for anything safety-shaped.
 17. **`permission` gains `workspace-write`** — measured on `agy --sandbox` 2026-09-13. Containment
     and approval are separate axes; the table flattened them and that is how a wrong ✓ survived.
+
+### Runtime — how the Node decision fell
+
+**Decided 2026-09-12 as Node/TypeScript. Reversed 2026-09-13 after an adversarial review against
+Codex, three rounds.** Both debaters chose Go independently and blind. The reversal is recorded here
+in full because the original decision was not merely superseded — **its stated reasons were false**,
+and one of them had already propagated into a downstream document.
+
+**The premise that was wrong.** The 2026-09-12 entry justified Node with "claude-code-router is
+Node". It is **Go**, and always was: `go.mod` appears in its first commit (`e4cf29e`, 2026-07-08) and
+no `package.json` has ever existed in its history. **[E0, found independently by both debaters.]**
+
+**The premise that assumed too much.** "Distribution is npm" assumes a Node runtime on the target
+machine. All three target CLIs install as Homebrew **casks with `deps=None`** — `claude`, `codex` and
+`agy` are dependency-free native binaries. **[E0]** "Users who have Claude Code" does not imply
+"users who have Node".
+
+**What the debate did *not* find.** Node is not disqualified by size or startup — both were measured
+and both arguments died:
+
+| | measured |
+|---|---|
+| a Node single-executable embeds | **116M** — against `claude` 193M, `codex` 212M, `agy` 172M already installed |
+| startup, net of a 19ms process-spawn baseline | Node ~18ms · Go ~11ms · Rust ~5ms — **non-deciding**, and the comparison is between different programs anyway |
+
+**Why Node is third, on evidence rather than taste.** Its bundled route is Node SEA, whose own
+documentation marks it "Active development" and **excludes macOS x64 from current support and testing,
+and Alpine from regular CI**. **[E2]** That is the only named platform hole among the three
+candidates. If macOS x64 and Alpine are both out of scope, this reason weakens to "experimental".
+
+**Why Go over Rust, and how narrow it is.** One argument survives: a **cgo-free** Go build has fewer
+cross-build prerequisites — `CGO_ENABLED=0` targets every platform from one machine, where Rust wants
+a target and a linker per triple. **It is conditional**: cross-compiling *with* cgo needs a C
+cross-compiler, and rustup says extra tooling is "typically", not always, required. Neither side
+measured per-release reliability. **If the implementation ever needs cgo, this advantage is gone and
+the choice between Go and Rust is arbitrary.**
+
+**The argument that killed Rust's case was the one that promoted it.** `pueue-lib` (0.31.1, pinned by
+pueue 4.0.4 itself) lets a Rust layer consume pueue's own types instead of re-deriving them from CLI
+JSON — the one advantage no other option can copy. But it buys *avoiding hand-written decoders*, and
+under this project's premise that writing code is cheap, that saving is worth little. It was never a
+runtime compatibility guarantee: the installed `pueue` binary upgrades independently of anything we
+compile.
+
+**Honest confidence: LOW.** Go's positive case is one qualified preference. Choosing Rust instead
+would not be a mistake. What the evidence settles firmly is Node third, and the two corrections above.
 
 ## Explicitly not building in v1
 
@@ -1121,11 +1198,11 @@ by more discussion.
 
    *A leaning is now recorded where none was before, because measurement removed the reason there
    was none. The call is still the user's.*
-7. ~~Runtime and distribution~~ — **DECIDED 2026-09-12: Node / TypeScript.** It matches everything
-   already maintained around this: claude-code-router is Node, Claude Code plugins are Node/shell,
-   OpenCode ships a JS SDK client, and both Kimi CLI and Pi are TypeScript — so the eventual
-   integration is the cheapest of the options. Use `systeminformation` for the descendant-tree and
-   CPU-delta channels rather than hand-rolled `ps` parsing. Distribution is npm.
+7. ~~Runtime and distribution~~ — **REDECIDED 2026-09-13: Go.** The 2026-09-12 decision was
+   Node/TypeScript and **its stated reasons were wrong**; see *Runtime — how the Node decision fell*
+   below. Distribution is a static binary: Homebrew tap plus `go install`, the pattern already
+   running for `ccr`. **Go's margin over Rust is narrow and unmeasured** — one build-prerequisite
+   preference, conditional on the implementation staying cgo-free. Node is third on evidence.
 
 ## Milestone plan
 
@@ -1133,7 +1210,7 @@ Each step is falsifiable — it either works or teaches us the design is wrong, 
 
 **Two things block milestone 1**, both decisions rather than unknowns: open question 1 (*Task = one
 turn?*) and open question 6 (*`read-only` on `agy`*). Everything else it depends on is settled and
-tested: the supervisor (pueue, verified on this machine), the runtime (Node/TypeScript), the config
+tested: the supervisor (pueue, verified on this machine), the runtime (Go), the config
 model, the status payload, and the publication and admission protocols above.
 
 ### 1. Task record + the first adapter — `antigravity:print` *(pending open question 6)*
@@ -1239,3 +1316,10 @@ Only then. And only after that, and only if something remote needs to call in: A
 - Antigravity CLI sandbox docs — https://antigravity.google/docs/cli/sandbox/
 - Adversarial review of this design, 2026-09-13 (Claude vs Codex, 2 rounds, ruling OVERTURNED with an
   amended motion upheld) — `/tmp/codex-debate/delegation-layer/design-ready-for-m1-20260913-115839/DEBATE.md`
+- Runtime debate, 2026-09-13 (Claude vs Codex, 3 rounds, Go > Rust > Node, confidence LOW) —
+  `/tmp/codex-debate/delegation-layer/runtime-node-go-rust-20260913-164415/DEBATE.md`
+- Node single-executable applications (platform support) — https://nodejs.org/api/single-executable-applications.html
+- cgo and cross-compilation — https://pkg.go.dev/cmd/cgo#hdr-Using_cgo_with_the_go_command
+- rustup cross-compilation — https://rust-lang.github.io/rustup/cross-compilation.html
+- `pueue-lib` on crates.io — https://crates.io/crates/pueue-lib
+- goreleaser config in use for `ccr` — `claude-code-router/.goreleaser.yaml`

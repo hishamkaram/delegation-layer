@@ -25,6 +25,10 @@ to the layer through five shell commands. Per-task config is provider-agnostic *
 permission, effort — where an unsupported or unverified key fails the dispatch rather than being
 silently dropped.
 
+Runtime: **Go**, shipped as a static binary — because every CLI this layer drives is itself a
+dependency-free native binary, and assuming a language runtime on the user's machine is the one
+mistake that is discovered after the work rather than before.
+
 ## What has actually been tested
 
 Marked as such throughout. Live on macOS 26.6.2 / arm64:
@@ -43,3 +47,8 @@ Where a doc and a test disagreed, the test won and the document says so.
 
 Both block milestone 1, and both are in *Open questions*: whether a Task is one turn or a
 conversation, and what `permission: read-only` means on the first adapter.
+
+A third is settled but narrow: the runtime was **redecided from Node to Go on 2026-09-13**, after a
+debate found the Node decision's stated reasons were factually wrong. Go's margin over Rust is one
+build-prerequisite preference and is conditional on the implementation staying cgo-free. See
+*Runtime — how the Node decision fell* in `DESIGN.md`.
