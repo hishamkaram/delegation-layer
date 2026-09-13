@@ -2,11 +2,12 @@
 
 A durable single-machine agent delegation layer: a frontier model leads, cheaper agents from provider CLIs do the donkey work, and **a worker's turn survives its launcher.**
 
-**Status: Phase 0 (Foundation) implemented; review, acceptance, and CI verification pending.**
-The `delegate` CLI executable exists supporting `help` and `version` commands, accompanied by a reproducible recurring engineering gate (`make check`). Remaining task orchestration commands (`dispatch`, `status`, `collect`, `cancel`, `logs`) and multi-provider adapters are planned for subsequent phases.
+**Status: Phase 0 accepted (PR #1 merged); Phase 1 candidate undergoing corrective implementation and independent acceptance.**
+The foundation CLI (`delegate`) is available. The durable protocol and its compiled `protocolfixture` test harness are being verified against the required 49-case fault matrix. Phase 1 is not accepted until code review, unit/race tests, live CLI tests and Linux/macOS CI pass. Task orchestration commands and all three native provider adapters follow in subsequent phases.
 
 - [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) — Normative, authoritative execution plan for all phases.
 - [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) — Phase-by-phase implementation tracking and progress.
+- [`docs/PROTOCOL-FIXTURE.md`](docs/PROTOCOL-FIXTURE.md) — Finite protocol test commands, ownership and fault observations.
 - [`DESIGN.md`](DESIGN.md) — Architectural design, verified provider facts, decisions taken, and historical measurements.
 - `diagrams/components.html` — System components architecture.
 - `diagrams/lead-interface.html` — Interaction model between the calling lead and the delegation layer.

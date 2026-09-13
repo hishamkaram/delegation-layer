@@ -2,7 +2,7 @@
 
 > Working name only; the directory is trivially renamable. Written 2026-09-12.
 >
-> **Status: Phase 0 (Foundation) implemented; review, acceptance, and CI verification pending.** The comprehensive execution plan in
+> **Status: Phase 0 (Foundation) accepted (PR #1 merged); Phase 1 (Durable Protocol) candidate; review, root acceptance, and CI verification pending.** The comprehensive execution plan in
 > [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) and [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md)
 > represent the authoritative normative roadmap and supersede conflicting milestones below.
 > Historical measurements and debate records are preserved as historical context.
