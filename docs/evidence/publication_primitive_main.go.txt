@@ -1,0 +1,61 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+)
+
+// Two concurrent publishers, each with its OWN unique temp file, both racing to
+// commit the terminal record. link(2) must let exactly one win.
+func main() {
+	dir, _ := os.MkdirTemp("", "pub")
+	defer os.RemoveAll(dir)
+	target := filepath.Join(dir, "result.txt")
+
+	var wg sync.WaitGroup
+	won := make([]bool, 8)
+	errs := make([]error, 8)
+	start := make(chan struct{})
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			f, err := os.CreateTemp(dir, "result-*.tmp")
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			fmt.Fprintf(f, "answer from publisher %d\n", i)
+			f.Sync()
+			name := f.Name()
+			f.Close()
+			<-start
+			err = os.Link(name, target) // atomic create-if-absent
+			os.Remove(name)
+			if err == nil {
+				won[i] = true
+			} else {
+				errs[i] = err
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	n := 0
+	for _, w := range won {
+		if w {
+			n++
+		}
+	}
+	b, _ := os.ReadFile(target)
+	fmt.Printf("winners=%d (must be exactly 1)\ncontent=%q\n", n, string(b))
+	fmt.Printf("one loser's error: %v\n", errs[func() int { for i := range won { if !won[i] { return i } }; return 0 }()])
+	// second attempt after the fact
+	f2, _ := os.CreateTemp(dir, "late-*.tmp")
+	fmt.Fprint(f2, "LATE OVERWRITE")
+	f2.Close()
+	fmt.Printf("late link over committed result: %v\n", os.Link(f2.Name(), target))
+}
