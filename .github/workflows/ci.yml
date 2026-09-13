@@ -38,6 +38,9 @@ jobs:
       - name: Run gate checks
         run: make check
 
+      - name: Run protocol acceptance
+        run: make acceptance-protocol
+
   gate-macos:
     name: Gate (macOS macos-15)
     runs-on: macos-15
@@ -65,3 +68,6 @@ jobs:
 
       - name: Run gate checks
         run: make check
+
+      - name: Run protocol acceptance
+        run: make acceptance-protocol
