@@ -1,7 +1,8 @@
 # Implementation plan and milestones
 
-**Status: agreed plan, nothing built.** Supersedes the *Milestone plan* section of
-[`DESIGN.md`](../DESIGN.md), which remains the architecture of record.
+**Status: Phase 0 (Foundation) implemented; review, acceptance, and CI verification pending.** The comprehensive execution plan in
+[`docs/EXECUTION-PLAN.md`](EXECUTION-PLAN.md) is the authoritative normative phase handoff and execution plan.
+This document tracks implementation details and preserves historical debate context.
 
 ## How this plan was produced
 
@@ -110,25 +111,28 @@ Packages are created when behaviour arrives.
 
 ### Tracked files at Phase 0 exit
 
+> [!NOTE]
+> *(Historical/Superseded initial sketch)*: The table below was an initial proposal during the three-way debate. The authoritative plan in [`docs/EXECUTION-PLAN.md`](EXECUTION-PLAN.md) defines Phase 6 for private release (rather than Phase 5), scopes agents to `.codex/agents/reviewer.toml` and `.codex/agents/researcher.toml`, maintains private foundation status without a premature `LICENSE` file, and establishes the complete `scripts/` verification suite.
+
 | File | Purpose |
 |---|---|
 | `go.mod` | module `github.com/hishamkaram/delegation-layer`, `go 1.27.0` declared minimum. No dependencies yet, so no `go.sum`. |
-| `Makefile` | The gate. `tools fmt fmt-check vet lint test-race build vuln check`. |
+| `Makefile` | The gate. `tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions test-race build smoke-cli vuln check`. |
 | `.golangci.yml` | `default: none`, then the explicit set defended below. |
 | `.github/workflows/ci.yml` | Calls `make check` on **Linux and macOS**, action SHAs pinned. |
-| `.goreleaser.yaml` | Written now, validated by `goreleaser check` in the gate, **not released until Phase 5**. |
+| `.goreleaser.yaml` | Written now, validated by `goreleaser check` in the gate, candidate configuration for **Phase 6 private release**. |
 | `AGENTS.md` | The one authoritative instruction file: invariants, package ownership, Go rules, the verification gate, the prohibition on signalling. |
 | `agents/_data/delegation-invariants.md` | Tri-state discipline, at-most-once launch, the publication predicate, the two-bounds rule, fail-closed config. |
 | `agents/_data/adapter-contract.md` | The eight operations and what each may **not** do — chiefly that `collect` never executes a turn. |
 | `agents/_data/code-quality-floor.md` | The lint categories and the local gate. |
-| `.codex/config.toml` | Codex project rules. No unrestricted-sandbox default and no 12-thread setting — neither prevents a failure here. |
-| `.codex/agents/go-implementer.toml`, `go-reviewer.toml` | Two roles, scoped to assigned packages. |
+| `.codex/config.toml` | Codex project rules. Strict sandboxing: read-only, no blanket approvals, no parallelism overrides. |
+| `.codex/agents/reviewer.toml`, `.codex/agents/researcher.toml` | Two scoped read-only agents: code review, verification gate checks, and diff inspection (`reviewer.toml`); codebase exploration, documentation analysis, and constraint checking (`researcher.toml`). |
 | `skills/add-an-adapter/SKILL.md` | The one recurring multi-step procedure this project has. |
-| `scripts/verify-gates.sh` | Proves the gate **rejects**. See the exit criterion. |
+| `scripts/` (`install-tools.sh`, `check-tool-versions.sh`, `smoke-cli.sh`, `verify-gates.sh`, `verify-tooling-regressions.sh`) | Proves the gate **rejects**, verifies tool versions, and tests CLI behaviour. See the exit criterion. |
 | `cmd/delegate/main.go` + `main_test.go` | A real entry point: help, version, strict rejection of unknown commands. Exercises the whole gate on day one. |
-| `.gitignore`, `LICENSE`, `README.md`, `docs/` | — |
+| `.gitignore`, `README.md`, `docs/` | Foundational repository metadata and documentation. |
 
-`CONTRIBUTING.md` and `SECURITY.md` wait until the repo is public.
+`CONTRIBUTING.md`, `LICENSE`, and `SECURITY.md` wait until the repo is public.
 
 ### Linters
 
@@ -177,35 +181,43 @@ watcher, observe **zero** stop requests, then collect the naturally completed ta
 
 ### Tool versions
 
-`golangci-lint`, `gofumpt` and `govulncheck` are **not installed on this machine**; `go`, `goreleaser`,
-`gh` and `jq` are. `make tools` installs the three at pinned versions into `./bin` via `go install`,
-so CI and laptop run identical binaries. Start from the reference's pins (`golangci-lint` 2.12.2,
-`govulncheck` 1.1.4) and **verify them against Go 1.27.1 during Phase 0** — that compatibility is
-unverified. Never `@latest`; record the version that actually worked.
+`golangci-lint` (2.13.2), `gofumpt` (0.12.0), `govulncheck` (1.8.0), and `goreleaser` (2.18.1) are
+pinned and installed into `./bin` via `make tools` with verified SHA-256 archive manifests, so CI
+and local development run identical binaries. `golangci-lint` 2.13.2 was adopted because Go 1.27
+support began in 2.13.0. `GOTOOLCHAIN=local` is strictly enforced.
 
 ### `make check`, in order
 
-```
-check: tool-versions fmt-check vet lint test-race build vuln
+```makefile
+check:
+	$(MAKE) tool-versions
+	$(MAKE) fmt-check
+	$(MAKE) config-check
+	$(MAKE) vet
+	$(MAKE) lint
+	$(MAKE) verify-gates
+	$(MAKE) test-race
+	$(MAKE) build
+	$(MAKE) smoke-cli
+	$(MAKE) vuln
 ```
 
-Cheapest and most deterministic first, so a failure returns in seconds rather than after the race
-detector. Implemented as **sequential recipe invocations, not prerequisites**, so `make -j check`
-cannot reorder them. Missing tools fail loudly rather than being skipped. CI calls this same target
-rather than re-listing the steps, so the two cannot drift.
+Cheapest and most deterministic first. Implemented as **separate sequential recursive-make recipe
+lines, not a prerequisite list**, so `make -j check` cannot reorder them. Missing tools fail loudly
+rather than being skipped. CI calls this exact same target.
 
-### Exit criterion
+### Exit criterion (Phase 0 complete)
 
 ```bash
-make tools && make check && bash scripts/verify-gates.sh
+make tools && make check
 ```
 
-`make check` exiting zero proves only that the gate **accepts** compliant code. `verify-gates.sh`
-proves it **rejects**: each known-bad fixture must compile, fail with the **expected diagnostic**,
-and have a corrected counterpart that passes — otherwise a missing tool or an unrelated error could
-masquerade as enforcement. Fixtures: a `.Signal(` call (`forbidigo`), a tri-state `switch` missing
-the unknown case **and carrying a `default:` branch** (`exhaustive`), an ignored error (`errcheck`).
-No fixture executes signalling behaviour. It runs in the recurring gate, not only at setup.
+`make check` exiting zero proves that the gate **accepts** compliant code and **rejects**
+non-compliant code via `verify-gates.sh`: each known-bad fixture compiles and fails with its
+**expected diagnostic**, and has a corrected counterpart that passes. Fixtures: `Process.Signal`,
+`cmd.Process.Kill`, `syscall.Kill`, `syscall.Setsid`, `exec.CommandContext`, nonzero `Cmd.WaitDelay`,
+bare filesystem error, `_ = f.Sync()`, and tri-state enum missing `Unknown`. No fixture executes
+signalling behaviour. It runs in the recurring gate on every check.
 
 ---
 
@@ -311,9 +323,12 @@ No fixture executes signalling behaviour. It runs in the recurring gate, not onl
     separate fields inside the effective config**, even though `permission` stays the public
     vocabulary — that flattening is how a wrong `✓` survived once already.
 
-11. **`delegate-run` contains no goroutines.** It forks one child and waits. Stated as a rule so
-    "every goroutine has an owner" never needs enforcing. A goroutine appearing there is a design
-    change requiring a decision entry.
+11. **Bounded event loop for `delegate-run`.** (Amended 2026-09-13 per `EXECUTION-PLAN.md`).
+    The runner owns a small fixed set of goroutines for stdout capture, stderr capture, Wait,
+    and deadline/supervisor observation. The root runner is independent of dispatcher/watcher
+    cancellation. Every owned worker has a documented completion channel; no anonymous background
+    retry loops. Direct signals (`os.Process.Signal/Kill`, `syscall.Kill`), `exec.CommandContext`,
+    and nonzero `WaitDelay` remain prohibited.
 
 12. No package-level mutable state except sentinel errors. `context.Context` on everything that
     shells out. Wrap with `%w`. Never log and return the same error. **`delegate-run` never invokes
@@ -328,102 +343,68 @@ measurement — the publication lock.
 
 ## Phases
 
-Every exit command is **proposed future work**, not a command claimed to pass today. Each phase also
-re-runs `make check`.
+The normative phase sequence is defined in [`docs/EXECUTION-PLAN.md`](EXECUTION-PLAN.md).
+Every exit command for future phases is **proposed future work**, not claimed to pass today. Each phase also re-runs `make check`.
 
-### Phase 1 — the durable protocol, with no external CLI
+### Phase 0 — Foundation (implemented; review, acceptance, and CI verification pending)
 
-- **Goal:** make duplicate launch and false publication hard to *express*, before any paid execution
-  exists.
-- **Built:** `internal/task` (values and pure rules, no I/O), `internal/taskdir` (the file protocol,
-  leases, create-if-absent commit, sealing), `internal/config` (strict validation), the tri-state
-  types, submission permits, `provider.start`, outcome reduction, identity-bound recovery.
-- **Exit:** `go test -race -count=1 -v ./internal/task ./internal/taskdir ./internal/config`
-  — concurrent dispatch, every submission crash boundary, concurrent publisher/collector, torn
-  records, the health-ladder precedence table. **Every ambiguous admission case must produce zero
-  additional submissions.** Fault injection at named boundaries *plus* helper processes that exit at
-  checkpoints, so locks release naturally rather than by an injected error.
-- **Not yet:** adapters, pueue, budgets, live tests.
+- **Goal:** Ship a real `delegate` executable supporting `help` and `version`, and a recurring engineering gate that proves acceptance and rejection.
+- **Built:** `cmd/delegate` (`main.go`, `main_test.go`), `Makefile`, `.golangci.yml`, `.goreleaser.yaml`, `.github/workflows/ci.yml`, `scripts/verify-gates.sh`, `scripts/smoke-cli.sh`, `scripts/install-tools.sh`, `scripts/check-tool-versions.sh`, `AGENTS.md`, contracts in `agents/_data/`, `skills/add-an-adapter/SKILL.md`, and scoped `.codex/` configuration.
+- **Exit:** `make tools && make check` passing locally and in CI, with all 9 negative/positive fixtures verified by `scripts/verify-gates.sh` and smoke tests verified by `scripts/smoke-cli.sh`.
 
-### Phase 2 — a supervised task completing, against fakes
+### Phase 1 — the durable protocol, with no external CLI (PLANNED)
+
+- **Goal:** make duplicate launch and false publication hard to *express*, before any paid execution exists.
+- **Built:** `internal/task` (values and pure rules, no I/O), `internal/taskdir` (the file protocol, leases, create-if-absent commit, sealing), `internal/config` (strict validation), the tri-state types, submission permits, `provider.start`, outcome reduction, identity-bound recovery.
+- **Exit:** `go test -race -count=1 -v ./internal/task ./internal/taskdir ./internal/config` and `make acceptance-protocol`.
+
+### Phase 2 — a supervised task completing, against fakes (PLANNED)
 
 - **Goal:** prove the executable and the subprocess boundaries before provider quirks arrive.
-- **Built:** `cmd/delegate-run`; `internal/pueue` (subprocess client, versioned JSON decoding);
-  `dispatch`, `status`, `collect`, `cancel`, `logs`; the wall budget; watch detachment; the fake
-  provider and fake supervisor; publication recovery.
-- **Exit:** `make acceptance-supervisor` — hermetic subprocess tests plus an **isolated** pueue
-  suite (dedicated config, state directory and endpoint; acceptance setup **fails** if isolation
-  cannot be established). Proves `--escape` handling, label reconciliation, dispatcher exit followed
-  by successful collection, repeated collection executing **no** provider turn, and watch expiry
-  producing **zero** stop requests. Stop routing is checked against the fake supervisor; the live
-  portion never tests signal behaviour.
-- **Not yet:** paid providers, token caps, release automation.
+- **Built:** `cmd/delegate-run`; `internal/pueue` (subprocess client, versioned JSON decoding); `dispatch`, `status`, `collect`, `cancel`, `logs`; the wall budget; watch detachment; the fake provider and fake supervisor; publication recovery.
+- **Exit:** `make acceptance-supervisor` with isolated real pueue daemon.
 
-`logs` lands here, earlier than `DESIGN.md` suggests: its descriptor is part of the recovery
-interface, so it is cheap to establish alongside the supervisor seam.
-
-### Phase 3 — the first adapter, `antigravity:print`
+### Phase 3 — the first adapter, `antigravity:print` (PLANNED)
 
 - **Goal:** survive `agy`'s success-shaped timeout failure without publishing an answer.
-- **Built:** all eight operations for `agy`; version-qualified capabilities; `--print-timeout` tied
-  to the budget; `permission: workspace-write` → `--sandbox`; `read-only` declared **unsupported**;
-  brief delivered on **stdin, closed** (measured above); inline-response parsing; usage accounting;
-  conversation and transcript descriptors.
-- **Exit:** `make acceptance-agy` — fixtures plus required live cases: a successful answer; a
-  deliberate print timeout; `read-only` refused **before launch**; workspace-write containment; and
-  collection performing no new turn. The timeout case asserts **no `result.txt` despite exit 0 and
-  `SUCCESS`**, preserves the stderr marker, and labels timed-out usage unreliable. Brief delivery is
-  demonstrated with quotes, newlines and shell metacharacters. Missing prerequisites **fail** this
-  target rather than skipping.
-- **Not yet:** Codex, automatic resume, transcript-database decoding.
+- **Built:** all eight operations for `agy`; version-qualified capabilities; `--print-timeout` tied to the budget; `permission: workspace-write` → `--sandbox`; `read-only` declared **unsupported**; brief delivered on stdin, closed; inline-response parsing; usage accounting; conversation and transcript descriptors.
+- **Exit:** `make acceptance-agy` — fixtures plus required live cases.
 
-### Phase 4 — the second adapter, Codex: the falsification test
+### Phase 4 — the second adapter, Codex (PLANNED)
 
 - **Goal:** prove the interface is not shaped around `agy`.
-- **Built:** `internal/provider/codex` — `codex exec`, JSONL/session parsing, output-file staging
-  (under `raw/`, never straight to `result.txt`), `read-only` mapping, resume availability,
-  transcript discovery bound to the actual session.
-- **Exit:** `make acceptance-codex`, **plus a structural assertion**: the phase's `git diff --stat`
-  touches only `internal/provider/codex/**`, one line of `cmd/*/main.go`, and tests. A required
-  change in `internal/taskdir` or `internal/pueue` means the interface was wrong — found for the
-  price of one adapter. Continuation creates a **new task**; the original result stays
-  byte-identical.
-- **Not yet:** Claude background mode, OpenCode, Gemini, Kimi, Pi, router aliases.
+- **Built:** `internal/provider/codex` — `codex exec`, JSONL/session parsing, output-file staging (under `raw/`, never straight to `result.txt`), `read-only` mapping, resume availability, transcript discovery bound to the actual session.
+- **Exit:** `make acceptance-codex`.
 
-### Phase 5 — consumption and release
+### Phase 5 — the third adapter, Claude print (PLANNED)
 
-- **Goal:** prove a lead can consume the public surface, then ship both binaries.
-- **Built:** a subprocess-only fan-out/collection acceptance test; stable machine-readable CLI
-  payloads; recovery and operator docs; the goreleaser run; archives containing **both** binaries
-  plus checksums; Homebrew formula with a `pueue` dependency; documented `go install` for both
-  commands.
-- **Exit:** `make acceptance-release && make acceptance-install VERSION=...` — consumer acceptance,
-  both provider targets, `goreleaser check`, snapshot packaging, checksum validation, and an
-  **executable smoke test on each supported OS family**. *Cross-compilation alone is not runtime
-  acceptance, and snapshot packaging is not shipment* — completion requires a published version
-  installed cleanly through the advertised channels.
+- **Goal:** provide a strictly contained read-only Claude adapter before release.
+- **Built:** `internal/provider/claude` — `claude --print`, stream-json parsing, strict tool restriction (`Read,Glob,Grep`), empty MCP config, `dontAsk` permission mode, disabled hooks, session resumption.
+- **Exit:** `make acceptance-claude`.
 
-### Phase 6 — port `claude-codex-duo`'s Phase 2 fan-out
+### Phase 6 — consumer acceptance and private release (PLANNED)
 
-`DESIGN.md` milestone 3. Exit: the review skill runs against the layer **with no edit to the skill**.
-Note Phase 5's consumer-shaped test does **not** prove this port works; it proves the surface is
-consumable.
+- **Goal:** prove consumer acceptance across all three adapters and ship private v0.1.0 release assets.
+- **Built:** mixed-provider consumer acceptance, GoReleaser platform packaging (`delegate` and `delegate-run`), checksum manifests, private authenticated Homebrew tap formula generator.
+- **Exit:** `make acceptance-release` and authenticated release verification.
 
-### Phase 7 — the lead loop
+### Phase 7 — port `claude-codex-duo` Phase 2 fan-out (PLANNED)
 
-`DESIGN.md` milestone 4. Only then, and only after that, A2A over HTTP if something remote needs to
-call in.
+- **Goal:** opt-in transport for the existing duo review runner with unmodified skill.
+- **Built:** `CODEX_RUN_TRANSPORT=delegate`, sidecar translation, gate-compatible claim release, exact-ID attach/cancel.
+- **Exit:** real review Phase 2 fanout test with byte-identical `SKILL.md`.
 
-### Not a phase — the OpenCode spike
+### Phase 8 — resumable declared-plan workflow (PLANNED)
 
-`DESIGN.md` 2b carries two possibly-broken upstream issues. A timeboxed spike whose only output is a
-note in the design. Never on the critical path.
+- **Goal:** execute a declared DAG of tasks with bounded concurrency and detached coordinator.
+- **Built:** `delegate workflow start|status|collect|resume`, manifest validation, epoch-fenced coordinator, immutable aggregate publication.
+- **Exit:** multi-provider fork/join execution and detached recovery.
 
 ---
 
 ## Ordering and blockers
 
-`0 → 1 → 2 → 3 → 4 → 5 → 6 → 7`. The spike runs in parallel.
+`0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8`. All phases proceed sequentially.
 
 **`DESIGN.md` says open questions 1 and 6 both block milestone 1. This plan disagrees on scope**, and
 the disagreement is the main structural change: the design fuses the task record, the publisher and

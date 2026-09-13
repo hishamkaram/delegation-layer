@@ -1,57 +1,37 @@
 # Delegation layer
 
-Design notes for a durable multi-provider agent delegation layer: a frontier model leads, cheaper
-agents from any provider CLI do the donkey work, and **a worker's turn survives its launcher.**
+A durable single-machine agent delegation layer: a frontier model leads, cheaper agents from provider CLIs do the donkey work, and **a worker's turn survives its launcher.**
 
-**Status: design, not built.** No code exists yet.
+**Status: Phase 0 (Foundation) implemented; review, acceptance, and CI verification pending.**
+The `delegate` CLI executable exists supporting `help` and `version` commands, accompanied by a reproducible recurring engineering gate (`make check`). Remaining task orchestration commands (`dispatch`, `status`, `collect`, `cancel`, `logs`) and multi-provider adapters are planned for subsequent phases.
 
-- [`DESIGN.md`](DESIGN.md) — the whole thing. Verified facts per provider CLI, the design, decisions
-  taken, invariants carried over, open questions, milestone plan.
-- `diagrams/components.html` — system components. Open the file in a browser.
-- `diagrams/lead-interface.html` — how the lead AI talks to the layer.
+- [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) — Normative, authoritative execution plan for all phases.
+- [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) — Phase-by-phase implementation tracking and progress.
+- [`DESIGN.md`](DESIGN.md) — Architectural design, verified provider facts, decisions taken, and historical measurements.
+- `diagrams/components.html` — System components architecture.
+- `diagrams/lead-interface.html` — Interaction model between the calling lead and the delegation layer.
 
-Both diagrams are self-contained HTML, generated from the `.json` specs beside them. The
-`visual-check.*` files are the browser-evidence receipts for those renders.
+## Core Invariants and Decisions
 
-## The short version
+- **Resumption-by-Reference & At-Most-Once Launch**: An agent turn is non-deterministic and costly to repeat. A task is strictly **one provider turn**. Resuming a conversation allocates a **new task** bound to the recorded session handle, preserving original identity, result, and launch count.
+- **Sole Terminal Authority (`outcome.json`)**: A worker's finished answer is a payload file (`result.txt`), but `outcome.json` is the sole terminal authority. The existence of a payload alone is pending; only an `outcome.json` referencing the payload digest seals completion. Terminal payloads and outcomes cannot be overwritten, and collection never launches, retries, or resumes paid work.
+- **Durable Filesystem Commit**: Staging uses cryptographically unique temporary files in the destination directory, closed and synced before hard-linking into place, followed by a directory sync barrier. Remote, tmpfs, or unsupported filesystems lacking reliable barrier primitives are refused.
+- **Supervisor-Owned Stopping**: `pueue` owns process supervision. Direct process signals (`os.Process.Signal`, `os.Process.Kill`, `syscall.Kill`), process group manipulation (`setsid`, `setpgid`, `pkill`, `killall`), `exec.CommandContext`, and nonzero `WaitDelay` are strictly prohibited. Budget supervision uses a bounded runner event loop with explicit ownership.
+- **Execution Deadlines**: Tasks enforce a wall-clock execution deadline. Stop-request, stop-acknowledgment, and termination-observed are separate status facts. Token/dollar ceilings and raw argv are rejected before admission.
+- **Input Delivery**: The prompt brief is delivered via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv, and provider commands are never shell-reparsed.
+- **Provider Scope (v1 Private Release)**:
+  - `antigravity:print`: Required candidate profile for `workspace-write` within validated roots, pending adapter-phase live acceptance receipts. Read-only is unsupported; `--sandbox` does not imply read-only.
+  - `codex:exec`: Required candidate profile for `read-only`, pending adapter-phase live acceptance receipts.
+  - `claude:print`: Required candidate profile for `read-only` via restricted built-in tools, pending adapter-phase live acceptance receipts.
+  All three provider profiles are required before the v1 release.
+- **Private Delivery**: The repository and release assets remain private. Authenticated GitHub tooling is required for installation; public repository distribution, public Homebrew taps, and unauthenticated `go install` are out of scope.
+- **Declared Workflow**: Multi-task coordination consumes an explicit declared plan DAG; it never autonomously infers or invents new tasks.
 
-Durability for LLM work is **resumption-by-reference + at-most-once launch + idempotent
-collection**, not replay — an agent turn is non-deterministic, side-effecting and costly to repeat,
-so a durable-execution engine's core primitive is unavailable to us.
+## Historical Measurements Preserved
 
-From that: a worker's finished answer is a **file**, and the file's existence is the completion
-signal. `pueue` is the supervisor, so we never write process supervision of our own. The lead talks
-to the layer through five shell commands. Per-task config is provider-agnostic **intent** — model,
-permission, effort — where an unsupported or unverified key fails the dispatch rather than being
-silently dropped.
-
-Runtime: **Go**, shipped as a static binary — because every CLI this layer drives is itself a
-dependency-free native binary, and assuming a language runtime on the user's machine is the one
-mistake that is discovered after the work rather than before.
-
-## What has actually been tested
-
-Marked as such throughout. Live on macOS 26.6.2 / arm64:
-
-- **pueue 4.0.4 vs task-spooler 1.0.4** — kill reach, JSON status, output retrieval
-- **the macOS process-tree ceiling** — a `setsid`-escaped descendant survives every supervisor
-  tested; this is an OS limit, not a tool defect
-- **`agy` 1.2.1** — the `--print-timeout` failure shape (exit 0 + `SUCCESS` + empty response), the
-  result JSON, transcript storage
-- **`agy` 1.2.2 `--sandbox`** — a real filesystem sandbox, `workspace-write` rather than read-only,
-  established with a control run
-
-Where a doc and a test disagreed, the test won and the document says so.
-
-## Two decisions still open
-
-Both block milestone 1, and both are in *Open questions*: whether a Task is one turn or a
-conversation, and what `permission: read-only` means on the first adapter.
-
-A third is settled: the runtime was **redecided from Node to Go on 2026-09-13**, after a debate found
-the Node decision's stated reasons were factually wrong. The Go-over-Rust margin was then measured on
-the same machine — on an **unprovisioned** machine Go cross-compiled **6/6** targets in 6.5s with
-nothing installed, Rust **2/6** in 58s (missing cross-linkers, not missing capability) — though
-Rust's binaries are 5–7× smaller. Confidence stays LOW: that advantage belongs to whoever builds
-releases, and users of this layer install a binary. See *Runtime — how the Node decision fell* in
-`DESIGN.md`.
+Marked as such throughout documentation and tests:
+- **Supervisor comparison**: `pueue 4.0.4` vs `task-spooler 1.0.4` — kill reach, JSON status, output retrieval.
+- **macOS process-tree ceiling**: A `setsid`-escaped descendant survives every supervisor tested; this is an OS limit, not a tool defect.
+- **`agy` 1.2.1**: The `--print-timeout` failure shape (exit 0 + `SUCCESS` + empty response), result JSON, transcript storage.
+- **`agy` 1.2.2 `--sandbox`**: Filesystem sandbox behavior, `workspace-write` rather than read-only.
+- **Go toolchain & cross-compilation**: Go 1.27.1 cross-compiles all 4 target platforms (`darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64`) with CGO_ENABLED=0 in seconds without external linkers.
