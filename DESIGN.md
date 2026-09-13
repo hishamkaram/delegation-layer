@@ -731,20 +731,36 @@ Two notes:
 no SIGTERM/SIGKILL escalation anywhere in this project. The component flagged as the riskiest thing
 we would build becomes a dependency that has already been through this exact bug.
 
-**Risk: `status --json` is not a promised stable contract, and this design leans on it.** The health
-ladder, admission and cancel all read pueue's JSON. But pueue's own `CHANGELOG.md:117` records a
-**task-state representation break** in 4.0.0, and `:132-133` records serialization and
-message-representation breaks. **[E2, surfaced by the runtime debate 2026-09-13.]** So:
+**Risk: `status --json` is not a promised stable contract — and a pueue upgrade WIPES THE QUEUE.**
+The health ladder, admission and cancel all read pueue's JSON. Its 4.0.0 changelog, read directly,
+is blunter than "the format may change" **[E2, verified 2026-09-13]**:
 
-- **pin the supported pueue version range in `capabilities()`** and record the observed version in
-  `meta.json`, exactly as provider CLI versions are recorded;
+> *"Refactor internal task state. Some task variables have been moved into the `TaskStatus` enum"* —
+> marked **Breaking**
+> *"This completely breaks pre v4.0 states"* · *"The Pueue daemon needs to be restarted and the state
+> will be wiped clean"*
+> *"Switch protocol message representation, completely breaking backwards compatibility"* — **Breaking**
+
+**The second line is the serious one and it is not a parsing problem.** This design's entire premise
+is that a worker's turn survives its launcher. A supervisor upgrade that wipes the queue defeats that
+directly: every in-flight task disappears from the supervisor while its task directory still says
+`running`. That is precisely the `admission-unknown` state — we hold a `submit.json`, the label is
+gone, and absence proves nothing. The tri-state rule already handles it correctly, **but only if we
+never read a wiped queue as "not admitted".**
+
+So:
+
+- **pin the supported pueue version range in `capabilities()`** and record the observed `pueue
+  --version` in `meta.json`, exactly as provider CLI versions are recorded;
 - **treat an unrecognised task-state shape as `undetermined`, never as a terminal outcome** — the
   tri-state rule applies to the supervisor's output as much as to a worker's;
+- **treat a version change between dispatch and collect as `admission-unknown` for every in-flight
+  task**, not as evidence they never ran;
 - **re-probe on a pueue major upgrade** rather than assuming the parse still holds.
 
-This is runtime-independent: no language choice protects against an independently upgraded external
-binary changing its output. A typed Rust binding to `pueue-lib` pins what *we compile*, not what the
-user's installed `pueue` emits.
+Runtime-independent: no language choice protects against an independently upgraded external binary
+changing its output or clearing its state. A typed Rust binding to `pueue-lib` pins what *we
+compile*, not what the user's installed `pueue` emits.
 
 **The one thing to test before adopting.** Issue **#188**: `pueue kill -c` signalled only *direct*
 children, leaving nested processes dangling. The `--children` flag was deprecated and removed in
@@ -765,7 +781,9 @@ For the silence-diagnosis channels, the `ps` invocations in *Diagnosing silence*
 **observations required**, not the implementation. Obtain them through a library where one exists for
 the chosen runtime; hand-rolled `ps` output parsing is the fallback, not the plan. (An earlier draft
 said "use `psutil` (Python) or `systeminformation` (Node)" and was read as a Node requirement — it
-never was. With Go chosen, `gopsutil` is the equivalent.)
+never was. With Go chosen the equivalent is **`github.com/shirou/gopsutil/v4`** — v4.26.8,
+BSD-3-Clause, whose `process` subpackage supplies both `children` and `cpu_times` on macOS, Linux,
+FreeBSD, OpenBSD and Windows, which is exactly channels 2 and 3. **[E2, verified 2026-09-13.]**)
 
 **Honest trade-off:** a new runtime dependency — a Rust binary plus a daemon the user installs and
 keeps running. And pueue states it "is not designed to be a heavy-duty programmable task
@@ -1097,19 +1115,42 @@ and both arguments died:
 | | measured |
 |---|---|
 | a Node single-executable embeds | **116M** — against `claude` 193M, `codex` 212M, `agy` 172M already installed |
+| *(caveat)* | this answers "is 116M prohibitive here" (no). It is **not** a like-for-like implementation comparison — a trivial Go build of this shape came out at **2.7M** |
 | startup, net of a 19ms process-spawn baseline | Node ~18ms · Go ~11ms · Rust ~5ms — **non-deciding**, and the comparison is between different programs anyway |
 
-**Why Node is third, on evidence rather than taste.** Its bundled route is Node SEA, whose own
-documentation marks it "Active development" and **excludes macOS x64 from current support and testing,
-and Alpine from regular CI**. **[E2]** That is the only named platform hole among the three
-candidates. If macOS x64 and Alpine are both out of scope, this reason weakens to "experimental".
+**Why Node is third, on evidence rather than taste.** Its bundled route is Node SEA, **Stability 1.1
+— Active development**, whose own platform-support section reads **[E2, verified 2026-09-13]**:
 
-**Why Go over Rust, and how narrow it is.** One argument survives: a **cgo-free** Go build has fewer
-cross-build prerequisites — `CGO_ENABLED=0` targets every platform from one machine, where Rust wants
-a target and a linker per triple. **It is conditional**: cross-compiling *with* cgo needs a C
-cross-compiler, and rustup says extra tooling is "typically", not always, required. Neither side
-measured per-release reliability. **If the implementation ever needs cgo, this advantage is gone and
-the choice between Go and Rust is arbitrary.**
+> *"Single-executable support is tested regularly on CI only on the following platforms: Windows ·
+> macOS (arm64 only; **x64 is not currently supported and is skipped in the tests**) · Linux (all
+> distributions supported by Node.js **except Alpine** and all architectures except s390x)"*
+
+Note "not currently supported", not merely untested. That is the only named platform hole among the
+three candidates. If macOS x64 and Alpine are both out of scope, this reason weakens to
+"experimental" — which is still a reason, just a weaker one.
+
+**Why Go over Rust, and how narrow it is.** One argument survives, and it was tested here rather than
+cited **[E0, 2026-09-13]**. A trivial Go program cross-compiled from this darwin/arm64 machine to
+**six targets — darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64, freebsd/amd64 —
+in 6.5 seconds total, with no toolchain installed for any of them**, producing 2.6–2.8M binaries.
+
+The cgo condition was tested too, and it behaves exactly as the caveat says:
+
+| build | result |
+|---|---|
+| `CGO_ENABLED=0`, any target | succeeds |
+| `CGO_ENABLED=1`, **no** `import "C"` anywhere | **succeeds** — cgo is simply unused |
+| `CGO_ENABLED=1`, with a real `import "C"` | **fails**: `# runtime/cgo` · `gcc_amd64.S:27:8: error: unknown token in expression` |
+
+So the advantage is real and it is precisely conditional: **it holds until something actually imports
+C**, not merely until `CGO_ENABLED` is set. Note also that `net` and `os/user` pull in cgo on some
+platforms unless built with the `netgo`/`osusergo` tags — worth pinning in the build config early.
+
+**The comparison is one-sided and this document should say so.** No Rust toolchain is installed here,
+so the Rust half was never measured — rustup documents that a target install plus "typically" a
+linker is required, and that is a citation, not a test. Neither side measured per-release
+reliability. **If the implementation ever needs cgo, this advantage is gone and the choice between Go
+and Rust is arbitrary.**
 
 **The argument that killed Rust's case was the one that promoted it.** `pueue-lib` (0.31.1, pinned by
 pueue 4.0.4 itself) lets a Rust layer consume pueue's own types instead of re-deriving them from CLI
@@ -1322,4 +1363,6 @@ Only then. And only after that, and only if something remote needs to call in: A
 - cgo and cross-compilation — https://pkg.go.dev/cmd/cgo#hdr-Using_cgo_with_the_go_command
 - rustup cross-compilation — https://rust-lang.github.io/rustup/cross-compilation.html
 - `pueue-lib` on crates.io — https://crates.io/crates/pueue-lib
+- pueue 4.0.0 breaking changes (state wipe, TaskStatus enum, protocol) — https://github.com/Nukesor/pueue/blob/v4.0.4/CHANGELOG.md
+- `gopsutil` v4 — https://pkg.go.dev/github.com/shirou/gopsutil/v4
 - goreleaser config in use for `ccr` — `claude-code-router/.goreleaser.yaml`
