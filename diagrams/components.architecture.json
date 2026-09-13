@@ -1,0 +1,328 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Delegation Layer — System Components",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1310,
+      610
+    ],
+    "views": [
+      {
+        "id": "dispatch",
+        "label": "Dispatch path",
+        "focus": [
+          "lead",
+          "layer",
+          "adapters",
+          "pueued",
+          "publisher"
+        ],
+        "note": "A brief becomes a supervised delegate-run, which invokes one provider CLI."
+      },
+      {
+        "id": "publication",
+        "label": "Publication path",
+        "focus": [
+          "publisher",
+          "codex",
+          "altclis",
+          "claudecc",
+          "tasks"
+        ],
+        "note": "delegate-run keeps the raw output, then publishes only on adapter-confirmed success."
+      },
+      {
+        "id": "providers",
+        "label": "Provider surface",
+        "focus": [
+          "publisher",
+          "codex",
+          "altclis",
+          "claudecc",
+          "ccr"
+        ],
+        "note": "Every CLI reaches the layer through one adapter shape and one publisher."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "lead",
+      "type": "external",
+      "label": "Lead AI",
+      "sublabel": "frontier model",
+      "tag": "restartable",
+      "pos": [
+        60,
+        110
+      ],
+      "size": [
+        165,
+        66
+      ]
+    },
+    {
+      "id": "layer",
+      "type": "backend",
+      "label": "Delegation Layer",
+      "sublabel": "Node / TypeScript",
+      "pos": [
+        320,
+        110
+      ],
+      "size": [
+        170,
+        66
+      ]
+    },
+    {
+      "id": "adapters",
+      "type": "backend",
+      "label": "Provider Adapters",
+      "sublabel": "intent → flags · predicate",
+      "pos": [
+        580,
+        110
+      ],
+      "size": [
+        200,
+        66
+      ]
+    },
+    {
+      "id": "pueued",
+      "type": "messagebus",
+      "label": "pueued",
+      "sublabel": "supervisor daemon",
+      "tag": "owns every job",
+      "pos": [
+        900,
+        110
+      ],
+      "size": [
+        165,
+        66
+      ]
+    },
+    {
+      "id": "tasks",
+      "type": "database",
+      "label": "Task Store",
+      "sublabel": "tasks/<id>/ on disk",
+      "tag": "submit · raw · result · exits",
+      "pos": [
+        250,
+        300
+      ],
+      "size": [
+        240,
+        76
+      ]
+    },
+    {
+      "id": "publisher",
+      "type": "backend",
+      "label": "delegate-run",
+      "sublabel": "our publisher process",
+      "tag": "supervises nothing",
+      "pos": [
+        700,
+        300
+      ],
+      "size": [
+        300,
+        62
+      ]
+    },
+    {
+      "id": "codex",
+      "type": "external",
+      "label": "Codex CLI",
+      "sublabel": "exec --sandbox read-only",
+      "pos": [
+        470,
+        500
+      ],
+      "size": [
+        165,
+        60
+      ]
+    },
+    {
+      "id": "altclis",
+      "type": "external",
+      "label": "Antigravity · Kimi",
+      "sublabel": "Pi · OpenCode — print modes",
+      "pos": [
+        675,
+        500
+      ],
+      "size": [
+        165,
+        60
+      ]
+    },
+    {
+      "id": "claudecc",
+      "type": "external",
+      "label": "Claude Code",
+      "sublabel": "-p print · --bg",
+      "pos": [
+        880,
+        500
+      ],
+      "size": [
+        165,
+        60
+      ]
+    },
+    {
+      "id": "ccr",
+      "type": "cloud",
+      "label": "claude-code-router",
+      "sublabel": "GLM · DeepSeek · MiniMax",
+      "pos": [
+        1085,
+        500
+      ],
+      "size": [
+        165,
+        60
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Single host — no server, no cross-machine tasks",
+      "wraps": [
+        "layer",
+        "adapters",
+        "pueued",
+        "tasks",
+        "publisher",
+        "codex",
+        "altclis",
+        "claudecc",
+        "ccr"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "dispatch-brief",
+      "from": "lead",
+      "to": "layer",
+      "label": "dispatch brief",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "pick-mode",
+      "from": "layer",
+      "to": "adapters",
+      "label": "select mode",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "drive-pueue",
+      "from": "adapters",
+      "to": "pueued",
+      "label": "add --escape --label",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "record-intent",
+      "from": "layer",
+      "to": "tasks",
+      "label": "submit.json before the call",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "spawn-publisher",
+      "from": "pueued",
+      "to": "publisher",
+      "label": "spawns · owns · kills",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "publish",
+      "from": "publisher",
+      "to": "tasks",
+      "label": "raw/ first, then result.txt by rename",
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "right",
+      "labelDy": -37
+    },
+    {
+      "id": "run-codex",
+      "from": "publisher",
+      "to": "codex",
+      "label": "invokes · waits",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "run-alt",
+      "from": "publisher",
+      "to": "altclis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "run-claude",
+      "from": "publisher",
+      "to": "claudecc",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "base-url-swap",
+      "from": "claudecc",
+      "to": "ccr",
+      "label": "ANTHROPIC_BASE_URL",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": 54
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Durability",
+      "items": [
+        "pueued owns every job, so a worker outlives the lead",
+        "result.txt is published by atomic rename — its existence IS the completion signal",
+        "Admission is tri-state: retry needs proof of non-submission, never a missing id"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Publication and recovery",
+      "items": [
+        "delegate-run preserves raw output BEFORE deciding, so publication is recoverable",
+        "Publish only on adapter-confirmed success — never on the exit code, never on 'terminal'",
+        "provider.exit and publish.exit are separate: a pending publish is not a failure"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Intent and providers",
+      "items": [
+        "The lead sets intent: model · permission · effort — adapters own the spelling",
+        "An unsupported OR unverified config key fails the dispatch, never silently dropped",
+        "GLM · DeepSeek · MiniMax need no adapter — they are base-URL swaps"
+      ]
+    }
+  ]
+}

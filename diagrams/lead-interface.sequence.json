@@ -1,0 +1,339 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "How the Lead AI Talks to the Layer",
+    "viewBox": [
+      1360,
+      700
+    ],
+    "column_fit": "spread",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "dispatch",
+        "label": "Dispatch and return",
+        "focus": [
+          "lead",
+          "cli",
+          "tasks",
+          "pueued",
+          "publisher"
+        ],
+        "note": "submit.json is written before pueued is called; dispatch then returns a task id."
+      },
+      {
+        "id": "publish",
+        "label": "Publication",
+        "focus": [
+          "publisher",
+          "worker",
+          "tasks"
+        ],
+        "note": "delegate-run keeps the raw output, then renames only on adapter-confirmed success."
+      },
+      {
+        "id": "collect",
+        "label": "Poll and collect",
+        "focus": [
+          "lead",
+          "cli",
+          "tasks",
+          "pueued"
+        ],
+        "note": "Every command is a fresh process reading durable files."
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "lead",
+      "type": "external",
+      "label": "Lead AI"
+    },
+    {
+      "id": "cli",
+      "type": "backend",
+      "label": "delegate CLI"
+    },
+    {
+      "id": "tasks",
+      "type": "database",
+      "label": "Task Store"
+    },
+    {
+      "id": "pueued",
+      "type": "messagebus",
+      "label": "pueued"
+    },
+    {
+      "id": "publisher",
+      "type": "backend",
+      "label": "delegate-run"
+    },
+    {
+      "id": "worker",
+      "type": "external",
+      "label": "Worker CLI"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 306,
+      "label": "Dispatch — returns immediately"
+    },
+    {
+      "from": 308,
+      "to": 362,
+      "label": "Work and publish — the lead need not be alive for any of this"
+    },
+    {
+      "from": 364,
+      "to": 558,
+      "label": "Poll and collect"
+    },
+    {
+      "from": 560,
+      "to": 618,
+      "label": "Cancel — pueue sends the only signal"
+    }
+  ],
+  "messages": [
+    {
+      "id": "m-dispatch",
+      "from": "lead",
+      "to": "cli",
+      "y": 180,
+      "label": "delegate dispatch --brief brief.md",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m-submit",
+      "from": "cli",
+      "to": "tasks",
+      "y": 208,
+      "label": "brief.md + task.json + submit.json",
+      "variant": "emphasis",
+      "note": "submit.json is fsynced BEFORE the supervisor is called, so its absence proves nothing ran."
+    },
+    {
+      "id": "m-add",
+      "from": "cli",
+      "to": "pueued",
+      "y": 236,
+      "label": "pueue add --escape --label <task id>",
+      "variant": "default"
+    },
+    {
+      "id": "m-spawn",
+      "from": "pueued",
+      "to": "publisher",
+      "y": 264,
+      "label": "spawns and owns delegate-run",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m-taskid",
+      "from": "cli",
+      "to": "lead",
+      "y": 292,
+      "label": "task id, then exit",
+      "variant": "return"
+    },
+    {
+      "id": "m-invoke",
+      "from": "publisher",
+      "to": "worker",
+      "y": 320,
+      "label": "invokes the provider, waits",
+      "variant": "emphasis",
+      "note": "delegate-run forks the worker and waits on it. It supervises nothing and signals nothing."
+    },
+    {
+      "id": "m-publish",
+      "from": "publisher",
+      "to": "tasks",
+      "y": 348,
+      "label": "raw/ first, then rename on confirmed success",
+      "variant": "emphasis",
+      "note": "Publication needs adapter-confirmed success, a non-empty answer and no abort marker. Otherwise publish.reject."
+    },
+    {
+      "id": "m-status",
+      "from": "lead",
+      "to": "cli",
+      "y": 376,
+      "label": "delegate status <id>",
+      "variant": "default"
+    },
+    {
+      "id": "m-ladder",
+      "from": "cli",
+      "to": "tasks",
+      "y": 404,
+      "label": "result.txt? publish.reject? which exit?",
+      "variant": "default"
+    },
+    {
+      "id": "m-check-pueue",
+      "from": "cli",
+      "to": "pueued",
+      "y": 432,
+      "label": "pueue status --json — the label proves admission",
+      "variant": "default"
+    },
+    {
+      "id": "m-status-out",
+      "from": "cli",
+      "to": "lead",
+      "y": 460,
+      "label": "{state, source, idle, paths}",
+      "variant": "return"
+    },
+    {
+      "id": "m-collect",
+      "from": "lead",
+      "to": "cli",
+      "y": 488,
+      "label": "delegate collect <id>",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m-read",
+      "from": "cli",
+      "to": "tasks",
+      "y": 516,
+      "label": "read result.txt, else re-judge raw/",
+      "variant": "default",
+      "note": "collect never executes a turn. If the publisher died mid-decision, the same predicate runs again over the same bytes."
+    },
+    {
+      "id": "m-answer",
+      "from": "cli",
+      "to": "lead",
+      "y": 544,
+      "label": "the worker's answer",
+      "variant": "return"
+    },
+    {
+      "id": "m-cancel",
+      "from": "lead",
+      "to": "cli",
+      "y": 572,
+      "label": "delegate cancel <id>",
+      "variant": "dashed"
+    },
+    {
+      "id": "m-kill",
+      "from": "cli",
+      "to": "pueued",
+      "y": 600,
+      "label": "pueue kill <task id>",
+      "variant": "dashed"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "cli",
+      "from": 174,
+      "to": 298,
+      "type": "backend"
+    },
+    {
+      "participant": "tasks",
+      "from": 202,
+      "to": 214,
+      "type": "database"
+    },
+    {
+      "participant": "pueued",
+      "from": 230,
+      "to": 242,
+      "type": "messagebus"
+    },
+    {
+      "participant": "publisher",
+      "from": 258,
+      "to": 362,
+      "type": "backend"
+    },
+    {
+      "participant": "worker",
+      "from": 314,
+      "to": 340,
+      "type": "external"
+    },
+    {
+      "participant": "tasks",
+      "from": 342,
+      "to": 354,
+      "type": "database"
+    },
+    {
+      "participant": "cli",
+      "from": 370,
+      "to": 550,
+      "type": "backend"
+    },
+    {
+      "participant": "tasks",
+      "from": 398,
+      "to": 410,
+      "type": "database"
+    },
+    {
+      "participant": "pueued",
+      "from": 426,
+      "to": 438,
+      "type": "messagebus"
+    },
+    {
+      "participant": "tasks",
+      "from": 510,
+      "to": 522,
+      "type": "database"
+    },
+    {
+      "participant": "cli",
+      "from": 566,
+      "to": 606,
+      "type": "backend"
+    },
+    {
+      "participant": "pueued",
+      "from": 594,
+      "to": 606,
+      "type": "messagebus"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "The whole interface",
+      "items": [
+        "Five commands: dispatch · status · logs · collect · cancel",
+        "Config is intent — model, permission, effort — resolved per provider",
+        "status returns WHERE to look: result path, transcript, session id"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Why it survives the lead",
+      "items": [
+        "dispatch returns a task id and exits — nothing is held open",
+        "Every command is a fresh process reading durable files",
+        "The lead can die between any two commands and lose nothing"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "What the lead decides",
+      "items": [
+        "Four outcomes: usable · recoverable · terminal · undetermined",
+        "idle_seconds is reported; the threshold belongs to the lead",
+        "admission-unknown is surfaced, never auto-resubmitted — only the lead may relaunch"
+      ]
+    }
+  ]
+}
