@@ -1104,13 +1104,23 @@ in full because the original decision was not merely superseded — **its stated
 and one of them had already propagated into a downstream document.
 
 **The premise that was wrong.** The 2026-09-12 entry justified Node with "claude-code-router is
-Node". It is **Go**, and always was: `go.mod` appears in its first commit (`e4cf29e`, 2026-07-08) and
-no `package.json` has ever existed in its history. **[E0, found independently by both debaters.]**
+Node". It is **Go**, and always was: `go.mod` appears in its first commit (`e4cf29e`, 2026-07-08, declaring `go 1.25.10`; the current
+tree says 1.25.13) and no `package.json` has ever existed in its reachable history — the repository
+is not shallow, so "always" holds for all history present. **[E0, found independently by both debaters.]**
 
 **The premise that assumed too much.** "Distribution is npm" assumes a Node runtime on the target
-machine. All three target CLIs install as Homebrew **casks with `deps=None`** — `claude`, `codex` and
-`agy` are dependency-free native binaries. **[E0]** "Users who have Claude Code" does not imply
-"users who have Node".
+machine. On this machine all three CLIs are native binaries installed as Homebrew casks with no
+runtime dependency — `claude-code@latest` (`depends_on: {}`), `codex`, `antigravity-cli` — each
+`Mach-O 64-bit executable arm64`. **[E0]**
+
+**Two corrections to this passage, both found by a third reviewer auditing it [E0]:**
+- An earlier draft cited the cask **`claude`** with "`deps=None`". Wrong on both counts. `brew info
+  claude` returns *two* casks and the first is Anthropic's **Electron desktop app**, not the CLI; the
+  CLI comes from **`claude-code@latest`**. And casks have no `deps` field — the field is
+  `depends_on`. The conclusion held, the evidence was for the wrong artifact.
+- **Claude Code is also distributed on npm** (`@anthropic-ai/claude-code`), so a large share of its
+  users *do* have Node. The correct claim is the weaker one: having these CLIs **does not imply**
+  having Node — not that these users lack it.
 
 **What the debate did *not* find.** Node is not disqualified by size or startup — both were measured
 and both arguments died:
@@ -1119,17 +1129,23 @@ and both arguments died:
 |---|---|
 | a Node single-executable embeds | **116M** — against `claude` 193M, `codex` 212M, `agy` 172M already installed |
 | *(caveat)* | this answers "is 116M prohibitive here" (no). It is **not** a like-for-like implementation comparison — a trivial Go build of this shape came out at **2.7M** |
-| startup, net of a 19ms process-spawn baseline | Node ~18ms · Go ~11ms · Rust ~5ms — **non-deciding**, and the comparison is between different programs anyway |
+| startup | **withdrawn — the measurement was invalid.** `node -e ""` 37ms / `ccr --version` 30ms / `pueue --version` 24ms / `/bin/echo` 19ms compares four unrelated programs with different init paths; subtracting `/bin/echo` isolates nothing. Conceded in debate as C-17 and repeated as a finding by a later audit. **No startup comparison exists.** |
 
-**Why Node is third, on evidence rather than taste.** Its bundled route is Node SEA, **Stability 1.1
+**Why Node is third, on evidence rather than taste — and the claim is narrower than it first reads.**
+What was examined is **Node's own** bundling route, SEA. Third-party single-executable routes exist
+(`@vercel/pkg`, or compiling with Bun or Deno) and **none of them was evaluated**, so what follows
+indicts the route Node itself documents, not every possible way to ship JavaScript as a binary.
+SEA is **Stability 1.1
 — Active development**, whose own platform-support section reads **[E2, verified 2026-09-13]**:
 
 > *"Single-executable support is tested regularly on CI only on the following platforms: Windows ·
 > macOS (arm64 only; **x64 is not currently supported and is skipped in the tests**) · Linux (all
 > distributions supported by Node.js **except Alpine** and all architectures except s390x)"*
 
-Note "not currently supported", not merely untested. That is the only named platform hole among the
-three candidates. If macOS x64 and Alpine are both out of scope, this reason weakens to
+Note the two exclusions are **different strengths of statement**, and an earlier draft conflated
+them: *"not currently supported and is skipped in the tests"* is said of **macOS x64 specifically**.
+Alpine is merely outside regular **CI coverage**, which is not proof that SEA fails there. Only the
+macOS x64 exclusion is a hard hole. If macOS x64 and Alpine are both out of scope, this reason weakens to
 "experimental" — which is still a reason, just a weaker one.
 
 **Why Go over Rust, and how narrow it is.** One argument survives, and it was tested here rather than
@@ -1145,11 +1161,27 @@ The cgo condition was tested too, and it behaves exactly as the caveat says:
 | `CGO_ENABLED=1`, **no** `import "C"` anywhere | **succeeds** — cgo is simply unused |
 | `CGO_ENABLED=1`, with a real `import "C"` | **fails**: `# runtime/cgo` · `gcc_amd64.S:27:8: error: unknown token in expression` |
 
-So the advantage is real and it is precisely conditional: **it holds until something actually imports
-C**, not merely until `CGO_ENABLED` is set. Note also that `net` and `os/user` pull in cgo on some
-platforms unless built with the `netgo`/`osusergo` tags — worth pinning in the build config early.
+So the advantage is real and it is precisely conditional: **it holds until the dependency graph —
+transitive dependencies included — actually requires C compilation**, not merely until `CGO_ENABLED`
+is set.
 
-**The Rust half was then measured too, and the gap is much larger than the debate assumed.**
+**A note here was wrong and is corrected [E0].** It said `net` and `os/user` "pull in cgo on some
+platforms unless built with the `netgo`/`osusergo` tags — worth pinning in the build config early".
+That is backwards. Under `CGO_ENABLED=0` cgo is off unconditionally and Go uses its pure-Go resolver
+and user lookup automatically; those tags only matter when building *with* `CGO_ENABLED=1`. Tested: a
+program importing both `net` and `os/user` cross-built to `linux/amd64` and `windows/amd64` under
+`CGO_ENABLED=0` with **no tags at all**. No build-config pinning is needed.
+
+**And the one dependency most likely to have forced C, already answered.** State is "One SQLite file"
+below, and the usual Go driver (`mattn/go-sqlite3`) requires cgo — which would have triggered exactly
+the reversal condition above. `claude-code-router` already runs **`modernc.org/sqlite` v1.53.0**, a
+pure-Go implementation (`go.mod:16`, imported at `internal/store/store.go:12`), in a repo that builds
+`CGO_ENABLED=0`. **[E0]** So the most probable route into cgo has a proven cgo-free answer in the
+author's own production code.
+
+**The Rust half was then measured too.** (An earlier draft of this line said "the gap is much larger
+than the debate assumed" — that is the overstatement round 4 struck down, left standing by accident,
+and removed on audit. The gap is wide *on this axis* and narrow *in importance*.)
 A Rust toolchain was installed on 2026-09-13 specifically to close this, and the identical program —
 same six targets, same machine, `rustc -O` directly so no build tool is in the way — gives
 **[E0, 2026-09-13, rustc 1.98.1]**:
@@ -1162,18 +1194,39 @@ same six targets, same machine, `rustc -O` directly so no build tool is in the w
 | linux/arm64 | ✅ 2.6M | ❌ ``linking with `cc` failed`` |
 | windows/amd64 | ✅ 2.8M | ❌ ``linker `x86_64-w64-mingw32-gcc` not found`` |
 | freebsd/amd64 | ✅ 2.6M | ❌ ``linking with `cc` failed`` |
-| **result** | **6 / 6, 6.5s total, nothing installed** | **2 / 6, 58.3s** |
+| **result** | **6 / 6, 6.5s total** | **2 / 6, 58.3s** |
 
-**Read that row precisely.** It says *"2/6 with the tools present on this machine"*, **not** "Rust
-supports 2/6 targets" — Rust supports all six; what was absent were linkers. And the 58.3s includes
-std downloads, so this is not a steady-state build-speed comparison. **What it measures is the first
-build on an unprovisioned machine, and nothing else** — not repeated releases, not provisioned CI,
-not whether the artifacts actually run on their targets, which was never tested.
+**Read that row precisely** — it was narrowed twice under audit and every qualifier is load-bearing:
+
+- It says *"2/6 with the tools present on this machine"*, **not** "Rust supports 2/6 targets". Rust
+  supports all six.
+- **"Nothing installed" meant no *additional target toolchains* were installed for the experiment.**
+  Both compilers were already present and the Go build cache was not cold. That qualifier was missing
+  from an earlier draft and is the reason the phrase has been dropped from the table.
+- The 58.3s **includes Rust's std downloads**, so this is not a steady-state build-speed comparison.
+- It measures a **first build on a machine without cross-toolchains** — not repeated releases, not
+  provisioned CI, and not whether the artifacts run, which was never tested.
+
+**And it is a report, not reproducible evidence.** The audit of this section returned
+**COULD-NOT-CHECK** for this row, correctly: a reviewer can confirm the present inventory (all six
+Rust target libraries installed; no `x86_64-w64-mingw32-gcc` on `PATH`) but cannot verify historical
+build outcomes, timings or cache state from a table someone else wrote. **Re-run it before relying on
+it.**
 
 Rust reached only the two Apple targets, and only because Apple's own `cc` links both Mach-O
 architectures. Every non-Apple target needs a cross-linker — mingw-w64 for Windows, a musl/gnu
-toolchain or `cross`/Docker for Linux and FreeBSD. The std libraries downloaded fine; **linking is
-the wall**, and it is per-platform-family, not per-triple.
+toolchain or `cross`/Docker for Linux and FreeBSD. **The build artifacts prove where the wall is**
+**[E0]**: each failed target left `*.rcgu.o` object files on disk, so `rustc` compiled the program
+and its std all the way through code generation and stopped only at link. **Linking is the wall.**
+An earlier draft added "and it is per-platform-family, not per-triple" — that is too coarse and is
+withdrawn: the toolchain *does* ship `rust-lld`, the verified absence was the Windows GCC driver
+specifically, and a working configuration can also need target libraries, startup objects and a
+sysroot. Four failures do not establish the granularity of what is missing.
+
+The Go side was checked the same way rather than trusted: `file` reports
+`ELF 64-bit LSB executable, x86-64, SYSV, statically linked`, `PE32+ executable (console) x86-64,
+for MS Windows`, and `ELF 64-bit LSB executable, x86-64, FreeBSD` — real binaries for the claimed
+targets. **None was executed on its target**, so "it links" is proven and "it runs" is not.
 
 **Stated fairly, because this cuts both ways:**
 - It is **fixable and well-trodden** — nobody ships Rust cross-platform without solving it. The cost
@@ -1181,8 +1234,12 @@ the wall**, and it is per-platform-family, not per-triple.
   reused behind one command, so this is friction on *new* build machines and CI images, not on every
   release. If you build releases in a prepared container, the gap narrows sharply.
 - **Rust wins on artifact size, measured:** 369K with `strip` + `opt-level="z"`, ~500K at bare `-O`,
-  against Go's 2.6M with `-ldflags="-s -w"`. Roughly 5–7× smaller. For a binary pueue spawns per
-  task, this is real but not load-bearing.
+  against Go's 2.6M with `-ldflags="-s -w"`. Roughly 5–7× smaller **for these two probe programs at these
+  build settings — no delegation-layer implementation exists to compare, so the ratio does not
+  generalise.** The saving is ~2.2MB once, per installed executable — `delegate-run` is installed once and spawned repeatedly, not stored per
+  task, so an earlier phrasing here ("a binary pueue spawns per task") implied a recurring cost that
+  does not exist. Disk size also says nothing about resident memory or launch latency, neither of
+  which was measured. Real, and not load-bearing.
 
 **Effect on the decision: none. Confidence stays LOW, and the attempt to raise it was an error.**
 This measurement was taken back to the debate as round 4, with the explicit question "does this
@@ -1193,8 +1250,10 @@ mistake this document is prone to:
 > increase."*
 
 The experiment measures a **first build on an unprovisioned machine**. It says nothing about
-provisioned release pipelines, repeated releases, or the binary-installing user — who, per this
-document's own distribution plan, never cross-compiles anything. Raising overall confidence on it
+provisioned release pipelines, repeated releases, or the binary-installing user. One qualification on
+that last point, raised in round 4 and worth keeping honest: this document advertises **`go install`**
+alongside the Homebrew tap, which *is* a source-install route — so "users never build anything" holds
+for binary consumers, not for every install path offered. Raising overall confidence on it
 conflated *"this premise is now better evidenced"* with *"the decision is better supported"*. The
 confidence was raised on 2026-09-13 and **reverted the same day**.
 
@@ -1223,10 +1282,18 @@ text**:
 > requires committing to Rust"* — citing the `processkit` entry above: *"It would commit the project
 > to Rust, or at least a Rust sidecar binary."*
 
-That is the escape hatch if decision 9 fails: a Rust layer absorbs it natively, a Go layer ships a
-Rust sidecar and maintains two toolchains. **It does not move the ranking** — `pueue kill` was tested
-here and the ceiling it hits is an OS limit no crate removes — but no debater raised it across four
-rounds, so it is recorded rather than left to be rediscovered.
+**And it was refuted within the hour, by the second reviewer auditing the first.** [E0] The claim
+confuses *a chosen library* with *a language requirement*. `processkit` is Rust, but containment is
+not: Go exposes cgroup placement directly in the standard library —
+```
+$ GOOS=linux go doc syscall.SysProcAttr | grep -i cgroup
+   UseCgroupFD  bool   // Whether to make use of the CgroupFD field.
+   CgroupFD     int    // File descriptor of a cgroup to put the new process into.
+```
+That does not prove Go has a feature-complete `processkit` equivalent, but it does defeat the
+categorical form of the argument. **Recorded in full — claim and refutation — because the sequence is
+the useful part: a third model found the strongest argument for Rust in this document's own text, and
+a second model killed it with one `go doc`.** Neither would have happened with one reviewer.
 
 **Honest confidence: LOW.** Raised to MEDIUM on the strength of the cross-compilation measurement and
 **reverted the same day** — the measurement strengthened one premise without making that premise more
