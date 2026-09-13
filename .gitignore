@@ -1,1 +1,7 @@
 .DS_Store
+/bin/
+/dist/
+*.out
+*.prof
+/coverage/
+/tmp/

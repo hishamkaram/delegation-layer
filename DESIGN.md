@@ -2,34 +2,24 @@
 
 > Working name only; the directory is trivially renamable. Written 2026-09-12.
 >
-> **Status: design complete, not built.** No code exists yet. The supervisor, runtime, first adapter,
-> config model and status payload are settled, and the load-bearing ones were verified by live
-> testing on this machine, not taken from docs.
+> **Status: Phase 0 (Foundation) implemented; review, acceptance, and CI verification pending.** The comprehensive execution plan in
+> [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) and [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md)
+> represent the authoritative normative roadmap and supersede conflicting milestones below.
+> Historical measurements and debate records are preserved as historical context.
 >
-> **Revised 2026-09-13 after an adversarial review against Codex** (`/tmp/codex-debate/
-> delegation-layer/design-ready-for-m1-20260913-115839/DEBATE.md`). The thesis survived unchallenged
-> — resumption-by-reference over replay, a supervisor we do not write, file-based state, intent-based
-> config. Three specification defects did not, and are corrected here: the document contained two
-> incompatible publication rules; the at-most-once admission rule could duplicate paid work; and the
-> first adapter's `permission: read-only` mapping was marked verified when it does not deliver
-> read-only. See *The publisher*, *At-most-once launch*, and the config table's footnote.
->
-> **Two decisions are still open and both block milestone 1**: *is a Task one turn or a
-> conversation?* and *what happens to `permission: read-only` on `agy`?* (open questions 1 and 6).
->
-> `agy --sandbox` was then **measured** rather than argued about (2026-09-13, `agy` 1.2.2, with a
-> control run): it is a real filesystem sandbox after all, but a `workspace-write` one, not
-> read-only. See *`--sandbox` measured*.
->
-> **The runtime was redecided on 2026-09-13, from Node/TypeScript to Go**, after a second debate
-> whose finding was that the Node decision's stated reasons were factually wrong — not that Node was
-> unworkable. The debate rated Go over Rust a weak, unmeasured preference; **it was then measured on
-> 2026-09-13 — on an unprovisioned machine Go cross-compiled 6/6 targets in 6.5s with nothing
-> installed, Rust 2/6 in 58s (linkers, not capability). Confidence stays **LOW**: that strengthens one
-> premise without making it more important to a user who installs a binary.** See *Runtime — how the Node decision fell*.
+> **Normative decisions confirmed 2026-09-13:**
+> - **Task scope**: A Task is strictly **one turn**. Continuation creates a new task bound to an explicit layer-recorded session handle, preserving original identity, result, and launch count.
+> - **Terminal authority**: `outcome.json` is the sole terminal authority. `result.txt` alone is a payload and cannot prove completion. Payloads and outcomes cannot be overwritten; collection never launches, retries, or resumes paid work.
+> - **Input delivery**: Stdin from a finite regular file then EOF; brief text is never placed in argv, and provider commands are never shell-reparsed.
+> - **Durability & barriers**: Cryptographically unique staging, close-before-link, same-filesystem hard-link, and directory-sync barriers. Unsupported or remote filesystems are refused before admission (eliminating contradictory "local implies safe" assumptions).
+> - **Supervision & stopping**: Supervisor (`pueue`) owns stopping. Direct signals (`os.Process.Signal/Kill`, `syscall.Kill`), process-group manipulation (`setsid`, `pkill`, `killall`), `exec.CommandContext`, and nonzero `WaitDelay` are strictly prohibited. Budget supervision uses a bounded runner event loop with explicit ownership.
+> - **Deadlines**: Wall-clock execution deadline with stop-request, stop-acknowledgment, and termination-observed recorded separately. Token/dollar ceilings and raw argv are rejected before admission.
+> - **Provider profiles (v1 Private Release)**: Required candidate profiles pending adapter-phase live acceptance receipts: `antigravity:print` (`workspace-write`; `read-only` is unsupported and refused), `codex:exec` (`read-only`), and `claude:print` (`read-only`). All three are required before v1 release.
+> - **Private delivery**: Private repository, private release assets, and authenticated GitHub install tooling. Public repositories, public taps, and unauthenticated `go install` are out of scope.
+> - **Workflow**: Resumable declared-plan DAG execution; the layer never invents tasks or autonomously judges result quality.
 >
 > Diagrams: `diagrams/components.html` (system components) and `diagrams/lead-interface.html`
-> (how the lead AI talks to the layer) — **both regenerated 2026-09-13** against this revision.
+> (how the lead AI talks to the layer).
 
 ## Goal
 
@@ -352,6 +342,9 @@ subcommand's error; that is the plugin's probe lesson exactly.
 
 ### Core insight
 
+> [!NOTE]
+> *(Historical/Superseded initial proposal)*: The early proposal below treats `result.txt` existence as the completion signal. As established in the normative decisions confirmed above and in [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md), `outcome.json` is the sole terminal authority; `result.txt` is an immutable payload linked prior to `outcome.json` and does not prove completion by itself.
+
 **A worker's finished answer should be a file, and the file's existence should be the completion
 signal.** Everything else follows from that.
 
@@ -421,6 +414,9 @@ different questions, and a wedged worker answers yes to the first.
 
 **Channels, consulted in order of authority.** The first that returns an authoritative answer wins;
 no lower channel overrides a higher one.
+
+> [!NOTE]
+> *(Historical/Superseded initial proposal)*: The early channel hierarchy table below lists `result.txt exists` as Channel 1. Under the normative protocol confirmed above and in [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md), `outcome.json` (linked atomically via hard-link) is the sole terminal authority, superseding single-file `result.txt` checks.
 
 | # | Channel | Answers | Available on |
 |---|---|---|---|
@@ -1330,70 +1326,27 @@ Hard-won over thirteen review cycles. Marked by whether the file-as-signal desig
 
 ---
 
-## Open questions
+## Open questions and confirmed decisions
 
-**Two must be settled before code: #1 and #7.** The rest are answered more cheaply by building than
-by more discussion.
+**Settled and confirmed for implementation:**
 
-1. **What is a Task — one turn, or a conversation?** A2A allows a Task to span messages. If a Task
-   is one turn, resume is trivial and multi-turn work is the lead's problem. *Leaning: one turn* —
-   and the adversarial review found this coherent, with one condition now written into the adapter
-   interface: a completed task may expose a conversation handle for a *new* task to continue,
-   without that changing the original task's identity or result. **Decide before milestone 1.**
-2. **Who owns isolation?** `--bg` auto-creates a git worktree; Codex and Gemini do not. Either the
-   layer makes a worktree per task, or workers are **read-only by default** with writes opt-in.
-   *Leaning: read-only default — it collapses most of the safety surface.* Note the mechanism
-   already exists per-provider: `pi --tools read,grep,find,ls` and `codex --sandbox read-only` both
-   enforce it inside the CLI, which is better than us policing it from outside.
-3. **What happens to a blocked worker?** *Largely closed.* Auto-approve flags plus stdin from
-   `/dev/null` mean most modes cannot block on input at all, and the event stream tells us what a
-   silent worker is waiting on. What remains open is only `claude:bg`, where a worker can sit
-   `blocked` indefinitely while the daemon keeps it alive: does the lead get to answer the prompt,
-   or is blocked-past-N simply a failure?
-4. **Does the lead ever re-dispatch?** If a result is unusable, is that a new Task or a resumed one?
-   Cost and idempotency both hang on this. *Answer by building — milestone 1's timed-out run is the
-   first real instance of it.*
-5. **What does the lead branch on?** Proposed: exactly four outcomes — *usable result*, *no result
-   but recoverable*, *no result and terminal*, *undetermined*. Anything richer is the adapter's
-   business.
-6. **`permission: read-only` on `agy` — what happens?** *(New 2026-09-13. Blocks milestone 1.)* The
-   layer defaults to `read-only`, `agy` has no read-only mode, and an unsupported key fails the
-   dispatch — so the first adapter cannot run at the layer's default.
+1. **What is a Task — one turn, or a conversation?** **RESOLVED: Exactly one turn.**
+   Resuming or continuing a conversation creates a **new task** with a new deterministic task ID, bound to an explicit layer-recorded session handle. The original task's identity, metadata, and results remain immutable and preserved.
+2. **Who owns isolation?** Workers are **read-only by default** with writes opt-in.
+   Each provider enforces isolation through validated candidate profiles pending adapter-phase live acceptance receipts: `codex:exec` (`read-only`), `claude:print` (`read-only`), and `antigravity:print` (`workspace-write`).
+3. **What happens to a blocked worker?** Closed. Headless operation with finite stdin then EOF prevents blocking on interactive prompts. Tasks enforce a finite wall-clock execution deadline managed via the supervisor.
+4. **Does the lead ever re-dispatch?** Collection never re-dispatches or executes paid work; collection is purely observational. A retry or continuation is a new task dispatch with explicit identity.
+5. **What does the lead branch on?** The sole terminal authority is `outcome.json`, containing explicit verdicts and evidence digests. `result.txt` alone is only a payload.
+6. **`permission: read-only` on `agy` — what happens?** **RESOLVED: `read-only` is unsupported on `agy`.**
+   Tasks requiring `antigravity:print` must explicitly declare `permission: workspace-write`. If a task requests `read-only` for `agy`, it is refused before admission.
+7. **Runtime and distribution** — **CONFIRMED: Go 1.27.1.**
+   Shipped as static binaries (`CGO_ENABLED=0`) across `darwin/{amd64,arm64}` and `linux/{amd64,arm64}`. Delivery is private via authenticated GitHub release tooling.
 
-   **The cheap option was taken first and it changed the answer.** `agy --sandbox` was measured
-   rather than argued about (see *`--sandbox` measured*), and it turns out to be a genuine
-   filesystem sandbox: writes outside the workspace and into `$HOME` return `EPERM`, with a control
-   run proving the flag causes it. It is `workspace-write`, not `read-only` — which both confirms
-   the withdrawn ✓ and supplies a real containment tier the design did not have a name for.
+## Milestone plan (Superseded by EXECUTION-PLAN.md)
 
-   That leaves two options, and the choice is a product decision, not a technical one:
-   - **(a)** demote `agy` behind **Codex** for milestone 1. `codex --sandbox read-only` is a
-     verified read-only mode, so the layer's default works untouched. Cost: the reasons `agy` was
-     chosen first — inline `response`, real token `usage`, and the nastiest timeout trap in the set
-     to build the guards against — all move to milestone 2.
-   - **(b) *(leaning)*** declare `read-only` **unsupported on `agy`**, and have the `agy` adapter
-     declare `workspace-write` instead. A task that wants `agy` at the layer default is refused,
-     explicitly and on the record; a task that asks for `workspace-write` runs contained. Fail-closed
-     survives intact, milestone 1 keeps its first adapter, and workers are **not** unrestricted —
-     which was the only real cost of this option before the measurement.
-
-   *A leaning is now recorded where none was before, because measurement removed the reason there
-   was none. The call is still the user's.*
-7. ~~Runtime and distribution~~ — **REDECIDED 2026-09-13: Go.** The 2026-09-12 decision was
-   Node/TypeScript and **its stated reasons were wrong**; see *Runtime — how the Node decision fell*
-   below. Distribution is a static binary: Homebrew tap plus `go install`, the pattern already
-   running for `ccr`. **Go's margin over Rust was measured on 2026-09-13: 6/6 targets cross-compiled
-   in 6.5s with nothing installed, against Rust's 2/6 in 58s** — but only for building on an
-   unprovisioned machine, and narrowed if the dependency graph ever requires C. Node is third on evidence.
-
-## Milestone plan
-
-Each step is falsifiable — it either works or teaches us the design is wrong, cheaply.
-
-**Two things block milestone 1**, both decisions rather than unknowns: open question 1 (*Task = one
-turn?*) and open question 6 (*`read-only` on `agy`*). Everything else it depends on is settled and
-tested: the supervisor (pueue, verified on this machine), the runtime (Go), the config
-model, the status payload, and the publication and admission protocols above.
+> [!NOTE]
+> The historical milestone sequence below is superseded by the normative 9-phase sequence defined in
+> [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) (Phases 0 through 8). Phase 0 (Foundation) is implemented, with review, acceptance, and CI verification pending.
 
 ### 1. Task record + the first adapter — `antigravity:print` *(pending open question 6)*
 

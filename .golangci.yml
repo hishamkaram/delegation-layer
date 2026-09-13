@@ -1,0 +1,51 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - nilerr
+    - errorlint
+    - errname
+    - forcetypeassert
+    - contextcheck
+    - exhaustive
+    - forbidigo
+    - nolintlint
+    - gocognit
+    - gocyclo
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    exhaustive:
+      default-signifies-exhaustive: false
+    gocognit:
+      min-complexity: 20
+    gocyclo:
+      min-complexity: 15
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    forbidigo:
+      analyze-types: true
+      exclude-godoc-examples: false
+      forbid:
+        - pattern: '^os\.Process\.(Signal|Kill)$'
+          msg: "Direct process signals are prohibited; supervisor owns stopping."
+        - pattern: '^syscall\.(Kill|Setsid)$'
+          msg: "Direct syscall signals and setsid are prohibited; supervisor owns stopping."
+        - pattern: '^exec\.CommandContext$'
+          msg: "exec.CommandContext defaults to Process.Kill; supervisor owns stopping and timeout."
+        - pattern: '^exec\.Cmd\.WaitDelay$'
+          msg: "Nonzero Cmd.WaitDelay can implicitly kill processes; supervisor owns stopping."
