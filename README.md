@@ -48,7 +48,9 @@ Where a doc and a test disagreed, the test won and the document says so.
 Both block milestone 1, and both are in *Open questions*: whether a Task is one turn or a
 conversation, and what `permission: read-only` means on the first adapter.
 
-A third is settled but narrow: the runtime was **redecided from Node to Go on 2026-09-13**, after a
-debate found the Node decision's stated reasons were factually wrong. Go's margin over Rust is one
-build-prerequisite preference and is conditional on the implementation staying cgo-free. See
-*Runtime — how the Node decision fell* in `DESIGN.md`.
+A third is settled: the runtime was **redecided from Node to Go on 2026-09-13**, after a debate found
+the Node decision's stated reasons were factually wrong. The Go-over-Rust margin was then measured on
+the same machine — Go cross-compiled **6/6** targets in 6.5s with nothing installed, Rust **2/6** in
+58s (every non-Apple target needs a cross-linker) — though Rust's binaries are 5–7× smaller. It stays
+conditional on the implementation never importing C. See *Runtime — how the Node decision fell* in
+`DESIGN.md`.

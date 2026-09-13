@@ -23,8 +23,9 @@
 >
 > **The runtime was redecided on 2026-09-13, from Node/TypeScript to Go**, after a second debate
 > whose finding was that the Node decision's stated reasons were factually wrong — not that Node was
-> unworkable. The margin over Rust is narrow and Node's third place is the firmest part of the
-> result. See *Runtime — how the Node decision fell*.
+> unworkable. The debate rated Go over Rust a weak, unmeasured preference; **it was then measured on
+> 2026-09-13 — Go cross-compiled 6/6 targets in 6.5s with nothing installed, Rust 2/6 in 58s — and
+> confidence moved LOW → MEDIUM.** See *Runtime — how the Node decision fell*.
 >
 > Diagrams: `diagrams/components.html` (system components) and `diagrams/lead-interface.html`
 > (how the lead AI talks to the layer) — **both regenerated 2026-09-13** against this revision.
@@ -1075,7 +1076,8 @@ and makes an HTTP surface a serialization layer later rather than a re-architect
 9. **pueue is the supervisor** — chosen over task-spooler after both were installed and tested here;
    the deciding margin was JSON status and output retrieval, not kill reach, which tied.
 10. **Go**, distributed as a static binary (Homebrew tap + `go install`). **Redecided 2026-09-13**,
-    reversing Node/TypeScript-on-npm. The margin over Rust is narrow; Node is third on evidence. See
+    reversing Node/TypeScript-on-npm. The margin over Rust is measured, not narrow (6/6 vs 2/6
+    cross-compiled targets); Node is third on evidence. See
     *Runtime — how the Node decision fell*.
 11. **Config is intent, and an unsupported key fails the dispatch.** Never silently dropped; the
     `--allow-unsupported` escape hatch records a warning instead.
@@ -1146,11 +1148,40 @@ So the advantage is real and it is precisely conditional: **it holds until somet
 C**, not merely until `CGO_ENABLED` is set. Note also that `net` and `os/user` pull in cgo on some
 platforms unless built with the `netgo`/`osusergo` tags — worth pinning in the build config early.
 
-**The comparison is one-sided and this document should say so.** No Rust toolchain is installed here,
-so the Rust half was never measured — rustup documents that a target install plus "typically" a
-linker is required, and that is a citation, not a test. Neither side measured per-release
-reliability. **If the implementation ever needs cgo, this advantage is gone and the choice between Go
-and Rust is arbitrary.**
+**The Rust half was then measured too, and the gap is much larger than the debate assumed.**
+A Rust toolchain was installed on 2026-09-13 specifically to close this, and the identical program —
+same six targets, same machine, `rustc -O` directly so no build tool is in the way — gives
+**[E0, 2026-09-13, rustc 1.98.1]**:
+
+| target | Go (`CGO_ENABLED=0`) | Rust (`rustup target add` + `rustc --target`) |
+|---|---|---|
+| darwin/arm64 | ✅ 2.6M | ✅ 503K |
+| darwin/amd64 | ✅ 2.7M | ✅ 493K — but **11.8s** to download the target's std |
+| linux/amd64 | ✅ 2.7M | ❌ ``linking with `cc` failed`` |
+| linux/arm64 | ✅ 2.6M | ❌ ``linking with `cc` failed`` |
+| windows/amd64 | ✅ 2.8M | ❌ ``linker `x86_64-w64-mingw32-gcc` not found`` |
+| freebsd/amd64 | ✅ 2.6M | ❌ ``linking with `cc` failed`` |
+| **result** | **6 / 6, 6.5s total, nothing installed** | **2 / 6, 58.3s** |
+
+Rust reached only the two Apple targets, and only because Apple's own `cc` links both Mach-O
+architectures. Every non-Apple target needs a cross-linker — mingw-w64 for Windows, a musl/gnu
+toolchain or `cross`/Docker for Linux and FreeBSD. The std libraries downloaded fine; **linking is
+the wall**, and it is per-platform-family, not per-triple.
+
+**Stated fairly, because this cuts both ways:**
+- It is **fixable and well-trodden** — nobody ships Rust cross-platform without solving it. The cost
+  is provisioning a build environment, and Codex's objection stands: a provisioned environment can be
+  reused behind one command, so this is friction on *new* build machines and CI images, not on every
+  release. If you build releases in a prepared container, the gap narrows sharply.
+- **Rust wins on artifact size, measured:** 369K with `strip` + `opt-level="z"`, ~500K at bare `-O`,
+  against Go's 2.6M with `-ldflags="-s -w"`. Roughly 5–7× smaller. For a binary pueue spawns per
+  task, this is real but not load-bearing.
+
+**Effect on the decision:** the runtime debate graded this argument "a weak preference for fewer
+build prerequisites, not a measured claim of fewer failed releases". It is now measured — **6/6
+versus 2/6 out of the box** — so the confidence in Go moves from LOW to **MEDIUM**. The reversal
+condition is unchanged and still live: **if the implementation ever needs cgo, Go's advantage
+disappears** (verified above) and the choice becomes arbitrary again.
 
 **The argument that killed Rust's case was the one that promoted it.** `pueue-lib` (0.31.1, pinned by
 pueue 4.0.4 itself) lets a Rust layer consume pueue's own types instead of re-deriving them from CLI
@@ -1159,8 +1190,11 @@ under this project's premise that writing code is cheap, that saving is worth li
 runtime compatibility guarantee: the installed `pueue` binary upgrades independently of anything we
 compile.
 
-**Honest confidence: LOW.** Go's positive case is one qualified preference. Choosing Rust instead
-would not be a mistake. What the evidence settles firmly is Node third, and the two corrections above.
+**Honest confidence: MEDIUM, raised from LOW on 2026-09-13 by the measurement above.** The debate
+ruled LOW precisely because Go's positive case was unmeasured; it is now measured, and the margin is
+6/6 against 2/6. Choosing Rust is still not a *mistake* — the gap is provisioning, not capability,
+and Rust's binaries are 5–7× smaller — but it is no longer a free choice, and the document should
+stop describing the margin as "narrow". What remains firmest is Node third.
 
 ## Explicitly not building in v1
 
@@ -1242,8 +1276,9 @@ by more discussion.
 7. ~~Runtime and distribution~~ — **REDECIDED 2026-09-13: Go.** The 2026-09-12 decision was
    Node/TypeScript and **its stated reasons were wrong**; see *Runtime — how the Node decision fell*
    below. Distribution is a static binary: Homebrew tap plus `go install`, the pattern already
-   running for `ccr`. **Go's margin over Rust is narrow and unmeasured** — one build-prerequisite
-   preference, conditional on the implementation staying cgo-free. Node is third on evidence.
+   running for `ccr`. **Go's margin over Rust was measured on 2026-09-13: 6/6 targets cross-compiled
+   in 6.5s with nothing installed, against Rust's 2/6 in 58s** — still conditional on the
+   implementation staying cgo-free. Node is third on evidence.
 
 ## Milestone plan
 
