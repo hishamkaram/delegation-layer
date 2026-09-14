@@ -9,7 +9,7 @@
 | Handoff | Status | Acceptance |
 |---|---|---|
 | Engineering guidance and skills | Accepted | [PR #5](https://github.com/hishamkaram/delegation-layer/pull/5), squash `84a1a4a`; 32 validator tests, full local gate, direct Codex review, Linux/macOS PR and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34829586220) passed |
-| Catalog and agy proof | Review fixes in progress | At `a1c57c9`: full quality gate and 49-case protocol acceptance passed; supervisor suite 47/48, isolated failed-case retest passed. Five direct Codex review findings are being fixed. Final supervisor/live acceptance, clean review, CI and merge remain pending |
+| Catalog and agy proof | Independent review pending | [Local acceptance](PROVIDER-CATALOG-ACCEPTANCE.md) passed at `d2444c4`: full quality, 49 protocol, 48 hermetic + 5 native supervisor, and 3 live agy turns. Initial review findings fixed; clean review, CI and merge pending |
 | Shared infrastructure and contributor proof | Not started | Required |
 | Codex / Phase 4 | Not started | Required |
 | Claude / Phase 5 | Not started | Required |
