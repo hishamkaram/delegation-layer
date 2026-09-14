@@ -161,11 +161,13 @@ Use no production exception to the above bans in Phase 0; fixtures are compiled 
 
 ## Recurring gate — actual sequential recipe
 
-Expose `tools`, `tool-versions`, `fmt`, `fmt-check`, `config-check`, `vet`, `lint`, `verify-gates`,
-`test-race`, `build`, `smoke-cli`, `vuln`, and `check` as .PHONY targets.
+Expose `tools`, `tool-versions`, `verify-skills`, `fmt`, `fmt-check`, `config-check`, `vet`, `lint`, `verify-gates`,
+`test-race`, `test-native-harness`, `build`, `smoke-cli`, `vuln`, and `check` as .PHONY targets.
 Implement `check` as separate, ordered recursive-make recipe lines, **not a prerequisite list**:
-`tool-versions → fmt-check → config-check → vet → lint → verify-gates → test-race → build → smoke-cli → vuln`.
+`tool-versions → verify-skills → fmt-check → config-check → vet → lint → verify-gates → test-race → test-native-harness → build → smoke-cli → vuln`.
+This sequence includes the later native-harness and provider-guidance additions; it is the current recurring gate, not a claim that those additions existed in Phase 0.
 Each recursive command must stop the recipe on failure even with `make -j check`; propagate failures unchanged.
+verify-skills validates the repository skills and runs its negative/positive tests; test-native-harness runs the hermetic acceptance-harness tests without paid providers.
 config-check runs pinned `golangci-lint config verify` and pinned `goreleaser check` against real repository files.
 fmt-check uses standalone `gofumpt -l` and fails on any listed file; gofumpt itself can exit 0 while listing files.
 Scan tracked/applicable Go files without descending into tool caches; `fmt` is the explicit mutation target.

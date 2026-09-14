@@ -83,16 +83,20 @@ with punctuation or digits or contain `: `. Each skill body should make its trig
 deliverables, and exit criteria easy to find; the verifier deliberately does
 not require particular Markdown headings.
 
-Repository links in a skill use relative Markdown paths. A fragment after `#`
-is allowed and is ignored for file existence checks. External URLs may be used
-when they are genuinely useful, but they are not a substitute for links to
-the applicable repository contracts.
+Repository links in a skill use relative Markdown paths in an inline
+parenthesized destination. Parentheses in a destination are balanced, and an
+angle-bracket destination may contain spaces; a fragment after `#` is allowed
+and ignored for file existence checks. Reference-style links/definitions and
+other unsupported Markdown shapes are rejected explicitly. External URLs may
+be used when genuinely useful, but they are not a substitute for links to the
+applicable repository contracts.
 
 The verifier recognizes a one-target inline `make <target>` command when it is
 written as inline code or as a command-shaped line. The target must exist in
-the Makefile. A command that is intentionally future work must carry the
-explicit marker `[planned]` or `(planned)` on the same line; planned commands
-are documented without being treated as implemented. Unfinished scaffolding
-uses explicit uppercase tokens such as `TODO`, `FIXME`, `TBD`, `PLACEHOLDER`,
-`<YOUR_NAME>`, or `{{REPLACE_ME}}`; ordinary prose such as “todo list” is not a
-marker.
+the Makefile. Options, variable assignments, extra targets, shell operators,
+and other trailing command text are unsupported and fail explicitly. A command
+that is intentionally future work must carry the explicit marker `[planned]`
+or `(planned)` on the same line; that marker is accepted only when the line has
+one unambiguous command. Unfinished scaffolding uses explicit uppercase tokens
+such as `TODO`, `FIXME`, `TBD`, `PLACEHOLDER`, `<YOUR_NAME>`, or
+`{{REPLACE_ME}}`; ordinary prose such as “todo list” is not a marker.

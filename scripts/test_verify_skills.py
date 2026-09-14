@@ -74,6 +74,38 @@ class VerifySkillsTests(unittest.TestCase):
         errors = self.verify_demo()
         self.assertTrue(any("skills/demo/SKILL.md" in error for error in errors))
 
+    def test_external_symlinked_skill_file_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="verify-skills-outside-") as outside_dir:
+            outside = Path(outside_dir) / "SKILL.md"
+            outside.write_text(
+                "---\nname: demo\ndescription: External content.\n---\nBody.\n",
+                encoding="utf-8",
+            )
+            directory = self.root / "skills" / "demo"
+            directory.mkdir(parents=True)
+            (directory / "SKILL.md").symlink_to(outside)
+            errors = self.verify_demo()
+        self.assertTrue(any("must not be a symlink" in error for error in errors))
+
+    def test_broken_symlinked_required_skill_is_reported(self):
+        directory = self.root / "skills" / "demo"
+        directory.mkdir(parents=True)
+        (directory / "SKILL.md").symlink_to(directory / "missing.md")
+        errors = self.verify_demo()
+        self.assertTrue(any("must not be a symlink" in error for error in errors))
+
+    def test_symlinked_skill_directory_is_rejected_before_reading(self):
+        with tempfile.TemporaryDirectory(prefix="verify-skills-outside-") as outside_dir:
+            outside = Path(outside_dir) / "demo"
+            outside.mkdir()
+            (outside / "SKILL.md").write_text(
+                "---\nname: demo\ndescription: External content.\n---\nBody.\n",
+                encoding="utf-8",
+            )
+            (self.root / "skills" / "demo").symlink_to(outside, target_is_directory=True)
+            errors = self.verify_demo()
+        self.assertTrue(any("symlinked directory" in error for error in errors))
+
     def test_duplicate_name_and_directory_mismatch_are_rejected(self):
         self.write_skill("demo")
         nested = self.root / "skills" / "extra" / "demo"
@@ -101,12 +133,66 @@ class VerifySkillsTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("empty destination", errors[0])
 
+    def test_reference_links_and_definitions_are_rejected_explicitly(self):
+        self.write_skill(body="See [the contract][contract].\n\n[contract]: ../../guide.md\n")
+        errors = self.verify_demo()
+        joined = "\n".join(errors)
+        self.assertIn("reference-style Markdown links are unsupported", joined)
+        self.assertIn("reference-style Markdown link definitions are unsupported", joined)
+
+    def test_balanced_parenthesized_and_angle_destinations_pass(self):
+        docs = self.root / "docs"
+        docs.mkdir()
+        (docs / "foo_(bar).md").write_text("# Guide\n", encoding="utf-8")
+        (docs / "foo bar.md").write_text("# Guide\n", encoding="utf-8")
+        self.write_skill(
+            body=(
+                "Read [the balanced guide](../../docs/foo_(bar).md).\n"
+                "Read [the spaced guide](<../../docs/foo bar.md>).\n"
+            )
+        )
+        self.assertEqual(self.verify_demo(), [])
+
+    def test_absolute_and_windows_link_paths_are_rejected_before_scheme_skip(self):
+        for target in ("/tmp/outside.md", "C:/outside.md", r"C:\\outside.md"):
+            with self.subTest(target=target):
+                self.write_skill(body=f"Read [outside]({target}).\n")
+                errors = self.verify_demo()
+                self.assertEqual(len(errors), 1)
+                self.assertIn("must be relative", errors[0])
+
     def test_stale_make_target_is_rejected(self):
         self.write_skill(body="Run `make missing-target`.\n")
         errors = self.verify_demo()
         self.assertEqual(len(errors), 1)
         self.assertIn("make target 'missing-target'", errors[0])
         self.assertIn("Makefile", errors[0])
+
+    def test_unsupported_make_options_extra_targets_and_assignments_are_rejected(self):
+        bodies = (
+            "Run `make check missing-target`.\n",
+            "Run `make -j missing-target`.\n",
+            "Run `make missing-target --no-print-directory`.\n",
+            "Run `make missing-target VAR=1`.\n",
+            "Run `make`.\n",
+        )
+        for body in bodies:
+            with self.subTest(body=body):
+                self.write_skill(body=body)
+                errors = self.verify_demo()
+                self.assertTrue(any("unsupported make command shape" in error for error in errors))
+
+    def test_command_shaped_one_target_without_inline_code_is_checked(self):
+        self.write_skill(body="make check\n")
+        self.assertEqual(self.verify_demo(), [])
+
+    def test_planned_marker_cannot_bypass_another_command_on_the_line(self):
+        self.write_skill(body="Run `make future-target` [planned] and `make missing-target`.\n")
+        errors = self.verify_demo()
+        joined = "\n".join(errors)
+        self.assertIn("planned marker is ambiguous", joined)
+        self.assertIn("make target 'future-target'", joined)
+        self.assertIn("make target 'missing-target'", joined)
 
     def test_phony_declaration_without_rule_is_not_a_target(self):
         self.root.joinpath("Makefile").write_text(

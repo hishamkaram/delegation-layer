@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from collections import Counter
 import re
 from pathlib import Path
 import sys
@@ -30,13 +31,9 @@ REQUIRED_SKILLS: tuple[str, ...] = (
 
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 FRONTMATTER_FIELD_RE = re.compile(r"^(name|description):[ \t]+(.*)$")
-MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[[^\]\n]*\]\(([^)\n]*)\)")
-MAKE_COMMAND_RE = re.compile(
-    r"(?:^|[^A-Za-z0-9_./-])(?:\$[ \t]*)?make[ \t]+"
-    r"(?P<target>[A-Za-z0-9][A-Za-z0-9_.-]*)"
-    r"(?=[ \t]*(?:&&|\|\||[;,]|[`'\"\)\]\}.,:;!?#]|$))"
-)
-COMMAND_LINE_RE = re.compile(r"^(?:[-*+]\s+)?(?:\$[ \t]*)?make[ \t]+", re.IGNORECASE)
+MAKE_WORD_RE = re.compile(r"(?<![A-Za-z0-9_./-])make\b", re.IGNORECASE)
+COMMAND_LINE_RE = re.compile(r"^(?:[-*+]\s+)?(?:\$[ \t]*)?make(?:[ \t]+|$)", re.IGNORECASE)
+MAKE_TARGET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 PLANNED_COMMAND_RE = re.compile(
     r"(?:\[\s*planned\s*\]|\(\s*planned\s*\))", re.IGNORECASE
 )
@@ -55,6 +52,14 @@ class SkillDocument:
     description: str
     body: str
     body_start_line: int
+
+
+@dataclass(frozen=True)
+class MakeOccurrence:
+    line: int
+    target: str | None
+    source: str
+    syntax_error: str | None
 
 
 def _unquote_scalar(raw: str) -> tuple[str | None, str | None]:
@@ -98,6 +103,8 @@ def _unquote_scalar(raw: str) -> tuple[str | None, str | None]:
 def parse_skill(path: Path) -> tuple[SkillDocument | None, list[str]]:
     """Parse one skill and return diagnostics suitable for a CLI user."""
 
+    if path.is_symlink():
+        return None, [f"{path}: SKILL.md must not be a symlink"]
     errors: list[str] = []
     try:
         text = path.read_text(encoding="utf-8")
@@ -167,7 +174,15 @@ def _skill_files(root: Path) -> list[Path]:
     skills_root = root / "skills"
     if not skills_root.is_dir():
         return []
-    return sorted(path for path in skills_root.rglob("SKILL.md") if path.is_file())
+    # Keep symlink entries in the candidate list so verification can report
+    # them instead of silently following or dropping them.
+    candidates: set[Path] = set()
+    for path in skills_root.rglob("*"):
+        if path.name == "SKILL.md":
+            candidates.add(path)
+        elif path.is_symlink() and path.is_dir():
+            candidates.add(path / "SKILL.md")
+    return sorted(candidates)
 
 
 def _relative_to_root(path: Path, root: Path) -> bool:
@@ -178,26 +193,130 @@ def _relative_to_root(path: Path, root: Path) -> bool:
     return True
 
 
+def _skill_path_error(path: Path, root: Path, required: bool = False) -> str | None:
+    if path.is_symlink():
+        return f"{path}: SKILL.md must not be a symlink"
+    try:
+        relative = path.relative_to(root)
+        current = root
+        for part in relative.parts[:-1]:
+            current /= part
+            if current.is_symlink():
+                return f"{path}: SKILL.md uses a symlinked directory ({current})"
+        resolved = path.resolve(strict=False)
+    except (OSError, RuntimeError) as error:
+        return f"{path}: cannot resolve SKILL.md path: {error}"
+    if not _relative_to_root(resolved, root.resolve(strict=False)):
+        return f"{path}: SKILL.md resolves outside the repository root ({resolved})"
+    if not path.is_file():
+        message = "required skill is missing" if required else "SKILL.md is missing or not a regular file"
+        return f"{path}: {message}"
+    return None
+
+
+def _markdown_links(text: str) -> Iterator[tuple[int, str | None, str | None]]:
+    """Yield line, destination, and parse error for narrow inline links.
+
+    Reference links are intentionally not parsed by this small checker; their
+    syntax is reported separately so a broken reference cannot pass silently.
+    Parentheses in a destination are balanced, while nested Markdown labels
+    and full title parsing remain outside the supported syntax.
+    """
+
+    index = 0
+    while index < len(text):
+        if text[index] != "[" or (index > 0 and text[index - 1] == "!"):
+            index += 1
+            continue
+        label_end = text.find("]", index + 1)
+        if label_end < 0:
+            index += 1
+            continue
+        next_index = label_end + 1
+        if next_index < len(text) and text[next_index] == "[":
+            reference_end = text.find("]", next_index + 1)
+            if reference_end < 0:
+                reference_end = next_index
+            line = _line_number(text, index)
+            yield line, None, "reference-style Markdown links are unsupported; use an inline destination"
+            index = reference_end + 1
+            continue
+        if next_index >= len(text) or text[next_index] != "(":
+            index = label_end + 1
+            continue
+
+        cursor = next_index + 1
+        depth = 1
+        while cursor < len(text) and depth:
+            if text[cursor] == "\\" and cursor + 1 < len(text):
+                cursor += 2
+                continue
+            if text[cursor] == "(":
+                depth += 1
+            elif text[cursor] == ")":
+                depth -= 1
+            cursor += 1
+        line = _line_number(text, index)
+        if depth:
+            yield line, None, "unterminated parenthesized Markdown link"
+            index = cursor
+            continue
+        yield line, text[next_index + 1 : cursor - 1], None
+        index = cursor
+
+
+def _link_target(raw: str) -> tuple[str | None, str | None]:
+    value = raw.strip()
+    if not value:
+        return None, "local link has an empty destination"
+    if value.startswith("<"):
+        closing = value.find(">", 1)
+        if closing < 0:
+            return None, "angle-bracket link destination is unterminated"
+        target = value[1:closing]
+        trailing = value[closing + 1 :].strip()
+        if trailing and not (
+            (trailing.startswith('"') and trailing.endswith('"'))
+            or (trailing.startswith("'") and trailing.endswith("'"))
+        ):
+            return None, "unsupported text follows an angle-bracket link destination"
+        return target, None
+    return value.split(None, 1)[0], None
+
+
+def _validate_reference_definitions(document: SkillDocument) -> Iterator[str]:
+    definition = re.compile(r"^[ \t]{0,3}\[[^\]\n]+\]:", re.MULTILINE)
+    for match in definition.finditer(document.body):
+        line = document.body_start_line + _line_number(document.body, match.start()) - 1
+        yield (
+            f"{document.path}:{line}: reference-style Markdown link definitions are unsupported; "
+            "use an inline destination"
+        )
+
+
 def _validate_links(document: SkillDocument, root: Path) -> Iterator[str]:
     text = document.body
-    for match in MARKDOWN_LINK_RE.finditer(text):
-        raw_target = match.group(1).strip()
-        line = document.body_start_line + _line_number(text, match.start()) - 1
-
-        if raw_target.startswith("<") and raw_target.endswith(">"):
-            target = raw_target[1:-1]
-        else:
-            pieces = raw_target.split(None, 1)
-            if not pieces:
-                yield f"{document.path}:{line}: local link has an empty destination"
-                continue
-            target = pieces[0]
-        if not target or target.startswith("#"):
+    yield from _validate_reference_definitions(document)
+    for line, raw_target, parse_error in _markdown_links(text):
+        actual_line = document.body_start_line + line - 1
+        if parse_error is not None:
+            yield f"{document.path}:{actual_line}: {parse_error}"
             continue
-        if target.startswith("//") or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target):
+        if raw_target is None:
+            continue
+        target, target_error = _link_target(raw_target)
+        if target_error is not None:
+            yield f"{document.path}:{actual_line}: {target_error}"
+            continue
+        if target is None:
+            yield f"{document.path}:{actual_line}: local link has an empty destination"
             continue
         if target.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", target):
-            yield f"{document.path}:{line}: link {target!r} must be relative"
+            yield f"{document.path}:{actual_line}: link {target!r} must be relative"
+            continue
+        if target.startswith("#"):
+            continue
+        if target.startswith("//") or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target):
             continue
 
         local_target = target.split("#", 1)[0]
@@ -206,9 +325,9 @@ def _validate_links(document: SkillDocument, root: Path) -> Iterator[str]:
         candidate = (document.path.parent / local_target).resolve(strict=False)
         root_resolved = root.resolve(strict=False)
         if not _relative_to_root(candidate, root_resolved):
-            yield f"{document.path}:{line}: link {target!r} escapes the repository root"
+            yield f"{document.path}:{actual_line}: link {target!r} escapes the repository root"
         elif not candidate.is_file():
-            yield f"{document.path}:{line}: local link {target!r} does not exist"
+            yield f"{document.path}:{actual_line}: local link {target!r} does not exist"
 
 
 def _make_targets(makefile: Path) -> tuple[set[str], str | None]:
@@ -218,7 +337,7 @@ def _make_targets(makefile: Path) -> tuple[set[str], str | None]:
         return set(), str(error)
 
     targets: set[str] = set()
-    target_definition = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9_.-]*):(?:\s|$)")
+    target_definition = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9_.-]*):(?::|[ \t;]|$)")
     for line in lines:
         match = target_definition.match(line)
         if match:
@@ -230,44 +349,61 @@ def _line_number(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
-def _command_matches(text: str) -> Iterator[tuple[int, str, str]]:
-    """Yield line, target, and line text for command-shaped make references.
+def _make_contexts(text: str) -> Iterator[tuple[str, int, str]]:
+    """Yield code/command contexts that may contain a make invocation."""
 
-    Inline code and fenced code are always inspected.  Outside code, only a
-    line beginning with ``make`` (optionally after a list marker or ``$``) is
-    considered a command; this avoids treating ordinary prose such as "make a
-    plan" as a build invocation.
-    """
-
-    seen: set[tuple[int, str]] = set()
-
-    def emit(segment: str, base_offset: int, line_text: str) -> Iterator[tuple[int, str, str]]:
-        for match in MAKE_COMMAND_RE.finditer(segment):
-            target = match.group("target")
-            line = _line_number(text, base_offset + match.start("target"))
-            key = (line, target)
-            if key not in seen:
-                seen.add(key)
-                yield line, target, line_text
-
+    offset = 0
     in_fence = False
-    for line_match in re.finditer(r"^.*(?:\n|$)", text, re.MULTILINE):
-        line_text = line_match.group(0).rstrip("\n")
-        stripped = line_text.lstrip()
+    for raw_line in text.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        stripped = line.lstrip()
         if stripped.startswith("```") or stripped.startswith("~~~"):
             in_fence = not in_fence
-            continue
-        if in_fence:
-            yield from emit(line_text, line_match.start(), line_text)
-        elif COMMAND_LINE_RE.match(stripped):
-            yield from emit(line_text, line_match.start(), line_text)
+        elif in_fence or COMMAND_LINE_RE.match(stripped):
+            if MAKE_WORD_RE.search(line):
+                yield line, offset, line
+        offset += len(raw_line)
 
     for inline in re.finditer(r"`([^`\n]+)`", text):
-        line_start = text.rfind("\n", 0, inline.start()) + 1
-        line_end = text.find("\n", inline.end())
-        if line_end < 0:
-            line_end = len(text)
-        yield from emit(inline.group(1), inline.start(1), text[line_start:line_end])
+        segment = inline.group(1)
+        if MAKE_WORD_RE.search(segment):
+            line_start = text.rfind("\n", 0, inline.start()) + 1
+            line_end = text.find("\n", inline.end())
+            if line_end < 0:
+                line_end = len(text)
+            yield segment, inline.start(1), text[line_start:line_end]
+
+
+def _make_occurrences(text: str) -> list[MakeOccurrence]:
+    occurrences: list[MakeOccurrence] = []
+    seen_offsets: set[int] = set()
+    for segment, base_offset, source in _make_contexts(text):
+        for match in MAKE_WORD_RE.finditer(segment):
+            absolute_offset = base_offset + match.start()
+            if absolute_offset in seen_offsets:
+                continue
+            seen_offsets.add(absolute_offset)
+            remainder = segment[match.end() :].strip()
+            if MAKE_TARGET_RE.fullmatch(remainder):
+                target, syntax_error = remainder, None
+            else:
+                target = None
+                syntax_error = (
+                    "unsupported make command shape; use exactly `make <target>` "
+                    "with no options, assignments, extra targets, or shell operators"
+                )
+            occurrences.append(
+                MakeOccurrence(_line_number(text, absolute_offset), target, source, syntax_error)
+            )
+    return occurrences
+
+
+def _command_matches(text: str) -> Iterator[tuple[int, str, str]]:
+    """Yield valid one-target make references for callers that need matches."""
+
+    for occurrence in _make_occurrences(text):
+        if occurrence.target is not None:
+            yield occurrence.line, occurrence.target, occurrence.source
 
 
 def _validate_body(document: SkillDocument, make_targets: set[str]) -> Iterator[str]:
@@ -280,13 +416,30 @@ def _validate_body(document: SkillDocument, make_targets: set[str]) -> Iterator[
                 f"{marker.group(0)!r}; replace it or remove it"
             )
 
-    for line, target, source in _command_matches(document.body):
-        if PLANNED_COMMAND_RE.search(source):
+    occurrences = _make_occurrences(document.body)
+    planned_lines = Counter(
+        occurrence.line
+        for occurrence in occurrences
+        if PLANNED_COMMAND_RE.search(occurrence.source)
+    )
+    ambiguous_planned_lines: set[int] = set()
+    for occurrence in occurrences:
+        actual_line = document.body_start_line + occurrence.line - 1
+        if occurrence.syntax_error is not None:
+            yield f"{document.path}:{actual_line}: {occurrence.syntax_error}"
             continue
-        actual_line = document.body_start_line + line - 1
-        if target not in make_targets:
+        if planned_lines[occurrence.line] and planned_lines[occurrence.line] != 1:
+            if occurrence.line not in ambiguous_planned_lines:
+                ambiguous_planned_lines.add(occurrence.line)
+                yield (
+                    f"{document.path}:{actual_line}: planned marker is ambiguous for multiple "
+                    "make commands on the same line"
+                )
+        elif planned_lines[occurrence.line]:
+            continue
+        if occurrence.target not in make_targets:
             yield (
-                f"{document.path}:{actual_line}: make target {target!r} is not defined in Makefile; "
+                f"{document.path}:{actual_line}: make target {occurrence.target!r} is not defined in Makefile; "
                 "mark intentionally future work with [planned] or (planned)"
             )
 
@@ -304,6 +457,10 @@ def verify(root: Path, required_skills: Sequence[str] = REQUIRED_SKILLS) -> list
     documents: list[SkillDocument] = []
     names: dict[str, Path] = {}
     for path in files:
+        path_error = _skill_path_error(path, root)
+        if path_error is not None:
+            errors.append(path_error)
+            continue
         document, parse_errors = parse_skill(path)
         errors.extend(parse_errors)
         if document is None:
@@ -319,8 +476,9 @@ def verify(root: Path, required_skills: Sequence[str] = REQUIRED_SKILLS) -> list
 
     for required in required_skills:
         required_path = root / "skills" / required / "SKILL.md"
-        if not required_path.is_file():
-            errors.append(f"{required_path}: required skill is missing")
+        path_error = _skill_path_error(required_path, root, required=True)
+        if path_error is not None:
+            errors.append(path_error)
 
     make_targets, make_error = _make_targets(root / "Makefile")
     if make_error is not None:
