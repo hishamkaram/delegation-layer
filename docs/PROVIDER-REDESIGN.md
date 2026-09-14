@@ -63,7 +63,7 @@ Record commit, built binary digests, provider version/platform/profile, commands
 
 ## Handoff and review templates
 
-Implementation handoff fields: base commit; bounded objective; owned files/responsibilities; applicable skills/contracts; fixed interfaces; acceptance commands/scenarios; deferred scope. agy implements designated work and fixes without git/remote mutation. Additional agents use Luna/max with bounded ownership. Root owns docs/integration/review/commits/PR/CI/merge; one active implementation worktree.
+Implementation handoff fields: base commit; bounded objective; owned files/responsibilities; applicable skills/contracts; fixed interfaces; acceptance commands/scenarios; deferred scope. Root Codex implements directly or delegates work and fixes to Luna/max agents with bounded ownership and no git/remote mutation. agy is used only for provider integration and live acceptance tests, never implementation or review fixes. Root owns docs/integration/review/commits/PR/CI/merge; one active implementation worktree.
 
 Review record fields: reviewed head and base; changed surface and consumers inspected; maintainability assessment (ownership/dependencies/abstractions/duplication/compatibility/contributor impact); findings with severity, trigger, file/line, resolution and regression evidence; executed commands/results; native status; unresolved items. Direct Codex review CLI only, never Duo. Incomplete or failed review output is not approval. Disputed findings require code evidence, not relabeling. Fix all actionable findings and rerun affected checks/review on the new head.
 

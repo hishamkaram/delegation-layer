@@ -17,6 +17,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -44,6 +45,7 @@ A durable single-machine agent delegation layer.
 
 Commands:
   dispatch   Persist and submit one bounded provider turn
+  providers  Describe compiled provider capabilities
   status     Observe admission, liveness, and publication
   collect    Recover or read the immutable publication
   cancel     Request one explicit supervisor stop
@@ -56,13 +58,16 @@ Global flags:
   --pueue-config ABS      Initial supervisor configuration
   --runner ABS            Runner executable for dispatch
 
-Use --json on task commands for the versioned control response.
+Use --json on task and providers commands for the versioned response.
 `
 
 // Dependencies is the explicit composition boundary for production and the
 // hermetic acceptance harness. Production leaves hooks and profile selection at
 // their safe defaults; acceptance supplies a compiled finite profile directly.
 type Dependencies struct {
+	// Catalog is the immutable provider composition for this command. When it
+	// is empty, normalized constructs the production catalog once.
+	Catalog                     commonprovider.Catalog
 	PrepareProfile              PrepareProfile
 	PredicateRegistry           func() predicate.Registry
 	SupervisorOptions           pueue.Options
@@ -80,12 +85,22 @@ type storeDependencies struct {
 }
 
 func (d Dependencies) storeDependencies() storeDependencies {
-	return storeDependencies{predicateRegistry: d.PredicateRegistry}
+	registry := d.PredicateRegistry
+	if registry == nil && !d.Catalog.IsZero() {
+		registry = d.Catalog.Registry
+	}
+	return storeDependencies{predicateRegistry: registry}
 }
 
 func (d Dependencies) normalized() Dependencies {
+	if d.Catalog.IsZero() {
+		d.Catalog = NativeCatalog()
+	}
 	if d.PrepareProfile == nil {
-		d.PrepareProfile = NativeProfile
+		d.PrepareProfile = d.Catalog.Prepare
+	}
+	if d.PredicateRegistry == nil {
+		d.PredicateRegistry = d.Catalog.Registry
 	}
 	if d.PublisherVersion == "" {
 		d.PublisherVersion = defaultPublisher
@@ -181,7 +196,11 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 		return 0
 	}
 
-	result := runCommand(parsed, deps.normalized())
+	normalized := deps.normalized()
+	if parsed.Command == "providers" {
+		return runProviders(parsed.JSON, stdout, stderr, normalized.Catalog)
+	}
+	result := runCommand(parsed, normalized)
 	if parsed.JSON {
 		result.response.setError(result.err)
 		if err = writeJSON(stdout, result.response); err != nil {

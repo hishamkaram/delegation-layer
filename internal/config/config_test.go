@@ -60,8 +60,13 @@ func TestValidateProvider(t *testing.T) {
 			t.Errorf("expected provider %s to be valid, got: %v", p, err)
 		}
 	}
-	if err := ValidateProvider("openai:gpt4"); !errors.Is(err, ErrUnsupportedProvider) {
-		t.Errorf("expected ErrUnsupportedProvider, got: %v", err)
+	if err := ValidateProvider("openai:gpt4"); err != nil {
+		t.Errorf("expected structurally valid future provider identifier, got: %v", err)
+	}
+	for _, invalid := range []string{"openai", "openai:", ":exec", "OpenAI:exec", "openai:exec:extra", "openai:exec value"} {
+		if err := ValidateProvider(invalid); !errors.Is(err, ErrUnsupportedProvider) {
+			t.Errorf("expected ErrUnsupportedProvider for %q, got: %v", invalid, err)
+		}
 	}
 }
 

@@ -13,20 +13,16 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 const ProfileRevision = "agy-1.2.2-darwin-arm64-workspace-write-3"
 
-// Prepared is a statically checked candidate for the native capability gate.
-// Preparation launches nothing and does not turn documented capabilities into
-// Executed certification. The production composition owns that release gate.
-type Prepared struct {
-	Plan            execution.Plan
-	ObservedVersion string
-	Effective       task.EffectiveConfig
-	WritableRoots   []string
-}
+// Prepared is retained as an adapter-local name for the common prepared
+// profile. The common contract owns validation and app-facing compatibility;
+// this alias keeps certification tests focused on agy's existing fields.
+type Prepared = commonprovider.PreparedProfile
 
 func PrepareCandidate(request task.TaskRecord) (Prepared, error) {
 	arguments, err := printArguments(request)
@@ -53,6 +49,20 @@ func PrepareCandidate(request task.TaskRecord) (Prepared, error) {
 		Plan:            execution.Plan{Executable: identity.Executable, Arguments: arguments, Directory: request.CanonicalCwd, Environment: environment.Values, Predicate: NewCurrentPrintInterpreter().Reference()},
 		ObservedVersion: identity.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
 	}, nil
+}
+
+// Prepare builds the agy profile consumed by the app catalog. It wraps the
+// existing certified preparation path and only adds the identity observer
+// factory; it does not launch a process or change policy/argv semantics.
+func Prepare(request task.TaskRecord) (commonprovider.PreparedProfile, error) {
+	prepared, err := PrepareCertified(request)
+	if err != nil {
+		return commonprovider.PreparedProfile{}, err
+	}
+	prepared.Identity = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
+		return NewIdentityObserver(request.TaskID, expected, record)
+	}
+	return prepared, nil
 }
 
 func resolveEffectivePolicy(identity runtimeIdentity, environment profileEnvironment, inventory PolicyInventory) (task.EffectiveConfig, error) {

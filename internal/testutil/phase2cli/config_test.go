@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -112,6 +113,18 @@ func TestPrepareProfileReadsAndBindsAllFixtureDigests(t *testing.T) {
 	request.TaskID = "ffffffffffffffffffffffffffffffff"
 	if _, err = m.prepareProfile(request); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("provider task mismatch=%v", err)
+	}
+}
+
+func TestPrepareProfileRejectsNativeTimeoutBeforeReadingConfig(t *testing.T) {
+	m := &Main{configPath: filepath.Join(t.TempDir(), "missing-config.json")}
+	request := task.TaskRecord{
+		Provider:        phase2fixture.Provider,
+		Mode:            phase2fixture.Mode,
+		RequestedConfig: task.TaskConfig{Permission: phase2fixture.Mode, NativeTimeout: "1s"},
+	}
+	if _, err := m.prepareProfile(request); err == nil || !strings.Contains(err.Error(), "native timeout") {
+		t.Fatalf("native timeout was not rejected before config access: %v", err)
 	}
 }
 

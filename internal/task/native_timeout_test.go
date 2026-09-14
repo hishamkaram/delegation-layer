@@ -36,7 +36,7 @@ func TestNativeTimeoutNormalizesAndBindsRequest(t *testing.T) {
 	}
 }
 
-func TestNativeTimeoutRejectsInvalidAndOtherProviders(t *testing.T) {
+func TestNativeTimeoutRejectsInvalidButKeepsProviderSupportStructural(t *testing.T) {
 	for _, value := range []string{"0s", "-1s", "121s", "NaN", "infinity", "999999999999999999999999h"} {
 		t.Run(value, func(t *testing.T) {
 			request := nativeTimeoutRequest(value)
@@ -52,8 +52,8 @@ func TestNativeTimeoutRejectsInvalidAndOtherProviders(t *testing.T) {
 	for _, provider := range []string{config.ProviderCodexExec, config.ProviderClaudePrint, "fixture:test"} {
 		request := nativeTimeoutRequest("3s")
 		request.Provider = provider
-		if err := NormalizeRequestedConfig(&request); err == nil {
-			t.Errorf("native timeout accepted for %s", provider)
+		if err := NormalizeRequestedConfig(&request); err != nil {
+			t.Errorf("structural normalization rejected %s: %v", provider, err)
 		}
 	}
 }

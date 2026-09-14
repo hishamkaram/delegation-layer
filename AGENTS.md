@@ -41,8 +41,10 @@ ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery.
 ## Orchestrator and Reviewer: Root Codex
 Root Codex owns task orchestration, code review, branch commits, PR lifecycle, waiting for CI, and squash merges. No other agent may commit, push, create PRs, or squash merge unless explicitly requested.
 
-## Implementer: agy
-The installed Antigravity CLI (`agy`) acts as the primary implementer for designated phases and all review fixes. agy operates within its isolated worktree branch, delivering working code, passing tests, and running all required verification gates without touching git history or remote repositories directly.
+## Implementation and testing
+Root Codex implements directly or delegates bounded implementation and review fixes to agents using `gpt-5.6-luna` with `max` reasoning effort. Delegated agents have explicit file ownership and must not modify git history or remote repositories.
+
+The installed Antigravity CLI (`agy`) is used only to test its provider integration and live acceptance. Do not use agy to implement code or fix review findings. Native tests retain the required finite inputs, isolated supervision, and recorded evidence.
 
 ## Invariant Contracts
 All contributors and subagents must strictly adhere to the project contracts in `agents/_data/`:

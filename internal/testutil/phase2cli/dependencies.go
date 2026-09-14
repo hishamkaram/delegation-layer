@@ -129,8 +129,8 @@ func (m *Main) prepareProfile(request task.TaskRecord) (app.PreparedProfile, err
 	if request.Provider != phase2fixture.Provider || request.Mode != phase2fixture.Mode {
 		return app.PreparedProfile{}, fmt.Errorf("%w: fixture profile requires %s/%s", task.ErrIdentityMismatch, phase2fixture.Provider, phase2fixture.Mode)
 	}
-	if request.RequestedConfig.Model != "" || request.RequestedConfig.Effort != "" {
-		return app.PreparedProfile{}, errors.New("fixture profile does not accept model or effort")
+	if request.RequestedConfig.Model != "" || request.RequestedConfig.Effort != "" || request.RequestedConfig.NativeTimeout != "" {
+		return app.PreparedProfile{}, errors.New("fixture profile does not accept model, effort, or native timeout")
 	}
 	loaded, err := loadHarnessConfig(m.configPath)
 	if err != nil {

@@ -60,8 +60,8 @@ func normalizedNativeTimeout(provider, value string, budget int64) (string, erro
 	if value == "" {
 		return "", nil
 	}
-	if provider != config.ProviderAntigravityPrint {
-		return "", errors.New("native timeout is supported only for antigravity:print")
+	if err := config.ValidateProvider(provider); err != nil {
+		return "", err
 	}
 	duration, err := time.ParseDuration(value)
 	if err != nil || duration <= 0 || int64(duration) > budget {

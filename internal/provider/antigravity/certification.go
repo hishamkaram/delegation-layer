@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"runtime"
 
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -47,9 +49,9 @@ func PrepareCertified(request task.TaskRecord) (Prepared, error) {
 }
 
 func validateCertification(prepared Prepared, osName, arch string) error {
-	var record certificationRecord
-	if err := json.Unmarshal(certificationJSON, &record); err != nil {
-		return fmt.Errorf("%w: invalid embedded certification", ErrUnsupportedProfile)
+	record, err := embeddedCertification()
+	if err != nil {
+		return err
 	}
 	if !prepared.Plan.Predicate.Equal(record.predicate()) {
 		return fmt.Errorf("%w: predicate lacks Executed certification", ErrUnsupportedProfile)
@@ -62,6 +64,51 @@ func validateCertification(prepared Prepared, osName, arch string) error {
 		return fmt.Errorf("%w: runtime or effective profile lacks Executed certification", ErrUnsupportedProfile)
 	}
 	return nil
+}
+
+func embeddedCertification() (certificationRecord, error) {
+	var record certificationRecord
+	if err := json.Unmarshal(certificationJSON, &record); err != nil {
+		return certificationRecord{}, fmt.Errorf("%w: invalid embedded certification", ErrUnsupportedProfile)
+	}
+	return record, nil
+}
+
+// Description returns the immutable metadata used by the production catalog.
+// It is derived from the same embedded certification record used by the launch
+// gate, so discovery cannot drift from the certified version/profile facts.
+func Description() commonprovider.Description {
+	record, err := embeddedCertification()
+	if err != nil {
+		panic(err) // checked-in certification is a build invariant
+	}
+	return commonprovider.Description{
+		ID:               record.Provider,
+		SupportedOptions: []string{commonprovider.OptionContinuation, commonprovider.OptionNativeTimeout},
+		Discoverable:     true,
+		Profiles: []commonprovider.CertifiedProfile{{
+			Mode:            record.Mode,
+			Approval:        record.Approval,
+			Status:          record.Status,
+			ProviderVersion: record.ProviderVersion,
+			OS:              record.OS,
+			Arch:            record.Arch,
+			RuntimeSHA256:   record.RuntimeSHA256,
+			ProfileRevision: record.ProfileRevision,
+			Predicate:       record.predicate(),
+		}},
+	}
+}
+
+// Registration returns agy's one explicit catalog entry. Both predicate
+// revisions remain available for historical collection; only the current
+// revision is selected by fresh preparation.
+func Registration() commonprovider.Registration {
+	return commonprovider.Registration{
+		Description:  Description(),
+		Prepare:      Prepare,
+		Interpreters: []predicate.Interpreter{NewPrintInterpreter(), NewCurrentPrintInterpreter()},
+	}
 }
 
 func (r certificationRecord) predicate() task.PredicateRef {
