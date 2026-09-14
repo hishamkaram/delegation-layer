@@ -333,11 +333,13 @@ func (s *frameScanner) feed(data []byte) {
 }
 
 func (s *frameScanner) finish() {
-	if s.stopped || len(s.pending) == 0 {
+	if s.stopped {
 		return
 	}
-	s.onFrame(nil)
-	s.pending = nil
+	if len(s.pending) > 0 {
+		s.onFrame(nil)
+		s.pending = nil
+	}
 	s.stopped = true
 }
 

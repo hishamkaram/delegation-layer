@@ -265,10 +265,23 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 	if reconcileErr != nil {
 		return failed(response, reconcileErr, 1)
 	}
-	if observation.State == pueue.StateEnded {
-		return failed(response, errors.New("supervisor task ended before runner start"), 1)
+	if stateErr := runnerStartStateError(observation.State); stateErr != nil {
+		return failed(response, stateErr, 1)
 	}
 	return runProvider(response, td, req, profile, client, deps)
+}
+
+func runnerStartStateError(state pueue.State) error {
+	switch state {
+	case pueue.StateQueued, pueue.StateRunning:
+		return nil
+	case pueue.StateEnded:
+		return errors.New("supervisor task ended before runner start")
+	case pueue.StateUnknown:
+		return fmt.Errorf("%w: supervisor task state unknown before runner start", pueue.ErrUnknown)
+	default:
+		return fmt.Errorf("%w: unsupported supervisor task state %q before runner start", pueue.ErrUnknown, state)
+	}
 }
 
 func preparedHashes(td *taskdir.TaskDir) (string, string, error) {
@@ -290,19 +303,16 @@ type budgetStopper struct {
 	taskDir *taskdir.TaskDir
 }
 
-func (s *budgetStopper) RequestBudget(ctx context.Context, deadline time.Time) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	// TaskDir's durable stop API has no context parameter; ctx governs the
-	// supervisor call below and is checked before persistence begins.
-	permit, request, err := s.prepareStop(deadline) //nolint:contextcheck // TaskDir persistence is synchronous and cannot consume ctx.
+func (s *budgetStopper) PrepareBudget(deadline time.Time) (execution.BudgetRequest, error) {
+	permit, request, err := s.prepareStop(deadline)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	result, stopErr := s.client.Stop(ctx, permit)
-	releaseErr := permit.Release()
-	return errors.Join(stopErr, releaseErr, s.recordStopResult(request, result)) //nolint:contextcheck // TaskDir persistence is synchronous and cannot consume ctx.
+	return func(ctx context.Context) error {
+		result, stopErr := s.client.Stop(ctx, permit)
+		releaseErr := permit.Release()
+		return errors.Join(stopErr, releaseErr, s.recordStopResult(request, result)) //nolint:contextcheck // TaskDir persistence is synchronous and cannot consume ctx.
+	}, nil
 }
 
 func (s *budgetStopper) prepareStop(deadline time.Time) (*taskdir.StopPermit, *task.StopRequestRecord, error) {

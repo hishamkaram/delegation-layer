@@ -29,12 +29,16 @@ type IdentityObserver interface {
 	Complete() error
 }
 
-// Stopper requests a single durable budget stop through the bound supervisor.
-// Context only bounds observation: it must never cancel an external process.
-// Implementations return when observation ends and retain any in-flight Wait.
+// Stopper durably prepares one budget request while expiry owns the completion
+// barrier. Preparation performs no supervisor commands. The returned operation
+// must release its resources even when its observation context is already done.
+// Context must never cancel an external process; in-flight clients retain Wait.
 type Stopper interface {
-	RequestBudget(context.Context, time.Time) error
+	PrepareBudget(time.Time) (BudgetRequest, error)
 }
+
+// BudgetRequest observes a prepared stop through the bound supervisor.
+type BudgetRequest func(context.Context) error
 
 // Clock supplies monotonic in-memory launch timing. Wall times are evidence only.
 type Clock interface {

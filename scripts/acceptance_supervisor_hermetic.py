@@ -161,6 +161,14 @@ def status_job(numeric_id, label, state):
                 "result": "Success",
             }
         }
+    elif state == "locked":
+        status = {
+            "Locked": {
+                "previous_status": {
+                    "Queued": {"enqueued_at": FIXTURE_TIME},
+                },
+            }
+        }
     else:
         raise HarnessFailure("unsupported fake status state: " + state)
     return {
@@ -1511,6 +1519,8 @@ class HermeticSuite:
         self.run_case("C04", run_c04)
         self.run_case("C05", run_c05)
         self.run_case("C06", run_c06)
+        self.run_case("C07-locked-unknown", run_c07_locked_unknown)
+        self.run_case("C08-ended-unsealed", run_c08_ended_unsealed_cancel)
         self.run_case("SESSION-CHAIN", run_session_chain)
         summary = self.write_summary()
         if summary["counts"]["fail"]:
@@ -1523,6 +1533,8 @@ class HermeticSuite:
 
     def run_targeted(self, case_ids):
         controls = {
+            "C07-locked-unknown": run_c07_locked_unknown,
+            "C08-ended-unsealed": run_c08_ended_unsealed_cancel,
             "SESSION-CHAIN": run_session_chain,
             "SESSION-CHAIN-BASELINE": run_session_chain_baseline,
         }
@@ -1535,8 +1547,8 @@ class HermeticSuite:
         if summary["counts"]["fail"]:
             raise SystemExit(1)
         print(
-            "PASS hermetic H targeted: %d cases; terminal continuation chain "
-            "and natural provider/runner receipts recorded" % summary["counts"]["pass"],
+            "PASS hermetic H targeted: %d cases; compiled CLI and natural "
+            "process receipts recorded" % summary["counts"]["pass"],
             flush=True,
         )
 
@@ -2743,6 +2755,101 @@ def run_c06(case):
     assert_counts(case, A=1, S=0, E=0, K=1, M=0)
 
 
+def run_c07_locked_unknown(case):
+    """A matching pueue Locked row stays unknown before a fresh provider Start."""
+    case.dispatch_dynamic(status="queued")
+
+    untargeted_label = "delegate:" + case.root_id + ":" + task_id()
+    case.set_status("locked", label=untargeted_label)
+    untargeted = case.start_runner(name="locked-untargeted")
+    untargeted_response = case.finish_runner(untargeted, expected=(1,))
+    untargeted_supervisor = untargeted_response.get("supervisor") or {}
+    require_true(
+        untargeted_supervisor.get("matched") is False and
+        untargeted_supervisor.get("state") == "unknown" and
+        untargeted_response.get("error"),
+        "untargeted Locked row was not rejected as unknown",
+    )
+
+    case.set_status("locked")
+    runner = case.start_runner(name="locked-matching")
+    response = case.finish_runner(runner, expected=(1,))
+    supervisor = response.get("supervisor") or {}
+    require_true(
+        supervisor.get("matched") is True and
+        supervisor.get("state") == "unknown" and
+        supervisor.get("numeric_task_id") == case.numeric_id and
+        response.get("liveness") == "undetermined" and
+        response.get("error") and "unknown" in response["error"].lower(),
+        "matching Locked row was not refused before provider Start",
+    )
+    require_true(
+        not (case.task_dir() / "provider.start").exists() and
+        not (case.provider_records / "provider.entry.json").exists() and
+        "start-entry" not in case.event_names(),
+        "unknown supervisor state reached provider Start",
+    )
+    case.require_bound_records()
+    assert_counts(case, A=1, S=0, E=0, K=0, M=0)
+
+
+def run_c08_ended_unsealed_cancel(case):
+    """An ended supervised row can be cancelled without kill/remove mutation."""
+    case.dispatch_dynamic(status="queued")
+    case.set_status("ended")
+    _, response = case.run_command("cancel-ended-unsealed", "cancel", expected=(0,))
+    stop = response.get("stop")
+    require_true(
+        isinstance(stop, dict) and
+        stop.get("requested") is True and
+        stop.get("matched") is True and
+        stop.get("attempted") is False and
+        stop.get("numeric_task_id") == case.numeric_id and
+        stop.get("acknowledged") is None and
+        stop.get("observed_state") == "ended" and
+        stop.get("terminated") is True,
+        "immediate ended cancellation did not report proven termination",
+    )
+    request_id = stop["request_id"]
+    request = case.stop_record(request_id)
+    observation = read_json(
+        case.task_dir() / "stop" / (request_id + ".observed.json"), MAX_CONTROL_BYTES
+    )
+    require_true(
+        request["request_id"] == request_id and
+        request["task_id"] == case.task_id and
+        request["numeric_task_id"] == case.numeric_id,
+        "ended cancellation request was not durably bound",
+    )
+    require_true(
+        observation["request_id"] == request_id and
+        observation["task_id"] == case.task_id and
+        observation["numeric_task_id"] == case.numeric_id and
+        observation["state"] == "ended" and
+        observation["terminated"] is True,
+        "ended cancellation response disagreed with persisted observation",
+    )
+    _, reloaded = case.run_command("status-ended-after-cancel", "status", expected=(0,))
+    stop_rows = reloaded.get("stops") or []
+    persisted = next(
+        (row for row in stop_rows if row.get("request_id") == request_id), None
+    )
+    require_true(
+        isinstance(persisted, dict) and
+        persisted.get("observed_state") == "ended" and
+        persisted.get("terminated") is True,
+        "fresh status did not preserve persisted ended observation",
+    )
+    require_true(
+        not (case.task_dir() / "provider.start").exists() and
+        not (case.task_dir() / "provider.exit").exists() and
+        not (case.task_dir() / "outcome.json").exists(),
+        "ended unsealed cancellation fabricated provider terminal evidence",
+    )
+    case.require_bound_records()
+    assert_counts(case, A=1, S=0, E=0, K=0, M=0)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tools", required=True)
@@ -2750,9 +2857,14 @@ def main():
     parser.add_argument(
         "--case",
         action="append",
-        choices=("SESSION-CHAIN", "SESSION-CHAIN-BASELINE"),
+        choices=(
+            "C07-locked-unknown",
+            "C08-ended-unsealed",
+            "SESSION-CHAIN",
+            "SESSION-CHAIN-BASELINE",
+        ),
         dest="cases",
-        help="run one focused compiled H control instead of the complete suite",
+        help="run one or more focused compiled H controls instead of the complete suite",
     )
     args = parser.parse_args()
     suite = HermeticSuite(args.tools, args.output)

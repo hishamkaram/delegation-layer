@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
 )
@@ -128,10 +129,13 @@ func validateHarnessConfig(cfg HarnessConfig) error {
 	if cfg.SchemaVersion != 1 {
 		return fmt.Errorf("unsupported phase2 fixture schema version %d", cfg.SchemaVersion)
 	}
-	for _, path := range []string{cfg.ProviderExecutable, cfg.ProviderConfig, cfg.SupervisorExecutable, cfg.EventsDirectory} {
+	for _, path := range []string{cfg.ProviderExecutable, cfg.ProviderConfig, cfg.SupervisorExecutable} {
 		if err := validateCleanAbsolute(path); err != nil {
 			return err
 		}
+	}
+	if err := validateEventsDirectory(cfg.EventsDirectory); err != nil {
+		return err
 	}
 	for _, digest := range []string{cfg.ProviderSHA256, cfg.ProviderConfigSHA256} {
 		if err := task.ValidateSHA256(digest); err != nil {
@@ -181,6 +185,36 @@ func validateCleanAbsolute(path string) error {
 		return fmt.Errorf("phase2 fixture path must be clean and absolute: %w", errInvalidHarnessReference)
 	}
 	return nil
+}
+
+func validateEventsDirectory(path string) error {
+	if err := validateCleanAbsolute(path); err != nil {
+		return err
+	}
+	canonical, err := config.CanonicalizePath(path)
+	if err != nil {
+		return fmt.Errorf("resolving phase2 events directory: %w", err)
+	}
+	if canonical != path {
+		return fmt.Errorf("phase2 events directory must be canonical: %w", errInvalidHarnessReference)
+	}
+	for current := path; ; current = filepath.Dir(current) {
+		info, statErr := os.Lstat(current)
+		if statErr == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("phase2 events directory contains a symlink: %w", errInvalidHarnessReference)
+			}
+			if !info.IsDir() {
+				return fmt.Errorf("phase2 events directory component is not a directory: %w", errInvalidHarnessReference)
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("checking phase2 events directory: %w", statErr)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
+	}
 }
 
 func readRegular(path string, limit int64) (data []byte, err error) {

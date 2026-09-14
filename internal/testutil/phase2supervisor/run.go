@@ -113,16 +113,14 @@ func executeCommand(cfg Config, argv []string) ([]byte, []byte, int, error) {
 	if err = waitForInput(command.config.ReleasePath, command.config.Delay, MaxRunDuration); err != nil {
 		return nil, outputError(err), 1, err
 	}
-	defaultStdout, err := defaultOutput(cfg, command.verb)
-	if err != nil {
-		return nil, outputError(err), 1, err
-	}
-	stdout := defaultStdout
+	var stdout []byte
 	if command.config.StdoutPath != "" {
 		stdout, err = readConfiguredOutput(command.config.StdoutPath)
-		if err != nil {
-			return nil, outputError(err), 1, err
-		}
+	} else {
+		stdout, err = defaultOutput(cfg, command.verb)
+	}
+	if err != nil {
+		return nil, outputError(err), 1, err
 	}
 	stderr, err := readConfiguredOutput(command.config.StderrPath)
 	if err != nil {

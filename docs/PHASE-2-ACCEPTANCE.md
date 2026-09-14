@@ -6,9 +6,39 @@ The matrix uses **U** for deterministic unit or race checks, **H** for independe
 
 The links below point to the current repository files and test definitions. The H/R assertions must also retain exact per-process receipts, PIDs, argv, input/output bytes, event ordering, binding identity, and before/after record inventories. This map records observed receipts and pending gates; it does not declare final phase acceptance.
 
-## Receipt state
+## Final local verification
 
-The final local supervisor run is recorded in the private execution bundle
+The final combined source passed on 2026-09-14. The private execution evidence is
+`/tmp/delegation-layer-execution-20260913/phase-2/final-review-fixes-r2/`.
+`FREEZE.json` binds 191 source paths, `GATES-VERIFIED.json` records the results,
+and `REVIEW-COVERAGE.json` maps all 106 changed paths to exact review snapshots.
+The progress/receipt documentation was then updated from those verified results;
+no executable source changed after the gates.
+
+| Gate | Verified result |
+|---|---|
+| Repository checks | Sequential and parallel `make check` passed, including race tests, tooling enforcement, cross-builds, CLI smoke tests and vulnerability scanning. |
+| Protocol acceptance | All 49 required fault cases and the independent compiled CLI workflow passed. |
+| Hermetic CLI | 48 cases passed, including A→B→C continuation, matching `Locked` refusal before any provider start, and immediate termination consistent with a fresh `status` process. |
+| Native supervisor | I01–I05 passed using isolated pueue/pueued 4.0.4: A=S=E=1, K=M=0, no provider child, and observed daemon exit 0 after the sole job completed. |
+| Independent review | Direct native `codex review` found no actionable defects in the production follow-up or fixture follow-up; Root reviewed the implementation and test oracles and resolved the baseline findings. |
+
+The private PR's exact-head Linux/macOS checks and squash commit provide the
+merge acceptance receipt. The native run does not establish real signal
+enforcement, escaped-child containment or hardware power-loss durability.
+
+The review fixes have focused race regressions in
+`internal/execution/budget_handoff_test.go`, `internal/execution/run_wait_test.go`,
+`internal/app/phase2_review_regression_test.go`, and the affected fixture packages.
+The exit-state unit fixture checks classification by state presence; it does not
+simulate a real signal termination or modify private standard-library fields.
+
+## Earlier session-fix baseline receipts
+
+The following historical receipts predate the final review fixes above. Their
+pending-review/CI notes describe that earlier snapshot, not the final local gates.
+
+The earlier local supervisor run is recorded in the private execution bundle
 `/tmp/delegation-layer-execution-20260913/phase-2/root-session-review/root-supervisor-fix-r1/`.
 Its source manifest is in `root-session-review/root-supervisor-fix-r1.receipt.json`;
 compiled helper hashes are in its H summary. The H driver SHA-256 is

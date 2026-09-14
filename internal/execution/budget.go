@@ -37,25 +37,27 @@ func (b *budgetOwner) observe(ctx context.Context, deadline time.Time, opts Opti
 	case <-ctx.Done():
 		return
 	case <-b.timer.C():
-		if !b.observeExpiry(opts) {
-			return
-		}
-		if opts.Stopper != nil {
-			b.stopErr = opts.Stopper.RequestBudget(ctx, deadline)
-		} else {
-			b.stopErr = errors.New("budget expired without a supervisor stop capability")
+		request, err := b.prepareExpiry(deadline, opts)
+		b.stopErr = err
+		if request != nil {
+			b.stopErr = errors.Join(b.stopErr, request(ctx))
 		}
 	}
 }
 
-func (b *budgetOwner) observeExpiry(opts Options) bool {
+func (b *budgetOwner) prepareExpiry(deadline time.Time, opts Options) (BudgetRequest, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.completed {
-		return false
+		return nil, nil
 	}
 	opts.emit("deadline-observed")
-	return true
+	if opts.Stopper == nil {
+		return nil, errors.New("budget expired without a supervisor stop capability")
+	}
+	// Completion may cancel observation only after durable intent is prepared.
+	// No external reconciliation or stop reply is awaited under this mutex.
+	return opts.Stopper.PrepareBudget(deadline)
 }
 
 func (b *budgetOwner) complete(opts Options) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"golang.org/x/sys/unix"
 )
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -72,12 +73,15 @@ func parse(path string) (report, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return report{}, errors.New("config must be a clean absolute path")
 	}
-	f, err := os.Open(path)
+	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return report{}, err
 	}
-	data, readErr := task.ReadBounded(f, pueue.MaxControlBytes)
-	if err = errors.Join(readErr, f.Close()); err != nil {
+	if canonical != path {
+		return report{}, errors.New("config must be a canonical path")
+	}
+	data, err := readRegular(path, pueue.MaxControlBytes)
+	if err != nil {
 		return report{}, err
 	}
 	config, err := pueue.ParseConfig(data)
@@ -86,4 +90,20 @@ func parse(path string) (report, error) {
 	}
 	result := report{SchemaVersion: 1, ConfigSHA256: task.ComputeSHA256(data), Parsed: config}
 	return result, nil
+}
+
+func readRegular(path string, limit int64) (data []byte, err error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("config must be a regular file")
+	}
+	return task.ReadBounded(f, limit)
 }

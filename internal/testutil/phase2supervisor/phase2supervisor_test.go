@@ -345,6 +345,67 @@ func TestStatusPreservesRawBytes(t *testing.T) {
 	}
 }
 
+func prepareStatusInput(t *testing.T, base, path, kind string) {
+	t.Helper()
+	switch kind {
+	case "missing":
+		return
+	case "symlink":
+		target := filepath.Join(base, "status-target.json")
+		if writeErr := os.WriteFile(target, []byte(`{"tasks":{},"groups":{}}`), 0o600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if linkErr := os.Symlink(target, path); linkErr != nil {
+			t.Fatal(linkErr)
+		}
+	case "oversized":
+		file, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if truncateErr := file.Truncate(int64(MaxOutputBytes) + 1); truncateErr != nil {
+			if closeErr := file.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+			t.Fatal(truncateErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	default:
+		t.Fatalf("unknown default status input kind %q", kind)
+	}
+}
+
+func TestStatusStdoutOverrideSkipsDefaultStatusInput(t *testing.T) {
+	for _, defaultInput := range []string{"missing", "symlink", "oversized"} {
+		t.Run(defaultInput, func(t *testing.T) {
+			base, resolveErr := filepath.EvalSymlinks(t.TempDir())
+			if resolveErr != nil {
+				t.Fatal(resolveErr)
+			}
+			configPath := filepath.Join(base, ConfigName)
+			artifactDir := filepath.Join(base, "receipts")
+			defaultStatusPath := filepath.Join(base, "status.json")
+			explicitStdoutPath := filepath.Join(base, "explicit-status.json")
+			expected := []byte("explicit status\n")
+			if err := os.WriteFile(explicitStdoutPath, expected, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			prepareStatusInput(t, base, defaultStatusPath, defaultInput)
+
+			cfg := DefaultConfig(configPath, artifactDir, defaultStatusPath)
+			cfg.Status.StdoutPath = explicitStdoutPath
+			cfg.Status.ExitCode = 17
+			args := []string{"-c", configPath, "status", "--json"}
+			stdout, stderr, code, err := executeCommand(cfg, args)
+			if err != nil || code != 17 || !bytes.Equal(stdout, expected) || len(stderr) != 0 {
+				t.Fatalf("status override result: stdout=%q stderr=%q code=%d err=%v", stdout, stderr, code, err)
+			}
+		})
+	}
+}
+
 func TestKillAndRemoveUseConfiguredNumericIDs(t *testing.T) {
 	h := newTestHarness(t)
 	config, err := LoadConfig(h.config)

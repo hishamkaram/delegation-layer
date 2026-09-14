@@ -158,7 +158,7 @@ func (m *Main) prepareProfile(request task.TaskRecord) (app.PreparedProfile, err
 	if task.ComputeSHA256(configData) != loaded.Config.ProviderConfigSHA256 {
 		return app.PreparedProfile{}, errors.New("phase2 provider config digest mismatch")
 	}
-	providerConfigValue, err := phase2fixture.LoadProviderConfig(providerConfig)
+	providerConfigValue, err := phase2fixture.ParseProviderConfig(configData)
 	if err != nil {
 		return app.PreparedProfile{}, err
 	}

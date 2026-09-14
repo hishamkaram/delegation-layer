@@ -590,7 +590,8 @@ func logs(a Arguments, deps storeDependencies) (result commandResult) {
 }
 
 func stopResponseFromResult(id, cause string, result pueue.StopResult) StopResponse {
-	return StopResponse{RequestID: id, Cause: cause, Requested: result.Requested, Matched: result.Matched, Attempted: result.Attempted, Action: result.Action, NumericTaskID: copyTaskID(result.NumericTaskID), Acknowledged: result.Acknowledged, InFlight: result.InFlight, ObservedState: string(result.ObservedState), Message: result.Message}
+	terminated := result.ObservedState == pueue.StateEnded && result.NumericTaskID != nil
+	return StopResponse{RequestID: id, Cause: cause, Requested: result.Requested, Matched: result.Matched, Attempted: result.Attempted, Action: result.Action, NumericTaskID: copyTaskID(result.NumericTaskID), Acknowledged: result.Acknowledged, InFlight: result.InFlight, ObservedState: string(result.ObservedState), Terminated: terminated, Message: result.Message}
 }
 
 func stopResponses(records []taskdir.StopRecord) []StopResponse {

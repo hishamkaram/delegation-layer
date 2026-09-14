@@ -175,7 +175,7 @@ func observedWaitError(err error) error {
 		}
 	}
 	var exited *exec.ExitError
-	if errors.As(err, &exited) && exited.ProcessState != nil && exited.ExitCode() >= 0 {
+	if errors.As(err, &exited) && exited.ProcessState != nil {
 		return nil
 	}
 	return err

@@ -1,6 +1,6 @@
 # Implementation plan and milestones
 
-**Status: Phases 0 and 1 accepted (PRs #1 and #2 merged); Phase 2 supervisor integration and acceptance in progress.** The comprehensive execution plan in
+**Status: Phases 0 and 1 accepted (PRs #1 and #2 merged); Phase 2 implemented and locally verified. The private PR requires green exact-head CI before squash merge.** The comprehensive execution plan in
 [`docs/EXECUTION-PLAN.md`](EXECUTION-PLAN.md) is the authoritative normative phase handoff and execution plan.
 This document tracks implementation details and preserves historical debate context.
 
@@ -358,11 +358,11 @@ Every exit command for future phases is **proposed future work**, not claimed to
 - **Built:** `internal/task` (pure values, tri-state enums, canonical marshaling, strict JSON validation with duplicate-key detection, outcome and request reduction), `internal/config` (strict budget and directory validation, ancestor symlink canonicalization, regular-file brief checking up to global 8 MiB ceiling), `internal/taskdir` (safe local store, directory-relative boundaries, create-once staging with hard links and fsync/F_FULLFSYNC barriers, advisory flock with stable inodes and O_CLOEXEC, single-use pointer-backed permits, evidence sealing, publication reduction with sole outcome.json linearisation point, durable session continuation claims, nonblocking maintenance scavenger), compiled fixture `internal/testutil/protocolfixture` (prepare, claim, seal, collect, candidate, inspect, scavenge, lock-hold, session, reconcile and wait), and the acceptance suite `scripts/acceptance-protocol.sh`. All 49 required fault cases were corrected and verified with defining events and exact evidence. Earlier incomplete runs remain historical records, not acceptance evidence.
 - **Exit:** Unit/race, sequential and parallel `make check`, compiled protocol acceptance, independent live checks, and direct `codex review` passed. Exact-head Linux/macOS CI passed before [PR #2](https://github.com/hishamkaram/delegation-layer/pull/2) was squash-merged as `5f9c581f36ffdbed45c0d42bb78f9511afd24324`; post-merge CI also passed.
 
-### Phase 2 — a supervised task completing, against fakes (IMPLEMENTATION / ACCEPTANCE IN PROGRESS)
+### Phase 2 — a supervised task completing, against fakes (IMPLEMENTED AND VERIFIED)
 
 - **Goal:** prove the executable and the subprocess boundaries before provider quirks arrive.
 - **Built:** `cmd/delegate-run`; `internal/pueue` (subprocess client, versioned JSON decoding); `dispatch`, `status`, `collect`, `cancel`, `logs`; the wall budget; watch detachment; the fake provider and fake supervisor; publication recovery.
-- **Exit:** `make acceptance-supervisor` with isolated real pueue daemon.
+- **Verified:** Sequential and parallel `make check`, all 49 protocol cases and standalone CLI workflow, 48 hermetic CLI cases, and I01–I05 against isolated real pueue/pueued 4.0.4 passed. Root review and direct native `codex review` resolved all actionable findings, including the expiry/completion handoff, unknown-state start refusal, termination response and acceptance-helper boundaries. See [the acceptance map](PHASE-2-ACCEPTANCE.md) for receipts and limitations. Exact-head Linux/macOS CI and squash merge remain mandatory merge gates.
 
 ### Phase 3 — the first adapter, `antigravity:print` (PLANNED)
 

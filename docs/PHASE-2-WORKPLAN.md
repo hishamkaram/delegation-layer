@@ -12,6 +12,19 @@ Persist the absolute supervisor client path in fresh pueue bindings. New typed s
 
 The runner receives stdin from a narrow rooted, validated O_RDONLY *os.File so exec passes a finite descriptor directly and the parent can close it after Start. Do not pass an opaque io.Reader wrapper to Cmd.Stdin and inadvertently introduce an unowned copy goroutine. Raw stdout and stderr have separate owned pipe/capture workers; Wait happens exactly once. Normal nonzero exit is observed evidence, whereas infrastructure capture/Wait/flush failures prevent a seal. A started-receipt write error cannot abandon an already running process.
 
+Budget expiry and completion share a preparation barrier. If expiry wins, its
+create-once stop intent is durable before completion can cancel observation.
+Supervisor reconciliation and the stop reply run outside the barrier; completion
+still disarms observation before publication, and a delayed reply does not delay
+sealing. If completion wins, no budget intent is prepared. Persistence failure
+prevents the supervisor operation and remains a reported stop error.
+
+A completed `exec.ExitError` with an observed process state remains exit evidence,
+including Unix signal status `-1`; capture and infrastructure failures still
+prevent sealing. A fresh runner requires a known queued/running supervisor state.
+An immediate cancel response carries the same proven termination fact as its
+saved observation; acknowledgment alone never implies termination.
+
 The fake Phase2 interpreter uses a distinct fixture:test/read-only/version2 contract. Use bounded JSONL metadata/chunk events, allowing arbitrarily long total answers by concatenating exact decoded answer chunks. This avoids prebuilding a general JSON-string streaming parser for an acceptance-only format. Limit each event frame explicitly in the checked-in contract; do not limit total raw or answer size. Require exact task/session identity, full stream completion, a single final success, a non-whitespace answer and clean observed exit. Define each deterministic refusal reason and precedence in the contract before implementing tests. A late session event has a separate runner-owned observational path; it cannot publish or override a terminal winner.
 
 Dedicated acceptance mains call the same application/runtime with a reviewed harness-only constructor. Their independent runner reconstructs the same pinned fake configuration from an explicit acceptance-only path and verifies its digest before Start. Production mains import no acceptance constructor and expose no arbitrary provider executable/argv escape. Unimplemented native launch profiles are refused before admission. Native agy/Codex/Claude remain mandatory subsequent phases before release.

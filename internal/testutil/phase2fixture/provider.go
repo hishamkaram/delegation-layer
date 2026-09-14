@@ -88,6 +88,16 @@ func LoadProviderConfig(configPath string) (ProviderConfig, error) {
 	return loadProviderConfig(configPath, false)
 }
 
+// ParseProviderConfig strictly parses one public fixture configuration from
+// already-read bytes. Callers that authenticate a file by digest can parse
+// the exact bytes they authenticated without reopening the path.
+func ParseProviderConfig(data []byte) (ProviderConfig, error) {
+	if int64(len(data)) > task.MaxControlRecordSize {
+		return ProviderConfig{}, errors.New("provider config exceeds maximum size")
+	}
+	return parseProviderConfig(data, false)
+}
+
 func runProvider(configPath string, literalArgs []string, input io.Reader, stdout, stderr io.Writer, child bool) error {
 	if input == nil || stdout == nil || stderr == nil {
 		return errors.New("provider streams must be nonnil")
@@ -270,11 +280,15 @@ func loadProviderConfig(path string, allowChild bool) (ProviderConfig, error) {
 	if err = errors.Join(readErr, closeErr); err != nil {
 		return ProviderConfig{}, err
 	}
+	return parseProviderConfig(data, allowChild)
+}
+
+func parseProviderConfig(data []byte, allowChild bool) (ProviderConfig, error) {
 	var cfg ProviderConfig
-	if err = task.DecodeStrict(data, &cfg); err != nil {
+	if err := task.DecodeStrict(data, &cfg); err != nil {
 		return ProviderConfig{}, fmt.Errorf("decoding provider config: %w", err)
 	}
-	if err = validateProviderConfig(cfg, allowChild); err != nil {
+	if err := validateProviderConfig(cfg, allowChild); err != nil {
 		return ProviderConfig{}, err
 	}
 	return cfg, nil

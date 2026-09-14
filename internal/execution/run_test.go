@@ -344,7 +344,9 @@ func (*manualTimer) Stop() bool                    { return true }
 
 type stopperFunc func(context.Context, time.Time) error
 
-func (f stopperFunc) RequestBudget(ctx context.Context, d time.Time) error { return f(ctx, d) }
+func (f stopperFunc) PrepareBudget(d time.Time) (BudgetRequest, error) {
+	return func(ctx context.Context) error { return f(ctx, d) }, nil
+}
 
 func newManualClock() manualClock {
 	return manualClock{now: time.Now(), timer: &manualTimer{ch: make(chan time.Time, 1)}}
