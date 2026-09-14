@@ -1,6 +1,6 @@
 # Implementation plan and milestones
 
-**Status: Phases 0–3 accepted; Phase 3 merged in [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4), squash c094d03. Provider redesign is authorized; engineering guidance and catalog/agy proof are accepted in PRs #5–6; contributor proof is in progress. Phases 4–5 have not started.**
+**Status: Phases 0–3 accepted; Phase 3 merged in [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4), squash c094d03. Provider redesign is authorized; engineering guidance, catalog/agy proof and contributor proof are accepted in PRs #5–7. Codex / Phase 4 is in progress; Claude / Phase 5 remains planned.**
 
 [EXECUTION-PLAN.md](EXECUTION-PLAN.md) is normative, including its [provider redesign amendment](PROVIDER-REDESIGN.md). Historical planning below is retained as history, not current verification evidence.
 
@@ -10,8 +10,8 @@
 |---|---|---|
 | Engineering guidance and skills | Accepted | [PR #5](https://github.com/hishamkaram/delegation-layer/pull/5), squash `84a1a4a`; 32 validator tests, full local gate, direct Codex review, Linux/macOS PR and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34829586220) passed |
 | Catalog and agy proof | Accepted | [PR #6](https://github.com/hishamkaram/delegation-layer/pull/6), squash `38e3da4`; [local acceptance](PROVIDER-CATALOG-ACCEPTANCE.md), direct review, exact-head PR CI and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34840061876) passed |
-| Shared infrastructure and contributor proof | Verification in progress | Final baseline `e7ce3e0`; [fifteen-case compiled CLI proof](PROVIDER-CONTRIBUTION-ACCEPTANCE.md), exact rejection/replay checks and three zero-admission cases pass; final review corrections include input headroom, private runtime and resumable state; final quality/review/merge pending |
-| Codex / Phase 4 | Not started | Required |
+| Shared infrastructure and contributor proof | Accepted | [PR #7](https://github.com/hishamkaram/delegation-layer/pull/7), squash `2a4cb8a`; [fifteen-case compiled CLI proof](PROVIDER-CONTRIBUTION-ACCEPTANCE.md), three zero-admission cases, agy revalidation, full quality/protocol/supervisor gates, completed direct reviews, exact-head CI and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34859837834) passed; worktree retired with private archive |
+| Codex / Phase 4 | In progress | [Version-specific evidence](CODEX-ACCEPTANCE.md); two native turns passed, certification Executed; review passed; CI/merge pending |
 | Claude / Phase 5 | Not started | Required |
 | Integrated verification | Not started | Required |
 
@@ -375,18 +375,19 @@ Every exit command for future phases is **proposed future work**, not claimed to
 - **Built:** `cmd/delegate-run`; `internal/pueue` (subprocess client, versioned JSON decoding); `dispatch`, `status`, `collect`, `cancel`, `logs`; the wall budget; watch detachment; the fake provider and fake supervisor; publication recovery.
 - **Verified:** Sequential and parallel `make check`, all 49 protocol cases and standalone CLI workflow, 48 hermetic CLI cases, and I01–I05 against isolated real pueue/pueued 4.0.4 passed. Root review and direct native `codex review` resolved all actionable findings, including the expiry/completion handoff, unknown-state start refusal, termination response and acceptance-helper boundaries. See [the acceptance map](PHASE-2-ACCEPTANCE.md) for receipts and limitations. [PR #3](https://github.com/hishamkaram/delegation-layer/pull/3) was squash-merged as `b52eda2917fb186cdf7a8f21854d978dc5b79145`; [post-merge CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34802631828) passed.
 
-### Phase 3 — the first adapter, `antigravity:print` (IN PROGRESS)
+### Phase 3 — the first adapter, `antigravity:print` (ACCEPTED)
 
 - **Goal:** survive `agy`'s success-shaped timeout failure without publishing an answer.
 - **Implemented:** strict streamed envelope interpretation, conversation identity observation, explicit session continuation, cumulative usage accounting, bounded effective-policy inventory and drift checks, certified workspace-write launch profile, and independent native timeout within the outer budget. Read-only remains unsupported.
 - **Verification:** sequential and parallel `make check`, 49 protocol cases, 48 hermetic supervisor cases, and I01–I05 against private real pueue/pueued 4.0.4 passed. The current shipped native adapter passed three real turns, queued policy-drift refusal, busy-session refusal, replay, inside/outside write controls, continuation nonce recall, and native timeout. Embedded certification binds the measured runtime/profile/predicate. See [the acceptance evidence](PHASE-3-ACCEPTANCE.md).
-- **Remaining:** final direct `codex review`; private PR, exact-head CI, squash merge and post-merge verification. Stop after Phase 3 as requested; do not start Phase 4 or Phase 5.
+- **Accepted:** direct review and CI completed; PR #4 was squash-merged as `c094d03`. The requested stop after Phase 3 was fulfilled. The subsequently authorized provider-redesign amendment governs the current Codex, Claude and integrated acceptance work.
 - **Exit:** `make acceptance-agy` — fixtures plus required live cases, followed by the review and merge gates.
 
-### Phase 4 — the second adapter, Codex (PLANNED)
+### Phase 4 — the second adapter, Codex (IN PROGRESS)
 
 - **Goal:** prove the interface is not shaped around `agy`.
-- **Built:** `internal/provider/codex` — `codex exec`, JSONL/session parsing, output-file staging (under `raw/`, never straight to `result.txt`), `read-only` mapping, resume availability, transcript discovery bound to the actual session.
+- **Candidate implemented:** `internal/provider/codex` — pinned `codex exec` preparation, bounded JSONL/identity interpretation, core-owned output staging, read-only policy verification, and exact thread resume. Transcript discovery remains explicitly unavailable; no session path is guessed.
+- **Verification:** the full local gate, protocol/supervisor gates and contributor regression passed. After preserving the failed initial attempt, profile revision 2 passed fresh/read/denial/resume/replay controls in two native turns. Certification is Executed and shipped discovery/replay passed; review passed; CI and merge remain pending. See [the current acceptance receipt](CODEX-ACCEPTANCE.md).
 - **Exit:** `make acceptance-codex`.
 
 ### Phase 5 — the third adapter, Claude print (PLANNED)

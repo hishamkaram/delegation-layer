@@ -31,12 +31,7 @@ func TestProvidersJSONIsBoundedDeterministicAndDoesNotUseTaskFields(t *testing.T
 	if err := json.Unmarshal(first.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.SchemaVersion != OutputSchemaVersion || len(decoded.Providers) != 1 || decoded.Providers[0].ID != "antigravity:print" {
-		t.Fatalf("unexpected compiled provider metadata: %+v", decoded)
-	}
-	if len(decoded.Providers[0].Profiles) != 1 || decoded.Providers[0].Profiles[0].Status != "Executed" {
-		t.Fatalf("certification metadata missing: %+v", decoded.Providers[0])
-	}
+	assertNativeProviderMetadata(t, decoded)
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(first.Bytes(), &fields); err != nil {
 		t.Fatal(err)
@@ -44,6 +39,23 @@ func TestProvidersJSONIsBoundedDeterministicAndDoesNotUseTaskFields(t *testing.T
 	for _, forbidden := range []string{"admission", "liveness", "publication", "task_id", "supervisor"} {
 		if _, found := fields[forbidden]; found {
 			t.Fatalf("discovery response contains task field %q: %s", forbidden, first.String())
+		}
+	}
+}
+
+func assertNativeProviderMetadata(t *testing.T, response ProviderResponse) {
+	t.Helper()
+	expectedIDs := []string{"antigravity:print", "codex:exec"}
+	if response.SchemaVersion != OutputSchemaVersion || len(response.Providers) != len(expectedIDs) {
+		t.Fatalf("unexpected compiled provider metadata: %+v", response)
+	}
+	for index, expectedID := range expectedIDs {
+		description := response.Providers[index]
+		if description.ID != expectedID {
+			t.Fatalf("provider at index %d: got %s, want %s", index, description.ID, expectedID)
+		}
+		if len(description.Profiles) != 1 || description.Profiles[0].Status != "Executed" {
+			t.Fatalf("certification metadata missing: %+v", description)
 		}
 	}
 }

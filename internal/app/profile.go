@@ -16,7 +16,7 @@ type (
 var ErrProfileUnavailable = commonprovider.ErrProfileUnavailable
 
 // NativeProfile is the compatibility entry point for callers that need the
-// production agy profile without constructing the app dependencies manually.
+// production provider profile without constructing the app dependencies manually.
 func NativeProfile(request task.TaskRecord) (PreparedProfile, error) {
 	return NativeCatalog().Prepare(request)
 }

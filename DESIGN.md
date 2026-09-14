@@ -2,7 +2,7 @@
 
 > Working name only; the directory is trivially renamable. Written 2026-09-12.
 >
-> **Status: Phase 0 (Foundation) accepted (PR #1 merged); Phase 1 (Durable Protocol) candidate; review, root acceptance, and CI verification pending.** The comprehensive execution plan in
+> **Status: Phases 0–3 accepted; provider redesign guidance, catalog and contributor proof accepted in PRs #5–7. Codex / Phase 4 is in progress; native certification passed; review passed; CI and merge remain pending.** The comprehensive execution plan in
 > [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) and [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md)
 > represent the authoritative normative roadmap and supersede conflicting milestones below.
 > Historical measurements and debate records are preserved as historical context.
@@ -14,7 +14,7 @@
 > - **Durability & barriers**: Cryptographically unique staging, close-before-link, same-filesystem hard-link, and directory-sync barriers. Unsupported or remote filesystems are refused before admission (eliminating contradictory "local implies safe" assumptions).
 > - **Supervision & stopping**: Supervisor (`pueue`) owns stopping. Direct signals (`os.Process.Signal/Kill`, `syscall.Kill`), process-group manipulation (`setsid`, `pkill`, `killall`), `exec.CommandContext`, and nonzero `WaitDelay` are strictly prohibited. Budget supervision uses a bounded runner event loop with explicit ownership.
 > - **Deadlines**: Wall-clock execution deadline with stop-request, stop-acknowledgment, and termination-observed recorded separately. Token/dollar ceilings and raw argv are rejected before admission.
-> - **Provider profiles (v1 Private Release)**: Required candidate profiles pending adapter-phase live acceptance receipts: `antigravity:print` (`workspace-write`; `read-only` is unsupported and refused), `codex:exec` (`read-only`), and `claude:print` (`read-only`). All three are required before v1 release.
+> - **Provider profiles (v1 Private Release)**: The accepted `antigravity:print` profile is `workspace-write` (`read-only` is unsupported and refused). `codex:exec` (`read-only`) has an Executed pinned native profile; review passed; CI/merge remain pending. `claude:print` (`read-only`) still requires its adapter-phase live acceptance receipt. All three are required before v1 release.
 > - **Private delivery**: Private repository, private release assets, and authenticated GitHub install tooling. Public repositories, public taps, and unauthenticated `go install` are out of scope.
 > - **Workflow**: Resumable declared-plan DAG execution; the layer never invents tasks or autonomously judges result quality.
 >

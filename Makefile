@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy acceptance-codex codex-qualification-tools
 
 tools:
 	./scripts/install-tools.sh
@@ -101,6 +101,15 @@ acceptance-supervisor: supervisor-fixtures
 acceptance-agy: build supervisor-fixtures test-native-harness
 	go test -race -count=1 ./internal/provider/antigravity ./internal/task ./internal/taskdir
 	./scripts/acceptance_agy.sh
+
+codex-qualification-tools: tool-versions
+	@mkdir -p bin/codex-qualification
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/codex-qualification/delegate ./internal/testutil/codexqualification/cmd/delegate
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/codex-qualification/delegate-run ./internal/testutil/codexqualification/cmd/delegate-run
+
+acceptance-codex: build test-native-harness
+	go test -race -count=1 ./internal/provider/codex
+	./scripts/acceptance_codex.sh
 
 # Note: vuln requires access to the public vulnerability database (https://vuln.go.dev);
 # the mandatory behavioral and unit tests remain hermetic.

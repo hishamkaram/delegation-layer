@@ -1,0 +1,37 @@
+{
+  "status": "Executed",
+  "mode": "read-only",
+  "approval": "never",
+  "provider_version": "0.154.0",
+  "os": "darwin",
+  "arch": "arm64",
+  "runtime_sha256": "4f85982624b3898c8991cb80c0981b2aa71070e3537046c9a95950318a95afcc",
+  "profile_revision": "codex-0.154.0-darwin-arm64-read-only-2",
+  "output_writer_contract": "process-exit-eof-v1",
+  "predicate": {
+    "adapter": "codex:exec",
+    "mode": "read-only",
+    "sha256": "7d40d9c4627e58d8906e816d3fc6e1eed7f0d6b14ab5fc1f18b4c704415d3a8d",
+    "version": "0.154.0"
+  },
+  "native_evidence": {
+    "run": "2026-09-14T16:15:36Z",
+    "native_ai_turns": 2,
+    "fresh_task": "697f7c7e0eded5c60de061026617f923",
+    "resume_task": "0bd9ac255a6e9eae8ee7ac7b2d2c2136",
+    "nonce_read": true,
+    "workspace_write_denied": true,
+    "sibling_write_denied": true,
+    "exact_continuation": true,
+    "replay_launches": 0,
+    "natural_daemon_shutdown": true,
+    "receipt_sha256": {
+      "binding.json": "ef8cdfb55973501736fcbb627f5f2254ff84ba787d18d28de86b942766eb08ea",
+      "fresh-control.json": "6f764634f1323cbf860ac4189c3ecc10c531ce73d07581f09a8431cdc7666f1f",
+      "resume-control.json": "0e1940551cd4223c8c910c2604743cea7d5f229b8a7a2a6b37e2a96883b116f9",
+      "success.json": "a910c54f152da180675c7e6a515c282fdf6c20f3929d687bbde92a76c85a8c29",
+      "resume-oracle-revalidation.json": "3a71af8027e49710003c6737b0ff08bd6abf7e9123ff32a69fb8499cc0950c7a"
+    },
+    "tool_free_resume": true
+  }
+}

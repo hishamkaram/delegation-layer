@@ -19,6 +19,11 @@ from acceptance_supervisor_common import (
     Processes, config_for, digest, inherited_environment, read_json,
     require, sha, write_json,
 )
+from acceptance_provider_common import (
+    task_snapshot,
+    verify_collected_outcome as shared_verify_collected_outcome,
+    wait_runner_done as shared_wait_runner_done,
+)
 
 
 PROVIDER = "synthetic:contributor-proof"
@@ -28,13 +33,7 @@ MAX_BRIEF_BYTES = (MAX_ENVELOPE_BYTES - 512) // 6
 
 
 def verify_collected_outcome(collected, directory, expected):
-    outcome = read_json(directory / "outcome.json")
-    require(collected.get("outcome") == outcome, "CLI and sole outcome authority disagree")
-    require(outcome["verdict"] == expected, "collected outcome mismatch")
-    payload = outcome["payload"]
-    data = (directory / payload["basename"]).read_bytes()
-    require(len(data) == payload["length"] and sha(data) == payload["sha256"], "payload digest mismatch")
-    return outcome, data
+    return shared_verify_collected_outcome(collected, directory, expected)
 
 
 def verify_case_evidence(case, directory, answer, session_id):
@@ -150,18 +149,8 @@ class ContributorAcceptance:
                                   expected=0 if expected == "committed" else 4, timeout=160).json()
 
     def wait_runner_done(self, root_id, task_id):
-        label = "delegate:" + root_id + ":" + task_id
-        deadline = time.monotonic() + 150
-        while time.monotonic() < deadline:
-            rows = self.client("runner-status", ["status", "--json"]).json().get("tasks", {})
-            matching = [row for row in rows.values() if row.get("label") == label]
-            require(len(matching) == 1, "submitted task has no unique supervisor row")
-            status = matching[0].get("status")
-            if isinstance(status, dict) and "Done" in status:
-                require(status["Done"].get("result") == "Success", "supervisor reports a failed runner")
-                return
-            time.sleep(0.1)
-        raise RuntimeError("runner completion was not observed within acceptance deadline")
+        return shared_wait_runner_done(self.client, root_id, task_id, timeout=150,
+                                       sleep_fn=time.sleep, monotonic_fn=time.monotonic)
 
     def run_case(self, case, expected, answer="", nonce="", predecessor=None, scenario=None):
         task_id = uuid.uuid4().hex
@@ -260,13 +249,7 @@ class ContributorAcceptance:
                 require(raw.stat().st_size == 0, "present empty output was not preserved")
 
     def snapshot(self, task_id):
-        directory = self.root / "tasks" / task_id
-        outcome = read_json(directory / "outcome.json")
-        seal = read_json(directory / "provider.exit")
-        names = ["task.json", "meta.json", "provider.start", "provider.exit", "outcome.json", "provider.ref.json",
-                 outcome["payload"]["basename"], *[entry["path"] for entry in seal["raw_manifest"]]]
-        return {name: digest(directory / name) for name in names
-                if (directory / name).exists()}
+        return task_snapshot(self.root, task_id)
 
     def receipt_snapshot(self):
         return {str(path.relative_to(self.runtime)): digest(path)
