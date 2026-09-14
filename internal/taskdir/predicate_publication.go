@@ -161,7 +161,7 @@ func (td *TaskDir) evaluateAndPublish(interpreter predicate.Interpreter, seal *t
 		return nil, stage.discard(), err
 	}
 	descriptor := stage.descriptor()
-	candidate := task.OutcomeRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: meta, Predicate: seal.Predicate, EvidenceSHA256: seal.ManifestSHA256, Verdict: interpretation.Verdict, Payload: descriptor}
+	candidate := task.OutcomeRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: meta, Predicate: seal.Predicate, EvidenceSHA256: seal.ManifestSHA256, Verdict: interpretation.Verdict, Payload: descriptor, Usage: task.CloneUsageMetadata(interpretation.Usage)}
 	if err = task.ValidateOutcomeRecord(&candidate); err != nil {
 		return nil, stage.discard(), err
 	}

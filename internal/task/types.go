@@ -180,17 +180,19 @@ func (p PredicateRef) Equal(other PredicateRef) bool {
 
 // TaskConfig captures requested configuration parameters.
 type TaskConfig struct {
-	Model      string `json:"model,omitempty"`
-	Effort     string `json:"effort,omitempty"`
-	Permission string `json:"permission,omitempty"`
-	Budget     string `json:"budget,omitempty"`
+	Model         string `json:"model,omitempty"`
+	Effort        string `json:"effort,omitempty"`
+	Permission    string `json:"permission,omitempty"`
+	Budget        string `json:"budget,omitempty"`
+	NativeTimeout string `json:"native_timeout,omitempty"`
 }
 
 // EffectiveConfig captures resolved non-secret effective configuration.
 type EffectiveConfig struct {
-	Containment string `json:"containment"`
-	Approval    string `json:"approval"`
-	Digest      string `json:"digest"`
+	Containment string         `json:"containment"`
+	Approval    string         `json:"approval"`
+	Digest      string         `json:"digest"`
+	Policy      *PolicyDetails `json:"policy,omitempty"`
 }
 
 // PriorSession captures conversation continuity reference.
@@ -357,6 +359,7 @@ type OutcomeRecord struct {
 	EvidenceSHA256 string            `json:"evidence_sha256"`
 	Predicate      PredicateRef      `json:"predicate"`
 	Payload        PayloadDescriptor `json:"payload"`
+	Usage          []UsageMetadata   `json:"usage,omitempty"`
 }
 
 // PublishExitRecord is stored in publish.exit.
@@ -723,6 +726,9 @@ func ValidateOutcomeRecord(r *OutcomeRecord) error {
 		return fmt.Errorf("outcome.json evidence_sha256: %w", err)
 	}
 	if err := ValidatePredicateRef(r.Predicate); err != nil {
+		return err
+	}
+	if err := ValidateUsageMetadataList(r.Usage); err != nil {
 		return err
 	}
 	return validateOutcomePayload(r)

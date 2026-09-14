@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "status": "Executed",
+  "provider": "antigravity:print",
+  "provider_version": "1.2.2",
+  "os": "darwin",
+  "arch": "arm64",
+  "runtime_sha256": "cabadc15a61944372bede1fdff186701c17467dd9d718e97dc79283055d3c101",
+  "profile_revision": "agy-1.2.2-darwin-arm64-workspace-write-3",
+  "mode": "workspace-write",
+  "approval": "accept-edits:request-review:headless-deny",
+  "configuration_rules": "sparse-default-project; validated source inventory; canonical trusted workspace; no extra roots or extensions; runtime-state exclusion",
+  "native_evidence": {
+    "run": "2026-09-14T07:24:53Z",
+    "predicate_version": "1.2.2-auth2",
+    "predicate_sha256": "53f1b5368023953447088ecbd4fc36c1b431b0fb376cf76511ed70d943d8138a",
+    "inside_nonce_write": true,
+    "outside_write_denied": true,
+    "continuation_nonce_recalled": true,
+    "busy_refused_before_submission": true,
+    "native_timeout_rejected": true,
+    "queued_policy_drift_refused": true,
+    "launch_counts": {
+      "A": 4,
+      "E": 3,
+      "S": 3,
+      "seal": 3
+    },
+    "receipt_sha256": {
+      "L1-filesystem.json": "d18c955dd052cda22d576f28f808612e17d3c0945b57bb617fea68b8257fc176",
+      "L1-control-outcome.json": "a79603447b91bd57ad30086dc4a94bc72c3e2fbbd761ff04dc93041db2207858",
+      "L2-collect.json": "bff22168828ad6ba5b58580238f26a6470b578bb54429b5112b28b0897ed0917",
+      "L3-collect.json": "6cbf2f4c9ee42f5df14139974cbce15b504365fd5fd9e2e259e3dffd520d3259",
+      "busy-verified.json": "405d4e41d350e73a719cdf534496b32dc18d5d94c007f6fc0f2608a1c5c22564",
+      "policy-drift-verified.json": "9df00bfc840dfc9899d5fd5e005ea2155bcc644d578382d623102d23aa53709e"
+    }
+  }
+}

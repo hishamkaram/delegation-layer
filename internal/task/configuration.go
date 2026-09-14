@@ -49,7 +49,36 @@ func normalizeRequestedConfig(r *TaskRecord) error {
 	}
 	r.BudgetNanos = int64(duration)
 	r.RequestedConfig.Budget = duration.String()
+	r.RequestedConfig.NativeTimeout, err = normalizedNativeTimeout(r.Provider, r.RequestedConfig.NativeTimeout, r.BudgetNanos)
+	if err != nil {
+		return err
+	}
 	return validateRequestedConfig(r.RequestedConfig, r.Mode, r.BudgetNanos)
+}
+
+func normalizedNativeTimeout(provider, value string, budget int64) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if provider != config.ProviderAntigravityPrint {
+		return "", errors.New("native timeout is supported only for antigravity:print")
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 || int64(duration) > budget {
+		return "", errors.New("native timeout must be positive and no greater than the task budget")
+	}
+	return duration.String(), nil
+}
+
+func validateNativeTimeout(provider string, request TaskConfig, budget int64) error {
+	normalized, err := normalizedNativeTimeout(provider, request.NativeTimeout, budget)
+	if err != nil {
+		return err
+	}
+	if normalized != request.NativeTimeout {
+		return errors.New("native timeout must be normalized")
+	}
+	return nil
 }
 
 func validateRequestedConfig(request TaskConfig, mode string, budget int64) error {
@@ -79,6 +108,9 @@ func validateTaskConfiguration(r *TaskRecord) error {
 		return err
 	}
 	if err := validateRequestedConfig(r.RequestedConfig, r.Mode, r.BudgetNanos); err != nil {
+		return err
+	}
+	if err := validateNativeTimeout(r.Provider, r.RequestedConfig, r.BudgetNanos); err != nil {
 		return err
 	}
 	// Saved evidence outlives the execution directory. Fresh execution authority
@@ -161,11 +193,14 @@ func validateMetaConfiguration(r *MetaRecord) error {
 	if err := validateRequestedConfig(r.RequestedConfig, r.Predicate.Mode, int64(duration)); err != nil {
 		return err
 	}
+	if err := validateNativeTimeout(r.Predicate.Adapter, r.RequestedConfig, int64(duration)); err != nil {
+		return err
+	}
 	if !nonblank(r.Containment) || !nonblank(r.Approval) || r.Containment != r.EffectiveConfig.Containment || r.Approval != r.EffectiveConfig.Approval {
 		return errors.New("missing or inconsistent effective containment and approval")
 	}
-	if err := ValidateSHA256(r.EffectiveConfig.Digest); err != nil {
-		return fmt.Errorf("effective config digest: %w", err)
+	if err := ValidateEffectiveConfig(r.EffectiveConfig); err != nil {
+		return err
 	}
 	return validateMetaRuntime(r)
 }

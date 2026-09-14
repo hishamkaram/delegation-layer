@@ -77,43 +77,50 @@ func dispatchInputs(a Arguments) (root, cwd string, brief []byte, err error) {
 func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *taskdir.TaskDir, req task.TaskRecord, response Response) (result commandResult) {
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	oldReq, oldMeta, err := td.PreparedRecords()
-	if err == nil {
-		if !sameRequest(&req, oldReq) {
-			return failed(response, task.ErrRequestConflict, 2)
-		}
-		if a.PueueConfig != "" && a.PueueConfig != oldMeta.SupervisorConfig.ConfigPath {
-			return failed(response, task.ErrRequestConflict, 2)
-		}
-		response.RootID, response.TaskID = oldReq.RootID, oldReq.TaskID
-		inspection, inspectErr := td.Inspect()
-		fillInspection(&response, inspection)
-		if inspectErr != nil {
-			return failed(response, inspectErr, classifyCode(inspectErr, 1))
-		}
-		if isTerminal(inspection) {
-			if releaseErr := releaseContinuationSession(td, oldReq, inspection.Outcome); releaseErr != nil {
-				return failed(response, releaseErr, 1)
-			}
-			return commandResult{response: response, code: 0}
-		}
-		submit, submitErr := td.ReadSubmission()
-		if submitErr == nil {
-			return reconcileExisting(td, oldReq, oldMeta, submit, deps.SupervisorOptions, response)
-		}
-		if !errors.Is(submitErr, os.ErrNotExist) {
-			return failed(response, submitErr, classifyCode(submitErr, 1))
-		}
-		if inspection.StartExists {
-			return failed(response, task.ErrAlreadyStarted, 1)
-		}
-		return submitPrepared(a, deps, td, oldReq, oldMeta, oldMeta.SupervisorConfig, response)
+	if err != nil {
+		return dispatchNew(a, deps, store, req, nil, response)
 	}
-	return dispatchNew(a, deps, store, req, nil, response)
+
+	if !sameRequest(&req, oldReq) {
+		return failed(response, task.ErrRequestConflict, 2)
+	}
+	if a.PueueConfig != "" && a.PueueConfig != oldMeta.SupervisorConfig.ConfigPath {
+		return failed(response, task.ErrRequestConflict, 2)
+	}
+	response.RootID, response.TaskID = oldReq.RootID, oldReq.TaskID
+	inspection, inspectErr := td.Inspect()
+	fillInspection(&response, inspection)
+	if inspectErr != nil {
+		return failed(response, inspectErr, classifyCode(inspectErr, 1))
+	}
+	if isTerminal(inspection) {
+		if releaseErr := releaseContinuationSession(td, oldReq, inspection.Outcome); releaseErr != nil {
+			return failed(response, releaseErr, 1)
+		}
+		return commandResult{response: response, code: 0}
+	}
+	submit, submitErr := td.ReadSubmission()
+	if submitErr == nil {
+		return reconcileExisting(td, oldReq, oldMeta, submit, deps.SupervisorOptions, response)
+	}
+	if !errors.Is(submitErr, os.ErrNotExist) {
+		return failed(response, submitErr, classifyCode(submitErr, 1))
+	}
+	if inspection.StartExists {
+		return failed(response, task.ErrAlreadyStarted, 1)
+	}
+	if _, profileErr := prepareMatchedProfile(deps, store.Root, *oldReq, *oldMeta); profileErr != nil {
+		return failed(response, profileErr, classifyCode(profileErr, 2))
+	}
+	return submitPrepared(a, deps, td, oldReq, oldMeta, oldMeta.SupervisorConfig, response)
 }
 
 func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, brief []byte, response Response) commandResult {
 	profile, err := prepareProfile(deps, req)
 	if err != nil {
+		return failed(response, err, classifyCode(err, 2))
+	}
+	if err = profile.ValidateStatePlacement(store.Root); err != nil {
 		return failed(response, err, classifyCode(err, 2))
 	}
 	supervisor, err := bindInitial(a, deps)

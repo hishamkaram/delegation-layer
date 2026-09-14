@@ -40,7 +40,9 @@ func TestRunProviderReleasesContinuationOnCommittedAndRejected(t *testing.T) {
 			}
 			rewriteAppProviderExecutable(t, td, tc.executable)
 			profile := appTestExecutionProfile(req, tc.executable, tc.arguments)
-			result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{})
+			result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+				return profile, nil
+			}})
 			if result.code != 0 || result.err != nil {
 				t.Fatalf("terminal provider run failed: %+v", result)
 			}
@@ -192,7 +194,9 @@ func TestRunProviderUnknownOutcomeRetainsContinuation(t *testing.T) {
 	profile.Identity = func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 		return nil, errInjectedIdentity
 	}
-	result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{})
+	result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+		return profile, nil
+	}})
 	if result.code != 1 || !errors.Is(result.err, errInjectedIdentity) || result.response.Outcome != nil {
 		t.Fatalf("unknown provider outcome was not retained: %+v", result)
 	}
@@ -298,7 +302,9 @@ func TestContinuationReleaseFailurePreservesWinnerAndRetries(t *testing.T) {
 	releaseErr := errors.New("release durability failed")
 	store.SetFaultInjector(&releaseOnlyFailureInjector{err: releaseErr})
 	profile := appTestExecutionProfile(req, "/usr/bin/printf", []string{"answer\n"})
-	result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{})
+	result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+		return profile, nil
+	}})
 	if result.code != 1 || !errors.Is(result.err, releaseErr) {
 		t.Fatalf("release failure was not operational: %+v", result)
 	}

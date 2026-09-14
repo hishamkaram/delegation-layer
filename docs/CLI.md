@@ -8,7 +8,7 @@ The finite `fixture:test` profile is compiled only into acceptance programs.
 delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
   --provider PROFILE --brief FILE --cwd ABS [--id TASK_ID] \
   [--permission MODE] [--budget DURATION] [--model MODEL] \
-  [--effort EFFORT] [--resume-task PREDECESSOR_ID] [--json]
+  [--effort EFFORT] [--native-timeout DURATION] [--resume-task PREDECESSOR_ID] [--json]
 
 delegate [--root ABS] status TASK_ID [--json]
 delegate [--root ABS] collect TASK_ID [--watch DURATION] [--json]
@@ -33,6 +33,14 @@ must be a positive Go duration such as `30s` or `5m`. It begins immediately
 before the one provider Start attempt and includes process wait and pipe
 capture. Queue time does not consume it. Token and dollar ceilings and raw
 provider arguments are unsupported.
+
+Antigravity also accepts `--native-timeout DURATION`, a positive duration no
+greater than `--budget`. It sets agy's own print timeout while the supervisor
+continues to enforce the full wall-clock budget. When omitted, the print timeout
+equals that budget. Other providers reject this option. For example,
+`--budget 120s --native-timeout 3s` exercises native timeout handling with time
+left to capture and seal the provider's output. This setting is part of the
+immutable task request and cannot be changed when reusing a task ID.
 
 `--watch` bounds one collection call and defaults to `0s`. It does not change
 the task budget or stop the worker. Collection reads a valid existing outcome
@@ -108,3 +116,7 @@ Its real lifecycle uses no workload stop/kill/remove operation; it shuts down
 the private daemon only after positive natural completion. Evidence is written
 under `bin/phase2-acceptance/`; unresolved failures preserve private paths and
 PIDs for inspection.
+
+### Local Antigravity acceptance authentication
+
+AGY selects a different authentication flow when it detects SSH. If a local terminal or tmux environment retains `SSH_CONNECTION`, a supervised headless run can report authentication required even though an interactive local session works. On the verified local host, `env -u SSH_CONNECTION make acceptance-agy` selected the existing local keyring credentials. This is a process-local diagnostic workaround, not a production environment rewrite. Do not apply it blindly to a genuine remote SSH session. See [AGY authentication](https://antigravity.google/docs/cli/install/).

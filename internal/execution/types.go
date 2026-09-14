@@ -73,10 +73,14 @@ type Hooks struct {
 }
 
 type Options struct {
-	Clock    Clock
-	Stopper  Stopper
-	Identity IdentityObserver
-	Hooks    Hooks
+	// Preflight performs finite, non-launching policy validation at the last
+	// boundary before process Start. A refusal follows normal start-failed
+	// capture/sealing; it never abandons the consumed start permit.
+	Preflight func() error
+	Clock     Clock
+	Stopper   Stopper
+	Identity  IdentityObserver
+	Hooks     Hooks
 }
 
 type Result struct {
@@ -101,6 +105,11 @@ func (o Options) emit(name string) {
 }
 
 func (o Options) start(cmd *exec.Cmd) error {
+	if o.Preflight != nil {
+		if err := o.Preflight(); err != nil {
+			return err
+		}
+	}
 	if o.Hooks.Start != nil {
 		return o.Hooks.Start(cmd)
 	}

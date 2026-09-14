@@ -371,7 +371,7 @@ func (d storeDependencies) registry() predicate.Registry {
 	if d.predicateRegistry != nil {
 		return d.predicateRegistry()
 	}
-	return predicate.Default()
+	return NativePredicates()
 }
 
 func openStore(root string, deps storeDependencies, create bool) (*taskdir.Store, error) {

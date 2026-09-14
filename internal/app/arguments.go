@@ -106,6 +106,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	fs.StringVar(&a.Cwd, "cwd", "", "absolute working directory")
 	fs.StringVar(&a.Config.Permission, "permission", config.DefaultMode, "permission intent")
 	fs.StringVar(&a.Config.Budget, "budget", "", "finite execution budget")
+	fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "optional agy timeout within the task budget")
 	fs.StringVar(&a.Config.Model, "model", "", "requested model")
 	fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
 	fs.StringVar(&a.ResumeTask, "resume-task", "", "exact predecessor task ID")

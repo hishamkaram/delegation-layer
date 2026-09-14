@@ -192,11 +192,20 @@ func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, p
 	if err != nil {
 		return failed(response, err, 1)
 	}
+	admittedReq, admittedMeta, err := td.PreparedRecords()
+	if err != nil {
+		return failed(response, err, 1)
+	}
+	preflight := func() error {
+		root := filepath.Dir(filepath.Dir(td.Dir))
+		_, validationErr := prepareMatchedProfile(deps, root, *admittedReq, *admittedMeta)
+		return validationErr
+	}
 	permit, err := td.PrepareStart(0)
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	runResult := execution.Run(td, permit, profile.Plan, execution.Options{Stopper: stopper, Identity: identityObserver, Hooks: deps.ExecutionHooks})
+	runResult := execution.Run(td, permit, profile.Plan, execution.Options{Preflight: preflight, Stopper: stopper, Identity: identityObserver, Hooks: deps.ExecutionHooks})
 	if runResult.Outcome != nil {
 		response.Outcome = runResult.Outcome
 		response.Payload = &runResult.Outcome.Payload
@@ -254,11 +263,8 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 	if inspection.StartExists {
 		return failed(response, task.ErrAlreadyStarted, 1)
 	}
-	profile, err := prepareProfile(deps, *req)
+	_, err = prepareMatchedProfile(deps, root, *req, *meta)
 	if err != nil {
-		return failed(response, err, classifyCode(err, 1))
-	}
-	if err = profile.Matches(*req, *meta); err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
 	client, observation, reconcileErr := reconcileRunner(&response, td, req, meta, deps.SupervisorOptions)
@@ -268,7 +274,29 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 	if stateErr := runnerStartStateError(observation.State); stateErr != nil {
 		return failed(response, stateErr, 1)
 	}
+	profile, err := prepareMatchedProfile(deps, root, *req, *meta)
+	if err != nil {
+		return failed(response, err, classifyCode(err, 1))
+	}
 	return runProvider(response, td, req, profile, client, deps)
+}
+
+// prepareMatchedProfile refreshes the provider's compiled launch profile and
+// checks it against the immutable admission record. Callers use it immediately
+// before any fresh submission and again after supervisor reconciliation, so a
+// policy or placement change cannot cross the next authority boundary.
+func prepareMatchedProfile(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {
+	profile, err := prepareProfile(deps, req)
+	if err != nil {
+		return PreparedProfile{}, err
+	}
+	if err = profile.Matches(req, meta); err != nil {
+		return PreparedProfile{}, err
+	}
+	if err = profile.ValidateStatePlacement(root); err != nil {
+		return PreparedProfile{}, err
+	}
+	return profile, nil
 }
 
 func runnerStartStateError(state pueue.State) error {

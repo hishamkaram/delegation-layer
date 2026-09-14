@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions test-race build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy
 
 tools:
 	./scripts/install-tools.sh
@@ -56,6 +56,9 @@ verify-gates: tool-versions
 test-race: tool-versions
 	go test -race -count=1 ./...
 
+test-native-harness:
+	python3 -m unittest discover -s scripts -p test_acceptance_agy.py -v
+
 build: tool-versions
 	@mkdir -p bin dist/delegate-darwin-amd64 dist/delegate-darwin-arm64 dist/delegate-linux-amd64 dist/delegate-linux-arm64
 	CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o bin/delegate ./cmd/delegate
@@ -91,6 +94,10 @@ supervisor-fixtures: tool-versions
 acceptance-supervisor: supervisor-fixtures
 	./scripts/acceptance-supervisor.sh
 
+acceptance-agy: build supervisor-fixtures test-native-harness
+	go test -race -count=1 ./internal/provider/antigravity ./internal/task ./internal/taskdir
+	./scripts/acceptance_agy.sh
+
 # Note: vuln requires access to the public vulnerability database (https://vuln.go.dev);
 # the mandatory behavioral and unit tests remain hermetic.
 vuln: tool-versions
@@ -104,6 +111,7 @@ check:
 	$(MAKE) lint
 	$(MAKE) verify-gates
 	$(MAKE) test-race
+	$(MAKE) test-native-harness
 	$(MAKE) build
 	$(MAKE) smoke-cli
 	$(MAKE) vuln
