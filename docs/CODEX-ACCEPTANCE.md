@@ -193,3 +193,11 @@ Direct Codex review used `gpt-5.6-luna` at max effort. The complete review and
 focused closure logs/source hashes are retained privately. Root's source,
 contract and maintainability review agrees with the closure; CI and merge
 remain required.
+
+The initial PR head `18d7eb5` failed CI because the expanded discovery test
+exceeded the cyclomatic-complexity ceiling by one. The prior full local gate
+preceded that certification/discovery assertion change; focused tests had
+passed but did not cover lint. The correction extracts the metadata assertions
+into a named helper with an expected-provider table. Full lint and focused
+race tests pass, and direct Codex review confirmed every assertion is retained.
+A new full local gate and exact-head CI are required for the corrected head.
