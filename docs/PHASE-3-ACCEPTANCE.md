@@ -1,6 +1,8 @@
 # Phase 3 acceptance evidence
 
-Status: **implementation and local gates complete; merge pending**. This record distinguishes the
+Status: **implementation, local gates, and review complete**.
+[PR #4](https://github.com/hishamkaram/delegation-layer/pull/4) is the authoritative
+record of exact-head CI and squash-merge acceptance. This record distinguishes the
 executed permission profile from final verification of the reviewed release.
 
 ## Executed capability measurement
@@ -82,7 +84,7 @@ The final launch-path code passed `make check` and a complete rerun of
 CLI review findings are resolved; the final focused review found no concrete
 actionable defects. Exact reviewed source hashes were verified.
 
-## Remaining phase gates
-- Open the private PR, require green Linux/macOS CI on its exact head, squash
-  merge, and verify main CI.
+## Merge acceptance requirements
+- Require green Linux/macOS CI on the private PR’s exact head, squash merge,
+  and verify main CI. The linked PR and workflow runs record those results.
 - Stop after Phase 3 as requested. Phases 4 and 5 remain planned and unstarted.

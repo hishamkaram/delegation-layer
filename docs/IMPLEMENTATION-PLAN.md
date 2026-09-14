@@ -1,6 +1,6 @@
 # Implementation plan and milestones
 
-**Status: Phases 0–2 accepted (PRs #1–#3 merged); Phase 3 implementation and local verification complete; review complete and merge pending. Phases 4 and 5 have not started. Work stops after Phase 3 merge and main CI verification.** The comprehensive execution plan in
+**Status: Phases 0–2 accepted (PRs #1–#3 merged); Phase 3 implementation, local verification, and review complete; [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4) records merge and CI acceptance. Phases 4 and 5 have not started. Work stops after Phase 3 merge and main CI verification.** The comprehensive execution plan in
 [`docs/EXECUTION-PLAN.md`](EXECUTION-PLAN.md) is the authoritative normative phase handoff and execution plan.
 This document tracks implementation details and preserves historical debate context.
 
