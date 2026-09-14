@@ -31,9 +31,8 @@ REQUIRED_SKILLS: tuple[str, ...] = (
 
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 FRONTMATTER_FIELD_RE = re.compile(r"^(name|description):[ \t]+(.*)$")
-MAKE_WORD_RE = re.compile(r"(?<![A-Za-z0-9_./-])make\b", re.IGNORECASE)
+MAKE_WORD_RE = re.compile(r"(?<![A-Za-z0-9_./-])make(?![A-Za-z0-9_.-])", re.IGNORECASE)
 COMMAND_LINE_RE = re.compile(r"^(?:[-*+]\s+)?(?:\$[ \t]*)?make(?:[ \t]+|$)", re.IGNORECASE)
-MAKE_TARGET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 PLANNED_COMMAND_RE = re.compile(
     r"(?:\[\s*planned\s*\]|\(\s*planned\s*\))", re.IGNORECASE
 )
@@ -246,6 +245,19 @@ def _markdown_links(text: str) -> Iterator[tuple[int, str | None, str | None]]:
             continue
 
         cursor = next_index + 1
+        if cursor < len(text) and text[cursor] == "<":
+            closing = text.find(">", cursor + 1)
+            if closing < 0 or "\n" in text[cursor:closing]:
+                yield _line_number(text, index), None, "unterminated angle-bracket link destination"
+                index = cursor + 1
+                continue
+            if closing + 1 >= len(text) or text[closing + 1] != ")":
+                yield _line_number(text, index), None, "unsupported link destination; omit titles"
+                index = closing + 1
+                continue
+            yield _line_number(text, index), text[cursor:closing + 1], None
+            index = closing + 2
+            continue
         depth = 1
         while cursor < len(text) and depth:
             if text[cursor] == "\\" and cursor + 1 < len(text):
@@ -267,21 +279,13 @@ def _markdown_links(text: str) -> Iterator[tuple[int, str | None, str | None]]:
 
 def _link_target(raw: str) -> tuple[str | None, str | None]:
     value = raw.strip()
-    if not value:
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1]
+    elif re.search(r"[\s<>]", value):
+        return None, "unsupported link destination; use <path with spaces> and omit titles"
+    if not value.strip():
         return None, "local link has an empty destination"
-    if value.startswith("<"):
-        closing = value.find(">", 1)
-        if closing < 0:
-            return None, "angle-bracket link destination is unterminated"
-        target = value[1:closing]
-        trailing = value[closing + 1 :].strip()
-        if trailing and not (
-            (trailing.startswith('"') and trailing.endswith('"'))
-            or (trailing.startswith("'") and trailing.endswith("'"))
-        ):
-            return None, "unsupported text follows an angle-bracket link destination"
-        return target, None
-    return value.split(None, 1)[0], None
+    return value, None
 
 
 def _validate_reference_definitions(document: SkillDocument) -> Iterator[str]:
@@ -311,12 +315,14 @@ def _validate_links(document: SkillDocument, root: Path) -> Iterator[str]:
         if target is None:
             yield f"{document.path}:{actual_line}: local link has an empty destination"
             continue
+        if target.startswith("//"):
+            continue
         if target.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", target):
             yield f"{document.path}:{actual_line}: link {target!r} must be relative"
             continue
         if target.startswith("#"):
             continue
-        if target.startswith("//") or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target):
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target):
             continue
 
         local_target = target.split("#", 1)[0]
@@ -378,23 +384,24 @@ def _make_occurrences(text: str) -> list[MakeOccurrence]:
     occurrences: list[MakeOccurrence] = []
     seen_offsets: set[int] = set()
     for segment, base_offset, source in _make_contexts(text):
-        for match in MAKE_WORD_RE.finditer(segment):
-            absolute_offset = base_offset + match.start()
-            if absolute_offset in seen_offsets:
-                continue
-            seen_offsets.add(absolute_offset)
-            remainder = segment[match.end() :].strip()
-            if MAKE_TARGET_RE.fullmatch(remainder):
-                target, syntax_error = remainder, None
-            else:
-                target = None
-                syntax_error = (
-                    "unsupported make command shape; use exactly `make <target>` "
-                    "with no options, assignments, extra targets, or shell operators"
-                )
-            occurrences.append(
-                MakeOccurrence(_line_number(text, absolute_offset), target, source, syntax_error)
-            )
+        match = MAKE_WORD_RE.search(segment)
+        if match is None:
+            continue
+        absolute_offset = base_offset + match.start()
+        if absolute_offset in seen_offsets:
+            continue
+        seen_offsets.add(absolute_offset)
+        command = PLANNED_COMMAND_RE.sub("", segment).strip()
+        command = re.sub(r"^(?:[-*+]\s+)?(?:\$[ \t]*)?", "", command)
+        parsed = re.fullmatch(r"make[ \t]+([A-Za-z0-9][A-Za-z0-9_.-]*)", command)
+        syntax_error = None if parsed else (
+            "unsupported make command shape; use exactly `make <target>` "
+            "with no options, assignments, extra targets, or shell operators"
+        )
+        occurrences.append(MakeOccurrence(
+            _line_number(text, absolute_offset), parsed.group(1) if parsed else None,
+            source, syntax_error,
+        ))
     return occurrences
 
 

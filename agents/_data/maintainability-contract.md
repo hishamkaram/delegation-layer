@@ -86,7 +86,8 @@ not require particular Markdown headings.
 Repository links in a skill use relative Markdown paths in an inline
 parenthesized destination. Parentheses in a destination are balanced, and an
 angle-bracket destination may contain spaces; a fragment after `#` is allowed
-and ignored for file existence checks. Reference-style links/definitions and
+and ignored for file existence checks. Link titles are unsupported; put explanatory text in the label or surrounding prose.
+Reference-style links/definitions and
 other unsupported Markdown shapes are rejected explicitly. External URLs may
 be used when genuinely useful, but they are not a substitute for links to the
 applicable repository contracts.

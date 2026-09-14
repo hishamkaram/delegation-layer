@@ -237,6 +237,41 @@ class VerifySkillsTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("unfinished scaffold marker 'TODO'", errors[0])
 
+    def test_planned_markers_in_command_lines_and_fences(self):
+        for body in ("make future [planned]\n", "```sh\nmake future (planned)\n```\n",
+                     "Run `make future [planned]`.\n"):
+            with self.subTest(body=body):
+                self.write_skill(body=body)
+                self.assertEqual(self.verify_demo(), [])
+
+    def test_target_names_without_a_make_invocation_are_not_commands(self):
+        self.write_skill(body="The `make-lint` and `make.foo` targets are names.\n")
+        self.assertEqual(self.verify_demo(), [])
+
+    def test_make_named_targets_are_not_additional_commands(self):
+        for target in ("make", "make-lint", "make.foo", "remake"):
+            with self.subTest(target=target):
+                (self.root / "Makefile").write_text(target + ":\n\t@true\n")
+                self.write_skill(body="Run `make " + target + "`.\n")
+                self.assertEqual(self.verify_demo(), [])
+
+    def test_protocol_relative_external_url_is_not_a_local_path(self):
+        self.write_skill(body="[external](//example.com/docs)\n")
+        self.assertEqual(self.verify_demo(), [])
+
+    def test_empty_angle_destination_and_titles_are_rejected(self):
+        for destination in ('<>', '<> "title"', '<../../guide.md> "title"',
+                            '../../guide.md "title"'):
+            with self.subTest(destination=destination):
+                (self.root / "guide.md").write_text("Guide\n")
+                self.write_skill(body="[guide](" + destination + ")\n")
+                self.assertTrue(self.verify_demo())
+
+    def test_angle_destination_parentheses_are_literal(self):
+        (self.root / "guide)name.md").write_text("Guide\n")
+        self.write_skill(body="[guide](<../../guide)name.md>)\n")
+        self.assertEqual(self.verify_demo(), [])
+
     def test_cli_returns_nonzero_and_actionable_diagnostic(self):
         self.write_skill(body="Run `make stale`.\n")
         output = StringIO()
