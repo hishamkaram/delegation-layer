@@ -9,11 +9,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 // Store manages the root-level delegation store and task directories.
 type Store struct {
+	predicates    predicate.Registry
 	Root          string
 	RootID        string
 	rootHandle    *os.Root
@@ -99,6 +101,10 @@ func (s *Store) loadExistingRoot(rootJSONPath string) error {
 
 // InitStore initializes a state store at rootPath with root.json and .maintenance.lock.
 func InitStore(rootPath string) (*Store, error) {
+	return InitStoreWithPredicates(rootPath, predicate.Default())
+}
+
+func InitStoreWithPredicates(rootPath string, registry predicate.Registry) (*Store, error) {
 	if !filepath.IsAbs(rootPath) {
 		return nil, fmt.Errorf("state root must be an absolute path: %s", rootPath)
 	}
@@ -137,6 +143,7 @@ func InitStore(rootPath string) (*Store, error) {
 	}
 
 	s := &Store{
+		predicates: registry,
 		Root:       cleanRoot,
 		rootHandle: rootHandle,
 		maintLock:  mLock,
@@ -177,6 +184,10 @@ func InitStore(rootPath string) (*Store, error) {
 
 // OpenStore opens an existing store at rootPath.
 func OpenStore(rootPath string) (*Store, error) {
+	return OpenStoreWithPredicates(rootPath, predicate.Default())
+}
+
+func OpenStoreWithPredicates(rootPath string, registry predicate.Registry) (*Store, error) {
 	if !filepath.IsAbs(rootPath) {
 		return nil, fmt.Errorf("state root must be an absolute path: %s", rootPath)
 	}
@@ -224,6 +235,7 @@ func OpenStore(rootPath string) (*Store, error) {
 	}
 
 	s := &Store{
+		predicates: registry,
 		Root:       cleanRoot,
 		RootID:     rootRec.RootID,
 		rootHandle: rootHandle,

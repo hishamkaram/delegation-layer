@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions test-race build smoke-cli vuln check acceptance-protocol
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions test-race build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor
 
 tools:
 	./scripts/install-tools.sh
@@ -59,11 +59,16 @@ test-race: tool-versions
 build: tool-versions
 	@mkdir -p bin dist/delegate-darwin-amd64 dist/delegate-darwin-arm64 dist/delegate-linux-amd64 dist/delegate-linux-arm64
 	CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o bin/delegate ./cmd/delegate
+	CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o bin/delegate-run ./cmd/delegate-run
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/protocolfixture ./internal/testutil/protocolfixture
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o dist/delegate-darwin-amd64/delegate ./cmd/delegate
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o dist/delegate-darwin-amd64/delegate-run ./cmd/delegate-run
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o dist/delegate-darwin-arm64/delegate ./cmd/delegate
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o dist/delegate-darwin-arm64/delegate-run ./cmd/delegate-run
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o dist/delegate-linux-amd64/delegate ./cmd/delegate
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o dist/delegate-linux-amd64/delegate-run ./cmd/delegate-run
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o dist/delegate-linux-arm64/delegate ./cmd/delegate
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o dist/delegate-linux-arm64/delegate-run ./cmd/delegate-run
 
 smoke-cli: build
 	./scripts/smoke-cli.sh
@@ -74,6 +79,17 @@ smoke-cli: build
 
 acceptance-protocol: build
 	./scripts/acceptance-protocol.sh
+
+supervisor-fixtures: tool-versions
+	@mkdir -p bin/phase2tools
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/delegate ./internal/testutil/phase2cli/cmd/delegate
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/delegate-run ./internal/testutil/phase2cli/cmd/delegate-run
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/provider ./internal/testutil/phase2fixture/cmd/provider
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/pueue-fake ./internal/testutil/phase2supervisor/cmd/pueue
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/phase2probe ./internal/testutil/phase2probe
+
+acceptance-supervisor: supervisor-fixtures
+	./scripts/acceptance-supervisor.sh
 
 # Note: vuln requires access to the public vulnerability database (https://vuln.go.dev);
 # the mandatory behavioral and unit tests remain hermetic.

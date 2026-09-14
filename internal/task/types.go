@@ -19,6 +19,8 @@ const MaxBriefSize = 8 * 1024 * 1024
 
 // Sentinel errors.
 var (
+	ErrStopAlreadyRequested  = errors.New("stop request already exists: no new authority")
+	ErrTerminalTask          = errors.New("task already has a valid terminal outcome")
 	ErrInvalidTaskID         = errors.New("invalid task ID: must be exactly 32 lowercase hex characters")
 	ErrInvalidRootID         = errors.New("invalid root ID: must be exactly 32 lowercase hex characters")
 	ErrUnsupportedSchema     = errors.New("unsupported schema version")
@@ -200,10 +202,13 @@ type PriorSession struct {
 
 // SupervisorRef binds task execution to an explicit supervisor instance.
 type SupervisorRef struct {
-	Endpoint        string `json:"endpoint"`
-	ConfigPath      string `json:"config_path"`
-	ConfigDigest    string `json:"config_digest"`
-	ObservedVersion string `json:"observed_version"`
+	ClientExecutable     string `json:"client_executable,omitempty"`
+	ClientSHA256         string `json:"client_sha256,omitempty"`
+	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
+	Endpoint             string `json:"endpoint"`
+	ConfigPath           string `json:"config_path"`
+	ConfigDigest         string `json:"config_digest"`
+	ObservedVersion      string `json:"observed_version"`
 }
 
 // RootRecord is stored in root.json.
@@ -261,15 +266,20 @@ type SubmitRecord struct {
 
 // SupervisorReceipt is stored in supervisor.ref.json.
 type SupervisorReceipt struct {
-	SchemaVersion   int    `json:"schema_version"`
-	RootID          string `json:"root_id"`
-	TaskID          string `json:"task_id"`
-	SpecSHA256      string `json:"spec_sha256"`
-	NumericTaskID   int64  `json:"numeric_task_id"`
-	Label           string `json:"label"`
-	ConfigDigest    string `json:"config_digest"`
-	Endpoint        string `json:"endpoint"`
-	ObservedVersion string `json:"observed_version"`
+	MetaSHA256           string `json:"meta_sha256,omitempty"`
+	ConfigPath           string `json:"config_path,omitempty"`
+	ClientExecutable     string `json:"client_executable,omitempty"`
+	ClientSHA256         string `json:"client_sha256,omitempty"`
+	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
+	SchemaVersion        int    `json:"schema_version"`
+	RootID               string `json:"root_id"`
+	TaskID               string `json:"task_id"`
+	SpecSHA256           string `json:"spec_sha256"`
+	NumericTaskID        int64  `json:"numeric_task_id"`
+	Label                string `json:"label"`
+	ConfigDigest         string `json:"config_digest"`
+	Endpoint             string `json:"endpoint"`
+	ObservedVersion      string `json:"observed_version"`
 }
 
 // ProviderStartRecord is stored in provider.start.
@@ -296,6 +306,9 @@ type ProviderStartedRecord struct {
 
 // ProviderRefRecord is stored in provider.ref.json.
 type ProviderRefRecord struct {
+	MetaSHA256     string `json:"meta_sha256,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	ObservedAt     string `json:"observed_at,omitempty"`
 	SchemaVersion  int    `json:"schema_version"`
 	RootID         string `json:"root_id"`
 	TaskID         string `json:"task_id"`
@@ -359,6 +372,11 @@ type PublishExitRecord struct {
 
 // StopRequestRecord is stored in stop/<request_id>.request.json.
 type StopRequestRecord struct {
+	NumericTaskID *int64        `json:"numeric_task_id,omitempty"`
+	MetaSHA256    string        `json:"meta_sha256,omitempty"`
+	Label         string        `json:"label,omitempty"`
+	BudgetNanos   int64         `json:"budget_nanos,omitempty"`
+	Deadline      string        `json:"deadline,omitempty"`
 	SchemaVersion int           `json:"schema_version"`
 	RootID        string        `json:"root_id"`
 	TaskID        string        `json:"task_id"`
@@ -371,25 +389,37 @@ type StopRequestRecord struct {
 
 // StopReplyRecord is stored in stop/<request_id>.reply.json.
 type StopReplyRecord struct {
-	SchemaVersion int    `json:"schema_version"`
-	RootID        string `json:"root_id"`
-	TaskID        string `json:"task_id"`
-	SpecSHA256    string `json:"spec_sha256"`
-	RequestID     string `json:"request_id"`
-	Acknowledged  bool   `json:"acknowledged"`
-	Message       string `json:"message"`
-	RepliedAt     string `json:"replied_at"`
+	Action        string         `json:"action,omitempty"`
+	MetaSHA256    string         `json:"meta_sha256,omitempty"`
+	Label         string         `json:"label,omitempty"`
+	Supervisor    *SupervisorRef `json:"supervisor,omitempty"`
+	RequestSHA256 string         `json:"request_sha256,omitempty"`
+	NumericTaskID *int64         `json:"numeric_task_id,omitempty"`
+	SchemaVersion int            `json:"schema_version"`
+	RootID        string         `json:"root_id"`
+	TaskID        string         `json:"task_id"`
+	SpecSHA256    string         `json:"spec_sha256"`
+	RequestID     string         `json:"request_id"`
+	Acknowledged  bool           `json:"acknowledged"`
+	Message       string         `json:"message"`
+	RepliedAt     string         `json:"replied_at"`
 }
 
 // StopObservedRecord is stored in stop/<request_id>.observed.json.
 type StopObservedRecord struct {
-	SchemaVersion int    `json:"schema_version"`
-	RootID        string `json:"root_id"`
-	TaskID        string `json:"task_id"`
-	SpecSHA256    string `json:"spec_sha256"`
-	RequestID     string `json:"request_id"`
-	Terminated    bool   `json:"terminated"`
-	ObservedAt    string `json:"observed_at"`
+	State         string         `json:"state,omitempty"`
+	MetaSHA256    string         `json:"meta_sha256,omitempty"`
+	Label         string         `json:"label,omitempty"`
+	Supervisor    *SupervisorRef `json:"supervisor,omitempty"`
+	RequestSHA256 string         `json:"request_sha256,omitempty"`
+	NumericTaskID *int64         `json:"numeric_task_id,omitempty"`
+	SchemaVersion int            `json:"schema_version"`
+	RootID        string         `json:"root_id"`
+	TaskID        string         `json:"task_id"`
+	SpecSHA256    string         `json:"spec_sha256"`
+	RequestID     string         `json:"request_id"`
+	Terminated    bool           `json:"terminated"`
+	ObservedAt    string         `json:"observed_at"`
 }
 
 // FaultRecord is stored in faults/<random_id>.json.

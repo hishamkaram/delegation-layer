@@ -22,8 +22,14 @@ type checkpointFaultInjector struct {
 	events      string
 	release     string
 	timeout     time.Duration
-	stages      map[string]string
+	stages      map[string]stageTrace
+	skipCleanup map[string]int
 	cleanupDest string
+}
+
+type stageTrace struct {
+	dest          string
+	linkAttempted bool
 }
 
 func checkpointFlags(fs *flag.FlagSet) *checkpointFaultInjector {
@@ -99,11 +105,25 @@ func (c *checkpointFaultInjector) OnStageBarrier(path string) error {
 	return c.fault("file-barrier", path)
 }
 func (c *checkpointFaultInjector) OnStageClose(path string) error { return c.fault("close", path) }
-func (c *checkpointFaultInjector) OnLink(stage, path string) error {
+
+func (c *checkpointFaultInjector) OnBeforeStageCreate(stage, path string) error {
 	if c.stages == nil {
-		c.stages = make(map[string]string)
+		c.stages = make(map[string]stageTrace)
 	}
-	c.stages[stage] = path
+	c.stages[stage] = stageTrace{dest: path}
+	return c.event("stage-create", path)
+}
+
+func (c *checkpointFaultInjector) OnLink(stage, path string) error {
+	trace, ok := c.stages[stage]
+	if !ok {
+		return fmt.Errorf("link stage has no creation trace: %s", stage)
+	}
+	if trace.dest != path {
+		return fmt.Errorf("link stage destination mismatch: stage=%s got=%s want=%s", stage, path, trace.dest)
+	}
+	trace.linkAttempted = true
+	c.stages[stage] = trace
 	if err := c.fault("link", path); err != nil {
 		return err
 	}
@@ -130,18 +150,33 @@ func (c *checkpointFaultInjector) OnAfterLinkDirBarrier(path string) error {
 }
 
 func (c *checkpointFaultInjector) OnCleanupUnlink(stage string) error {
-	path, ok := c.stages[stage]
+	trace, ok := c.stages[stage]
 	if !ok {
 		return fmt.Errorf("cleanup stage has no destination trace: %s", stage)
 	}
-	c.cleanupDest = path
-	if err := c.point("before-" + recordKind(path) + "-cleanup"); err != nil {
+	if !trace.linkAttempted {
+		if c.skipCleanup == nil {
+			c.skipCleanup = make(map[string]int)
+		}
+		c.skipCleanup[filepath.Dir(stage)]++
+		return nil
+	}
+	c.cleanupDest = trace.dest
+	if err := c.point("before-" + recordKind(trace.dest) + "-cleanup"); err != nil {
 		return err
 	}
-	return c.fault("cleanup", path)
+	return c.fault("cleanup", trace.dest)
 }
 
-func (c *checkpointFaultInjector) OnCleanupDirBarrier(_ string) error {
+func (c *checkpointFaultInjector) OnCleanupDirBarrier(path string) error {
+	if n := c.skipCleanup[path]; n > 0 {
+		if n == 1 {
+			delete(c.skipCleanup, path)
+		} else {
+			c.skipCleanup[path] = n - 1
+		}
+		return nil
+	}
 	return c.fault("cleanup-barrier", c.cleanupDest)
 }
 

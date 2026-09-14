@@ -1,0 +1,11 @@
+package main
+
+import (
+	"os"
+
+	"github.com/hishamkaram/delegation-layer/internal/testutil/phase2cli"
+)
+
+func main() {
+	os.Exit(phase2cli.Run(os.Args[1:], os.Stdout, os.Stderr))
+}

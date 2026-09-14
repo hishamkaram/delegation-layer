@@ -1,6 +1,6 @@
 # Implementation plan and milestones
 
-**Status: Phase 0 (Foundation) accepted (PR #1 merged); Phase 1 (Durable Protocol) candidate undergoing corrective implementation; review, root acceptance, and CI verification pending.** The comprehensive execution plan in
+**Status: Phases 0 and 1 accepted (PRs #1 and #2 merged); Phase 2 supervisor integration and acceptance in progress.** The comprehensive execution plan in
 [`docs/EXECUTION-PLAN.md`](EXECUTION-PLAN.md) is the authoritative normative phase handoff and execution plan.
 This document tracks implementation details and preserves historical debate context.
 
@@ -352,13 +352,13 @@ Every exit command for future phases is **proposed future work**, not claimed to
 - **Built:** `cmd/delegate` (`main.go`, `main_test.go`), `Makefile`, `.golangci.yml`, `.goreleaser.yaml`, `.github/workflows/ci.yml`, `scripts/verify-gates.sh`, `scripts/smoke-cli.sh`, `scripts/install-tools.sh`, `scripts/check-tool-versions.sh`, `AGENTS.md`, contracts in `agents/_data/`, `skills/add-an-adapter/SKILL.md`, and scoped `.codex/` configuration.
 - **Exit:** `make tools && make check` passing locally and in CI, with all 9 negative/positive fixtures verified by `scripts/verify-gates.sh` and smoke tests verified by `scripts/smoke-cli.sh`. Accepted via PR #1 squash merge.
 
-### Phase 1 — the durable protocol, with no external CLI (CANDIDATE; corrective implementation and verification pending)
+### Phase 1 — the durable protocol, with no external CLI (ACCEPTED)
 
 - **Goal:** make duplicate launch and false publication hard to *express*, before any paid execution exists.
-- **Built:** `internal/task` (pure values, tri-state enums, canonical marshaling, strict JSON validation with duplicate-key detection, outcome and request reduction), `internal/config` (strict budget and directory validation, ancestor symlink canonicalization, regular-file brief checking up to global 8 MiB ceiling), `internal/taskdir` (safe local store, directory-relative boundaries, create-once staging with hard links and fsync/F_FULLFSYNC barriers, advisory flock with stable inodes and O_CLOEXEC, single-use pointer-backed permits, evidence sealing, publication reduction with sole outcome.json linearisation point, durable session continuation claims, nonblocking maintenance scavenger), compiled fixture `internal/testutil/protocolfixture` (prepare, claim, seal, collect, candidate, inspect, scavenge, lock-hold, session, reconcile and wait), and the acceptance suite `scripts/acceptance-protocol.sh`. The 49 required fault cases are being corrected to assert their defining events and exact evidence; their previous passing status did not establish complete coverage.
-- **Exit:** `go test -race -count=1 ./...` and `make acceptance-protocol` passing locally and in Linux and macOS CI.
+- **Built:** `internal/task` (pure values, tri-state enums, canonical marshaling, strict JSON validation with duplicate-key detection, outcome and request reduction), `internal/config` (strict budget and directory validation, ancestor symlink canonicalization, regular-file brief checking up to global 8 MiB ceiling), `internal/taskdir` (safe local store, directory-relative boundaries, create-once staging with hard links and fsync/F_FULLFSYNC barriers, advisory flock with stable inodes and O_CLOEXEC, single-use pointer-backed permits, evidence sealing, publication reduction with sole outcome.json linearisation point, durable session continuation claims, nonblocking maintenance scavenger), compiled fixture `internal/testutil/protocolfixture` (prepare, claim, seal, collect, candidate, inspect, scavenge, lock-hold, session, reconcile and wait), and the acceptance suite `scripts/acceptance-protocol.sh`. All 49 required fault cases were corrected and verified with defining events and exact evidence. Earlier incomplete runs remain historical records, not acceptance evidence.
+- **Exit:** Unit/race, sequential and parallel `make check`, compiled protocol acceptance, independent live checks, and direct `codex review` passed. Exact-head Linux/macOS CI passed before [PR #2](https://github.com/hishamkaram/delegation-layer/pull/2) was squash-merged as `5f9c581f36ffdbed45c0d42bb78f9511afd24324`; post-merge CI also passed.
 
-### Phase 2 — a supervised task completing, against fakes (PLANNED)
+### Phase 2 — a supervised task completing, against fakes (IMPLEMENTATION / ACCEPTANCE IN PROGRESS)
 
 - **Goal:** prove the executable and the subprocess boundaries before provider quirks arrive.
 - **Built:** `cmd/delegate-run`; `internal/pueue` (subprocess client, versioned JSON decoding); `dispatch`, `status`, `collect`, `cancel`, `logs`; the wall budget; watch detachment; the fake provider and fake supervisor; publication recovery.

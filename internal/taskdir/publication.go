@@ -81,7 +81,7 @@ func (td *TaskDir) acknowledgeRecord(name string) error {
 			return fmt.Errorf("%w: %w", task.ErrUncertainDurability, err)
 		}
 	}
-	if err := td.store.barrierDir(td.Dir); err != nil {
+	if err := td.store.barrierDir(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("%w: %w", task.ErrUncertainDurability, err)
 	}
 	if inj := td.store.faultInjector; inj != nil {
@@ -142,37 +142,11 @@ func (td *TaskDir) collectOwned(predicate task.PredicateRef) (*task.OutcomeRecor
 	if err != nil {
 		return nil, nil, err
 	}
-	decision, err := task.EvaluateRegisteredPredicate(predicate, seal)
+	interpreter, err := td.store.predicates.Resolve(predicate)
 	if err != nil {
 		return nil, nil, err
 	}
-	return td.publishDecision(decision, seal, spec, metaHash)
-}
-
-func (td *TaskDir) publishDecision(decision task.PredicateDecision, seal *task.ProviderExitRecord, spec, metaHash string) (*task.OutcomeRecord, error, error) {
-	descriptor := task.PayloadDescriptor{Basename: decision.PayloadBasename, Length: int64(len(decision.PayloadContent)), SHA256: task.ComputeSHA256(decision.PayloadContent)}
-	var reader io.Reader = bytes.NewReader(decision.PayloadContent)
-	if decision.RawPath != "" {
-		f, err := td.store.openFile(filepath.Join(td.Dir, decision.RawPath), unix.O_RDONLY)
-		if err != nil {
-			return nil, nil, err
-		}
-		defer closeFileQuietly(f)
-		reader = f
-		found := false
-		for _, entry := range seal.RawManifest {
-			if entry.Path == decision.RawPath {
-				descriptor.Length = entry.Size
-				descriptor.SHA256 = entry.SHA256
-				found = true
-			}
-		}
-		if !found {
-			return nil, nil, task.ErrEvidenceFault
-		}
-	}
-	candidate := task.OutcomeRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: metaHash, Verdict: decision.Verdict, EvidenceSHA256: seal.ManifestSHA256, Predicate: seal.Predicate, Payload: descriptor}
-	return td.publishCandidate(&candidate, reader)
+	return td.evaluateAndPublish(interpreter, seal, spec, metaHash)
 }
 
 func (td *TaskDir) publishCandidate(candidate *task.OutcomeRecord, reader io.Reader) (*task.OutcomeRecord, error, error) {
@@ -186,6 +160,10 @@ func (td *TaskDir) publishCandidate(candidate *task.OutcomeRecord, reader io.Rea
 	if err = td.ensurePayload(candidate.Payload, reader); err != nil {
 		return nil, nil, err
 	}
+	return td.commitOutcome(candidate, data)
+}
+
+func (td *TaskDir) commitOutcome(candidate *task.OutcomeRecord, data []byte) (*task.OutcomeRecord, error, error) {
 	committed, cleanupErr, err := td.store.stageAndCommit(td.Dir, "outcome.json", data, td.store.faultInjector)
 	if errors.Is(err, os.ErrExist) {
 		_, _, meta, spec, metaHash, readErr := td.loadAndValidatePreparedSet()

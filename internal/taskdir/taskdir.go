@@ -381,7 +381,7 @@ func (td *TaskDir) PrepareSubmission(supervisor task.SupervisorRef) (_ *Submissi
 	td.admissionLease = lease
 	td.mu.Unlock()
 	success = true
-	return newSubmissionPermit(td.TaskID, lease), nil
+	return newSubmissionPermit(td.TaskID, lease, rec), nil
 }
 
 func (td *TaskDir) commitRecord(name string, rec any) error {
@@ -443,7 +443,7 @@ func (td *TaskDir) PrepareStart(budget int64) (_ *StartPermit, resultErr error) 
 	td.runnerLease = lease
 	td.mu.Unlock()
 	success = true
-	return newStartPermit(td.TaskID, lease), nil
+	return newStartPermit(td.TaskID, lease, rec), nil
 }
 
 func (td *TaskDir) initializeRaw() error {

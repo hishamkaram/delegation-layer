@@ -1,0 +1,110 @@
+# Task CLI
+
+Phase 2 introduces these command interfaces. Native agy, Codex, and Claude
+launch profiles remain disabled until their adapter phases pass acceptance.
+The finite `fixture:test` profile is compiled only into acceptance programs.
+
+```text
+delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
+  --provider PROFILE --brief FILE --cwd ABS [--id TASK_ID] \
+  [--permission MODE] [--budget DURATION] [--model MODEL] \
+  [--effort EFFORT] [--resume-task PREDECESSOR_ID] [--json]
+
+delegate [--root ABS] status TASK_ID [--json]
+delegate [--root ABS] collect TASK_ID [--watch DURATION] [--json]
+delegate [--root ABS] logs TASK_ID [--json]
+delegate [--root ABS] cancel TASK_ID [--json]
+```
+
+Task IDs are 32 lowercase hexadecimal characters. Omit `--id` to allocate a
+new ID. Reusing an ID requires the same immutable request and never grants
+another provider turn. A resume request allocates a new task and names its
+exact predecessor; it does not select a session by recency.
+
+A continuation reserves that conversation until it has a validated terminal
+outcome and its runner has released ownership. Active or uncertain execution
+keeps the reservation. If releasing a completed task's reservation fails,
+the command returns an operational error while preserving its outcome;
+collecting that task again retries the release.
+
+The brief is a finite file of at most 8 MiB. It is passed through stdin, not
+placed in the provider's argument list. The task budget defaults to `30m` and
+must be a positive Go duration such as `30s` or `5m`. It begins immediately
+before the one provider Start attempt and includes process wait and pipe
+capture. Queue time does not consume it. Token and dollar ceilings and raw
+provider arguments are unsupported.
+
+`--watch` bounds one collection call and defaults to `0s`. It does not change
+the task budget or stop the worker. Collection reads a valid existing outcome
+or interprets complete sealed evidence through its recorded predicate. It
+never launches, retries, or resumes provider work.
+
+## Supervisor configuration
+
+Initial dispatch requires an absolute `--pueue-config` path or the explicit
+`DELEGATE_PUEUE_CONFIG` environment setting. There is no default-queue fallback.
+The supported supervisor version is pueue 4.0.4. The initial client executable
+is resolved once and its absolute path, version, binary hash, exact configuration
+bytes, and resolved settings are bound to the task. Later operations use that
+saved binding and refuse incompatible fresh authority.
+
+Configuration accepts ordinary YAML and JSON-form YAML, with strict known
+fields, bounded aliases and explicit base-section selection. Merge keys,
+duplicate keys, custom tags, ambiguous relative paths, and multiple documents
+are refused. Defining a profile does not select it. Configuration is limited
+to 1 MiB, depth 64, 16,384 original nodes, 128 aliases and 65,536 expanded nodes.
+
+`delegate-run` normally resolves beside `delegate`. The absolute `--runner`
+override supports source builds. It receives the saved root and task ID from
+pueue and reconstructs the recorded launch profile. Existing admission/start
+guards prevent another attempt after an uncertain process result.
+
+## Results and observations
+
+| Exit | Meaning |
+|---|---|
+| 0 | Command completed; successful collection returned a committed outcome. |
+| 1 | Operational, storage, configuration-binding, or output error. |
+| 2 | Invalid request or unsupported initial profile/configuration. |
+| 3 | Collection is still pending or cannot yet establish a terminal outcome. |
+| 4 | Collection returned a valid rejected outcome. |
+
+`--json` returns a versioned control object with separate `admission`, `liveness`
+and `publication` fields. `outcome`, when present and validated, is the terminal
+authority. Payload and raw output are file descriptors in this response, not
+embedded answer text. Inspect the exit code and any `error` alongside the
+outcome: an ancillary operational error does not erase an independently valid
+published result.
+
+Each complete JSON response is limited to 1 MiB, including JSON escaping and
+the final newline. Oversized diagnostic text is shortened with
+`error_truncated: true` or the affected stop's `message_truncated: true`.
+Authority fields and descriptors are retained. If those fields alone exceed
+the limit, the command returns exit 1 before writing JSON.
+
+`logs` identifies the two absolute raw-stream paths. Live descriptors report
+availability without a final size or hash. Sealed descriptors include verified
+byte sizes and SHA-256 hashes. Collection remains usable for a valid historical
+winner when the provider executable, working directory or external supervisor
+configuration is no longer available.
+
+Cancellation records one explicit request, then freshly verifies the exact
+saved task before asking pueue to stop one running job or remove one queued
+job. It does not broaden or automatically repeat an uncertain request. A
+request, acknowledgment and observed job end are separate facts. None alone
+creates a provider seal or outcome, and a supervised job's end does not prove
+that every escaped descendant ended. Cancelling a valid terminal outcome is
+a no-op.
+
+## Verification
+
+`make check` runs the build, static checks and unit/race gates.
+`make acceptance-protocol` runs the inherited compiled protocol matrix.
+Install the pinned supervisor test pair with
+`scripts/install-test-supervisor.sh`, then run `make acceptance-supervisor`.
+The latter builds acceptance programs around the shared application and runs
+finite fake-client cases followed by one private pueue/pueued lifecycle.
+Its real lifecycle uses no workload stop/kill/remove operation; it shuts down
+the private daemon only after positive natural completion. Evidence is written
+under `bin/phase2-acceptance/`; unresolved failures preserve private paths and
+PIDs for inspection.

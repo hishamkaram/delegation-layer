@@ -16,6 +16,19 @@ builds:
       - arm64
     ldflags:
       - -X main.version={{.Version}}
+  - id: delegate-run
+    main: ./cmd/delegate-run
+    binary: delegate-run
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -X main.version={{.Version}}
 
 archives:
   - id: default

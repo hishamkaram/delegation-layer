@@ -2,12 +2,13 @@
 
 A durable single-machine agent delegation layer: a frontier model leads, cheaper agents from provider CLIs do the donkey work, and **a worker's turn survives its launcher.**
 
-**Status: Phase 0 accepted (PR #1 merged); Phase 1 candidate undergoing corrective implementation and independent acceptance.**
-The foundation CLI (`delegate`) is available. The durable protocol and its compiled `protocolfixture` test harness are being verified against the required 49-case fault matrix. Phase 1 is not accepted until code review, unit/race tests, live CLI tests and Linux/macOS CI pass. Task orchestration commands and all three native provider adapters follow in subsequent phases.
+**Status: Phases 0 and 1 accepted (PRs #1 and #2 merged); Phase 2 supervisor integration undergoing acceptance.**
+The durable protocol and its compiled `protocolfixture` harness passed the required 49-case matrix, independent review, and Linux/macOS CI. Phase 2 adds the shared `delegate` commands and `delegate-run` process owner. Its compiled acceptance programs supply a finite test provider; production dispatch refuses native profiles until their adapter phases are implemented and verified. agy, Codex, and Claude are all required before the private first release.
 
 - [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) — Normative, authoritative execution plan for all phases.
 - [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md) — Phase-by-phase implementation tracking and progress.
 - [`docs/PROTOCOL-FIXTURE.md`](docs/PROTOCOL-FIXTURE.md) — Finite protocol test commands, ownership and fault observations.
+- [`docs/CLI.md`](docs/CLI.md) — Task commands, result codes, and supervisor configuration.
 - [`DESIGN.md`](DESIGN.md) — Architectural design, verified provider facts, decisions taken, and historical measurements.
 - `diagrams/components.html` — System components architecture.
 - `diagrams/lead-interface.html` — Interaction model between the calling lead and the delegation layer.
@@ -18,7 +19,7 @@ The foundation CLI (`delegate`) is available. The durable protocol and its compi
 - **Sole Terminal Authority (`outcome.json`)**: A worker's finished answer is a payload file (`result.txt`), but `outcome.json` is the sole terminal authority. The existence of a payload alone is pending; only an `outcome.json` referencing the payload digest seals completion. Terminal payloads and outcomes cannot be overwritten, and collection never launches, retries, or resumes paid work.
 - **Durable Filesystem Commit**: Staging uses cryptographically unique temporary files in the destination directory, closed and synced before hard-linking into place, followed by a directory sync barrier. Remote, tmpfs, or unsupported filesystems lacking reliable barrier primitives are refused.
 - **Supervisor-Owned Stopping**: `pueue` owns process supervision. Direct process signals (`os.Process.Signal`, `os.Process.Kill`, `syscall.Kill`), process group manipulation (`setsid`, `setpgid`, `pkill`, `killall`), `exec.CommandContext`, and nonzero `WaitDelay` are strictly prohibited. Budget supervision uses a bounded runner event loop with explicit ownership.
-- **Execution Deadlines**: Tasks enforce a wall-clock execution deadline. Stop-request, stop-acknowledgment, and termination-observed are separate status facts. Token/dollar ceilings and raw argv are rejected before admission.
+- **Execution Budgets**: A monotonic runtime timer observes the execution budget and requests a validated supervisor stop on expiry. Stop-request, stop-acknowledgment, and termination-observed are separate facts; expiry does not prove termination. Token/dollar ceilings and raw argv are rejected before admission.
 - **Input Delivery**: The prompt brief is delivered via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv, and provider commands are never shell-reparsed.
 - **Provider Scope (v1 Private Release)**:
   - `antigravity:print`: Required candidate profile for `workspace-write` within validated roots, pending adapter-phase live acceptance receipts. Read-only is unsupported; `--sandbox` does not imply read-only.
