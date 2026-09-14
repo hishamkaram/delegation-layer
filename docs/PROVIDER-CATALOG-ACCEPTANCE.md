@@ -1,8 +1,9 @@
 # Provider catalog acceptance
 
 Runtime snapshot: `d2444c4` on `codex/provider-catalog`, based on `84a1a4a`.
-This handoff is not accepted until independent review, PR CI, squash merge,
-and main CI are recorded.
+Accepted in [PR #6](https://github.com/hishamkaram/delegation-layer/pull/6),
+squash `38e3da4`. Direct review was clean at `93c30c9`; all Linux/macOS
+PR checks and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34840061876) passed.
 
 ## Executed local gates
 
@@ -37,7 +38,9 @@ effort compatibility, ignored fixture timeout, certification status/digest
 validation, profile/predicate mode consistency, and prepared-predicate binding.
 `60bcd12` fixes them with regression tests, including multiple certified profiles
 for one mode. `d2444c4` removes a duplicate assertion to satisfy complexity lint;
-the dedicated timeout regression remains. Independent re-review is pending.
+the dedicated timeout regression remains. Runtime re-review found no additional
+runtime/catalog issue, and the final bounded review of `93c30c9` found no
+actionable findings.
 
 Two earlier observation timeouts remain recorded as failures: the fake pueue
 version probe in P03-diagnostic, and the unchanged compiled child-rendezvous

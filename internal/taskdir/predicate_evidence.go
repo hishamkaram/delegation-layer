@@ -22,6 +22,8 @@ type (
 		activeReaders int
 		mu            sync.Mutex
 		streams       map[predicate.Stream]sealedStream
+		named         map[string]sealedStream
+		declared      map[string]bool
 		closed        bool
 		failure       error
 	}
@@ -53,6 +55,26 @@ func (e *sealedEvidence) Read(key predicate.Stream, consume func(io.Reader) erro
 		return os.ErrClosed
 	}
 	stream, ok := e.streams[key]
+	return e.readLocked(stream, ok, consume)
+}
+
+func (e *sealedEvidence) ReadNamed(name string, consume func(io.Reader) error) error {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return os.ErrClosed
+	}
+	stream, present := e.named[name]
+	if e.declared[name] && !present && consume != nil {
+		e.mu.Unlock()
+		return predicate.ErrEvidenceAbsent
+	}
+	return e.readLocked(stream, present && e.declared[name], consume)
+}
+
+// readLocked consumes and releases e.mu; both APIs share reader lifetime and
+// poison tracking.
+func (e *sealedEvidence) readLocked(stream sealedStream, ok bool, consume func(io.Reader) error) error {
 	if !ok || consume == nil {
 		e.failure = errors.Join(e.failure, task.ErrEvidenceFault)
 		e.mu.Unlock()
@@ -86,28 +108,50 @@ func (e *sealedEvidence) Close() error {
 	for _, stream := range e.streams {
 		e.failure = errors.Join(e.failure, stream.file.Close())
 	}
+	for _, stream := range e.named {
+		e.failure = errors.Join(e.failure, stream.file.Close())
+	}
 	return e.failure
 }
 
 func (td *TaskDir) openValidatedEvidence(seal *task.ProviderExitRecord) (*sealedEvidence, error) {
-	evidence := &sealedEvidence{streams: make(map[predicate.Stream]sealedStream)}
+	if err := td.validateManifestDeclarations(seal.RawManifest); err != nil {
+		return nil, err
+	}
+	_, meta, err := td.PreparedRecords()
+	if err != nil {
+		return nil, err
+	}
+	evidence := &sealedEvidence{streams: make(map[predicate.Stream]sealedStream), named: make(map[string]sealedStream), declared: make(map[string]bool)}
+	for _, output := range meta.OutputArtifacts {
+		evidence.declared[output.Name] = true
+	}
 	for _, entry := range seal.RawManifest {
-		key := predicate.Stdout
-		if entry.Path == "raw/stderr" {
-			key = predicate.Stderr
-		} else if entry.Path != "raw/stdout" {
-			return nil, errors.Join(task.ErrEvidenceFault, evidence.Close())
-		}
-		f, err := td.store.openFile(filepath.Join(td.Dir, entry.Path), os.O_RDONLY)
-		if err != nil {
-			return nil, errors.Join(task.ErrEvidenceFault, err, evidence.Close())
-		}
-		evidence.streams[key] = sealedStream{file: f, size: entry.Size}
-		h := sha256.New()
-		n, err := io.Copy(h, f)
-		if err != nil || n != entry.Size || hex.EncodeToString(h.Sum(nil)) != entry.SHA256 {
+		if err := td.openEvidenceEntry(evidence, entry); err != nil {
 			return nil, errors.Join(task.ErrEvidenceFault, err, evidence.Close())
 		}
 	}
 	return evidence, nil
+}
+
+func (td *TaskDir) openEvidenceEntry(evidence *sealedEvidence, entry task.RawManifestEntry) error {
+	f, err := td.store.openFile(filepath.Join(td.Dir, entry.Path), os.O_RDONLY)
+	if err != nil {
+		return err
+	}
+	stream := sealedStream{file: f, size: entry.Size}
+	switch entry.Path {
+	case "raw/stdout":
+		evidence.streams[predicate.Stdout] = stream
+	case "raw/stderr":
+		evidence.streams[predicate.Stderr] = stream
+	default:
+		evidence.named[filepath.Base(entry.Path)] = stream
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil || n != entry.Size || hex.EncodeToString(h.Sum(nil)) != entry.SHA256 {
+		return errors.Join(task.ErrEvidenceFault, err)
+	}
+	return nil
 }

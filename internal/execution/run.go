@@ -88,6 +88,13 @@ func validatePlan(td *taskdir.TaskDir, permit *taskdir.StartPermit, p Plan) erro
 	if guard.RootID != meta.RootID || guard.TaskID != td.TaskID || guard.SpecSHA256 != meta.SpecSHA256 || guard.BudgetNanos != req.BudgetNanos {
 		return task.ErrInvalidPermit
 	}
+	return matchLaunchPlan(p, req, meta)
+}
+
+func matchLaunchPlan(p Plan, req *task.TaskRecord, meta *task.MetaRecord) error {
+	if !task.CompareInputFiles(p.InputFiles, meta.InputFiles) || !task.CompareOutputArtifacts(p.OutputArtifacts, meta.OutputArtifacts) || p.OutputWriterContract != meta.OutputWriterContract {
+		return task.ErrIdentityMismatch
+	}
 	if p.Executable != meta.ProviderExecutable || p.Directory != req.CanonicalCwd || !p.Predicate.Equal(meta.Predicate) {
 		return task.ErrIdentityMismatch
 	}
@@ -95,6 +102,10 @@ func validatePlan(td *taskdir.TaskDir, permit *taskdir.StartPermit, p Plan) erro
 }
 
 func prepareInvocation(td *taskdir.TaskDir, plan Plan) (*invocation, error) {
+	arguments, err := td.PrepareLaunchFiles(plan.Arguments)
+	if err != nil {
+		return nil, err
+	}
 	stdin, err := td.OpenBriefForExecution()
 	if err != nil {
 		return nil, err
@@ -107,7 +118,7 @@ func prepareInvocation(td *taskdir.TaskDir, plan Plan) (*invocation, error) {
 	if err != nil {
 		return nil, errors.Join(err, stdin.Close(), stdout.discard())
 	}
-	cmd := exec.Command(plan.Executable, append([]string(nil), plan.Arguments...)...)
+	cmd := exec.Command(plan.Executable, arguments...)
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = plan.Directory, stdin, stdout.writer, stderr.writer
 	if plan.Environment != nil {
 		cmd.Env = append([]string{}, plan.Environment...)
@@ -189,6 +200,9 @@ func sealAndPublish(td *taskdir.TaskDir, i *invocation, plan Plan, startErr erro
 		exitCode = i.cmd.ProcessState.ExitCode()
 	} else {
 		return nil, nil, errors.New("successful Start has no observed process state")
+	}
+	if err := td.ImportOutputArtifacts(); err != nil {
+		return nil, nil, err
 	}
 	if _, err := td.Seal(invocationState, exitCode, diagnostic, plan.Predicate); err != nil {
 		return nil, nil, err

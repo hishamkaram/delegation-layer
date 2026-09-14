@@ -34,6 +34,18 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    handling, and a versioned interpreter over sealed evidence. The adapter only
    prepares a plan and interprets evidence: it does not own pipes, capture,
    sealing, processes, stopping, deadlines, collection, or publication.
+   For small non-secret UTF-8 configuration files, declare `Plan.InputFiles`
+   with a safe lowercase name, exact content and an empty reserved argv slot.
+   For optional native output files, declare `Plan.OutputArtifacts` and the
+   version-qualified `OutputWriterContract` in both the plan and certified
+   profile. The core binds declarations to immutable metadata, supplies paths,
+   materializes input files, and imports completed outputs into sealed raw
+   evidence. Never write protocol records or expose a raw-writer handle from
+   provider code. Interpret named output through `predicate.NamedEvidence`;
+   `predicate.ErrEvidenceAbsent` means optional absence, while other read faults
+   must not be treated as fallback. Present empty or contradictory output is
+   evidence. Certify writer completion at process exit and stream EOF; a stable
+   file alone is insufficient.
 3. Register the adapter once in the explicit catalog. Reuse shared task,
    execution, predicate, usage, lifecycle, and acceptance-harness mechanics;
    do not add provider-specific branches to task, execution, or publication.

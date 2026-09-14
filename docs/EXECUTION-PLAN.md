@@ -499,10 +499,10 @@ Own `internal/provider/codex/**`, its fixtures, acceptance cases, docs and adapt
 codex exec --json --color never --ignore-user-config --ignore-rules
     --strict-config --sandbox read-only -c approval_policy="never"
     -c allow_login_shell=false --cd <workspace>
-    --output-last-message <task-state>/raw/codex-last-message.txt -
+    --output-last-message <core-owned-task-staging>/codex-last-message.txt -
 ```
 
-Here each `-c` value is one argv token, generated as valid TOML. No prompt text appears in argv. The output path is new for this task and cannot be a preexisting result. Do not use --ephemeral because exact continuation is part of acceptance.
+Here each `-c` value is one argv token, generated as valid TOML. No prompt text appears in argv. The output path is new for this task and cannot be a preexisting result. The core supplies a create-once staging path outside the workspace, then imports any completed regular file into sealed `raw/codex-last-message.txt` after the certified writer-completion boundary. The adapter receives no raw-writer or seal authority. This staging clarification preserves the optional-output and conflict checks below. Do not use --ephemeral because exact continuation is part of acceptance.
 
 This isolates the base user config and execpolicy rules, **not every config source**. Validate remaining trusted project, system, cloud-managed and requirements sources relevant to the supported version. Pin sandbox and approval in the invocation; neither substitutes for the other. Reject effective custom executable hooks, enabled MCP/custom tools, extra write grants, or conflicting managed policy not neutralized by verified overrides. For a discovered MCP server, the documented `mcp_servers.<id>.enabled=false` override may disable it; generate safely quoted TOML paths and verify the effective result. Do not assume `mcp_servers={}` erases inherited tables. Hook arrays can be cleared only where the installed resolver's merge behavior is verified; otherwise reject the affected profile. A clean compatible config is the minimum supported case; no requirement to support arbitrary personal plugins.
 

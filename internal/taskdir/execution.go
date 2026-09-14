@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 
@@ -179,12 +180,17 @@ func (s *Store) fileDigest(path string) (string, int64, error) {
 }
 
 func (td *TaskDir) rawManifest() ([]task.RawManifestEntry, string, error) {
-	manifest := make([]task.RawManifestEntry, 0, 2)
-	for _, name := range []string{"stderr", "stdout"} {
+	names, err := td.admittedRawNames()
+	if err != nil {
+		return nil, "", err
+	}
+	slices.Sort(names)
+	manifest := make([]task.RawManifestEntry, 0, len(names))
+	for _, name := range names {
 		path := "raw/" + name
-		digest, size, err := td.store.fileDigest(filepath.Join(td.Dir, path))
-		if err != nil {
-			return nil, "", err
+		digest, size, digestErr := td.store.fileDigest(filepath.Join(td.Dir, path))
+		if digestErr != nil {
+			return nil, "", digestErr
 		}
 		manifest = append(manifest, task.RawManifestEntry{Path: path, Size: size, SHA256: digest})
 	}
@@ -207,6 +213,9 @@ func (td *TaskDir) Seal(invocation string, exitCode int, exitErr string, predica
 	_, _, meta, specHash, metaHash, err := td.loadAndValidatePreparedSet()
 	if err != nil {
 		return nil, err
+	}
+	if len(meta.OutputArtifacts) > 0 && !state.artifactsImported {
+		return nil, fmt.Errorf("%w: output artifacts were not imported", task.ErrEvidenceFault)
 	}
 	if !predicate.Equal(meta.Predicate) {
 		return nil, task.ErrIncompatiblePredicate
@@ -243,7 +252,11 @@ func (td *TaskDir) Seal(invocation string, exitCode int, exitErr string, predica
 
 func (td *TaskDir) barrierRaw() error {
 	inj := td.store.faultInjector
-	for _, name := range []string{"stderr", "stdout"} {
+	names, err := td.admittedRawNames()
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
 		path := filepath.Join(td.Dir, "raw", name)
 		f, err := td.store.openFile(path, unix.O_RDONLY)
 		if err != nil {
@@ -301,14 +314,24 @@ func (td *TaskDir) readSealRecord(predicate task.PredicateRef, spec, meta string
 	if !startExists {
 		return nil, task.ErrEvidenceFault
 	}
+	if err := td.validateSealedFiles(&seal); err != nil {
+		return nil, err
+	}
+	return &seal, nil
+}
+
+func (td *TaskDir) validateSealedFiles(seal *task.ProviderExitRecord) error {
+	if err := td.validateManifestDeclarations(seal.RawManifest); err != nil {
+		return err
+	}
 	for _, entry := range seal.RawManifest {
 		digest, size, e := td.store.fileDigest(filepath.Join(td.Dir, entry.Path))
 		if e != nil {
-			return nil, e
+			return e
 		}
 		if digest != entry.SHA256 || size != entry.Size {
-			return nil, task.ErrEvidenceFault
+			return task.ErrEvidenceFault
 		}
 	}
-	return &seal, nil
+	return nil
 }

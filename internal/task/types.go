@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // SchemaVersion defines the supported protocol JSON schema version.
@@ -237,21 +238,24 @@ type TaskRecord struct {
 
 // MetaRecord is stored in meta.json (the immutable prepared execution plan).
 type MetaRecord struct {
-	SchemaVersion      int             `json:"schema_version"`
-	RootID             string          `json:"root_id"`
-	TaskID             string          `json:"task_id"`
-	SpecSHA256         string          `json:"spec_sha256"`
-	RequestedConfig    TaskConfig      `json:"requested_config"`
-	EffectiveConfig    EffectiveConfig `json:"effective_config"`
-	Containment        string          `json:"containment"`
-	Approval           string          `json:"approval"`
-	ProviderExecutable string          `json:"provider_executable"`
-	ProviderVersion    string          `json:"provider_version"`
-	PublisherBuild     string          `json:"publisher_build"`
-	PublisherVersion   string          `json:"publisher_version"`
-	Predicate          PredicateRef    `json:"predicate"`
-	SupervisorConfig   SupervisorRef   `json:"supervisor_config"`
-	CreatedAt          string          `json:"created_at"`
+	SchemaVersion        int              `json:"schema_version"`
+	RootID               string           `json:"root_id"`
+	TaskID               string           `json:"task_id"`
+	SpecSHA256           string           `json:"spec_sha256"`
+	RequestedConfig      TaskConfig       `json:"requested_config"`
+	EffectiveConfig      EffectiveConfig  `json:"effective_config"`
+	Containment          string           `json:"containment"`
+	Approval             string           `json:"approval"`
+	ProviderExecutable   string           `json:"provider_executable"`
+	ProviderVersion      string           `json:"provider_version"`
+	PublisherBuild       string           `json:"publisher_build"`
+	PublisherVersion     string           `json:"publisher_version"`
+	Predicate            PredicateRef     `json:"predicate"`
+	SupervisorConfig     SupervisorRef    `json:"supervisor_config"`
+	CreatedAt            string           `json:"created_at"`
+	OutputArtifacts      []OutputArtifact `json:"output_artifacts,omitempty"`
+	OutputWriterContract string           `json:"output_writer_contract,omitempty"`
+	InputFiles           []InputFile      `json:"input_files,omitempty"`
 }
 
 // SubmitRecord is stored in submit.json.
@@ -523,6 +527,18 @@ func ValidateMetaRecord(r *MetaRecord) error {
 	if err := ValidateSHA256(r.SpecSHA256); err != nil {
 		return fmt.Errorf("meta record spec_sha256: %w", err)
 	}
+	if err := validateCanonicalInputFiles(r.InputFiles); err != nil {
+		return fmt.Errorf("meta record input files: %w", err)
+	}
+	if err := validateCanonicalOutputArtifacts(r.OutputArtifacts); err != nil {
+		return fmt.Errorf("meta record output artifacts: %w", err)
+	}
+	if err := ValidateOutputArtifacts(r.OutputArtifacts, r.OutputWriterContract); err != nil {
+		return fmt.Errorf("meta record output contract: %w", err)
+	}
+	if err := ValidateInputOutputBindings(r.InputFiles, r.OutputArtifacts); err != nil {
+		return fmt.Errorf("meta record artifact bindings: %w", err)
+	}
 	return validateMetaConfiguration(r)
 }
 
@@ -609,24 +625,21 @@ func ValidateProviderStartedRecord(r *ProviderStartedRecord) error {
 
 // ValidateRawManifest validates raw manifest completeness, uniqueness, sorting, and digest.
 func ValidateRawManifest(manifest []RawManifestEntry, manifestSHA256 string) error {
-	if len(manifest) != 2 {
-		return fmt.Errorf("%w: exactly raw/stderr and raw/stdout are required", ErrEvidenceFault)
+	if len(manifest) < 2 || len(manifest) > MaxOutputArtifacts+2 {
+		return fmt.Errorf("%w: invalid raw manifest entry count", ErrEvidenceFault)
 	}
-	seenPaths := make(map[string]struct{})
+	seenPaths := make(map[string]bool, len(manifest))
 	for i, entry := range manifest {
-		if (entry.Path != "raw/stderr" && entry.Path != "raw/stdout") || entry.Size < 0 {
-			return fmt.Errorf("%w: invalid raw entry path or size", ErrEvidenceFault)
+		if err := validateRawEntry(entry); err != nil {
+			return err
 		}
-		if err := ValidateSHA256(entry.SHA256); err != nil {
-			return fmt.Errorf("%w: %w", ErrEvidenceFault, err)
-		}
-		if _, seen := seenPaths[entry.Path]; seen {
-			return fmt.Errorf("%w: duplicate raw manifest path %q", ErrEvidenceFault, entry.Path)
-		}
-		seenPaths[entry.Path] = struct{}{}
 		if i > 0 && manifest[i-1].Path >= entry.Path {
-			return fmt.Errorf("%w: raw manifest paths not strictly sorted: %q >= %q", ErrEvidenceFault, manifest[i-1].Path, entry.Path)
+			return fmt.Errorf("%w: raw manifest paths are not strictly sorted and unique", ErrEvidenceFault)
 		}
+		seenPaths[entry.Path] = true
+	}
+	if !seenPaths["raw/stdout"] || !seenPaths["raw/stderr"] {
+		return fmt.Errorf("%w: raw/stderr and raw/stdout are required", ErrEvidenceFault)
 	}
 	canonicalBytes, err := MarshalCanonical(manifest)
 	if err != nil {
@@ -634,6 +647,22 @@ func ValidateRawManifest(manifest []RawManifestEntry, manifestSHA256 string) err
 	}
 	if ComputeSHA256(canonicalBytes) != manifestSHA256 {
 		return fmt.Errorf("%w: manifest digest mismatch", ErrEvidenceFault)
+	}
+	return nil
+}
+
+func validateRawEntry(entry RawManifestEntry) error {
+	name, prefixed := strings.CutPrefix(entry.Path, "raw/")
+	if !prefixed || entry.Size < 0 {
+		return fmt.Errorf("%w: invalid raw entry path or size", ErrEvidenceFault)
+	}
+	if name != "stdout" && name != "stderr" {
+		if err := ValidateArtifactName(name); err != nil {
+			return fmt.Errorf("%w: unsafe raw artifact name: %w", ErrEvidenceFault, err)
+		}
+	}
+	if err := ValidateSHA256(entry.SHA256); err != nil {
+		return fmt.Errorf("%w: %w", ErrEvidenceFault, err)
 	}
 	return nil
 }

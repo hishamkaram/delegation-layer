@@ -1,6 +1,6 @@
 # Implementation plan and milestones
 
-**Status: Phases 0–3 accepted; Phase 3 merged in [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4), squash c094d03. Provider redesign is authorized; engineering guidance is accepted in PR #5, and the catalog/agy proof is in progress. Phases 4–5 have not started.**
+**Status: Phases 0–3 accepted; Phase 3 merged in [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4), squash c094d03. Provider redesign is authorized; engineering guidance and catalog/agy proof are accepted in PRs #5–6; contributor proof is in progress. Phases 4–5 have not started.**
 
 [EXECUTION-PLAN.md](EXECUTION-PLAN.md) is normative, including its [provider redesign amendment](PROVIDER-REDESIGN.md). Historical planning below is retained as history, not current verification evidence.
 
@@ -9,8 +9,8 @@
 | Handoff | Status | Acceptance |
 |---|---|---|
 | Engineering guidance and skills | Accepted | [PR #5](https://github.com/hishamkaram/delegation-layer/pull/5), squash `84a1a4a`; 32 validator tests, full local gate, direct Codex review, Linux/macOS PR and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34829586220) passed |
-| Catalog and agy proof | Independent review pending | [Local acceptance](PROVIDER-CATALOG-ACCEPTANCE.md) passed at `d2444c4`: full quality, 49 protocol, 48 hermetic + 5 native supervisor, and 3 live agy turns. Initial review findings fixed; clean review, CI and merge pending |
-| Shared infrastructure and contributor proof | Not started | Required |
+| Catalog and agy proof | Accepted | [PR #6](https://github.com/hishamkaram/delegation-layer/pull/6), squash `38e3da4`; [local acceptance](PROVIDER-CATALOG-ACCEPTANCE.md), direct review, exact-head PR CI and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34840061876) passed |
+| Shared infrastructure and contributor proof | Generic artifact boundary implementation in progress | Freeze shared baseline, then prove a new synthetic module + fixtures + one registration; shared acceptance and native reverification pending |
 | Codex / Phase 4 | Not started | Required |
 | Claude / Phase 5 | Not started | Required |
 | Integrated verification | Not started | Required |

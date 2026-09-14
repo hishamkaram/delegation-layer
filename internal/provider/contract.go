@@ -82,6 +82,9 @@ func pathContains(parent, child string) bool {
 // It validates shape and identity only; the caller remains responsible for
 // process admission and launch.
 func (p PreparedProfile) Validate(request task.TaskRecord) error {
+	if err := validatePlanBindings(p.Plan); err != nil {
+		return err
+	}
 	if !filepath.IsAbs(p.Plan.Executable) || p.ObservedVersion == "" {
 		return errors.New("profile must resolve an absolute executable and observed version")
 	}
@@ -109,8 +112,42 @@ func (p PreparedProfile) Matches(request task.TaskRecord, meta task.MetaRecord) 
 	if err := p.Validate(request); err != nil {
 		return err
 	}
-	if p.Plan.Executable != meta.ProviderExecutable || p.ObservedVersion != meta.ProviderVersion || !task.CompareEffectiveConfigs(p.Effective, meta.EffectiveConfig) || !p.Plan.Predicate.Equal(meta.Predicate) {
+	inputs, err := task.NormalizeInputFiles(p.Plan.InputFiles)
+	if err != nil {
+		return err
+	}
+	outputs, err := task.NormalizeOutputArtifacts(p.Plan.OutputArtifacts)
+	if err != nil {
+		return err
+	}
+	if p.Plan.Executable != meta.ProviderExecutable || p.ObservedVersion != meta.ProviderVersion || !task.CompareEffectiveConfigs(p.Effective, meta.EffectiveConfig) || !p.Plan.Predicate.Equal(meta.Predicate) || !task.CompareInputFiles(inputs, meta.InputFiles) || !task.CompareOutputArtifacts(outputs, meta.OutputArtifacts) || p.Plan.OutputWriterContract != meta.OutputWriterContract {
 		return task.ErrIdentityMismatch
+	}
+	return nil
+}
+
+func validatePlanBindings(plan execution.Plan) error {
+	if err := task.ValidateInputOutputBindings(plan.InputFiles, plan.OutputArtifacts); err != nil {
+		return err
+	}
+	if err := task.ValidateOutputArtifacts(plan.OutputArtifacts, plan.OutputWriterContract); err != nil {
+		return err
+	}
+	for _, file := range plan.InputFiles {
+		if file.ArgumentIndex >= len(plan.Arguments) {
+			return fmt.Errorf("input file %q argument index %d is outside argv", file.Name, file.ArgumentIndex)
+		}
+		if plan.Arguments[file.ArgumentIndex] != "" {
+			return fmt.Errorf("input file %q argument slot %d must be empty", file.Name, file.ArgumentIndex)
+		}
+	}
+	for _, artifact := range plan.OutputArtifacts {
+		if artifact.ArgumentIndex >= len(plan.Arguments) {
+			return fmt.Errorf("output artifact %q argument index %d is outside argv", artifact.Name, artifact.ArgumentIndex)
+		}
+		if plan.Arguments[artifact.ArgumentIndex] != "" {
+			return fmt.Errorf("output artifact %q argument slot %d must be empty", artifact.Name, artifact.ArgumentIndex)
+		}
 	}
 	return nil
 }
@@ -123,15 +160,16 @@ type PrepareProfile func(task.TaskRecord) (PreparedProfile, error)
 // profile. The fields are metadata; they do not assert that this host is
 // currently ready to launch the provider.
 type CertifiedProfile struct {
-	Mode            string            `json:"mode"`
-	Approval        string            `json:"approval"`
-	Status          string            `json:"status"`
-	ProviderVersion string            `json:"provider_version"`
-	OS              string            `json:"os"`
-	Arch            string            `json:"arch"`
-	RuntimeSHA256   string            `json:"runtime_sha256"`
-	ProfileRevision string            `json:"profile_revision"`
-	Predicate       task.PredicateRef `json:"predicate"`
+	Mode                 string            `json:"mode"`
+	Approval             string            `json:"approval"`
+	Status               string            `json:"status"`
+	ProviderVersion      string            `json:"provider_version"`
+	OS                   string            `json:"os"`
+	Arch                 string            `json:"arch"`
+	RuntimeSHA256        string            `json:"runtime_sha256"`
+	ProfileRevision      string            `json:"profile_revision"`
+	Predicate            task.PredicateRef `json:"predicate"`
+	OutputWriterContract string            `json:"output_writer_contract,omitempty"`
 }
 
 // Description is the bounded metadata exposed by the providers command.

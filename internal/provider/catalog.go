@@ -173,6 +173,9 @@ func validateProfile(providerID string, profile CertifiedProfile) error {
 	if err := task.ValidateSHA256(profile.RuntimeSHA256); err != nil {
 		return fmt.Errorf("profile runtime SHA-256: %w", err)
 	}
+	if err := task.ValidateOutputWriterContract(profile.OutputWriterContract); err != nil {
+		return fmt.Errorf("profile output writer contract: %w", err)
+	}
 	if err := config.ValidateMode(profile.Mode); err != nil {
 		return fmt.Errorf("profile mode: %w", err)
 	}
@@ -206,7 +209,7 @@ func addUnique(values map[string]struct{}, key string) bool {
 }
 
 func profileKey(profile CertifiedProfile) string {
-	return strings.Join([]string{profile.Mode, profile.Approval, profile.Status, profile.ProviderVersion, profile.OS, profile.Arch, profile.ProfileRevision, predicateKey(profile.Predicate)}, "\x00")
+	return strings.Join([]string{profile.Mode, profile.Approval, profile.Status, profile.ProviderVersion, profile.OS, profile.Arch, profile.ProfileRevision, profile.OutputWriterContract, predicateKey(profile.Predicate)}, "\x00")
 }
 
 func predicateKey(ref task.PredicateRef) string {
@@ -328,8 +331,22 @@ func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
 	if err != nil {
 		return PreparedProfile{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, err)
 	}
-	if !hasCertifiedProfilePredicate(registration.Description, request.Mode, profile.Plan.Predicate) {
-		return PreparedProfile{}, fmt.Errorf("%w: %s returned an uncertified predicate", ErrProfileUnavailable, request.Provider)
+	if !hasCertifiedPreparedProfile(registration.Description, request.Mode, profile.Plan.Predicate, profile.Plan.OutputWriterContract) {
+		return PreparedProfile{}, fmt.Errorf("%w: %s returned an uncertified predicate or writer contract", ErrProfileUnavailable, request.Provider)
+	}
+	profile.Plan.InputFiles, err = task.NormalizeInputFiles(profile.Plan.InputFiles)
+	if err != nil {
+		return PreparedProfile{}, fmt.Errorf("%w: invalid prepared input files: %w", ErrProfileUnavailable, err)
+	}
+	profile.Plan.OutputArtifacts, err = task.NormalizeOutputArtifacts(profile.Plan.OutputArtifacts)
+	if err != nil {
+		return PreparedProfile{}, fmt.Errorf("%w: invalid prepared output artifacts: %w", ErrProfileUnavailable, err)
+	}
+	if err = task.ValidateInputOutputBindings(profile.Plan.InputFiles, profile.Plan.OutputArtifacts); err != nil {
+		return PreparedProfile{}, fmt.Errorf("%w: invalid prepared artifact bindings: %w", ErrProfileUnavailable, err)
+	}
+	if err = task.ValidateOutputArtifacts(profile.Plan.OutputArtifacts, profile.Plan.OutputWriterContract); err != nil {
+		return PreparedProfile{}, fmt.Errorf("%w: invalid prepared output contract: %w", ErrProfileUnavailable, err)
 	}
 	return profile, nil
 }
@@ -343,9 +360,9 @@ func hasCertifiedProfileMode(description Description, mode string) bool {
 	return false
 }
 
-func hasCertifiedProfilePredicate(description Description, mode string, ref task.PredicateRef) bool {
+func hasCertifiedPreparedProfile(description Description, mode string, ref task.PredicateRef, writerContract string) bool {
 	for _, profile := range description.Profiles {
-		if profile.Mode == mode && profile.Predicate.Equal(ref) {
+		if profile.Mode == mode && profile.Predicate.Equal(ref) && profile.OutputWriterContract == writerContract {
 			return true
 		}
 	}
