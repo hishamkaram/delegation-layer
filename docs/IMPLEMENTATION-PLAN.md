@@ -10,7 +10,7 @@
 |---|---|---|
 | Engineering guidance and skills | Accepted | [PR #5](https://github.com/hishamkaram/delegation-layer/pull/5), squash `84a1a4a`; 32 validator tests, full local gate, direct Codex review, Linux/macOS PR and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34829586220) passed |
 | Catalog and agy proof | Accepted | [PR #6](https://github.com/hishamkaram/delegation-layer/pull/6), squash `38e3da4`; [local acceptance](PROVIDER-CATALOG-ACCEPTANCE.md), direct review, exact-head PR CI and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34840061876) passed |
-| Shared infrastructure and contributor proof | Generic artifact boundary implementation in progress | Freeze shared baseline, then prove a new synthetic module + fixtures + one registration; shared acceptance and native reverification pending |
+| Shared infrastructure and contributor proof | Verification in progress | Final baseline `e7ce3e0`; [thirteen-case compiled CLI proof](PROVIDER-CONTRIBUTION-ACCEPTANCE.md), proof repeated with size-bound and UTF-8 regressions; corrected quality, protocol, supervisor and agy gates pass; direct reviews and merge pending |
 | Codex / Phase 4 | Not started | Required |
 | Claude / Phase 5 | Not started | Required |
 | Integrated verification | Not started | Required |

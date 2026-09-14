@@ -1,0 +1,9 @@
+{
+  "status": "Executed",
+  "provider_version": "contributor-provider 1",
+  "runtime_sha256": "9260202559db2e80c68b83aadc70bd923f06f82122cc6b40984fcb7dfd7fa15e",
+  "os": "darwin",
+  "arch": "arm64",
+  "profile_revision": "contributor-provider-1-darwin-arm64",
+  "verification": "Finite fixture --self-test passed: configuration reads, optional output, exact continuation and create-once receipts. Built with Go1.27.1, CGO_ENABLED=0, -trimpath and -buildvcs=false. Synthetic executable only; native AI certification is not claimed."
+}
