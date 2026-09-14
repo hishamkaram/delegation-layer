@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"123e4567-e89b-12d3-a456-426614174000"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"commentary","type":"agent_message","text":"Working on it."}}
+{"type":"item.completed","item":{"id":"reasoning","type":"reasoning","text":"Internal reasoning is never the answer."}}
+{"type":"item.completed","item":{"id":"collab","type":"collab_tool_call","sender_thread_id":"123e4567-e89b-12d3-a456-426614174000","receiver_thread_ids":[],"prompt":"nested text is not selected","agents_states":{},"status":"completed"}}
+{"type":"item.completed","item":{"id":"final","type":"agent_message","text":"The exact final answer."}}
+{"type":"turn.completed","usage":{"input_tokens":12,"cached_input_tokens":3,"cache_write_input_tokens":2,"output_tokens":8,"reasoning_output_tokens":5}}

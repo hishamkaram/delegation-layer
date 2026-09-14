@@ -31,11 +31,13 @@ func TestProvidersJSONIsBoundedDeterministicAndDoesNotUseTaskFields(t *testing.T
 	if err := json.Unmarshal(first.Bytes(), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.SchemaVersion != OutputSchemaVersion || len(decoded.Providers) != 1 || decoded.Providers[0].ID != "antigravity:print" {
+	if decoded.SchemaVersion != OutputSchemaVersion || len(decoded.Providers) != 2 || decoded.Providers[0].ID != "antigravity:print" || decoded.Providers[1].ID != "codex:exec" {
 		t.Fatalf("unexpected compiled provider metadata: %+v", decoded)
 	}
-	if len(decoded.Providers[0].Profiles) != 1 || decoded.Providers[0].Profiles[0].Status != "Executed" {
-		t.Fatalf("certification metadata missing: %+v", decoded.Providers[0])
+	for _, description := range decoded.Providers {
+		if len(description.Profiles) != 1 || description.Profiles[0].Status != "Executed" {
+			t.Fatalf("certification metadata missing: %+v", description)
+		}
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(first.Bytes(), &fields); err != nil {

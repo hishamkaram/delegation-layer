@@ -11,7 +11,6 @@ place for review.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,6 +23,16 @@ import tempfile
 import time
 from datetime import datetime, timezone
 
+from acceptance_provider_common import (
+    AcceptanceFailure,
+    clean_absolute,
+    ensure_private_directory,
+    path_is_within,
+    reject_tmp,
+    require,
+    sha,
+    write_bytes,
+)
 from acceptance_supervisor_common import config_for, digest, read_json, write_json
 
 
@@ -46,29 +55,6 @@ DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delega
 DEFAULT_WORKSPACE_PARENT = Path.home() / "Active-Projects" / "delegation-layer-acceptance"
 PUEUE_PARENT = Path("/Users/Shared")
 MAX_STATUS_BYTES = 8 * 1024 * 1024
-
-
-class AcceptanceFailure(RuntimeError):
-    """A named native acceptance gate failure."""
-
-
-def require(condition: bool, message: str) -> None:
-    if not condition:
-        raise AcceptanceFailure(message)
-
-
-def clean_absolute(value: object, label: str) -> Path:
-    require(isinstance(value, str) and bool(value), f"{label} must be a nonempty path")
-    path = Path(value)
-    require(path.is_absolute() and path == Path(os.path.normpath(value)), f"{label} must be absolute and clean")
-    return path
-
-
-def reject_tmp(path: Path, label: str) -> None:
-    resolved = path.resolve(strict=False)
-    excluded = [Path(item).resolve(strict=False) for item in ("/tmp", "/var/tmp", "/var/folders", "/dev")]
-    require(not any(resolved == root or root in resolved.parents for root in excluded),
-            f"{label} must be outside provider temporary roots: {resolved}")
 
 
 def provider_runtime_roots(environment: dict[str, str]) -> list[Path]:
@@ -95,31 +81,6 @@ def reject_runtime_roots(path: Path, label: str, environment: dict[str, str]) ->
             raise AcceptanceFailure(f"{label} is inside provider writable runtime root {root}: {resolved}")
 
 
-def path_is_within(path: Path, parent: Path) -> bool:
-    child = path.resolve(strict=False)
-    ancestor = parent.resolve(strict=False)
-    return child == ancestor or ancestor in child.parents
-
-
-def ensure_private_directory(path: Path, label: str, create: bool = False) -> Path:
-    reject_tmp(path, label)
-    if create:
-        path.mkdir(mode=0o700, parents=True, exist_ok=False)
-    require(path.is_dir() and not path.is_symlink(), f"{label} is not a private directory: {path}")
-    os.chmod(path, 0o700)
-    require(path.stat().st_mode & 0o077 == 0, f"{label} is group/world accessible: {path}")
-    return path.resolve()
-
-
-def write_bytes(path: Path, data: bytes) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with path.open("xb") as stream:
-        stream.write(data)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.chmod(path, 0o600)
-
-
 def copy_bytes(source: Path, destination: Path, label: str) -> None:
     require(source.is_file() and not source.is_symlink(), f"{label} is not a regular file: {source}")
     write_bytes(destination, source.read_bytes())
@@ -131,10 +92,6 @@ def utc_stamp() -> str:
 
 def task_id() -> str:
     return secrets.token_hex(16)
-
-
-def hash_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def no_prompt_argv(argv: list[str], brief_paths: list[Path]) -> None:
@@ -239,7 +196,7 @@ class OwnedProcess:
             "full_environment_preserved": True,
             "stdin": "PIPE" if stdin is not None else "DEVNULL",
             "stdin_bytes": len(stdin) if stdin is not None else 0,
-            "stdin_sha256": hash_bytes(stdin) if stdin is not None else None,
+            "stdin_sha256": sha(stdin) if stdin is not None else None,
             "shell": False,
         }
         write_json(directory / "invocation.json", invocation)
@@ -541,6 +498,8 @@ def load_prepared(path: Path) -> Prepared:
 def resolve_executable(value: str | None, default: Path, label: str) -> Path:
     candidate = Path(value) if value else default
     require(candidate.is_absolute(), f"{label} must be an absolute executable path")
+    # Homebrew and other package managers expose commands through symlinked
+    # aliases. Validate and record the canonical regular executable.
     require(candidate.is_file() and os.access(candidate, os.X_OK),
             f"{label} is unavailable or not executable: {candidate}")
     resolved = candidate.resolve(strict=True)
@@ -798,7 +757,7 @@ class NativeRun:
                 continue
             data = path.read_bytes()
             relative = str(path.relative_to(directory))
-            snapshot[relative] = {"bytes": len(data), "sha256": hash_bytes(data)}
+            snapshot[relative] = {"bytes": len(data), "sha256": sha(data)}
         return snapshot
 
     def read_record(self, task: str, name: str) -> dict[str, object]:
@@ -881,7 +840,7 @@ class NativeRun:
         payload_path = directory / payload["basename"]
         require(payload_path.is_file() and not payload_path.is_symlink(), f"{name} payload is absent")
         payload_bytes = payload_path.read_bytes()
-        require(len(payload_bytes) == payload.get("length") and hash_bytes(payload_bytes) == payload.get("sha256"),
+        require(len(payload_bytes) == payload.get("length") and sha(payload_bytes) == payload.get("sha256"),
                 f"{name} payload digest mismatch")
         require((directory / "raw" / "stdout").is_file() and (directory / "raw" / "stderr").is_file(),
                 f"{name} raw streams are absent")
@@ -928,7 +887,7 @@ class NativeRun:
         self.dispatch("policy-drift", task, brief, None, None)
         self.assert_unstarted_queued(task, "drift-queued")
         admitted = self.read_record(task, "meta.json")["effective_config"]["policy"]["sources"]
-        require(any(source["path"] == str(policy) and source["sha256"] == hash_bytes(initial)
+        require(any(source["path"] == str(policy) and source["sha256"] == sha(initial)
                     for source in admitted), "drift fixture was not bound at admission")
         with policy.open("wb") as stream:
             stream.write(b"Acceptance context revision two.\n")
@@ -1004,8 +963,8 @@ class NativeRun:
         require(inside_bytes in allowed_inside, "L1 inside sentinel content mismatch")
         require(not os.path.lexists(self.prepared.outside), "L1 outside sentinel was written")
         write_json(self.output / "L1-filesystem.json", {
-            "expected_nonce_sha256": hash_bytes(nonce),
-            "inside_sha256": hash_bytes(inside_bytes),
+            "expected_nonce_sha256": sha(nonce),
+            "inside_sha256": sha(inside_bytes),
             "inside_matches": True, "outside_entry_absent": True,
         })
         if verdict == "committed":

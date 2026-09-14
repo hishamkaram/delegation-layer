@@ -498,7 +498,11 @@ Own `internal/provider/codex/**`, its fixtures, acceptance cases, docs and adapt
 ```text
 codex exec --json --color never --ignore-user-config --ignore-rules
     --strict-config --sandbox read-only -c approval_policy="never"
-    -c allow_login_shell=false --cd <workspace>
+    -c approvals_reviewer="user" -c allow_login_shell=false
+    -c features.shell_snapshot=false -c features.shell_snapshot_v2=false
+    -c features.apps=false -c features.hooks=false
+    -c features.plugins=false -c cli_auth_credentials_store="file"
+    --cd <workspace>
     --output-last-message <core-owned-task-staging>/codex-last-message.txt -
 ```
 
@@ -508,15 +512,17 @@ This isolates the base user config and execpolicy rules, **not every config sour
 
 Do not relocate CODEX_HOME or copy authentication into scratch directories. --ignore-user-config deliberately keeps the existing auth location. No model/effort flags are necessary for the minimum case; provider-default behavior must be recorded honestly.
 
+The 0.154.0 candidate uses the bounded personal-file-auth and authoritative macOS preference checks documented in [Codex acceptance](CODEX-ACCEPTANCE.md). Other authentication or managed-policy profiles fail before admission. The explicit hook/plugin feature gates and file-store override are part of the profile, and require exact argv, policy and native evidence before certification.
+
 Continuation shape: put the same exec options that are not resume-local **before** `resume`, then `resume <recorded-thread-uuid> -`. Use captured `codex exec resume --help` for allowed child-option placement. A hermetic argv test and one actual resume must prove this exact invocation; do not reuse a fresh-launch argv by concatenating it after `resume`.
 
 ### Events, answer, and transcript
 
 Parse JSONL without assuming a final newline. Track one thread.started/thread_id, one turn.started, subsequent item events and one successful turn.completed. A turn.failed event or other terminal interruption rejects publication. Recoverable error/retry events earlier in a stream do not alone defeat a later successful turn; retain them as diagnostics.
 
-Require a non-whitespace final agent message associated with this invocation's completed turn, and the raw -o file to agree when present. Ignore earlier commentary/plans, reasoning, tool output and subagent messages as answer candidates. For the exact installed schema, fixture the final-message identification rule rather than assuming the last text of any type is the answer. Missing turn.completed, mismatched thread IDs, conflicting finals, or output-file content without a successful completed turn cannot publish. If stdout alone contains a verified final answer and -o is absent due to a publication crash, recovery uses stdout under the same predicate; the -o file is not the authority.
+Require a non-whitespace final agent message associated with this invocation's completed turn, and the raw -o file to agree when present. Ignore earlier commentary/plans, reasoning, tool output and subagent messages as answer candidates. For the exact installed schema, fixture the final-message identification rule rather than assuming the last text of any type is the answer. In Codex 0.154.0, JSONL `agent_message` carries text without a phase field; the pinned producer selects the last top-level agent message of the completed turn. Earlier messages are superseded, while reasoning, plan and nested collaboration output are never candidates. Require output-file byte agreement when present, and reject duplicate/conflicting completion records. Missing turn.completed, mismatched thread IDs, conflicting finals, or output-file content without a successful completed turn cannot publish. If stdout alone contains a verified final answer and -o is absent due to a publication crash, recovery uses stdout under the same predicate; the -o file is not the authority.
 
-Usage from turn.completed is stored as task/turn scoped according to the verified event schema. Record cached input and reasoning counters without double-counting. Transcript lookup is optional and bound to the exact recorded thread. The installed CLI exposes paginated-history migration; do not hardcode a glob over ~/.codex/sessions or inspect unrelated sessions. A null descriptor is preferable to a guessed file.
+Usage scope follows the verified event producer, not the event name. The pinned Codex 0.154.0 producer copies `ThreadTokenUsage.total` into `turn.completed.usage`, so this profile records conversation-cumulative counters and derives no task delta. Record cached input and reasoning counters without double-counting. Transcript lookup is optional and bound to the exact recorded thread. The installed CLI exposes paginated-history migration; do not hardcode a glob over ~/.codex/sessions or inspect unrelated sessions. A null descriptor is preferable to a guessed file.
 
 ### Required fixtures and live gate
 

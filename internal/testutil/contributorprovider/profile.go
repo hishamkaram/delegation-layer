@@ -1,11 +1,8 @@
 package contributorprovider
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -307,39 +304,12 @@ func canonicalExecutable(path, label string) (string, error) {
 	return path, nil
 }
 
-func inspectExecutable(path string) (identity runtimeIdentity, resultErr error) {
-	path, err := canonicalExecutable(path, "provider executable")
+func inspectExecutable(path string) (runtimeIdentity, error) {
+	digest, err := commonprovider.FingerprintExecutable(path)
 	if err != nil {
 		return runtimeIdentity{}, err
 	}
-	before, err := os.Lstat(path)
-	if err != nil {
-		return runtimeIdentity{}, err
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return runtimeIdentity{}, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
-	opened, err := file.Stat()
-	if err != nil {
-		return runtimeIdentity{}, err
-	}
-	if !os.SameFile(before, opened) {
-		return runtimeIdentity{}, errors.New("provider executable changed before hashing")
-	}
-	hasher := sha256.New()
-	if _, copyErr := io.Copy(hasher, file); copyErr != nil {
-		return runtimeIdentity{}, copyErr
-	}
-	after, err := os.Lstat(path)
-	if err != nil {
-		return runtimeIdentity{}, err
-	}
-	if !os.SameFile(after, opened) || after.Size() != opened.Size() || after.ModTime() != opened.ModTime() {
-		return runtimeIdentity{}, errors.New("provider executable changed during hashing")
-	}
-	return runtimeIdentity{Executable: path, SHA256: hex.EncodeToString(hasher.Sum(nil)), OS: runtime.GOOS, Arch: runtime.GOARCH}, nil
+	return runtimeIdentity{Executable: path, SHA256: digest, OS: runtime.GOOS, Arch: runtime.GOARCH}, nil
 }
 
 func pathsOverlap(left, right string) bool {

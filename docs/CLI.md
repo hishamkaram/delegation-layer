@@ -1,8 +1,9 @@
 # Task CLI
 
 These commands manage durable provider tasks. Antigravity has a certified
-workspace-write profile on its recorded version/platform. Codex and Claude
-launch profiles remain planned until their adapter phases pass acceptance.
+workspace-write profile on its recorded version/platform. Codex has a certified
+read-only profile for 0.154.0 on Darwin/arm64. Claude remains planned until its
+adapter phase passes acceptance.
 The finite `fixture:test` launch profile is compiled only into acceptance programs.
 
 ```text
@@ -64,6 +65,15 @@ before supervisor admission. An explicit `--effort default` retains the native
 provider-default selection where supported; it does not request a custom effort
 level or change the stored request representation. The discovery response has no task admission,
 liveness or publication fields.
+
+The Codex profile uses existing personal ChatGPT file authentication in the
+native Codex home. Managed policy, alternate authentication, nonempty effective
+system/project configuration, explicit model/effort overrides and native timeout
+are outside the certified profile and fail before admission. User configuration
+is ignored by the pinned native launch flags. Exact conversation continuation
+uses `--resume-task TASK_ID`; it allocates a new task. See
+[Codex profile evidence and limits](CODEX-ACCEPTANCE.md) for the source inventory,
+runtime exclusions and executed containment checks.
 
 ## Supervisor configuration
 

@@ -182,3 +182,16 @@ unresolved actionable findings, including ownership, lifetimes, dependencies,
 duplication, compatibility and contributor effort. Record the PR's exact reviewed
 head, green CI on that head, squash commit, green main CI, and worktree retirement
 receipt before marking this handoff accepted.
+
+## Merge receipt
+
+Accepted in [PR #7](https://github.com/hishamkaram/delegation-layer/pull/7).
+Reviewed head `005ce9a57a46e3f971520c93aff3e33af7ccebf2` squash-merged as
+`2a4cb8a9f5fe20ad3d542216512bffc1d71b5f23`; the merged tree matched exactly.
+All direct Codex reviews completed with zero unresolved actionable findings.
+Both platform jobs passed on the exact PR head and in
+[post-merge CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34859837834).
+The implementation worktree and its owned local/remote branches were retired
+after preserving source history, generated files, native evidence and review
+logs in the private contributor archive with a digest inventory. Earlier
+pending statements above describe the evidence capture before this receipt.
