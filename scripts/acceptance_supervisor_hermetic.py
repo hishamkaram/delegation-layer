@@ -1443,6 +1443,10 @@ class HermeticSuite:
             },
         }
         write_json(self.output / "summary.json", summary)
+        for result in self.results:
+            if result["status"] == "fail":
+                print("FAIL " + result["case"] + ": " + result["error"], file=sys.stderr, flush=True)
+                print(result["traceback"], file=sys.stderr, flush=True)
         return summary
 
     def run(self):
