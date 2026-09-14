@@ -31,7 +31,7 @@ This document specifies the non-negotiable engineering floor for the repository.
 
 ## 3. Testing and Verification Discipline
 - **Sequential Gate (`make check`)**:
-  `tool-versions → fmt-check → config-check → vet → lint → verify-gates → test-race → build → smoke-cli → vuln`.
+  `tool-versions → verify-skills → fmt-check → config-check → vet → lint → verify-gates → test-race → test-native-harness → build → smoke-cli → vuln`.
 - **Race Detection**: All unit and integration tests run under `-race -count=1`.
 - **Unit Testing**: Unit tests exercise error branches, writer failures, and boundaries using injected in-memory mocks without spawning background or external subprocesses.
 - **Gate Rejection Fixtures**: `scripts/verify-gates.sh` proves linter enforcement against isolated temporary modules for each forbidden pattern and verifies that corrected counterparts pass.

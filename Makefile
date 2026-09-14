@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy
 
 tools:
 	./scripts/install-tools.sh
@@ -52,6 +52,10 @@ verify-tooling-regressions: tool-versions
 verify-gates: tool-versions
 	./scripts/verify-gates.sh
 	./scripts/verify-tooling-regressions.sh
+
+verify-skills:
+	python3 scripts/verify_skills.py
+	python3 -m unittest discover -s scripts -p 'test_verify_skills.py' -v
 
 test-race: tool-versions
 	go test -race -count=1 ./...
@@ -105,6 +109,7 @@ vuln: tool-versions
 
 check:
 	$(MAKE) tool-versions
+	$(MAKE) verify-skills
 	$(MAKE) fmt-check
 	$(MAKE) config-check
 	$(MAKE) vet

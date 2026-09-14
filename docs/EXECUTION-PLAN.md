@@ -2,6 +2,10 @@
 
 Status: execution authorized 2026-09-13; phase completion is evidence-driven. This document is the normative phase handoff and supersedes conflicting milestones in DESIGN.md and docs/IMPLEMENTATION-PLAN.md. Historical measurements remain historical; tests and live evidence are never claimed before they run.
 
+## Provider redesign amendment
+
+The authorized [provider maintainability and integration workplan](PROVIDER-REDESIGN.md) adds engineering skills, a maintainability gate, and a catalog/contributor proof before Phase 4. It governs that refactor and its handoffs; existing provider profiles, execution invariants and phase numbering remain authoritative. Phase 3 is merged; the earlier stop-after-Phase-3 instruction was fulfilled and the user has now authorized this sequence.
+
 ## Goal and confirmed decisions
 
 Deliver the durable single-machine delegation layer, with antigravity:print, codex:exec, and claude:print all in the first private release. Then port the existing duo review fan-out and deliver a resumable declared-plan workflow that returns task outcomes to its calling AI lead. The workflow never invents tasks or autonomously judges result quality. Keep the repository, release assets, and any tap private. No HTTP/A2A, native Claude background mode, router adapters, or unbounded autonomous lead in this sequence.
@@ -157,11 +161,13 @@ Use no production exception to the above bans in Phase 0; fixtures are compiled 
 
 ## Recurring gate — actual sequential recipe
 
-Expose `tools`, `tool-versions`, `fmt`, `fmt-check`, `config-check`, `vet`, `lint`, `verify-gates`,
-`test-race`, `build`, `smoke-cli`, `vuln`, and `check` as .PHONY targets.
+Expose `tools`, `tool-versions`, `verify-skills`, `fmt`, `fmt-check`, `config-check`, `vet`, `lint`, `verify-gates`,
+`test-race`, `test-native-harness`, `build`, `smoke-cli`, `vuln`, and `check` as .PHONY targets.
 Implement `check` as separate, ordered recursive-make recipe lines, **not a prerequisite list**:
-`tool-versions → fmt-check → config-check → vet → lint → verify-gates → test-race → build → smoke-cli → vuln`.
+`tool-versions → verify-skills → fmt-check → config-check → vet → lint → verify-gates → test-race → test-native-harness → build → smoke-cli → vuln`.
+This sequence includes the later native-harness and provider-guidance additions; it is the current recurring gate, not a claim that those additions existed in Phase 0.
 Each recursive command must stop the recipe on failure even with `make -j check`; propagate failures unchanged.
+verify-skills validates the repository skills and runs its negative/positive tests; test-native-harness runs the hermetic acceptance-harness tests without paid providers.
 config-check runs pinned `golangci-lint config verify` and pinned `goreleaser check` against real repository files.
 fmt-check uses standalone `gofumpt -l` and fails on any listed file; gofumpt itself can exit 0 while listing files.
 Scan tracked/applicable Go files without descending into tool caches; `fmt` is the explicit mutation target.

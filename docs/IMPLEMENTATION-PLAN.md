@@ -1,8 +1,19 @@
 # Implementation plan and milestones
 
-**Status: Phases 0–2 accepted (PRs #1–#3 merged); Phase 3 implementation, local verification, and review complete; [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4) records merge and CI acceptance. Phases 4 and 5 have not started. Work stops after Phase 3 merge and main CI verification.** The comprehensive execution plan in
-[`docs/EXECUTION-PLAN.md`](EXECUTION-PLAN.md) is the authoritative normative phase handoff and execution plan.
-This document tracks implementation details and preserves historical debate context.
+**Status: Phases 0–3 accepted; Phase 3 merged in [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4), squash c094d03. Provider redesign is authorized; engineering guidance is in progress. Phases 4–5 have not started.**
+
+[EXECUTION-PLAN.md](EXECUTION-PLAN.md) is normative, including its [provider redesign amendment](PROVIDER-REDESIGN.md). Historical planning below is retained as history, not current verification evidence.
+
+## Provider redesign tracking
+
+| Handoff | Status | Acceptance |
+|---|---|---|
+| Engineering guidance and skills | In progress | Tests/review/CI/merge pending |
+| Catalog and agy proof | Not started | Required |
+| Shared infrastructure and contributor proof | Not started | Required |
+| Codex / Phase 4 | Not started | Required |
+| Claude / Phase 5 | Not started | Required |
+| Integrated verification | Not started | Required |
 
 ## How this plan was produced
 
