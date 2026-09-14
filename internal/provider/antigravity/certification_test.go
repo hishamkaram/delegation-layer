@@ -8,6 +8,27 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+func TestDescriptionDerivesCertifiedMetadataFromEmbeddedRecord(t *testing.T) {
+	record, err := embeddedCertification()
+	if err != nil {
+		t.Fatal(err)
+	}
+	description := Description()
+	if description.ID != record.Provider || len(description.Profiles) != 1 {
+		t.Fatalf("description identity/profile count mismatch: %+v", description)
+	}
+	profile := description.Profiles[0]
+	if profile.Mode != record.Mode || profile.Approval != record.Approval || profile.Status != record.Status ||
+		profile.ProviderVersion != record.ProviderVersion || profile.OS != record.OS || profile.Arch != record.Arch ||
+		profile.RuntimeSHA256 != record.RuntimeSHA256 || profile.ProfileRevision != record.ProfileRevision ||
+		!profile.Predicate.Equal(record.predicate()) {
+		t.Fatalf("description drifted from embedded certification: %+v, record=%+v", profile, record)
+	}
+	if !description.Discoverable || len(description.SupportedOptions) != 2 {
+		t.Fatalf("description omitted supported production capabilities: %+v", description)
+	}
+}
+
 func TestCertificationRejectsUnexecutedRuntimeAndProfile(t *testing.T) {
 	cases := []struct {
 		name   string

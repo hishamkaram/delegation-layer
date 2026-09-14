@@ -65,14 +65,27 @@ func ValidateMode(mode string) error {
 	}
 }
 
-// ValidateProvider validates that provider is a recognized native or fixture identifier.
+// ValidateProvider validates the structural provider:transport identifier.
+// Catalogs decide whether a structurally valid identifier is executable
+// support; config deliberately does not keep a provider allowlist.
 func ValidateProvider(provider string) error {
-	switch provider {
-	case ProviderAntigravityPrint, ProviderCodexExec, ProviderClaudePrint, ProviderFixture:
-		return nil
-	default:
+	name, transport, found := strings.Cut(provider, ":")
+	if !found || strings.ContainsRune(transport, ':') || !validProviderComponent(name) || !validProviderComponent(transport) {
 		return fmt.Errorf("%w: %q", ErrUnsupportedProvider, provider)
 	}
+	return nil
+}
+
+func validProviderComponent(value string) bool {
+	if value == "" || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for _, char := range value[1:] {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' && char != '_' && char != '.' {
+			return false
+		}
+	}
+	return true
 }
 
 // ResolveDefaultRoot returns the default persistent state root path.

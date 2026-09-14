@@ -1,8 +1,9 @@
 # Task CLI
 
-Phase 2 introduces these command interfaces. Native agy, Codex, and Claude
-launch profiles remain disabled until their adapter phases pass acceptance.
-The finite `fixture:test` profile is compiled only into acceptance programs.
+These commands manage durable provider tasks. Antigravity has a certified
+workspace-write profile on its recorded version/platform. Codex and Claude
+launch profiles remain planned until their adapter phases pass acceptance.
+The finite `fixture:test` launch profile is compiled only into acceptance programs.
 
 ```text
 delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
@@ -46,6 +47,21 @@ immutable task request and cannot be changed when reusing a task ID.
 the task budget or stop the worker. Collection reads a valid existing outcome
 or interprets complete sealed evidence through its recorded predicate. It
 never launches, retries, or resumes provider work.
+
+## Provider discovery
+
+`delegate providers --json` describes compiled provider support with
+`schema_version: 1` and a `providers` array sorted by provider ID. Each entry
+lists supported request options and certified permission/profile, native
+version, platform and predicate metadata. Historical-only interpreters are
+retained for collection and omitted from discovery.
+
+Discovery reads compiled metadata. It does not create task state, contact
+pueue, inspect native authentication or launch a provider. A listed profile is
+not a claim that the current host has the required executable or configuration;
+dispatch still checks those prerequisites. Unsupported explicit options fail
+before supervisor admission. The discovery response has no task admission,
+liveness or publication fields.
 
 ## Supervisor configuration
 

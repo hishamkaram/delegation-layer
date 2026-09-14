@@ -75,7 +75,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "status", "collect", "cancel", "logs":
+		case "help", "version", "dispatch", "providers", "status", "collect", "cancel", "logs":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -158,7 +158,7 @@ func (a *Arguments) validate(positional []string, watch string) error {
 		}
 	}
 	switch a.Command {
-	case "help", "version":
+	case "help", "version", "providers":
 		if len(positional) != 0 {
 			return fmt.Errorf("unexpected extra argument %q for %s", positional[0], a.Command)
 		}

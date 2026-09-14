@@ -25,7 +25,7 @@ PASSED_CASES=0
 assert_case() {
     local name="$1"
     local expected_code="$2"
-    local stdout_mode="$3" # "empty", "usage", "version"
+    local stdout_mode="$3" # "empty", "usage", "version", "providers"
     local stderr_mode="$4" # "empty", "error"
     local expected_err_substr="$5"
     shift 5
@@ -68,6 +68,12 @@ assert_case() {
                 exit 1
             fi
             ;;
+        providers)
+            if ! grep -q '"schema_version":1' "${stdout_file}" || ! grep -q 'antigravity:print' "${stdout_file}"; then
+                echo "FAIL [${name}]: stdout missing provider discovery metadata. Got: $(cat "${stdout_file}")" >&2
+                exit 1
+            fi
+            ;;
     esac
 
     # Check stderr
@@ -91,7 +97,7 @@ assert_case() {
     esac
 
     PASSED_CASES=$((PASSED_CASES + 1))
-    echo "PASS [${PASSED_CASES}/10]: ${name}"
+    echo "PASS [${PASSED_CASES}/12]: ${name}"
 }
 
 # 1. No arguments: exit 0, usage on stdout, empty stderr
@@ -112,21 +118,27 @@ assert_case "version command" 0 version empty "" version
 # 6. --version: exit 0, version on stdout, empty stderr
 assert_case "--version flag" 0 version empty "" --version
 
-# 7. unknown command: exit 2, error+usage on stderr, empty stdout
+# 7. providers discovery: exit 0, bounded JSON on stdout, empty stderr
+assert_case "providers discovery" 0 providers empty "" providers --json
+
+# 8. unknown command: exit 2, error+usage on stderr, empty stdout
 assert_case "unknown command" 2 empty error 'error: unknown command or flag "unknown-cmd"' unknown-cmd
 
-# 8. unknown flag: exit 2, error+usage on stderr, empty stdout
+# 9. unknown flag: exit 2, error+usage on stderr, empty stdout
 assert_case "unknown flag" 2 empty error 'error: unknown command or flag "--invalid-flag"' --invalid-flag
 
-# 9. extra argument to help: exit 2, error+usage on stderr, empty stdout
+# 10. extra argument to help: exit 2, error+usage on stderr, empty stdout
 assert_case "extra argument to help" 2 empty error 'unexpected extra argument "extra-arg" for help' help extra-arg
 
-# 10. extra argument to version: exit 2, error+usage on stderr, empty stdout
+# 11. extra argument to version: exit 2, error+usage on stderr, empty stdout
 assert_case "extra argument to version" 2 empty error 'unexpected extra argument "extra-arg" for version' version extra-arg
 
-if [[ "${PASSED_CASES}" -ne 10 ]]; then
-    echo "FAIL: Expected 10 smoke test cases to execute, but only ${PASSED_CASES} passed." >&2
+# 12. extra argument to providers: exit 2, error+usage on stderr, empty stdout
+assert_case "extra argument to providers" 2 empty error 'unexpected extra argument "extra-arg" for providers' providers extra-arg
+
+if [[ "${PASSED_CASES}" -ne 12 ]]; then
+    echo "FAIL: Expected 12 smoke test cases to execute, but only ${PASSED_CASES} passed." >&2
     exit 1
 fi
 
-echo "All smoke tests passed (${PASSED_CASES}/10 cases executed)."
+echo "All smoke tests passed (${PASSED_CASES}/12 cases executed)."
