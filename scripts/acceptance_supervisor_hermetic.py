@@ -1380,6 +1380,9 @@ class Case:
                 "termination_unknown_preserved": True,
             },
         )
+        # This is a diagnostic snapshot, not sealed execution evidence. Keep
+        # the original base and preserve links without reading their targets.
+        shutil.copytree(self.base, destination / "private-base", symlinks=True)
 
 
 class HermeticSuite:
@@ -1443,6 +1446,10 @@ class HermeticSuite:
             },
         }
         write_json(self.output / "summary.json", summary)
+        for result in self.results:
+            if result["status"] == "fail":
+                print("FAIL " + result["case"] + ": " + result["error"], file=sys.stderr, flush=True)
+                print(result["traceback"], file=sys.stderr, flush=True)
         return summary
 
     def run(self):

@@ -25,7 +25,33 @@ Each row is one implementation PR with root review, direct Codex CLI review, exa
 | Claude / Phase 5 | Restricted read/search native module, managed policy checks, final-result interpretation, exact resume, acceptance-claude | Existing Phase 5 fixtures and two bounded native turns |
 | Integrated verification | Sequential acceptance-providers target; capability/docs reconciliation; contributor and replay verification | Full seven-turn native suite, all matrix rows resolved, maintainability review, CI and merge receipt |
 
-The contributor proof blocks further integrations if it needs provider-specific core exceptions. Fix the boundary and repeat the proof, rather than adding a workaround. Shared extraction must be supported by actual reuse; retain provider source-discovery/precedence and success semantics locally. Do not copy lifecycle/certification/harness logic. The synthetic provider is test-only, never part of production discovery. The implementer must use add-an-adapter and fix missing instructions exposed by the exercise. Map actual Codex and Claude cases onto the contract before accepting it.
+The [contributor acceptance checklist](PROVIDER-CONTRIBUTION-ACCEPTANCE.md) records the required boundary, compatibility and executable proof. The contributor proof blocks further integrations if it needs provider-specific core exceptions. Fix the boundary and repeat the proof, rather than adding a workaround. Shared extraction must be supported by actual reuse; retain provider source-discovery/precedence and success semantics locally. Do not copy lifecycle/certification/harness logic. The synthetic provider is test-only, never part of production discovery. The implementer must use add-an-adapter and fix missing instructions exposed by the exercise. Map actual Codex and Claude cases onto the contract before accepting it.
+
+## Contributor-proof artifact boundary
+
+The contributor handoff includes the shared extra-output capability needed by
+the existing Codex recipe. A typed output declaration identifies a safe logical
+name and a reserved argv index; it is not a path/template language. Bind these
+declarations and the certified writer-completion contract into immutable task
+metadata. Bounded non-secret input-file declarations similarly bind exact content
+and reserved argv slots; the core creates their regular configuration files.
+The core supplies task-local staging paths and owns import, sync,
+close, raw-manifest validation, sealing and named-evidence reads. Preserve old
+metadata and two-stream manifests byte-for-byte when no artifact is declared.
+
+Use separate create-once native staging and final raw evidence. A present empty
+or conflicting file remains evidence; an absent optional file is distinguishable
+from a read or validation fault. Replays read only the sealed manifest and never
+need the current executable, staging file, or launch profile. Additional artifact
+writers require version-scoped certification of completion at process exit/EOF;
+file existence or a stable snapshot alone cannot prove an arbitrary writer ended.
+
+Freeze this generic baseline before adding a new synthetic provider. Its module,
+fixtures and single test-only registration must then exercise present output,
+absence/stdout fallback, conflict, identity, continuation and replay without
+provider-specific core edits. The existing phase2 fixture alone does not count
+as a new contributor exercise. Real Codex/Claude integrations remain subsequent
+handoffs; mapping their concrete cases here does not claim native certification.
 
 ## Engineering guidance
 

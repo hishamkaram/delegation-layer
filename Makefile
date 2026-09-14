@@ -61,7 +61,7 @@ test-race: tool-versions
 	go test -race -count=1 ./...
 
 test-native-harness:
-	python3 -m unittest discover -s scripts -p test_acceptance_agy.py -v
+	python3 -m unittest discover -s scripts -p 'test_acceptance_*.py' -v
 
 build: tool-versions
 	@mkdir -p bin dist/delegate-darwin-amd64 dist/delegate-darwin-arm64 dist/delegate-linux-amd64 dist/delegate-linux-arm64

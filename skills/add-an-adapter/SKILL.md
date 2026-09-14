@@ -34,6 +34,26 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    handling, and a versioned interpreter over sealed evidence. The adapter only
    prepares a plan and interprets evidence: it does not own pipes, capture,
    sealing, processes, stopping, deadlines, collection, or publication.
+   For small non-secret UTF-8 configuration files, declare `Plan.InputFiles`
+   with a safe lowercase name, exact content and an empty reserved argv slot.
+   The `stage.` prefix is reserved for core durability and scavenging.
+   For optional native output files, declare `Plan.OutputArtifacts` and the
+   version-qualified `OutputWriterContract` in both the plan and certified
+   profile. The core binds declarations to immutable metadata, supplies paths,
+   materializes input files, and imports completed outputs into sealed raw
+   evidence. Never write protocol records or expose a raw-writer handle from
+   provider code. Interpret named output through `predicate.NamedEvidence`;
+   `predicate.ErrEvidenceAbsent` means optional absence, while other read faults
+   must not be treated as fallback. Present empty or contradictory output is
+   evidence. Certify writer completion at process exit and stream EOF; a stable
+   file alone is insufficient.
+   For continuation, supply `PreparedProfile.Identity` using the existing
+   bounded `execution.IdentityObserver` interface. Report validated session
+   identity through its runner-owned callback so the core persists the session
+   reference. Returning a session from the sealed-evidence interpreter alone
+   does not create that reference. Test chunked observation, identity mismatch,
+   parser bounds and callback errors, then prove fresh-to-resume dispatch with
+   the compiled CLI.
 3. Register the adapter once in the explicit catalog. Reuse shared task,
    execution, predicate, usage, lifecycle, and acceptance-harness mechanics;
    do not add provider-specific branches to task, execution, or publication.
@@ -41,6 +61,8 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    refusal/error/timeout markers, exit conflicts, identity mismatch, policy
    drift, usage scope, and historical predicate revisions. Collection must stay
    observational and must never retry paid work.
+   Name Python acceptance-driver regressions `scripts/test_acceptance_<provider>.py`
+   so the shared `make test-native-harness` gate discovers them automatically.
 5. Run the provider through the shipped dispatcher/runner with isolated pueue,
    finite stdin followed by EOF, existing authentication, and the exact plan
    budgets. Inspect sealed raw evidence and filesystem effects directly; do not

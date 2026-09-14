@@ -14,11 +14,14 @@ import (
 
 // Plan is constructed by a trusted compiled adapter, never from public raw argv.
 type Plan struct {
-	Executable  string
-	Arguments   []string
-	Directory   string
-	Environment []string
-	Predicate   task.PredicateRef
+	Executable           string
+	Arguments            []string
+	Directory            string
+	Environment          []string
+	Predicate            task.PredicateRef
+	InputFiles           []task.InputFile
+	OutputArtifacts      []task.OutputArtifact
+	OutputWriterContract string
 }
 
 // IdentityObserver observes stdout without deciding publication. It must retain

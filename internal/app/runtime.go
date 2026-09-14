@@ -561,7 +561,7 @@ func bindInitial(a Arguments, deps Dependencies) (*pueue.Client, error) {
 
 func newMeta(req task.TaskRecord, profile PreparedProfile, supervisor task.SupervisorRef, publisher string) task.MetaRecord {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, PublisherBuild: publisher, PublisherVersion: publisher, Predicate: profile.Plan.Predicate, SupervisorConfig: supervisor, CreatedAt: now}
+	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, PublisherBuild: publisher, PublisherVersion: publisher, Predicate: profile.Plan.Predicate, InputFiles: profile.Plan.InputFiles, OutputArtifacts: profile.Plan.OutputArtifacts, OutputWriterContract: profile.Plan.OutputWriterContract, SupervisorConfig: supervisor, CreatedAt: now}
 }
 
 func taskIdentity(req *task.TaskRecord, meta *task.MetaRecord, specHash, metaHash string, receipt *task.SupervisorReceipt) pueue.Identity {

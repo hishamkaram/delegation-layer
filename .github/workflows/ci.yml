@@ -45,10 +45,24 @@ jobs:
         run: ./scripts/install-test-supervisor.sh
 
       - name: Run supervisor acceptance
+        id: supervisor
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-supervisor
+
+      - name: Archive supervisor failure evidence
+        if: failure() && steps.supervisor.outcome == 'failure'
+        run: tar -czf "${{ runner.temp }}/supervisor-failure-evidence.tar.gz" bin/phase2-acceptance
+
+      - name: Retain supervisor failure evidence
+        if: failure() && steps.supervisor.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: supervisor-failure-${{ runner.os }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/supervisor-failure-evidence.tar.gz
+          retention-days: 7
+          if-no-files-found: error
 
   gate-macos:
     name: Gate (macOS macos-15)
@@ -85,7 +99,21 @@ jobs:
         run: ./scripts/install-test-supervisor.sh
 
       - name: Run supervisor acceptance
+        id: supervisor
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-supervisor
+
+      - name: Archive supervisor failure evidence
+        if: failure() && steps.supervisor.outcome == 'failure'
+        run: tar -czf "${{ runner.temp }}/supervisor-failure-evidence.tar.gz" bin/phase2-acceptance
+
+      - name: Retain supervisor failure evidence
+        if: failure() && steps.supervisor.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: supervisor-failure-${{ runner.os }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/supervisor-failure-evidence.tar.gz
+          retention-days: 7
+          if-no-files-found: error

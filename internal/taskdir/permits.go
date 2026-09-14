@@ -12,15 +12,17 @@ type permitState struct {
 	consumed bool
 }
 type leaseState struct {
-	mu            sync.Mutex
-	lock          *LockFile
-	maintenance   *LockFile
-	released      bool
-	releaseErr    error
-	activeWriters int
-	sealed        bool
-	poisoned      error
-	permit        *permitState
+	mu                sync.Mutex
+	lock              *LockFile
+	maintenance       *LockFile
+	released          bool
+	releaseErr        error
+	activeWriters     int
+	filesPrepared     bool
+	artifactsImported bool
+	sealed            bool
+	poisoned          error
+	permit            *permitState
 }
 
 func (s *leaseState) release() error {
