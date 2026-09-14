@@ -54,3 +54,27 @@ All contributors and subagents must strictly adhere to the project contracts in 
 - `docs/EXECUTION-PLAN.md`: Complete, authoritative normative execution plan for all phases.
 - `docs/IMPLEMENTATION-PLAN.md`: Phase-by-phase implementation progress and tracking.
 - `DESIGN.md`: Architecture design, preserved historical measurements, and provider facts.
+
+## Maintainability Guidance
+
+Read the shared [maintainability contract](agents/_data/maintainability-contract.md)
+alongside the three invariant contracts before changing provider boundaries. Use
+the focused repository skill that matches the work:
+
+- [delegation architect](skills/delegation-architect/SKILL.md) for ownership and
+  interface design;
+- [Go implementer](skills/go-implementer/SKILL.md) for bounded runtime changes;
+- [Go reviewer](skills/go-reviewer/SKILL.md) for evidence-backed review;
+- [Go test writer](skills/go-test-writer/SKILL.md) for behavior and fault tests;
+- [live E2E](skills/live-e2e/SKILL.md) for real provider/supervisor acceptance;
+- [Go concurrency](skills/go-concurrency/SKILL.md) for lifetimes, races, and
+  deadline paths;
+- [docs updater](skills/docs-updater/SKILL.md) for plan, matrix, and receipt
+  changes; and
+- [add an adapter](skills/add-an-adapter/SKILL.md) for a new provider or a
+  provider-contract repair.
+
+Skills are repository instructions and are read explicitly by the working CLI;
+they require no global installation or configuration. Run `make verify-skills`
+after changing a skill or its local links. Root retains ownership of planning
+documents, integration, review, commits, PRs, CI, and merges.

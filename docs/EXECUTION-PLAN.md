@@ -2,6 +2,10 @@
 
 Status: execution authorized 2026-09-13; phase completion is evidence-driven. This document is the normative phase handoff and supersedes conflicting milestones in DESIGN.md and docs/IMPLEMENTATION-PLAN.md. Historical measurements remain historical; tests and live evidence are never claimed before they run.
 
+## Provider redesign amendment
+
+The authorized [provider maintainability and integration workplan](PROVIDER-REDESIGN.md) adds engineering skills, a maintainability gate, and a catalog/contributor proof before Phase 4. It governs that refactor and its handoffs; existing provider profiles, execution invariants and phase numbering remain authoritative. Phase 3 is merged; the earlier stop-after-Phase-3 instruction was fulfilled and the user has now authorized this sequence.
+
 ## Goal and confirmed decisions
 
 Deliver the durable single-machine delegation layer, with antigravity:print, codex:exec, and claude:print all in the first private release. Then port the existing duo review fan-out and deliver a resumable declared-plan workflow that returns task outcomes to its calling AI lead. The workflow never invents tasks or autonomously judges result quality. Keep the repository, release assets, and any tap private. No HTTP/A2A, native Claude background mode, router adapters, or unbounded autonomous lead in this sequence.
