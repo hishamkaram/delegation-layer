@@ -55,6 +55,7 @@ func TestIdentityObserverInvalidEvidenceDoesNotRecord(t *testing.T) {
 		"trailing":         append(append([]byte{}, valid...), valid...),
 		"task-mismatch":    identityEnvelope(t, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "session-"+taskID),
 		"session-mismatch": identityEnvelope(t, taskID, "session-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		"legacy-session":   identityEnvelope(t, taskID, "legacy-session"),
 		"oversized":        []byte(strings.Repeat(" ", MaxEnvelopeBytes+1)),
 	}
 	for name, data := range cases {
@@ -100,7 +101,12 @@ func TestIdentityObserverRecorderFailureIsRetained(t *testing.T) {
 func TestIdentityObserverRejectsInvalidConstruction(t *testing.T) {
 	const taskID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	record := func(task.SessionIdentity) error { return nil }
-	for _, expected := range []task.SessionExpectation{{Required: true}, {ID: "unexpected"}} {
+	for _, expected := range []task.SessionExpectation{
+		{Required: true},
+		{ID: "unexpected"},
+		{Required: true, ID: "legacy-session"},
+		{Required: true, ID: "session-" + strings.Repeat("a", 31)},
+	} {
 		if _, err := identityFactory(taskID)(expected, record); err == nil {
 			t.Fatalf("accepted invalid expectation: %+v", expected)
 		}

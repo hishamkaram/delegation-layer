@@ -68,7 +68,7 @@ func sessionAnswer(runtimeDir string, opts options, brief protocol.Brief) (strin
 		if err := readJSONFile(path, &recorded); err != nil {
 			return "", err
 		}
-		if recorded.SchemaVersion != 1 || recorded.SessionID != opts.sessionID || recorded.Nonce == "" {
+		if recorded.SchemaVersion != protocol.SchemaVersion || recorded.SessionID != opts.sessionID {
 			return "", errors.New("invalid recorded synthetic session")
 		}
 		return recorded.Nonce, nil
@@ -76,6 +76,10 @@ func sessionAnswer(runtimeDir string, opts options, brief protocol.Brief) (strin
 	if opts.sessionID != "session-"+opts.taskID {
 		return "", errors.New("fresh synthetic session does not match task")
 	}
-	recorded := sessionRecord{SchemaVersion: 1, SessionID: opts.sessionID, Nonce: brief.Nonce}
+	remembered := brief.Nonce
+	if remembered == "" {
+		remembered = brief.Answer
+	}
+	recorded := sessionRecord{SchemaVersion: protocol.SchemaVersion, SessionID: opts.sessionID, Nonce: remembered}
 	return brief.Answer, writeJSONOnce(path, recorded)
 }

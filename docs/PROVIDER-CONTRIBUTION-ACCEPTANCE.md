@@ -1,7 +1,7 @@
 # Provider contribution acceptance
 
 Status: local verification passes; direct review and merge gates remain
-required. The thirteen-case contributor exercise and three affected agy turns
+required. The fifteen-case contributor exercise and three affected agy turns
 passed. This receipt records evidence for the contributor handoff in
 [the provider redesign](PROVIDER-REDESIGN.md). The catalog prerequisite was
 accepted through [PR 6](https://github.com/hishamkaram/delegation-layer/pull/6),
@@ -95,14 +95,33 @@ Root review and the guide exercise corrected four provider/fixture issues:
   an error-bearing collection remains a failure. Earlier failed receipts are
   retained privately with natural daemon shutdown.
 
-The final private receipt `contributor-catalog-proof` passed thirteen cases:
-present, resume, absent, empty, conflict, rejected, malformed, wrong-task,
+The original contributor-module review identified additional acceptance and
+preparation gaps. The final correction checks each case's exact sealed envelope,
+artifact, exit code and refusal reason; replay checks the returned outcome and
+CLI exit code as well as unchanged payload/raw hashes. Preparation rejects
+invalid session grammar, non-private runtime roots/children and briefs beyond
+the fixture's admitted limit before launch. Three real negative dispatches
+proved no task admission, queue change or provider launch.
+
+The synthetic input bound is 174,677 bytes: `(1 MiB - 512) / 6`, reserving
+worst-case JSON escaping and fixed metadata within the existing 1 MiB strict
+JSON limit. Near-bound ASCII and escaped answers, stored-session reads and
+continuation are covered by unit/race tests. Fresh turns without an explicit
+nonce remember their answer; empty remembered state remains valid and can
+produce a semantic empty-answer rejection on continuation. The live exercise
+includes a near-bound answer and continuation without an explicit nonce.
+These corrections affect only the new synthetic module and harness; the frozen
+generic baseline remains unchanged. The initial, unmerged predicate contract
+now explicitly records these bounds and session grammar in its digest.
+
+The final private receipt `contributor-reviewed-proof` passed fifteen cases:
+present, resume, absent, resume-answer, near-bound, empty, conflict, rejected, malformed, wrong-task,
 wrong-session, nonzero, oversized-envelope, oversized-output and invalid-utf8. It records
-three committed outcomes, ten rejected outcomes, thirteen actual launches,
+five committed outcomes, ten rejected outcomes, fifteen actual launches,
 zero replay launches, unchanged immutable records and natural daemon shutdown.
 Replay removes both generated configuration/output staging and the provider
 executable before collecting every task again. The fresh task
-`565a4806e7bb4f16a949e27dc7f72783` continues as `9251667cbd0846ecb61168e582fe68f0`,
+`79312b8cf2984b61b77c901af68d7c76` continues as `78c6297d508d4bfbbed23606505dbdda`,
 with the nonce omitted from the continuation request and the same exact
 recorded session returned.
 
@@ -118,7 +137,7 @@ python3 scripts/acceptance_contributor.py --tools bin/contributor --pueue bin/te
 
 Executed platform: Darwin/arm64, Go 1.27.1, pueue/pueued 4.0.4.
 Fixture version `contributor-provider 1`; measured binary SHA-256
-`9260202559db2e80c68b83aadc70bd923f06f82122cc6b40984fcb7dfd7fa15e`.
+`3c8d0e26ac6b917da95944251ad593d00cdaed430d707327be96d0d97ff5e85d`.
 The executable's self-test passed before updating the embedded certificate.
 Other platform/build combinations are intentionally uncertified for live
 fixture preparation. Unit tests use explicit identities and do not claim
@@ -134,9 +153,9 @@ certification; production discovery contains no synthetic provider.
 | New provider semantics | Predicate tests cover strict/bounded envelopes, exact bytes, absence/empty/conflict, identities, refusal/nonzero exit, evidence and sink failures |
 | New provider preparation | Profile tests cover exact fresh/resume argv, generated configurations, immutable policy, binary/platform drift and runtime/workspace placement |
 | Session persistence | Identity tests cover chunking, exact fresh/resume identity, malformed/mismatched/oversized input, once-only callbacks and persistence errors |
-| Acceptance-driver failures | Four hermetic tests reject failed runners and unrelated rows, wait for successful completion and enforce a finite deadline; shared discovery runs all 17 agy/contributor harness tests |
+| Acceptance-driver failures | Six hermetic tests reject failed runners, wrong rejection evidence, incorrect replay outcomes and unrelated rows, wait for successful completion and enforce a finite deadline; shared discovery runs all 19 agy/contributor harness tests |
 | Executable fixture | Direct `fixture.Run` unit/race tests cover configuration reads, continuation without a supplied nonce, output variants, duplicate tasks and writer failures |
-| Full quality | `make check` passed at the corrected contributor boundary: tools, 8 skills/32 validator tests, formatting/config/vet/lint, 43 tooling enforcement cases, full race suite, native-harness tests, build, 12 CLI smoke cases and vulnerability scanning. Subsequent size/UTF-8 fixes passed focused provider/CLI race tests, lint and the thirteen-case live exercise |
+| Full quality | `make check` passed at the corrected contributor boundary: tools, 8 skills/32 validator tests, formatting/config/vet/lint, 43 tooling enforcement cases, full race suite, native-harness tests, build, 12 CLI smoke cases and vulnerability scanning. Subsequent review fixes passed focused provider/CLI race tests, lint and the fifteen-case live exercise; final full-gate rerun and direct correction review remain pending |
 | Existing protocol | `make acceptance-protocol`: 49 fault matrix cases and compiled CLI workflow passed |
 | Existing supervisor | `make acceptance-supervisor`: 48 hermetic cases and five isolated real-pueue cases passed; native A=S=E=1, K=M=0, natural shutdown |
 | Existing native agy | Three turns passed in `agy-20260914T125447Z-5855f5c1`: A4/S3/E3/seal3, policy drift zero launches, workspace positive control/outside denial, exact continuation and native timeout. Later staging-name and synthetic-only fixes do not change agy preparation or its two-stream evidence path |

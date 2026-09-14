@@ -90,7 +90,7 @@ func resolveRuntimeDirectory() (string, error) {
 	if !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
 		return "", fmt.Errorf("%w: %s must be a clean absolute path", ErrUnsupportedProfile, contributorRuntimeEnvironment)
 	}
-	if err := validateExistingCanonicalDirectory(raw, contributorRuntimeEnvironment); err != nil {
+	if _, err := validateRuntimeDirectory(raw); err != nil {
 		return "", err
 	}
 	return raw, nil
@@ -136,6 +136,25 @@ func prepareWithDependencies(request task.TaskRecord, dependencies prepareDepend
 }
 
 func validatePreparationRequest(request task.TaskRecord) error {
+	if err := validateRequestProfile(request); err != nil {
+		return err
+	}
+	if err := validateBriefLength(request.BriefLength); err != nil {
+		return err
+	}
+	if err := task.ValidateTaskID(request.TaskID); err != nil {
+		return fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
+	}
+	if err := validateExistingCanonicalDirectory(request.CanonicalCwd, "workspace"); err != nil {
+		return err
+	}
+	if request.PriorSession != nil {
+		return validatePriorSession(*request.PriorSession)
+	}
+	return nil
+}
+
+func validateRequestProfile(request task.TaskRecord) error {
 	if request.Provider != Provider || request.Mode != Mode || request.RequestedConfig.Permission != Mode {
 		return fmt.Errorf("%w: contributor proof requires the read-only permission profile", ErrUnsupportedProfile)
 	}
@@ -145,20 +164,22 @@ func validatePreparationRequest(request task.TaskRecord) error {
 	if request.BudgetNanos <= 0 {
 		return fmt.Errorf("%w: task budget must be positive", ErrUnsupportedProfile)
 	}
-	if err := task.ValidateTaskID(request.TaskID); err != nil {
-		return fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
+	return nil
+}
+
+func validateBriefLength(length int64) error {
+	if length <= 0 || length > MaxBriefBytes {
+		return fmt.Errorf("%w: brief length must be positive and at most %d bytes", ErrUnsupportedProfile, MaxBriefBytes)
 	}
-	if err := validateExistingCanonicalDirectory(request.CanonicalCwd, "workspace"); err != nil {
-		return err
+	return nil
+}
+
+func validatePriorSession(prior task.PriorSession) error {
+	if prior.Provider != Provider || !validSessionID(prior.ConversationID) {
+		return fmt.Errorf("%w: invalid continuation session", ErrUnsupportedProfile)
 	}
-	if request.PriorSession != nil {
-		prior := request.PriorSession
-		if prior.Provider != Provider || !validSessionID(prior.ConversationID) {
-			return fmt.Errorf("%w: invalid continuation session", ErrUnsupportedProfile)
-		}
-		if err := task.ValidateTaskID(prior.PredecessorTaskID); err != nil {
-			return fmt.Errorf("%w: invalid continuation predecessor: %w", ErrUnsupportedProfile, err)
-		}
+	if err := task.ValidateTaskID(prior.PredecessorTaskID); err != nil {
+		return fmt.Errorf("%w: invalid continuation predecessor: %w", ErrUnsupportedProfile, err)
 	}
 	return nil
 }
@@ -174,10 +195,40 @@ func validateIdentity(identity runtimeIdentity, record certificationRecord) erro
 }
 
 func validateRuntimeDirectory(path string) (string, error) {
-	if err := validateExistingCanonicalDirectory(path, "runtime"); err != nil {
+	if err := validatePrivateCanonicalDirectory(path, "runtime"); err != nil {
 		return "", err
 	}
+	for _, child := range []string{"sessions", "launches", "completions"} {
+		if err := validateOptionalPrivateCanonicalDirectory(filepath.Join(path, child), "runtime/"+child); err != nil {
+			return "", err
+		}
+	}
 	return path, nil
+}
+
+func validatePrivateCanonicalDirectory(path, label string) error {
+	if err := validateExistingCanonicalDirectory(path, label); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("%w: %s cannot be inspected: %w", ErrUnsupportedProfile, label, err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("%w: %s must have private 0700 permissions", ErrUnsupportedProfile, label)
+	}
+	return nil
+}
+
+func validateOptionalPrivateCanonicalDirectory(path, label string) error {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %s cannot be inspected: %w", ErrUnsupportedProfile, label, err)
+	}
+	return validatePrivateCanonicalDirectory(path, label)
 }
 
 func validateExistingCanonicalDirectory(path, label string) error {

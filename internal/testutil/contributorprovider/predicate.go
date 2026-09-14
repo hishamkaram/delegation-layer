@@ -218,21 +218,9 @@ func rejected(reason string) task.Interpretation {
 }
 
 func validSessionID(id string) bool {
-	if len(id) == 0 || len(id) > 128 {
+	const prefix = "session-"
+	if !strings.HasPrefix(id, prefix) {
 		return false
 	}
-	if !isSessionIDAlphaNumeric(id[0]) {
-		return false
-	}
-	for index := 1; index < len(id); index++ {
-		value := id[index]
-		if !isSessionIDAlphaNumeric(value) && value != '.' && value != '_' && value != ':' && value != '-' {
-			return false
-		}
-	}
-	return true
-}
-
-func isSessionIDAlphaNumeric(value byte) bool {
-	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9')
+	return task.ValidateTaskID(strings.TrimPrefix(id, prefix)) == nil
 }

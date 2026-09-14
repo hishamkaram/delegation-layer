@@ -24,12 +24,15 @@ const (
 	CaseNonzero      = "nonzero"
 )
 
-// MaxEnvelopeBytes bounds this synthetic protocol's one-turn stdout record.
+// MaxEnvelopeBytes stays within the shared strict JSON decoder's bound.
 // Complete raw evidence remains owned and sealed by the core.
 const MaxEnvelopeBytes = 1 << 20
 
-// MaxBriefBytes bounds the finite JSON request consumed from stdin.
-const MaxBriefBytes = 1 << 20
+// MaxBriefBytes reserves serialization headroom before admission. A JSON
+// string can expand to six bytes per input byte, and envelope/session metadata
+// needs fewer than 512 additional bytes. Every admitted brief therefore fits
+// the strict output and session-record limits, including escaped answers.
+const MaxBriefBytes = (MaxEnvelopeBytes - 512) / 6
 
 // Brief is the finite JSON request sent to the fixture over stdin. Answer and
 // nonce are omitted on a resume case so the provider must recover the nonce

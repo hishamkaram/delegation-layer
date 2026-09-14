@@ -130,6 +130,49 @@ func TestRunReadsBothConfigsAndResumesExactNonce(t *testing.T) {
 	assertResumeRun(t, first, resume, firstBrief.Nonce)
 }
 
+func TestRunResumesNearBoundAnswerWithoutNonce(t *testing.T) {
+	for _, character := range []string{"x", "<"} {
+		t.Run(character, func(t *testing.T) {
+			first := newRunFixture(t, strings.Repeat("a", 32))
+			answer := strings.Repeat(character, protocol.MaxBriefBytes-64)
+			// Both fixed characters are valid unescaped JSON string content.
+			// '<' expands during canonical serialization of output and session state.
+			briefBytes := []byte(`{"case":"present","answer":"` + answer + `"}`)
+			if len(briefBytes) >= protocol.MaxBriefBytes {
+				t.Fatalf("brief length=%d exceeds admitted bound", len(briefBytes))
+			}
+			var stdout, stderr bytes.Buffer
+			code := Run(runArguments(first, false), bytes.NewReader(briefBytes), &stdout, &stderr)
+			if code != 0 || stderr.Len() != 0 {
+				t.Fatalf("fresh near-bound run code=%d stderr=%q", code, stderr.String())
+			}
+			if stdout.Len() <= protocol.MaxBriefBytes || stdout.Len() > protocol.MaxEnvelopeBytes {
+				t.Fatalf("envelope length=%d lacks valid serialization headroom", stdout.Len())
+			}
+			envelope := decodeEnvelope(t, stdout.Bytes())
+			if envelope.Answer != answer || string(readFixtureFile(t, first.output)) != answer {
+				t.Fatal("near-bound answer changed during serialization")
+			}
+			assertFreshSession(t, first, protocol.Brief{Case: protocol.CasePresent, Answer: answer})
+			resume := first
+			resume.taskID = strings.Repeat("b", 32)
+			resume.output = filepath.Join(first.runtimeDir, "near-bound-resume.txt")
+			assertResumeRun(t, first, resume, answer)
+		})
+	}
+}
+
+func TestRunAllowsEmptyRememberedStateToResume(t *testing.T) {
+	first := newRunFixture(t, strings.Repeat("d", 32))
+	brief := protocol.Brief{Case: protocol.CasePresent}
+	assertFreshRun(t, first, brief)
+
+	resume := first
+	resume.taskID = strings.Repeat("e", 32)
+	resume.output = filepath.Join(first.runtimeDir, "empty-resume.txt")
+	assertResumeRun(t, first, resume, "")
+}
+
 func assertFreshRun(t *testing.T, fixture runFixture, brief protocol.Brief) {
 	t.Helper()
 	code, stdout, stderr := runFixtureOnce(t, fixture, brief, false)
@@ -154,7 +197,11 @@ func assertFreshSession(t *testing.T, fixture runFixture, brief protocol.Brief) 
 	if err := task.DecodeStrict(session, &recorded); err != nil {
 		t.Fatal(err)
 	}
-	if recorded.SessionID != fixture.sessionID || recorded.Nonce != brief.Nonce {
+	wantRemembered := brief.Nonce
+	if wantRemembered == "" {
+		wantRemembered = brief.Answer
+	}
+	if recorded.SessionID != fixture.sessionID || recorded.Nonce != wantRemembered {
 		t.Fatalf("recorded session=%+v", recorded)
 	}
 }

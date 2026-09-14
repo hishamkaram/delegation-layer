@@ -2,6 +2,7 @@ package contributorprovider
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -41,6 +42,11 @@ func TestPrepareBuildsExactPlanAndPolicy(t *testing.T) {
 	assertPreparedPolicy(t, profile, workspace, runtimeDir)
 	if err := profile.Validate(request); err != nil {
 		t.Fatalf("prepared profile failed validation: %v", err)
+	}
+	for _, child := range []string{"sessions", "launches", "completions"} {
+		if _, err := os.Lstat(filepath.Join(runtimeDir, child)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("preparation mutated absent runtime child %s: %v", child, err)
+		}
 	}
 }
 
@@ -109,6 +115,29 @@ func TestPrepareContinuationUsesExactPriorSession(t *testing.T) {
 	}
 }
 
+func TestPrepareRejectsBriefOutsideFixtureBound(t *testing.T) {
+	workspace, runtimeDir := separateDirectories(t)
+	record, err := embeddedCertification()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := runtimeIdentity{Executable: "/test/bin/provider", Version: record.ProviderVersion, SHA256: record.RuntimeSHA256, OS: record.OS, Arch: record.Arch}
+	for _, briefLength := range []int64{0, -1, int64(MaxBriefBytes) + 1} {
+		t.Run(fmt.Sprintf("length-%d", briefLength), func(t *testing.T) {
+			request := testRequest(workspace)
+			request.BriefLength = briefLength
+			if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir, Certification: record}); !errors.Is(err, ErrUnsupportedProfile) {
+				t.Fatalf("brief length %d was accepted: %v", briefLength, err)
+			}
+		})
+	}
+	request := testRequest(workspace)
+	request.BriefLength = MaxBriefBytes
+	if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir, Certification: record}); err != nil {
+		t.Fatalf("fixture maximum brief length was rejected: %v", err)
+	}
+}
+
 func TestPrepareRejectsWorkspaceRuntimeOverlapAndIdentityDrift(t *testing.T) {
 	workspace, runtimeDir := separateDirectories(t)
 	request := testRequest(workspace)
@@ -152,6 +181,48 @@ func TestPrepareRejectsNonCanonicalOrMissingRuntime(t *testing.T) {
 	}
 }
 
+func TestPrepareRejectsNonPrivateRuntimeDirectories(t *testing.T) {
+	record, err := embeddedCertification()
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := runtimeIdentity{Executable: "/test/bin/provider", Version: record.ProviderVersion, SHA256: record.RuntimeSHA256, OS: record.OS, Arch: record.Arch}
+	cases := []struct {
+		name  string
+		setup func(string) error
+	}{
+		{name: "runtime mode", setup: func(path string) error { return os.Chmod(path, 0o755) }},
+		{name: "child mode", setup: func(path string) error { return os.Mkdir(filepath.Join(path, "sessions"), 0o755) }},
+		{name: "child file", setup: func(path string) error { return os.WriteFile(filepath.Join(path, "launches"), nil, 0o600) }},
+		{name: "child symlink", setup: func(path string) error { return os.Symlink(path, filepath.Join(path, "completions")) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace, runtimeDir := separateDirectories(t)
+			if err := tc.setup(runtimeDir); err != nil {
+				t.Fatal(err)
+			}
+			request := testRequest(workspace)
+			if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir, Certification: record}); !errors.Is(err, ErrUnsupportedProfile) {
+				t.Fatalf("invalid private runtime layout was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestPrepareAcceptsPrivateExistingRuntimeChildren(t *testing.T) {
+	workspace, runtimeDir := separateDirectories(t)
+	for _, child := range []string{"sessions", "launches", "completions"} {
+		if err := os.Mkdir(filepath.Join(runtimeDir, child), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := prepareTestProfile(t, testRequest(workspace), runtimeDir)
+	if profile.Plan.Directory != workspace {
+		t.Fatalf("prepared profile changed workspace: %q", profile.Plan.Directory)
+	}
+}
+
 func TestResolveRuntimeDirectoryRequiresExplicitCanonicalDirectory(t *testing.T) {
 	t.Setenv(contributorRuntimeEnvironment, "")
 	if _, err := resolveRuntimeDirectory(); !errors.Is(err, ErrUnsupportedProfile) {
@@ -160,6 +231,14 @@ func TestResolveRuntimeDirectoryRequiresExplicitCanonicalDirectory(t *testing.T)
 	t.Setenv(contributorRuntimeEnvironment, filepath.Join(t.TempDir(), "missing"))
 	if _, err := resolveRuntimeDirectory(); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("missing runtime directory was accepted: %v", err)
+	}
+	privateRoot := t.TempDir()
+	if err := os.Chmod(privateRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(contributorRuntimeEnvironment, privateRoot)
+	if _, err := resolveRuntimeDirectory(); !errors.Is(err, ErrUnsupportedProfile) {
+		t.Fatalf("non-private runtime directory was accepted: %v", err)
 	}
 }
 

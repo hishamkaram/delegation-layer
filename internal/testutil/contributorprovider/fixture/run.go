@@ -123,12 +123,16 @@ func execute(opts options, stdin io.Reader, stdout io.Writer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	envelopeData, err := marshalEnvelope(brief.Case, envelope)
+	if err != nil {
+		return 0, err
+	}
 	if present {
 		if err := writeOnce(opts.output, []byte(output)); err != nil {
 			return 0, err
 		}
 	}
-	if err := emitEnvelope(stdout, brief.Case, envelope); err != nil {
+	if err := emitEnvelope(stdout, envelopeData); err != nil {
 		return 0, err
 	}
 	if err := writeReceipt(runtimeDir, "completions", opts, "completed"); err != nil {
@@ -166,23 +170,36 @@ func applyCase(name string, envelope *protocol.Envelope) (string, bool, int, err
 	return output, present, code, nil
 }
 
-func emitEnvelope(stdout io.Writer, name string, envelope protocol.Envelope) error {
+func marshalEnvelope(name string, envelope protocol.Envelope) ([]byte, error) {
 	if name == "malformed" {
-		return writeText(stdout, "{\"protocol\":")
+		return []byte("{\"protocol\":"), nil
 	}
 	data, err := task.MarshalCanonical(envelope)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if name == "invalid-utf8" {
 		marker := []byte(`"answer":"`)
 		start := bytes.Index(data, marker)
 		if start < 0 {
-			return errors.New("fixture answer marker missing")
+			return nil, errors.New("fixture answer marker missing")
 		}
 		data[start+len(marker)] = 0xff
 	}
-	_, err = stdout.Write(data)
+	// The oversized-envelope case is an intentional semantic fault fixture.
+	// Every normal case is checked after JSON marshaling, so escaping overhead
+	// cannot turn an admitted brief into an over-limit successful envelope.
+	if name != "oversized-envelope" && len(data) > protocol.MaxEnvelopeBytes {
+		return nil, task.ErrControlRecordTooBig
+	}
+	return data, nil
+}
+
+func emitEnvelope(stdout io.Writer, data []byte) error {
+	n, err := stdout.Write(data)
+	if err == nil && n != len(data) {
+		return io.ErrShortWrite
+	}
 	return err
 }
 
@@ -211,7 +228,11 @@ func loadConfiguration(opts options) (string, error) {
 }
 
 func readJSON(reader io.Reader, value any) error {
-	data, err := task.ReadBounded(reader, 1<<20)
+	return readBoundedJSON(reader, value, protocol.MaxBriefBytes)
+}
+
+func readBoundedJSON(reader io.Reader, value any, maximum int64) error {
+	data, err := task.ReadBounded(reader, maximum)
 	if err != nil {
 		return err
 	}
@@ -230,5 +251,5 @@ func readJSONFile(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(readJSON(file, value), file.Close())
+	return errors.Join(readBoundedJSON(file, value, protocol.MaxEnvelopeBytes), file.Close())
 }

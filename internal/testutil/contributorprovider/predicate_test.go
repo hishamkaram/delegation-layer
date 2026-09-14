@@ -135,7 +135,7 @@ func TestPredicateMalformedAndIdentityCasesAreSemanticRejections(t *testing.T) {
 		},
 		{
 			name:   "wrong session",
-			stdout: marshalEnvelope(t, Envelope{Protocol: Protocol, TaskID: testTaskID, SessionID: "wrong-session", Status: "complete", Answer: "answer"}),
+			stdout: marshalEnvelope(t, Envelope{Protocol: Protocol, TaskID: testTaskID, SessionID: "session-" + strings.Repeat("0", 32), Status: "complete", Answer: "answer"}),
 			want:   refusalIdentity,
 		},
 		{
@@ -143,7 +143,7 @@ func TestPredicateMalformedAndIdentityCasesAreSemanticRejections(t *testing.T) {
 			stdout: marshalEnvelope(t, Envelope{Protocol: Protocol, TaskID: testTaskID, SessionID: freshSession(testTaskID), Status: "complete", Answer: "answer"}),
 			want:   refusalIdentity,
 			input: func(input *predicate.Input) {
-				input.ExpectedSession = task.SessionExpectation{Required: true, ID: "other-session"}
+				input.ExpectedSession = task.SessionExpectation{Required: true, ID: "session-" + strings.Repeat("1", 32)}
 			},
 		},
 		{
@@ -151,7 +151,7 @@ func TestPredicateMalformedAndIdentityCasesAreSemanticRejections(t *testing.T) {
 			stdout: marshalEnvelope(t, Envelope{Protocol: Protocol, TaskID: testTaskID, SessionID: freshSession(testTaskID), Status: "complete", Answer: "answer"}),
 			want:   refusalIdentity,
 			input: func(input *predicate.Input) {
-				input.RecordedSession = &task.SessionIdentity{Provider: Provider, ConversationID: "other-session"}
+				input.RecordedSession = &task.SessionIdentity{Provider: Provider, ConversationID: "session-" + strings.Repeat("1", 32)}
 			},
 		},
 	}
@@ -167,6 +167,25 @@ func TestPredicateMalformedAndIdentityCasesAreSemanticRejections(t *testing.T) {
 			interpretation, err := Predicate().Evaluate(input, evidence, &out)
 			if err != nil || interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != tc.want || out.Len() != 0 {
 				t.Fatalf("interpretation=%+v answer=%q err=%v", interpretation, out.String(), err)
+			}
+		})
+	}
+}
+
+func TestValidSessionIDUsesFixtureGrammar(t *testing.T) {
+	valid := "session-" + testTaskID
+	cases := map[string]bool{
+		valid:                                true,
+		"session-" + strings.Repeat("a", 31): false,
+		"session-" + strings.Repeat("a", 33): false,
+		"session-" + strings.Repeat("A", 32): false,
+		"session-" + strings.Repeat("g", 32): false,
+		"legacy-session":                     false,
+	}
+	for sessionID, want := range cases {
+		t.Run(sessionID, func(t *testing.T) {
+			if got := validSessionID(sessionID); got != want {
+				t.Fatalf("validSessionID(%q)=%v, want %v", sessionID, got, want)
 			}
 		})
 	}

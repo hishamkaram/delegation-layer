@@ -22,6 +22,63 @@ from acceptance_supervisor_common import (
 
 
 PROVIDER = "synthetic:contributor-proof"
+# Independent acceptance expectations for the finite fixture protocol.
+MAX_ENVELOPE_BYTES = 1 << 20
+MAX_BRIEF_BYTES = (MAX_ENVELOPE_BYTES - 512) // 6
+
+
+def verify_collected_outcome(collected, directory, expected):
+    outcome = read_json(directory / "outcome.json")
+    require(collected.get("outcome") == outcome, "CLI and sole outcome authority disagree")
+    require(outcome["verdict"] == expected, "collected outcome mismatch")
+    payload = outcome["payload"]
+    data = (directory / payload["basename"]).read_bytes()
+    require(len(data) == payload["length"] and sha(data) == payload["sha256"], "payload digest mismatch")
+    return outcome, data
+
+
+def verify_case_evidence(case, directory, answer, session_id):
+    seal = read_json(directory / "provider.exit")
+    require(seal["exit_code"] == (7 if case == "nonzero" else 0), case + " provider exit mismatch")
+    require(seal["error"] == "", case + " unexpected seal error")
+    require((directory / "raw/stderr").read_bytes() == b"", case + " unexpected provider stderr")
+    stdout = (directory / "raw/stdout").read_bytes()
+    expected = {"protocol": "contributor-proof/v1", "task_id": directory.name,
+                "session_id": session_id, "status": "complete", "answer": answer}
+    if case == "wrong-task":
+        expected["task_id"] = "0" * 32
+    if case == "wrong-session":
+        expected["session_id"] = "session-" + "0" * 32
+    if case == "rejected":
+        expected["status"] = "rejected"
+    if case == "malformed":
+        require(stdout == b'{"protocol":', "malformed case did not emit the declared fault")
+    elif case == "invalid-utf8":
+        canonical = json.dumps(expected, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
+        offset = canonical.index(b'"answer":"') + len(b'"answer":"')
+        require(stdout == canonical[:offset] + b"\xff" + canonical[offset + 1:], "invalid UTF-8 fault differs")
+    else:
+        actual = json.loads(stdout)
+        if case == "oversized-envelope":
+            require(len(actual["answer"]) == MAX_ENVELOPE_BYTES and set(actual["answer"]) == {"x"}, "oversize fault missing")
+            expected["answer"] = actual["answer"]
+        require(actual == expected, case + " sealed envelope mismatch")
+    reasons = {"empty": "empty-output", "conflict": "output-conflict",
+               "rejected": "provider-rejected: " + answer, "malformed": "malformed-envelope",
+               "wrong-task": "identity-mismatch", "wrong-session": "identity-mismatch",
+               "nonzero": "provider-failed: exit_code=7", "oversized-envelope": "malformed-envelope",
+               "oversized-output": "output-conflict", "invalid-utf8": "malformed-envelope"}
+    if case in reasons:
+        require((directory / "publish.reject").read_bytes() == reasons[case].encode(), case + " rejection reason mismatch")
+    artifact = directory / "raw/answer.txt"
+    if case in ("absent", "invalid-utf8"):
+        require(not artifact.exists(), case + " unexpectedly has an output artifact")
+    elif case == "oversized-output":
+        data = artifact.read_bytes()
+        require(len(data) == MAX_ENVELOPE_BYTES + 1 and set(data) == {ord("x")}, "oversize output fault missing")
+    else:
+        output = "" if case == "empty" else answer + (" conflicting artifact" if case == "conflict" else "")
+        require(artifact.read_bytes() == output.encode(), case + " output artifact mismatch")
 
 
 class ContributorAcceptance:
@@ -46,6 +103,7 @@ class ContributorAcceptance:
         self.daemon = None
         self.tasks = {}
         self.rows = {}
+        self.preflight = {}
         self.closed = False
 
     def setup(self):
@@ -86,9 +144,10 @@ class ContributorAcceptance:
     def client(self, name, operation, expected=0):
         return self.processes.run(name, [self.pueue, "-c", self.config, *operation], self.base, expected)
 
-    def collect(self, name, task_id):
+    def collect(self, name, task_id, expected):
         return self.processes.run(name, [self.delegate, "--root", self.root, "collect", task_id,
-                                        "--watch", "150s", "--json"], self.base, expected={0, 4}, timeout=160).json()
+                                        "--watch", "150s", "--json"], self.base,
+                                  expected=0 if expected == "committed" else 4, timeout=160).json()
 
     def wait_runner_done(self, root_id, task_id):
         label = "delegate:" + root_id + ":" + task_id
@@ -104,21 +163,17 @@ class ContributorAcceptance:
             time.sleep(0.1)
         raise RuntimeError("runner completion was not observed within acceptance deadline")
 
-    def run_case(self, case, expected, answer="", nonce="", predecessor=None):
+    def run_case(self, case, expected, answer="", nonce="", predecessor=None, scenario=None):
         task_id = uuid.uuid4().hex
         brief = self.base / (case + ".brief.json")
-        value = {"case": case}
-        if answer and case != "resume":
+        scenario = scenario or case
+        value = {"case": scenario}
+        if answer and scenario != "resume":
             value["answer"] = answer
         if nonce:
             value["nonce"] = nonce
         write_json(brief, value)
-        args = [self.delegate, "--root", self.root, "--pueue-config", self.config,
-                "--runner", self.runner, "dispatch", "--provider", PROVIDER,
-                "--brief", brief, "--cwd", self.work, "--id", task_id,
-                "--permission", "read-only", "--budget", "120s", "--json"]
-        if predecessor:
-            args.extend(["--resume-task", predecessor])
+        args = self.dispatch_arguments(task_id, brief, predecessor)
         dispatched = self.processes.run("dispatch-" + case, args, self.base).json()
         require(dispatched.get("task_id") == task_id, "dispatch returned a different task")
         self.tasks[case] = task_id
@@ -126,17 +181,16 @@ class ContributorAcceptance:
         # completed runner; do not mistake a transient cleanup lock for a
         # provider failure or accept an error-bearing collection as success.
         self.wait_runner_done(dispatched["root_id"], task_id)
-        collected = self.collect("collect-" + case, task_id)
+        collected = self.collect("collect-" + case, task_id, expected)
         directory = self.root / "tasks" / task_id
-        outcome = read_json(directory / "outcome.json")
-        require(collected.get("outcome") == outcome, "CLI and sole outcome authority disagree")
-        require(outcome["verdict"] == expected, case + " outcome mismatch")
-        payload = outcome["payload"]
-        data = (directory / payload["basename"]).read_bytes()
-        require(len(data) == payload["length"] and sha(data) == payload["sha256"], "payload digest mismatch")
+        outcome, data = verify_collected_outcome(collected, directory, expected)
         if expected == "committed":
             require(data == answer.encode(), case + " changed final answer bytes")
-        self.verify_files(case, directory)
+        self.verify_files(scenario, directory)
+        session_id = "session-" + task_id
+        if predecessor:
+            session_id = read_json(self.root / "tasks" / predecessor / "provider.ref.json")["conversation_id"]
+        verify_case_evidence(scenario, directory, answer, session_id)
         seal = read_json(directory / "provider.exit")
         require(seal["invocation_state"] == "started", "case did not enter real provider")
         require(outcome["evidence_sha256"] == seal["manifest_sha256"], "outcome is not bound to seal")
@@ -144,6 +198,40 @@ class ContributorAcceptance:
                            "outcome_sha256": digest(directory / "outcome.json")}
         print("PASS contributor " + case, flush=True)
         return task_id
+
+    def dispatch_arguments(self, task_id, brief, predecessor=None):
+        args = [self.delegate, "--root", self.root, "--pueue-config", self.config,
+                "--runner", self.runner, "dispatch", "--provider", PROVIDER,
+                "--brief", brief, "--cwd", self.work, "--id", task_id,
+                "--permission", "read-only", "--budget", "120s", "--json"]
+        if predecessor:
+            args.extend(["--resume-task", predecessor])
+        return args
+
+    def verify_preflight_rejections(self):
+        before = self.receipt_snapshot()
+        rows = self.client("preflight-before", ["status", "--json"]).json()["tasks"]
+        for case, changed in (("brief-limit", None), ("runtime-mode", self.runtime),
+                              ("session-directory-mode", self.runtime / "sessions")):
+            task_id = uuid.uuid4().hex
+            brief = self.base / ("preflight-" + case + ".json")
+            write_json(brief, {"case": "present", "answer": "x" * (MAX_BRIEF_BYTES if changed is None else 1)})
+            try:
+                if changed is not None:
+                    changed.chmod(0o755)
+                process = self.processes.run("preflight-" + case, self.dispatch_arguments(task_id, brief),
+                                             self.base, expected={1, 2})
+                diagnostic = (process.directory / "stdout").read_text() + (process.directory / "stderr").read_text()
+                require("unsupported-effective-config" in diagnostic, case + " failed for an unrelated reason")
+            finally:
+                if changed is not None:
+                    changed.chmod(0o700)
+            require(not (self.root / "tasks" / task_id).exists(), case + " was admitted")
+            require(self.receipt_snapshot() == before, case + " launched the provider")
+            after = self.client("preflight-after", ["status", "--json"]).json()["tasks"]
+            require(after == rows, case + " changed the supervisor queue")
+            self.preflight[case] = {"task_id": task_id, "admitted": False, "provider_launches": 0}
+            print("PASS contributor preflight " + case, flush=True)
 
     def verify_files(self, case, directory):
         meta = read_json(directory / "meta.json")
@@ -173,8 +261,11 @@ class ContributorAcceptance:
 
     def snapshot(self, task_id):
         directory = self.root / "tasks" / task_id
-        return {name: digest(directory / name) for name in
-                ("task.json", "meta.json", "provider.start", "provider.exit", "outcome.json", "provider.ref.json")
+        outcome = read_json(directory / "outcome.json")
+        seal = read_json(directory / "provider.exit")
+        names = ["task.json", "meta.json", "provider.start", "provider.exit", "outcome.json", "provider.ref.json",
+                 outcome["payload"]["basename"], *[entry["path"] for entry in seal["raw_manifest"]]]
+        return {name: digest(directory / name) for name in names
                 if (directory / name).exists()}
 
     def receipt_snapshot(self):
@@ -193,7 +284,8 @@ class ContributorAcceptance:
         self.provider.rename(self.provider.with_name("provider.archived"))
         for case, task_id in self.tasks.items():
             snapshot = self.snapshot(task_id)
-            self.collect("replay-" + case, task_id)
+            collected = self.collect("replay-" + case, task_id, self.rows[case]["verdict"])
+            verify_collected_outcome(collected, self.root / "tasks" / task_id, self.rows[case]["verdict"])
             require(snapshot == self.snapshot(task_id), "replay changed immutable task records")
         require(self.receipt_snapshot() == before, "collection relaunched the provider")
 
@@ -224,13 +316,20 @@ class ContributorAcceptance:
             original_ref = read_json(self.root / "tasks" / first / "provider.ref.json")
             resumed_ref = read_json(self.root / "tasks" / self.tasks["resume"] / "provider.ref.json")
             require(original_ref["conversation_id"] == resumed_ref["conversation_id"], "continuation changed session")
-            self.run_case("absent", "committed", " exact Ω answer\nsecond line ")
+            answer = " exact Ω answer\nsecond line "
+            without_nonce = self.run_case("absent", "committed", answer)
+            unchanged = self.snapshot(without_nonce)
+            self.run_case("resume-answer", "committed", answer, predecessor=without_nonce, scenario="resume")
+            require(self.snapshot(without_nonce) == unchanged, "answer continuation changed its predecessor")
+            self.run_case("near-bound", "committed", "x" * (MAX_BRIEF_BYTES - 64), scenario="present")
             for case in ("empty", "conflict", "rejected", "malformed", "wrong-task", "wrong-session", "nonzero",
                          "oversized-envelope", "oversized-output", "invalid-utf8"):
                 self.run_case(case, "rejected", "fixture answer")
+            self.verify_preflight_rejections()
             self.verify_replay()
             self.shutdown()
             write_json(self.output / "success.json", {"cases": self.rows, "base": str(self.base),
+                       "preflight": self.preflight,
                        "actual_provider_launches": len(self.tasks), "replay_launches": 0,
                        "natural_daemon_shutdown": self.closed, "signals_sent": 0})
         except BaseException as error:
