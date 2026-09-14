@@ -4,13 +4,36 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from acceptance_supervisor_hermetic import HermeticSuite
+from acceptance_supervisor_hermetic import Case, HermeticSuite
 
 
 class SupervisorDiagnosticsTests(unittest.TestCase):
+    def test_failed_case_snapshot_retains_logs_and_symlinks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            case = object.__new__(Case)
+            case.base = root / "private-base"
+            case.base.mkdir()
+            case.case_id = "failed-case"
+            case.suite = SimpleNamespace(output=root / "evidence")
+            case.processes = SimpleNamespace(drain=lambda **_kwargs: [{"pid": 123, "termination": "unknown"}])
+            (case.base / "stderr").write_bytes(b"diagnostic bytes")
+            (case.base / "unavailable-link").symlink_to(root / "not-present")
+            case.retain_failure(RuntimeError("injected failure"))
+            destination = case.suite.output / "cases" / case.case_id
+            copied = destination / "private-base"
+            self.assertEqual((copied / "stderr").read_bytes(), b"diagnostic bytes")
+            self.assertTrue((copied / "unavailable-link").is_symlink())
+            self.assertEqual((copied / "unavailable-link").readlink(), root / "not-present")
+            self.assertTrue(case.base.exists())
+            failure = json.loads((destination / "failure.json").read_text())
+            self.assertTrue(failure["termination_unknown_preserved"])
+            self.assertEqual(failure["unresolved_owned_processes"][0]["pid"], 123)
+
     def test_failed_case_is_reported_and_keeps_nonzero_exit(self):
         with tempfile.TemporaryDirectory() as temporary:
             suite = self.suite(temporary, "fail")

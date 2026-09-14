@@ -153,7 +153,7 @@ certification; production discovery contains no synthetic provider.
 | New provider semantics | Predicate tests cover strict/bounded envelopes, exact bytes, absence/empty/conflict, identities, refusal/nonzero exit, evidence and sink failures |
 | New provider preparation | Profile tests cover exact fresh/resume argv, generated configurations, immutable policy, binary/platform drift and runtime/workspace placement |
 | Session persistence | Identity tests cover chunking, exact fresh/resume identity, malformed/mismatched/oversized input, once-only callbacks and persistence errors |
-| Acceptance-driver failures | Six hermetic tests reject failed runners, wrong rejection evidence, incorrect replay outcomes and unrelated rows, wait for successful completion and enforce a finite deadline; shared discovery runs all 21 agy/contributor/supervisor harness tests |
+| Acceptance-driver failures | Six hermetic tests reject failed runners, wrong rejection evidence, incorrect replay outcomes and unrelated rows, wait for successful completion and enforce a finite deadline; shared discovery runs all 22 agy/contributor/supervisor harness tests |
 | Executable fixture | Direct `fixture.Run` unit/race tests cover configuration reads, continuation without a supplied nonce, output variants, duplicate tasks and writer failures |
 | Full quality | `make check` passed at the corrected contributor boundary: tools, 8 skills/32 validator tests, formatting/config/vet/lint, 43 tooling enforcement cases, full race suite, native-harness tests, build, 12 CLI smoke cases and vulnerability scanning. Subsequent review fixes passed focused provider/CLI race tests, lint and the fifteen-case live exercise; final full-gate rerun and direct correction review remain pending |
 | Existing protocol | `make acceptance-protocol`: 49 fault matrix cases and compiled CLI workflow passed |
@@ -163,8 +163,10 @@ certification; production discovery contains no synthetic provider.
 A PR CI run exposed missing diagnostics when the shared hermetic supervisor
 suite fails. Its failing case and traceback now reach stderr without changing
 the nonzero result, and both CI platforms retain the complete synthetic
-supervisor evidence as a private failure artifact. Two hermetic diagnostics
-tests cover failure propagation and unchanged success behavior. This generic
+supervisor evidence as a private failure artifact. Three hermetic diagnostics
+tests cover failure propagation, preserved failed-case logs/symlinks and unchanged
+success behavior. Failed-case copies remain diagnostic snapshots; their unknown
+process/termination state is preserved rather than treated as sealed evidence. This generic
 observability change introduces no provider-specific runtime behavior.
 
 ## Acceptance gates and merge receipt

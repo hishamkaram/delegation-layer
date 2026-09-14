@@ -1380,6 +1380,9 @@ class Case:
                 "termination_unknown_preserved": True,
             },
         )
+        # This is a diagnostic snapshot, not sealed execution evidence. Keep
+        # the original base and preserve links without reading their targets.
+        shutil.copytree(self.base, destination / "private-base", symlinks=True)
 
 
 class HermeticSuite:
