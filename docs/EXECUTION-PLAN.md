@@ -434,13 +434,24 @@ Own `internal/provider/antigravity/**`, provider fixtures, acceptance cases, doc
 Working directory is the canonical requested workspace. Start fresh with this argv shape (brackets below describe placeholders, not literal shell syntax):
 
 ```text
-agy --sandbox --output-format json --input-format text
+agy --sandbox --mode accept-edits --add-dir <canonical-workspace> --output-format json --input-format text
     --disable-slash-commands --print-timeout <positive-task-duration>
 ```
+
+The revision-3 candidate explicitly registers exactly the canonical task workspace with `--add-dir` and selects `--mode accept-edits`, including on continuation. It adds no other workspace root. Revision 1 failed its actual workspace read under the sparse default project; revision 2 reached the write step but denied file creation. The per-run edit mode is documented to approve file operations while retaining shell permission rules. The sandbox, non-workspace policy, source validation, and outside-write control remain mandatory; this candidate requires its own live certification before release.
 
 The brief is stdin, closed after its bytes. Piped input selects headless mode on the installed CLI, as the existing project measurement demonstrated. Do not append `-p <brief>` or an empty positional prompt. Resume adds exactly `--conversation <recorded-conversation-id>` and otherwise uses the same profile. If the installed supported version needs an explicit print switch with stdin, establish that exact spelling in acceptance and record it; never guess by launching a second task.
 
 **Do not add `--dangerously-skip-permissions` to this minimum profile.** Auto-approval can approve requests to escape the sandbox. The baseline allows workspace file operations and any validated pre-approved commands that stay sandboxed, while headless policy denies unresolved requests. A profile needing all tool approvals is a separate, deferred capability.
+
+The public `--native-timeout DURATION` option is specific to Antigravity and may
+shorten its print timeout without changing the outer `--budget`. It must be
+positive and no greater than that budget; omission keeps the print timeout equal
+to the budget. Normalize and persist it in the immutable requested configuration.
+Other providers reject it. This supplies the required short-native-timeout live
+case through the shipped CLI: L3 uses `--budget 120s --native-timeout 3s`, allowing
+native timeout output to be captured before the supervisor deadline. No arbitrary
+provider argument or second process-lifetime controller is introduced.
 
 Preflight reads the applicable non-secret policy from the documented global settings location and every additional project/agent/workspace source established for 1.2.2. The CLI exposes no per-run settings-file flag in captured help. Do not manufacture one, rewrite global settings, or repurpose HOME. The supported baseline works with an already-compatible validated provider configuration.
 
@@ -467,6 +478,8 @@ On continuation, require conversation_id equal to the recorded predecessor ID. T
 Fixtures: valid fresh/resume success; whitespace response; SUCCESS with empty response; timeout marker with empty and nonempty responses; every known non-success state; error with diagnostic response; wrong conversation ID; missing/duplicate IDs; extra envelope/trailing bytes; malformed/truncated JSON; invalid usage type; cumulative usage delta and reset; unsafe configuration cases above; config changed after admission; exact brief transport containing quotes/newlines/metacharacters.
 
 `make acceptance-agy` includes these fixtures plus **three bounded provider turns**: (1) read a random nonce from a scratch workspace file, create a workspace sentinel, and attempt an explicitly named sibling scratch write that must be denied; inspect actual filesystem outcomes, not the answer's claim; (2) continue that exact conversation asking for the prior nonce and verify a new task, same provider ID, and byte-identical original result; (3) a deliberately long answer with a short native print timeout, verifying no result publication and preserved raw evidence. Any outside write fails the phase immediately. The normal profile's file-write capability and containment both need observation; model refusal to attempt the positive control is inconclusive.
+
+The first turn may terminate with a native write-denial envelope that is correctly rejected rather than published as an answer. In that case require the exact inside nonce copy, no outside entry, one explicit `write_file` denial, matching recorded session identity, normal sealed process termination, and an immutable `publish.reject` payload. A denied read or missing/incorrect inside file is still a failed positive control. The second turn must commit a nonempty answer recalling the nonce on that exact session; preserve the first turn’s rejection and payload byte-for-byte. Do not weaken the result predicate to publish a denial.
 
 Malformed/unsafe settings are tested with injected resolver fixtures or a verified temporary provider configuration mechanism; never alter global settings for testing. Failure to produce the historical empty-SUCCESS timeout shape on 1.2.2 is not by itself a defect: record the actual timeout envelope and require correct non-publication for it while retaining the old regression fixture.
 

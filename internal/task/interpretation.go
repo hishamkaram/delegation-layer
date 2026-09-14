@@ -21,6 +21,7 @@ type (
 		Verdict string
 		Refusal string
 		Session *SessionIdentity
+		Usage   []UsageMetadata
 	}
 )
 
@@ -32,6 +33,9 @@ func ValidateSessionIdentity(v SessionIdentity) error {
 }
 
 func ValidateInterpretation(v Interpretation) error {
+	if err := ValidateUsageMetadataList(v.Usage); err != nil {
+		return err
+	}
 	if v.Session != nil {
 		if err := ValidateSessionIdentity(*v.Session); err != nil {
 			return err

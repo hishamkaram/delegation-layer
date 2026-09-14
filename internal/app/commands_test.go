@@ -443,12 +443,16 @@ func TestRunProviderReturnsFailureForReceiptErrorWithOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := PreparedProfile{
-		Plan: execution.Plan{Executable: "/bin/true", Directory: req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
+		Plan:            execution.Plan{Executable: "/bin/true", Directory: req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
+		ObservedVersion: "fixture-v2",
+		Effective:       task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("app-test"))},
 		Identity: func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 			return receiptErrorObserver{}, nil
 		},
 	}
-	result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{})
+	result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+		return profile, nil
+	}})
 	if result.code != 1 || !errors.Is(result.err, errInjectedReceipt) {
 		t.Fatalf("receipt failure was not operational: %+v", result)
 	}

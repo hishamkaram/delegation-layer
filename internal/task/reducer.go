@@ -2,6 +2,7 @@ package task
 
 import (
 	"fmt"
+	"reflect"
 )
 
 // CompareRequests compares two TaskRecord requests for semantic equality,
@@ -35,7 +36,7 @@ func CompareRequests(a, b *TaskRecord) bool {
 
 // CompareOutcomes compares two OutcomeRecord values for semantic equality,
 // covering task/spec/meta identity, verdict, sealed evidence digest, predicate reference,
-// and payload descriptor.
+// payload descriptor, and each independent provider accounting scope.
 func CompareOutcomes(a, b *OutcomeRecord) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -55,7 +56,14 @@ func CompareOutcomes(a, b *OutcomeRecord) bool {
 	if a.Payload != b.Payload {
 		return false
 	}
-	return true
+	return compareUsage(a.Usage, b.Usage)
+}
+
+func compareUsage(a, b []UsageMetadata) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // ReducePublication determines publication state according to the delegation invariants.
