@@ -461,6 +461,8 @@ func TestSealedOutputReplayNeedsNoNativeStaging(t *testing.T) {
 
 	archived := filepath.Join(td.Dir, "provider-output.archived")
 	must(t, os.Rename(filepath.Join(td.Dir, "provider-output"), archived))
+	_, scavengeErr := s.Scavenge()
+	must(t, scavengeErr)
 	s.SetFaultInjector(&testFaultInjector{failStageWrite: true})
 	replayed, replayCleanup, replayErr := td.Collect(task.FixturePredicateRef())
 	s.SetFaultInjector(nil)

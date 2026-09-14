@@ -83,6 +83,17 @@ func TestNormalizeOutputArtifactsAndWriterContract(t *testing.T) {
 	}
 }
 
+func TestArtifactNamesReserveCoreStagingNamespace(t *testing.T) {
+	for _, name := range []string{"stage.0123456789abcdef0123456789abcdef.tmp", "stage.profile.json"} {
+		if _, err := NormalizeInputFiles([]InputFile{{Name: name, Content: "config"}}); err == nil {
+			t.Fatalf("scavenger namespace accepted for input: %s", name)
+		}
+		if _, err := NormalizeOutputArtifacts([]OutputArtifact{{Name: name}}); err == nil {
+			t.Fatalf("scavenger namespace accepted for output: %s", name)
+		}
+	}
+}
+
 func TestValidateInputOutputBindingsRejectsNameAndSlotCollisions(t *testing.T) {
 	nameCollision := []InputFile{{Name: "answer.txt", ArgumentIndex: 0, Content: "x"}}
 	if err := ValidateInputOutputBindings(nameCollision, []OutputArtifact{{Name: "answer.txt", ArgumentIndex: 1}}); err == nil {
@@ -169,7 +180,7 @@ func TestValidateRawManifestAllowsSafeDeclaredShapeAndRejectsUnsafeExtras(t *tes
 	if err = ValidateRawManifest(manifest, ComputeSHA256(data)); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"raw/../escape", "raw/nested/file", "raw/.hidden"} {
+	for _, path := range []string{"raw/../escape", "raw/nested/file", "raw/.hidden", "raw/stage.0123456789abcdef0123456789abcdef.tmp"} {
 		bad := append([]RawManifestEntry(nil), manifest...)
 		bad[0].Path = path
 		badData, marshalErr := MarshalCanonical(bad)

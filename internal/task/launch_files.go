@@ -50,9 +50,10 @@ type OutputArtifact struct {
 }
 
 // ValidateArtifactName accepts one safe, task-local basename. stdout and
-// stderr are reserved for the mandatory process streams.
+// stderr are reserved for the mandatory process streams. The stage. namespace
+// belongs to core durability/scavenging and must never contain provider files.
 func ValidateArtifactName(name string) error {
-	if !artifactNamePattern.MatchString(name) || name == "stdout" || name == "stderr" {
+	if !artifactNamePattern.MatchString(name) || name == "stdout" || name == "stderr" || strings.HasPrefix(name, "stage.") {
 		return fmt.Errorf("invalid task artifact name %q", name)
 	}
 	return nil
