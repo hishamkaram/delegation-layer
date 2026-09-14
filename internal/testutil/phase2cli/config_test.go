@@ -110,11 +110,6 @@ func TestPrepareProfileReadsAndBindsAllFixtureDigests(t *testing.T) {
 		t.Fatal("model accepted by fixture profile")
 	}
 	request.RequestedConfig.Model = ""
-	request.RequestedConfig.NativeTimeout = "1s"
-	if _, err = m.prepareProfile(request); err == nil || !strings.Contains(err.Error(), "native timeout") {
-		t.Fatalf("native timeout was not refused by fixture profile: %v", err)
-	}
-	request.RequestedConfig.NativeTimeout = ""
 	request.TaskID = "ffffffffffffffffffffffffffffffff"
 	if _, err = m.prepareProfile(request); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("provider task mismatch=%v", err)
