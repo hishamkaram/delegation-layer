@@ -60,7 +60,9 @@ Discovery reads compiled metadata. It does not create task state, contact
 pueue, inspect native authentication or launch a provider. A listed profile is
 not a claim that the current host has the required executable or configuration;
 dispatch still checks those prerequisites. Unsupported explicit options fail
-before supervisor admission. The discovery response has no task admission,
+before supervisor admission. An explicit `--effort default` retains the native
+provider-default selection where supported; it does not request a custom effort
+level or change the stored request representation. The discovery response has no task admission,
 liveness or publication fields.
 
 ## Supervisor configuration

@@ -167,6 +167,12 @@ func validateProfile(providerID string, profile CertifiedProfile) error {
 	if profile.Mode == "" || profile.Approval == "" || profile.Status == "" || profile.ProviderVersion == "" || profile.OS == "" || profile.Arch == "" || profile.ProfileRevision == "" {
 		return fmt.Errorf("incomplete certified profile for %s", providerID)
 	}
+	if profile.Status != "Executed" {
+		return fmt.Errorf("certified profile for %s is not Executed", providerID)
+	}
+	if err := task.ValidateSHA256(profile.RuntimeSHA256); err != nil {
+		return fmt.Errorf("profile runtime SHA-256: %w", err)
+	}
 	if err := config.ValidateMode(profile.Mode); err != nil {
 		return fmt.Errorf("profile mode: %w", err)
 	}
@@ -175,6 +181,9 @@ func validateProfile(providerID string, profile CertifiedProfile) error {
 	}
 	if err := task.ValidatePredicateRef(profile.Predicate); err != nil {
 		return fmt.Errorf("profile predicate: %w", err)
+	}
+	if profile.Predicate.Mode != profile.Mode {
+		return fmt.Errorf("profile mode does not match its predicate for %s", providerID)
 	}
 	return nil
 }
@@ -281,14 +290,7 @@ func (c Catalog) ValidateRequest(request task.TaskRecord) error {
 	if err = config.ValidateMode(request.Mode); err != nil {
 		return err
 	}
-	profileSupported := false
-	for _, profile := range registration.Description.Profiles {
-		if profile.Mode == request.Mode {
-			profileSupported = true
-			break
-		}
-	}
-	if !profileSupported {
+	if !hasCertifiedProfileMode(registration.Description, request.Mode) {
 		return fmt.Errorf("%w: %s does not certify permission profile %s", ErrProfileUnavailable, request.Provider, request.Mode)
 	}
 	options := []struct {
@@ -296,7 +298,10 @@ func (c Catalog) ValidateRequest(request task.TaskRecord) error {
 		present bool
 	}{
 		{name: OptionContinuation, present: request.PriorSession != nil},
-		{name: OptionEffort, present: request.RequestedConfig.Effort != ""},
+		// The explicit default is a provider-default selection, so it does not
+		// request an effort override and must retain compatibility with agy's
+		// existing persisted request representation.
+		{name: OptionEffort, present: request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default"},
 		{name: OptionModel, present: request.RequestedConfig.Model != ""},
 		{name: OptionNativeTimeout, present: request.RequestedConfig.NativeTimeout != ""},
 	}
@@ -323,5 +328,26 @@ func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
 	if err != nil {
 		return PreparedProfile{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, err)
 	}
+	if !hasCertifiedProfilePredicate(registration.Description, request.Mode, profile.Plan.Predicate) {
+		return PreparedProfile{}, fmt.Errorf("%w: %s returned an uncertified predicate", ErrProfileUnavailable, request.Provider)
+	}
 	return profile, nil
+}
+
+func hasCertifiedProfileMode(description Description, mode string) bool {
+	for _, profile := range description.Profiles {
+		if profile.Mode == mode {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCertifiedProfilePredicate(description Description, mode string, ref task.PredicateRef) bool {
+	for _, profile := range description.Profiles {
+		if profile.Mode == mode && profile.Predicate.Equal(ref) {
+			return true
+		}
+	}
+	return false
 }

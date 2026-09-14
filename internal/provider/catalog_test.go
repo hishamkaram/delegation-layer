@@ -72,6 +72,50 @@ func TestNewCatalogRejectsDiscoverableProviderWithoutCertifiedProfile(t *testing
 	}
 }
 
+func TestNewCatalogRejectsUnexecutedIncompleteOrMismatchedProfiles(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(*Registration)
+	}{
+		{
+			name: "unexecuted status",
+			change: func(registration *Registration) {
+				registration.Description.Profiles[0].Status = "Documented"
+			},
+		},
+		{
+			name: "missing runtime digest",
+			change: func(registration *Registration) {
+				registration.Description.Profiles[0].RuntimeSHA256 = ""
+			},
+		},
+		{
+			name: "malformed runtime digest",
+			change: func(registration *Registration) {
+				registration.Description.Profiles[0].RuntimeSHA256 = "not-a-sha256"
+			},
+		},
+		{
+			name: "predicate mode mismatch",
+			change: func(registration *Registration) {
+				ref := registration.Description.Profiles[0].Predicate
+				ref.Mode = "workspace-write"
+				registration.Description.Profiles[0].Predicate = ref
+				registration.Interpreters[0] = catalogTestInterpreter{ref: ref}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			registration := testRegistration("alpha:print", "read-only")
+			tc.change(&registration)
+			if _, err := NewCatalog(registration); err == nil {
+				t.Fatal("invalid certified profile was accepted")
+			}
+		})
+	}
+}
+
 func TestNewCatalogRejectsProfileWithoutRegisteredInterpreter(t *testing.T) {
 	registration := testRegistration("alpha:print", "read-only")
 	ref := task.PredicateRef{Adapter: registration.Description.ID, Mode: "read-only", Version: "other", SHA256: task.ComputeSHA256([]byte("other"))}
@@ -122,6 +166,121 @@ func TestCatalogRejectsUnsupportedOptionBeforePreparation(t *testing.T) {
 	}
 	if called {
 		t.Fatal("provider preparation ran before capability refusal")
+	}
+}
+
+func TestCatalogTreatsDefaultEffortAsProviderDefault(t *testing.T) {
+	called := false
+	registration := testRegistration("alpha:print", "read-only")
+	registration.Prepare = func(request task.TaskRecord) (PreparedProfile, error) {
+		called = true
+		return PreparedProfile{Plan: executionPlanForCatalogTest(request)}, nil
+	}
+	catalog, err := NewCatalog(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := task.TaskRecord{
+		Provider:     "alpha:print",
+		Mode:         "read-only",
+		CanonicalCwd: "/workspace",
+		RequestedConfig: task.TaskConfig{
+			Permission: "read-only",
+			Effort:     "default",
+		},
+	}
+	if _, err = catalog.Prepare(request); err != nil {
+		t.Fatalf("provider-default effort was refused: %v", err)
+	}
+	if !called {
+		t.Fatal("provider preparation did not receive provider-default request")
+	}
+	if request.RequestedConfig.Effort != "default" {
+		t.Fatalf("provider-default effort was normalized or discarded: %q", request.RequestedConfig.Effort)
+	}
+}
+
+func TestCatalogAcceptsPreparedPredicateFromAnyMatchingModeProfile(t *testing.T) {
+	registration := testRegistration("alpha:print", "read-only")
+	secondRef := task.PredicateRef{
+		Adapter: "alpha:print",
+		Mode:    "read-only",
+		Version: "2",
+		SHA256:  task.ComputeSHA256([]byte("alpha:print/read-only/2")),
+	}
+	registration.Description.Profiles = append(registration.Description.Profiles, CertifiedProfile{
+		Mode:            "read-only",
+		Approval:        "test",
+		Status:          "Executed",
+		ProviderVersion: "test-2",
+		OS:              "test",
+		Arch:            "test",
+		RuntimeSHA256:   task.ComputeSHA256([]byte("runtime-2")),
+		ProfileRevision: "test-2",
+		Predicate:       secondRef,
+	})
+	registration.Interpreters = append(registration.Interpreters, catalogTestInterpreter{ref: secondRef})
+	registration.Prepare = func(request task.TaskRecord) (PreparedProfile, error) {
+		plan := executionPlanForCatalogTest(request)
+		plan.Predicate = secondRef
+		return PreparedProfile{Plan: plan}, nil
+	}
+	catalog, err := NewCatalog(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := task.TaskRecord{Provider: "alpha:print", Mode: "read-only", CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Permission: "read-only"}}
+	if _, err = catalog.Prepare(request); err != nil {
+		t.Fatalf("matching second certified profile was refused: %v", err)
+	}
+}
+
+func TestCatalogRejectsPreparedHistoricalOrUnknownPredicate(t *testing.T) {
+	cases := []struct {
+		name        string
+		preparedRef func(task.PredicateRef) task.PredicateRef
+		addInterp   bool
+	}{
+		{
+			name: "unknown predicate",
+			preparedRef: func(ref task.PredicateRef) task.PredicateRef {
+				ref.Version = "unknown"
+				ref.SHA256 = task.ComputeSHA256([]byte("unknown"))
+				return ref
+			},
+		},
+		{
+			name: "registered historical predicate",
+			preparedRef: func(ref task.PredicateRef) task.PredicateRef {
+				ref.Version = "historical"
+				ref.SHA256 = task.ComputeSHA256([]byte("historical"))
+				return ref
+			},
+			addInterp: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			registration := testRegistration("alpha:print", "read-only")
+			currentRef := registration.Description.Profiles[0].Predicate
+			preparedRef := tc.preparedRef(currentRef)
+			if tc.addInterp {
+				registration.Interpreters = append(registration.Interpreters, catalogTestInterpreter{ref: preparedRef})
+			}
+			registration.Prepare = func(request task.TaskRecord) (PreparedProfile, error) {
+				plan := executionPlanForCatalogTest(request)
+				plan.Predicate = preparedRef
+				return PreparedProfile{Plan: plan}, nil
+			}
+			catalog, err := NewCatalog(registration)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := task.TaskRecord{Provider: "alpha:print", Mode: "read-only", CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Permission: "read-only"}}
+			if _, err = catalog.Prepare(request); !errors.Is(err, ErrProfileUnavailable) {
+				t.Fatalf("uncertified prepared predicate was accepted: %v", err)
+			}
+		})
 	}
 }
 
