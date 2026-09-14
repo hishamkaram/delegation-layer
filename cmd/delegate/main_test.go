@@ -80,7 +80,7 @@ func TestRunUnknownCommandOrFlag(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"unknown command", []string{"dispatch"}},
+		{"unknown command", []string{"unknown-command"}},
 		{"unknown flag", []string{"--unknown"}},
 		{"arbitrary string", []string{"something-else"}},
 	}

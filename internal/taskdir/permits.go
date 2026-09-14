@@ -107,14 +107,15 @@ func (l *RunnerLease) HasActiveWriters() bool {
 }
 
 type SubmissionPermit struct {
-	state *permitState
-	lease *AdmissionLease
+	record task.SubmitRecord
+	state  *permitState
+	lease  *AdmissionLease
 }
 
-func newSubmissionPermit(id string, lease *AdmissionLease) *SubmissionPermit {
+func newSubmissionPermit(id string, lease *AdmissionLease, record task.SubmitRecord) *SubmissionPermit {
 	state := &permitState{taskID: id}
 	lease.state.permit = state
-	return &SubmissionPermit{state: state, lease: lease}
+	return &SubmissionPermit{state: state, lease: lease, record: record}
 }
 
 func (p *SubmissionPermit) TaskID() string {
@@ -146,14 +147,15 @@ func (p *SubmissionPermit) IsConsumed() bool {
 }
 
 type StartPermit struct {
-	state *permitState
-	lease *RunnerLease
+	record task.ProviderStartRecord
+	state  *permitState
+	lease  *RunnerLease
 }
 
-func newStartPermit(id string, lease *RunnerLease) *StartPermit {
+func newStartPermit(id string, lease *RunnerLease, record task.ProviderStartRecord) *StartPermit {
 	state := &permitState{taskID: id}
 	lease.state.permit = state
-	return &StartPermit{state: state, lease: lease}
+	return &StartPermit{state: state, lease: lease, record: record}
 }
 
 func (p *StartPermit) TaskID() string {
@@ -189,4 +191,31 @@ func (p *StartPermit) IsConsumed() bool {
 		return false
 	}
 	return isConsumed(p.state, p.lease.state)
+}
+
+// Record returns a copy of the exact immutable authority record, never a writable pointer.
+func (p *SubmissionPermit) Record() (*task.SubmitRecord, error) {
+	if p == nil || p.lease == nil || p.state == nil {
+		return nil, task.ErrInvalidPermit
+	}
+	p.lease.state.mu.Lock()
+	defer p.lease.state.mu.Unlock()
+	if p.lease.state.released || p.lease.state.permit != p.state {
+		return nil, task.ErrInvalidPermit
+	}
+	record := p.record
+	return &record, nil
+}
+
+func (p *StartPermit) Record() (*task.ProviderStartRecord, error) {
+	if p == nil || p.lease == nil || p.state == nil {
+		return nil, task.ErrInvalidPermit
+	}
+	p.lease.state.mu.Lock()
+	defer p.lease.state.mu.Unlock()
+	if p.lease.state.released || p.lease.state.permit != p.state {
+		return nil, task.ErrInvalidPermit
+	}
+	record := p.record
+	return &record, nil
 }

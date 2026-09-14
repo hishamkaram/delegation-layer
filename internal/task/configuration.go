@@ -131,6 +131,16 @@ func ValidatePredicateRef(ref PredicateRef) error {
 
 // ValidateSupervisorRef checks the complete pinned supervisor coordinates.
 func ValidateSupervisorRef(ref SupervisorRef) error {
+	if ref.ClientExecutable != "" && (!nonblank(ref.ClientExecutable) || !filepath.IsAbs(ref.ClientExecutable) || filepath.Clean(ref.ClientExecutable) != ref.ClientExecutable) {
+		return errors.New("supervisor client must be a clean absolute path")
+	}
+	for _, digest := range []string{ref.ClientSHA256, ref.ResolvedConfigSHA256} {
+		if digest != "" {
+			if err := ValidateSHA256(digest); err != nil {
+				return err
+			}
+		}
+	}
 	if !filepath.IsAbs(ref.ConfigPath) || filepath.Clean(ref.ConfigPath) != ref.ConfigPath {
 		return errors.New("supervisor config path must be canonical and absolute")
 	}
@@ -178,4 +188,19 @@ func validateSessionFields(provider, timestamp string) error {
 		return err
 	}
 	return validateTimestamp(timestamp)
+}
+
+// ValidateFreshSupervisorRef requires the complete Phase2 binding without reading
+// external files. The pueue boundary verifies actual executable/configuration bytes.
+func ValidateFreshSupervisorRef(ref SupervisorRef) error {
+	if err := ValidateSupervisorRef(ref); err != nil {
+		return err
+	}
+	if ref.ClientExecutable == "" {
+		return errors.New("missing saved supervisor client executable")
+	}
+	if err := ValidateSHA256(ref.ClientSHA256); err != nil {
+		return err
+	}
+	return ValidateSHA256(ref.ResolvedConfigSHA256)
 }

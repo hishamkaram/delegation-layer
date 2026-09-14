@@ -41,6 +41,15 @@ jobs:
       - name: Run protocol acceptance
         run: make acceptance-protocol
 
+      - name: Install pinned supervisor test binaries
+        run: ./scripts/install-test-supervisor.sh
+
+      - name: Run supervisor acceptance
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-supervisor
+
   gate-macos:
     name: Gate (macOS macos-15)
     runs-on: macos-15
@@ -71,3 +80,12 @@ jobs:
 
       - name: Run protocol acceptance
         run: make acceptance-protocol
+
+      - name: Install pinned supervisor test binaries
+        run: ./scripts/install-test-supervisor.sh
+
+      - name: Run supervisor acceptance
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-supervisor
