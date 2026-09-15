@@ -16,19 +16,18 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/testutil/contributorprovider/protocol"
 )
 
-func TestDescriptionUsesMeasuredCertificationWithoutLiveProbes(t *testing.T) {
-	record, err := embeddedCertification()
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestDescriptionExposesFixtureCapabilitiesWithoutLiveProbes(t *testing.T) {
 	description := Description()
 	if description.ID != Provider || !description.Discoverable || !slices.Equal(description.SupportedOptions, []string{commonprovider.OptionContinuation}) {
 		t.Fatalf("unexpected description: %+v", description)
 	}
-	if len(description.Profiles) != 1 || description.Profiles[0] != record.profile() {
-		t.Fatalf("description drifted from embedded certification: %+v", description.Profiles)
+	if !slices.Equal(description.SupportedModes, []string{Mode}) {
+		t.Fatalf("unexpected supported modes: %+v", description.SupportedModes)
 	}
-	if _, err = commonprovider.NewCatalog(Registration()); err != nil {
+	if len(description.Runtime.RequiredFlags) == 0 {
+		t.Fatalf("runtime flag requirements are missing: %+v", description)
+	}
+	if _, err := commonprovider.NewCatalog(Registration()); err != nil {
 		t.Fatalf("registration was rejected: %v", err)
 	}
 }
@@ -117,23 +116,19 @@ func TestPrepareContinuationUsesExactPriorSession(t *testing.T) {
 
 func TestPrepareRejectsBriefOutsideFixtureBound(t *testing.T) {
 	workspace, runtimeDir := separateDirectories(t)
-	record, err := embeddedCertification()
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := runtimeIdentity{Executable: "/test/bin/provider", Version: record.ProviderVersion, SHA256: record.RuntimeSHA256, OS: record.OS, Arch: record.Arch}
+	identity := testRuntimeIdentity()
 	for _, briefLength := range []int64{0, -1, int64(MaxBriefBytes) + 1} {
 		t.Run(fmt.Sprintf("length-%d", briefLength), func(t *testing.T) {
 			request := testRequest(workspace)
 			request.BriefLength = briefLength
-			if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir, Certification: record}); !errors.Is(err, ErrUnsupportedProfile) {
+			if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir}); !errors.Is(err, ErrUnsupportedProfile) {
 				t.Fatalf("brief length %d was accepted: %v", briefLength, err)
 			}
 		})
 	}
 	request := testRequest(workspace)
 	request.BriefLength = MaxBriefBytes
-	if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir, Certification: record}); err != nil {
+	if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir}); err != nil {
 		t.Fatalf("fixture maximum brief length was rejected: %v", err)
 	}
 }
@@ -141,18 +136,13 @@ func TestPrepareRejectsBriefOutsideFixtureBound(t *testing.T) {
 func TestPrepareRejectsWorkspaceRuntimeOverlapAndIdentityDrift(t *testing.T) {
 	workspace, runtimeDir := separateDirectories(t)
 	request := testRequest(workspace)
-	record, err := embeddedCertification()
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := runtimeIdentity{Executable: "/test/bin/provider", Version: record.ProviderVersion, SHA256: record.RuntimeSHA256, OS: record.OS, Arch: record.Arch}
+	identity := testRuntimeIdentity()
 	cases := []struct {
 		name string
 		deps prepareDependencies
 	}{
-		{name: "workspace runtime overlap", deps: prepareDependencies{Identity: identity, RuntimeDir: workspace, Certification: record}},
-		{name: "binary digest drift", deps: prepareDependencies{Identity: runtimeIdentity{Executable: identity.Executable, Version: identity.Version, SHA256: strings.Repeat("f", 64), OS: identity.OS, Arch: identity.Arch}, RuntimeDir: runtimeDir, Certification: record}},
-		{name: "platform drift", deps: prepareDependencies{Identity: runtimeIdentity{Executable: identity.Executable, Version: identity.Version, SHA256: identity.SHA256, OS: "linux", Arch: identity.Arch}, RuntimeDir: runtimeDir, Certification: record}},
+		{name: "workspace runtime overlap", deps: prepareDependencies{Identity: identity, RuntimeDir: workspace}},
+		{name: "missing version", deps: prepareDependencies{Identity: runtimeIdentity{Executable: identity.Executable, SHA256: identity.SHA256}, RuntimeDir: runtimeDir}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,32 +151,28 @@ func TestPrepareRejectsWorkspaceRuntimeOverlapAndIdentityDrift(t *testing.T) {
 			}
 		})
 	}
+	changedDigest := runtimeIdentity{Executable: identity.Executable, Version: identity.Version, SHA256: strings.Repeat("f", 64)}
+	if _, err := prepareWithDependencies(request, prepareDependencies{Identity: changedDigest, RuntimeDir: runtimeDir}); err != nil {
+		t.Fatalf("valid runtime digest change was rejected: %v", err)
+	}
 }
 
 func TestPrepareRejectsNonCanonicalOrMissingRuntime(t *testing.T) {
 	workspace, runtimeDir := separateDirectories(t)
 	request := testRequest(workspace)
-	record, err := embeddedCertification()
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := runtimeIdentity{Executable: "/test/bin/provider", Version: record.ProviderVersion, SHA256: record.RuntimeSHA256, OS: record.OS, Arch: record.Arch}
+	identity := testRuntimeIdentity()
 	for _, runtimePath := range []string{filepath.Join(runtimeDir, "missing"), runtimeDir + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(runtimeDir)} {
-		if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimePath, Certification: record}); !errors.Is(err, ErrUnsupportedProfile) {
+		if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimePath}); !errors.Is(err, ErrUnsupportedProfile) {
 			t.Fatalf("runtime path %q was accepted: %v", runtimePath, err)
 		}
 	}
-	if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: "relative", Certification: record}); !errors.Is(err, ErrUnsupportedProfile) {
+	if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: "relative"}); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("relative runtime path was accepted: %v", err)
 	}
 }
 
 func TestPrepareRejectsNonPrivateRuntimeDirectories(t *testing.T) {
-	record, err := embeddedCertification()
-	if err != nil {
-		t.Fatal(err)
-	}
-	identity := runtimeIdentity{Executable: "/test/bin/provider", Version: record.ProviderVersion, SHA256: record.RuntimeSHA256, OS: record.OS, Arch: record.Arch}
+	identity := testRuntimeIdentity()
 	cases := []struct {
 		name  string
 		setup func(string) error
@@ -203,7 +189,7 @@ func TestPrepareRejectsNonPrivateRuntimeDirectories(t *testing.T) {
 				t.Fatal(err)
 			}
 			request := testRequest(workspace)
-			if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir, Certification: record}); !errors.Is(err, ErrUnsupportedProfile) {
+			if _, err := prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir}); !errors.Is(err, ErrUnsupportedProfile) {
 				t.Fatalf("invalid private runtime layout was accepted: %v", err)
 			}
 		})
@@ -270,13 +256,13 @@ func testRequest(workspace string) task.TaskRecord {
 
 func prepareTestProfile(t *testing.T, request task.TaskRecord, runtimeDir string) commonprovider.PreparedProfile {
 	t.Helper()
-	record, err := embeddedCertification()
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile, err := prepareWithDependencies(request, prepareDependencies{Identity: runtimeIdentity{Executable: "/test/bin/provider", Version: record.ProviderVersion, SHA256: record.RuntimeSHA256, OS: record.OS, Arch: record.Arch}, RuntimeDir: runtimeDir, Certification: record})
+	profile, err := prepareWithDependencies(request, prepareDependencies{Identity: testRuntimeIdentity(), RuntimeDir: runtimeDir})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return profile
+}
+
+func testRuntimeIdentity() runtimeIdentity {
+	return runtimeIdentity{Executable: "/test/bin/provider", Version: Version, SHA256: task.ComputeSHA256([]byte("test provider"))}
 }

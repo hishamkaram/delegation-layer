@@ -2,39 +2,26 @@ package claude
 
 import (
 	"fmt"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
-const (
-	inspectedRuntimeSHA256 = "a506b6d970a4cf44f6abdb53a81ddcd5d3b0ce042a95c502fe9d1f946bdb8807"
-)
+// RuntimeRequirements returns the flags used by the Claude launch plan. It
+// returns a fresh slice so package metadata remains immutable.
+func RuntimeRequirements() commonprovider.RuntimeCapability {
+	return commonprovider.RuntimeCapability{
+		RequiredFlags: []string{
+			"--print", "--input-format", "--output-format", "--verbose", "--safe-mode", "--restricted",
+			"--tools", "--disallowedTools", "--strict-mcp-config", "--mcp-config", "--settings", "--permission-mode",
+			"--permission-prompts", "--disable-slash-commands", "--no-chrome", "--resume", "--session-id",
+		},
+	}
+}
 
-func resolveExecutable() (string, error) {
-	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		return "", fmt.Errorf("%w: Claude runtime has not been inspected on this platform", ErrUnsupportedProfile)
-	}
-	path, err := exec.LookPath("claude")
+func resolveExecutable() (commonprovider.CLIInfo, error) {
+	info, err := commonprovider.LocateCLI("claude")
 	if err != nil {
-		return "", fmt.Errorf("%w: Claude executable is unavailable", ErrUnsupportedProfile)
+		return commonprovider.CLIInfo{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}
-	path, err = filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	path, err = filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", err
-	}
-	digest, err := commonprovider.FingerprintExecutable(path)
-	if err != nil {
-		return "", fmt.Errorf("%w: inspect Claude runtime: %w", ErrUnsupportedProfile, err)
-	}
-	if digest != inspectedRuntimeSHA256 {
-		return "", fmt.Errorf("%w: Claude executable differs from inspected 2.1.270 runtime", ErrUnsupportedProfile)
-	}
-	return path, nil
+	return info, nil
 }

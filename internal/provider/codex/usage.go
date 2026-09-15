@@ -8,7 +8,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// usageTotals mirrors the five counters copied by the pinned Codex event
+// usageTotals mirrors the five counters copied by the observed Codex event
 // processor from ThreadTokenUsage.total. Pointers preserve a missing counter;
 // no task delta or synthetic total is calculated.
 type usageTotals struct {

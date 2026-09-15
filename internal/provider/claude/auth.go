@@ -11,7 +11,7 @@ import (
 )
 
 // personalOAuthProof contains only the native eligibility fields needed to
-// prove the pinned remote-settings loader skips cache and network access.
+// prove the inspected remote-settings loader skips cache and network access.
 // Tokens remain transient and are never returned, hashed, or persisted.
 type personalOAuthProof struct {
 	SubscriptionType string   `json:"subscription_type"`

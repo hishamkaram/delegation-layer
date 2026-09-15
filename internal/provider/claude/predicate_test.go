@@ -18,7 +18,7 @@ const (
 	claudeTestMetaHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 )
 
-func TestReferenceBindsPinnedContract(t *testing.T) {
+func TestReferenceBindsImmutableContract(t *testing.T) {
 	ref := Reference()
 	if ref.Adapter != Provider || ref.Mode != Mode || ref.Version != Version || ref.SHA256 != ContractDigest() {
 		t.Fatalf("reference=%+v", ref)
@@ -142,7 +142,6 @@ func TestInitPolicyAndExactFieldNamesAreRequired(t *testing.T) {
 		{name: "missing tool", init: strings.Replace(initLine(claudeTestUUID), `"Grep"]`, `"Read","Glob"]`, 1), want: refusalMalformed},
 		{name: "mcp server", init: strings.Replace(initLine(claudeTestUUID), `"mcp_servers":[]`, `"mcp_servers":[{"name":"x","status":"connected"}]`, 1), want: refusalMalformed},
 		{name: "permission mode", init: strings.Replace(initLine(claudeTestUUID), `"permissionMode":"dontAsk"`, `"permissionMode":"default"`, 1), want: refusalMalformed},
-		{name: "version", init: strings.Replace(initLine(claudeTestUUID), Version, "2.1.269", 1), want: refusalMalformed},
 		{name: "wrong case type", init: strings.Replace(initLine(claudeTestUUID), `"type"`, `"Type"`, 1), want: refusalMalformed},
 		{name: "wrong case session", init: strings.Replace(initLine(claudeTestUUID), `"session_id"`, `"Session_ID"`, 1), want: refusalMalformed},
 		{name: "wrong case api key source", init: strings.Replace(initLine(claudeTestUUID), `"apiKeySource"`, `"apikeysource"`, 1), want: refusalMalformed},
@@ -160,6 +159,15 @@ func TestInitPolicyAndExactFieldNamesAreRequired(t *testing.T) {
 				t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 			}
 		})
+	}
+}
+
+func TestChangedCLIReportedVersionIsAccepted(t *testing.T) {
+	stdout := jsonl(strings.Replace(initLine(claudeTestUUID), Version, "9.9.9", 1), resultLine(claudeTestUUID, "answer"))
+	var answer bytes.Buffer
+	interp, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "answer" {
+		t.Fatalf("changed CLI version was rejected: interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 	}
 }
 

@@ -15,15 +15,32 @@ type profileEnvironment struct {
 	Values        []string
 }
 
-// prepareEnvironment preserves the caller's authentication and environment.
-// Only path decisions enter the policy snapshot; credential values never do.
-// Alternate provider/config discovery roots need a separately verified profile.
+// nativeEnvironmentKeys is the same bounded, nonsecret control environment
+// used by the supervisor client. Antigravity's supported login is native to
+// its home directory; ambient credential values are deliberately not copied
+// into a queued task record.
+var nativeEnvironmentKeys = map[string]struct{}{
+	"HOME": {}, "PATH": {}, "USER": {}, "LOGNAME": {}, "SHELL": {},
+	"LANG": {}, "LC_ALL": {}, "LC_CTYPE": {}, "TZ": {},
+	"TMPDIR": {}, "TMP": {}, "TEMP": {}, "__CF_USER_TEXT_ENCODING": {},
+}
+
+// prepareEnvironment preserves the native Antigravity login location and the
+// bounded process-control values. Unrelated ambient variables, including
+// credential values, never cross the supervisor boundary.
 func prepareEnvironment(values []string) (profileEnvironment, error) {
 	environment := make(map[string]string, len(values))
 	for _, entry := range values {
 		key, value, ok := strings.Cut(entry, "=")
 		if !ok || key == "" {
 			return profileEnvironment{}, fmt.Errorf("%w: invalid environment entry", ErrUnsupportedProfile)
+		}
+		// The pueue shell adds these bookkeeping values to queued workers and
+		// may rewrite shell bookkeeping. They are not provider inputs and must
+		// not change the immutable inspection definition between admission and
+		// the supervised worker.
+		if volatileSupervisorEnvironmentKey(key) {
+			continue
 		}
 		if _, duplicate := environment[key]; duplicate {
 			return profileEnvironment{}, fmt.Errorf("%w: duplicate environment key", ErrUnsupportedProfile)
@@ -41,7 +58,27 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 	if err != nil {
 		return profileEnvironment{}, err
 	}
-	return profileEnvironment{Home: home, WritableRoots: roots, Values: slices.Clone(values)}, nil
+	filtered := make([]string, 0, len(nativeEnvironmentKeys))
+	for key, value := range environment {
+		if _, allowed := nativeEnvironmentKeys[key]; !allowed {
+			continue
+		}
+		filtered = append(filtered, key+"="+value)
+	}
+	slices.Sort(filtered)
+	return profileEnvironment{Home: home, WritableRoots: roots, Values: filtered}, nil
+}
+
+func volatileSupervisorEnvironmentKey(key string) bool {
+	if strings.HasPrefix(key, "PUEUE_") {
+		return true
+	}
+	switch key {
+	case "_", "OLDPWD", "SHLVL":
+		return true
+	default:
+		return false
+	}
 }
 
 func rejectAlternateDiscovery(environment map[string]string) error {

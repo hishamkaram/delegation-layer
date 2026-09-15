@@ -9,13 +9,14 @@ import (
 )
 
 const (
-	Provider   = "codex:exec"
-	Mode       = "read-only"
-	OutputName = "codex-last-message.txt"
+	Provider             = "codex:exec"
+	Mode                 = "read-only"
+	OutputName           = "codex-last-message.txt"
+	ProfileRevision      = "codex-read-only-v1"
+	OutputWriterContract = task.OutputWriterProcessExitEOF
 
-	// predicateVersion is tied to the pinned Codex 0.154.0 event producer. A
-	// changed interpretation rule gets a new predicate reference and keeps this
-	// implementation available for historical sealed evidence.
+	// predicateVersion identifies this interpreter's output contract. It is
+	// independent of the installed Codex CLI release.
 	predicateVersion = "0.154.0"
 
 	maxEventLineBytes = task.MaxControlRecordSize

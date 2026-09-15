@@ -1,6 +1,6 @@
 // Package fixture implements a finite, controlled provider executable. It does
-// not import adapter registration or certification, so its measured binary is
-// independent of the certificate later embedded in the acceptance CLI.
+// not import adapter registration, so its measured binary is independent of
+// the acceptance CLI and catalog.
 package fixture
 
 import (
@@ -36,6 +36,9 @@ type options struct {
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 1 && args[0] == "--version" {
 		return report(stderr, writeText(stdout, RuntimeVersion+"\n"))
+	}
+	if len(args) == 1 && args[0] == "--help" {
+		return report(stderr, writeText(stdout, "Usage: contributor-provider [--runtime-config PATH] [--tools-config PATH] [--output PATH] [--task-id ID] [--session-id ID] [--resume]\n"))
 	}
 	if len(args) == 1 && args[0] == "--self-test" {
 		return report(stderr, selfTest(stdout))

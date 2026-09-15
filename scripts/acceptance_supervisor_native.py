@@ -127,12 +127,12 @@ class NativeSuite:
         self.release = self.base / "provider-release"
         provider_cfg = {
             "scenario": "hold", "artifact_dir": str(self.base / "provider-records"),
-            "lifetime_ms": 15000, "task_id": self.task_id, "session_id": "phase2-" + self.task_id,
+            "lifetime_ms": 15000, "task_id": self.task_id, "session_id": "supervisor-" + self.task_id,
             "argv": ["literal argument", "$(touch DO_NOT_CREATE); 'quoted' \"double\""],
             "answer": self.answer, "rendezvous_path": str(self.release),
         }
         write_json(self.provider_config, provider_cfg)
-        self.profile = self.bindir / "phase2-fixture.json"
+        self.profile = self.bindir / "provider-fixture.json"
         write_json(self.profile, {
             "schema_version": 1, "provider_executable": str(self.provider),
             "provider_sha256": digest(self.provider), "provider_config": str(self.provider_config),
@@ -144,14 +144,14 @@ class NativeSuite:
         write_json(self.output / "binding.json", {
             "private_base": str(self.base), "task_id": self.task_id,
             "config_path": str(self.config_path), "config_sha256": self.config_hash,
-            "binaries": {str(p): digest(p) for p in (self.pueue, self.pueued, self.delegate, self.runner, self.provider, self.tools / "phase2probe")},
+            "binaries": {str(p): digest(p) for p in (self.pueue, self.pueued, self.delegate, self.runner, self.provider, self.tools / "harnessprobe")},
             "platform": platform.platform(), "architecture": platform.machine(),
             "driver_sha256": digest(__file__), "fixtures_sha256": digest(self.profile),
             "supervisor": "4.0.4", "K": 0, "M": 0,
         })
-        probe = self.processes.run("private-isolation", [self.tools / "phase2probe", "isolate", self.config_path, self.base], self.base)
+        probe = self.processes.run("private-isolation", [self.tools / "harnessprobe", "isolate", self.config_path, self.base], self.base)
         write_json(self.output / "resolved-isolation.json", probe.json())
-        self.parity = YAMLChecks(self.output / "yaml", self.processes, self.tools / "phase2probe", self.base, self.config).run()
+        self.parity = YAMLChecks(self.output / "yaml", self.processes, self.tools / "harnessprobe", self.base, self.config).run()
         for name, binary in (("pueue", self.pueue), ("pueued", self.pueued)):
             proc = self.processes.run(name + "-version", [binary, "-c", self.config_path, "--version"], self.base)
             require((proc.directory / "stdout").read_bytes() == (name + " 4.0.4\n").encode(), "unsupported native " + name)
@@ -284,7 +284,7 @@ class NativeSuite:
         require(not end.get("child_pid"), "unexpected child PID in native lifecycle")
         require(not (self.work / "DO_NOT_CREATE").exists(), "literal shell-looking argument was executed")
         provider_ref = read_json(self.task_dir / "provider.ref.json")
-        require(provider_ref["conversation_id"] == "phase2-" + self.task_id, "recorded provider session changed")
+        require(provider_ref["conversation_id"] == "supervisor-" + self.task_id, "recorded provider session changed")
 
     def validate_provider_waiting(self, expected_entry=None):
         records = self.base / "provider-records"

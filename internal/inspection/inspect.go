@@ -13,24 +13,42 @@ import (
 // stop capability, or sensitive output crosses into the provider adapter.
 func Inspect(scope execution.PreflightScope, definition provider.InspectionDefinition) (json.RawMessage, error) {
 	definition, _, err := definition.Snapshot()
-	if err != nil || scope.Authorize() != nil {
-		return nil, errNativeInspection
-	}
-	digest, err := provider.FingerprintExecutable(definition.Executable)
-	if err != nil || digest != definition.ExecutableSHA256 {
-		return nil, errNativeInspection
-	}
-	native, err := runNative(scope.Context(), definition, scope.Authorize, nativeHooks{})
 	if err != nil {
-		return nil, err
-	}
-	defer clear(native)
-	facts, err := runProjection(scope.Context(), definition, native)
-	if err != nil {
-		return nil, err
+		return nil, errNativeInspection
 	}
 	if scope.Authorize() != nil {
 		return nil, errNativeInspection
 	}
-	return facts, nil
+	var runtimeFacts *provider.RuntimeFacts
+	if definition.Runtime != nil {
+		facts, runtimeErr := InspectRuntime(scope, *definition.Runtime, definition.OutputLimit)
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		runtimeFacts = &facts
+	}
+	nativeEnabled := len(definition.Arguments) > 0 || definition.Project != nil || definition.Remote != nil
+	var nativeFacts json.RawMessage
+	if nativeEnabled {
+		digest, digestErr := provider.FingerprintExecutable(definition.Executable)
+		if digestErr != nil || digest != definition.ExecutableSHA256 {
+			return nil, errNativeInspection
+		}
+		native, nativeErr := runNative(scope.Context(), definition, scope.Authorize, nativeHooks{})
+		if nativeErr != nil {
+			return nil, nativeErr
+		}
+		defer clear(native)
+		nativeFacts, err = runProjection(scope.Context(), definition, native)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if scope.Authorize() != nil {
+		return nil, errNativeInspection
+	}
+	if runtimeFacts != nil {
+		return provider.EncodeInspectionFacts(*runtimeFacts, nativeFacts)
+	}
+	return nativeFacts, nil
 }

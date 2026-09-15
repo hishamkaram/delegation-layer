@@ -12,6 +12,7 @@ import (
 type profileEnvironment struct {
 	Home          string
 	ClaudeHome    string
+	RuntimeSHA256 string
 	Values        []string
 	WritableRoots []string
 }
@@ -35,7 +36,7 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 		return profileEnvironment{}, fmt.Errorf("%w: invalid Claude home", ErrUnsupportedProfile)
 	}
 	result := profileEnvironment{Home: home, ClaudeHome: claudeHome}
-	// The pinned runtime processes this explicit false value before its
+	// The restricted runtime processes this explicit false value before its
 	// first-pin-wins storage latch. Remote feature evaluation cannot repin it.
 	// OAuth retains the same native Keychain service/account.
 	result.Values = append(result.Values, storageBackendPin)
@@ -75,7 +76,7 @@ func parseEnvironment(values []string) (map[string]string, error) {
 		}
 		if strings.HasPrefix(key, "CLAUDE") || strings.HasPrefix(key, "ANTHROPIC") {
 			if key+"="+value != storageBackendPin {
-				return nil, fmt.Errorf("%w: alternate Claude environment selectors are uncertified", ErrUnsupportedProfile)
+				return nil, fmt.Errorf("%w: alternate Claude environment selectors are unsupported", ErrUnsupportedProfile)
 			}
 		}
 		entries[key] = value

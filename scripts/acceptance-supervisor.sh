@@ -15,12 +15,12 @@ if ! command -v python3 >/dev/null 2>&1; then
     echo "ERROR: Python 3 is required for finite supervisor acceptance." >&2
     exit 1
 fi
-mkdir -p "${REPO_ROOT}/bin/phase2-acceptance"
-ACCEPTANCE_OUTPUT="$(mktemp -d "${REPO_ROOT}/bin/phase2-acceptance/run.XXXXXX")"
+mkdir -p "${REPO_ROOT}/bin/supervisor-acceptance"
+ACCEPTANCE_OUTPUT="$(mktemp -d "${REPO_ROOT}/bin/supervisor-acceptance/run.XXXXXX")"
 export PYTHONDONTWRITEBYTECODE=1
-echo "Phase 2 acceptance evidence: ${ACCEPTANCE_OUTPUT}"
+echo "Supervisor acceptance evidence: ${ACCEPTANCE_OUTPUT}"
 python3 "${SCRIPT_DIR}/acceptance_supervisor_hermetic.py" \
-    --tools "${REPO_ROOT}/bin/phase2tools" --output "${ACCEPTANCE_OUTPUT}/hermetic"
+    --tools "${REPO_ROOT}/bin/harness-tools" --output "${ACCEPTANCE_OUTPUT}/hermetic"
 python3 "${SCRIPT_DIR}/acceptance_supervisor_native.py" \
-    --tools "${REPO_ROOT}/bin/phase2tools" --pueue "${PUEUE_TEST_CLIENT}" \
+    --tools "${REPO_ROOT}/bin/harness-tools" --pueue "${PUEUE_TEST_CLIENT}" \
     --pueued "${PUEUE_TEST_DAEMON}" --output "${ACCEPTANCE_OUTPUT}/native"

@@ -20,7 +20,7 @@ type WorkerObservationRecord struct {
 
 // RecordWorkerSuccess is called by the admission observer only after the bound
 // supervisor reports the exact worker ended successfully. A worker cannot
-// certify its own exit; result/completion records alone are insufficient.
+// prove its own exit; result/completion records alone are insufficient.
 func (o *Operation) RecordWorkerSuccess(id int64) error {
 	return o.RecordWorkerSuccessContext(context.Background(), id)
 }

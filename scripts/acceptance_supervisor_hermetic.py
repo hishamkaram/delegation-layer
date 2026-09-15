@@ -1,4 +1,4 @@
-"""Hermetic H acceptance for the Phase 2 supervisor and finite fixture.
+"""Hermetic supervisor acceptance for the finite provider fixture.
 
 The harness deliberately starts the compiled acceptance command and the
 compiled finite supervisor/provider as separate OS processes.  The fake
@@ -273,7 +273,7 @@ class Case:
         write_bytes(self.production_config, private_pueue_yaml(self.base))
         self.status_path = self.base / "status.json"
         write_json(self.status_path, status_document([]))
-        self.fake_config = self.supervisor_dir / "phase2-supervisor.json"
+        self.fake_config = self.supervisor_dir / "fake-supervisor.json"
         self.add_release = self.base / "add.release"
         self.kill_release = self.base / "kill.release"
         self.remove_release = self.base / "remove.release"
@@ -294,7 +294,7 @@ class Case:
         self.runner = copy_executable(tools / "delegate-run", self.bin_dir / "delegate-run")
         self.provider = copy_executable(tools / "provider", self.bin_dir / "provider")
         self.pueue = copy_executable(tools / "pueue-fake", self.supervisor_dir / "pueue-fake")
-        self.probe = canonical_executable(tools / "phase2probe")
+        self.probe = canonical_executable(tools / "harnessprobe")
 
     def _write_configs(self, scenario, hook):
         provider = {
@@ -302,7 +302,7 @@ class Case:
             "artifact_dir": str(self.provider_records),
             "lifetime_ms": int(self.provider_kwargs.pop("lifetime_ms", 250)),
             "task_id": self.task_id,
-            "session_id": "phase2-" + self.task_id,
+            "session_id": "supervisor-" + self.task_id,
             "argv": self.provider_kwargs.pop(
                 "argv",
                 ["literal argument", "$(touch DO_NOT_CREATE); 'quoted' \"double\""],
@@ -366,7 +366,7 @@ class Case:
             ],
             "hooks": hook_config,
         }
-        self.profile_config = self.bin_dir / "phase2-fixture.json"
+        self.profile_config = self.bin_dir / "provider-fixture.json"
         write_json(self.profile_config, profile)
         self.profile_settings = profile
 
@@ -1391,7 +1391,7 @@ class HermeticSuite:
         self.output = Path(output).resolve()
         self.output.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.results = []
-        for name in ("delegate", "delegate-run", "provider", "pueue-fake", "phase2probe"):
+        for name in ("delegate", "delegate-run", "provider", "pueue-fake", "harnessprobe"):
             canonical_executable(self.tools / name)
 
     def run_case(self, case_id, fn, **kwargs):
@@ -1423,13 +1423,13 @@ class HermeticSuite:
     def write_summary(self):
         summary = {
             "schema_version": 1,
-            "suite": "phase2-supervisor-hermetic",
+            "suite": "fake-supervisor-hermetic",
             "tools": {
                 name: {
                     "path": str(self.tools / name),
                     "sha256": digest(self.tools / name),
                 }
-                for name in ("delegate", "delegate-run", "provider", "pueue-fake", "phase2probe")
+                for name in ("delegate", "delegate-run", "provider", "pueue-fake", "harnessprobe")
             },
             "cases": self.results,
             "counts": {
@@ -1680,7 +1680,7 @@ def require_chain_provider_receipts(case, records):
 
 def run_session_chain(case, expect_session_block=False):
     """Exercise public A -> B -> C terminal continuation ownership."""
-    conversation = "phase2-chain-" + case.task_id
+    conversation = "supervisor-chain-" + case.task_id
     records = []
 
     record_a = case.configure_chain_task(

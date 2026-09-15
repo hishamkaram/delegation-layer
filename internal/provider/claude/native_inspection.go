@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	nativeInspectionRevision = "claude-2.1.270-native-oauth-policy-1"
+	nativeInspectionRevision = "claude-native-oauth-policy-v1"
 	nativeCredentialHelper   = "/usr/bin/security"
 	claudeSettingsEndpoint   = "https://api.anthropic.com/api/claude_code/settings"
 	refreshMargin            = 5 * time.Minute
@@ -45,7 +45,7 @@ func nativeInspection(environment profileEnvironment) (commonprovider.Inspection
 		Remote: &commonprovider.HTTPInspectionDefinition{
 			URL: claudeSettingsEndpoint,
 			Headers: map[string]string{
-				"anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-cli/2.1.270 (external, cli)",
+				"anthropic-beta": "oauth-2025-04-20", "User-Agent": "claude-cli (external, cli)",
 				"Cache-Control": "no-cache", "Pragma": "no-cache",
 			},
 			Authorization: nativePolicyAuthorization,

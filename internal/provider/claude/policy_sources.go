@@ -17,7 +17,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// Claude 2.1.270 resolves these machine-wide paths on macOS. The managed
+// Claude Code resolves these machine-wide paths on macOS. The managed
 // plist paths are intentionally kept as whole files: Claude reads their full
 // dictionaries through plutil, so a CFPreferences lookup is not equivalent.
 const (
@@ -51,16 +51,17 @@ const (
 type claudePolicySourceReader func(string) (commonprovider.SourceBytes, error)
 
 // resolvePolicySources inventories the policy files that can affect the
-// pinned restricted profile. User/project/local settings remain observed
-// because their presence is part of the admission evidence. The certified
-// strict MCP argv bypasses ordinary user/project/local MCP server loading;
+// fixed restricted profile. User/project/local settings remain observed
+// because their presence is part of the admission evidence. The strict MCP
+// argv bypasses ordinary user/project/local MCP server loading;
 // managed settings, managed MCP, and executable/auth controls remain active.
 //
-// The resolver never reads Keychain or credentials files. It records the
-// metadata-only absence of the direct plaintext OAuth fallback used after the
-// native Keychain lookup; any present fallback is refused. A present managed
-// plist/managed JSON source is refused because this pure resolver cannot
-// faithfully parse the native whole-document policy semantics.
+// The resolver never reads Keychain or credentials files. It records only the
+// metadata-only presence or absence of the direct plaintext OAuth fallback
+// used after the native Keychain lookup. Native inspection separately proves
+// the signed-in Keychain account before launch. A present managed plist/managed
+// JSON source is refused because this pure resolver cannot faithfully parse the
+// native whole-document policy semantics.
 func resolvePolicySources(request task.TaskRecord, environment profileEnvironment) ([]task.PolicySourceDigest, error) {
 	username, err := currentClaudeOSUsername()
 	if err != nil {
@@ -213,7 +214,7 @@ func (collector *claudePolicySourceCollector) addWorkspaceSources(ancestors []st
 	// Strict MCP mode selects only the task-owned empty --mcp-config input. We
 	// still inventory every native project .mcp.json candidate so its shape is
 	// covered by the policy digest, while its server values are deliberately
-	// ignored by the certified execution profile.
+	// ignored by the restricted execution profile.
 	for _, directory := range ancestors {
 		if err := collector.addJSON(filepath.Join(directory, ".mcp.json"), claudeProjectMCPKind, inspectClaudeMCP); err != nil {
 			return err
@@ -271,7 +272,7 @@ func validatePolicySourceInputs(request task.TaskRecord, environment profileEnvi
 	if err := validateRequest(request); err != nil {
 		return err
 	}
-	if err := validateCertifiedMCPArguments(request); err != nil {
+	if err := validateMCPArguments(request); err != nil {
 		return err
 	}
 	for name, path := range map[string]string{"home": environment.Home, "Claude home": environment.ClaudeHome} {
@@ -295,18 +296,18 @@ func validatePolicySourceInputs(request task.TaskRecord, environment profileEnvi
 	return nil
 }
 
-// validateCertifiedMCPArguments binds the source projection below to the
+// validateMCPArguments binds the source projection below to the
 // exact read-only Claude profile that passes --strict-mcp-config and supplies
 // a task-owned empty --mcp-config file. A future profile change must update
 // this gate before ordinary user/project MCP can be treated as bypassed.
-func validateCertifiedMCPArguments(request task.TaskRecord) error {
+func validateMCPArguments(request task.TaskRecord) error {
 	arguments, inputs, err := printArguments(request)
 	if err != nil {
 		return err
 	}
 	for _, flag := range []string{"--safe-mode", "--restricted", "--strict-mcp-config", "--no-chrome"} {
 		if !hasClaudeFlag(arguments, flag) {
-			return fmt.Errorf("%w: Claude policy inspection requires the certified strict MCP argv", ErrUnsupportedProfile)
+			return fmt.Errorf("%w: Claude policy inspection requires the strict MCP argv", ErrUnsupportedProfile)
 		}
 	}
 	mcpArgumentIndex := -1
@@ -320,7 +321,7 @@ func validateCertifiedMCPArguments(request task.TaskRecord) error {
 	} {
 		index := claudeFlagValueIndex(arguments, required.flag, required.value)
 		if index < 0 {
-			return fmt.Errorf("%w: Claude policy inspection requires the certified strict MCP argv", ErrUnsupportedProfile)
+			return fmt.Errorf("%w: Claude policy inspection requires the strict MCP argv", ErrUnsupportedProfile)
 		}
 		if required.flag == "--mcp-config" {
 			mcpArgumentIndex = index
@@ -402,11 +403,13 @@ func claudeAbsentSource(path, kind string) task.PolicySourceDigest {
 const claudePlaintextCredentialsFallbackKind = "claude-plaintext-credentials-fallback"
 
 // observeClaudePlaintextCredentialsFallback deliberately uses Lstat only.
-// Claude's pinned native path checks Keychain first and falls back to
+// Claude's native path checks Keychain first and falls back to
 // ~/.claude/.credentials.json; the fallback is an OAuth credential store, so
 // its contents must never be read, parsed, or hashed by policy inspection.
-// An absent path is useful evidence. Any present path, including a symlink or
-// non-regular entry, is an unsupported authentication source.
+// An absent path is useful evidence. A present path is recorded as an opaque
+// marker without opening it; the native helper remains the authority for the
+// account actually used by the CLI. This allows a normal signed-in account to
+// retain Claude's native fallback file without copying or exposing it.
 func observeClaudePlaintextCredentialsFallback(path string) (task.PolicySourceDigest, error) {
 	result := claudeAbsentSource(path, claudePlaintextCredentialsFallbackKind)
 	_, err := os.Lstat(path)
@@ -416,7 +419,11 @@ func observeClaudePlaintextCredentialsFallback(path string) (task.PolicySourceDi
 	if err != nil {
 		return result, fmt.Errorf("%w: direct Claude credentials fallback metadata is unavailable", ErrUnsupportedProfile)
 	}
-	return result, fmt.Errorf("%w: direct Claude credentials fallback is present and cannot be inspected", ErrUnsupportedProfile)
+	// Do not read, parse, or hash the credential bytes. The marker distinguishes
+	// presence from absence while remaining independent of secret contents.
+	result.Present = true
+	result.SHA256 = task.ComputeSHA256([]byte("present"))
+	return result, nil
 }
 
 type claudeJSONInspector func([]byte) ([]byte, error)
@@ -482,23 +489,40 @@ func inspectClaudeGlobalConfig(data []byte) ([]byte, error) {
 	return claudeJSONShape(root), nil
 }
 
-// claudeGlobalActiveView removes the native root skillUsage bookkeeping map
-// before running the policy checks. The map is persisted in the global
-// document, but native consumers use it only for usage counters; records may
-// therefore contain names that collide with active policy keys such as
-// allowedTools or managedMcpServers. Keeping this projection separate from
-// the original root preserves the complete key/type shape digest while
-// ensuring every active-state check applies the same scope rule. A nested
-// skillUsage field remains in the returned view and is checked normally.
+// claudeGlobalActiveView removes native bookkeeping and feature-cache
+// subtrees before running the policy checks. These maps are persisted in the
+// global document, but native consumers use them only for telemetry and
+// experiment evaluation; records may therefore contain names that collide
+// with active policy keys such as allowedTools or statusLine. Keeping this
+// projection separate from the original root preserves the complete key/type
+// shape digest while ensuring every active-state check applies the same scope
+// rule. A similarly named field nested under an active object remains visible
+// and is checked normally.
+var claudeGlobalInactiveRootKeys = map[string]struct{}{
+	"skillUsage":                 {},
+	"cachedGrowthBookFeatures":   {},
+	"cachedGrowthBookFeaturesAt": {},
+	"cachedExperimentFeatures":   {},
+	"cachedExperimentData":       {},
+}
+
 func claudeGlobalActiveView(root map[string]any) map[string]any {
-	if _, present := root["skillUsage"]; !present {
+	remove := false
+	for key := range root {
+		if _, inactive := claudeGlobalInactiveRootKeys[key]; inactive {
+			remove = true
+			break
+		}
+	}
+	if !remove {
 		return root
 	}
-	active := make(map[string]any, len(root)-1)
+	active := make(map[string]any, len(root)-len(claudeGlobalInactiveRootKeys))
 	for key, value := range root {
-		if key != "skillUsage" {
-			active[key] = value
+		if _, inactive := claudeGlobalInactiveRootKeys[key]; inactive {
+			continue
 		}
+		active[key] = value
 	}
 	return active
 }
@@ -508,9 +532,9 @@ func inspectClaudeSettings(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := rejectClaudeSettingsControls(root, true); err != nil {
-		return nil, err
-	}
+	// The restricted launch passes --safe-mode and --restricted and supplies
+	// task-owned settings, so user/project settings are inactive. Keep only a
+	// key/type shape for drift evidence while allowing native UX fields to evolve.
 	return claudeJSONShape(root), nil
 }
 
@@ -791,7 +815,7 @@ func walkClaudeJSONKeys(value any, visit func(string, []string) error) error {
 }
 
 // walkClaudeJSONKeysIgnoringOrdinaryMCP walks the global configuration while
-// omitting each ordinary mcpServers subtree. The pinned strict profile owns
+// omitting each ordinary mcpServers subtree. The fixed strict profile owns
 // the MCP config it loads, so server commands, env, and headers in these
 // native ordinary MCP maps are not active inputs for this invocation. Root
 // skillUsage bookkeeping is projected out once by claudeGlobalActiveView;

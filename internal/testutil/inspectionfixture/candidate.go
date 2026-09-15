@@ -11,7 +11,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/testutil/phase2cli"
+	"github.com/hishamkaram/delegation-layer/internal/testutil/harnesscli"
 )
 
 type helperOutput struct {
@@ -31,17 +31,17 @@ type effectiveBinding struct {
 	Facts              json.RawMessage `json:"facts"`
 }
 
-// NewDependencies composes the phase-two provider with the native inspection
-// candidate. The existing phase2cli profile factory remains the source of the
+// NewDependencies composes the finite provider with the native inspection
+// candidate. The existing harnesscli profile factory remains the source of the
 // ordinary finite provider plan and predicate.
 func NewDependencies() app.Dependencies { return NewDependenciesForExecutable("") }
 
 // NewDependenciesForExecutable composes a copied acceptance wrapper. The
-// phase2 event recorder is intentionally disabled here: inspection fixture
+// supervisor event recorder is intentionally disabled here: inspection fixture
 // wrappers have no recorder lifecycle of their own, and the pueue/execution
 // callbacks must not retain an unjoined recorder after this function returns.
 func NewDependenciesForExecutable(executable string) app.Dependencies {
-	main := phase2cli.NewMain(executable)
+	main := harnesscli.NewMain(executable)
 	deps := main.Dependencies()
 	prepare := deps.PrepareProfile
 	inspectionPath := filepath.Join(filepath.Dir(main.ConfigPath()), ConfigName)

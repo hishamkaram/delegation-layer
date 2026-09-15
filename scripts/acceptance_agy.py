@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Run the three-turn Antigravity native acceptance gate.
 
-This harness deliberately has a small process supervisor of its own.  It
-passes the caller's complete environment to the shipped commands, records
-only environment names, and never uses a timeout wrapper or a signal.  An
-observation timeout therefore leaves the Popen handle and all evidence in
-place for review.
+This harness deliberately has a small process supervisor of its own.  Its
+direct observations retain the caller's environment so the signed-in native
+CLI can be exercised, while the production adapter sends only its bounded
+allowlist through the queue.  The harness records only environment names and
+never uses a timeout wrapper or a signal.  An observation timeout therefore
+leaves the Popen handle and all evidence in place for review.
 """
 
 from __future__ import annotations
@@ -14,8 +15,8 @@ import argparse
 import json
 import os
 from pathlib import Path
-import platform
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -38,17 +39,14 @@ from acceptance_supervisor_common import config_for, digest, read_json, write_js
 
 PROVIDER = "antigravity:print"
 MODE = "workspace-write"
-PROVIDER_VERSION = "1.2.2"
 PREDICATE_VERSION = "1.2.2-auth2"
 PREDICATE_SHA256 = "53f1b5368023953447088ecbd4fc36c1b431b0fb376cf76511ed70d943d8138a"
-PROFILE_REVISION = "agy-1.2.2-darwin-arm64-workspace-write-3"
 TASK_BUDGET = "120s"
 CANONICAL_TASK_BUDGET = "2m0s"
 L3_NATIVE_TIMEOUT = "3s"
 WATCH_SECONDS = 150
 TIMEOUT_MARKER = b"[agy] print timeout"
 PUEUE_VERSION = "4.0.4"
-AGY_SHA256 = "cabadc15a61944372bede1fdff186701c17467dd9d718e97dc79283055d3c101"
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
@@ -193,7 +191,7 @@ class OwnedProcess:
             "executable_sha256": digest(executable),
             "environment_keys": sorted(self.env),
             "environment_values_in_record": False,
-            "full_environment_preserved": True,
+            "harness_environment_preserved": True,
             "stdin": "PIPE" if stdin is not None else "DEVNULL",
             "stdin_bytes": len(stdin) if stdin is not None else 0,
             "stdin_sha256": sha(stdin) if stdin is not None else None,
@@ -525,7 +523,7 @@ def selected_pueued(default: Path) -> Path:
 
 
 def selected_tools(repo: Path) -> Path:
-    return resolve_executable(os.environ.get("DELEGATE_PHASE2TOOLS"), repo / "bin" / "phase2tools" / "phase2probe", "phase2probe")
+    return resolve_executable(os.environ.get("DELEGATE_HARNESS_TOOLS"), repo / "bin" / "harness-tools" / "harnessprobe", "harnessprobe")
 
 
 def parse_json_output(process: OwnedProcess, label: str) -> dict[str, object]:
@@ -600,6 +598,10 @@ class NativeRun:
         self.daemon_ready_empty = False
         self.processed_turns = 0
         self.dispatch_attempts: set[str] = set()
+        # Every admitted candidate creates one supervised runtime inspection
+        # row.  Keep those rows in the final queue proof, including an
+        # inspection created by a continuation that is later refused as busy.
+        self.inspection_attempts: set[str] = set()
         self.l1_snapshot: dict[str, dict[str, object]] | None = None
         self.l1_conversation: str | None = None
         self.l1_nonce: str | None = None
@@ -615,9 +617,9 @@ class NativeRun:
         self.probe = selected_tools(REPO_ROOT)
         require_discovery("agy", self.agy)
         require_discovery("pueue", self.pueue)
-        require(platform.system() == "Darwin" and platform.machine() in {"arm64", "aarch64"},
-                f"acceptance-agy unsupported runtime: {platform.system()}/{platform.machine()} (Linux is a named failure)")
-        require(digest(self.agy) == AGY_SHA256, "agy executable hash does not match inspected 1.2.2 binary")
+        self.provider_version: str | None = None
+        self.provider_sha256 = digest(self.agy)
+        self.profile_revision: str | None = None
         self.output.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.processes = ProcessBook(output / "processes", self.environment)
 
@@ -637,7 +639,8 @@ class NativeRun:
         write_json(self.pueue_config, config_for(self.pueue_base))
         self.processes.run("agy-version", [str(self.agy), "--version"], REPO_ROOT, timeout=15)
         version = self.processes.entries[-1].output().decode().strip()
-        require(version == PROVIDER_VERSION, f"unexpected agy version: {version!r}")
+        require(version, "agy returned an empty version")
+        self.provider_version = version
         self.processes.run("pueue-version", pueue_command(self.pueue, self.pueue_config, "--version"), REPO_ROOT, timeout=15)
         self.processes.run("pueued-version", [str(self.pueued), "-c", str(self.pueue_config), "--version"], REPO_ROOT, timeout=15)
         pueue_version = self.processes.entries[-2].output().decode().strip()
@@ -646,7 +649,7 @@ class NativeRun:
         require(pueued_version == f"pueued {PUEUE_VERSION}", f"unexpected pueued version: {pueued_version!r}")
         self.processes.run("isolation-probe", [str(self.probe), "isolate", str(self.pueue_config), str(self.pueue_base)], REPO_ROOT, timeout=30)
         write_json(self.output / "binding.json", {
-            "agy": str(self.agy), "agy_version": PROVIDER_VERSION, "agy_sha256": digest(self.agy),
+            "agy": str(self.agy), "agy_version": self.provider_version, "agy_sha256": self.provider_sha256,
             "pueue": str(self.pueue), "pueue_sha256": digest(self.pueue),
             "pueued": str(self.pueued), "pueued_sha256": digest(self.pueued),
             "pueue_version": PUEUE_VERSION, "pueued_version": PUEUE_VERSION,
@@ -693,6 +696,7 @@ class NativeRun:
             argv.extend(["--resume-task", resume])
         no_prompt_argv(argv, [brief])
         self.dispatch_attempts.add(task)
+        self.inspection_attempts.add(task)
         process = self.direct(name, argv, timeout=45)
         response = parse_json_output(process, name)
         require(response.get("admission") == "admitted", f"{name} was not admitted: {response}")
@@ -800,7 +804,7 @@ class NativeRun:
                 f"{name} provider.started evidence identity mismatch")
         meta = self.read_record(task, "meta.json")
         require(meta.get("provider_executable") == str(self.agy), f"{name} provider executable drifted")
-        require(meta.get("provider_version") == PROVIDER_VERSION, f"{name} provider version drifted")
+        require(meta.get("provider_version") == self.provider_version, f"{name} provider version drifted")
         meta_supervisor = meta.get("supervisor_config")
         require(meta_supervisor == supervisor, f"{name} meta supervisor binding differs from submit evidence")
         predicate = meta.get("predicate")
@@ -812,9 +816,15 @@ class NativeRun:
                 isinstance(effective.get("digest"), str) and effective.get("digest"),
                 f"{name} effective policy is absent")
         policy = effective.get("policy")
-        require(isinstance(policy, dict) and policy.get("profile_revision") == PROFILE_REVISION and
-                policy.get("runtime_sha256") == AGY_SHA256 and policy.get("workspace") == str(self.prepared.workspace),
+        require(isinstance(policy, dict) and policy.get("workspace") == str(self.prepared.workspace) and
+                policy.get("runtime_sha256") == self.provider_sha256,
                 f"{name} effective policy binding mismatch")
+        profile_revision = policy.get("profile_revision")
+        require(isinstance(profile_revision, str) and profile_revision,
+                f"{name} effective policy revision is absent")
+        if self.profile_revision is None:
+            self.profile_revision = profile_revision
+        require(profile_revision == self.profile_revision, f"{name} effective policy revision drifted")
         writable_roots = policy.get("writable_roots")
         expected_roots = [str(root) for root in provider_runtime_roots(self.environment)]
         require(writable_roots == expected_roots, f"{name} persisted writable runtime roots differ from the inherited environment")
@@ -917,6 +927,7 @@ class NativeRun:
                 "--brief", str(brief), "--cwd", str(self.prepared.workspace), "--permission", MODE,
                 "--budget", TASK_BUDGET, "--resume-task", self.prepared.ids["L1"]]
         self.dispatch_attempts.add(refused_task)
+        self.inspection_attempts.add(refused_task)
         process = self.direct("busy-refusal", argv, expected=1, timeout=45)
         response = parse_json_output(process, "busy-refusal")
         require("session continuation busy" in response.get("error", ""), "overlapping continuation was not refused as busy")
@@ -1065,12 +1076,26 @@ class NativeRun:
         require(self.pueue_config is not None, "pueue is not configured")
         final = self.status("final-status")
         tasks = final.get("tasks")
-        require(isinstance(tasks, dict) and len(tasks) == 3 + len(self.nonprovider_tasks), "private pueue queue has an unexpected job count")
+        require(isinstance(tasks, dict), "private pueue queue has no tasks object")
+        ordinary = {key: row for key, row in tasks.items()
+                    if isinstance(row, dict) and row.get("group") == "default"}
+        inspection = {key: row for key, row in tasks.items()
+                      if isinstance(row, dict) and row.get("group") != "default"}
+        require(len(ordinary) == len(self.task_numbers),
+                "private pueue queue has an unexpected ordinary job count")
+        expected_inspections = self._inspection_records()
+        require(len(inspection) == len(expected_inspections),
+                "private pueue queue has an unexpected inspection job count")
         for task, number in self.task_numbers.items():
             row = status_row(final, number)
             require(row is not None, f"final private pueue status lost {task}")
             validate_queue_row(row, self.labels[task], self.runner, self.prepared.state, task)
             require(row_state(row) == "Done", f"private pueue job {task} was not positively observed Done")
+        for task, record in expected_inspections.items():
+            number = record["receipt"]["numeric_task_id"]
+            row = status_row(final, number)
+            require(row is not None, f"final private pueue status lost inspection {task}")
+            self._validate_inspection_queue_row(row, record)
         self.final_queue = final
         pending = self.processes.pending(exclude=(self.daemon,) if self.daemon is not None else ())
         require(not pending, f"owned command remains pending at supervisor shutdown: {pending}")
@@ -1148,8 +1173,32 @@ class NativeRun:
 
     def failure_queue_finished(self, value: dict[str, object]) -> bool:
         tasks = value["tasks"]
+        if not isinstance(tasks, dict):
+            return False
+        try:
+            expected_inspections = self._inspection_records() if hasattr(self, "prepared") else {}
+        except (AcceptanceFailure, OSError, ValueError, TypeError, KeyError):
+            return False
+        ordinary_rows = [row for row in tasks.values()
+                         if isinstance(row, dict) and row.get("group") == "default"]
+        inspection_rows = [row for row in tasks.values()
+                           if isinstance(row, dict) and row.get("group") != "default"]
+        if expected_inspections:
+            if len(inspection_rows) != len(expected_inspections):
+                return False
+            by_label = {row.get("label"): row for row in inspection_rows}
+            for record in expected_inspections.values():
+                row = by_label.get(record["request"].get("label"))
+                if not isinstance(row, dict):
+                    return False
+                try:
+                    self._validate_inspection_queue_row(row, record)
+                except (AcceptanceFailure, KeyError, TypeError, ValueError):
+                    return False
+        elif inspection_rows:
+            return False
         seen = set()
-        for row in tasks.values():
+        for row in ordinary_rows:
             if not isinstance(row, dict) or row_state(row) != "Done":
                 return False
             label = row.get("label", "")
@@ -1165,6 +1214,54 @@ class NativeRun:
                 return False
             seen.add(task)
         return seen == self.dispatch_attempts
+
+    def _inspection_records(self) -> dict[str, dict[str, object]]:
+        """Load the immutable request/receipt pair for each runtime probe."""
+        parent = self.prepared.state / "inspections"
+        if not parent.is_dir():
+            return {}
+        records: dict[str, dict[str, object]] = {}
+        for directory in sorted(parent.iterdir()):
+            if not directory.is_dir() or directory.is_symlink():
+                continue
+            task = directory.name
+            request = read_json(directory / "request.json")
+            receipt = read_json(directory / "receipt.json")
+            require(isinstance(request, dict) and isinstance(receipt, dict),
+                    f"inspection record {task} is malformed")
+            records[task] = {"request": request, "receipt": receipt}
+        expected = getattr(self, "inspection_attempts", set())
+        require(not expected or set(records) == expected,
+                "runtime inspection records do not match admitted attempts")
+        return records
+
+    def _validate_inspection_queue_row(self, row: dict[str, object], record: dict[str, object]) -> None:
+        request = record["request"]
+        receipt = record["receipt"]
+        require(isinstance(request, dict) and isinstance(receipt, dict),
+                "inspection record is malformed")
+        task = request.get("task_id")
+        label = request.get("label")
+        group = request.get("group")
+        number = receipt.get("numeric_task_id")
+        require(isinstance(task, str) and isinstance(label, str) and isinstance(group, str) and
+                type(number) is int and number >= 0, "inspection identity is malformed")
+        require(row.get("id") == number and row.get("label") == label and row.get("group") == group,
+                f"inspection queue identity mismatch for {task}")
+        require(row_state(row) == "Done", f"inspection worker is not Done for {task}")
+        done = row.get("status")
+        require(isinstance(done, dict) and isinstance(done.get("Done"), dict) and
+                done["Done"].get("result") == "Success",
+                f"inspection worker did not succeed for {task}")
+        expected = [str(self.runner), "--inspection", "--root", str(self.prepared.state), task]
+        for key in ("original_command", "command"):
+            command = row.get(key)
+            require(isinstance(command, str), f"inspection queue row missing {key} for {task}")
+            try:
+                parsed = shlex.split(command)
+            except ValueError as error:
+                raise AcceptanceFailure(f"inspection queue argv is malformed for {task}") from error
+            require(parsed == expected, f"inspection queue argv mismatch for {task}")
 
     def verify_queue_and_write_success(self) -> None:
         require(self.daemon_done, "private supervisor was not positively shut down")
@@ -1253,9 +1350,6 @@ def failure_receipt(output: Path | None, error: BaseException, run: NativeRun | 
 def main(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if platform.system() != "Darwin" or platform.machine() not in {"arm64", "aarch64"}:
-        print(f"FAIL acceptance-agy: unsupported runtime {platform.system()}/{platform.machine()} (Linux is a named failure)", file=sys.stderr)
-        return 2
     prepared: Prepared | None = None
     output: Path | None = None
     run: NativeRun | None = None

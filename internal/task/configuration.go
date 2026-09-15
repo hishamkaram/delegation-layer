@@ -225,7 +225,7 @@ func validateSessionFields(provider, timestamp string) error {
 	return validateTimestamp(timestamp)
 }
 
-// ValidateFreshSupervisorRef requires the complete Phase2 binding without reading
+// ValidateFreshSupervisorRef requires the complete Supervisor binding without reading
 // external files. The pueue boundary verifies actual executable/configuration bytes.
 func ValidateFreshSupervisorRef(ref SupervisorRef) error {
 	if err := ValidateSupervisorRef(ref); err != nil {

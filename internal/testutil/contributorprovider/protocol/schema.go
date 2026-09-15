@@ -1,7 +1,7 @@
 // Package protocol defines the synthetic contributor-proof wire and fixture
 // configuration schema. It imports no application, task, provider, or
-// certification code so the fixture executable cannot depend on its future
-// catalog registration.
+// registration code so the fixture executable stays independent of the
+// catalog and adapter implementation.
 package protocol
 
 const (

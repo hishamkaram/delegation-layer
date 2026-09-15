@@ -4,13 +4,13 @@ Authorized 2026-09-14. This is the normative provider-redesign amendment linked 
 
 ## Scope and architecture
 
-Use a compiled catalog with narrow consumer-owned interfaces. An adapter supplies description (ID, supported request options, certified profiles), preparation (existing execution plan, effective policy, observed version, writable roots, identity-observer factory), and all immutable interpreter revisions. Move shared preparation types below app to avoid imports from providers into orchestration. Reuse existing task/execution/predicate value types; do not introduce parallel result, usage or lifecycle models.
+Use a compiled catalog with narrow consumer-owned interfaces. An adapter supplies description (ID, supported request options, runtime capability profiles), preparation (existing execution plan, effective policy, observed version, writable roots, identity-observer factory), and all immutable interpreter revisions. Move shared preparation types below app to avoid imports from providers into orchestration. Reuse existing task/execution/predicate value types; do not introduce parallel result, usage or lifecycle models.
 
 Construct one explicit catalog at startup, without init registration or mutable globals. Derive launch selection, capability validation and interpreter lookup from it. Duplicate provider IDs or exact predicate references fail construction. Structural validation stays in task/config; provider capability validation occurs before admission. Preserve existing normalization and persisted requests, including agy native-timeout >0 and <= outer budget; other providers do not advertise this option. Explicit unsupported model/effort requests must not be silently dropped.
 
 Providers own native argument construction, configuration precedence, identity semantics and output interpretation. The core retains admission, claims, scheduling, process execution, deadlines, pipes, capture, sealing and publication. Preparation does not launch; interpretation receives only sealed evidence and a result writer. Preserve preflight immediately before Start, at-most-once launch and observational collection. Historical predicates remain registered independently of whether a current executable is available; semantics changes require a new revision.
 
-Add `delegate providers --json`: schema_version 1, providers sorted by ID, supported request options and certified profile/version/platform metadata. It describes compiled support, makes no host-ready claim and performs no provider/auth probe. Preserve existing provider IDs and native login flows. No arbitrary executable loading, dynamic plugins, universal DSL, ACP migration, SDK replacement, event bus, parser rewrite, permission expansion, automatic fallback or paid retry.
+Add `delegate providers --json`: schema_version 1, providers sorted by ID, supported modes/options, and runtime help compatibility. It describes compiled support, makes no host-ready claim and performs no provider/auth probe. Preserve existing provider IDs and native login flows. No arbitrary executable loading, dynamic plugins, universal DSL, ACP migration, SDK replacement, event bus, parser rewrite, permission expansion, automatic fallback or paid retry.
 
 ## Delivery handoffs
 
@@ -23,16 +23,16 @@ Each row is one implementation PR with root review, direct Codex CLI review, exa
 | Contributor proof | Extract demonstrated shared mechanics and acceptance orchestration; synthetic provider using the normal catalog in acceptance binaries; guide exercise | Provider module + fixtures + one registration only; no app/task/storage/execution/supervisor/publication edits; real isolated pueue success/failure/identity/replay; concrete Codex/Claude cases fit |
 | Codex / Phase 4 | Read-only native module, versioned JSONL interpretation and policy, exact resume, acceptance-codex | Existing Phase 4 fixtures and two bounded native turns |
 | Claude / Phase 5 | Restricted read/search native module, managed policy checks, final-result interpretation, exact resume, acceptance-claude | Existing Phase 5 fixtures and two bounded native turns |
-| Integrated verification | Sequential acceptance-providers target; capability/docs reconciliation; contributor and replay verification | Full seven-turn native suite, all matrix rows resolved, maintainability review, CI and merge receipt |
+| Integrated verification | Sequential acceptance-providers target; capability/docs reconciliation; contributor and replay verification | Full seven-turn native suite, all capability rows resolved, maintainability review, CI and merge receipt |
 
-The [contributor acceptance checklist](PROVIDER-CONTRIBUTION-ACCEPTANCE.md) records the required boundary, compatibility and executable proof. The contributor proof blocks further integrations if it needs provider-specific core exceptions. Fix the boundary and repeat the proof, rather than adding a workaround. Shared extraction must be supported by actual reuse; retain provider source-discovery/precedence and success semantics locally. Do not copy lifecycle/certification/harness logic. The synthetic provider is test-only, never part of production discovery. The implementer must use add-an-adapter and fix missing instructions exposed by the exercise. Map actual Codex and Claude cases onto the contract before accepting it.
+The [contributor acceptance checklist](PROVIDER-CONTRIBUTION-ACCEPTANCE.md) records the required boundary, compatibility and executable proof. The contributor proof blocks further integrations if it needs provider-specific core exceptions. Fix the boundary and repeat the proof, rather than adding a workaround. Shared extraction must be supported by actual reuse; retain provider source-discovery/precedence and success semantics locally. Do not copy lifecycle/capability-check/harness logic. The synthetic provider is test-only, never part of production discovery. The implementer must use add-an-adapter and fix missing instructions exposed by the exercise. Map actual Codex and Claude cases onto the contract before accepting it.
 
 ## Contributor-proof artifact boundary
 
 The contributor handoff includes the shared extra-output capability needed by
 the existing Codex recipe. A typed output declaration identifies a safe logical
 name and a reserved argv index; it is not a path/template language. Bind these
-declarations and the certified writer-completion contract into immutable task
+declarations and the declared writer-completion contract into immutable task
 metadata. Bounded non-secret input-file declarations similarly bind exact content
 and reserved argv slots; the core creates their regular configuration files.
 The core supplies task-local staging paths and owns import, sync,
@@ -43,15 +43,15 @@ Use separate create-once native staging and final raw evidence. A present empty
 or conflicting file remains evidence; an absent optional file is distinguishable
 from a read or validation fault. Replays read only the sealed manifest and never
 need the current executable, staging file, or launch profile. Additional artifact
-writers require version-scoped certification of completion at process exit/EOF;
+writers require the declared completion contract at process exit/EOF;
 file existence or a stable snapshot alone cannot prove an arbitrary writer ended.
 
 Freeze this generic baseline before adding a new synthetic provider. Its module,
 fixtures and single test-only registration must then exercise present output,
 absence/stdout fallback, conflict, identity, continuation and replay without
-provider-specific core edits. The existing phase2 fixture alone does not count
+provider-specific core edits. The existing supervisor fixture alone does not count
 as a new contributor exercise. Real Codex/Claude integrations remain subsequent
-handoffs; mapping their concrete cases here does not claim native certification.
+handoffs; mapping their concrete cases here does not claim a live native run.
 
 ## Engineering guidance
 
@@ -71,8 +71,8 @@ The rows name required scenarios, not claims that tests have already passed. Eac
 | catalog | Registration, discovery, unsupported options | Duplicate IDs/references; deterministic JSON; errors/writer failures; no admission | Shipped providers command and rejected dispatch, zero provider launches | Planned |
 | preparation | Argv, stdin, policy, identity and drift | Fresh/resume argv; finite input; source conflicts; binary/config drift | Native probes through dispatcher/runner; controlled prestart drift fixture | Planned |
 | agy | Existing write profile, denial, timeout and resume | Existing versioned envelope/policy/usage regressions unchanged | Existing three-turn acceptance-agy, real workspace positive control and outside denial | Reverification required after refactor |
-| codex | Read-only, completed turn, exact resume | Commentary/final/retry/failure/JSONL EOF/output-file conflict fixtures | Two-turn acceptance-codex; reads work, writes denied, exact thread | Accepted in PR #8 for pinned 0.154.0 profile 2; main CI passed |
-| claude | Restricted reads, managed policy, final result, resume | Result/error/truncation/init tools/session/accounting fixtures | Two-turn acceptance-claude; reads/search work, forbidden effects absent | In progress; [candidate and policy evidence](CLAUDE-ACCEPTANCE.md), certification Pending |
+| codex | Read-only, completed turn, exact resume | Commentary/final/retry/failure/JSONL EOF/output-file conflict fixtures | Two-turn acceptance-codex; reads work, writes denied, exact thread | Accepted in PR #8; main CI passed |
+| claude | Restricted reads, managed policy, final result, resume | Result/error/truncation/init tools/session/accounting fixtures | Two-turn acceptance-claude; reads/search work, forbidden effects absent | Implemented; [runtime safety evidence](CLAUDE-ACCEPTANCE.md), live acceptance passed; review/merge pending |
 | evidence | Malformed, conflicting or missing completion | Parser bounds, duplicate critical fields, exit conflicts, blank answer, writer failure | Controlled fake provider errors through real runner; raw sealed before collection | Existing core gates plus adapter extensions |
 | lifecycle | Admission, stop/deadline, unknown termination | Permit/claim/race/unknown-state regressions | Protocol and supervisor acceptance; no duplicate launch or fabricated terminal state | Existing gates retained |
 | replay | Historical identity/outcomes and zero paid collection | Old predicates; current binary unavailable; nullable usage; cumulative scope | Repeated collect on every native task; unchanged predecessor outcome | Required for each adapter |
@@ -83,9 +83,9 @@ The rows name required scenarios, not claims that tests have already passed. Eac
 
 Runtime handoffs run make check, make acceptance-protocol and make acceptance-supervisor; guidance-only handoff runs make check and its dedicated tooling tests. Run affected native gates after behavior stabilizes. Final integration runs acceptance-providers sequentially, stopping on failure. Existing named provider specifications remain authoritative for exact flags/envelopes/configuration and positive/negative controls.
 
-Use 120s task budgets, 150s acceptance watch and agy's prescribed short native timeout. Missing binary/auth/config/certification, inconclusive positive controls, absent receipts or an unknown task at watch expiry are blocked/failed acceptance, never a passing skip. Keep exact task handles; no automatic paid retries, direct signals or global configuration changes. Inspect filesystem/tool evidence rather than trusting prose claims of success or denial.
+Use 120s task budgets, 150s acceptance watch and agy's prescribed short native timeout. Missing binary/auth/configuration, inconclusive positive controls, absent receipts or an unknown task at watch expiry are blocked/failed acceptance, never a passing skip. Keep exact task handles; no automatic paid retries, direct signals or global configuration changes. Inspect filesystem/tool evidence rather than trusting prose claims of success or denial.
 
-Record commit, built binary digests, provider version/platform/profile, commands, task/session identities, expected/actual observations and artifact digests. Keep raw private logs outside git, sanitized fixtures/receipts only. Launch/policy/interpretation/certification/assertion changes invalidate affected evidence; documentation-only changes do not force paid reruns. Use purpose-based names in commit-identified artifact directories, never review-round filenames.
+Record the observed provider version and executable digest, runtime profile, commands, task/session identities, expected/actual observations and artifact digests. These values document a run and are never release gates. Keep raw private logs outside git, sanitized fixtures/receipts only. Launch/policy/interpretation/capability/assertion changes invalidate affected evidence; documentation-only changes do not force paid reruns. Use purpose-based names in commit-identified artifact directories, never review-round filenames.
 
 ## Handoff and review templates
 

@@ -12,14 +12,14 @@ import (
 var ErrUnsupportedProfile = errors.New("unsupported-effective-config")
 
 // printArguments constructs the fixed stdin profile. It does not itself grant
-// launch authority: executable, policy sources, certification, environment,
+// launch authority: executable, policy sources, environment,
 // workspace, and state placement must be validated by the profile resolver.
 func printArguments(request task.TaskRecord) ([]string, error) {
 	if request.Provider != Provider || request.Mode != Mode || request.RequestedConfig.Permission != Mode {
 		return nil, fmt.Errorf("%w: antigravity requires workspace-write", ErrUnsupportedProfile)
 	}
 	if request.RequestedConfig.Model != "" || (request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default") {
-		return nil, fmt.Errorf("%w: model or effort combination has not been certified", ErrUnsupportedProfile)
+		return nil, fmt.Errorf("%w: model or effort combination is unsupported", ErrUnsupportedProfile)
 	}
 	if request.BudgetNanos <= 0 {
 		return nil, fmt.Errorf("%w: print timeout must be positive", ErrUnsupportedProfile)

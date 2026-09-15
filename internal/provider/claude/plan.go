@@ -29,8 +29,8 @@ func printArguments(request task.TaskRecord) ([]string, []task.InputFile, error)
 		"--disable-slash-commands", "--no-chrome",
 	}
 	inputs := []task.InputFile{
-		{Name: "empty-mcp.json", ArgumentIndex: 14, Content: emptyMCPSettings},
 		{Name: "claude-profile.json", ArgumentIndex: 16, Content: profileSettings},
+		{Name: "empty-mcp.json", ArgumentIndex: 14, Content: emptyMCPSettings},
 	}
 	if prior := request.PriorSession; prior != nil {
 		if prior.Provider != Provider || !validSessionID(prior.ConversationID) || task.ValidateTaskID(prior.PredecessorTaskID) != nil {
@@ -50,7 +50,7 @@ func validateRequest(request task.TaskRecord) error {
 		return fmt.Errorf("%w: Claude requires read-only permission", ErrUnsupportedProfile)
 	}
 	if request.RequestedConfig.Model != "" || (request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default") || request.RequestedConfig.NativeTimeout != "" {
-		return fmt.Errorf("%w: only provider-default model and effort are certified", ErrUnsupportedProfile)
+		return fmt.Errorf("%w: only provider-default model and effort are supported", ErrUnsupportedProfile)
 	}
 	if request.BudgetNanos <= 0 || request.BriefLength <= 0 || request.BriefLength > task.MaxBriefSize {
 		return fmt.Errorf("%w: finite brief and positive budget are required", ErrUnsupportedProfile)

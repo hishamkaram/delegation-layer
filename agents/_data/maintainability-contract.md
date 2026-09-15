@@ -11,8 +11,8 @@ skills.
 
 - The core owns task admission, claims, scheduling, process execution,
   deadlines, pipes, output capture, sealing, collection, and publication.
-- An adapter owns its immutable identity, supported request options, certified
-  profile, native argument/configuration preparation, identity semantics, and
+- An adapter owns its immutable identity, supported request options, runtime
+  capability profile, native argument/configuration preparation, identity semantics, and
   versioned interpretation of sealed provider evidence. It never owns pipes,
   capture, sealing, processes, stopping, or publication.
 - Interfaces belong to the consumer that needs them. Keep each interface
@@ -31,7 +31,7 @@ For every substantial change or review, record evidence about:
 1. ownership and resource lifetimes, including cleanup and failure paths;
 2. dependency direction and whether a new dependency is necessary;
 3. the interface owner and whether the boundary is real and narrow;
-4. duplicated lifecycle, certification, parser, or acceptance-harness logic;
+4. duplicated lifecycle, capability-check, parser, or acceptance-harness logic;
 5. error context, compatibility behavior, and accidental secret exposure; and
 6. contributor effort, including whether the documented path is discoverable
    and repeatable.
@@ -51,7 +51,7 @@ established by the authoritative outcome record and its evidence, not by an
 assumption that the payload is empty.
 
 Use meaningful tests for observable behavior, error branches, writer failures,
-boundaries, and compatibility. Do not copy lifecycle or certification tests
+boundaries, and compatibility. Do not copy lifecycle or capability-check tests
 into every provider. Keep provider interpretation pure over sealed evidence and
 keep acceptance orchestration in the shipped dispatcher/runner and shared
 harness.

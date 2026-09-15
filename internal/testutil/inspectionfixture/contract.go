@@ -1,5 +1,5 @@
 // Package inspectionfixture provides the hermetic native-inspection fixture
-// used by the acceptance harness.  It composes the existing phase-two
+// used by the acceptance harness.  It composes the existing finite
 // provider and command wrappers; the helper below is the only native command
 // added by this fixture.
 package inspectionfixture
@@ -285,7 +285,7 @@ func writeAll(writer io.Writer, data []byte) error {
 }
 
 // ConfigPathForExecutable returns the canonical sibling inspection config
-// path. Empty executable selects the current process, matching phase2cli.
+// path. Empty executable selects the current process, matching harnesscli.
 func ConfigPathForExecutable(executable string) (string, error) {
 	if executable == "" {
 		var err error

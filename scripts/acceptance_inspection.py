@@ -299,14 +299,14 @@ class InspectionAcceptance:
             "task_id": task_id, "session_id": "inspection-" + task_id, "argv": [],
             "answer": "inspection-fixture-result",
         })
-        write_json(self.bindir / "phase2-fixture.json", {
+        write_json(self.bindir / "provider-fixture.json", {
             "schema_version": 1, "provider_executable": str(self.provider),
             "provider_sha256": digest(self.provider), "provider_config": str(provider_config),
             "provider_config_sha256": digest(provider_config), "supervisor_executable": str(self.pueue),
             "events_directory": str(self.events),
             "environment": [key + "=" + value for key, value in sorted(self.environment.items())],
             "hooks": {"mode": "normal", "delay_ms": 0},
-        }, replace=(self.bindir / "phase2-fixture.json").exists())
+        }, replace=(self.bindir / "provider-fixture.json").exists())
         helper_config = self.inputs / (name + "-helper.json")
         write_json(helper_config, {"schema_version": 1, "artifact_dir": str(markers),
                                    "sentinel_path": str(self.sentinel_file), "delay_ms": delay_ms,

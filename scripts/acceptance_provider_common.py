@@ -88,7 +88,7 @@ class AcceptanceFailure(RuntimeError):
 def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     """Decode objects with no exact or Go SimpleFold-equivalent duplicate keys.
 
-    Go's pinned provider decoders reject aliases such as ``session_id`` and
+    Go's registered provider decoders reject aliases such as ``session_id`` and
     ``Session_ID`` at every nesting level.  This uses the minimum rune from
     each Go ``unicode.SimpleFold`` cycle, rather than Python's full Unicode
     casefold, so multi-rune folds such as ``ß`` → ``ss`` remain distinct.

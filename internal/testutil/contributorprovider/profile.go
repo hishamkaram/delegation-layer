@@ -1,17 +1,19 @@
 package contributorprovider
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/testutil/contributorprovider/fixture"
 	"github.com/hishamkaram/delegation-layer/internal/testutil/contributorprovider/protocol"
 )
 
@@ -23,39 +25,85 @@ type runtimeIdentity struct {
 	Executable string
 	Version    string
 	SHA256     string
-	OS         string
-	Arch       string
 }
 
 type prepareDependencies struct {
-	Identity      runtimeIdentity
-	RuntimeDir    string
-	Certification certificationRecord
+	Identity   runtimeIdentity
+	RuntimeDir string
 }
 
-// Prepare resolves the certified fixture executable and the explicitly
-// configured private runtime directory. It performs no process, supervisor,
+// PrepareCandidate performs static fixture preparation and describes the
+// shared supervised capability check. The provider executable is discovered
+// and fingerprinted here; its version and help output are observed by the
+// inspection worker immediately before launch.
+func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	if err := validatePreparationRequest(request); err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	identity, err := resolveRuntime(request.CanonicalCwd)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	if err = validateStaticIdentity(identity); err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	runtimeDir, err := resolveRuntimeDirectory()
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	if pathsOverlap(request.CanonicalCwd, runtimeDir) {
+		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: contributor runtime must be outside the workspace", ErrUnsupportedProfile)
+	}
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(
+		commonprovider.CLIInfo{Path: identity.Executable, SHA256: identity.SHA256},
+		request.CanonicalCwd,
+		[]string{},
+		RuntimeRequirements(),
+	)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
+	}
+	return commonprovider.ProfileCandidate{
+		Directory:     request.CanonicalCwd,
+		WritableRoots: []string{runtimeDir},
+		Inspection:    &definition,
+		Finalize: func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
+			facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
+			if decodeErr != nil || facts.Runtime == nil || facts.Native != nil {
+				return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
+			}
+			observed := facts.Runtime
+			if observed.Executable != identity.Executable || observed.SHA256 != identity.SHA256 {
+				return commonprovider.PreparedProfile{}, fmt.Errorf("%w: runtime executable changed during inspection", ErrUnsupportedProfile)
+			}
+			return prepareWithDependencies(request, prepareDependencies{
+				Identity:   runtimeIdentity{Executable: observed.Executable, Version: observed.Version, SHA256: observed.SHA256},
+				RuntimeDir: runtimeDir,
+			})
+		},
+	}, nil
+}
+
+// Prepare resolves the fixture executable and the explicitly configured
+// private runtime directory. It performs no process, supervisor,
 // authentication, or native-provider probe.
 func Prepare(request task.TaskRecord) (commonprovider.PreparedProfile, error) {
-	record, err := embeddedCertification()
+	identity, err := resolveRuntime(request.CanonicalCwd)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
-	identity, err := resolveRuntime(record)
-	if err != nil {
-		return commonprovider.PreparedProfile{}, err
-	}
+	// Prepare is retained for deterministic fixture unit tests. Production and
+	// acceptance composition use PrepareCandidate, whose finalizer receives the
+	// supervised CLI-reported version.
+	identity.Version = fixture.RuntimeVersion
 	runtimeDir, err := resolveRuntimeDirectory()
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
-	return prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir, Certification: record})
+	return prepareWithDependencies(request, prepareDependencies{Identity: identity, RuntimeDir: runtimeDir})
 }
 
-func resolveRuntime(record certificationRecord) (runtimeIdentity, error) {
-	if err := record.validate(); err != nil {
-		return runtimeIdentity{}, err
-	}
+func resolveRuntime(directory string) (runtimeIdentity, error) {
 	wrapper, err := os.Executable()
 	if err != nil {
 		return runtimeIdentity{}, fmt.Errorf("%w: resolving contributor wrapper: %w", ErrUnsupportedProfile, err)
@@ -65,24 +113,28 @@ func resolveRuntime(record certificationRecord) (runtimeIdentity, error) {
 		return runtimeIdentity{}, err
 	}
 	executable := filepath.Join(filepath.Dir(wrapper), "provider")
-	identity, err := inspectExecutable(executable)
+	cli, err := commonprovider.LocateCLIPath(executable)
 	if err != nil {
 		return runtimeIdentity{}, fmt.Errorf("%w: contributor provider executable: %w", ErrUnsupportedProfile, err)
 	}
-	if identity.OS != record.OS || identity.Arch != record.Arch {
-		return runtimeIdentity{}, fmt.Errorf("%w: certified provider platform is %s/%s, current runtime is %s/%s", ErrUnsupportedProfile, record.OS, record.Arch, identity.OS, identity.Arch)
-	}
-	if identity.SHA256 != record.RuntimeSHA256 {
-		return runtimeIdentity{}, fmt.Errorf("%w: contributor provider executable differs from measured certification", ErrUnsupportedProfile)
-	}
-	identity.Version = record.ProviderVersion
-	return identity, nil
+	return runtimeIdentity{Executable: cli.Path, SHA256: cli.SHA256}, nil
 }
 
 func resolveRuntimeDirectory() (string, error) {
 	raw := os.Getenv(contributorRuntimeEnvironment)
 	if raw == "" {
-		return "", fmt.Errorf("%w: %s is required", ErrUnsupportedProfile, contributorRuntimeEnvironment)
+		// The acceptance supervisor intentionally strips unrelated environment
+		// variables from queued workers. Derive the fixture runtime beside the
+		// copied acceptance binaries when no explicit override is available.
+		wrapper, err := os.Executable()
+		if err != nil {
+			return "", fmt.Errorf("%w: resolving contributor wrapper: %w", ErrUnsupportedProfile, err)
+		}
+		wrapper, err = canonicalExecutable(wrapper, "contributor wrapper")
+		if err != nil {
+			return "", err
+		}
+		raw = filepath.Join(filepath.Dir(filepath.Dir(wrapper)), "provider-runtime")
 	}
 	if !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
 		return "", fmt.Errorf("%w: %s must be a clean absolute path", ErrUnsupportedProfile, contributorRuntimeEnvironment)
@@ -97,10 +149,7 @@ func prepareWithDependencies(request task.TaskRecord, dependencies prepareDepend
 	if err := validatePreparationRequest(request); err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
-	if err := dependencies.Certification.validate(); err != nil {
-		return commonprovider.PreparedProfile{}, err
-	}
-	if err := validateIdentity(dependencies.Identity, dependencies.Certification); err != nil {
+	if err := validateIdentity(dependencies.Identity); err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
 	runtimeDir, err := validateRuntimeDirectory(dependencies.RuntimeDir)
@@ -115,7 +164,7 @@ func prepareWithDependencies(request task.TaskRecord, dependencies prepareDepend
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
-	effective, err := effectiveConfiguration(request, runtimeDir, dependencies.Certification)
+	effective, err := effectiveConfiguration(request, runtimeDir, dependencies.Identity.SHA256)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
@@ -181,9 +230,19 @@ func validatePriorSession(prior task.PriorSession) error {
 	return nil
 }
 
-func validateIdentity(identity runtimeIdentity, record certificationRecord) error {
-	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable || identity.Version != record.ProviderVersion || identity.OS != record.OS || identity.Arch != record.Arch || identity.SHA256 != record.RuntimeSHA256 {
-		return fmt.Errorf("%w: executable identity does not match measured certification", ErrUnsupportedProfile)
+func validateIdentity(identity runtimeIdentity) error {
+	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable || strings.TrimSpace(identity.Version) == "" {
+		return fmt.Errorf("%w: executable identity is incomplete", ErrUnsupportedProfile)
+	}
+	if err := task.ValidateSHA256(identity.SHA256); err != nil {
+		return fmt.Errorf("%w: executable identity digest: %w", ErrUnsupportedProfile, err)
+	}
+	return nil
+}
+
+func validateStaticIdentity(identity runtimeIdentity) error {
+	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable {
+		return fmt.Errorf("%w: executable identity is incomplete", ErrUnsupportedProfile)
 	}
 	if err := task.ValidateSHA256(identity.SHA256); err != nil {
 		return fmt.Errorf("%w: executable identity digest: %w", ErrUnsupportedProfile, err)
@@ -272,8 +331,8 @@ func configurationInputs(runtimeDir string) ([]task.InputFile, error) {
 	}, nil
 }
 
-func effectiveConfiguration(request task.TaskRecord, runtimeDir string, record certificationRecord) (task.EffectiveConfig, error) {
-	policy := &task.PolicyDetails{ProfileRevision: record.ProfileRevision, RuntimeSHA256: record.RuntimeSHA256, Workspace: request.CanonicalCwd, WritableRoots: []string{runtimeDir}}
+func effectiveConfiguration(request task.TaskRecord, runtimeDir, runtimeSHA256 string) (task.EffectiveConfig, error) {
+	policy := &task.PolicyDetails{ProfileRevision: ProfileRevision, RuntimeSHA256: runtimeSHA256, Workspace: request.CanonicalCwd, WritableRoots: []string{runtimeDir}}
 	effective := task.EffectiveConfig{Containment: Mode, Approval: "never", Policy: policy}
 	encoded, err := task.MarshalCanonical(effective)
 	if err != nil {
@@ -302,14 +361,6 @@ func canonicalExecutable(path, label string) (string, error) {
 		return "", fmt.Errorf("%w: %s must be an executable regular file", ErrUnsupportedProfile, label)
 	}
 	return path, nil
-}
-
-func inspectExecutable(path string) (runtimeIdentity, error) {
-	digest, err := commonprovider.FingerprintExecutable(path)
-	if err != nil {
-		return runtimeIdentity{}, err
-	}
-	return runtimeIdentity{Executable: path, SHA256: digest, OS: runtime.GOOS, Arch: runtime.GOARCH}, nil
 }
 
 func pathsOverlap(left, right string) bool {

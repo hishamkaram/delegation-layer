@@ -2,9 +2,8 @@
 """Run the bounded Codex ``exec`` acceptance gate.
 
 The gate exercises the normal shipped delegate and runner against a private
-real pueue instance.  It records acceptance evidence; embedded certification
-tracking remains a separate, reviewed step.  The installed Codex executable is
-used in place and is never copied or renamed.
+real pueue instance. It records acceptance evidence. The installed Codex
+executable is used in place and is never copied or renamed.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
-import platform
 import re
 import secrets
 import shlex
@@ -27,6 +25,7 @@ from datetime import datetime, timezone
 from acceptance_provider_common import (
     AcceptanceFailure,
     NativeTaskOps,
+    canonical_go_json,
     clean_absolute,
     ensure_private_directory,
     failure_queue_finished,
@@ -35,6 +34,7 @@ from acceptance_provider_common import (
     reject_tmp,
     require,
     snapshot,
+    supervisor_binding,
     status_jobs,
     unique_object,
     verify_collected_outcome,
@@ -53,12 +53,8 @@ from acceptance_supervisor_common import (
 PROVIDER = "codex:exec"
 MODE = "read-only"
 APPROVAL = "never"
-CODEX_VERSION = "0.154.0"
-CODEX_VERSION_OUTPUTS = {"codex-cli 0.154.0", "codex 0.154.0"}
-CODEX_SHA256 = "4f85982624b3898c8991cb80c0981b2aa71070e3537046c9a95950318a95afcc"
 PREDICATE_VERSION = "0.154.0"
 PREDICATE_SHA256 = "7d40d9c4627e58d8906e816d3fc6e1eed7f0d6b14ab5fc1f18b4c704415d3a8d"
-PROFILE_REVISION = "codex-0.154.0-darwin-arm64-read-only-2"
 OUTPUT_NAME = "codex-last-message.txt"
 OUTPUT_WRITER_CONTRACT = "process-exit-eof-v1"
 TASK_BUDGET = "120s"
@@ -66,7 +62,6 @@ CANONICAL_TASK_BUDGET = "2m0s"
 WATCH_SECONDS = 150
 PLANNED_NATIVE_AI_TURNS = 2
 ACCEPTANCE_STATUS = "acceptance-passed"
-CERTIFICATION_STATUS = "embedded-certification-tracked-separately"
 PRELAUNCH_STATUS = "planned"
 PUEUE_VERSION = "4.0.4"
 MAX_CONTROL_BYTES = 1 << 20
@@ -81,8 +76,53 @@ REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
 DEFAULT_WORKSPACE_PARENT = Path.home() / "Active-Projects" / "delegation-layer-acceptance"
 PUEUE_PARENT = Path("/Users/Shared")
+RUNTIME_INSPECTION_REVISION = "runtime-capability-v1"
+RUNTIME_HELP_ARGS = ["exec"]
+RUNTIME_REQUIRED_FLAGS = [
+    "-c", "--strict-config", "--sandbox", "--cd", "--ignore-user-config", "--ignore-rules",
+    "--output-last-message", "--json", "--color",
+]
+CODEX_ENVIRONMENT_KEYS = (
+    "HOME", "CODEX_HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
+    "TZ", "TMPDIR", "TMP", "TEMP", "__CF_USER_TEXT_ENCODING",
+)
 UUID_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 TASK_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+
+def expected_codex_inspection_binding(
+        pueue: Path, config: Path, base: Path, config_digest: str,
+        runner: Path, workspace: Path, environment: dict[str, str],
+        provider: Path, provider_digest: str) -> dict[str, object]:
+    """Build the expected runtime-only inspection binding from setup sources."""
+    values = sorted(key + "=" + environment[key]
+                    for key in CODEX_ENVIRONMENT_KEYS if key in environment)
+    definition = {
+        "revision": RUNTIME_INSPECTION_REVISION,
+        "executable": str(provider),
+        "executable_sha256": provider_digest,
+        "arguments": None,
+        "directory": str(workspace),
+        "environment": values,
+        "output_limit": 1 << 20,
+        "runtime": {
+            "executable": str(provider),
+            "executable_sha256": provider_digest,
+            "directory": str(workspace),
+            "environment": values,
+            "help_args": RUNTIME_HELP_ARGS,
+            "required_flags": RUNTIME_REQUIRED_FLAGS,
+        },
+    }
+    return {
+        "definition_revision": RUNTIME_INSPECTION_REVISION,
+        "definition_sha256": sha(canonical_go_json(definition)),
+        "helper_executable": str(provider),
+        "helper_sha256": provider_digest,
+        "worker_executable": str(runner),
+        "worker_sha256": digest(runner),
+        "supervisor": supervisor_binding(pueue, config, base, config_digest),
+    }
 
 
 class BlockedFailure(AcceptanceFailure):
@@ -197,7 +237,7 @@ def parse_usage(event: dict[str, object]) -> dict[str, int | None] | None:
 
 
 def parse_codex_events(raw: bytes) -> dict[str, object]:
-    """Apply the pinned 0.154.0 JSONL selection and completion rules."""
+    """Apply the immutable Codex JSONL selection and completion rules."""
     require(len(raw) <= MAX_PROVIDER_BYTES, "Codex stdout exceeds observation bound")
     lines = raw.split(b"\n")
     if lines and lines[-1] == b"":
@@ -676,10 +716,10 @@ class CodexAcceptance:
         self.pueue = resolve_executable(args.pueue, Path("/opt/homebrew/bin/pueue"), "pueue")
         self.pueued = resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued")
         self.codex = resolve_executable(args.codex, Path("/opt/homebrew/bin/codex"), "codex")
-        if platform.system() != "Darwin" or platform.machine() not in {"arm64", "aarch64"}:
-            raise BlockedFailure("Codex acceptance requires the inspected Darwin/arm64 runtime")
-        if digest(self.codex) != CODEX_SHA256:
-            raise BlockedFailure("Codex executable differs from the pinned 0.154.0 runtime")
+        self.provider_version: str | None = None
+        self.provider_sha256 = digest(self.codex)
+        self.profile_revision: str | None = None
+        self.inspection_binding: dict[str, object] | None = None
         require_discovery("codex", self.codex)
         require_discovery("pueue", self.pueue)
         require_discovery("pueued", self.pueued)
@@ -796,6 +836,9 @@ class CodexAcceptance:
         write_bytes(aliases, b"{}\n")
         self.pueue_config = self.pueue_base / "pueue.yml"
         write_json(self.pueue_config, config_for(self.pueue_base))
+        self.inspection_binding = expected_codex_inspection_binding(
+            self.pueue, self.pueue_config, self.pueue_base, digest(self.pueue_config),
+            self.runner, self.workspace, self.environment, self.codex, self.provider_sha256)
 
         pueue_version = self.direct("pueue-version", [self.pueue, "--version"], timeout=15)
         pueued_version = self.direct("pueued-version", [self.pueued, "-c", self.pueue_config, "--version"], timeout=15)
@@ -805,8 +848,8 @@ class CodexAcceptance:
                 "unexpected pueued version")
         codex_version = self.direct("codex-version", [self.codex, "--version"], timeout=15)
         observed = (codex_version.directory / "stdout").read_text().strip()
-        if observed not in CODEX_VERSION_OUTPUTS:
-            raise BlockedFailure(f"unexpected Codex version: {observed!r}")
+        require(observed, "Codex returned an empty version")
+        self.provider_version = observed
 
         self.daemon = self.processes.start("private-daemon", [self.pueued, "-c", self.pueue_config], self.state_parent)
         self.ops.bind_supervisor(self.pueue_config, self.daemon)
@@ -826,8 +869,8 @@ class CodexAcceptance:
             "mode": MODE,
             "approval": APPROVAL,
             "codex": str(self.codex),
-            "codex_version": CODEX_VERSION,
-            "codex_sha256": digest(self.codex),
+            "codex_version": self.provider_version,
+            "codex_sha256": self.provider_sha256,
             "delegate": str(self.delegate),
             "delegate_sha256": digest(self.delegate),
             "runner": str(self.runner),
@@ -852,7 +895,6 @@ class CodexAcceptance:
             "environment_keys": sorted(self.environment),
             "environment_values_in_record": False,
             "acceptance_status": PRELAUNCH_STATUS,
-            "certification_status": CERTIFICATION_STATUS,
             "planned_native_ai_turns": PLANNED_NATIVE_AI_TURNS,
             "driver_sha256": digest(__file__),
         })
@@ -898,6 +940,9 @@ class CodexAcceptance:
 
     def dispatch(self, name: str, task: str, brief: Path, predecessor: str | None = None) -> dict[str, object]:
         self.ops.root_id = self.root_id
+        require(self.inspection_binding is not None,
+                "expected Codex inspection binding is unavailable")
+        self.ops.expect_inspection(task, self.inspection_binding)
         response = self.ops.dispatch(name, task, self.dispatch_arguments(task, brief, predecessor))
         root = response.get("root_id")
         require(is_task_id(root), f"{name} omitted a valid root identity")
@@ -952,7 +997,7 @@ class CodexAcceptance:
         meta = self.read_record(task, "meta.json")
         require(meta.get("root_id") == self.root_id and meta.get("task_id") == task and
                 meta.get("provider_executable") == str(self.codex) and
-                meta.get("provider_version") == CODEX_VERSION and
+                meta.get("provider_version") == self.provider_version and
                 meta.get("containment") == MODE and meta.get("approval") == APPROVAL,
                 f"{name} meta provider or policy binding mismatch")
         effective = meta.get("effective_config")
@@ -961,9 +1006,14 @@ class CodexAcceptance:
                 f"{name} effective read-only policy is absent")
         policy = effective.get("policy")
         require(isinstance(policy, dict) and policy.get("workspace") == str(self.workspace) and
-                policy.get("runtime_sha256") == CODEX_SHA256 and
-                policy.get("profile_revision") == PROFILE_REVISION,
+                policy.get("runtime_sha256") == self.provider_sha256,
                 f"{name} persisted Codex runtime policy is incomplete")
+        profile_revision = policy.get("profile_revision")
+        require(isinstance(profile_revision, str) and profile_revision,
+                f"{name} effective policy revision is absent")
+        if self.profile_revision is None:
+            self.profile_revision = profile_revision
+        require(profile_revision == self.profile_revision, f"{name} effective policy revision drifted")
         roots = policy.get("writable_roots")
         require(isinstance(roots, list) and all(isinstance(root, str) for root in roots),
                 f"{name} writable runtime roots are absent")
@@ -1186,7 +1236,6 @@ class CodexAcceptance:
             write_json(self.output / "success.json", {
                 "status": ACCEPTANCE_STATUS,
                 "provider": PROVIDER,
-                "certification_status": CERTIFICATION_STATUS,
                 "native_ai_turns": len(self.tasks),
                 "planned_native_ai_turns": PLANNED_NATIVE_AI_TURNS,
                 "tasks": {name: {"task_id": self.tasks[name],

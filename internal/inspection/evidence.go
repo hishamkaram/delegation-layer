@@ -40,7 +40,7 @@ type ResultRecord struct {
 	Facts         map[string]json.RawMessage `json:"facts"`
 }
 
-// CompletionRecord certifies completed local inspection work, not supervisor
+// CompletionRecord proves completed local inspection work, not supervisor
 // termination. Eligibility also requires the exact worker's successful exit.
 type CompletionRecord struct {
 	SchemaVersion int    `json:"schema_version"`

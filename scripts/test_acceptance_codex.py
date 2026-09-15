@@ -1,7 +1,7 @@
 """Hermetic tests for the Codex acceptance driver oracles.
 
 These tests build no provider and make no network or paid-model call.  Native
-qualification is intentionally exercised only by the explicitly invoked gate.
+live provider behavior is intentionally exercised only by the explicitly invoked gate.
 """
 
 from __future__ import annotations
@@ -265,10 +265,8 @@ class CodexOracleTests(unittest.TestCase):
 
     def test_acceptance_receipt_labels_are_neutral_and_turn_count_is_planned(self):
         self.assertEqual(gate.ACCEPTANCE_STATUS, "acceptance-passed")
-        self.assertEqual(gate.CERTIFICATION_STATUS, "embedded-certification-tracked-separately")
         self.assertEqual(gate.PRELAUNCH_STATUS, "planned")
         self.assertEqual(gate.PLANNED_NATIVE_AI_TURNS, 2)
-        self.assertNotIn("pending", gate.CERTIFICATION_STATUS.lower())
         self.assertNotIn("candidate", gate.ACCEPTANCE_STATUS.lower())
 
     def test_probe_gate_accepts_one_shell_wrapped_probe(self):

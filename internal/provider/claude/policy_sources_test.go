@@ -206,6 +206,11 @@ func TestGlobalStorageV5AndRemoteFeatureCachesAreShapeOnlyWithFixedFalsePin(t *t
 			data:   `{"cachedExperimentData":{"tengu_hover_rest":{"value":true}}}`,
 			marker: "tengu_hover_rest",
 		},
+		{
+			name:   "cached feature control names",
+			data:   `{"cachedGrowthBookFeatures":{"tengu_toasty_breeze":{"statusLine":{"type":"command","command":"/tmp/cached-status"}}}}`,
+			marker: "/tmp/cached-status",
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			fixture := &claudePolicyFixture{files: map[string][]byte{globalPath: []byte(testCase.data)}}
@@ -246,10 +251,10 @@ func TestRemoteFeatureFlagRemainsIndependentlyCheckedWithFixedFalsePin(t *testin
 
 type plaintextCredentialsFallbackSetup func(*testing.T, profileEnvironment, string)
 
-func TestPlaintextCredentialsFallbackIsMetadataOnlyAndFailClosed(t *testing.T) {
+func TestPlaintextCredentialsFallbackIsMetadataOnlyAndRecorded(t *testing.T) {
 	for _, testCase := range plaintextCredentialsFallbackCases() {
 		t.Run(testCase.name, func(t *testing.T) {
-			testPlaintextCredentialsFallback(t, testCase.setup)
+			testPlaintextCredentialsFallback(t, testCase.setup, testCase.name == "unreadable parent")
 		})
 	}
 }
@@ -311,7 +316,7 @@ func writeCredentialsFixture(t *testing.T, path string, data []byte) {
 	}
 }
 
-func testPlaintextCredentialsFallback(t *testing.T, setup plaintextCredentialsFallbackSetup) {
+func testPlaintextCredentialsFallback(t *testing.T, setup plaintextCredentialsFallbackSetup, wantError bool) {
 	t.Helper()
 	root := filepath.Clean(t.TempDir())
 	workspace := filepath.Join(root, "workspace")
@@ -320,12 +325,24 @@ func testPlaintextCredentialsFallback(t *testing.T, setup plaintextCredentialsFa
 	setup(t, environment, credentialsPath)
 	fixture := &claudePolicyFixture{files: map[string][]byte{}}
 
-	_, err := resolvePolicySourcesWithReaderAndUsername(claudePolicyTestRequest(workspace), environment, fixture.read, "fixture-user")
-	if !errors.Is(err, ErrUnsupportedProfile) {
-		t.Fatalf("plaintext credentials fallback was accepted: %v", err)
+	sources, err := resolvePolicySourcesWithReaderAndUsername(claudePolicyTestRequest(workspace), environment, fixture.read, "fixture-user")
+	if wantError {
+		if !errors.Is(err, ErrUnsupportedProfile) {
+			t.Fatalf("unreadable credentials fallback was accepted: %v", err)
+		}
+	} else {
+		if err != nil {
+			t.Fatalf("metadata-only credentials fallback observation failed: %v", err)
+		}
+		observed := slices.IndexFunc(sources, func(source task.PolicySourceDigest) bool {
+			return source.Path == credentialsPath && source.Kind == claudePlaintextCredentialsFallbackKind
+		})
+		if observed < 0 || !sources[observed].Present || sources[observed].SHA256 != task.ComputeSHA256([]byte("present")) {
+			t.Fatalf("credentials fallback metadata was not recorded: %+v", sources)
+		}
 	}
-	if strings.Contains(err.Error(), "fixture-secret") || strings.Contains(err.Error(), "fixture-parent") {
-		t.Fatalf("credential contents escaped metadata-only refusal: %v", err)
+	if err != nil && (strings.Contains(err.Error(), "fixture-secret") || strings.Contains(err.Error(), "fixture-parent")) {
+		t.Fatalf("credential contents escaped metadata-only observation: %v", err)
 	}
 	if slices.Contains(fixture.calls, credentialsPath) {
 		t.Fatal("plaintext credentials fallback was read through the policy source reader")
@@ -359,7 +376,7 @@ func TestGlobalExecutableControlsRefuseBeforeDigest(t *testing.T) {
 	}
 }
 
-func TestOrdinaryMCPIsBypassedByCertifiedProfile(t *testing.T) {
+func TestOrdinaryMCPIsBypassedByRestrictedLaunch(t *testing.T) {
 	root := filepath.Clean(t.TempDir())
 	workspace := filepath.Join(root, "checkout", "nested")
 	environment, _ := claudePolicyTestEnvironment(root)
@@ -374,7 +391,7 @@ func TestOrdinaryMCPIsBypassedByCertifiedProfile(t *testing.T) {
 
 	sources, err := resolvePolicySourcesWithReaderAndUsername(claudePolicyTestRequest(workspace), environment, fixture.read, "fixture-user")
 	if err != nil {
-		t.Fatalf("ordinary MCP configuration was rejected under the certified strict profile: %v", err)
+		t.Fatalf("ordinary MCP configuration was rejected under the strict profile: %v", err)
 	}
 	for _, want := range []struct {
 		path string
@@ -474,17 +491,18 @@ func TestGlobalEmptyProjectControlsAreShapeOnly(t *testing.T) {
 	}
 }
 
-func TestClaudeSettingsAndMCPControls(t *testing.T) {
+func TestClaudeInactiveSettingsAreShapeOnly(t *testing.T) {
 	for _, testCase := range []struct {
 		name string
 		data string
 		want bool
 	}{
 		{name: "benign appearance", data: `{"theme":"dark","attribution":{"commit":"fixture"}}`, want: true},
-		{name: "hooks", data: `{"hooks":{"SessionStart":[]}}`},
-		{name: "permissions", data: `{"permissions":{"defaultMode":"dontAsk"}}`},
-		{name: "nested environment", data: `{"attribution":{"env":{"PATH":"/tmp"}}}`},
-		{name: "unknown top-level", data: `{"futurePolicyField":true}`},
+		{name: "hooks", data: `{"hooks":{"SessionStart":[]}}`, want: true},
+		{name: "permissions", data: `{"permissions":{"defaultMode":"dontAsk"}}`, want: true},
+		{name: "nested environment", data: `{"attribution":{"env":{"PATH":"/tmp"}}}`, want: true},
+		{name: "unknown top-level", data: `{"futurePolicyField":true}`, want: true},
+		{name: "malformed", data: `[]`, want: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			_, err := inspectClaudeSettings([]byte(testCase.data))

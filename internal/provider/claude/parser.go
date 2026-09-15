@@ -261,8 +261,8 @@ func decodeInitIdentity(fields map[string]json.RawMessage) (string, string, erro
 		return "", "", errors.New("system/init session_id is not a UUID")
 	}
 	version, err := requiredString(fields, "claude_code_version")
-	if err != nil || version != Version {
-		return "", "", errors.New("system/init claude_code_version does not match inspected runtime")
+	if err != nil || !validText(version) {
+		return "", "", errors.New("system/init claude_code_version is invalid")
 	}
 	return sessionID, version, nil
 }

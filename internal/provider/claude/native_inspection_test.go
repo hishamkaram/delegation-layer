@@ -133,7 +133,7 @@ func TestPolicyDigestBindsFactsWithoutObservationTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := task.TaskRecord{CanonicalCwd: "/workspace", BudgetNanos: int64(time.Minute)}
-	environment := profileEnvironment{WritableRoots: []string{"/home/test/.claude"}}
+	environment := profileEnvironment{WritableRoots: []string{"/home/test/.claude"}, RuntimeSHA256: strings.Repeat("c", 64)}
 	digest := strings.Repeat("a", 64)
 	first, err := finalizePolicy(request, environment, nil, digest, facts, now)
 	if err != nil {

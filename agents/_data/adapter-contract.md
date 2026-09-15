@@ -1,8 +1,8 @@
-# Adapter Contract and Certified Profiles
+# Adapter Contract and Runtime Capability Checks
 
 This document defines the normative requirements for provider adapters (`antigravity:print`, `codex:exec`, and `claude:print`). All three adapters are required dependencies for the v1 private release.
 
-## 1. Minimal Certified Profiles
+## 1. Supported Runtime Profiles
 
 | Adapter | Capability Profile | Approval Policy | Command Shape & Flags | Deferred Capabilities |
 |---|---|---|---|---|
@@ -10,12 +10,22 @@ This document defines the normative requirements for provider adapters (`antigra
 | `codex:exec` | `read-only` | `never` | `codex exec --json --color never --ignore-user-config --ignore-rules --strict-config --sandbox read-only -c approval_policy="never" -c approvals_reviewer="user" -c allow_login_shell=false -c features.shell_snapshot=false -c features.shell_snapshot_v2=false -c features.apps=false -c features.hooks=false -c features.plugins=false -c cli_auth_credentials_store="file" --cd <workspace> --output-last-message <path> -` | `workspace-write`, unrestricted execution, ephemeral sessions |
 | `claude:print` | `read-only` | `dontAsk` | `claude --print --input-format text --output-format stream-json --verbose --safe-mode --restricted --tools Read,Glob,Grep --disallowedTools mcp__* --strict-mcp-config --mcp-config <empty-mcp.json> --settings <profile.json> --permission-mode dontAsk --permission-prompts none --disable-slash-commands --no-chrome --session-id <uuid>` | `workspace-write`, shell execution, Agent/subagents, custom tools, background mode |
 
+Each native adapter locates its executable during static preparation and records
+the executable identity in the immutable candidate. The already-supervised
+inspection worker then verifies that the file is still executable, runs its
+version and help commands, and checks that every flag used in its command shape
+is advertised in help output before finalization and provider launch. Any
+reported version and binary digest are observations bound to that task's
+admission and start identity; no release version, operating system, architecture,
+profile revision, or digest is compared with a checked-in value.
+
 ## 2. Launch Planning and Preflight Policy
-- **Claude Storage Selection**: The pinned Claude profile supplies invocation-local
+- **Claude Storage Selection**: The restricted Claude profile supplies invocation-local
   `CLAUDE_CODE_HOVER_REST=0`, preserving its native Keychain service/account while
-  fixing the settings/cache backend. Conflicting ambient values and a present
-  plaintext credential fallback are refused. This implementation-specific control
-  is bound to the inspected binary and must be requalified on upgrades.
+  fixing the settings/cache backend. The native inspection records the opaque
+  plaintext fallback's presence without opening it; the signed-in Keychain
+  account remains the authentication authority. Conflicting ambient selectors
+  are refused. This implementation-specific control is checked on every task.
 - **Input Delivery**: Brief text is delivered exclusively via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv. Brief size limit is 8 MiB.
 - **Argv Construction**: Built strictly as Go string slices (`[]string`), executed directly via `exec.Command` without shell wrapper or reparsing.
 - **Working Directory**: Set strictly to the validated canonical workspace directory (`Cmd.Dir = workdir`).

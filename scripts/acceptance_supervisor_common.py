@@ -1,4 +1,4 @@
-"""Finite process ownership and exact-byte evidence for Phase 2 acceptance."""
+"""Finite process ownership and exact-byte evidence for supervisor acceptance."""
 import hashlib
 import json
 import os

@@ -1,12 +1,16 @@
-# Claude provider qualification
+# Claude provider runtime safety
 
-Status: **Claude live qualification paused by user decision; strict profile retained.**
-Native certification remains **Pending**. The present plaintext credential
-fallback prevents qualification under the selected guarantee. Credential contents
-have not been read, copied, or hashed, and no Claude model turn has run. Login,
-credential files, Keychain permissions, and global settings remain unchanged.
+Status: **Claude live runtime safety acceptance passed; review and merge pending.**
+The bounded live gate completed on 2026-09-15 with the user's signed-in Claude
+account. It ran two real provider turns, verified the restricted read/search
+controls and exact continuation, collected both outcomes, and performed an
+observational replay with zero provider launches. The harness did not expose,
+modify, or copy the host login Keychain, credential files, or global settings.
+Because native continuation is tied to the host Claude configuration directory,
+Claude wrote its normal host session metadata during the live run; the layer
+does not edit or remove that metadata.
 
-The integration passed `make check`, including the full race suite, 137 harness
+The integration passed `make check`, including the full race suite, 140 harness
 tests, lint, CLI smoke tests, and vulnerability checks, after the lock and context
 corrections. Group reconciliation, process joining,
 worker binding, independent source-binding registration, and root-timestamp
@@ -39,22 +43,30 @@ The full quality gate passed again after this final correction. An isolated
 policy-cancellation fault test passed three race-enabled runs; removing the
 checkpoint makes the test fail because canceled preflight creates the probe
 parent. The overlays and logs are retained as private diagnostic evidence. The private investigation record
-is `task-initialization-investigation.json`. Phase 5 remains in progress and
-unmerged. The user has switched to a personal account; a subsequent existence-only
-check still found the plaintext fallback, so strict Claude qualification remains
-paused without reading credentials or changing login/settings.
+is `task-initialization-investigation.json`. Phase 5 is implemented locally; the
+remaining work is the reviewed commit, private pull request, green CI, and
+squash merge. The live run records the plaintext fallback as an opaque
+presence marker only and uses the native helper as the authentication authority;
+credential bytes and global login/settings remain untouched.
 
-## Inspected runtime
+The acceptance driver isolates layer-owned task, evidence, supervisor,
+temporary, and scratch-workspace paths. The workspace is outside the host home
+tree so the provider's ancestor policy walk cannot discover real project
+settings. Before pueue or any native/provider process starts, the driver uses
+`lstat` only on the host `.credentials.json` fallback; a present entry is
+recorded as an opaque marker and never opened. The native helper confirms the
+signed-in account immediately before launch, while Claude keeps its native
+host configuration and session store so the real account can continue.
+
+## Runtime capability observation
 
 - Provider: `claude:print`, minimum `read-only` profile with `dontAsk` approval.
-- CLI: `2.1.270 (Claude Code)`, Darwin ARM64.
-- Canonical executable: `/opt/homebrew/Caskroom/claude-code@latest/2.1.270/claude`.
-- Executable SHA-256: `a506b6d970a4cf44f6abdb53a81ddcd5d3b0ce042a95c502fe9d1f946bdb8807`.
-- Embedded build commit: `97ecbf7abeb4170dcfd26c4d4b397afd9015030e`.
-- Official SDK package: [`@anthropic-ai/claude-agent-sdk@0.3.270` manifest](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.270/manifest.json)
-  and [schema](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.270/sdk.d.ts).
-  The package's Darwin ARM64 artifact matches the installed executable hash.
-- The actual version and help invocations exited successfully. The ordinary
+- The acceptance host is Darwin ARM64. The discovered executable's path,
+  reported version and digest are recorded as task identity observations.
+- The actual version and help invocations exited successfully, and every flag
+  used by the adapter was present in the help output. A changed reported CLI
+  version remains acceptable when these checks pass.
+- The ordinary
   macOS first-open confirmation was completed for the signed Anthropic binary;
   authentication and global provider settings were not changed.
 
@@ -69,19 +81,19 @@ selects only the exact layer-recorded session UUID.
 
 Preparation and interpretation stay inside the provider package. The existing
 app/runner owns admission, process lifetime, supervision, capture, sealing,
-collection, and publication. Candidate qualification uses an explicit test
-composition of that same app; Pending certification does not enable production
-launch or discovery. Historical interpretation remains registered.
+collection, and publication. The live safety run uses an explicit test
+composition of that same app; its passing status does not change production
+discovery. Historical interpretation remains registered.
 
-The common certification matcher is shared with Codex. Provider-independent
+The common runtime capability checks are shared with Codex. Provider-independent
 field-binding tests live with that matcher, while provider tests bind each
-embedded record and its production registration. The shared matcher and Codex
+output interpreter and its production registration. The shared matcher and Codex
 race tests passed after extraction; the integrated quality, protocol,
 supervisor, and inspection gates are also recorded below.
 
 ## Native policy evidence and supervised access
 
-The pinned executable's remote-policy eligibility and loading functions were
+The inspected executable's remote-policy eligibility and loading functions were
 inspected at byte offsets `167605700–167609000` and
 `178184976–178213882`. Native Pro/Max OAuth without alternate authentication is
 ineligible for remote managed settings; the loader returns before cache/network
@@ -93,15 +105,15 @@ separate `oauthAccount` display metadata. On macOS the native composite storage
 prefers Keychain and falls back to `.credentials.json`. A file-only inspection
 cannot establish which native credentials will be used.
 
-A no-UI Security-framework probe found the
+A historical no-UI Security-framework probe found the
 `Claude Code-credentials` entry's attributes but could not read its data
 (`errSecAuthFailed`, -25293). It returned no credentials and changed no Keychain
 permissions or authentication settings. The exact native service/account query returned the same denial. This blocks
-the planned in-process native-login inspection on this host. It does not justify
-a credentials-file fallback or a completed policy implementation. The [native inspection handoff](NATIVE-METADATA-INSPECTION.md) compares the
-ownership alternatives and selects supervised admission inspection with a
-core-owned final recheck. That integration is implemented; native proof remains outstanding;
-an observation timeout cannot stand in for process termination.
+the planned in-process native-login inspection on this host. The [native
+inspection handoff](NATIVE-METADATA-INSPECTION.md) therefore selects supervised
+admission inspection with a core-owned final recheck. That path is implemented
+and was exercised successfully by the live gate; an observation timeout still
+cannot stand in for process termination.
 
 Pinned macOS managed-policy loading reads the entire dictionaries at
 `/Library/Managed Preferences/<OS username>/com.anthropic.claudecode.plist` and
@@ -123,18 +135,18 @@ The receipt SHA-256 is
 `3aa1bd5a8889488d4e70e957a8ae309c807aa1ce8012912c9c725cb696e74e7a`;
 see the native inspection handoff for its location and scope. The host-account
 blocker was cleared for that observation. The user subsequently switched back
-to Team. This is supervision evidence only, not provider certification. No
+to Team. This is supervision evidence only, not provider live acceptance. No
 adapter receives process ownership. Team preflight now combines a fresh fixed-endpoint
 settings observation with local and cache source validation. The native reload
 timing limitation is documented in the inspection handoff; an atomic remote
 snapshot freeze is not an agreed guarantee.
 
 A supervised Team-only first-party settings GET returned HTTP 404 at 18:55 UTC
-on 2026-09-14, the pinned loader's successful-empty case. Its remote receipt is
+on 2026-09-14, the inspected loader's successful-empty case. Its remote receipt is
 recorded in the native inspection contract. Credentials and remote response
 bytes were not retained or hashed; the supervisor shut down naturally and used
-zero provider turns. Local/cache validation and production integration are now
-implemented; their complete native qualification remains outstanding.
+zero provider turns. This earlier supervision-only observation is supplemented
+by the successful two-turn live acceptance recorded below.
 
 ## Focused validation
 
@@ -145,10 +157,10 @@ after completion. The resulting Claude pure-file race suite passed, along with
 the earlier Python validation snapshot, including Unicode SimpleFold corrections.
 After the evidence-review corrections, root reran all 60 native-harness tests
 and all 32 skill-verifier tests successfully.
-The generated Unicode table also passed its Go race test. The Pending
-certification and acceptance harness bind the
+The generated Unicode table also passed its Go race test. The live acceptance
+harness binds the
 updated predicate digest
-`256087e579c3f8cf7aeba0e2e87df64e9132129bc92c8f03c7ac03bd531fb059`.
+`b92db06be971c081c653322a6cc9d12ff6996066019df05e0dd6989ab62b3021`.
 
 The shared direct Codex review found a Python/Go Unicode folding mismatch; the
 correction passed focused direct re-review with no actionable findings. The
@@ -158,7 +170,7 @@ have clean direct follow-up reviews. The candidate and pure finalizer replace
 the missing effective-policy implementation. Focused full-package race tests
 passed for Claude (4.140 seconds), app (41.614 seconds), and execution
 (30.609 seconds). These historical package timings do not establish native
-certification; the current native blocker is the paused live qualification.
+runtime safety; the live acceptance receipt below is the current evidence.
 
 The direct deadline follow-up review returned no actionable findings for its
 bounded changes. Subsequent work adds a borrowed preflight scope and a supervised
@@ -180,8 +192,8 @@ focused lint returned zero issues after caller-context propagation. A full `make
 and live-inspection changes; the current full quality result is recorded in the
 summary above. The Claude policy review found blank-token and pre-network expiry
 validation gaps. Both were corrected with targeted tests; focused direct
-re-review returned no actionable findings (`claude-auth-review.log`). Live
-certification remains pending.
+re-review returned no actionable findings (`claude-auth-review.log`). The live
+runtime safety gate then passed with two real turns and zero replay launches.
 
 The acceptance brief explicitly requests the workspace/sibling write, shell,
 and subagent controls required by the execution plan. An unavailable route is
@@ -238,10 +250,10 @@ provider turns remain at zero.
 The corrected no-AI inspection gate passed all three cases with natural daemon
 shutdown and no sentinel leakage. Its receipt SHA-256 is
 `2ffd4a6cd457cbcef30a85cabca3270dfcbf08868a0d669c4aa022146fac1d4a`.
-An initial real-Claude qualification dispatch then correctly refused inherited
+An initial real-Claude safety dispatch then correctly refused inherited
 `CLAUDE_CODE_COZY_TEAPOT=relaxed` before creating any inspection or ordinary task.
-The pinned binary reads this selector at offset 168050856 for Bash-first prompt
-steering, used at 175036860. Qualification removes that experimental selector
+The inspected binary reads this selector at offset 168050856 for Bash-first prompt
+steering, used at 175036860. The safety invocation removes that experimental selector
 from its invocation environment only; production rejection and the user's
 global environment/login remain unchanged. The empty failed-run queue was
 independently verified and shut down through pueue while its original daemon
@@ -253,7 +265,7 @@ direct follow-up review; user MCP configuration remains unchanged.
 
 ## Strict MCP and global history classification
 
-The pinned binary's strict loader at byte offset 179294970 selects an empty
+The inspected binary's strict loader at byte offset 179294970 selects an empty
 ordinary-server map instead of `cP` (171463595), which loads ordinary user,
 project, and local MCP sources. Explicit MCP files remain active inputs, so
 preparation verifies containment flags and the task-owned empty MCP file.
@@ -261,7 +273,7 @@ The enterprise guard (`Km`, 171474945) and independently active auth/helper
 paths remain conservatively checked. Ordinary MCP commands, environment values,
 and headers are excluded from executable/auth classification and value hashes.
 
-Pinned-source offsets 173476776–173477472 establish that root `skillUsage`
+Inspected-source offsets 173476776–173477472 establish that root `skillUsage`
 is a map of skill names to usage counts and timestamps. Active `statusLine`
 commands instead come from the settings schema and policy resolver
 (165344214 and 170451820). The classifier excludes that root history map while
@@ -296,7 +308,7 @@ cross-builds, CLI smoke tests, and vulnerability checks passed. Protocol
 acceptance passed its 49 fault cases and compiled CLI workflow. The supervisor
 native gate passed all five cases after its authorization-event oracle was
 updated; it observed natural daemon shutdown. Its evidence is
-`bin/phase2-acceptance/native-supervision-1789418201026` in the active worktree.
+`bin/supervisor-acceptance/native-supervision-1789418201026` in the active worktree.
 These results are an earlier snapshot; the later bounded-result and policy
 corrections are covered by the current quality and review records above.
 
@@ -307,7 +319,7 @@ Dispatch exited 2 before metadata or model launch; its response retained unknown
 admission/publication. The final cleanup receipt records all owned processes
 joined, natural daemon shutdown, and zero signals; the original daemon Wait
 receipt independently records exit 0. This is failure-cleanup proof, not Claude
-provider certification.
+provider live acceptance.
 
 The latest complete `make check` passed (`current-quality-gate.log`). A subsequent
 Python-only review correction requires an exact integer static-refusal schema
@@ -320,17 +332,24 @@ accepted all three corrections without an actionable defect; the broader
 inspection review's findings were subsequently resolved and its final context
 follow-up was clean.
 
-## Remaining acceptance gates
+## Live acceptance result
 
-- Two bounded real Claude turns: successful Read/Glob/Grep controls with
-  forbidden operations unavailable or denied; then exact, tool-free nonce recall
-  after deleting the fresh input fixture, with unchanged predecessor evidence.
-- Byte-identical observational collection and zero replay launches in that live
-  run.
-- After the live receipt exists: commit the reviewed branch, open the private PR,
-  wait for green exact-head CI, squash merge, verify green main CI, and retire
-  the worktree.
+The successful receipt is retained outside the repository at
+`$HOME/Library/Application Support/delegation-layer-evidence/claude-720cf0231bc1728c30475c7a`.
+It records `acceptance-passed`, two planned and two executed native turns,
+`replay_launches: 0`, natural daemon shutdown, and zero signals. The fresh task
+`399da8b345b2a2fa01d9e9d462d65f9d` and its continuation
+`036a071a8f1bd43ee2435f874b71ea61` share session
+`77a5691a-4e1a-53cb-bedd-11e7bc121652`; both collected payloads are byte-bound
+and the predecessor outcome is unchanged.
+
+## Remaining merge gates
+
+- Complete the direct review of the current exact head and resolve any findings.
+- Commit the reviewed branch, open the private pull request, wait for green
+  exact-head CI, squash merge, verify main CI, and retire the provider worktree.
 
 Private review and diagnostic evidence is retained outside the repository under
 the run-specific evidence root. Native acceptance evidence is outside
-provider-writable temporary roots. No Claude model turn has run yet.
+provider-writable temporary roots. Credentials and raw provider output remain
+outside the repository.

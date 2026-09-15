@@ -35,8 +35,8 @@ func TestPrintArgumentsRejectUnsupportedRequests(t *testing.T) {
 		"provider mismatch":   func(r *task.TaskRecord) { r.Provider = "codex:exec" },
 		"zero budget":         func(r *task.TaskRecord) { r.BudgetNanos = 0 },
 		"negative budget":     func(r *task.TaskRecord) { r.BudgetNanos = -1 },
-		"uncertified model":   func(r *task.TaskRecord) { r.RequestedConfig.Model = "some-model" },
-		"uncertified effort":  func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max" },
+		"unsupported model":   func(r *task.TaskRecord) { r.RequestedConfig.Model = "some-model" },
+		"unsupported effort":  func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max" },
 		"resume selector": func(r *task.TaskRecord) {
 			r.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "--last"}
 		},

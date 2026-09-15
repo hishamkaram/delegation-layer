@@ -2,17 +2,20 @@
 
 Status: **implementation, local gates, and review complete**.
 [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4) is the authoritative
-record of exact-head CI and squash-merge acceptance. This record distinguishes the
-executed permission profile from final verification of the reviewed release.
+record of exact-head CI and squash-merge acceptance. This record describes the
+observed runtime capability and per-task safety checks. Provider version,
+platform and executable digest are observations from that run; they are not
+release acceptances.
 
-## Executed capability measurement
+## Runtime capability measurement
 
-The 2026-09-14T07:24:53Z native `make acceptance-agy` run passed using agy
-1.2.2 on Darwin/arm64, profile
-`agy-1.2.2-darwin-arm64-workspace-write-3`. The embedded
-[`certification.json`](../internal/provider/antigravity/certification.json)
-records the exact binary SHA-256 and hashes of the supporting receipts.
-No other OS/architecture or permission mode has Executed certification.
+The 2026-09-14T07:24:53Z native `make acceptance-agy` run passed using the
+discovered agy executable on Darwin/arm64. Runtime preflight located the
+executable, verified its executable bit, accepted its reported version, and
+confirmed every launch flag in `agy --help`. The task receipt records the
+observed executable identity and policy details for replay. Other environments
+require their own live containment checks; no provider release or platform
+status is inferred from this receipt.
 
 The native run used the shipped dispatcher and runner with private pueue 4.0.4:
 
@@ -33,22 +36,24 @@ The tested approval policy is
 workspace, the sparse default CLI project, validated configuration-source
 inventory, and runtime/state-root exclusion checks. The CLI arguments include
 `--sandbox --mode accept-edits --add-dir <workspace>`; no blanket permission
-bypass is enabled. Ordinary dispatch resolves policy and checks the embedded
-certification without requiring local acceptance receipts or paid probes.
+bypass is enabled. Ordinary dispatch resolves policy and runs the same
+executable/help preflight without requiring a local receipt or an extra paid
+probe.
 
 ## Review corrections and compatibility
 
-The earlier 2026-09-14T06:55:32Z capability measurement used predicate 1.2.2 with SHA-256
+The earlier 2026-09-14T06:55:32Z capability measurement used output-predicate
+revision 1.2.2 with SHA-256
 `9aca4a6a639c18b8c4515445d8f004f2788c0f627264695cbb66357b5285d366`.
 That interpreter remains registered for immutable collection/replay.
-The new `1.2.2-auth2` interpreter classifies structurally valid ERROR envelopes
+The new `1.2.2-auth2` output interpreter classifies structurally valid ERROR envelopes
 before requiring a conversation UUID. Success still requires exact session
 identity. Focused race tests verify both revisions and registry resolution.
-The latest integrated native gate passed with the new revision, SHA-256
+The latest integrated native gate passed with the new output-interpreter revision, SHA-256
 `53f1b5368023953447088ecbd4fc36c1b431b0fb376cf76511ed70d943d8138a`.
-Certification now requires that exact predicate as well as runtime/profile
-identity. A final 2026-09-14T07:52:14Z native run also passed after adding policy
-validation immediately before process Start. Refusal at this boundary follows
+The task records bind that exact predicate together with the observed runtime
+identity for replay. A final 2026-09-14T07:52:14Z native run also passed after
+adding policy validation immediately before process Start. Refusal at this boundary follows
 the sealed start-failed path, preserving the consumed start authority without
 launching the provider. Unit regressions cover refusal, replay, and exactly one
 successful launch. The final native run again recorded A=4, S=3, E=3, seal=3;
@@ -72,7 +77,7 @@ natural daemon shutdown, with zero provider launches.
 | `make acceptance-supervisor` | Passed: 48 hermetic cases and real I01–I05, natural shutdown |
 | `make acceptance-agy` | Passed: current predicate and three native turns |
 | Native evidence audit | Initial current-predicate run: 74 redacted captures; final launch-path run: 66 redacted, size-bounded captures; exact outcome/replay checks passed |
-| Targeted Codex cleanup review | No concrete regressions in lint cleanup, test renames and certification binding |
+| Targeted Codex cleanup review | No concrete regressions in lint cleanup, test renames and capability binding |
 
 The initial supervisor gate stopped before execution because the worktree-local
 test binaries were absent. Installing the SHA-256-pinned pueue/pueued 4.0.4 pair

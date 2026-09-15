@@ -1,6 +1,6 @@
 # Durable protocol acceptance fixture
 
-`internal/testutil/protocolfixture` is a finite test executable for Phase 1. It uses the actual task store and fake admission/Start sinks. It does not invoke a native provider or supervisor and does not certify any provider permission profile. Build it with `make build`; run the acceptance suite with `make acceptance-protocol`.
+`internal/testutil/protocolfixture` is a finite test executable for Phase 1. It uses the actual task store and fake admission/Start sinks. It does not invoke a native provider or supervisor and does not establish native runtime readiness. Build it with `make build`; run the acceptance suite with `make acceptance-protocol`.
 
 A normal lifecycle is `prepare`, `claim -kind admission`, `seal`, then `collect`. `seal` acquires and consumes the Start permit in its own process, records the fake Start entry, captures both streams while holding the runner lease, closes them, and commits `provider.exit`. A separate `claim -kind runner` deliberately ends unsealed and is used only for launch-authority and crash tests. Reopening that task cannot restore its runner capability or seal its unfinished capture.
 

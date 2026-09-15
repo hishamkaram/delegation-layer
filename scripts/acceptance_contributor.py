@@ -1,8 +1,8 @@
 """A new compiled provider through the normal CLI and an isolated real pueue.
 
 Provider-specific scenarios are fixtures; process ownership and supervisor
-configuration reuse the existing acceptance harness. This does not certify a
-native AI provider or add a provider to production discovery.
+configuration reuse the existing acceptance harness. This exercises the
+adapter contract without adding a provider to production discovery.
 """
 import argparse
 import json
@@ -276,7 +276,18 @@ class ContributorAcceptance:
         for _ in range(30):
             final = self.client("final-status", ["status", "--json"]).json()
             rows = final.get("tasks")
-            require(isinstance(rows, dict) and len(rows) == len(self.tasks), "unexpected private queue membership")
+            require(isinstance(rows, dict), "private queue status has no task map")
+            root_id = read_json(self.root / "root.json")["root_id"]
+            expected = {
+                label
+                for task_id in self.tasks.values()
+                for label in (
+                    "delegate:" + root_id + ":" + task_id,
+                    "delegation-inspection-" + root_id + "-" + task_id,
+                )
+            }
+            actual = {row.get("label") for row in rows.values() if isinstance(row, dict)}
+            require(actual == expected, "unexpected private queue membership")
             if all(isinstance(row.get("status"), dict) and "Done" in row["status"] for row in rows.values()):
                 break
             time.sleep(0.1)

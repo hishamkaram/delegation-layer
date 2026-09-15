@@ -10,12 +10,12 @@ observer; this file never starts Claude directly.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
 import json
 import os
 from pathlib import Path
-import platform
 import pwd
 import re
 import secrets
@@ -50,37 +50,41 @@ from acceptance_supervisor_common import Processes, config_for, digest, read_jso
 PROVIDER = "claude:print"
 MODE = "read-only"
 APPROVAL = "dontAsk"
-CLAUDE_VERSION = "2.1.270"
-CLAUDE_VERSION_OUTPUTS = {"2.1.270 (Claude Code)", "2.1.270"}
-CLAUDE_SHA256 = "a506b6d970a4cf44f6abdb53a81ddcd5d3b0ce042a95c502fe9d1f946bdb8807"
-PROFILE_REVISION = "claude-2.1.270-darwin-arm64-read-only-1"
 PREDICATE_VERSION = "2.1.270"
-PREDICATE_SHA256 = "256087e579c3f8cf7aeba0e2e87df64e9132129bc92c8f03c7ac03bd531fb059"
-# Claude's pinned native OAuth profile rejects environment/API-key/helper
-# overrides; the inspected producer emits this exact init source marker.
+PREDICATE_SHA256 = "b92db06be971c081c653322a6cc9d12ff6996066019df05e0dd6989ab62b3021"
+# Claude's restricted native OAuth profile rejects environment/API-key/helper
+# overrides; the producer must report a non-empty source marker.
 EXPECTED_API_KEY_SOURCE = "none"
 TASK_BUDGET = "120s"
 CANONICAL_TASK_BUDGET = "2m0s"
 WATCH_SECONDS = 150
 PLANNED_NATIVE_AI_TURNS = 2
 ACCEPTANCE_STATUS = "acceptance-passed"
-CERTIFICATION_STATUS = "embedded-certification-tracked-separately"
 PRELAUNCH_STATUS = "planned"
 PUEUE_VERSION = "4.0.4"
 MAX_CONTROL_BYTES = 1 << 20
 MAX_PROVIDER_BYTES = 8 << 20
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
-DEFAULT_WORKSPACE_PARENT = Path.home() / "Active-Projects" / "delegation-layer-acceptance"
 PUEUE_PARENT = Path("/Users/Shared")
-NATIVE_INSPECTION_REVISION = "claude-2.1.270-native-oauth-policy-1"
+NATIVE_INSPECTION_REVISION = "claude-native-oauth-policy-v1"
 NATIVE_CREDENTIAL_HELPER = Path("/usr/bin/security")
 NATIVE_POLICY_ENDPOINT = "https://api.anthropic.com/api/claude_code/settings"
 NATIVE_STORAGE_BACKEND_PIN = "CLAUDE_CODE_HOVER_REST=0"
+RUNTIME_HELP_ARGS: list[str] | None = None
+RUNTIME_REQUIRED_FLAGS = (
+    "--print", "--input-format", "--output-format", "--verbose", "--safe-mode", "--restricted",
+    "--tools", "--disallowedTools", "--strict-mcp-config", "--mcp-config", "--settings", "--permission-mode",
+    "--permission-prompts", "--disable-slash-commands", "--no-chrome", "--resume", "--session-id",
+)
 NATIVE_ENVIRONMENT_KEYS = (
     "HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
     "TZ", "TMPDIR", "TMP", "TEMP", "__CF_USER_TEXT_ENCODING",
 )
+PATH_VALIDATION_ENVIRONMENT_KEYS = frozenset({
+    "HOME", "TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+    "CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR",
+})
 UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 TASK_PATTERN = re.compile(r"^[0-9a-f]{32}$")
@@ -103,6 +107,61 @@ class BlockedFailure(AcceptanceFailure):
     """A required native prerequisite is unavailable on this host."""
 
 
+def path_validation_environment(inherited: Mapping[str, str]) -> dict[str, str]:
+    """Read only path-related variables needed for harness-root validation."""
+    return {key: inherited[key] for key in PATH_VALIDATION_ENVIRONMENT_KEYS if key in inherited}
+
+
+def isolated_acceptance_environment(
+        inherited: Mapping[str, str], home: Path, temporary: Path) -> dict[str, str]:
+    """Build a fully task-owned Claude environment for hermetic fixtures."""
+    values = {key: inherited[key] for key in NATIVE_ENVIRONMENT_KEYS if key in inherited}
+    values["HOME"] = str(Path(home).resolve())
+    for key in ("TMPDIR", "TMP", "TEMP"):
+        values[key] = str(Path(temporary).resolve())
+    return values
+
+
+def native_account_acceptance_environment(
+        inherited: Mapping[str, str], home: Path, temporary: Path) -> dict[str, str]:
+    """Use the signed-in native account while relocating mutable temp state.
+
+    Claude's macOS Keychain lookup is tied to the host login context. The
+    acceptance run therefore keeps the real HOME/Keychain account, while its
+    temporary, cache, and log paths remain task-owned. No credential bytes are
+    read by this driver or copied into the task roots.
+    """
+    values = {key: inherited[key] for key in NATIVE_ENVIRONMENT_KEYS if key in inherited}
+    values["HOME"] = str(Path(home).resolve(strict=True))
+    for key in ("TMPDIR", "TMP", "TEMP"):
+        values[key] = str(Path(temporary).resolve())
+    return values
+
+
+def host_home_directory() -> Path:
+    """Resolve the OS account home without trusting an overridden HOME."""
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True)
+    except (KeyError, OSError) as error:
+        raise BlockedFailure("native Claude home cannot be resolved") from error
+
+
+def host_plaintext_credentials_path() -> Path:
+    """Return the host fallback path without opening or hashing its contents."""
+    return host_home_directory() / ".claude" / ".credentials.json"
+
+
+def observe_plaintext_fallback(path: Path) -> bool:
+    """Observe fallback presence with lstat only; never open or hash it."""
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise BlockedFailure("host Claude credential fallback metadata is unavailable") from error
+    return True
+
+
 def _native_account(environment: dict[str, str]) -> str:
     """Mirror the provider's non-secret Keychain account selection."""
     account = environment.get("USER", "")
@@ -121,7 +180,7 @@ def _native_environment(environment: dict[str, str]) -> list[str]:
     for key, value in environment.items():
         if (key.startswith("CLAUDE") or key.startswith("ANTHROPIC")) and \
                 key + "=" + value != NATIVE_STORAGE_BACKEND_PIN:
-            raise BlockedFailure("alternate Claude environment selectors are uncertified")
+            raise BlockedFailure("alternate Claude environment selectors are unsupported")
     values = [key + "=" + environment[key] for key in NATIVE_ENVIRONMENT_KEYS
               if key in environment]
     values.append(NATIVE_STORAGE_BACKEND_PIN)
@@ -130,6 +189,7 @@ def _native_environment(environment: dict[str, str]) -> list[str]:
 
 def expected_claude_inspection_binding(
         pueue: Path, config: Path, base: Path, config_digest: str,
+        workspace: Path, executable: Path,
         runner: Path, environment: dict[str, str],
         helper: Path = NATIVE_CREDENTIAL_HELPER) -> dict[str, object]:
     """Build Claude's expected inspection binding from setup-owned sources."""
@@ -149,11 +209,19 @@ def expected_claude_inspection_binding(
         "directory": str(home),
         "environment": _native_environment(environment),
         "output_limit": 1 << 20,
+        "runtime": {
+            "executable": str(Path(executable).resolve(strict=True)),
+            "executable_sha256": digest(executable),
+            "directory": str(Path(workspace).resolve(strict=True)),
+            "environment": _native_environment(environment),
+            "help_args": RUNTIME_HELP_ARGS,
+            "required_flags": list(RUNTIME_REQUIRED_FLAGS),
+        },
         "remote": {
             "url": NATIVE_POLICY_ENDPOINT,
             "headers": {key: value for key, value in sorted({
                 "anthropic-beta": "oauth-2025-04-20",
-                "User-Agent": "claude-cli/2.1.270 (external, cli)",
+                "User-Agent": "claude-cli (external, cli)",
                 "Cache-Control": "no-cache",
                 "Pragma": "no-cache",
             }.items())},
@@ -288,7 +356,7 @@ def _content_blocks(event: dict[str, object]) -> list[dict[str, object]]:
             require(isinstance(block.get("name"), str) and block["name"],
                     "Claude tool_use has no name")
             require(block["name"] in ALLOWED_TOOLS,
-                    "Claude emitted a tool_use outside the pinned tool profile")
+                    "Claude emitted a tool_use outside the restricted tool profile")
             require(isinstance(block.get("input"), dict), "Claude tool_use input is not an object")
         else:
             require(isinstance(block.get("tool_use_id"), str) and block["tool_use_id"],
@@ -357,7 +425,7 @@ def validate_usage_shapes(result: dict[str, object]) -> None:
 
 
 def parse_claude_events(raw: bytes) -> dict[str, object]:
-    """Parse the pinned Claude print stream without selecting prose as success."""
+    """Parse the bounded Claude print stream without selecting prose as success."""
     require(len(raw) <= MAX_PROVIDER_BYTES, "Claude stdout exceeds observation bound")
     lines = raw.split(b"\n")
     if lines and lines[-1] == b"":
@@ -524,7 +592,8 @@ def validate_init_profile(parsed: dict[str, object], expected_session: str | Non
     if expected_session is not None:
         require(session == expected_session, "Claude init session identity mismatch")
     version = init.get("claude_code_version")
-    require(version == CLAUDE_VERSION, "Claude init runtime version is not pinned")
+    require(isinstance(version, str) and version.strip() == version and version,
+            "Claude init runtime version is absent or malformed")
     cwd = init.get("cwd")
     require(isinstance(cwd, str) and cwd and "\x00" not in cwd,
             "Claude init cwd is absent or malformed")
@@ -546,7 +615,7 @@ def validate_init_profile(parsed: dict[str, object], expected_session: str | Non
                 "Claude init model is malformed")
     api_key_source = init.get("apiKeySource")
     require(api_key_source == EXPECTED_API_KEY_SOURCE,
-            "Claude init apiKeySource is missing or differs from the pinned source-backed value")
+            "Claude init apiKeySource is missing or differs from the required source-backed value")
     mcp_servers = init.get("mcp_servers")
     require(isinstance(mcp_servers, list) and not mcp_servers,
             "Claude init mcp_servers are not an empty array")
@@ -569,7 +638,7 @@ def _successful_tool_result(results: list[dict[str, object]], use: dict[str, obj
 def _blocked_routes(parsed: dict[str, object]) -> set[str]:
     """Return routes named by the native permission-denial evidence.
 
-    The pinned producer records ``permission_denials`` on the terminal result
+    The producer records ``permission_denials`` on the terminal result
     when a route reaches its permission gate and is refused.  Routes omitted
     from the producer's ``system/init.tools`` list are handled separately by
     ``validate_fresh_controls``: the init list is the filtered built-in tool
@@ -627,7 +696,7 @@ def validate_fresh_controls(parsed: dict[str, object], nonce_file: Path,
         require(len(matching) >= 1, f"Claude did not make a positive {name} call for the workspace")
         for use in matching:
             _validate_search_result(name, _successful_tool_result(results, use))
-    # Claude's pinned ``--tools Read,Glob,Grep`` profile is compiled into the
+    # Claude's restricted ``--tools Read,Glob,Grep`` profile is compiled into the
     # producer's filtered built-in registry.  A required blocked route is
     # therefore evidenced either by an exact native permission denial or by
     # its exact absence from ``init.tools``.  Do this per route: a global set
@@ -840,7 +909,6 @@ def validate_record_usage(outcome: dict[str, object], parsed: dict[str, object],
 class ClaudeAcceptance:
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.environment = os.environ.copy()
         self.tools = Path(args.tools).resolve(strict=True)
         require(self.tools.is_dir() and not self.tools.is_symlink(), "--tools must be a directory")
         self.delegate = resolve_executable(args.delegate, self.tools / "delegate", "delegate")
@@ -848,26 +916,35 @@ class ClaudeAcceptance:
         self.pueue = resolve_executable(args.pueue, Path("/opt/homebrew/bin/pueue"), "pueue")
         self.pueued = resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued")
         self.claude = resolve_executable(args.claude, Path("/opt/homebrew/bin/claude"), "claude")
-        if platform.system() != "Darwin" or platform.machine() not in {"arm64", "aarch64"}:
-            raise BlockedFailure("Claude acceptance requires the inspected Darwin/arm64 runtime")
-        if digest(self.claude) != CLAUDE_SHA256:
-            raise BlockedFailure("Claude executable differs from the pinned 2.1.270 runtime")
+        self.provider_version: str | None = None
+        self.provider_sha256 = digest(self.claude)
+        self.profile_revision: str | None = None
         require_discovery("claude", self.claude)
         require_discovery("pueue", self.pueue)
         require_discovery("pueued", self.pueued)
         self.output = clean_absolute(args.output, "evidence output")
         reject_tmp(self.output, "evidence output")
-        reject_runtime_roots(self.output, "evidence output", self.environment)
+        reject_runtime_roots(self.output, "evidence output", path_validation_environment(os.environ))
         require(not self.output.exists(), f"evidence output already exists: {self.output}")
         self.output.mkdir(mode=0o700, parents=True, exist_ok=False)
         os.chmod(self.output, 0o700)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(6)
         self.state_parent = ensure_private_directory(DEFAULT_STATE_PARENT / ("claude-" + stamp),
                                                       "acceptance state parent", create=True)
+        self.test_tmp = ensure_private_directory(self.state_parent / "tmp", "isolated Claude temporary root", create=True)
+        self.host_home = host_home_directory()
+        self.environment = native_account_acceptance_environment(os.environ, self.host_home, self.test_tmp)
         self.state = ensure_private_directory(self.state_parent / "state", "acceptance state", create=True)
-        self.workspace = ensure_private_directory(DEFAULT_WORKSPACE_PARENT / ("claude-" + stamp),
+        # Keep the scratch checkout outside the caller's home tree. Claude's
+        # project-policy walk includes every ancestor up to the filesystem
+        # root, so a home-contained checkout would still discover the real
+        # ~/.claude project settings even with an isolated HOME.
+        workspace_parent = ensure_private_directory(
+            PUEUE_PARENT / ("delegation-layer-claude-workspace-" + stamp),
+            "acceptance workspace parent", create=True)
+        self.workspace = ensure_private_directory(workspace_parent / "fresh",
                                                    "acceptance workspace", create=True)
-        self.sibling = ensure_private_directory(DEFAULT_WORKSPACE_PARENT / ("claude-" + stamp + "-sibling"),
+        self.sibling = ensure_private_directory(workspace_parent / "sibling",
                                                  "acceptance sibling", create=True)
         self.briefs = ensure_private_directory(self.state_parent / "briefs", "acceptance briefs", create=True)
         self.profile = self.state_parent / "claude-profile.json"
@@ -925,6 +1002,8 @@ class ClaudeAcceptance:
         return args
 
     def setup(self) -> None:
+        self.host_credentials_path = host_plaintext_credentials_path()
+        self.host_plaintext_fallback_present = observe_plaintext_fallback(self.host_credentials_path)
         base = PUEUE_PARENT / ("delegation-layer-claude-" + secrets.token_hex(8))
         self.pueue_base = ensure_private_directory(base, "private pueue base", create=True)
         ensure_private_directory(self.pueue_base / "state", "private pueue state", create=True)
@@ -935,7 +1014,7 @@ class ClaudeAcceptance:
         config_digest = digest(self.pueue_config)
         self.inspection_binding = expected_claude_inspection_binding(
             self.pueue, self.pueue_config, self.pueue_base, config_digest,
-            self.runner, self.environment)
+            self.workspace, self.claude, self.runner, self.environment)
         pueue_version = self.ops.direct("pueue-version", [self.pueue, "--version"], timeout=15)
         pueued_version = self.ops.direct("pueued-version", [self.pueued, "-c", self.pueue_config, "--version"], timeout=15)
         require((pueue_version.directory / "stdout").read_text().strip() == "pueue " + PUEUE_VERSION,
@@ -944,8 +1023,8 @@ class ClaudeAcceptance:
                 "unexpected pueued version")
         claude_version = self.ops.direct("claude-version", [self.claude, "--version"], timeout=15)
         observed = (claude_version.directory / "stdout").read_text().strip()
-        if observed not in CLAUDE_VERSION_OUTPUTS:
-            raise BlockedFailure(f"unexpected Claude version: {observed!r}")
+        require(observed, "Claude returned an empty version")
+        self.provider_version = observed
         self.daemon = self.processes.start("private-daemon", [self.pueued, "-c", self.pueue_config], self.state_parent)
         self.ops.bind_supervisor(self.pueue_config, self.daemon)
         for _ in range(200):
@@ -960,8 +1039,8 @@ class ClaudeAcceptance:
             raise AcceptanceFailure("private pueue readiness was not established")
         write_json(self.output / "binding.json", {
             "provider": PROVIDER, "mode": MODE, "approval": APPROVAL,
-            "claude": str(self.claude), "claude_version": CLAUDE_VERSION,
-            "claude_sha256": digest(self.claude), "delegate": str(self.delegate),
+            "claude": str(self.claude), "claude_version": self.provider_version,
+            "claude_sha256": self.provider_sha256, "delegate": str(self.delegate),
             "delegate_sha256": digest(self.delegate), "runner": str(self.runner),
             "runner_sha256": digest(self.runner), "pueue": str(self.pueue),
             "pueue_sha256": digest(self.pueue), "pueued": str(self.pueued),
@@ -969,11 +1048,15 @@ class ClaudeAcceptance:
             "pueued_version": PUEUE_VERSION, "pueue_base": str(self.pueue_base),
             "pueue_config": str(self.pueue_config), "config_sha256": digest(self.pueue_config),
             "state": str(self.state), "workspace": str(self.workspace), "sibling": str(self.sibling),
+            "host_home": str(self.host_home), "isolated_temporary_root": str(self.test_tmp),
+            "environment_isolated": True, "host_home_inherited": True,
+            "native_auth_context": "host-login-keychain",
+            "host_plaintext_fallback_observed": self.host_plaintext_fallback_present,
             "claude_profile": str(self.profile), "claude_profile_sha256": digest(self.profile),
             "empty_mcp": str(self.empty_mcp), "empty_mcp_sha256": digest(self.empty_mcp),
             "nonce_sha256": sha(self.nonce + b"\n"), "environment_keys": sorted(self.environment),
-            "environment_values_in_record": False, "profile_revision": PROFILE_REVISION,
-            "acceptance_status": PRELAUNCH_STATUS, "certification_status": CERTIFICATION_STATUS,
+            "environment_values_in_record": False,
+            "acceptance_status": PRELAUNCH_STATUS,
             "planned_native_ai_turns": PLANNED_NATIVE_AI_TURNS, "driver_sha256": digest(__file__),
         })
         self.workspace_before = snapshot(self.workspace, ignored_prefixes=())
@@ -1070,7 +1153,7 @@ class ClaudeAcceptance:
         meta = self.read_record(task, "meta.json")
         require(meta.get("root_id") == self.root_id and meta.get("task_id") == task and
                 meta.get("provider_executable") == str(self.claude) and
-                meta.get("provider_version") == CLAUDE_VERSION and
+                meta.get("provider_version") == self.provider_version and
                 meta.get("containment") == MODE and meta.get("approval") == APPROVAL,
                 f"{name} meta provider or policy binding mismatch")
         effective = meta.get("effective_config")
@@ -1079,9 +1162,14 @@ class ClaudeAcceptance:
                 f"{name} effective Claude policy is absent")
         policy = effective.get("policy")
         require(isinstance(policy, dict) and policy.get("workspace") == str(self.workspace) and
-                policy.get("profile_revision") == PROFILE_REVISION and
-                policy.get("runtime_sha256") == CLAUDE_SHA256,
+                policy.get("runtime_sha256") == self.provider_sha256,
                 f"{name} persisted Claude profile policy is incomplete")
+        profile_revision = policy.get("profile_revision")
+        require(isinstance(profile_revision, str) and profile_revision,
+                f"{name} effective policy revision is absent")
+        if self.profile_revision is None:
+            self.profile_revision = profile_revision
+        require(profile_revision == self.profile_revision, f"{name} effective policy revision drifted")
         predicate = meta.get("predicate")
         require(predicate == {"adapter": PROVIDER, "mode": MODE,
                               "version": PREDICATE_VERSION, "sha256": PREDICATE_SHA256},
@@ -1281,7 +1369,7 @@ class ClaudeAcceptance:
             self.shutdown()
             write_json(self.output / "success.json", {
                 "status": ACCEPTANCE_STATUS, "provider": PROVIDER,
-                "certification_status": CERTIFICATION_STATUS, "native_ai_turns": len(self.tasks),
+                "native_ai_turns": len(self.tasks),
                 "planned_native_ai_turns": PLANNED_NATIVE_AI_TURNS,
                 "tasks": {name: {"task_id": self.tasks[name],
                                   "conversation_id": self.records[name]["reference"]["conversation_id"],

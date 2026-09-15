@@ -24,8 +24,9 @@ type ProfileCandidate struct {
 	Finalize      func(facts json.RawMessage, now time.Time) (PreparedProfile, error)
 }
 
-// InspectionDefinition describes one fixed native command. Core owns its
-// stdin, pipes, Start/Wait, deadline, projection containment, and publication.
+// InspectionDefinition describes an optional native projection and/or a
+// supervised runtime capability probe. Core owns stdin, pipes, Start/Wait,
+// deadlines, projection containment, and publication.
 // Project must return canonical nonsecret JSON, never native credential bytes.
 // Core discards error/panic values and publishes only fixed failure codes.
 type InspectionDefinition struct {
@@ -36,6 +37,7 @@ type InspectionDefinition struct {
 	Directory        string                                       `json:"directory"`
 	Environment      []string                                     `json:"environment"`
 	OutputLimit      int64                                        `json:"output_limit"`
+	Runtime          *RuntimeProbeDefinition                      `json:"runtime,omitempty"`
 	Project          func(stdout []byte) (json.RawMessage, error) `json:"-"`
 	Remote           *HTTPInspectionDefinition                    `json:"remote,omitempty"`
 }

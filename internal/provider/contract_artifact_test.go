@@ -47,10 +47,9 @@ func TestPreparedProfileValidateRejectsNonEmptyBindingSlots(t *testing.T) {
 	}
 }
 
-func TestCatalogNormalizesPreparedDeclarationsAndChecksCertifiedWriter(t *testing.T) {
+func TestCatalogNormalizesPreparedDeclarationsAndChecksWriterContract(t *testing.T) {
 	request := artifactRequest()
 	registration := testRegistration(request.Provider, request.Mode)
-	registration.Description.Profiles[0].OutputWriterContract = task.OutputWriterProcessExitEOF
 	registration.Prepare = ReadyCandidate(func(req task.TaskRecord) (PreparedProfile, error) {
 		plan := artifactPlan(req)
 		plan.InputFiles = append(plan.InputFiles, task.InputFile{Name: "a.json", ArgumentIndex: 3, Content: "a"})
@@ -79,25 +78,17 @@ func TestCatalogNormalizesPreparedDeclarationsAndChecksCertifiedWriter(t *testin
 		t.Fatal("catalog returned shared input content")
 	}
 
-	registration.Description.Profiles[0].OutputWriterContract = "snapshot-only-v1"
-	if _, err = NewCatalog(registration); err == nil {
-		t.Fatal("unsupported certified writer contract was accepted")
-	}
-}
-
-func TestCatalogRejectsPreparedWriterContractNotCertifiedByPredicateProfile(t *testing.T) {
-	request := artifactRequest()
-	plan := artifactPlan(request)
-	registration := testRegistration(request.Provider, request.Mode)
-	registration.Prepare = ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) {
+	registration.Prepare = ReadyCandidate(func(req task.TaskRecord) (PreparedProfile, error) {
+		plan := artifactPlan(req)
+		plan.OutputWriterContract = "snapshot-only-v1"
 		return catalogTestProfile(plan), nil
 	})
-	catalog, err := NewCatalog(registration)
-	if err != nil {
-		t.Fatal(err)
+	catalog, catalogErr := NewCatalog(registration)
+	if catalogErr != nil {
+		t.Fatal(catalogErr)
 	}
 	if _, err = catalog.Prepare(request); !errors.Is(err, ErrProfileUnavailable) {
-		t.Fatalf("uncertified output writer contract was accepted: %v", err)
+		t.Fatalf("unsupported writer contract was accepted: %v", err)
 	}
 }
 
@@ -117,23 +108,5 @@ func TestPreparedProfileMatchesInputContentAndOutputDeclarations(t *testing.T) {
 	meta.OutputWriterContract = ""
 	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed output writer contract matched immutable metadata")
-	}
-}
-
-func TestCatalogSelectsMatchingWriterContractAcrossCertifiedProfiles(t *testing.T) {
-	request := artifactRequest()
-	registration := testRegistration(request.Provider, request.Mode)
-	withOutput := registration.Description.Profiles[0]
-	withOutput.OutputWriterContract = task.OutputWriterProcessExitEOF
-	registration.Description.Profiles = append(registration.Description.Profiles, withOutput)
-	registration.Prepare = ReadyCandidate(func(req task.TaskRecord) (PreparedProfile, error) {
-		return catalogTestProfile(artifactPlan(req)), nil
-	})
-	catalog, err := NewCatalog(registration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = catalog.Prepare(request); err != nil {
-		t.Fatalf("matching certified writer contract was hidden by another profile: %v", err)
 	}
 }

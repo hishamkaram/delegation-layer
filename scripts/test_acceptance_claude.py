@@ -30,7 +30,7 @@ def init_event(session: str = SESSION, tools: list[str] | None = None,
                permission: str = "dontAsk") -> dict[str, object]:
     return {
         "type": "system", "subtype": "init", "session_id": session,
-        "claude_code_version": gate.CLAUDE_VERSION, "cwd": "/workspace",
+        "claude_code_version": "2.1.270", "cwd": "/workspace",
         "tools": tools or ["Read", "Glob", "Grep"],
         "permissionMode": permission, "apiKeySource": "none", "mcp_servers": [],
     }
@@ -364,7 +364,7 @@ class ClaudeOracleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "identity|precedes system/init"):
             gate.parse_claude_events(stream([preinit, init_event(), answer_event()]))
         blocked = tool_use("blocked", "Bash", command="true")
-        with self.assertRaisesRegex(RuntimeError, "outside the pinned tool profile"):
+        with self.assertRaisesRegex(RuntimeError, "outside the restricted tool profile"):
             gate.parse_claude_events(stream([init_event(), blocked, answer_event()]))
 
     def test_nullable_usage_envelopes_are_absent_and_fresh_session_is_uuidv5(self):
@@ -471,15 +471,20 @@ class ClaudeOracleTests(unittest.TestCase):
             pueue = root / "pueue-bin"
             runner = root / "delegate-run"
             helper = root / "security"
-            for path, content in ((pueue, b"pueue"), (runner, b"runner"), (helper, b"helper")):
+            claude = root / "claude"
+            for path, content in ((pueue, b"pueue"), (runner, b"runner"),
+                                  (helper, b"helper"), (claude, b"claude")):
                 path.write_bytes(content)
                 path.chmod(0o700)
             home = root / "home"
             home.mkdir()
+            workspace = root / "workspace"
+            workspace.mkdir()
             environment = {"HOME": str(home), "PATH": "/usr/bin", "USER": "fixture-user", "LANG": "C"}
 
             binding = gate.expected_claude_inspection_binding(
-                pueue, config, base, gate.digest(config), runner, environment, helper)
+                pueue, config, base, gate.digest(config), workspace, claude,
+                runner, environment, helper)
             definition = {
                 "revision": gate.NATIVE_INSPECTION_REVISION,
                 "executable": str(helper.resolve()),
@@ -490,10 +495,19 @@ class ClaudeOracleTests(unittest.TestCase):
                 "environment": ["CLAUDE_CODE_HOVER_REST=0", "HOME=" + str(home),
                                 "LANG=C", "PATH=/usr/bin", "USER=fixture-user"],
                 "output_limit": 1 << 20,
+                "runtime": {
+                    "executable": str(claude.resolve()),
+                    "executable_sha256": gate.digest(claude),
+                    "directory": str(workspace.resolve()),
+                    "environment": ["CLAUDE_CODE_HOVER_REST=0", "HOME=" + str(home),
+                                    "LANG=C", "PATH=/usr/bin", "USER=fixture-user"],
+                    "help_args": None,
+                    "required_flags": list(gate.RUNTIME_REQUIRED_FLAGS),
+                },
                 "remote": {
                     "url": gate.NATIVE_POLICY_ENDPOINT,
                     "headers": {"Cache-Control": "no-cache", "Pragma": "no-cache",
-                                 "User-Agent": "claude-cli/2.1.270 (external, cli)",
+                                 "User-Agent": "claude-cli (external, cli)",
                                  "anthropic-beta": "oauth-2025-04-20"},
                 },
             }
@@ -527,7 +541,7 @@ class ClaudeOracleTests(unittest.TestCase):
             self.assertEqual(gate._native_account(environment), "claude-code-user")
             with self.assertRaisesRegex(gate.BlockedFailure, "alternate Claude environment"):
                 gate.expected_claude_inspection_binding(
-                    paths[0], config, base, gate.digest(config), paths[1],
+                    paths[0], config, base, gate.digest(config), home, paths[2], paths[1],
                     {**environment, "ANTHROPIC_API_KEY": "ambient"}, paths[2])
 
     def test_dispatch_registers_complete_expected_binding_before_admission(self):
@@ -577,12 +591,75 @@ class ClaudeOracleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "runtime root"):
             gate.reject_runtime_roots(Path.home() / ".claude" / "sessions", "state", environment)
 
-    def test_labels_remain_acceptance_and_certification_separate(self):
+    def test_live_profile_environment_is_task_owned(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            scratch = root / "tmp"
+            inherited = {
+                "HOME": "/real/user",
+                "PATH": "/usr/bin",
+                "USER": "fixture-user",
+                "CLAUDE_CODE_COZY_TEAPOT": "relaxed",
+                "ANTHROPIC_API_KEY": "ambient-secret",
+                "XDG_CONFIG_HOME": "/real/config",
+                "TMPDIR": "/real/tmp",
+            }
+            isolated = gate.isolated_acceptance_environment(inherited, home, scratch)
+            self.assertEqual(isolated["HOME"], str(home.resolve()))
+            self.assertEqual(isolated["TMPDIR"], str(scratch.resolve()))
+            self.assertEqual(isolated["TMP"], str(scratch.resolve()))
+            self.assertEqual(isolated["TEMP"], str(scratch.resolve()))
+            self.assertNotIn("CLAUDE_CODE_COZY_TEAPOT", isolated)
+            self.assertNotIn("ANTHROPIC_API_KEY", isolated)
+            self.assertNotIn("XDG_CONFIG_HOME", isolated)
+            validation = gate.path_validation_environment(inherited)
+            self.assertEqual(validation["HOME"], "/real/user")
+            self.assertEqual(validation["TMPDIR"], "/real/tmp")
+            self.assertNotIn("ANTHROPIC_API_KEY", validation)
+            self.assertNotIn("CLAUDE_CODE_COZY_TEAPOT", validation)
+            self.assertNotIn("XDG_CONFIG_HOME", validation)
+
+    def test_native_account_environment_keeps_login_and_relocates_mutable_temp(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            scratch = root / "tmp"
+            scratch.mkdir()
+            inherited = {
+                "HOME": "/real/user",
+                "PATH": "/usr/bin",
+                "USER": "fixture-user",
+                "TMPDIR": "/real/tmp",
+                "ANTHROPIC_API_KEY": "ambient-secret",
+            }
+            environment = gate.native_account_acceptance_environment(inherited, home, scratch)
+            self.assertEqual(environment["HOME"], str(home.resolve()))
+            self.assertEqual(environment["TMPDIR"], str(scratch.resolve()))
+            self.assertEqual(environment["TMP"], str(scratch.resolve()))
+            self.assertEqual(environment["TEMP"], str(scratch.resolve()))
+            self.assertNotIn("ANTHROPIC_API_KEY", environment)
+
+    def test_plaintext_fallback_observation_uses_metadata_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            absent = root / "missing" / ".credentials.json"
+            self.assertFalse(gate.observe_plaintext_fallback(absent))
+            present = root / "present" / ".credentials.json"
+            present.parent.mkdir()
+            present.write_bytes(b"synthetic credential bytes")
+            self.assertTrue(gate.observe_plaintext_fallback(present))
+            target = root / "target"
+            target.write_bytes(b"synthetic credential bytes")
+            link = root / "link"
+            link.symlink_to(target)
+            self.assertTrue(gate.observe_plaintext_fallback(link))
+
+    def test_acceptance_receipt_labels_are_neutral(self):
         self.assertEqual(gate.ACCEPTANCE_STATUS, "acceptance-passed")
-        self.assertEqual(gate.CERTIFICATION_STATUS, "embedded-certification-tracked-separately")
         self.assertEqual(gate.PRELAUNCH_STATUS, "planned")
         self.assertNotIn("candidate", gate.ACCEPTANCE_STATUS.lower())
-        self.assertNotIn("pending", gate.CERTIFICATION_STATUS.lower())
 
 
 if __name__ == "__main__":

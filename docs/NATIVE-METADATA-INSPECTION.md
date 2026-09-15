@@ -1,11 +1,12 @@
 # Supervised native metadata inspection
 
-Status: implementation in progress; not integrated or certified. This extends the
-Claude integration in EXECUTION-PLAN.md. The first private release still requires
-all three providers. No native metadata success is a provider acceptance receipt.
+Status: implemented as per-task native authentication and policy inspection; it
+is not a provider release gate. This extends the Claude integration in
+EXECUTION-PLAN.md. The first private release still requires all three
+providers. A native metadata success is task evidence, not a release receipt.
 
-Host qualification update: the user switched back to Team and requested that
-work continue with that login. Team qualification remains pending. The earlier
+Host safety-run update: the user switched back to Team and requested that
+work continue with that login. Team verification remains pending. The earlier
 blanket freeze requirement exceeded the agreed threat model: EXECUTION-PLAN.md
 excludes hostile administrator replacement between validation and startup and
 requires preflight source/drift checks. A fresh remote check does not atomically
@@ -16,7 +17,7 @@ Compare a core-owned, supervised first-party policy fetch plus local/cache
 validation against a native diagnostic-only probe. The first must preserve
 transient credential handling and inspect every fallback source; the second is
 acceptable only if source evidence proves it cannot execute unverified policy
-and reports enough evidence. Personal-only qualification no longer satisfies the
+and reports enough evidence. Personal-only verification no longer satisfies the
 requested host scope. Do not bypass managed policy or silently accept unknown
 sources. Runtime containment and live acceptance remain mandatory. Anthropic's
 [delivery and cache documentation](https://code.claude.com/docs/en/server-managed-settings)
@@ -27,12 +28,12 @@ The private personal-account receipt is
 `3aa1bd5a8889488d4e70e957a8ae309c807aa1ce8012912c9c725cb696e74e7a`.
 It records native exit zero, clean shutdown, zero provider turns, no direct
 signals, no retained native stdout/stderr, and a clean synthetic-sentinel scan.
-This is a feasibility receipt, not production crash-ownership or certification
+This is a feasibility receipt, not production crash-ownership or per-task safety
 proof. Final admission and launch must independently recheck current metadata.
 
 ## Problem and evidence
 
-Claude 2.1.270 reads OAuth through the native macOS `security` executable. An
+Claude Code reads OAuth through the native macOS `security` executable. An
 exact service/account Security-framework query with UI disabled returns
 `errSecAuthFailed` on this host. An attributes-only query can establish that the
 separate legacy API-key entry is absent, but cannot supply OAuth expiry or plan.
@@ -72,8 +73,8 @@ and finalizer make the effect boundary reviewable.
 The selected Team baseline requires fresh empty server-managed settings and a
 compatible local/cache policy snapshot. The supervised private experiment on
 2026-09-14 at 18:55 UTC returned HTTP 404 from the same first-party endpoint
-used by CLI 2.1.270; its native loader treats 204/404 as successful empty
-settings. This establishes feasibility, not effective-policy certification.
+used by the CLI; its native loader treats 204/404 as successful empty
+settings. This establishes feasibility, not effective-policy safety.
 The receipt is `metadata-probe/run-20260914T185543Z-2156980194ed/receipt.json`
 (SHA-256 `8dc9e7aaf30d84463081277396ef99bf75e6cddf4e398b2e81da7562ebd9e850`),
 with `remote-policy-observation.json` SHA-256
@@ -117,7 +118,7 @@ failures, late responses after deadline, and zero ordinary admission on refusal.
 
 ### Fixed native storage backend
 
-The pinned binary also contains a StorageV5 latch. Without an explicit choice,
+The inspected binary also contains a StorageV5 latch. Without an explicit choice,
 cached or remote GrowthBook evaluation can select another settings/cache backend;
 reading direct files alone does not prove which backend native startup will use.
 Comparing the alternatives, inferring the latch from direct-file absence is
@@ -130,9 +131,10 @@ before OAuth priming and managed-policy loading, and the latch accepts only its
 first value. Later feature evaluation cannot repin it. OAuth remains Keychain
 first, using the same service and account; the control changes the plaintext
 fallback/settings backend, not the Keychain identity or policy endpoint. The
-profile therefore also requires the direct plaintext credential fallback to be
-absent, verified through file metadata without reading or hashing credentials.
-Managed files and the direct remote-policy caches remain independently checked.
+profile records the direct plaintext credential fallback with file metadata
+only; it does not open or hash that file. The native helper proves the current
+signed-in account immediately before admission and again before launch. Managed
+files and the direct remote-policy caches remain independently checked.
 
 The provider rejects conflicting ambient values and supplies exactly one fixed
 control in its compiled environment. Its definition digest binds that control.
@@ -140,18 +142,30 @@ No global feature flag, credential, login, Keychain ACL, or administrator policy
 is edited. Source evidence is retained privately in `storage-backend-evidence.json`
 (SHA-256 `912b36bcdbde718d49c8167a6e91e0ea3fed49c76767a159cf3fa1ee375c5fca`)
 with nine exact byte ranges and per-slice hashes under the same inspected runtime
-SHA-256. Backend controls and fallback refusal still require live qualification.
+SHA-256. Backend controls and native account proof still require a live
+safety run.
 
-## Credential fallback decision: strict profile retained
+## Credential fallback decision: use the signed-in host account
 
-The user selected **keep the strict guarantee and pause Claude live qualification**.
-The checkpoint-only proposal is not approved and must not be implemented. No
-additional Claude live attempt is authorized under the present fallback state.
-The current absence requirement remains authoritative. Real qualification found
-`~/.claude/.credentials.json` present and correctly refused before helper or
-model launch. Its contents have not been read, copied, or hashed.
+The live workflow uses the user's already signed-in Claude account. The
+acceptance harness keeps the host `HOME` so Claude can use its native macOS
+Keychain, while relocating layer-owned temporary, supervisor, evidence, and
+workspace paths to task-owned roots. Native Claude session metadata remains in
+its host configuration directory because continuation is bound to that native
+store; the harness does not edit or remove it. It does not require a dedicated
+macOS account, modify the Keychain search list, or copy credentials. The
+`.credentials.json` fallback is checked with `lstat` only and represented as a
+stable opaque presence marker; credential bytes never enter records, digests,
+diagnostics, or fixtures.
 
-The pinned composite store (`vn`, around byte 166441000; fallback implementation
+The supervised native helper validates an unexpired OAuth account and applicable
+remote policy at admission and immediately before the provider launch. This
+makes a normal signed-in account usable without pretending that the
+account-global Keychain is an isolated credential store. A later native
+Keychain failure could still cause Claude itself to use its own fallback
+behavior; the receipt records this boundary explicitly.
+
+The native composite store (`vn`, around byte 166441000; fallback implementation
 166438590–166447000) returns non-null Keychain JSON first and reads the plaintext
 fallback on missing/null/error results. The StorageV5 pin does not disable this
 OAuth fallback. Native `claude.ai`/`apiKeySource` labels do not distinguish the
@@ -161,15 +175,15 @@ The alternatives considered were:
 
 | Choice | Guarantee and effect |
 |---|---|
-| Preserve the current profile | A fallback file cannot become an unchecked credential source. Live qualification stays blocked on this environment; no login or file is changed. |
-| Adopt a separately revised checkpoint profile | Require valid unexpired Keychain OAuth and applicable remote-policy proof at admission and immediately before launch. Treat the file as inactive at those checkpoints and never read it. This permits the existing login, but a later native Keychain error can activate unchecked fallback credentials; the layer cannot claim to prevent that path. |
+| Keep the old strict absence profile | A fallback file cannot become an unchecked credential source, but ordinary signed-in accounts with Claude's native fallback remain unusable. |
+| Use the host-account profile (selected) | Require valid unexpired native OAuth and applicable remote-policy proof at admission and immediately before launch. Observe the fallback with metadata only and let Claude retain its documented native Keychain-first behavior. |
 
-The unselected second choice is a narrower guarantee, not proof that fallback is disabled.
-It would require explicit acceptance of that boundary, a new profile revision,
-updated certification evidence, and regressions for every failed/null/malformed
-Keychain check. No fabricated digest may represent unread credential content.
-Production would remain unavailable until both live turns, replay, review, and
-CI pass. The existing profile has not been relaxed.
+The selected profile is a deliberate boundary: the layer verifies the native
+account and policy checks it can observe, while Claude retains ownership of its
+account-global credential selection. It requires a new acceptance receipt and
+regressions for every failed, null, malformed, or expired native check. No
+fabricated digest represents unread credential content. Production remains
+unavailable until both live turns, replay, review, and CI pass.
 
 A multi-source credential inspection extension was also considered. It adds
 secret-input handling, authorization checks for potentially distinct accounts,
@@ -213,7 +227,7 @@ remain independent prerequisites. Unknown policy is unavailable.
 
 The implementation uses these consumer-owned boundaries. The value types and
 ready-provider wrapper exist in `internal/provider/candidate.go`. The catalog
-uses the single candidate hook, preserves certified finalization, and refuses
+uses the single candidate hook, preserves capability finalization, and refuses
 inspection through its compatibility preparation path. Claude now supplies an
 inspection candidate and a pure Team/Pro/Max finalizer. Admission and worker
 integration remain pending:
@@ -263,7 +277,7 @@ The bound worker executable digest pins the compiled projector implementation.
 The catalog's registration preparation hook becomes `PrepareCandidate`. A
 `ReadyCandidate` wrapper adapts the existing agy/Codex profile factories and
 rejects nonempty supplied facts. Catalog finalization retains the existing
-certified predicate/writer checks and artifact normalization. A legacy
+predicate/writer checks and artifact normalization. A legacy
 `Catalog.Prepare` compatibility entry point may finalize only candidates without
 inspection; it must refuse an inspection candidate, never bypass its proof.
 The app uses the explicit candidate path for admission and runner checks.
@@ -467,7 +481,7 @@ must not claim actual start or termination; those keep their existing receipts.
 
 The exact native worker may be an internal mode of the existing shipped runner;
 do not add a third shipped binary without a demonstrated need. The ordinary
-provider task schema, historical interpreters, and existing certifications must
+provider task schema, historical interpreters, and existing runtime capability checks must
 remain compatible.
 
 ## Required proof before acceptance

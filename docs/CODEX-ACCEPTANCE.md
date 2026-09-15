@@ -1,29 +1,32 @@
 # Codex adapter acceptance
 
-Status: accepted in PR #8, squash `d6c3b3b`. Profile revision 2 is Executed;
-independent review and Linux/macOS PR and main CI passed. The implementation
-worktree is retired. Earlier validation notes below preserve the intermediate
-findings; the final handoff receipt records acceptance.
+Status: accepted in PR #8, squash `d6c3b3b`. Independent review and
+Linux/macOS PR and main CI passed. The implementation worktree is retired.
+Earlier validation notes below preserve intermediate findings; the final
+handoff receipt records the observed runtime and safety checks.
 
-## Version-specific evidence
+## Runtime capability evidence
 
-The installed CLI reports `codex-cli 0.154.0` on Darwin/arm64; its executable
-SHA-256 is `4f85982624b3898c8991cb80c0981b2aa71070e3537046c9a95950318a95afcc`.
-This identifies the candidate runtime and does not certify containment.
+The acceptance run discovered a usable Codex executable on Darwin/arm64. Its
+reported version and executable digest were recorded as task identity
+observations. Runtime preflight also verified that the executable is regular
+and executable, that `codex exec --help` succeeds, and that every flag used by
+the adapter is advertised. These observations do not establish containment by
+themselves and are never compared with a release manifest.
 
-The upstream `rust-v0.154.0` tag resolves to commit
-`6b9826e3aa83b1a5947db50f4332cb9c65f1b340`. Root inspected:
+An upstream Codex source snapshot was inspected for the output behavior. Root
+verified:
 
 - [JSONL event schema](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/exec/src/exec_events.rs): agent messages expose text without a phase field.
 - [JSONL producer](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/exec/src/event_processor_with_jsonl_output.rs): completed turns select the last top-level agent message; thread-total usage is copied into the completed event. Interrupted turns do not emit successful completion.
-- [Last-message writer](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/exec/src/event_processor.rs): writes the exact message bytes synchronously with no added newline. The native qualification below confirmed output-file agreement at the writer boundary.
+- [Last-message writer](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/exec/src/event_processor.rs): writes the exact message bytes synchronously with no added newline. The native safety run below confirmed output-file agreement at the writer boundary.
 
-Installed `exec --help` and `exec resume --help` confirm the planned flags and
-resume option placement. The interpreter uses a completed-turn rule specific
-to this version, not an invented phase field. Usage remains
+The discovered `exec --help` and `exec resume --help` outputs confirm the
+planned flags and resume option placement. The interpreter uses a completed-
+turn rule established by the output contract, not an invented phase field. Usage remains
 conversation-cumulative, with absent counters unavailable and no inferred
-per-task deltas. The required live gate must confirm the installed executable
-agrees with the pinned source behavior.
+per-task deltas. A changed CLI release remains usable when the runtime
+preflight and output contract checks pass.
 
 ## Policy implementation choice
 
@@ -42,7 +45,7 @@ to call CoreFoundation in-process. This preserves the repository's
 `CGO_ENABLED=0` cross-build contract; a cgo implementation would change that
 toolchain requirement. The call owns and releases its library handle and CF
 objects. It reads only whether the two Codex control preferences exist, without
-decoding or persisting their values. Other platforms remain uncertified.
+decoding or persisting their values. Other platforms remain unsupported.
 
 The candidate pins file credential storage and `approvals_reviewer="user"`,
 disables hooks, plugins, apps and both shell-snapshot implementations, and
@@ -62,22 +65,22 @@ pinned [auth manager](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db
 [auth storage](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/login/src/auth/storage.rs),
 and [cloud service](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/cloud-config/src/service.rs).
 Resume explicitly supplies the current sandbox, approval policy and approval
-reviewer. The pinned resume path reconstructs previous model/context metadata
+reviewer. The resume path reconstructs previous model/context metadata
 without restoring old hooks, plugins or MCP configuration. Provider-401 auth
-recovery does not replace the already-built session configuration. The native qualification below covers this constrained profile.
+recovery does not replace the already-built session configuration. The recorded native safety run below covers this constrained profile.
 
-The startup audit advanced the candidate to profile revision
-`codex-0.154.0-darwin-arm64-read-only-2`. In the pinned release, legacy shell
+The startup audit refined the read-only policy. In the inspected source,
+legacy shell
 snapshots default on and can run login-shell startup files outside the tool
 sandbox; `allow_login_shell=false` alone does not stop this V1 path. Apps also
 default on and inject the `codex_apps` MCP server independently of user
 `mcp_servers`. The candidate therefore explicitly sets
 `features.shell_snapshot=false`, `features.shell_snapshot_v2=false`, and
-`features.apps=false`. See the pinned
+`features.apps=false`. See the inspected
 [feature defaults](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/features/src/lib.rs),
 [V1 snapshot execution](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/core/src/shell_snapshot.rs),
 and [built-in MCP configuration](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/core/src/mcp.rs).
-The earlier profile-1 attempt remains unqualified and preserved unchanged.
+The earlier attempt remains preserved as a failed safety observation.
 
 ## Validation in progress
 
@@ -96,11 +99,11 @@ a successful shell-wrapped `cat` command and the nonce. The original acceptance
 matcher did not unwrap that shell command. More importantly, the model's final
 response reported two write denials without corresponding command events in
 the sealed stream. Prose does not establish those negative controls, so the
-attempt failed qualification and did not run a continuation. The private
+attempt failed the safety control and did not run a continuation. The private
 daemon shut down naturally. Its source snapshot, binaries and evidence are
-preserved in the private `codex-provider/native-qualification` archive.
+preserved in the private `codex-provider/native-safety-run` archive.
 The normal shipped CLI subsequently collected that task successfully while
-Codex certification was still pending and the daemon was stopped; immutable
+Codex runtime capability checks were still pending and the daemon was stopped; immutable
 task evidence remained byte-identical and no provider launch was requested.
 
 The revised acceptance harness binds a private, mode-0400 probe script by exact
@@ -118,21 +121,21 @@ Meaningful interpreter, identity, policy, argv, reader/writer-failure and replay
 tests; full quality, protocol and supervisor gates; two bounded native turns
 proving successful reads, denied writes and exact continuation; direct Codex
 review with no unresolved actionable findings; exact-head PR CI, squash merge,
-main CI and worktree retirement. Native qualification has passed; independent review passed; CI and the merge lifecycle remain pending.
+main CI and worktree retirement. Native safety controls passed; independent review passed; CI and the merge lifecycle remain pending.
 
-The pinned finite `exec` and `exec resume` paths send their brief as
+The finite `exec` and `exec resume` paths send their brief as
 `UserInput::Text` through `TurnStart`. Slash and bang prefixes do not invoke
 the interactive user-shell operation. That unsandboxed operation requires a
 separate TUI command or explicit `thread/shellCommand` API request, neither of
-which this launch path sends. See the pinned
+which this launch path sends. See the inspected
 [exec input path](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/exec/src/lib.rs#L877)
 and [explicit user-shell handler](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/core/src/session/handlers.rs#L98).
 
-## Executed profile qualification
+## Recorded native safety run
 
 On 2026-09-14 at 16:15 UTC, the revised candidate completed two native turns
 through the ordinary dispatcher/runner composition and isolated pueue 4.0.4.
-The explicit candidate composition differs only in pre-certification preparation;
+The explicit candidate composition differs only in runtime capability preflight;
 execution, capture, sealing, collection and publication use the shipped core.
 
 | Control | Evidence |
@@ -147,8 +150,8 @@ execution, capture, sealing, collection and publication use the shipped core.
 | Cleanup | Private daemon shut down naturally; zero signals |
 
 The private archive `codex-provider/native-containment-proof` preserves the
-qualification binaries, source manifest and snapshot, task receipts and probe
-binding. Embedded certification records the runtime, profile, predicate and
+acceptance binaries, source manifest and snapshot, task receipts and probe
+binding. Runtime capability evidence records the runtime, profile, predicate and
 receipt hashes. After promotion, freshly built production binaries exposed
 Codex in `providers --json` and collected both tasks again with the daemon
 already stopped and immutable evidence unchanged. No paid turn was used for
@@ -161,7 +164,7 @@ review invocations are separate from integration-test turns.
 The final local `make check` passed after the revised probe/profile freeze:
 full race suite, 40 acceptance-harness tests, 32 skill-validator tests, strict
 lint/vet and tooling regressions, four-platform CGO-free builds, 12 CLI smoke
-checks and vulnerability scanning. The subsequent certification/discovery
+checks and vulnerability scanning. The subsequent runtime preflight/discovery
 change also passed focused Codex and app race tests. The unchanged protocol,
 supervisor and contributor controls passed earlier in this handoff as recorded
 above. The independent review and focused findings closure completed.
@@ -190,7 +193,7 @@ The corrected harness passed 21 Codex tests and the full 75-test script suite
 core contract, with no concrete regression or unresolved actionable finding.
 
 The final rebuilt production CLI again passed discovery and both immutable
-collections after the supplemental receipt was bound into certification.
+collections after the supplemental receipt was recorded as task evidence.
 Direct Codex review used `gpt-5.6-luna` at max effort. The complete review and
 focused closure logs/source hashes are retained privately. Root's source,
 contract and maintainability review agrees with the closure; CI and merge
@@ -198,7 +201,7 @@ remain required.
 
 The initial PR head `18d7eb5` failed CI because the expanded discovery test
 exceeded the cyclomatic-complexity ceiling by one. The prior full local gate
-preceded that certification/discovery assertion change; focused tests had
+preceded that runtime preflight/discovery assertion change; focused tests had
 passed but did not cover lint. The correction extracts the metadata assertions
 into a named helper with an expected-provider table. Full lint and focused
 race tests pass, and direct Codex review confirmed every assertion is retained.

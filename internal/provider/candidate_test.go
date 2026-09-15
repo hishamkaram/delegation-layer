@@ -174,9 +174,9 @@ func TestCatalogRequiresInspectionBeforeFinalization(t *testing.T) {
 	if _, err = candidate.Finalize(json.RawMessage(`{"eligible":true}`), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	profile.Plan.Predicate.Version = "uncertified"
+	profile.Plan.Predicate.Version = "unregistered"
 	if _, err = candidate.Finalize(json.RawMessage(`{"eligible":true}`), time.Now()); !errors.Is(err, ErrProfileUnavailable) {
-		t.Fatalf("inspection bypassed certification: %v", err)
+		t.Fatalf("inspection accepted an unregistered predicate: %v", err)
 	}
 	profile.Plan.Predicate = executionPlanForCatalogTest(request).Predicate
 	profile.WritableRoots = []string{"/new-writable-root"}

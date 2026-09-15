@@ -148,8 +148,8 @@ type ProjectDiscovery struct {
 }
 
 // PolicyInventory is a bounded, deterministic snapshot of the source paths
-// that the pinned Antigravity baseline can observe. It is an input to a later
-// policy parser and live capability gate, not a certification by itself.
+// that the Antigravity CLI can expose. It is an input to a later
+// policy parser and live capability gate, not a substitute for per-task checks.
 type PolicyInventory struct {
 	Home             string
 	Workspace        string

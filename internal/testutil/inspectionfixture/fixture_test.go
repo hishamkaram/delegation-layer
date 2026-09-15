@@ -283,7 +283,7 @@ func TestPrepareInspectionCandidateRejectsChangedHelper(t *testing.T) {
 func TestDependenciesDisableUnownedRecorderCallbacks(t *testing.T) {
 	deps := NewDependenciesForExecutable("")
 	if deps.SupervisorOptions.Observer != nil || deps.ExecutionHooks.Event != nil || deps.ExecutionHooks.Start != nil || deps.ExecutionHooks.Wait != nil || deps.ExecutionHooks.Capture != nil {
-		t.Fatal("inspection fixture retained phase2 recorder callbacks")
+		t.Fatal("inspection fixture retained supervisor recorder callbacks")
 	}
 }
 

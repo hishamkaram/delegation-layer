@@ -14,7 +14,7 @@ const defaultProjectID = "default-cli-project"
 
 // validateDefaultProject accepts the observed sparse default CLI project only.
 // A project with resources or permission overrides needs its own verified
-// schema/profile; it cannot inherit this baseline's certification. The implicit
+// schema/profile; it cannot inherit this baseline's policy assumptions. The implicit
 // cwd behavior of this exact empty-resource shape still needs the native gate.
 func validateDefaultProject(data []byte) error {
 	if !utf8.Valid(data) || task.ValidateJSONStructure(data) != nil {

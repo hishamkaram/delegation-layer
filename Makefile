@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy acceptance-codex codex-qualification-tools acceptance-claude claude-qualification-tools
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy codex-acceptance-tools acceptance-codex claude-acceptance-tools acceptance-claude
 
 tools:
 	./scripts/install-tools.sh
@@ -88,12 +88,12 @@ acceptance-protocol: build
 	./scripts/acceptance-protocol.sh
 
 supervisor-fixtures: tool-versions
-	@mkdir -p bin/phase2tools
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/delegate ./internal/testutil/phase2cli/cmd/delegate
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/delegate-run ./internal/testutil/phase2cli/cmd/delegate-run
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/provider ./internal/testutil/phase2fixture/cmd/provider
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/pueue-fake ./internal/testutil/phase2supervisor/cmd/pueue
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/phase2tools/phase2probe ./internal/testutil/phase2probe
+	@mkdir -p bin/harness-tools
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/harness-tools/delegate ./internal/testutil/harnesscli/cmd/delegate
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/harness-tools/delegate-run ./internal/testutil/harnesscli/cmd/delegate-run
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/harness-tools/provider ./internal/testutil/fakeprovider/cmd/provider
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/harness-tools/pueue-fake ./internal/testutil/fakesupervisor/cmd/pueue
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/harness-tools/harnessprobe ./internal/testutil/harnessprobe
 
 acceptance-supervisor: supervisor-fixtures
 	./scripts/acceptance-supervisor.sh
@@ -102,21 +102,21 @@ acceptance-agy: build supervisor-fixtures test-native-harness
 	go test -race -count=1 ./internal/provider/antigravity ./internal/task ./internal/taskdir
 	./scripts/acceptance_agy.sh
 
-codex-qualification-tools: tool-versions
-	@mkdir -p bin/codex-qualification
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/codex-qualification/delegate ./internal/testutil/codexqualification/cmd/delegate
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/codex-qualification/delegate-run ./internal/testutil/codexqualification/cmd/delegate-run
+codex-acceptance-tools: tool-versions
+	@mkdir -p bin/codex-acceptance
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/codex-acceptance/delegate ./internal/testutil/codexacceptance/cmd/delegate
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/codex-acceptance/delegate-run ./internal/testutil/codexacceptance/cmd/delegate-run
 
-acceptance-codex: build test-native-harness
+acceptance-codex: build test-native-harness codex-acceptance-tools
 	go test -race -count=1 ./internal/provider/codex
 	./scripts/acceptance_codex.sh
 
-claude-qualification-tools: tool-versions
-	@mkdir -p bin/claude-qualification
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/claude-qualification/delegate ./internal/testutil/claudequalification/cmd/delegate
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/claude-qualification/delegate-run ./internal/testutil/claudequalification/cmd/delegate-run
+claude-acceptance-tools: tool-versions
+	@mkdir -p bin/claude-acceptance
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/claude-acceptance/delegate ./internal/testutil/claudeacceptance/cmd/delegate
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/claude-acceptance/delegate-run ./internal/testutil/claudeacceptance/cmd/delegate-run
 
-acceptance-claude: build test-native-harness
+acceptance-claude: build test-native-harness claude-acceptance-tools
 	go test -race -count=1 ./internal/provider/claude
 	./scripts/acceptance_claude.sh
 
@@ -145,7 +145,7 @@ inspection-fixtures: tool-versions
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/delegate ./internal/testutil/inspectionfixture/cmd/delegate
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/delegate-run ./internal/testutil/inspectionfixture/cmd/delegate-run
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/inspection-helper ./internal/testutil/inspectionfixture/cmd/inspection-helper
-	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/provider ./internal/testutil/phase2fixture/cmd/provider
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/provider ./internal/testutil/fakeprovider/cmd/provider
 
 acceptance-inspection: inspection-fixtures test-native-harness
 	./scripts/acceptance-inspection.sh

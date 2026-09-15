@@ -3,72 +3,63 @@ package provider
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-
-	"github.com/hishamkaram/delegation-layer/internal/task"
-	"golang.org/x/sys/unix"
 )
 
-func TestFingerprintExecutableRejectsAliasesAndSpecialFiles(t *testing.T) {
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(root, "provider")
-	data := []byte("finite fixture; never executed")
-	if err = os.WriteFile(path, data, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	digest, err := FingerprintExecutable(path)
-	if err != nil || digest != task.ComputeSHA256(data) {
-		t.Fatalf("digest=%s err=%v", digest, err)
-	}
-	alias := filepath.Join(root, "alias")
-	if err = os.Symlink(path, alias); err != nil {
-		t.Fatal(err)
-	}
-	fifo := filepath.Join(root, "fifo")
-	if err = unix.Mkfifo(fifo, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, invalid := range []string{root, alias, fifo, "relative"} {
-		if _, err = FingerprintExecutable(invalid); err == nil {
-			t.Errorf("accepted %s", invalid)
+func TestParseCLIVersionAcceptsChangedReportedVersion(t *testing.T) {
+	for _, output := range []string{"provider 99.42.7 (nightly)\n", "v2026.09\n", "custom build"} {
+		got, err := ParseCLIVersion([]byte(output))
+		if err != nil || got != strings.TrimSpace(output) {
+			t.Fatalf("version %q: got %q err=%v", output, got, err)
 		}
-	}
-	if err = os.Chmod(path, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = FingerprintExecutable(path); err == nil {
-		t.Fatal("accepted non-executable")
 	}
 }
 
-func TestFingerprintOpenedRejectsChangedPathIdentity(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "provider")
-	if err := os.WriteFile(path, []byte("original"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if closeErr := file.Close(); closeErr != nil {
-			t.Error(closeErr)
+func TestParseCLIVersionRejectsInvalidOutput(t *testing.T) {
+	for _, output := range [][]byte{nil, []byte("  \n"), []byte("provider\x00version\n"), {0xff}} {
+		if _, err := ParseCLIVersion(output); err == nil {
+			t.Fatalf("invalid version output %q was accepted", output)
 		}
-	})
-	if err = os.Rename(path, path+".original"); err != nil {
+	}
+}
+
+func TestContainsCLIFlagRequiresCompleteToken(t *testing.T) {
+	if !ContainsCLIFlag([]byte("  --sandbox   --output-last-message\n"), "--sandbox") {
+		t.Fatal("advertised flag was not found")
+	}
+	for _, output := range []string{"--sandboxed", "prefix--sandbox", "--sandbox_value"} {
+		if ContainsCLIFlag([]byte(output), "--sandbox") {
+			t.Fatalf("partial flag %q was accepted", output)
+		}
+	}
+}
+
+func TestLocateCLIRejectsMissingAndNonExecutable(t *testing.T) {
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	if _, err := LocateCLIPath(missing); err == nil {
+		t.Fatal("missing executable was accepted")
+	}
+	nonExecutable := filepath.Join(root, "not-executable")
+	if err := os.WriteFile(nonExecutable, []byte("#!/bin/sh\nexit 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(path, []byte("replaced"), 0o700); err != nil {
+	if _, err := LocateCLIPath(nonExecutable); err == nil {
+		t.Fatal("non-executable file was accepted")
+	}
+}
+
+func TestLocateCLIPathFingerprintsRegularExecutable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "provider")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' version\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = fingerprintOpened(path, file, before); err == nil {
-		t.Fatal("accepted replaced executable path")
+	info, err := LocateCLIPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Path == "" || info.SHA256 == "" || info.Version != "" {
+		t.Fatalf("unexpected static executable info: %+v", info)
 	}
 }

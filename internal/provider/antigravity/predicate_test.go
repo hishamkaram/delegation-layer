@@ -28,7 +28,7 @@ func TestPrintReferenceAndContractDigest(t *testing.T) {
 		t.Fatalf("reference = %+v, want %+v", ref, want)
 	}
 	if ref.Adapter != "antigravity:print" || ref.Mode != "workspace-write" || ref.Version != "1.2.2" {
-		t.Fatalf("reference lost pinned provider contract: %+v", ref)
+		t.Fatalf("reference lost immutable provider contract: %+v", ref)
 	}
 	if !strings.HasSuffix(Contract(), "\n") || task.ComputeSHA256([]byte(Contract())) != ref.SHA256 {
 		t.Fatal("contract digest or terminator changed")
