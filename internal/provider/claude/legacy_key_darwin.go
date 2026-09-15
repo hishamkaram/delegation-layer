@@ -118,6 +118,13 @@ func inspectLegacyAPIKeyAbsence(environment profileEnvironment) (resultErr error
 	return inspectLegacyAPIKeyAbsenceWithAPI(environment, newLegacyKeychainAPI(native))
 }
 
+func inspectLegacyAPIKey(environment profileEnvironment) legacyAPIKeyInspection {
+	if err := inspectLegacyAPIKeyAbsence(environment); err != nil {
+		return legacyAPIKeyInspection{Err: err}
+	}
+	return legacyAPIKeyInspection{Verified: true}
+}
+
 func inspectLegacyAPIKeyAbsenceWithAPI(environment profileEnvironment, api legacyKeychainAPI) error {
 	account, err := legacyAPIKeyAccount(environment)
 	if err != nil || api.copyMatching == nil {

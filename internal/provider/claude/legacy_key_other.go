@@ -9,3 +9,7 @@ import "fmt"
 func inspectLegacyAPIKeyAbsence(profileEnvironment) error {
 	return fmt.Errorf("%w: legacy Claude API-key inspection is unavailable on this platform", ErrUnsupportedProfile)
 }
+
+func inspectLegacyAPIKey(profileEnvironment) legacyAPIKeyInspection {
+	return legacyAPIKeyInspection{Err: fmt.Errorf("%w: legacy Claude API-key inspection is unavailable on this platform", ErrUnsupportedProfile)}
+}

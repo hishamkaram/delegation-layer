@@ -33,7 +33,7 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	if err = inspectLegacyAPIKeyAbsence(environment); err != nil {
+	if err = validateLegacyAPIKeyInspection(inspectLegacyAPIKey(environment)); err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
 	definition, err := nativeInspection(environment)
