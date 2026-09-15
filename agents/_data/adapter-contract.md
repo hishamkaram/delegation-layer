@@ -1,6 +1,6 @@
 # Adapter Contract and Runtime Capability Checks
 
-This document defines the normative requirements for provider adapters (`antigravity:print`, `codex:exec`, and `claude:print`). All three adapters are required dependencies for the v1 private release.
+This document defines the normative requirements for provider adapters (`antigravity:print`, `codex:exec`, and `claude:print`). All three adapters are supported dependencies for the private preview.
 
 ## 1. Supported Runtime Profiles
 

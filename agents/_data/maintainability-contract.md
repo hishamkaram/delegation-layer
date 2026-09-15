@@ -56,8 +56,8 @@ into every provider. Keep provider interpretation pure over sealed evidence and
 keep acceptance orchestration in the shipped dispatcher/runner and shared
 harness.
 
-Root owns planning documents, integration, direct Codex review, commits,
-pull requests, CI, and merges. Contributors may prepare bounded changes and
+Root owns integration, direct Codex review, commits, pull requests, CI, and
+merges. Contributors may prepare bounded changes and
 receipts, but must not transfer those responsibilities or install global
 skills/configuration. A review record is incomplete when its output is
 inconclusive or when actionable findings remain unresolved.

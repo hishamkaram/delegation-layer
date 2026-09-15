@@ -7,8 +7,8 @@ import "fmt"
 // and retaining this implementation when recovery of v1 remains supported.
 const fixturePredicateV1Contract = `{"adapter":"fixture:test","mode":"read-only","version":"1","raw":["raw/stderr","raw/stdout"],"success":"started,exit_code=0,error=empty,stdout-size>0; preserve every stdout byte","refusals":{"start_failed":"start_failed: <error>","error":"capture_error: <error>","nonzero_exit":"provider_exit: <decimal-exit-code>","empty_stdout":"empty_answer"},"precedence":["start_failed","error","nonzero_exit","empty_stdout","success"]}` + "\n"
 
-// FixturePredicateRef returns the one explicitly registered Phase 1 predicate.
-// Native provider predicates will be registered by their later adapter phases.
+// FixturePredicateRef returns the explicitly registered fixture predicate.
+// Native provider predicates are registered by their provider adapters.
 func FixturePredicateRef() PredicateRef {
 	return PredicateRef{
 		Adapter: "fixture:test",

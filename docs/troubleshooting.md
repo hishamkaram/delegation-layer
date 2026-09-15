@@ -1,0 +1,72 @@
+# Troubleshooting
+
+Use `--json` while diagnosing a task. It keeps admission, liveness, and
+publication separate and includes a bounded error message without embedding
+provider answer text.
+
+## Provider is not found or rejected before admission
+
+Check that the executable is on the dispatch process's `PATH`, is a regular
+executable file, and can run in the requested workspace. Then run the native
+help command yourself. Delegation Layer invokes the provider's version and help
+commands and requires every adapter flag to appear in help output. A missing
+flag or an unreadable executable is a capability failure, not a release-version
+failure.
+
+Use `delegate providers --json` to confirm the profile ID and required runtime
+flags. Discovery does not prove that the current host has the executable.
+
+If the host is Linux, remember that the current Codex and Claude profiles also
+need their native Darwin policy checks; use a profile with a supported native
+contract for that host.
+
+## Authentication fails
+
+Authenticate with the provider's own CLI workflow and retry a new task. Do not
+copy credential files into the Delegation Layer state root. Native login caches
+and account policy can change between preparation and launch; the provider's
+reported authentication result is authoritative for that turn.
+
+## Mode or option is unsupported
+
+Compare the request with the catalog entry. `antigravity:print` supports
+`workspace-write`, `continuation`, and `native-timeout`; `codex:exec` and
+`claude:print` are read-only and support continuation. Unsupported model,
+effort, policy, or timeout combinations are rejected before supervisor
+admission.
+
+## Supervisor configuration fails
+
+Pass an existing absolute `--pueue-config` path or set
+`DELEGATE_PUEUE_CONFIG` to that path. Use Pueue 4.0.4 with a private Unix socket
+and keep its configuration and credentials outside the task state root and
+workspace. A changed executable, configuration file, or resolved supervisor
+settings can invalidate a saved task binding.
+
+## A task remains pending
+
+`status` reports what is known without starting another process. `collect --watch
+5s` waits for one bounded observation interval; repeat it if the supervisor is
+still running. Queue time does not consume the provider budget. Do not delete
+the task directory or reuse its ID while the state is uncertain.
+
+## A continuation is busy
+
+The predecessor still owns its conversation reservation, or its runner has not
+released it after a completed outcome. Collect the predecessor until terminal,
+then retry the continuation with a new task ID and the exact predecessor ID.
+
+## A result is rejected
+
+A rejected outcome is a terminal result with exit code 4. Inspect the outcome
+and sealed raw descriptors from `collect` and `logs`. Common causes are changed
+provider output shape, session identity mismatch, policy drift, an invalid
+declared artifact, or a provider-reported failure. The task is not retried
+automatically.
+
+## Collection fails after a successful run
+
+If the response contains a valid outcome alongside an operational error, keep
+the outcome: it is independently committed. Re-run `collect` or `logs` to
+retry descriptor validation and reservation cleanup. Preserve the state root
+for inspection when the error remains unresolved.
