@@ -82,3 +82,41 @@ func TestBudgetCompletionPreventsEvenPreparation(t *testing.T) {
 	default:
 	}
 }
+
+func TestClockExpiryAtCompletionCannotCancelUndeliveredTimer(t *testing.T) {
+	clock := newAdvancingClock()
+	events := &eventLog{}
+	preparations, requests := 0, 0
+	opts := Options{Hooks: Hooks{Event: events.add}, Stopper: budgetPreparerFunc(func(time.Time) (BudgetRequest, error) {
+		preparations++
+		events.add("intent-persisted")
+		return func(context.Context) error { requests++; return nil }, nil
+	})}
+	owner, _ := armBudget(clock, time.Second, opts)
+	require(t, owner.authorizeStart(opts))
+	clock.advance(time.Second)
+	owner.complete(opts)
+	require(t, owner.await())
+	if preparations != 1 || requests != 1 {
+		t.Fatalf("late completion lost expiry: preparations=%d requests=%d", preparations, requests)
+	}
+	assertOrder(t, events.snapshot(), "intent-persisted", "completion-observed")
+}
+
+func TestBudgetPreparationErrorCannotGrantReturnedRequest(t *testing.T) {
+	clock := newAdvancingClock()
+	failure := errors.New("stop intent barrier failed")
+	requests := 0
+	opts := Options{Stopper: budgetPreparerFunc(func(time.Time) (BudgetRequest, error) {
+		return func(context.Context) error { requests++; return nil }, failure
+	})}
+	owner, _ := armBudget(clock, time.Second, opts)
+	clock.advance(time.Second)
+	owner.complete(opts)
+	if !errors.Is(owner.await(), failure) {
+		t.Fatal("lost failed preparation")
+	}
+	if requests != 0 {
+		t.Fatal("failed preparation granted a supervisor operation")
+	}
+}

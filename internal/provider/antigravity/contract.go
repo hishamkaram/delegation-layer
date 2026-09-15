@@ -15,9 +15,10 @@ const (
 	TimeoutMarker = "[agy] print timeout"
 )
 
-// printV122Contract is immutable interpretation policy for the observed agy
-// 1.2.2 author-envelope shape. A changed field, status, or refusal rule gets
-// a new version and digest rather than silently changing recovery semantics.
+// printV122Contract is immutable interpretation policy for the agy
+// author-envelope shape. Its revision is independent of the installed CLI;
+// a changed field, status, or refusal rule gets a new predicate digest rather
+// than silently changing recovery semantics.
 const printV122Contract = `{"adapter":"antigravity:print","mode":"workspace-write","version":"1.2.2","top_level":{"conversation_id":"uuid-string","status":"SUCCESS|ERROR","response":"string","error":"string?","duration_seconds":"nonnegative-finite-number?","num_turns":"nonnegative-integer?","usage":{"input_tokens":"nonnegative-integer?","output_tokens":"nonnegative-integer?","thinking_tokens":"nonnegative-integer?","cache_read_tokens":"nonnegative-integer?","total_tokens":"nonnegative-integer?"}},"object":"one strict object; duplicate and unknown keys rejected; JSON whitespace is allowed between tokens but not inside strings or escapes","success":"status=SUCCESS,error absent,exit_code=0,conversation_id valid,response non-whitespace,no timeout marker","failure":"known ERROR status becomes provider-failed; sealed capture errors become provider-failed","identity":"UUID-shaped conversation_id; exact expected and recorded IDs","timeout":"exact case-sensitive stderr marker; incomplete-output","usage":"conversation-cumulative/provider-envelope; reported on success, unreliable on failure/incomplete","invalid":"malformed, truncated, invalid UTF-8, wrong types, unknown status, duplicate/trailing data","response":"decoded UTF-8 bytes streamed without adapter length cap"}` + "\n"
 
 // Contract returns the canonical bytes whose digest identifies this

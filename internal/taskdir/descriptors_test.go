@@ -11,7 +11,7 @@ import (
 )
 
 func TestPreparedIdentityUsesActualRecordBytes(t *testing.T) {
-	td := phase2Task(t, testStore(t))
+	td := supervisorTask(t, testStore(t))
 	path := filepath.Join(td.Dir, "meta.json")
 	original := readTestFile(t, path)
 	noncanonical := append([]byte(" \n"), original...)
@@ -37,7 +37,7 @@ func TestPreparedIdentityUsesActualRecordBytes(t *testing.T) {
 }
 
 func TestLogDescriptorsDistinguishLiveBytesFromSealedIdentity(t *testing.T) {
-	td := phase2Task(t, testStore(t))
+	td := supervisorTask(t, testStore(t))
 	descriptors, err := td.LogDescriptors()
 	must(t, err)
 	checkLogDescriptors(t, td, descriptors, false, false)

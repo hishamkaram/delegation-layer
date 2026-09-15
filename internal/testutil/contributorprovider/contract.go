@@ -11,10 +11,11 @@ import (
 const (
 	// Provider is a structurally valid test-only provider ID. It must never be
 	// added to app.NativeCatalog.
-	Provider = "synthetic:contributor-proof"
-	Mode     = "read-only"
-	Version  = "1"
-	Protocol = protocol.Protocol
+	Provider        = "synthetic:contributor-proof"
+	Mode            = "read-only"
+	Version         = "1"
+	ProfileRevision = "contributor-proof-v1"
+	Protocol        = protocol.Protocol
 
 	RuntimeInputName = protocol.RuntimeInputName
 	ToolsInputName   = protocol.ToolsInputName
@@ -39,9 +40,7 @@ const MaxEnvelopeBytes = protocol.MaxEnvelopeBytes
 // MaxBriefBytes bounds the finite JSON request consumed from stdin.
 const MaxBriefBytes = protocol.MaxBriefBytes
 
-// OutputWriterContract is the shared core's certified completion contract for
-// the optional answer artifact. A future registration must certify the same
-// value alongside this predicate revision.
+// OutputWriterContract is the shared core's completion contract for the optional answer artifact.
 const OutputWriterContract = task.OutputWriterProcessExitEOF
 
 // contractV1 is immutable interpretation policy. Any semantic change needs a

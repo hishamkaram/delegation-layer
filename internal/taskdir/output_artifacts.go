@@ -15,9 +15,8 @@ import (
 var errNativeOutputAbsent = errors.New("optional native output file absent")
 
 // ImportOutputArtifacts is called by execution only after observed process
-// termination and both stream EOFs. The certified profile establishes that no
-// declared output writer survives that boundary. Snapshot checks below detect
-// faults; they are not a substitute for that certification.
+// termination and both stream EOFs. The declared writer contract requires no
+// output writer to survive that boundary. Snapshot checks below detect faults.
 func (td *TaskDir) ImportOutputArtifacts() (resultErr error) {
 	state, err := td.ownedRunner()
 	if err != nil {

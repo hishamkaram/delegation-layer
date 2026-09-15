@@ -49,7 +49,7 @@ The installed Antigravity CLI (`agy`) is used only to test its provider integrat
 ## Invariant Contracts
 All contributors and subagents must strictly adhere to the project contracts in `agents/_data/`:
 1. `agents/_data/delegation-invariants.md`: Terminal outcome authority, single-turn tasks, at-most-once launch, create-once staging, and forbidden signals.
-2. `agents/_data/adapter-contract.md`: Certified launch profiles, containment verification, input transport, and result predicates.
+2. `agents/_data/adapter-contract.md`: Runtime capability checks, containment verification, input transport, and result predicates.
 3. `agents/_data/code-quality-floor.md`: Pinned toolchain, strict linter policy, zero-blank errcheck, forbidigo patterns, and test hygiene.
 
 ## Planning and Normative Documents

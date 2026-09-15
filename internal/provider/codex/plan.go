@@ -38,7 +38,7 @@ func validateRequest(request task.TaskRecord) error {
 		return fmt.Errorf("%w: Codex requires read-only permission", ErrUnsupportedProfile)
 	}
 	if request.RequestedConfig.Model != "" || (request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default") || request.RequestedConfig.NativeTimeout != "" {
-		return fmt.Errorf("%w: only provider-default model and effort are certified", ErrUnsupportedProfile)
+		return fmt.Errorf("%w: only provider-default model and effort are supported", ErrUnsupportedProfile)
 	}
 	if request.BudgetNanos <= 0 || request.BriefLength <= 0 || request.BriefLength > task.MaxBriefSize {
 		return fmt.Errorf("%w: finite brief and positive budget are required", ErrUnsupportedProfile)

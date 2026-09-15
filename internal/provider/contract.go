@@ -17,8 +17,8 @@ import (
 )
 
 var (
-	// ErrProfileUnavailable identifies a provider profile that is not compiled
-	// into, or not certified for, this command build.
+	// ErrProfileUnavailable identifies a provider mode or runtime that cannot
+	// be prepared for this request.
 	ErrProfileUnavailable = errors.New("provider permission profile is not available")
 	// ErrDuplicateProvider identifies a catalog containing two registrations for
 	// the same provider identifier.
@@ -28,8 +28,8 @@ var (
 	ErrDuplicatePredicate = errors.New("duplicate provider predicate reference")
 	// ErrInvalidDescriptor identifies malformed immutable discovery metadata.
 	ErrInvalidDescriptor = errors.New("invalid provider descriptor")
-	// ErrUnsupportedOption identifies a request option not certified by a
-	// selected provider profile.
+	// ErrUnsupportedOption identifies a request option not supported by the
+	// selected provider.
 	ErrUnsupportedOption = errors.New("unsupported provider option")
 )
 
@@ -156,30 +156,23 @@ func validatePlanBindings(plan execution.Plan) error {
 // by hermetic acceptance compositions.
 type PrepareProfile func(task.TaskRecord) (PreparedProfile, error)
 
-// CertifiedProfile describes one immutable, already-executed permission
-// profile. The fields are metadata; they do not assert that this host is
-// currently ready to launch the provider.
-type CertifiedProfile struct {
-	Mode                 string            `json:"mode"`
-	Approval             string            `json:"approval"`
-	Status               string            `json:"status"`
-	ProviderVersion      string            `json:"provider_version"`
-	OS                   string            `json:"os"`
-	Arch                 string            `json:"arch"`
-	RuntimeSHA256        string            `json:"runtime_sha256"`
-	ProfileRevision      string            `json:"profile_revision"`
-	Predicate            task.PredicateRef `json:"predicate"`
-	OutputWriterContract string            `json:"output_writer_contract,omitempty"`
+// RuntimeCapability describes the command-level checks performed when a
+// launch profile is prepared. HelpArgs are prepended before --help (for
+// example, Codex uses ["exec"]); RequiredFlags are the flags the adapter puts
+// in its argv. These are requirements, not a release manifest.
+type RuntimeCapability struct {
+	HelpArgs      []string `json:"help_args,omitempty"`
+	RequiredFlags []string `json:"required_flags"`
 }
 
 // Description is the bounded metadata exposed by the providers command.
-// Discoverable controls whether this registration appears in that response;
-// historical-only registrations can still contribute interpreters.
+// Discoverable controls whether this registration appears in that response.
 type Description struct {
-	ID               string             `json:"id"`
-	SupportedOptions []string           `json:"supported_options"`
-	Profiles         []CertifiedProfile `json:"profiles"`
-	Discoverable     bool               `json:"-"`
+	ID               string            `json:"id"`
+	SupportedModes   []string          `json:"supported_modes"`
+	SupportedOptions []string          `json:"supported_options"`
+	Runtime          RuntimeCapability `json:"runtime"`
+	Discoverable     bool              `json:"-"`
 }
 
 // Registration is one explicit catalog entry. A nil Prepare function is
@@ -187,6 +180,6 @@ type Description struct {
 // authority.
 type Registration struct {
 	Description  Description
-	Prepare      PrepareProfile
+	Prepare      PrepareCandidate
 	Interpreters []predicate.Interpreter
 }

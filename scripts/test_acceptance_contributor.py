@@ -39,7 +39,7 @@ class ContributorHarnessTests(unittest.TestCase):
             (directory / "raw/answer.txt").write_bytes(b"")
             (directory / "publish.reject").write_bytes(b"empty-output")
             verify_case_evidence("empty", directory, "answer", "session-" + TASK_ID)
-            # A catch-all rejection cannot certify the empty-file behavior.
+            # A catch-all rejection cannot prove the empty-file behavior.
             (directory / "publish.reject").write_bytes(b"malformed-envelope")
             with self.assertRaisesRegex(RuntimeError, "rejection reason mismatch"):
                 verify_case_evidence("empty", directory, "answer", "session-" + TASK_ID)

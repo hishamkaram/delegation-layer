@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -70,103 +71,44 @@ func (s eventState) semanticFault() bool { return s.semantic != nil }
 // while the stream is drained so the core can safely close and seal capture.
 func parseStdout(reader io.Reader) (eventState, error) {
 	state := newEventState()
-	if reader == nil {
-		return state, errors.New("reading codex stdout: nil reader")
-	}
-	parser := lineParser{state: &state}
-	buffer := make([]byte, readBufferBytes)
-	noProgress := 0
-	for {
-		n, err := reader.Read(buffer)
-		if n < 0 || n > len(buffer) {
-			return state, fmt.Errorf("reading codex stdout: reader returned invalid byte count %d", n)
-		}
-		if n > 0 {
-			noProgress = 0
-			parser.feed(buffer[:n])
-		} else if err == nil {
-			noProgress++
-			if noProgress >= 100 {
-				return state, fmt.Errorf("reading codex stdout: %w", io.ErrNoProgress)
-			}
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				parser.finish()
-				return state, nil
-			}
-			return state, fmt.Errorf("reading codex stdout: %w", err)
+	semanticErr, readErr := commonprovider.ReadJSONL(reader, maxEventLineBytes, func(line []byte) error {
+		return processEventLine(&state, line)
+	})
+	if state.semantic == nil && semanticErr != nil {
+		if errors.Is(semanticErr, commonprovider.ErrJSONLLineTooLong) {
+			state.markSemantic("event line exceeds 1 MiB")
+		} else {
+			state.markSemantic(semanticErr.Error())
 		}
 	}
+	if readErr != nil {
+		return state, fmt.Errorf("reading codex stdout: %w", readErr)
+	}
+	return state, nil
 }
 
-// lineParser handles JSONL framing without bufio.Scanner's token limit. It
-// never retains more than MaxControlRecordSize+1 bytes for one line.
-type lineParser struct {
-	state      *eventState
-	line       []byte
-	lineTooBig bool
-}
-
-func (p *lineParser) feed(data []byte) {
-	for _, byteValue := range data {
-		if p.state.semantic != nil {
-			return
-		}
-		if byteValue == '\n' {
-			p.finishLine()
-			continue
-		}
-		if p.lineTooBig {
-			continue
-		}
-		if len(p.line) >= maxEventLineBytes {
-			p.lineTooBig = true
-			p.state.markSemantic("event line exceeds 1 MiB")
-			continue
-		}
-		p.line = append(p.line, byteValue)
-	}
-}
-
-func (p *lineParser) finish() {
-	if p.lineTooBig || len(p.line) != 0 {
-		p.finishLine()
-	}
-}
-
-func (p *lineParser) finishLine() {
-	if p.lineTooBig {
-		p.lineTooBig = false
-		p.line = p.line[:0]
-		return
-	}
-	line := p.line
-	p.line = p.line[:0]
-	if len(bytes.TrimSpace(line)) == 0 {
-		p.state.markSemantic("blank JSONL event line")
-		return
-	}
-	processEventLine(p.state, line)
-}
-
-func processEventLine(state *eventState, line []byte) {
+func processEventLine(state *eventState, line []byte) error {
 	// Once a permanent semantic fault is known, no later event can restore a
 	// publishable result. Keep consuming bytes for real reader faults, but do
 	// not parse or retain any more event state.
 	if state.semantic != nil {
-		return
+		return state.semantic
+	}
+	if len(bytes.TrimSpace(line)) == 0 {
+		state.markSemantic("blank JSONL event line")
+		return state.semantic
 	}
 	if !utf8.Valid(line) {
 		state.markSemantic("event line is not valid UTF-8")
-		return
+		return state.semantic
 	}
 	event, err := decodeEvent(line)
 	if err != nil {
 		state.markSemantic(err.Error())
-		return
+		return state.semantic
 	}
 	applyEvent(state, event)
+	return state.semantic
 }
 
 func decodeEvent(line []byte) (parsedEvent, error) {

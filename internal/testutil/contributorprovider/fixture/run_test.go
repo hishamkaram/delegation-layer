@@ -64,6 +64,18 @@ func runArguments(fixture runFixture, resume bool) []string {
 	return args
 }
 
+func TestRunHelpAdvertisesAdapterFlags(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--help"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("help exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	for _, flag := range []string{"--runtime-config", "--tools-config", "--output", "--task-id", "--session-id", "--resume"} {
+		if !strings.Contains(stdout.String(), flag) {
+			t.Fatalf("help omitted %s: %q", flag, stdout.String())
+		}
+	}
+}
+
 func marshalBrief(t *testing.T, brief protocol.Brief) []byte {
 	t.Helper()
 	data, err := task.MarshalCanonical(brief)

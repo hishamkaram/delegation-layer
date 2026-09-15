@@ -10,7 +10,8 @@ import (
 )
 
 // These are finite fake supervisor observations; actual supervisor transport is
-// Phase 2. An empty or unavailable observation cannot erase a submission guard.
+// exercised by the acceptance harness. An empty or unavailable observation
+// cannot erase a submission guard.
 type fixtureAdmissionObservation struct {
 	RootID     string `json:"root_id"`
 	TaskID     string `json:"task_id"`

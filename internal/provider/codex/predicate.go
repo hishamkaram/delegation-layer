@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -67,7 +68,7 @@ func readEvidence(raw predicate.Evidence) (eventState, error) {
 		stdout, err = parseStdout(reader)
 		return err
 	})
-	stderrReadErr := raw.Read(predicate.Stderr, drainReader)
+	stderrReadErr := raw.Read(predicate.Stderr, commonprovider.DrainReader)
 	return stdout, errors.Join(stdoutReadErr, stderrReadErr)
 }
 
@@ -213,34 +214,6 @@ func retainBounded(data, chunk []byte, maxBytes int, tooLarge bool) ([]byte, boo
 		tooLarge = true
 	}
 	return data, tooLarge
-}
-
-func drainReader(reader io.Reader) error {
-	if reader == nil {
-		return errors.New("nil codex evidence reader")
-	}
-	buffer := make([]byte, readBufferBytes)
-	noProgress := 0
-	for {
-		n, err := reader.Read(buffer)
-		if n < 0 || n > len(buffer) {
-			return fmt.Errorf("reader returned invalid byte count %d", n)
-		}
-		if n > 0 {
-			noProgress = 0
-		} else if err == nil {
-			noProgress++
-			if noProgress >= 100 {
-				return io.ErrNoProgress
-			}
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			return err
-		}
-	}
 }
 
 func writeAnswer(out io.Writer, data []byte) error {

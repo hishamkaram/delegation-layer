@@ -1,6 +1,6 @@
 ---
 name: add-an-adapter
-description: Add and certify a provider adapter while preserving shared lifecycle ownership and versioned evidence interpretation.
+description: Add a provider adapter with runtime capability checks while preserving shared lifecycle ownership and versioned evidence interpretation.
 ---
 
 # Add a provider adapter
@@ -17,8 +17,8 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
 
 ## Inputs
 
-- the immutable provider ID, supported request options, certified profile,
-  executable/version/platform scope, and predicate revision;
+- the immutable provider ID, supported request options, runtime capability
+  profile, executable/help compatibility, and output-predicate revision;
 - the exact owned package, catalog, fixture, harness, and documentation files;
 - the provider's configuration precedence, identity/session semantics, native
   envelope, usage fields, and failure markers; and
@@ -27,7 +27,7 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
 
 ## Workflow
 
-1. Define the smallest certified profile and reject escalation, arbitrary
+1. Define the smallest supported profile and reject escalation, arbitrary
    executable loading, unsupported options, and unrecognized effective policy
    before admission. Preserve existing IDs and native login flows.
 2. Implement provider-owned preparation, native argv/configuration and identity
@@ -38,14 +38,14 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    with a safe lowercase name, exact content and an empty reserved argv slot.
    The `stage.` prefix is reserved for core durability and scavenging.
    For optional native output files, declare `Plan.OutputArtifacts` and the
-   version-qualified `OutputWriterContract` in both the plan and certified
-   profile. The core binds declarations to immutable metadata, supplies paths,
+   `OutputWriterContract` in both the plan and adapter declaration. The core
+   binds declarations to immutable metadata, supplies paths,
    materializes input files, and imports completed outputs into sealed raw
    evidence. Never write protocol records or expose a raw-writer handle from
    provider code. Interpret named output through `predicate.NamedEvidence`;
    `predicate.ErrEvidenceAbsent` means optional absence, while other read faults
    must not be treated as fallback. Present empty or contradictory output is
-   evidence. Certify writer completion at process exit and stream EOF; a stable
+   evidence. Verify writer completion at process exit and stream EOF; a stable
    file alone is insufficient.
    For continuation, supply `PreparedProfile.Identity` using the existing
    bounded `execution.IdentityObserver` interface. Report validated session
@@ -54,9 +54,20 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    does not create that reference. Test chunked observation, identity mismatch,
    parser bounds and callback errors, then prove fresh-to-resume dispatch with
    the compiled CLI.
-3. Register the adapter once in the explicit catalog. Reuse shared task,
-   execution, predicate, usage, lifecycle, and acceptance-harness mechanics;
-   do not add provider-specific branches to task, execution, or publication.
+3. Register the adapter once in the explicit catalog. `Registration.Prepare`
+   accepts the shared `PrepareCandidate` hook. For an ordinary finite profile
+   factory, use `provider.ReadyCandidate(Prepare)`; no inspection implementation
+   is needed. A provider that requires native metadata declares a
+   `ProfileCandidate` with static placement, an `InspectionDefinition`, and a
+   pure finalizer over nonsecret facts. Read the
+   [native inspection contract](../../docs/NATIVE-METADATA-INSPECTION.md) for that
+   conditional path and its current integration status. Core owns inspection
+   execution; never hide native commands in a preparation or finalizer callback.
+   Catalog finalization retains capability and artifact checks and refuses
+   changes to the candidate's workspace or writable roots. The compatibility
+   `Catalog.Prepare` method refuses inspection candidates.
+   Reuse shared task, execution, predicate, usage, lifecycle, and acceptance
+   mechanics; do not add provider-specific core branches.
 4. Add deterministic fixtures for valid and malformed envelopes, blank answers,
    refusal/error/timeout markers, exit conflicts, identity mismatch, policy
    drift, usage scope, and historical predicate revisions. Collection must stay
@@ -73,8 +84,10 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    for a rejected task. Missing prerequisites and inconclusive controls are
    `BLOCKED`, never pass.
 7. Record sanitized platform/version/profile/predicate/configuration, task and
-   session identities, timings, commands, observations, and digests. Keep raw
-   private evidence outside the repository and let root update normative plans.
+   session identities, timings, commands, observations, and digests. Treat the
+   provider version and executable digest as observations bound to that task;
+   never compare them with a checked-in release value. Keep raw private
+   evidence outside the repository and let root update normative plans.
 
 ## Deliverables
 

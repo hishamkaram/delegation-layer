@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
@@ -77,10 +79,11 @@ func normalizeRegistration(supplied Registration) (Registration, error) {
 	}
 	registration.Description.SupportedOptions = slices.Clone(registration.Description.SupportedOptions)
 	slices.Sort(registration.Description.SupportedOptions)
-	registration.Description.Profiles = slices.Clone(registration.Description.Profiles)
-	slices.SortFunc(registration.Description.Profiles, func(left, right CertifiedProfile) int {
-		return strings.Compare(profileKey(left), profileKey(right))
-	})
+	registration.Description.SupportedModes = slices.Clone(registration.Description.SupportedModes)
+	slices.Sort(registration.Description.SupportedModes)
+	registration.Description.Runtime.HelpArgs = slices.Clone(registration.Description.Runtime.HelpArgs)
+	registration.Description.Runtime.RequiredFlags = slices.Clone(registration.Description.Runtime.RequiredFlags)
+	slices.Sort(registration.Description.Runtime.RequiredFlags)
 	registration.Interpreters = slices.Clone(registration.Interpreters)
 	return registration, nil
 }
@@ -92,26 +95,22 @@ func validateDescription(description Description) error {
 	if err := validateOptions(description.SupportedOptions); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
 	}
-	if err := validateProfiles(description.ID, description.Profiles); err != nil {
+	if err := validateModes(description.SupportedModes); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
 	}
-	if description.Discoverable && len(description.Profiles) == 0 {
-		return fmt.Errorf("%w: discoverable provider %s has no certified profile", ErrInvalidDescriptor, description.ID)
+	if err := validateRuntimeCapability(description.Runtime); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
 	}
-	return nil
-}
-
-func validateInterpreterCoverage(description Description, interpreterRefs map[string]struct{}) error {
-	for _, profile := range description.Profiles {
-		if _, ok := interpreterRefs[predicateKey(profile.Predicate)]; !ok {
-			return fmt.Errorf("%w: provider %s has no interpreter for profile predicate", ErrInvalidDescriptor, description.ID)
-		}
+	if description.Discoverable && len(description.SupportedModes) == 0 {
+		return fmt.Errorf("%w: discoverable provider %s has no supported mode", ErrInvalidDescriptor, description.ID)
+	}
+	if description.Discoverable && len(description.Runtime.RequiredFlags) == 0 {
+		return fmt.Errorf("%w: discoverable provider %s has no runtime flag requirements", ErrInvalidDescriptor, description.ID)
 	}
 	return nil
 }
 
 func validateInterpreters(registration Registration, seenRefs map[string]struct{}) ([]predicate.Interpreter, error) {
-	interpreterRefs := make(map[string]struct{}, len(registration.Interpreters))
 	for _, interpreter := range registration.Interpreters {
 		if isNilInterpreter(interpreter) {
 			return nil, fmt.Errorf("%w: provider %s has a nil interpreter", ErrInvalidDescriptor, registration.Description.ID)
@@ -128,10 +127,6 @@ func validateInterpreters(registration Registration, seenRefs map[string]struct{
 			return nil, fmt.Errorf("%w: %s/%s/%s", ErrDuplicatePredicate, ref.Adapter, ref.Mode, ref.Version)
 		}
 		seenRefs[key] = struct{}{}
-		interpreterRefs[key] = struct{}{}
-	}
-	if err := validateInterpreterCoverage(registration.Description, interpreterRefs); err != nil {
-		return nil, err
 	}
 	return registration.Interpreters, nil
 }
@@ -150,43 +145,40 @@ func validateOptions(options []string) error {
 	return nil
 }
 
-func validateProfiles(providerID string, profiles []CertifiedProfile) error {
-	seenProfiles := make(map[string]struct{}, len(profiles))
-	for _, profile := range profiles {
-		if err := validateProfile(providerID, profile); err != nil {
+func validateModes(modes []string) error {
+	seen := make(map[string]struct{}, len(modes))
+	for _, mode := range modes {
+		if err := config.ValidateMode(mode); err != nil {
 			return err
 		}
-		if key := profileKey(profile); !addUnique(seenProfiles, key) {
-			return fmt.Errorf("duplicate certified profile for %s", providerID)
+		if _, exists := seen[mode]; exists {
+			return fmt.Errorf("duplicate supported mode %q", mode)
 		}
+		seen[mode] = struct{}{}
 	}
 	return nil
 }
 
-func validateProfile(providerID string, profile CertifiedProfile) error {
-	if profile.Mode == "" || profile.Approval == "" || profile.Status == "" || profile.ProviderVersion == "" || profile.OS == "" || profile.Arch == "" || profile.ProfileRevision == "" {
-		return fmt.Errorf("incomplete certified profile for %s", providerID)
+func validateRuntimeCapability(capability RuntimeCapability) error {
+	seenHelpArgs := make(map[string]struct{}, len(capability.HelpArgs))
+	for _, arg := range capability.HelpArgs {
+		if arg == "" || strings.ContainsAny(arg, "\x00 \t\r\n") {
+			return fmt.Errorf("invalid runtime help argument %q", arg)
+		}
+		if _, exists := seenHelpArgs[arg]; exists {
+			return fmt.Errorf("duplicate runtime help argument %q", arg)
+		}
+		seenHelpArgs[arg] = struct{}{}
 	}
-	if profile.Status != "Executed" {
-		return fmt.Errorf("certified profile for %s is not Executed", providerID)
-	}
-	if err := task.ValidateSHA256(profile.RuntimeSHA256); err != nil {
-		return fmt.Errorf("profile runtime SHA-256: %w", err)
-	}
-	if err := task.ValidateOutputWriterContract(profile.OutputWriterContract); err != nil {
-		return fmt.Errorf("profile output writer contract: %w", err)
-	}
-	if err := config.ValidateMode(profile.Mode); err != nil {
-		return fmt.Errorf("profile mode: %w", err)
-	}
-	if profile.Predicate.Adapter != providerID {
-		return fmt.Errorf("profile predicate adapter does not match %s", providerID)
-	}
-	if err := task.ValidatePredicateRef(profile.Predicate); err != nil {
-		return fmt.Errorf("profile predicate: %w", err)
-	}
-	if profile.Predicate.Mode != profile.Mode {
-		return fmt.Errorf("profile mode does not match its predicate for %s", providerID)
+	seenFlags := make(map[string]struct{}, len(capability.RequiredFlags))
+	for _, flag := range capability.RequiredFlags {
+		if flag == "" || !strings.HasPrefix(flag, "-") || strings.ContainsAny(flag, "\x00 \t\r\n") {
+			return fmt.Errorf("invalid required runtime flag %q", flag)
+		}
+		if _, exists := seenFlags[flag]; exists {
+			return fmt.Errorf("duplicate required runtime flag %q", flag)
+		}
+		seenFlags[flag] = struct{}{}
 	}
 	return nil
 }
@@ -198,18 +190,6 @@ func validOption(option string) bool {
 	default:
 		return false
 	}
-}
-
-func addUnique(values map[string]struct{}, key string) bool {
-	if _, exists := values[key]; exists {
-		return false
-	}
-	values[key] = struct{}{}
-	return true
-}
-
-func profileKey(profile CertifiedProfile) string {
-	return strings.Join([]string{profile.Mode, profile.Approval, profile.Status, profile.ProviderVersion, profile.OS, profile.Arch, profile.ProfileRevision, profile.OutputWriterContract, predicateKey(profile.Predicate)}, "\x00")
 }
 
 func predicateKey(ref task.PredicateRef) string {
@@ -249,7 +229,9 @@ func (c Catalog) Lookup(id string) (Registration, error) {
 
 func cloneRegistration(registration Registration) Registration {
 	registration.Description.SupportedOptions = slices.Clone(registration.Description.SupportedOptions)
-	registration.Description.Profiles = slices.Clone(registration.Description.Profiles)
+	registration.Description.SupportedModes = slices.Clone(registration.Description.SupportedModes)
+	registration.Description.Runtime.HelpArgs = slices.Clone(registration.Description.Runtime.HelpArgs)
+	registration.Description.Runtime.RequiredFlags = slices.Clone(registration.Description.Runtime.RequiredFlags)
 	registration.Interpreters = slices.Clone(registration.Interpreters)
 	return registration
 }
@@ -293,8 +275,8 @@ func (c Catalog) ValidateRequest(request task.TaskRecord) error {
 	if err = config.ValidateMode(request.Mode); err != nil {
 		return err
 	}
-	if !hasCertifiedProfileMode(registration.Description, request.Mode) {
-		return fmt.Errorf("%w: %s does not certify permission profile %s", ErrProfileUnavailable, request.Provider, request.Mode)
+	if !slices.Contains(registration.Description.SupportedModes, request.Mode) {
+		return fmt.Errorf("%w: %s does not support permission mode %s", ErrProfileUnavailable, request.Provider, request.Mode)
 	}
 	options := []struct {
 		name    string
@@ -316,24 +298,69 @@ func (c Catalog) ValidateRequest(request task.TaskRecord) error {
 	return nil
 }
 
-// Prepare validates capabilities and invokes the adapter's preparation hook.
-// The hook is the only provider-specific operation here and must return before
-// the caller acquires any submission or start permit.
-func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
+// Candidate validates capabilities and obtains static preparation inputs. Its
+// finalizer retains artifact and effective-profile checks after inspection.
+func (c Catalog) Candidate(request task.TaskRecord) (ProfileCandidate, error) {
 	if err := c.ValidateRequest(request); err != nil {
-		return PreparedProfile{}, err
+		return ProfileCandidate{}, err
 	}
 	registration, err := c.Lookup(request.Provider)
 	if err != nil {
+		return ProfileCandidate{}, err
+	}
+	candidate, err := registration.Prepare(request)
+	if err != nil {
+		return ProfileCandidate{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, err)
+	}
+	if candidate.Directory != request.CanonicalCwd {
+		return ProfileCandidate{}, task.ErrIdentityMismatch
+	}
+	if candidate.Finalize == nil {
+		return ProfileCandidate{}, fmt.Errorf("%w: missing candidate finalizer", ErrProfileUnavailable)
+	}
+	candidate.WritableRoots = slices.Clone(candidate.WritableRoots)
+	if candidate.Inspection != nil {
+		definition, _, snapshotErr := candidate.Inspection.Snapshot()
+		if snapshotErr != nil {
+			return ProfileCandidate{}, snapshotErr
+		}
+		candidate.Inspection = &definition
+	}
+	directory := candidate.Directory
+	writableRoots := slices.Clone(candidate.WritableRoots)
+	finalize := candidate.Finalize
+	registry := c.registry
+	candidate.Finalize = func(facts json.RawMessage, now time.Time) (PreparedProfile, error) {
+		profile, finalizeErr := finalize(facts, now)
+		if finalizeErr != nil {
+			return PreparedProfile{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, finalizeErr)
+		}
+		if profile.Plan.Directory != directory || !slices.Equal(profile.WritableRoots, writableRoots) {
+			return PreparedProfile{}, task.ErrIdentityMismatch
+		}
+		if _, resolveErr := registry.Resolve(profile.Plan.Predicate); resolveErr != nil {
+			return PreparedProfile{}, fmt.Errorf("%w: provider returned an unregistered predicate: %w", ErrProfileUnavailable, resolveErr)
+		}
+		return finalizeCatalogProfile(request, profile)
+	}
+	return candidate, nil
+}
+
+// Prepare preserves the finite preparation path for providers without native
+// inspection. It cannot bypass an inspection-dependent candidate's proof.
+func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
+	candidate, err := c.Candidate(request)
+	if err != nil {
 		return PreparedProfile{}, err
 	}
-	profile, err := registration.Prepare(request)
-	if err != nil {
-		return PreparedProfile{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, err)
+	if candidate.Inspection != nil {
+		return PreparedProfile{}, fmt.Errorf("%w: native inspection is required", ErrProfileUnavailable)
 	}
-	if !hasCertifiedPreparedProfile(registration.Description, request.Mode, profile.Plan.Predicate, profile.Plan.OutputWriterContract) {
-		return PreparedProfile{}, fmt.Errorf("%w: %s returned an uncertified predicate or writer contract", ErrProfileUnavailable, request.Provider)
-	}
+	return candidate.Finalize(nil, time.Now())
+}
+
+func finalizeCatalogProfile(request task.TaskRecord, profile PreparedProfile) (PreparedProfile, error) {
+	var err error
 	profile.Plan.InputFiles, err = task.NormalizeInputFiles(profile.Plan.InputFiles)
 	if err != nil {
 		return PreparedProfile{}, fmt.Errorf("%w: invalid prepared input files: %w", ErrProfileUnavailable, err)
@@ -348,23 +375,8 @@ func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
 	if err = task.ValidateOutputArtifacts(profile.Plan.OutputArtifacts, profile.Plan.OutputWriterContract); err != nil {
 		return PreparedProfile{}, fmt.Errorf("%w: invalid prepared output contract: %w", ErrProfileUnavailable, err)
 	}
-	return profile, nil
-}
-
-func hasCertifiedProfileMode(description Description, mode string) bool {
-	for _, profile := range description.Profiles {
-		if profile.Mode == mode {
-			return true
-		}
+	if err = profile.Validate(request); err != nil {
+		return PreparedProfile{}, fmt.Errorf("%w: invalid finalized profile: %w", ErrProfileUnavailable, err)
 	}
-	return false
-}
-
-func hasCertifiedPreparedProfile(description Description, mode string, ref task.PredicateRef, writerContract string) bool {
-	for _, profile := range description.Profiles {
-		if profile.Mode == mode && profile.Predicate.Equal(ref) && profile.OutputWriterContract == writerContract {
-			return true
-		}
-	}
-	return false
+	return cloneCandidateProfile(profile), nil
 }

@@ -2,9 +2,8 @@
 """Run the bounded Codex ``exec`` acceptance gate.
 
 The gate exercises the normal shipped delegate and runner against a private
-real pueue instance.  It records acceptance evidence; embedded certification
-tracking remains a separate, reviewed step.  The installed Codex executable is
-used in place and is never copied or renamed.
+real pueue instance. It records acceptance evidence. The installed Codex
+executable is used in place and is never copied or renamed.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
-import platform
 import re
 import secrets
 import shlex
@@ -26,14 +24,20 @@ from datetime import datetime, timezone
 
 from acceptance_provider_common import (
     AcceptanceFailure,
+    NativeTaskOps,
+    canonical_go_json,
     clean_absolute,
     ensure_private_directory,
+    failure_queue_finished,
+    no_prompt_argv as _no_prompt_argv,
     path_is_within,
     reject_tmp,
     require,
     snapshot,
+    supervisor_binding,
+    status_jobs,
+    unique_object,
     verify_collected_outcome,
-    wait_runner_done,
     write_bytes,
 )
 from acceptance_supervisor_common import (
@@ -49,12 +53,8 @@ from acceptance_supervisor_common import (
 PROVIDER = "codex:exec"
 MODE = "read-only"
 APPROVAL = "never"
-CODEX_VERSION = "0.154.0"
-CODEX_VERSION_OUTPUTS = {"codex-cli 0.154.0", "codex 0.154.0"}
-CODEX_SHA256 = "4f85982624b3898c8991cb80c0981b2aa71070e3537046c9a95950318a95afcc"
 PREDICATE_VERSION = "0.154.0"
 PREDICATE_SHA256 = "7d40d9c4627e58d8906e816d3fc6e1eed7f0d6b14ab5fc1f18b4c704415d3a8d"
-PROFILE_REVISION = "codex-0.154.0-darwin-arm64-read-only-2"
 OUTPUT_NAME = "codex-last-message.txt"
 OUTPUT_WRITER_CONTRACT = "process-exit-eof-v1"
 TASK_BUDGET = "120s"
@@ -62,7 +62,6 @@ CANONICAL_TASK_BUDGET = "2m0s"
 WATCH_SECONDS = 150
 PLANNED_NATIVE_AI_TURNS = 2
 ACCEPTANCE_STATUS = "acceptance-passed"
-CERTIFICATION_STATUS = "embedded-certification-tracked-separately"
 PRELAUNCH_STATUS = "planned"
 PUEUE_VERSION = "4.0.4"
 MAX_CONTROL_BYTES = 1 << 20
@@ -77,8 +76,53 @@ REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
 DEFAULT_WORKSPACE_PARENT = Path.home() / "Active-Projects" / "delegation-layer-acceptance"
 PUEUE_PARENT = Path("/Users/Shared")
+RUNTIME_INSPECTION_REVISION = "runtime-capability-v1"
+RUNTIME_HELP_ARGS = ["exec"]
+RUNTIME_REQUIRED_FLAGS = [
+    "-c", "--strict-config", "--sandbox", "--cd", "--ignore-user-config", "--ignore-rules",
+    "--output-last-message", "--json", "--color",
+]
+CODEX_ENVIRONMENT_KEYS = (
+    "HOME", "CODEX_HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
+    "TZ", "TMPDIR", "TMP", "TEMP", "__CF_USER_TEXT_ENCODING",
+)
 UUID_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 TASK_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+
+def expected_codex_inspection_binding(
+        pueue: Path, config: Path, base: Path, config_digest: str,
+        runner: Path, workspace: Path, environment: dict[str, str],
+        provider: Path, provider_digest: str) -> dict[str, object]:
+    """Build the expected runtime-only inspection binding from setup sources."""
+    values = sorted(key + "=" + environment[key]
+                    for key in CODEX_ENVIRONMENT_KEYS if key in environment)
+    definition = {
+        "revision": RUNTIME_INSPECTION_REVISION,
+        "executable": str(provider),
+        "executable_sha256": provider_digest,
+        "arguments": None,
+        "directory": str(workspace),
+        "environment": values,
+        "output_limit": 1 << 20,
+        "runtime": {
+            "executable": str(provider),
+            "executable_sha256": provider_digest,
+            "directory": str(workspace),
+            "environment": values,
+            "help_args": RUNTIME_HELP_ARGS,
+            "required_flags": RUNTIME_REQUIRED_FLAGS,
+        },
+    }
+    return {
+        "definition_revision": RUNTIME_INSPECTION_REVISION,
+        "definition_sha256": sha(canonical_go_json(definition)),
+        "helper_executable": str(provider),
+        "helper_sha256": provider_digest,
+        "worker_executable": str(runner),
+        "worker_sha256": digest(runner),
+        "supervisor": supervisor_binding(pueue, config, base, config_digest),
+    }
 
 
 class BlockedFailure(AcceptanceFailure):
@@ -124,16 +168,6 @@ def is_thread_id(value: object) -> bool:
     return isinstance(value, str) and UUID_PATTERN.fullmatch(value) is not None
 
 
-def no_prompt_argv(argv: list[object], briefs: list[Path]) -> None:
-    """Prove prompt contents are transported by file/stdin rather than argv."""
-    strings = [str(value) for value in argv]
-    joined = "\x00".join(strings)
-    for brief in briefs:
-        content = brief.read_bytes().decode("utf-8", errors="replace")
-        require(content not in joined, "brief content leaked into child argv")
-    require("--ephemeral" not in strings, "Codex continuation cannot use --ephemeral")
-
-
 def resolve_executable(value: str | None, default: Path, label: str) -> Path:
     candidate = Path(value) if value else default
     if not candidate.is_absolute():
@@ -149,87 +183,17 @@ def resolve_executable(value: str | None, default: Path, label: str) -> Path:
     return resolved
 
 
+def no_prompt_argv(argv: list[object], briefs: list[Path]) -> None:
+    """Codex transport guard, including its continuation-only prohibition."""
+    _no_prompt_argv(argv, briefs, forbidden=("--ephemeral",))
+
+
 def require_discovery(name: str, selected: Path) -> None:
     discovered = shutil.which(name)
     if discovered is None:
         raise BlockedFailure(f"{name} is not discoverable in the inherited PATH")
     if Path(discovered).resolve() != selected:
         raise BlockedFailure(f"{name} discovery does not match selected executable; PATH shadowing is forbidden")
-
-
-def pueue_command(pueue: Path, config: Path, *args: str) -> list[object]:
-    return [str(pueue), "-c", str(config), *args]
-
-
-def parse_json_output(process: object, label: str, bound: int = MAX_CONTROL_BYTES) -> dict[str, object]:
-    try:
-        value = read_json(process.directory / "stdout", bound)
-    except (OSError, ValueError, TypeError, RecursionError) as error:
-        raise AcceptanceFailure(f"{label} did not produce one JSON object: {error}") from error
-    require(isinstance(value, dict), f"{label} JSON response must be an object")
-    return value
-
-
-def status_jobs(process: object) -> dict[str, object]:
-    value = parse_json_output(process, "pueue status", MAX_PROVIDER_BYTES)
-    require(isinstance(value.get("tasks"), dict), "pueue status JSON has no tasks object")
-    require(isinstance(value.get("groups"), dict), "pueue status JSON has no groups object")
-    return value
-
-
-def row_state(row: dict[str, object]) -> str:
-    value = row.get("status")
-    require(isinstance(value, dict) and len(value) == 1, "pueue row status is not a one-state object")
-    return next(iter(value))
-
-
-def done_result(row: dict[str, object]) -> str | None:
-    """Return a recognized pueue terminal result, if the row is Done."""
-    status = row.get("status")
-    if not isinstance(status, dict) or set(status) != {"Done"}:
-        return None
-    done = status.get("Done")
-    if not isinstance(done, dict):
-        return None
-    result = done.get("result")
-    if isinstance(result, str) and result in {"Success", "Killed", "Errored", "DependencyFailed"}:
-        return result
-    if not isinstance(result, dict) or len(result) != 1:
-        return None
-    name, value = next(iter(result.items()))
-    if name == "Failed" and isinstance(value, int) and not isinstance(value, bool):
-        return name
-    if name == "FailedToSpawn" and isinstance(value, str):
-        return name
-    return None
-
-
-def validate_queue_row(row: dict[str, object], label: str, runner: Path,
-                       state: Path, task: str) -> None:
-    require(row.get("label") == label, f"pueue label mismatch for {task}")
-    for key in ("original_command", "command", "path"):
-        require(isinstance(row.get(key), str), f"pueue row missing {key} for {task}")
-    command = f"{row['original_command']}\n{row['command']}"
-    require(str(runner) in command and str(state) in command and task in command,
-            f"pueue row does not bind runner/state/task for {task}")
-    require("--brief" not in command and "--provider" not in command,
-            f"provider prompt or selection leaked into pueue command for {task}")
-
-
-def canonical_queue(value: dict[str, object]) -> dict[str, object]:
-    """Keep the complete private queue snapshot, including groups."""
-    tasks = value.get("tasks")
-    groups = value.get("groups")
-    require(isinstance(tasks, dict) and isinstance(groups, dict), "queue snapshot is malformed")
-    return {"tasks": deepcopy(tasks), "groups": deepcopy(groups)}
-
-
-def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        require(key not in result, "duplicate JSON object key: " + key)
-        result[key] = value
-    return result
 
 
 def reject_constant(value: str) -> None:
@@ -273,7 +237,7 @@ def parse_usage(event: dict[str, object]) -> dict[str, int | None] | None:
 
 
 def parse_codex_events(raw: bytes) -> dict[str, object]:
-    """Apply the pinned 0.154.0 JSONL selection and completion rules."""
+    """Apply the immutable Codex JSONL selection and completion rules."""
     require(len(raw) <= MAX_PROVIDER_BYTES, "Codex stdout exceeds observation bound")
     lines = raw.split(b"\n")
     if lines and lines[-1] == b"":
@@ -752,10 +716,10 @@ class CodexAcceptance:
         self.pueue = resolve_executable(args.pueue, Path("/opt/homebrew/bin/pueue"), "pueue")
         self.pueued = resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued")
         self.codex = resolve_executable(args.codex, Path("/opt/homebrew/bin/codex"), "codex")
-        if platform.system() != "Darwin" or platform.machine() not in {"arm64", "aarch64"}:
-            raise BlockedFailure("Codex acceptance requires the inspected Darwin/arm64 runtime")
-        if digest(self.codex) != CODEX_SHA256:
-            raise BlockedFailure("Codex executable differs from the pinned 0.154.0 runtime")
+        self.provider_version: str | None = None
+        self.provider_sha256 = digest(self.codex)
+        self.profile_revision: str | None = None
+        self.inspection_binding: dict[str, object] | None = None
         require_discovery("codex", self.codex)
         require_discovery("pueue", self.pueue)
         require_discovery("pueued", self.pueued)
@@ -812,17 +776,20 @@ class CodexAcceptance:
 
         git = resolve_executable(shutil.which("git"), Path("/usr/bin/git"), "git")
         self.processes = Processes(self.output / "processes", self.environment)
+        self.ops = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
+                                 self.state_parent, self.state, self.output,
+                                 watch_seconds=WATCH_SECONDS)
         self.git = git
         self.pueue_base: Path | None = None
         self.pueue_config: Path | None = None
         self.daemon = None
         self.closed = False
         self.root_id: str | None = None
-        self.tasks: dict[str, str] = {}
-        self.labels: dict[str, str] = {}
-        self.numbers: dict[str, int] = {}
+        self.tasks = self.ops.tasks
+        self.labels = self.ops.labels
+        self.numbers = self.ops.numbers
         self.records: dict[str, dict[str, object]] = {}
-        self.dispatch_attempts: set[str] = set()
+        self.dispatch_attempts = self.ops.dispatch_attempts
         self.queue_before_replay: dict[str, object] | None = None
 
     def require_probe_unchanged(self, phase: str) -> None:
@@ -851,12 +818,13 @@ class CodexAcceptance:
 
     def direct(self, name: str, argv: list[object], expected: int | set[int] = 0,
                timeout: float = 30):
-        return self.processes.run(name, argv, self.state_parent, expected=expected, timeout=timeout)
+        return self.ops.direct(name, argv, expected=expected, timeout=timeout)
 
     def client(self, name: str, operation: list[str], expected: int | set[int] = 0,
                timeout: float = 30):
         require(self.pueue_config is not None, "pueue is not configured")
-        return self.direct(name, pueue_command(self.pueue, self.pueue_config, *operation), expected, timeout)
+        self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        return self.ops.client(name, operation, expected=expected, timeout=timeout)
 
     def setup(self) -> None:
         self.require_probe_unchanged("before setup")
@@ -868,6 +836,9 @@ class CodexAcceptance:
         write_bytes(aliases, b"{}\n")
         self.pueue_config = self.pueue_base / "pueue.yml"
         write_json(self.pueue_config, config_for(self.pueue_base))
+        self.inspection_binding = expected_codex_inspection_binding(
+            self.pueue, self.pueue_config, self.pueue_base, digest(self.pueue_config),
+            self.runner, self.workspace, self.environment, self.codex, self.provider_sha256)
 
         pueue_version = self.direct("pueue-version", [self.pueue, "--version"], timeout=15)
         pueued_version = self.direct("pueued-version", [self.pueued, "-c", self.pueue_config, "--version"], timeout=15)
@@ -877,10 +848,11 @@ class CodexAcceptance:
                 "unexpected pueued version")
         codex_version = self.direct("codex-version", [self.codex, "--version"], timeout=15)
         observed = (codex_version.directory / "stdout").read_text().strip()
-        if observed not in CODEX_VERSION_OUTPUTS:
-            raise BlockedFailure(f"unexpected Codex version: {observed!r}")
+        require(observed, "Codex returned an empty version")
+        self.provider_version = observed
 
         self.daemon = self.processes.start("private-daemon", [self.pueued, "-c", self.pueue_config], self.state_parent)
+        self.ops.bind_supervisor(self.pueue_config, self.daemon)
         for _ in range(200):
             require(self.daemon.poll() is None, "private pueued exited before readiness")
             process = self.client("ready", ["status", "--json"], expected={0, 1}, timeout=15)
@@ -897,8 +869,8 @@ class CodexAcceptance:
             "mode": MODE,
             "approval": APPROVAL,
             "codex": str(self.codex),
-            "codex_version": CODEX_VERSION,
-            "codex_sha256": digest(self.codex),
+            "codex_version": self.provider_version,
+            "codex_sha256": self.provider_sha256,
             "delegate": str(self.delegate),
             "delegate_sha256": digest(self.delegate),
             "runner": str(self.runner),
@@ -923,7 +895,6 @@ class CodexAcceptance:
             "environment_keys": sorted(self.environment),
             "environment_values_in_record": False,
             "acceptance_status": PRELAUNCH_STATUS,
-            "certification_status": CERTIFICATION_STATUS,
             "planned_native_ai_turns": PLANNED_NATIVE_AI_TURNS,
             "driver_sha256": digest(__file__),
         })
@@ -968,45 +939,26 @@ class CodexAcceptance:
         return args
 
     def dispatch(self, name: str, task: str, brief: Path, predecessor: str | None = None) -> dict[str, object]:
-        self.dispatch_attempts.add(task)
-        process = self.direct(name, self.dispatch_arguments(task, brief, predecessor), timeout=45)
-        response = parse_json_output(process, name)
-        require(response.get("admission") == "admitted", f"{name} was not admitted")
-        require(response.get("task_id") == task, f"{name} task identity mismatch")
+        self.ops.root_id = self.root_id
+        require(self.inspection_binding is not None,
+                "expected Codex inspection binding is unavailable")
+        self.ops.expect_inspection(task, self.inspection_binding)
+        response = self.ops.dispatch(name, task, self.dispatch_arguments(task, brief, predecessor))
         root = response.get("root_id")
         require(is_task_id(root), f"{name} omitted a valid root identity")
-        if self.root_id is None:
-            self.root_id = root
+        self.root_id = root
+        self.ops.root_id = root
         require(self.root_id == root, f"{name} changed root identity")
-        supervisor = response.get("supervisor")
-        require(isinstance(supervisor, dict) and supervisor.get("matched") is True,
-                f"{name} has no positive supervisor admission")
-        numeric = supervisor.get("numeric_task_id")
-        require(isinstance(numeric, int) and not isinstance(numeric, bool) and numeric >= 0,
-                f"{name} has no numeric pueue identity")
-        self.tasks[name] = task
-        self.labels[name] = f"delegate:{root}:{task}"
-        self.numbers[name] = numeric
-        write_json(self.output / (name + "-dispatch.json"), response)
         return response
 
     def wait_task(self, name: str, task: str) -> dict[str, object]:
         require(self.root_id is not None, "root identity is unavailable")
-        row = wait_runner_done(self.client, self.root_id, task, timeout=WATCH_SECONDS,
-                               sleep_fn=time.sleep, monotonic_fn=time.monotonic)
-        require(isinstance(row, dict), "runner completion row is malformed")
-        validate_queue_row(row, self.labels[name], self.runner, self.state, task)
-        write_json(self.output / (name + "-done.json"), row)
-        return row
+        self.ops.root_id = self.root_id
+        return self.ops.wait_task(name, task)
 
     def collect(self, name: str, task: str) -> dict[str, object]:
-        process = self.direct(name, [self.delegate, "--root", self.state, "--pueue-config", self.pueue_config,
-                                     "--runner", self.runner, "collect", task, "--watch", "0s", "--json"],
-                             timeout=45)
-        response = parse_json_output(process, name)
-        require(response.get("task_id") == task, f"{name} collected the wrong task")
-        write_json(self.output / (name + ".json"), response)
-        return response
+        self.ops.root_id = self.root_id
+        return self.ops.collect(name, task)
 
     def read_record(self, task: str, name: str) -> dict[str, object]:
         value = read_json(self.state / "tasks" / task / name)
@@ -1045,7 +997,7 @@ class CodexAcceptance:
         meta = self.read_record(task, "meta.json")
         require(meta.get("root_id") == self.root_id and meta.get("task_id") == task and
                 meta.get("provider_executable") == str(self.codex) and
-                meta.get("provider_version") == CODEX_VERSION and
+                meta.get("provider_version") == self.provider_version and
                 meta.get("containment") == MODE and meta.get("approval") == APPROVAL,
                 f"{name} meta provider or policy binding mismatch")
         effective = meta.get("effective_config")
@@ -1054,9 +1006,14 @@ class CodexAcceptance:
                 f"{name} effective read-only policy is absent")
         policy = effective.get("policy")
         require(isinstance(policy, dict) and policy.get("workspace") == str(self.workspace) and
-                policy.get("runtime_sha256") == CODEX_SHA256 and
-                policy.get("profile_revision") == PROFILE_REVISION,
+                policy.get("runtime_sha256") == self.provider_sha256,
                 f"{name} persisted Codex runtime policy is incomplete")
+        profile_revision = policy.get("profile_revision")
+        require(isinstance(profile_revision, str) and profile_revision,
+                f"{name} effective policy revision is absent")
+        if self.profile_revision is None:
+            self.profile_revision = profile_revision
+        require(profile_revision == self.profile_revision, f"{name} effective policy revision drifted")
         roots = policy.get("writable_roots")
         require(isinstance(roots, list) and all(isinstance(root, str) for root in roots),
                 f"{name} writable runtime roots are absent")
@@ -1239,115 +1196,35 @@ class CodexAcceptance:
         return record
 
     def queue_status(self, name: str) -> dict[str, object]:
-        status = status_jobs(self.client(name, ["status", "--json"], timeout=20))
-        write_json(self.output / (name + ".json"), status)
-        return status
+        self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        return self.ops.queue_status(name)
 
     def replay(self) -> None:
         self.require_probe_unchanged("before replay")
-        before_queue = self.queue_status("replay-queue-before")
-        self.queue_before_replay = canonical_queue(before_queue)
-        for name in ("fresh", "resume"):
-            task = self.tasks[name]
-            record = self.records[name]
-            before = provider_record_snapshot(record["directory"])
-            original = {
-                "outcome": deepcopy(record["outcome"]),
-                "payload": deepcopy(record["payload"]),
-                "evidence_sha256": record["outcome"]["evidence_sha256"],
-            }
-            collected = self.collect("replay-" + name, task)
-            outcome, _ = verify_collected_outcome(collected, record["directory"], "committed")
-            actual = {"outcome": deepcopy(outcome), "payload": deepcopy(collected.get("payload")),
-                      "evidence_sha256": collected.get("evidence_sha256")}
-            require(actual == original, f"{name} replay changed outcome, payload or evidence hash")
-            require(before == provider_record_snapshot(record["directory"]),
-                    f"{name} replay changed immutable task records")
-        after_queue = self.queue_status("replay-queue-after")
-        require(canonical_queue(after_queue) == self.queue_before_replay,
-                "collection replay changed the private supervisor queue")
+        self.ops.root_id = self.root_id
+        self.ops.replay(self.records, names=("fresh", "resume"))
+        self.queue_before_replay = self.ops.queue_before_replay
         self.require_probe_unchanged("after replay")
-        write_json(self.output / "replay-control.json", {
-            "tasks": dict(self.tasks),
-            "provider_launches": len(self.tasks),
-            "replay_launches": 0,
-            "queue_unchanged": True,
-            "outcomes_unchanged": True,
-        })
 
     def failure_queue_finished(self, status: dict[str, object]) -> bool:
-        tasks = status.get("tasks")
-        if not isinstance(tasks, dict):
-            return False
-        if not self.dispatch_attempts:
-            return not tasks
-        if len(tasks) != len(self.dispatch_attempts):
-            return False
-        expected = {self.labels.get(name): task for name, task in self.tasks.items()
-                    if task in self.dispatch_attempts}
-        for row in tasks.values():
-            if not isinstance(row, dict):
-                return False
-            label = row.get("label")
-            if not isinstance(label, str) or label not in expected:
-                return False
-            task = expected[label]
-            try:
-                validate_queue_row(row, label, self.runner, self.state, task)
-            except (AcceptanceFailure, KeyError):
-                return False
-            try:
-                state = row_state(row)
-            except RuntimeError:
-                return False
-            if state != "Done" or done_result(row) is None:
-                return False
-        return True
+        return failure_queue_finished(status, self.dispatch_attempts, self.tasks,
+                                      self.labels, self.runner, self.state,
+                                      self.numbers)
 
     def shutdown(self) -> None:
-        status = self.queue_status("final-queue")
-        tasks = status.get("tasks")
-        require(isinstance(tasks, dict) and len(tasks) == len(self.tasks),
-                "unexpected private queue membership")
-        labels = [row.get("label") for row in tasks.values() if isinstance(row, dict)]
-        require(len(labels) == len(tasks) and all(isinstance(label, str) for label in labels) and
-                len(set(labels)) == len(labels) and
-                set(labels) == set(self.labels.values()),
-                "final private queue labels are not exactly the admitted tasks")
-        for name, task in self.tasks.items():
-            row = next((candidate for candidate in tasks.values()
-                        if isinstance(candidate, dict) and candidate.get("label") == self.labels[name]), None)
-            require(isinstance(row, dict), f"final private status lost {name} task")
-            validate_queue_row(row, self.labels[name], self.runner, self.state, task)
-            require(row_state(row) == "Done" and done_result(row) == "Success",
-                    "unknown, failed or active task prevents natural shutdown")
-        pending = self.processes.drain(timeout=1, exclude=(() if self.daemon is None else (self.daemon,)))
-        require(not pending, "owned acceptance process remains active")
-        self.client("private-shutdown", ["shutdown"], timeout=20)
-        require(self.daemon is not None, "private daemon was not started")
-        self.daemon.wait(timeout=30, expected=0)
-        self.closed = True
+        self.ops.root_id = self.root_id
+        self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        self.ops.shutdown()
+        self.closed = self.ops.closed
 
     def safe_failure_shutdown(self) -> bool:
         """Shutdown only after an all-Done observation; never signals unknown work."""
-        if self.daemon is None or self.daemon.poll() is not None or self.pueue_config is None:
-            return False
-        try:
-            # A timed-out or failed client still belongs to this process book.
-            # Do not shut down the daemon while that handle is unresolved; the
-            # owner must remain available for later observation.
-            pending = self.processes.drain(timeout=0, exclude=(self.daemon,))
-            if pending:
-                return False
-            status = status_jobs(self.client("failure-queue", ["status", "--json"], expected={0, 1}, timeout=20))
-            if not self.failure_queue_finished(status):
-                return False
-            self.client("failure-shutdown", ["shutdown"], timeout=20)
-            self.daemon.wait(timeout=30, expected=0)
-            self.closed = True
-            return True
-        except BaseException:
-            return False
+        self.ops.root_id = self.root_id
+        if self.pueue_config is not None:
+            self.ops.bind_supervisor(self.pueue_config, self.daemon)
+        result = self.ops.safe_failure_shutdown()
+        self.closed = self.ops.closed
+        return result
 
     def run(self) -> None:
         try:
@@ -1359,7 +1236,6 @@ class CodexAcceptance:
             write_json(self.output / "success.json", {
                 "status": ACCEPTANCE_STATUS,
                 "provider": PROVIDER,
-                "certification_status": CERTIFICATION_STATUS,
                 "native_ai_turns": len(self.tasks),
                 "planned_native_ai_turns": PLANNED_NATIVE_AI_TURNS,
                 "tasks": {name: {"task_id": self.tasks[name],

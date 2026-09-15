@@ -79,6 +79,7 @@ func TestParseStatusAcceptsEverySupportedLifecycleState(t *testing.T) {
 func TestParseStatusAcceptsTaskResultVariants(t *testing.T) {
 	results := map[string]any{
 		"success":         "Success",
+		"escaped_success": json.RawMessage(`"Succ\u0065ss"`),
 		"killed":          "Killed",
 		"errored":         "Errored",
 		"dependency":      "DependencyFailed",
@@ -89,10 +90,33 @@ func TestParseStatusAcceptsTaskResultVariants(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			state := map[string]any{"Done": map[string]any{"enqueued_at": statusTestTime, "start": statusTestTime, "end": statusTestTime, "result": result}}
 			data := statusTestPayload(t, map[string]any{"7": statusTestJob(7, "label", state)}, map[string]any{})
-			if _, err := ParseStatus(data, SupportedVersion); err != nil {
+			jobs, err := ParseStatus(data, SupportedVersion)
+			if err != nil {
 				t.Fatal(err)
 			}
+			if len(jobs) != 1 || jobs[0].Succeeded != (name == "success" || name == "escaped_success") {
+				t.Fatalf("worker success was not distinguished from termination: %+v", jobs)
+			}
 		})
+	}
+}
+
+func TestQueueSnapshotPreservesInspectionSchedulingFacts(t *testing.T) {
+	job := statusTestJob(7, "inspection", map[string]any{"Queued": map[string]any{"enqueued_at": statusTestTime}})
+	job["group"] = "inspection-root"
+	data := statusTestPayload(t, map[string]any{"7": job}, map[string]any{
+		"inspection-root": map[string]any{"status": "Running", "parallel_tasks": 1},
+		"unrelated":       map[string]any{"status": "Paused", "parallel_tasks": 3},
+	})
+	snapshot, err := ParseQueueSnapshot(data, SupportedVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Jobs) != 1 || snapshot.Jobs[0].Group != "inspection-root" || snapshot.Jobs[0].Succeeded {
+		t.Fatalf("queued inspection facts changed: %+v", snapshot.Jobs)
+	}
+	if snapshot.Groups["inspection-root"] != (Group{Status: "Running", ParallelTasks: 1}) || snapshot.Groups["unrelated"] != (Group{Status: "Paused", ParallelTasks: 3}) {
+		t.Fatalf("queue settings were lost: %+v", snapshot.Groups)
 	}
 }
 

@@ -18,9 +18,10 @@ import (
 )
 
 type runnerArguments struct {
-	Root   string
-	TaskID string
-	JSON   bool
+	Root       string
+	TaskID     string
+	JSON       bool
+	Inspection bool
 }
 
 // RunRunner executes one saved task from the supervisor's exact root/task
@@ -29,6 +30,12 @@ func RunRunner(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	parsed, err := parseRunnerArguments(args)
 	if err != nil {
 		return writeCLIError(stderr, err, 2)
+	}
+	if parsed.Inspection {
+		if err = runInspectionWorker(parsed.Root, parsed.TaskID, deps.normalized()); err != nil {
+			return writeCLIError(stderr, errors.New("native inspection unavailable"), 1)
+		}
+		return 0
 	}
 	result := runRunner(parsed, deps.normalized())
 	if parsed.JSON {
@@ -55,6 +62,7 @@ func parseRunnerArguments(args []string) (runnerArguments, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&parsed.Root, "root", "", "absolute state root")
 	fs.BoolVar(&parsed.JSON, "json", false, "emit versioned JSON")
+	fs.BoolVar(&parsed.Inspection, "inspection", false, "run the saved internal inspection operation")
 	ordered, err := orderRunnerFlags(fs, args)
 	if err != nil {
 		return runnerArguments{}, err
@@ -196,10 +204,9 @@ func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, p
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	preflight := func() error {
+	preflight := func(scope execution.PreflightScope) error {
 		root := filepath.Dir(filepath.Dir(td.Dir))
-		_, validationErr := prepareMatchedProfile(deps, root, *admittedReq, *admittedMeta)
-		return validationErr
+		return freshPreflightProfile(deps, root, *admittedReq, *admittedMeta, scope)
 	}
 	permit, err := td.PrepareStart(0)
 	if err != nil {
@@ -286,7 +293,11 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 // before any fresh submission and again after supervisor reconciliation, so a
 // policy or placement change cannot cross the next authority boundary.
 func prepareMatchedProfile(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {
-	profile, err := prepareProfile(deps, req)
+	candidate, facts, err := prepareExistingCandidate(deps, root, req, meta)
+	if err != nil {
+		return PreparedProfile{}, err
+	}
+	profile, err := finalizeCandidate(candidate, req, facts)
 	if err != nil {
 		return PreparedProfile{}, err
 	}
@@ -339,7 +350,7 @@ func (s *budgetStopper) PrepareBudget(deadline time.Time) (execution.BudgetReque
 	return func(ctx context.Context) error {
 		result, stopErr := s.client.Stop(ctx, permit)
 		releaseErr := permit.Release()
-		return errors.Join(stopErr, releaseErr, s.recordStopResult(request, result)) //nolint:contextcheck // TaskDir persistence is synchronous and cannot consume ctx.
+		return errors.Join(stopErr, releaseErr, s.recordStopResult(ctx, request, result))
 	}, nil
 }
 
@@ -355,16 +366,16 @@ func (s *budgetStopper) prepareStop(deadline time.Time) (*taskdir.StopPermit, *t
 	return permit, request, nil
 }
 
-func (s *budgetStopper) recordStopResult(request *task.StopRequestRecord, result pueue.StopResult) error {
+func (s *budgetStopper) recordStopResult(ctx context.Context, request *task.StopRequestRecord, result pueue.StopResult) error {
 	if request == nil {
 		return nil
 	}
 	var recordErr error
 	if result.Acknowledged != nil && result.NumericTaskID != nil {
-		recordErr = errors.Join(recordErr, s.taskDir.RecordStopReply(request.RequestID, task.StopReplyFacts{NumericTaskID: *result.NumericTaskID, Action: result.Action, Acknowledged: *result.Acknowledged, Message: result.Message}))
+		recordErr = errors.Join(recordErr, s.taskDir.RecordStopReplyContext(ctx, request.RequestID, task.StopReplyFacts{NumericTaskID: *result.NumericTaskID, Action: result.Action, Acknowledged: *result.Acknowledged, Message: result.Message}))
 	}
 	if result.ObservedState == pueue.StateEnded && result.NumericTaskID != nil {
-		recordErr = errors.Join(recordErr, s.taskDir.RecordStopObservation(request.RequestID, task.StopObservationFacts{NumericTaskID: *result.NumericTaskID, State: "ended", Terminated: true}))
+		recordErr = errors.Join(recordErr, s.taskDir.RecordStopObservationContext(ctx, request.RequestID, task.StopObservationFacts{NumericTaskID: *result.NumericTaskID, State: "ended", Terminated: true}))
 	}
 	return recordErr
 }

@@ -11,44 +11,68 @@ import (
 )
 
 type Job struct {
-	ID    int64
-	Label *string
-	State State
+	ID        int64
+	Label     *string
+	State     State
+	Group     string
+	Succeeded bool
+}
+
+// Group records the bounded scheduling facts needed to verify an inspection
+// queue. Neither a running group nor an ended job proves provider completion.
+type Group struct {
+	Status        string
+	ParallelTasks uint64
+}
+
+// QueueSnapshot retains scheduling and successful worker-exit evidence without
+// exposing queued command strings, process environments, or native error text.
+type QueueSnapshot struct {
+	Jobs   []Job
+	Groups map[string]Group
 }
 
 // ParseStatus validates the exact serialized State/Task schema from pueue4.0.4.
 // It does not return commands or task environment values in observations.
 func ParseStatus(data []byte, version string) ([]Job, error) {
+	snapshot, err := ParseQueueSnapshot(data, version)
+	return snapshot.Jobs, err
+}
+
+// ParseQueueSnapshot validates the same pinned status schema as ParseStatus,
+// retaining the group and worker-success facts used by native inspection.
+func ParseQueueSnapshot(data []byte, version string) (QueueSnapshot, error) {
 	if version != SupportedVersion {
-		return nil, ErrBinding
+		return QueueSnapshot{}, ErrBinding
 	}
 	if err := task.ValidateJSONStructure(data); err != nil {
-		return nil, fmt.Errorf("%w: malformed status JSON", ErrUnknown)
+		return QueueSnapshot{}, fmt.Errorf("%w: malformed status JSON", ErrUnknown)
 	}
 	root, err := statusObject(data, "tasks", "groups")
 	if err != nil {
-		return nil, err
+		return QueueSnapshot{}, err
 	}
-	if groupsErr := validateGroups(root["groups"]); groupsErr != nil {
-		return nil, groupsErr
+	groups, err := parseGroups(root["groups"])
+	if err != nil {
+		return QueueSnapshot{}, err
 	}
 	rows, err := rawObject(root["tasks"])
 	if err != nil {
-		return nil, err
+		return QueueSnapshot{}, err
 	}
 	jobs := make([]Job, 0, len(rows))
 	for key, raw := range rows {
 		id, err := parseID(key)
 		if err != nil {
-			return nil, err
+			return QueueSnapshot{}, err
 		}
 		job, err := parseJob(raw, id)
 		if err != nil {
-			return nil, err
+			return QueueSnapshot{}, err
 		}
 		jobs = append(jobs, job)
 	}
-	return jobs, nil
+	return QueueSnapshot{Jobs: jobs, Groups: groups}, nil
 }
 
 func parseID(s string) (int64, error) {
@@ -118,11 +142,37 @@ func parseJob(raw []byte, id int64) (Job, error) {
 	if err != nil {
 		return Job{}, err
 	}
-	return Job{ID: id, Label: label, State: state}, nil
+	group, err := decodeScalar[string](obj["group"])
+	if err != nil {
+		return Job{}, err
+	}
+	succeeded, err := jobSucceeded(obj["status"], state)
+	if err != nil {
+		return Job{}, err
+	}
+	return Job{ID: id, Label: label, State: state, Group: group, Succeeded: succeeded}, nil
+}
+
+func jobSucceeded(raw []byte, state State) (bool, error) {
+	if state != StateEnded {
+		return false, nil
+	}
+	outer, err := rawObject(raw)
+	if err != nil {
+		return false, err
+	}
+	done, err := rawObject(outer["Done"])
+	if err != nil {
+		return false, err
+	}
+	// The state parser has already validated every result variant. Object
+	// variants represent failure; only the decoded Success string qualifies.
+	var result string
+	return json.Unmarshal(done["result"], &result) == nil && result == "Success", nil
 }
 
 func validateJobFields(obj map[string]json.RawMessage) error {
-	for _, key := range []string{"original_command", "command", "path", "group"} {
+	for _, key := range []string{"original_command", "command", "path"} {
 		if _, err := decodeScalar[string](obj[key]); err != nil {
 			return err
 		}
@@ -161,25 +211,28 @@ func validateStringMap(raw []byte) error {
 	return nil
 }
 
-func validateGroups(raw []byte) error {
+func parseGroups(raw []byte) (map[string]Group, error) {
 	groups, err := rawObject(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, raw := range groups {
+	parsed := make(map[string]Group, len(groups))
+	for name, raw := range groups {
 		obj, err := statusObject(raw, "status", "parallel_tasks")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		s, err := decodeScalar[string](obj["status"])
 		if err != nil || (s != "Running" && s != "Paused" && s != "Reset") {
-			return ErrUnknown
+			return nil, ErrUnknown
 		}
-		if _, err := decodeScalar[uint64](obj["parallel_tasks"]); err != nil {
-			return err
+		parallel, err := decodeScalar[uint64](obj["parallel_tasks"])
+		if err != nil {
+			return nil, err
 		}
+		parsed[name] = Group{Status: s, ParallelTasks: parallel}
 	}
-	return nil
+	return parsed, nil
 }
 
 func validateTime(raw []byte) error {

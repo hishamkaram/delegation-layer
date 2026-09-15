@@ -18,8 +18,8 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 
 ## Inputs
 
-- the adapter's certified profile, exact version, predicate revision, and
-  platform scope;
+- the adapter's supported profile, observed CLI version, output-predicate
+  revision, and runtime capability result;
 - an isolated workspace, state root, supervisor configuration, and finite task
   budget;
 - existing authentication and required executable/configuration prerequisites;
@@ -29,7 +29,10 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 ## Workflow
 
 1. Verify prerequisites and record sanitized platform, executable, profile,
-   configuration-source, task/session, timing, and digest metadata. Never put
+   configuration-source, task/session, timing, and digest metadata. Runtime
+   preflight must locate an executable, verify it is executable, run version and
+   help, and confirm every adapter flag is advertised; any reported CLI version
+   is accepted when those checks pass. Never put
    credentials, tokens, unrelated environment values, or private raw logs in a
    receipt.
 2. Launch through the shipped dispatcher/runner with isolated pueue, finite

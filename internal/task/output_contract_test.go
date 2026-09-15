@@ -79,7 +79,7 @@ func TestNormalizeOutputArtifactsAndWriterContract(t *testing.T) {
 		t.Fatal("unsupported writer contract was accepted")
 	}
 	if err = ValidateOutputArtifacts(artifacts, ""); err == nil {
-		t.Fatal("artifacts without a certified writer contract were accepted")
+		t.Fatal("artifacts without a writer contract were accepted")
 	}
 }
 

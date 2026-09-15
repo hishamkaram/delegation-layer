@@ -28,7 +28,7 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 1. Read the full changed surface and relevant consumers, then verify that each
    claimed contract follows from code or an executed test.
 2. Assess ownership and lifetimes, dependency direction, interface ownership,
-   duplicated lifecycle/certification/harness logic, error diagnostics and
+   duplicated lifecycle/capability-check/harness logic, error diagnostics and
    secret handling, compatibility, and contributor effort.
 3. Check launch planning versus execution, sealed-evidence interpretation,
    outcome authority, historical revisions, unsupported options, context

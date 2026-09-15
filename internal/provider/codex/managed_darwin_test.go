@@ -6,6 +6,8 @@ import (
 	"errors"
 	"slices"
 	"testing"
+
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func TestManagedPreferencesReleaseEveryOwnedObject(t *testing.T) {
@@ -49,7 +51,7 @@ func checkManagedPreferenceOwnership(t *testing.T, configured bool) {
 		if !slices.Equal(names, []string{"com.openai.codex", "config_toml_base64", "requirements_toml_base64"}) {
 			t.Fatalf("wrong managed source lookup: %v", names)
 		}
-		if _, policyErr := sealPolicy(profileRequest(), profileEnvironment{}, sources); policyErr != nil {
+		if _, policyErr := sealPolicy(profileRequest(), profileEnvironment{}, sources, task.ComputeSHA256([]byte("test runtime"))); policyErr != nil {
 			t.Fatalf("managed observation cannot enter immutable policy: %v", policyErr)
 		}
 	}

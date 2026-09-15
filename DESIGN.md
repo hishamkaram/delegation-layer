@@ -2,7 +2,7 @@
 
 > Working name only; the directory is trivially renamable. Written 2026-09-12.
 >
-> **Status: Phases 0–3 accepted; provider redesign guidance, catalog and contributor proof accepted in PRs #5–7. Codex / Phase 4 is in progress; native certification passed; review passed; CI and merge remain pending.** The comprehensive execution plan in
+> **Status: Phases 0–4 accepted; provider redesign guidance, catalog, contributor proof and Codex accepted in PRs #5–8. Claude / Phase 5 is in progress.** The comprehensive execution plan in
 > [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) and [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md)
 > represent the authoritative normative roadmap and supersede conflicting milestones below.
 > Historical measurements and debate records are preserved as historical context.
@@ -14,7 +14,7 @@
 > - **Durability & barriers**: Cryptographically unique staging, close-before-link, same-filesystem hard-link, and directory-sync barriers. Unsupported or remote filesystems are refused before admission (eliminating contradictory "local implies safe" assumptions).
 > - **Supervision & stopping**: Supervisor (`pueue`) owns stopping. Direct signals (`os.Process.Signal/Kill`, `syscall.Kill`), process-group manipulation (`setsid`, `pkill`, `killall`), `exec.CommandContext`, and nonzero `WaitDelay` are strictly prohibited. Budget supervision uses a bounded runner event loop with explicit ownership.
 > - **Deadlines**: Wall-clock execution deadline with stop-request, stop-acknowledgment, and termination-observed recorded separately. Token/dollar ceilings and raw argv are rejected before admission.
-> - **Provider profiles (v1 Private Release)**: The accepted `antigravity:print` profile is `workspace-write` (`read-only` is unsupported and refused). `codex:exec` (`read-only`) has an Executed pinned native profile; review passed; CI/merge remain pending. `claude:print` (`read-only`) still requires its adapter-phase live acceptance receipt. All three are required before v1 release.
+> - **Provider profiles (v1 Private Release)**: The supported `antigravity:print` profile is `workspace-write` (`read-only` is unsupported and refused). `codex:exec` and `claude:print` support `read-only` with their declared policy and output contracts. Every adapter discovers its executable and checks version/help capability at task preparation; observed versions and digests are task identity facts, never release gates. All three are required before v1 release.
 > - **Private delivery**: Private repository, private release assets, and authenticated GitHub install tooling. Public repositories, public taps, and unauthenticated `go install` are out of scope.
 > - **Workflow**: Resumable declared-plan DAG execution; the layer never invents tasks or autonomously judges result quality.
 >
@@ -43,7 +43,8 @@ of whether the seam is in the right place.
 Two tiers of confidence, and the difference matters:
 
 - **Checked against primary docs** — most of what follows. CLI flags move fast; re-verify before
-  implementing, and pin the versions each adapter was tested against.
+  implementing and use runtime help discovery rather than treating a tested release as a
+  compatibility pin.
 - **Tested live on this machine** (macOS 26.6.2, arm64) — marked as such where it appears. Three
   things were established this way, and all three contradicted or sharpened what the docs said:
   **pueue 4.0.4 and task-spooler 1.0.4** (kill reach, JSON, output retrieval),
@@ -1246,7 +1247,7 @@ mistake this document is prone to:
 > increase."*
 
 The experiment measures a **first build on an unprovisioned machine**. It says nothing about
-provisioned release pipelines, repeated releases, or the binary-installing user. One qualification on
+provisioned release pipelines, repeated releases, or the binary-installing user. One acceptance on
 that last point, raised in round 4 and worth keeping honest: this document advertises **`go install`**
 alongside the Homebrew tap, which *is* a source-install route — so "users never build anything" holds
 for binary consumers, not for every install path offered. Raising overall confidence on it

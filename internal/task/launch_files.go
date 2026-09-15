@@ -24,7 +24,7 @@ const MaxInputFiles = 16
 const MaxInputBytes = 64 * 1024
 
 // OutputWriterProcessExitEOF is the only v1 writer contract. A profile that
-// declares it certifies that its declared output writers are complete when the
+// declares it promises that its declared output writers are complete when the
 // provider has exited and the child's stdout/stderr pipes have reached EOF.
 // File existence or a stable snapshot is not a substitute for this contract.
 const OutputWriterProcessExitEOF = "process-exit-eof-v1"
@@ -117,7 +117,7 @@ func NormalizeOutputArtifacts(artifacts []OutputArtifact) ([]OutputArtifact, err
 }
 
 // ValidateOutputWriterContract validates the versioned completion contract
-// advertised by a certified provider profile.
+// advertised by a provider adapter.
 func ValidateOutputWriterContract(contract string) error {
 	if contract != "" && contract != OutputWriterProcessExitEOF {
 		return fmt.Errorf("unsupported output writer contract %q", contract)
@@ -126,7 +126,7 @@ func ValidateOutputWriterContract(contract string) error {
 }
 
 // ValidateOutputArtifacts validates output declarations and requires the
-// certified process-exit contract whenever any output is declared.
+// process-exit contract whenever any output is declared.
 func ValidateOutputArtifacts(artifacts []OutputArtifact, writerContract string) error {
 	if err := ValidateOutputWriterContract(writerContract); err != nil {
 		return err

@@ -24,7 +24,9 @@ var (
 )
 
 // Options controls caller observation and an optional explicit process context.
-// Nil Resolution and Environment use current process values at each fresh call.
+// Nil Resolution and Environment use current process control values at each
+// fresh call; the default child environment is bounded to pueue's control
+// variables. A nonnil Environment is passed through as supplied by the caller.
 type Options struct {
 	ObservationTimeout time.Duration
 	Resolution         *ResolutionContext

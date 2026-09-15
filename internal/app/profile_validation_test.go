@@ -136,7 +136,7 @@ type runnerRefreshFixture struct {
 
 func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 	t.Helper()
-	rawBase, err := os.MkdirTemp("/tmp", "dlp3-")
+	rawBase, err := os.MkdirTemp("/tmp", "dl-runner-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 	configPath := filepath.Join(base, "pueue.json")
 	statusPath := filepath.Join(base, "status.json")
 	writeRunnerSupervisor(t, supervisorExecutable, configPath, statusPath, base)
-	environment := append(os.Environ(), "PHASE3_STATUS="+statusPath)
+	environment := append(os.Environ(), "RUNNER_STATUS_PATH="+statusPath)
 	supervisor, err := pueue.Bind(context.Background(), supervisorExecutable, configPath, pueue.Options{Environment: environment})
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func (f *runnerRefreshFixture) close(t *testing.T) {
 
 func writeRunnerSupervisor(t *testing.T, executable, configPath, statusPath, base string) {
 	t.Helper()
-	script := "#!/bin/sh\nset -eu\ncase \"${3-}\" in\n  --version) printf '%s\\n' 'pueue 4.0.4' ;;\n  status) cat \"$PHASE3_STATUS\" ;;\n  *) exit 64 ;;\nesac\n"
+	script := "#!/bin/sh\nset -eu\ncase \"${3-}\" in\n  --version) printf '%s\\n' 'pueue 4.0.4' ;;\n  status) cat \"$RUNNER_STATUS_PATH\" ;;\n  *) exit 64 ;;\nesac\n"
 	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

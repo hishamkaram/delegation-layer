@@ -14,7 +14,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func effectivePolicy(request task.TaskRecord, environment profileEnvironment, now time.Time, managed func() ([]task.PolicySourceDigest, error)) (task.EffectiveConfig, error) {
+func effectivePolicy(request task.TaskRecord, environment profileEnvironment, now time.Time, managed func() ([]task.PolicySourceDigest, error), runtimeSHA256 string) (task.EffectiveConfig, error) {
 	sources, err := managed()
 	if err != nil {
 		return task.EffectiveConfig{}, err
@@ -33,7 +33,7 @@ func effectivePolicy(request task.TaskRecord, environment profileEnvironment, no
 		return task.EffectiveConfig{}, err
 	}
 	sources = append(sources, auth)
-	return sealPolicy(request, environment, sources)
+	return sealPolicy(request, environment, sources, runtimeSHA256)
 }
 
 func emptyConfigSources(paths []string) ([]task.PolicySourceDigest, error) {
@@ -55,7 +55,10 @@ func emptyConfigSources(paths []string) ([]task.PolicySourceDigest, error) {
 	return sources, nil
 }
 
-func sealPolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest) (task.EffectiveConfig, error) {
+func sealPolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest, runtimeSHA256 string) (task.EffectiveConfig, error) {
+	if err := task.ValidateSHA256(runtimeSHA256); err != nil {
+		return task.EffectiveConfig{}, fmt.Errorf("%w: runtime identity: %w", ErrUnsupportedProfile, err)
+	}
 	sources = slices.Clone(sources)
 	slices.SortFunc(sources, func(a, b task.PolicySourceDigest) int {
 		if order := cmp.Compare(a.Path, b.Path); order != 0 {
@@ -64,7 +67,7 @@ func sealPolicy(request task.TaskRecord, environment profileEnvironment, sources
 		return cmp.Compare(a.Kind, b.Kind)
 	})
 	effective := task.EffectiveConfig{Containment: Mode, Approval: "never", Policy: &task.PolicyDetails{
-		ProfileRevision: ProfileRevision, RuntimeSHA256: inspectedRuntimeSHA256,
+		ProfileRevision: ProfileRevision, RuntimeSHA256: runtimeSHA256,
 		Workspace: request.CanonicalCwd, WritableRoots: slices.Clone(environment.WritableRoots), Sources: sources,
 	}}
 	encoded, err := task.MarshalCanonical(effective)

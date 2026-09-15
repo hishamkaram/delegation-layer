@@ -162,12 +162,22 @@ func (s *Store) stageAndCommit(dirPath, filename string, data []byte, injector F
 }
 
 func (s *Store) stageReader(dirPath, filename string, reader io.Reader, injector FaultInjector) (committed bool, cleanupErr, resultErr error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	return s.stageReaderContext(context.Background(), dirPath, filename, reader, injector)
+}
+
+func (s *Store) stageReaderContext(ctx context.Context, dirPath, filename string, reader io.Reader, injector FaultInjector) (committed bool, cleanupErr, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return false, nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := s.maintLock.LockSH(ctx); err != nil {
 		return false, nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, s.maintLock.Unlock()) }()
+	if err := ctx.Err(); err != nil {
+		return false, nil, err
+	}
 	if filename == "." || filename == ".." || filepath.Base(filename) != filename {
 		return false, nil, errors.New("unsafe record basename")
 	}
@@ -182,12 +192,7 @@ func (s *Store) stageReader(dirPath, filename string, reader io.Reader, injector
 	}
 	stage := filepath.Join(dirPath, "stage."+id+".tmp")
 	dest := filepath.Join(dirPath, filename)
-	if observer, ok := injector.(StageCreateInjector); ok {
-		if err = observer.OnBeforeStageCreate(stage, dest); err != nil {
-			return false, nil, err
-		}
-	}
-	f, err := s.openFile(stage, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY)
+	f, err := s.openStageContext(ctx, stage, dest, injector)
 	if err != nil {
 		return false, nil, err
 	}
@@ -197,7 +202,28 @@ func (s *Store) stageReader(dirPath, filename string, reader io.Reader, injector
 	if err = barrierAndCloseStage(f, dest, injector); err != nil {
 		return false, nil, errors.Join(err, f.Close())
 	}
-	return s.commitStage(stage, dest, injector)
+	committed, cleanupErr, resultErr = s.commitStage(stage, dest, injector)
+	if !committed && errors.Is(resultErr, os.ErrExist) {
+		// stageReader owns this newly created stage. A competing publisher
+		// owns dest, so clean only this attempt's stage before returning the
+		// publication race to the caller for winner verification.
+		cleanupErr = errors.Join(cleanupErr, s.cleanupStage(stage, dest, injector))
+	}
+	return committed, cleanupErr, resultErr
+}
+
+// openStageContext observes cancellation at the staging boundary. Once
+// creation starts, the caller retains ownership through writes and barriers.
+func (s *Store) openStageContext(ctx context.Context, stage, dest string, injector FaultInjector) (*os.File, error) {
+	if observer, ok := injector.(StageCreateInjector); ok {
+		if err := observer.OnBeforeStageCreate(stage, dest); err != nil {
+			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.openFile(stage, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY)
 }
 
 func (s *Store) commitStage(stage, dest string, injector FaultInjector) (bool, error, error) {

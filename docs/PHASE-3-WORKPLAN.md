@@ -1,6 +1,6 @@
 # Phase 3 — Antigravity implementation and acceptance
 
-Status: implementation in progress; no native permission certification claimed.
+Status: implementation in progress; no native permission runtime acceptance claimed.
 Base: accepted Phase 2, main `b52eda2917fb186cdf7a8f21854d978dc5b79145`.
 The provider specifications in `EXECUTION-PLAN.md` remain authoritative.
 
@@ -18,7 +18,7 @@ and requires all three providers.
 
 ## Implementation contracts
 
-1. Add an immutable, digest-bound Antigravity 1.2.2 print interpreter. Read only
+1. Add an immutable, digest-bound Antigravity print output interpreter. Read only
    sealed task evidence. Stream arbitrarily long response text with bounded
    parser memory; reject malformed UTF-8/JSON, duplicate keys, trailing records,
    unknown status, error payloads, blank answers, and identity conflicts. Drain
@@ -34,15 +34,15 @@ and requires all three providers.
    outcomes. Clone all pointer fields and validate durable replay. Antigravity
    counters and duration are conversation-cumulative; incomplete evidence is
    unreliable. No inferred per-task deltas, counter sums, or zero filling.
-4. Implement a typed launch profile and policy resolver using the installed
-   version's evidenced source inventory. Validate applicable CLI, shared,
+4. Implement a typed launch profile and policy resolver using the discovered
+   CLI's source inventory. Validate applicable CLI, shared,
    project, workspace, customization, hook, plugin, and MCP inputs. Reject
    unknown policy effects, bypass/unsandboxed rules, extra writable workspaces,
    and unreadable applicable sources. Preserve authentication and global files.
    Normalize non-secret decisions and source identities into the admission
    digest; recompute immediately before the one permitted launch.
-5. Bind the canonical executable and supported version to the profile. Use
-   argv slices, canonical cwd, finite task-owned stdin, explicit workspace-write,
+5. Bind the canonical executable and its observed version/digest to the task
+   profile. Use argv slices, canonical cwd, finite task-owned stdin, explicit workspace-write,
    sandbox, JSON output, text input, disabled slash commands, and positive native
    print timeout. Resume adds only the recorded conversation flag. Unsupported
    model/effort combinations and read-only requests fail before admission.
@@ -51,10 +51,10 @@ and requires all three providers.
    decisions to explain the permission profile and any drift rejection.
 7. Wire the native interpreter into both shipped commands, preserving the
    existing fixture predicate for recovery. Collection remains observational.
-   Ordinary dispatch never launches a certification probe. Mark a supported
-   platform/profile Executed only after the corresponding native gate passes;
-   incomplete source discovery or failed prerequisites remain an explicit
-   unavailable profile, not a completed phase.
+   Ordinary dispatch never launches a paid acceptance probe. Runtime preflight
+   discovers the executable and required flags before admission; incomplete
+   source discovery or failed prerequisites remain an explicit unavailable
+   profile. No release status is inferred from a local receipt.
 
 ## Verification matrix
 
@@ -80,7 +80,7 @@ oracles, and the actual process/supervisor terminal observation.
 - L1: place a random nonce in the workspace. Require reading it, creating the
   specified workspace sentinel, and attempting the specified sibling write.
   Verify real sentinel contents and absence of the outside file. A refused
-  positive control is inconclusive; any outside write fails certification.
+  positive control is inconclusive; any outside write fails runtime acceptance.
 - L2: create a new task resuming L1's exact conversation. Require recall of the
   prior nonce and verify same provider ID, distinct task ID, and byte-identical
   original request, identity, raw evidence, result, and outcome.
@@ -102,15 +102,15 @@ are positively observed finished.
 ## Acceptance record
 
 Create `PHASE-3-ACCEPTANCE.md` from actual receipts after execution. Include the
-supported OS/version/profile table with evidence status, config-source rules,
+observed runtime capability table, config-source rules,
 runtime writable-root disclosure, live L1–L3 results, review scope, exact tested
 commit/tree, CI URLs, and material limitations. Do not advance implementation
-tracking to verified based on unit tests or a draft certification record alone.
+tracking to verified based on unit tests or a draft runtime acceptance record alone.
 
-## Native profile revision 2 candidate
+## Native capability candidate
 
-The first authenticated supervised run reached the model but denied the exact workspace nonce read. The revised candidate passes `--add-dir` with only the canonical requested workspace and keeps the sandbox and headless approval policy. Its live certification remains pending. A native write-denial outcome from the outside control stays rejected; continuation must independently commit and recall the nonce after both workspace copies have been removed.
+The first authenticated supervised run reached the model but denied the exact workspace nonce read. The revised candidate passes `--add-dir` with only the canonical requested workspace and keeps the sandbox and headless approval policy. Runtime capability evidence remains subject to the live controls below. A native write-denial outcome from the outside control stays rejected; continuation must independently commit and recall the nonce after both workspace copies have been removed.
 
 The local acceptance environment inherited `SSH_CONNECTION` from a tmux session. Omitting that variable only in the acceptance child cleared authentication, consistent with the documented local keyring versus SSH authentication flows. Production preserves the caller environment; genuine remote sessions must use their configured authentication flow.
 
-Revision 2 reached a native `WriteToFile` denial with the inside sentinel still absent; it failed the positive control. Revision 3 adds the documented per-run `--mode accept-edits` to permit file edits while retaining shell permission rules and the sandbox. The effective approval record includes this decision. Outside-write containment is still unverified for this candidate and must pass the live filesystem control. See https://antigravity.google/docs/cli/modes/.
+The initial candidate reached a native `WriteToFile` denial with the inside sentinel still absent; it failed the positive control. The current candidate adds the documented per-run `--mode accept-edits` to permit file edits while retaining shell permission rules and the sandbox. The effective approval record includes this decision. Outside-write containment is still unverified for this candidate and must pass the live filesystem control. See https://antigravity.google/docs/cli/modes/.

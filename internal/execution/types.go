@@ -76,10 +76,14 @@ type Hooks struct {
 }
 
 type Options struct {
-	// Preflight performs finite, non-launching policy validation at the last
-	// boundary before process Start. A refusal follows normal start-failed
-	// capture/sealing; it never abandons the consumed start permit.
-	Preflight func() error
+	// Preflight performs finite policy validation at the last boundary before
+	// provider Start; it has no provider-start authority. Any native inspection
+	// remains core-owned inside this runner's supervisor lifetime and budget.
+	// It must not return until its owned command and capture work have ended.
+	// A successful preflight is followed by the
+	// budget owner's final start authorization. A refusal follows normal
+	// start-failed capture/sealing; it never abandons the consumed start permit.
+	Preflight func(PreflightScope) error
 	Clock     Clock
 	Stopper   Stopper
 	Identity  IdentityObserver
@@ -107,12 +111,14 @@ func (o Options) emit(name string) {
 	}
 }
 
-func (o Options) start(cmd *exec.Cmd) error {
+func (o Options) preflight(budget *budgetOwner) error {
 	if o.Preflight != nil {
-		if err := o.Preflight(); err != nil {
-			return err
-		}
+		return budget.runScoped(o, o.Preflight)
 	}
+	return nil
+}
+
+func (o Options) start(cmd *exec.Cmd) error {
 	if o.Hooks.Start != nil {
 		return o.Hooks.Start(cmd)
 	}

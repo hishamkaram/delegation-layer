@@ -14,7 +14,7 @@ adding the synthetic provider. Record the exercise's exact changed paths and
 show that its implementation consists only of a new provider module, fixtures,
 and one test-only catalog registration. Test harness preparation belongs in the
 baseline. Production discovery must not include the synthetic provider. Reusing
-the existing phase2 fixture alone is insufficient evidence of contributor use.
+the existing supervisor fixture alone is insufficient evidence of contributor use.
 
 The exercise must follow [add-an-adapter](../skills/add-an-adapter/SKILL.md).
 Record any guidance correction it exposes. Shared extraction needs concrete
@@ -31,21 +31,21 @@ they run.
 | Declaration validation | Unsafe, duplicate, reserved names and invalid or overlapping argv bindings fail before provider launch; declarations and completion contract bind to immutable metadata |
 | Legacy compatibility | Tasks without artifacts retain canonical metadata and two-stream manifest bytes; historical predicates and collection still work |
 | Staging ownership | Core supplies create-once paths outside workspace; native files are copied into separate raw evidence inodes before sealing |
-| Writer completion | Process exit and stream EOF gate import under the version-qualified writer contract; an inherited open stream prevents early sealing |
+| Writer completion | Process exit and stream EOF gate import under the declared writer contract; an inherited open stream prevents early sealing |
 | File faults | Symlink, nonregular file, replacement/mutation and import write/sync/close failures cannot produce an accepted seal |
 | Optional absence | Missing optional staged output is absent evidence; a missing or corrupt manifest-listed file is an evidence fault |
 | Present and conflicting output | Present empty output remains present; provider interpreter rejects conflict with the final stdout answer |
 | Success and rejection | New synthetic envelope passes and fails through the compiled dispatcher/runner with isolated real pueue |
 | Identity and continuation | Exact recorded session resumes under a new task; mismatch rejects; original records remain immutable |
 | Replay | Repeated collection uses sealed evidence with staging removed and executable unavailable; no additional launch occurs |
-| Profile and binary identity | Test certification and receipts use the actual built executable digest and executed platform; no invented execution evidence |
+| Runtime capability and identity | Tests use the actual built executable, its observed version/digest, and the declared help/flag preflight; no invented execution evidence |
 | Existing lifecycle | Protocol/supervisor gates preserve admission, at-most-once start, deadlines, stop authority and crash recovery |
 | Existing native provider | All three affected agy acceptance turns pass with filesystem, identity and replay evidence |
 
 ## Concrete native-provider fit
 
 The requirements below come from the provider specifications in
-[EXECUTION-PLAN.md](EXECUTION-PLAN.md). This mapping is not native certification;
+[EXECUTION-PLAN.md](EXECUTION-PLAN.md). This mapping is not native runtime acceptance;
 Codex and Claude retain their subsequent implementation and live-test gates.
 
 | Requirement | Intended ownership and proof |
@@ -55,11 +55,11 @@ Codex and Claude retain their subsequent implementation and live-test gates.
 | Codex commentary/retry/terminal semantics | Versioned provider interpreter selects the final completed-turn answer and rejects ambiguous completion; no core event parser |
 | Codex thread and usage | Provider maps verified identity and task-scoped usage into existing shared value types |
 | Claude regular settings and empty MCP files | Bounded non-secret input declarations bind exact bytes and reserved argv slots into immutable metadata; core creates regular task-owned files, tested before freezing the baseline |
-| Claude managed configuration and tool restrictions | Provider preparation validates effective policy; versioned interpreter checks reported initialization evidence |
+| Claude managed configuration and tool restrictions | Provider preparation validates effective policy; the output interpreter checks reported initialization evidence |
 | Claude trailing messages and final result | Core waits for stream closure; provider interpreter validates the final result, session and truncation/error semantics |
 | Claude session and accounting | Provider maps exact session identity and distinct accounting scopes into shared value types |
 
-## Executed contributor evidence
+## Recorded contributor evidence
 
 The generic boundary was first frozen at `78ad21e` on main `38e3da4`.
 Independent review found that declared artifact names could collide with the
@@ -135,23 +135,21 @@ CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -buildvcs=false -o bin/contri
 python3 scripts/acceptance_contributor.py --tools bin/contributor --pueue bin/test-supervisor/pueue --pueued bin/test-supervisor/pueued --output <new-private-evidence-directory>
 ```
 
-Executed platform: Darwin/arm64, Go 1.27.1, pueue/pueued 4.0.4.
-Fixture version `contributor-provider 1`; measured binary SHA-256
-`3c8d0e26ac6b917da95944251ad593d00cdaed430d707327be96d0d97ff5e85d`.
-The executable's self-test passed before updating the embedded certificate.
-Other platform/build combinations are intentionally uncertified for live
-fixture preparation. Unit tests use explicit identities and do not claim
-execution on another platform. This is synthetic certification, not native AI
-certification; production discovery contains no synthetic provider.
+The exercise ran on Darwin/arm64 with Go 1.27.1 and pueue/pueued 4.0.4.
+The fixture executable's version and digest were observed during preparation;
+its self-test passed before the runtime receipt was recorded. Other
+platform/build combinations need their own exercise. Unit tests use explicit
+identities and do not claim execution on another platform. This is synthetic
+runtime behavior evidence; production discovery contains no synthetic provider.
 
 | Requirement | Concrete verification |
 |---|---|
 | Declaration validation and legacy bytes | `internal/task/output_contract_test.go`: malformed declarations, reserved names/slots, canonical order, counts and legacy metadata/two-stream bytes |
-| Prepared binding and certification | `internal/provider/contract_artifact_test.go`: empty slots, changed content, normalization and matching writer contracts across profiles |
+| Prepared binding and runtime capability | `internal/provider/contract_artifact_test.go`: empty slots, changed content, normalization and matching writer contracts across profiles |
 | Ownership, import faults and replay | `internal/taskdir/launch_files_test.go`: consumed permits, private staging, absence, independent inodes, file faults, mutation, write/barrier/close failures, import fencing, scavenging and staging-free replay |
 | Launch ordering | `TestLaunchFilesBindBeforeStartAndImportAfterCapture`, changed-declaration permit test and definite-start-failure test |
 | New provider semantics | Predicate tests cover strict/bounded envelopes, exact bytes, absence/empty/conflict, identities, refusal/nonzero exit, evidence and sink failures |
-| New provider preparation | Profile tests cover exact fresh/resume argv, generated configurations, immutable policy, binary/platform drift and runtime/workspace placement |
+| New provider preparation | Profile tests cover exact fresh/resume argv, generated configurations, immutable policy, runtime identity drift and runtime/workspace placement |
 | Session persistence | Identity tests cover chunking, exact fresh/resume identity, malformed/mismatched/oversized input, once-only callbacks and persistence errors |
 | Acceptance-driver failures | Six hermetic tests reject failed runners, wrong rejection evidence, incorrect replay outcomes and unrelated rows, wait for successful completion and enforce a finite deadline; shared discovery runs all 22 agy/contributor/supervisor harness tests |
 | Executable fixture | Direct `fixture.Run` unit/race tests cover configuration reads, continuation without a supplied nonce, output variants, duplicate tasks and writer failures |

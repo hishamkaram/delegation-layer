@@ -1,7 +1,7 @@
 """Hermetic tests for the Codex acceptance driver oracles.
 
 These tests build no provider and make no network or paid-model call.  Native
-qualification is intentionally exercised only by the explicitly invoked gate.
+live provider behavior is intentionally exercised only by the explicitly invoked gate.
 """
 
 from __future__ import annotations
@@ -172,6 +172,23 @@ class CodexOracleTests(unittest.TestCase):
             self.assertEqual(len(parsed["commands"]), 3)
             self.assertEqual(parsed["incomplete_commands"], [])
 
+    def test_complete_stream_accepts_nested_multirune_fold_distinct_keys(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = successful_events(root / "n", root / "i", root / "s", b"n")
+            raw += b"\n" + event({
+                "type": "future.nonterminal",
+                "telemetry": {
+                    "ß": {"ss": "sharp-s"},
+                    "ss": {"ß": "letters"},
+                    "ﬀ": {"ff": "ligature"},
+                    "ff": {"ﬀ": "letters"},
+                },
+            })
+            parsed = gate.parse_codex_events(raw)
+            self.assertEqual(parsed["thread_id"], THREAD)
+            self.assertEqual(parsed["final_message"], b"final answer")
+
     def test_final_jsonl_line_may_omit_newline(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -248,10 +265,8 @@ class CodexOracleTests(unittest.TestCase):
 
     def test_acceptance_receipt_labels_are_neutral_and_turn_count_is_planned(self):
         self.assertEqual(gate.ACCEPTANCE_STATUS, "acceptance-passed")
-        self.assertEqual(gate.CERTIFICATION_STATUS, "embedded-certification-tracked-separately")
         self.assertEqual(gate.PRELAUNCH_STATUS, "planned")
         self.assertEqual(gate.PLANNED_NATIVE_AI_TURNS, 2)
-        self.assertNotIn("pending", gate.CERTIFICATION_STATUS.lower())
         self.assertNotIn("candidate", gate.ACCEPTANCE_STATUS.lower())
 
     def test_probe_gate_accepts_one_shell_wrapped_probe(self):
@@ -478,22 +493,27 @@ class CodexOracleTests(unittest.TestCase):
         run.dispatch_attempts = {TASK}
         run.tasks = {"fresh": TASK}
         run.labels = {"fresh": f"delegate:{ROOT}:{TASK}"}
+        run.numbers = {"fresh": 0}
         run.runner = Path("/controlled/delegate-run")
         run.state = Path("/controlled/state")
         command = f"{run.runner} --root {run.state} {TASK}"
-        done = {"tasks": {"0": {"label": run.labels["fresh"], "original_command": command,
+        done = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
+                                  "original_command": command,
                                   "command": command, "path": str(run.state),
                                   "status": {"Done": {"result": "Success"}}}}, "groups": {}}
         self.assertTrue(run.failure_queue_finished(done))
-        malformed = {"tasks": {"0": {"label": run.labels["fresh"], "original_command": command,
+        malformed = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
+                                        "original_command": command,
                                         "command": command, "path": str(run.state),
                                         "status": {"Done": {}}}}, "groups": {}}
         self.assertFalse(run.failure_queue_finished(malformed))
-        unknown_result = {"tasks": {"0": {"label": run.labels["fresh"], "original_command": command,
+        unknown_result = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
+                                            "original_command": command,
                                             "command": command, "path": str(run.state),
                                             "status": {"Done": {"result": "Unknown"}}}}, "groups": {}}
         self.assertFalse(run.failure_queue_finished(unknown_result))
-        running = {"tasks": {"0": {"label": run.labels["fresh"], "original_command": command,
+        running = {"tasks": {"0": {"id": 0, "label": run.labels["fresh"], "group": "default",
+                                     "original_command": command,
                                      "command": command, "path": str(run.state),
                                      "status": "Running"}}, "groups": {}}
         self.assertFalse(run.failure_queue_finished(running))

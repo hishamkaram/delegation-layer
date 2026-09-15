@@ -94,7 +94,7 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertEqual(book.pending(), [])
 
     def test_l1_oracle_cleanup_removes_both_nonce_copies(self):
-        # Unit input for the harness only; this does not certify a provider.
+        # Unit input for the harness only; this does not claim live readiness.
         with tempfile.TemporaryDirectory(prefix='agy-oracle-unit-') as directory:
             root = Path(directory)
             workspace = root / 'workspace'
@@ -207,6 +207,7 @@ class NativeHarnessTests(unittest.TestCase):
         command = f'{run.runner} --root {run.prepared.state} {task}'
         row = {'label': 'delegate:' + 'b' * 32 + ':' + task,
                'command': command, 'original_command': command, 'path': '/controlled',
+               'group': 'default',
                'status': {'Running': {}}}
         self.assertFalse(run.failure_queue_finished({'tasks': {}}))
         self.assertFalse(run.failure_queue_finished({'tasks': {'0': row}}))

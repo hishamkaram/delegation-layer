@@ -188,6 +188,33 @@ func OpenStore(rootPath string) (*Store, error) {
 }
 
 func OpenStoreWithPredicates(rootPath string, registry predicate.Registry) (*Store, error) {
+	s, err := openStoreMetadata(rootPath, registry)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.ProbeFilesystemSupport(); err != nil {
+		return nil, errors.Join(fmt.Errorf("filesystem support check failed: %w", err), s.Close())
+	}
+	return s, nil
+}
+
+// OpenStoreWithPredicatesContext opens an existing store and bounds its probe
+// by the caller's observation lifetime. It never initializes a missing store.
+func OpenStoreWithPredicatesContext(ctx context.Context, rootPath string, registry predicate.Registry) (*Store, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s, err := openStoreMetadata(rootPath, registry)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.ProbeFilesystemSupportContext(ctx); err != nil {
+		return nil, errors.Join(fmt.Errorf("filesystem support check failed: %w", err), s.Close())
+	}
+	return s, nil
+}
+
+func openStoreMetadata(rootPath string, registry predicate.Registry) (*Store, error) {
 	if !filepath.IsAbs(rootPath) {
 		return nil, fmt.Errorf("state root must be an absolute path: %s", rootPath)
 	}
@@ -244,13 +271,6 @@ func OpenStoreWithPredicates(rootPath string, registry predicate.Registry) (*Sto
 
 	s.maintLock.faultSource = s.FaultInjector
 
-	// Mandatory filesystem support and policy check before authority
-	if pErr := s.ProbeFilesystemSupport(); pErr != nil {
-		closeLockQuietly(mLock)
-		closeRootHandleQuietly(rootHandle)
-		return nil, fmt.Errorf("filesystem support check failed: %w", pErr)
-	}
-
 	return s, nil
 }
 
@@ -275,6 +295,26 @@ func (s *Store) ProbeFilesystemSupport() (resultErr error) {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, s.maintLock.Unlock()) }()
+	return s.probeFilesystemSupport(context.Background())
+}
+
+// ProbeFilesystemSupportContext waits for maintenance access only within ctx.
+// Once a probe file is opened, its writes, barriers and cleanup remain owned.
+func (s *Store) ProbeFilesystemSupportContext(ctx context.Context) (resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.maintLock.LockSH(ctx); err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, s.maintLock.Unlock()) }()
+	return s.probeFilesystemSupport(ctx)
+}
+
+func (s *Store) probeFilesystemSupport(ctx context.Context) (resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := checkPlatformFilesystemPolicy(s.Root); err != nil {
 		return err
 	}
@@ -284,6 +324,9 @@ func (s *Store) ProbeFilesystemSupport() (resultErr error) {
 		return fmt.Errorf("filesystem probe id: %w", idErr)
 	}
 	probeDir := filepath.Join(s.Root, ".probe", probeID)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := s.mkdir(probeDir, nil); err != nil {
 		return fmt.Errorf("filesystem probe mkdir: %w", err)
 	}
@@ -296,6 +339,13 @@ func (s *Store) ProbeFilesystemSupport() (resultErr error) {
 		resultErr = errors.Join(resultErr, s.rootHandle.RemoveAll(rel), s.barrierDir(filepath.Dir(probeDir)))
 	}()
 
+	return s.probeFilesystemOperations(ctx, probeDir)
+}
+
+func (s *Store) probeFilesystemOperations(ctx context.Context, probeDir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	fPath := filepath.Join(probeDir, "probe.file")
 	f, err := s.openFile(fPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY)
 	if err != nil {
@@ -313,6 +363,9 @@ func (s *Store) ProbeFilesystemSupport() (resultErr error) {
 		return fmt.Errorf("filesystem probe close: %w", err)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	linkPath := filepath.Join(probeDir, "probe.link")
 	if err := s.link(fPath, linkPath); err != nil {
 		return fmt.Errorf("filesystem probe hardlink unsupported: %w", err)
@@ -322,13 +375,16 @@ func (s *Store) ProbeFilesystemSupport() (resultErr error) {
 		return fmt.Errorf("filesystem probe dir barrier: %w", err)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Verify flock support on probe lock
 	probeLockPath := filepath.Join(probeDir, ".probe.lock")
 	pLock, lErr := s.openLock(probeLockPath, LockLevelNone)
 	if lErr != nil {
 		return fmt.Errorf("filesystem probe lock open: %w", lErr)
 	}
-	if shErr := pLock.LockSH(context.TODO()); shErr != nil {
+	if shErr := pLock.LockSH(ctx); shErr != nil {
 		closeLockQuietly(pLock)
 		return fmt.Errorf("filesystem probe lock SH: %w", shErr)
 	}

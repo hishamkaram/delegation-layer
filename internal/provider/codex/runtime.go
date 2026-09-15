@@ -2,40 +2,29 @@ package codex
 
 import (
 	"fmt"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
-const (
-	Version                = "0.154.0"
-	inspectedRuntimeSHA256 = "4f85982624b3898c8991cb80c0981b2aa71070e3537046c9a95950318a95afcc"
-)
+// RuntimeRequirements returns the command and flags used by the Codex launch
+// plan. It returns fresh slices so package metadata remains immutable.
+func RuntimeRequirements() commonprovider.RuntimeCapability {
+	return commonprovider.RuntimeCapability{
+		HelpArgs: []string{"exec"},
+		RequiredFlags: []string{
+			"-c", "--strict-config", "--sandbox", "--cd", "--ignore-user-config", "--ignore-rules",
+			"--output-last-message", "--json", "--color",
+		},
+	}
+}
 
-func resolveExecutable() (string, error) {
-	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		return "", fmt.Errorf("%w: Codex runtime has not been inspected on this platform", ErrUnsupportedProfile)
-	}
-	path, err := exec.LookPath("codex")
+func resolveExecutable() (commonprovider.CLIInfo, error) {
+	// Preparation only discovers and fingerprints the executable. The version,
+	// help output, and required flags are checked by the shared supervised
+	// runtime inspection after the candidate has been admitted.
+	info, err := commonprovider.LocateCLI("codex")
 	if err != nil {
-		return "", fmt.Errorf("%w: Codex executable is unavailable", ErrUnsupportedProfile)
+		return commonprovider.CLIInfo{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}
-	path, err = filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	path, err = filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", err
-	}
-	digest, err := commonprovider.FingerprintExecutable(path)
-	if err != nil {
-		return "", fmt.Errorf("%w: inspect Codex runtime: %w", ErrUnsupportedProfile, err)
-	}
-	if digest != inspectedRuntimeSHA256 {
-		return "", fmt.Errorf("%w: Codex executable differs from inspected 0.154.0 runtime", ErrUnsupportedProfile)
-	}
-	return path, nil
+	return info, nil
 }

@@ -99,22 +99,23 @@ func TestPolicyDigestBindsNonSecretSourcesAndPlacement(t *testing.T) {
 	request := profileRequest()
 	environment := profileEnvironment{WritableRoots: []string{"/runtime"}}
 	sources := []task.PolicySourceDigest{{Path: "/config.toml", Kind: "empty-native-config"}}
-	first, err := sealPolicy(request, environment, sources)
+	runtimeSHA256 := task.ComputeSHA256([]byte("test runtime"))
+	first, err := sealPolicy(request, environment, sources, runtimeSHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sources[0].Present, sources[0].SHA256 = true, task.ComputeSHA256(nil)
-	changed, err := sealPolicy(request, environment, sources)
+	changed, err := sealPolicy(request, environment, sources, runtimeSHA256)
 	if err != nil || changed.Digest == first.Digest {
 		t.Fatalf("configuration presence drift escaped digest: %v", err)
 	}
 	environment.WritableRoots = []string{"/other-runtime"}
-	placement, err := sealPolicy(request, environment, sources)
+	placement, err := sealPolicy(request, environment, sources, runtimeSHA256)
 	if err != nil || placement.Digest == changed.Digest {
 		t.Fatalf("runtime placement drift escaped digest: %v", err)
 	}
 	request.CanonicalCwd = "/other-workspace"
-	workspace, err := sealPolicy(request, environment, sources)
+	workspace, err := sealPolicy(request, environment, sources, runtimeSHA256)
 	if err != nil || workspace.Digest == placement.Digest {
 		t.Fatalf("workspace drift escaped digest: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestPolicyDigestBindsNonSecretSourcesAndPlacement(t *testing.T) {
 
 func TestManagedInspectionFailureStopsPolicyPreparation(t *testing.T) {
 	failure := errors.New("injected preference API failure")
-	_, err := effectivePolicy(profileRequest(), profileEnvironment{}, time.Now(), func() ([]task.PolicySourceDigest, error) { return nil, failure })
+	_, err := effectivePolicy(profileRequest(), profileEnvironment{}, time.Now(), func() ([]task.PolicySourceDigest, error) { return nil, failure }, task.ComputeSHA256([]byte("test runtime")))
 	if !errors.Is(err, failure) {
 		t.Fatalf("managed lookup failure lost: %v", err)
 	}

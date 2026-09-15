@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -259,6 +260,37 @@ func (td *TaskDir) stopEvidence(id string) (*task.StopRequestRecord, string, *ta
 	return r, task.ComputeSHA256(data), receipt, nil
 }
 
+func (td *TaskDir) stopEvidenceContext(ctx context.Context, id string) (*task.StopRequestRecord, string, *task.SupervisorReceipt, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", nil, err
+	}
+	r, err := td.ReadStopRequest(id)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, "", nil, err
+	}
+	if r.NumericTaskID == nil {
+		return nil, "", nil, task.ErrIdentityMismatch
+	}
+	data, err := td.store.readBytes(filepath.Join(td.Dir, "stop", id+".request.json"), task.MaxControlRecordSize)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, "", nil, err
+	}
+	receipt, err := td.ReadSupervisorReceipt()
+	if err != nil {
+		return nil, "", nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, "", nil, err
+	}
+	return r, task.ComputeSHA256(data), receipt, nil
+}
+
 func stopEvidenceMatches(request *task.StopRequestRecord, digest string, receipt *task.SupervisorReceipt, root, id, spec, meta, label, requestID, requestSHA string, supervisor *task.SupervisorRef, numeric *int64) bool {
 	return root == request.RootID && id == request.TaskID && spec == request.SpecSHA256 && meta == request.MetaSHA256 && label == request.Label && requestID == request.RequestID && requestSHA == digest && supervisor != nil && *supervisor == request.Supervisor && numeric != nil && *numeric == receipt.NumericTaskID
 }
@@ -496,14 +528,40 @@ func (td *TaskDir) RecordStopReply(id string, facts task.StopReplyFacts) (result
 	if err != nil {
 		return err
 	}
-	if facts.NumericTaskID != receipt.NumericTaskID {
-		return task.ErrIdentityMismatch
-	}
-	r := task.StopReplyRecord{SchemaVersion: task.SchemaVersion, RootID: request.RootID, TaskID: request.TaskID, SpecSHA256: request.SpecSHA256, MetaSHA256: request.MetaSHA256, Label: request.Label, Supervisor: &request.Supervisor, RequestID: id, RequestSHA256: digest, NumericTaskID: &facts.NumericTaskID, Action: facts.Action, Acknowledged: facts.Acknowledged, Message: facts.Message, RepliedAt: timestamp()}
-	if err = task.ValidateStopReplyRecord(&r); err != nil {
+	r, err := newStopReplyRecord(request, digest, receipt, id, facts)
+	if err != nil {
 		return err
 	}
 	return td.recordSame(filepath.Join("stop", id+".reply.json"), r, func() (bool, error) {
+		old, e := td.ReadStopReply(id)
+		if e != nil {
+			return false, e
+		}
+		r.RepliedAt = old.RepliedAt
+		return reflect.DeepEqual(old, &r), nil
+	})
+}
+
+// RecordStopReplyContext records an acknowledgment while honoring the caller's
+// observation lifetime. Legacy RecordStopReply retains its nonblocking lock
+// behavior for callers that do not supply a context.
+func (td *TaskDir) RecordStopReplyContext(ctx context.Context, id string, facts task.StopReplyFacts) (resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := td.store.maintLock.LockSH(ctx); err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
+	request, digest, receipt, err := td.stopEvidenceContext(ctx, id)
+	if err != nil {
+		return err
+	}
+	r, err := newStopReplyRecord(request, digest, receipt, id, facts)
+	if err != nil {
+		return err
+	}
+	return td.recordSameContext(ctx, filepath.Join("stop", id+".reply.json"), r, func() (bool, error) {
 		old, e := td.ReadStopReply(id)
 		if e != nil {
 			return false, e
@@ -525,11 +583,8 @@ func (td *TaskDir) RecordStopObservation(id string, facts task.StopObservationFa
 	if err != nil {
 		return err
 	}
-	if facts.NumericTaskID != receipt.NumericTaskID {
-		return task.ErrIdentityMismatch
-	}
-	r := task.StopObservedRecord{SchemaVersion: task.SchemaVersion, RootID: request.RootID, TaskID: request.TaskID, SpecSHA256: request.SpecSHA256, MetaSHA256: request.MetaSHA256, Label: request.Label, Supervisor: &request.Supervisor, RequestID: id, RequestSHA256: digest, NumericTaskID: &facts.NumericTaskID, Terminated: facts.Terminated, State: facts.State, ObservedAt: timestamp()}
-	if err = task.ValidateStopObservedRecord(&r); err != nil {
+	r, err := newStopObservationRecord(request, digest, receipt, id, facts)
+	if err != nil {
 		return err
 	}
 	return td.recordSame(filepath.Join("stop", id+".observed.json"), r, func() (bool, error) {
@@ -540,4 +595,58 @@ func (td *TaskDir) RecordStopObservation(id string, facts task.StopObservationFa
 		r.ObservedAt = old.ObservedAt
 		return reflect.DeepEqual(old, &r), nil
 	})
+}
+
+// RecordStopObservationContext records independently observed termination with
+// the caller's bounded observation lifetime. Legacy RecordStopObservation
+// retains its nonblocking lock behavior.
+func (td *TaskDir) RecordStopObservationContext(ctx context.Context, id string, facts task.StopObservationFacts) (resultErr error) {
+	if !facts.Terminated || facts.State != "ended" {
+		return task.ErrIdentityMismatch
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := td.store.maintLock.LockSH(ctx); err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
+	request, digest, receipt, err := td.stopEvidenceContext(ctx, id)
+	if err != nil {
+		return err
+	}
+	r, err := newStopObservationRecord(request, digest, receipt, id, facts)
+	if err != nil {
+		return err
+	}
+	return td.recordSameContext(ctx, filepath.Join("stop", id+".observed.json"), r, func() (bool, error) {
+		old, e := td.ReadStopObservation(id)
+		if e != nil {
+			return false, e
+		}
+		r.ObservedAt = old.ObservedAt
+		return reflect.DeepEqual(old, &r), nil
+	})
+}
+
+func newStopReplyRecord(request *task.StopRequestRecord, digest string, receipt *task.SupervisorReceipt, id string, facts task.StopReplyFacts) (task.StopReplyRecord, error) {
+	if request == nil || receipt == nil || facts.NumericTaskID != receipt.NumericTaskID {
+		return task.StopReplyRecord{}, task.ErrIdentityMismatch
+	}
+	r := task.StopReplyRecord{SchemaVersion: task.SchemaVersion, RootID: request.RootID, TaskID: request.TaskID, SpecSHA256: request.SpecSHA256, MetaSHA256: request.MetaSHA256, Label: request.Label, Supervisor: &request.Supervisor, RequestID: id, RequestSHA256: digest, NumericTaskID: &facts.NumericTaskID, Action: facts.Action, Acknowledged: facts.Acknowledged, Message: facts.Message, RepliedAt: timestamp()}
+	if err := task.ValidateStopReplyRecord(&r); err != nil {
+		return task.StopReplyRecord{}, err
+	}
+	return r, nil
+}
+
+func newStopObservationRecord(request *task.StopRequestRecord, digest string, receipt *task.SupervisorReceipt, id string, facts task.StopObservationFacts) (task.StopObservedRecord, error) {
+	if request == nil || receipt == nil || facts.NumericTaskID != receipt.NumericTaskID {
+		return task.StopObservedRecord{}, task.ErrIdentityMismatch
+	}
+	r := task.StopObservedRecord{SchemaVersion: task.SchemaVersion, RootID: request.RootID, TaskID: request.TaskID, SpecSHA256: request.SpecSHA256, MetaSHA256: request.MetaSHA256, Label: request.Label, Supervisor: &request.Supervisor, RequestID: id, RequestSHA256: digest, NumericTaskID: &facts.NumericTaskID, Terminated: facts.Terminated, State: facts.State, ObservedAt: timestamp()}
+	if err := task.ValidateStopObservedRecord(&r); err != nil {
+		return task.StopObservedRecord{}, err
+	}
+	return r, nil
 }

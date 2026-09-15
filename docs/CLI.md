@@ -1,9 +1,12 @@
 # Task CLI
 
-These commands manage durable provider tasks. Antigravity has a certified
-workspace-write profile on its recorded version/platform. Codex has a certified
-read-only profile for 0.154.0 on Darwin/arm64. Claude remains planned until its
-adapter phase passes acceptance.
+These commands manage durable provider tasks. Antigravity, Codex, and Claude
+are compiled adapters with bounded permission profiles. Static preparation
+locates the selected CLI and records its identity. The supervised inspection
+worker then verifies the executable, runs version and help, and checks the flags
+used by the adapter before launch. Any CLI version that passes those checks is
+accepted; the task still binds the observed executable identity and effective
+policy.
 The finite `fixture:test` launch profile is compiled only into acceptance programs.
 
 ```text
@@ -53,9 +56,10 @@ never launches, retries, or resumes provider work.
 
 `delegate providers --json` describes compiled provider support with
 `schema_version: 1` and a `providers` array sorted by provider ID. Each entry
-lists supported request options and certified permission/profile, native
-version, platform and predicate metadata. Historical-only interpreters are
-retained for collection and omitted from discovery.
+lists supported modes, request options, and the `runtime` capability metadata
+(`help_args` plus the required launch flags checked during preparation).
+Historical-only interpreters are retained for collection and omitted from
+discovery.
 
 Discovery reads compiled metadata. It does not create task state, contact
 pueue, inspect native authentication or launch a provider. A listed profile is
@@ -69,11 +73,17 @@ liveness or publication fields.
 The Codex profile uses existing personal ChatGPT file authentication in the
 native Codex home. Managed policy, alternate authentication, nonempty effective
 system/project configuration, explicit model/effort overrides and native timeout
-are outside the certified profile and fail before admission. User configuration
-is ignored by the pinned native launch flags. Exact conversation continuation
+are unsupported by this adapter and fail before admission. User configuration
+is ignored by the strict native launch flags. Exact conversation continuation
 uses `--resume-task TASK_ID`; it allocates a new task. See
 [Codex profile evidence and limits](CODEX-ACCEPTANCE.md) for the source inventory,
-runtime exclusions and executed containment checks.
+runtime exclusions and recorded containment checks.
+
+The Antigravity profile uses the CLI's native signed-in account and home
+directory. Supervisor and provider child processes receive only the bounded
+non-secret control environment, so ambient API keys and unrelated shell values
+are never persisted in pueue task records. A missing native login still fails
+with the provider's ordinary authentication result.
 
 ## Supervisor configuration
 
@@ -142,7 +152,7 @@ The latter builds acceptance programs around the shared application and runs
 finite fake-client cases followed by one private pueue/pueued lifecycle.
 Its real lifecycle uses no workload stop/kill/remove operation; it shuts down
 the private daemon only after positive natural completion. Evidence is written
-under `bin/phase2-acceptance/`; unresolved failures preserve private paths and
+under `bin/supervisor-acceptance/`; unresolved failures preserve private paths and
 PIDs for inspection.
 
 ### Local Antigravity acceptance authentication

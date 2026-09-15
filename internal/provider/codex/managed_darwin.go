@@ -18,7 +18,7 @@ type preferenceAPI struct {
 
 const coreFoundation = "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
 
-// managedSources uses the same authoritative preference API as the pinned
+// managedSources uses the same authoritative preference API as the observed
 // native loader. Filesystem plist absence cannot establish MDM absence.
 // The library and every returned CF object belong to this finite call.
 func managedSources() (sources []task.PolicySourceDigest, resultErr error) {

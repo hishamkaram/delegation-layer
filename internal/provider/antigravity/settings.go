@@ -45,7 +45,7 @@ type PermissionSettings struct {
 }
 
 // Settings is the typed subset of agy's global settings used by the fixed
-// workspace-write profile. The scalar defaults are the documented 1.2.2
+// workspace-write profile. The scalar defaults are the documented CLI
 // defaults. Trusted paths are syntax-checked here and resolved by the caller.
 type Settings struct {
 	Model                   string               `json:"model,omitempty"`

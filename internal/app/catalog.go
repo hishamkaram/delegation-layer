@@ -5,6 +5,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/provider/antigravity"
+	"github.com/hishamkaram/delegation-layer/internal/provider/claude"
 	"github.com/hishamkaram/delegation-layer/internal/provider/codex"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -21,6 +22,7 @@ func NativeCatalog() commonprovider.Catalog {
 	catalog, err := commonprovider.NewCatalog(
 		antigravity.Registration(),
 		codex.Registration(),
+		claude.Registration(),
 		commonprovider.Registration{
 			Description: commonprovider.Description{
 				ID:           config.ProviderFixture,
