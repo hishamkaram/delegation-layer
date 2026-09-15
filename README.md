@@ -2,7 +2,7 @@
 
 A durable single-machine agent delegation layer: a frontier model leads, cheaper agents from provider CLIs do the donkey work, and **a worker's turn survives its launcher.**
 
-**Status: Phases 0–4 and provider redesign guidance, catalog and contributor proof are accepted (PRs #1–8 merged). Claude / Phase 5 is implemented locally; review and merge are pending.**
+**Status: Phases 0–5 and the provider redesign guidance, catalog, contributor proof, and shared runtime-capability work are accepted (PRs #1–9 merged). Integrated consumer verification and release packaging remain planned.**
 The shared `delegate` commands and `delegate-run` process owner provide durable protocol and supervisor handling. Each native adapter performs a runtime capability preflight: it locates an executable, verifies executable permissions, runs help, and checks the flags it uses. Any CLI version that passes those checks is accepted; task admission still binds the observed executable identity and effective policy.
 
 - [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) — Normative, authoritative execution plan for all phases.

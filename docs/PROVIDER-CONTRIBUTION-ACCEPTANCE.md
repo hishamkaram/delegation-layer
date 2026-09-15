@@ -1,8 +1,7 @@
 # Provider contribution acceptance
 
-Status: local verification passes; direct review and merge gates remain
-required. The fifteen-case contributor exercise and three affected agy turns
-passed. This receipt records evidence for the contributor handoff in
+Status: accepted in PR #7, squash `2a4cb8a`; the fifteen-case contributor
+exercise and three affected agy turns passed. This receipt records evidence for the contributor handoff in
 [the provider redesign](PROVIDER-REDESIGN.md). The catalog prerequisite was
 accepted through [PR 6](https://github.com/hishamkaram/delegation-layer/pull/6),
 squash `38e3da4cbf4c57eb9e0a0dfc13c70e2990a549a3`.
@@ -153,7 +152,7 @@ runtime behavior evidence; production discovery contains no synthetic provider.
 | Session persistence | Identity tests cover chunking, exact fresh/resume identity, malformed/mismatched/oversized input, once-only callbacks and persistence errors |
 | Acceptance-driver failures | Six hermetic tests reject failed runners, wrong rejection evidence, incorrect replay outcomes and unrelated rows, wait for successful completion and enforce a finite deadline; shared discovery runs all 22 agy/contributor/supervisor harness tests |
 | Executable fixture | Direct `fixture.Run` unit/race tests cover configuration reads, continuation without a supplied nonce, output variants, duplicate tasks and writer failures |
-| Full quality | `make check` passed at the corrected contributor boundary: tools, 8 skills/32 validator tests, formatting/config/vet/lint, 43 tooling enforcement cases, full race suite, native-harness tests, build, 12 CLI smoke cases and vulnerability scanning. Subsequent review fixes passed focused provider/CLI race tests, lint and the fifteen-case live exercise; final full-gate rerun and direct correction review remain pending |
+| Full quality | `make check` passed at the corrected contributor boundary: tools, 8 skills/32 validator tests, formatting/config/vet/lint, 43 tooling enforcement cases, full race suite, native-harness tests, build, 12 CLI smoke cases and vulnerability scanning. Subsequent review fixes passed focused provider/CLI race tests, lint and the fifteen-case live exercise; final full-gate rerun and direct correction review passed |
 | Existing protocol | `make acceptance-protocol`: 49 fault matrix cases and compiled CLI workflow passed |
 | Existing supervisor | `make acceptance-supervisor`: 48 hermetic cases and five isolated real-pueue cases passed; native A=S=E=1, K=M=0, natural shutdown |
 | Existing native agy | Three turns passed in `agy-20260914T125447Z-5855f5c1`: A4/S3/E3/seal3, policy drift zero launches, workspace positive control/outside denial, exact continuation and native timeout. Later staging-name and synthetic-only fixes do not change agy preparation or its two-stream evidence path |

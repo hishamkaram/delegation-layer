@@ -1,6 +1,6 @@
 # Claude provider runtime safety
 
-Status: **Claude live runtime safety acceptance passed; review and merge pending.**
+Status: **Claude live runtime safety acceptance passed; accepted in PR #9, squash `e688947`; Linux/macOS PR CI and main CI passed.**
 The bounded live gate completed on 2026-09-15 with the user's signed-in Claude
 account. It ran two real provider turns, verified the restricted read/search
 controls and exact continuation, collected both outcomes, and performed an
@@ -43,9 +43,9 @@ The full quality gate passed again after this final correction. An isolated
 policy-cancellation fault test passed three race-enabled runs; removing the
 checkpoint makes the test fail because canceled preflight creates the probe
 parent. The overlays and logs are retained as private diagnostic evidence. The private investigation record
-is `task-initialization-investigation.json`. Phase 5 is implemented locally; the
-remaining work is the reviewed commit, private pull request, green CI, and
-squash merge. The live run records the plaintext fallback as an opaque
+is `task-initialization-investigation.json`. Phase 5 was reviewed in the private
+pull request and squash-merged as `e688947`; both PR CI and main CI are green.
+The live run records the plaintext fallback as an opaque
 presence marker only and uses the native helper as the authentication authority;
 credential bytes and global login/settings remain untouched.
 

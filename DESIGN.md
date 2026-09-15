@@ -2,7 +2,7 @@
 
 > Working name only; the directory is trivially renamable. Written 2026-09-12.
 >
-> **Status: Phases 0–4 accepted; provider redesign guidance, catalog, contributor proof and Codex accepted in PRs #5–8. Claude / Phase 5 is in progress.** The comprehensive execution plan in
+> **Status: Phases 0–5 accepted; provider redesign guidance, catalog, contributor proof, shared runtime-capability work and Claude are accepted in PRs #5–9. Integrated consumer verification and release packaging remain planned.** The comprehensive execution plan in
 > [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) and [`docs/IMPLEMENTATION-PLAN.md`](docs/IMPLEMENTATION-PLAN.md)
 > represent the authoritative normative roadmap and supersede conflicting milestones below.
 > Historical measurements and debate records are preserved as historical context.

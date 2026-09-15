@@ -16,7 +16,8 @@ runner before paid launch. This replaces the in-process-only credential metadata
 assumption; it does not authorize login, Keychain ACL, or global provider settings
 changes. Existing agy/Codex preparation and historical interpretation remain
 compatible. An unavailable inspection fails acceptance and never grants a paid
-launch. The amendment is implemented; live proof and final integration review remain pending.
+launch. The amendment is implemented; provider live proof, review and merge
+are complete. Final integrated consumer verification remains pending.
 
 Deliver the durable single-machine delegation layer, with antigravity:print, codex:exec, and claude:print all in the first private release. Then port the existing duo review fan-out and deliver a resumable declared-plan workflow that returns task outcomes to its calling AI lead. The workflow never invents tasks or autonomously judges result quality. Keep the repository, release assets, and any tap private. No HTTP/A2A, native Claude background mode, router adapters, or unbounded autonomous lead in this sequence.
 

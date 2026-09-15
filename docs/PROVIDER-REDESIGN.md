@@ -65,18 +65,18 @@ The maintainability review covers ownership and resource lifetime, dependencies,
 
 The rows name required scenarios, not claims that tests have already passed. Each implementation receipt must map these IDs to actual test names/commands and evidence. Native behavior requires real-provider evidence; deterministic fault injection uses executable fixtures rather than forcing unpredictable paid failures.
 
-| ID | Feature | Unit/contract evidence | Executable/live evidence | Initial status |
+| ID | Feature | Unit/contract evidence | Executable/live evidence | Current status |
 |---|---|---|---|---|
-| guidance | Skill metadata/links/commands and usability | verify-skills negative/positive suite | Contributor follows add-an-adapter during synthetic proof | Planned |
-| catalog | Registration, discovery, unsupported options | Duplicate IDs/references; deterministic JSON; errors/writer failures; no admission | Shipped providers command and rejected dispatch, zero provider launches | Planned |
-| preparation | Argv, stdin, policy, identity and drift | Fresh/resume argv; finite input; source conflicts; binary/config drift | Native probes through dispatcher/runner; controlled prestart drift fixture | Planned |
-| agy | Existing write profile, denial, timeout and resume | Existing versioned envelope/policy/usage regressions unchanged | Existing three-turn acceptance-agy, real workspace positive control and outside denial | Reverification required after refactor |
+| guidance | Skill metadata/links/commands and usability | verify-skills negative/positive suite | Contributor follows add-an-adapter during synthetic proof | Accepted in PR #5 |
+| catalog | Registration, discovery, unsupported options | Duplicate IDs/references; deterministic JSON; errors/writer failures; no admission | Shipped providers command and rejected dispatch, zero provider launches | Accepted in PR #6; revalidated in PR #9 |
+| preparation | Argv, stdin, policy, identity and drift | Fresh/resume argv; finite input; source conflicts; binary/config drift | Native probes through dispatcher/runner; controlled prestart drift fixture | Accepted in PR #9 |
+| agy | Existing write profile, denial, timeout and resume | Existing versioned envelope/policy/usage regressions unchanged | Existing three-turn acceptance-agy, real workspace positive control and outside denial | Accepted in PR #7; revalidated in PR #9 |
 | codex | Read-only, completed turn, exact resume | Commentary/final/retry/failure/JSONL EOF/output-file conflict fixtures | Two-turn acceptance-codex; reads work, writes denied, exact thread | Accepted in PR #8; main CI passed |
-| claude | Restricted reads, managed policy, final result, resume | Result/error/truncation/init tools/session/accounting fixtures | Two-turn acceptance-claude; reads/search work, forbidden effects absent | Implemented; [runtime safety evidence](CLAUDE-ACCEPTANCE.md), live acceptance passed; review/merge pending |
+| claude | Restricted reads, managed policy, final result, resume | Result/error/truncation/init tools/session/accounting fixtures | Two-turn acceptance-claude; reads/search work, forbidden effects absent | Accepted in PR #9; [runtime safety evidence](CLAUDE-ACCEPTANCE.md), PR/main CI passed |
 | evidence | Malformed, conflicting or missing completion | Parser bounds, duplicate critical fields, exit conflicts, blank answer, writer failure | Controlled fake provider errors through real runner; raw sealed before collection | Existing core gates plus adapter extensions |
 | lifecycle | Admission, stop/deadline, unknown termination | Permit/claim/race/unknown-state regressions | Protocol and supervisor acceptance; no duplicate launch or fabricated terminal state | Existing gates retained |
 | replay | Historical identity/outcomes and zero paid collection | Old predicates; current binary unavailable; nullable usage; cumulative scope | Repeated collect on every native task; unchanged predecessor outcome | Required for each adapter |
-| contribution | Add provider without core exceptions | Test-only provider contract fixtures | Compiled CLI + isolated real pueue; success, rejection, continuation and replay | Planned |
+| contribution | Add provider without core exceptions | Test-only provider contract fixtures | Compiled CLI + isolated real pueue; success, rejection, continuation and replay | Accepted in PR #7 |
 | integrated | All three use common interface | All tests and contributor regression | acceptance-providers: three agy + two Codex + two Claude turns | Planned |
 
 ## Verification and evidence

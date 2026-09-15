@@ -1,6 +1,6 @@
 # Implementation plan and milestones
 
-**Status: Phases 0–3 accepted; Phase 3 merged in [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4), squash c094d03. Provider redesign is authorized; engineering guidance, catalog/agy proof, contributor proof and Codex / Phase 4 are accepted in PRs #5–8. Claude / Phase 5 and the shared runtime-capability cleanup are implemented locally; review and merge are pending.**
+**Status: Phases 0–3 accepted; Phase 3 merged in [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4), squash c094d03. Provider redesign guidance, catalog/agy proof, contributor proof, Codex / Phase 4, Claude / Phase 5, and the shared runtime-capability cleanup are accepted in PRs #5–9. Integrated consumer verification remains planned.**
 
 [EXECUTION-PLAN.md](EXECUTION-PLAN.md) is normative, including its [provider redesign amendment](PROVIDER-REDESIGN.md). Historical planning below is retained as history, not current verification evidence.
 
@@ -12,7 +12,7 @@
 | Catalog and agy proof | Accepted | [PR #6](https://github.com/hishamkaram/delegation-layer/pull/6), squash `38e3da4`; [local acceptance](PROVIDER-CATALOG-ACCEPTANCE.md), direct review, exact-head PR CI and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34840061876) passed |
 | Shared infrastructure and contributor proof | Accepted | [PR #7](https://github.com/hishamkaram/delegation-layer/pull/7), squash `2a4cb8a`; [fifteen-case compiled CLI proof](PROVIDER-CONTRIBUTION-ACCEPTANCE.md), three zero-admission cases, agy revalidation, full quality/protocol/supervisor gates, completed direct reviews, exact-head CI and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34859837834) passed; worktree retired with private archive |
 | Codex / Phase 4 | Accepted | [PR #8](https://github.com/hishamkaram/delegation-layer/pull/8), squash `d6c3b3b`; two native turns, tool-free resume revalidation, full gate, direct review, Linux/macOS PR and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34871131198) passed; worktree retired |
-| Claude / Phase 5 | Implemented locally; review pending | [Runtime safety and policy evidence](CLAUDE-ACCEPTANCE.md); provider and supervised inspection implemented; common executable/version/help/flag capability checks accept arbitrary CLI releases; release metadata artifacts and gates removed; focused unit/race tests and 172 Python tests pass; `make acceptance-claude` passed two real turns, exact continuation, byte-bound collection and zero-launch replay; private PR/CI/merge remain |
+| Claude / Phase 5 | Accepted | [Runtime safety and policy evidence](CLAUDE-ACCEPTANCE.md); provider and supervised inspection implemented; common executable/version/help/flag capability checks accept arbitrary CLI releases; release metadata artifacts and gates removed; focused unit/race tests and 172 Python tests pass; `make acceptance-claude` passed two real turns, exact continuation, byte-bound collection and zero-launch replay; direct Codex review found no actionable defects; [PR #9](https://github.com/hishamkaram/delegation-layer/pull/9) squash `e688947`; Linux/macOS PR CI and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/35000106741) passed; worktree retired |
 | Integrated verification | Not started | Required |
 
 ## How this plan was produced
@@ -389,11 +389,11 @@ Every exit command for future phases is **proposed future work**, not claimed to
 - **Verification:** the full local gate, protocol/supervisor gates and contributor regression passed. After preserving the failed initial attempt, the current capability profile passed fresh/read/denial/resume/replay controls in two native turns. Shipped discovery and replay passed; PR #8 and main CI passed; the worktree is retired. The acceptance receipt records the observed executable and policy evidence as task observations, not release gates. See [the acceptance receipt](CODEX-ACCEPTANCE.md).
 - **Exit:** `make acceptance-codex`.
 
-### Phase 5 — the third adapter, Claude print (IMPLEMENTED; MERGE PENDING)
+### Phase 5 — the third adapter, Claude print (ACCEPTED; PR #9, squash e688947)
 
 - **Goal:** provide a strictly contained read-only Claude adapter before release.
 - **Planned deliverables:** `internal/provider/claude` — `claude --print`, stream-json parsing, strict tool restriction (`Read,Glob,Grep`), empty MCP config, `dontAsk` permission mode, disabled hooks, session resumption, and supervised native Keychain/policy inspection with a fail-closed process-binding preflight.
-- **Verification:** runtime capability preflight, arbitrary reported-version parsing, policy/identity/output checks, focused unit and race tests, the full Python suite, and `make acceptance-claude` all pass. The live receipt records two real Claude turns, exact tool-free continuation, immutable predecessor collection, and zero replay launches. The remaining gate is the root-owned review, private PR, green CI, squash merge, and main-CI verification.
+- **Verification:** runtime capability preflight, arbitrary reported-version parsing, policy/identity/output checks, focused unit and race tests, the full Python suite, and `make acceptance-claude` all pass. The live receipt records two real Claude turns, exact tool-free continuation, immutable predecessor collection, and zero replay launches. Direct Codex review found no actionable defects; PR #9 passed Linux/macOS CI and was squash-merged, followed by green main CI.
 - **Exit:** `make acceptance-claude`, followed by the review and merge gates.
 
 ### Phase 6 — consumer acceptance and private release (PLANNED)
