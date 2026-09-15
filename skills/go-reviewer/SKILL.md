@@ -35,8 +35,8 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
    lifetimes, and failure behavior. Treat a missing or inconclusive receipt as
    incomplete evidence.
 4. Run the narrowest meaningful checks, then the applicable repository gate.
-   Root obtains the independent review required by the execution plan with the
-   direct Codex review CLI; an agent already performing this review does not
+   Root obtains any required independent review with the direct Codex review
+   CLI; an agent already performing this review does not
    launch a nested reviewer or Duo workflow.
 5. Record each finding with severity, trigger, file/line, contract, correction,
    and regression evidence. Recheck accepted fixes on the new exact head.

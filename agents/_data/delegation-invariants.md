@@ -1,6 +1,6 @@
 # Delegation Layer Invariants
 
-This document establishes the normative operational invariants for the delegation layer. All agents, adapters, and tools must comply with these invariants across all phases.
+This document establishes the normative operational invariants for the delegation layer. All agents, adapters, and tools must comply with these invariants across all executions.
 
 ## 1. Terminal Authority and Immutability
 - **Sole Authority**: `outcome.json` is the sole terminal authority. `result.txt` or `publish.reject` alone is merely a payload file and does not establish task completion.

@@ -52,10 +52,13 @@ All contributors and subagents must strictly adhere to the project contracts in 
 2. `agents/_data/adapter-contract.md`: Runtime capability checks, containment verification, input transport, and result predicates.
 3. `agents/_data/code-quality-floor.md`: Pinned toolchain, strict linter policy, zero-blank errcheck, forbidigo patterns, and test hygiene.
 
-## Planning and Normative Documents
-- `docs/EXECUTION-PLAN.md`: Complete, authoritative normative execution plan for all phases.
-- `docs/IMPLEMENTATION-PLAN.md`: Phase-by-phase implementation progress and tracking.
-- `DESIGN.md`: Architecture design, preserved historical measurements, and provider facts.
+## Product and Contributor Documents
+- `README.md`: user-facing overview, requirements, installation, and safety summary.
+- `docs/architecture.md`: current lifecycle, ownership, and recovery boundaries.
+- `docs/providers.md`: supported provider profiles and runtime capability checks.
+- `docs/contributing.md`: development checks and adapter extension guidance.
+- Local planning notes and historical evidence, when needed for maintenance, live
+  under the ignored `.local/archive/` directory and are not product documentation.
 
 ## Maintainability Guidance
 
@@ -71,12 +74,12 @@ the focused repository skill that matches the work:
 - [live E2E](skills/live-e2e/SKILL.md) for real provider/supervisor acceptance;
 - [Go concurrency](skills/go-concurrency/SKILL.md) for lifetimes, races, and
   deadline paths;
-- [docs updater](skills/docs-updater/SKILL.md) for plan, matrix, and receipt
-  changes; and
+- [docs updater](skills/docs-updater/SKILL.md) for product, contributor, and
+  receipt changes; and
 - [add an adapter](skills/add-an-adapter/SKILL.md) for a new provider or a
   provider-contract repair.
 
 Skills are repository instructions and are read explicitly by the working CLI;
 they require no global installation or configuration. Run `make verify-skills`
-after changing a skill or its local links. Root retains ownership of planning
-documents, integration, review, commits, PRs, CI, and merges.
+after changing a skill or its local links. Root retains ownership of
+integration, review, commits, PRs, CI, and merges.

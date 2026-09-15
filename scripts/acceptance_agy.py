@@ -1306,7 +1306,7 @@ class NativeRun:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--prepared", default=None, help="prepared Phase A JSON receipt")
+    parser.add_argument("--prepared", default=None, help="prepared acceptance JSON receipt")
     parser.add_argument("--output", default=None, help="evidence directory")
     parser.add_argument("--delegate", default=None, help="absolute shipped delegate executable")
     parser.add_argument("--runner", default=None, help="absolute shipped delegate-run executable")

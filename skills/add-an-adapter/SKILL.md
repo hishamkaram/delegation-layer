@@ -13,7 +13,7 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
 [adapter contract](../../agents/_data/adapter-contract.md),
 [delegation invariants](../../agents/_data/delegation-invariants.md),
 [code-quality floor](../../agents/_data/code-quality-floor.md), and
-[execution plan](../../docs/EXECUTION-PLAN.md) first.
+[provider guide](../../docs/providers.md) first.
 
 ## Inputs
 
@@ -60,7 +60,7 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    is needed. A provider that requires native metadata declares a
    `ProfileCandidate` with static placement, an `InspectionDefinition`, and a
    pure finalizer over nonsecret facts. Read the
-   [native inspection contract](../../docs/NATIVE-METADATA-INSPECTION.md) for that
+   [architecture guide](../../docs/architecture.md) for that
    conditional path and its current integration status. Core owns inspection
    execution; never hide native commands in a preparation or finalizer callback.
    Catalog finalization retains capability and artifact checks and refuses

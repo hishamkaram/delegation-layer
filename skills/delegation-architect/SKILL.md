@@ -15,7 +15,7 @@ bug fix whose boundary is already established.
 Read the [maintainability contract](../../agents/_data/maintainability-contract.md),
 [delegation invariants](../../agents/_data/delegation-invariants.md),
 [adapter contract](../../agents/_data/adapter-contract.md), and the
-[execution plan](../../docs/EXECUTION-PLAN.md) before deciding on a boundary.
+[architecture guide](../../docs/architecture.md) before deciding on a boundary.
 
 ## Inputs
 
@@ -50,7 +50,7 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 - a boundary map with ownership and lifetime responsibilities;
 - narrow interface and catalog decisions tied to real consumers;
 - compatibility and failure-path notes; and
-- a file-bounded implementation plan with validation evidence.
+- a file-bounded handoff with validation evidence.
 
 ## Exit criteria
 

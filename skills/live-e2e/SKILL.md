@@ -14,7 +14,7 @@ probe. Use unit/contract tests for deterministic parser and policy behavior.
 Read the [maintainability contract](../../agents/_data/maintainability-contract.md),
 [adapter contract](../../agents/_data/adapter-contract.md),
 [delegation invariants](../../agents/_data/delegation-invariants.md), and the
-[execution plan](../../docs/EXECUTION-PLAN.md).
+[security guide](../../docs/security.md).
 
 ## Inputs
 
@@ -63,7 +63,7 @@ require a successful published first turn.
 
 ## Exit criteria
 
-- Every required probe for the selected profile and phase ran through the
+- Every required probe for the selected profile and requested scenario ran through the
   normal dispatch, execution, capture, sealing, collection, and publication
   path.
 - Required positive controls, denial controls, session identity, replay

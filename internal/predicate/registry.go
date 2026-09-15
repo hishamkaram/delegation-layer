@@ -45,7 +45,7 @@ func (r Registry) Resolve(ref task.PredicateRef) (Interpreter, error) {
 	return nil, task.ErrIncompatiblePredicate
 }
 
-// Default retains exactly the Phase1 fixture contract.
+// Default retains exactly the built-in fixture contract.
 func Default() Registry {
 	return Registry{entries: []entry{{ref: task.FixturePredicateRef(), interpreter: fixtureV1{}}}}
 }
