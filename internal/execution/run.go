@@ -132,7 +132,13 @@ func (i *invocation) discard() error {
 
 func (i *invocation) start(opts Options) error {
 	opts.emit("start-entry")
-	err := opts.start(i.cmd)
+	err := opts.preflight(i.budget)
+	if err == nil {
+		err = i.budget.authorizeStart(opts)
+	}
+	if err == nil {
+		err = opts.start(i.cmd)
+	}
 	if err == nil {
 		opts.emit("started")
 		go func() {

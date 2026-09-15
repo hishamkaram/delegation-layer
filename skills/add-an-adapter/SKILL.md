@@ -54,9 +54,20 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    does not create that reference. Test chunked observation, identity mismatch,
    parser bounds and callback errors, then prove fresh-to-resume dispatch with
    the compiled CLI.
-3. Register the adapter once in the explicit catalog. Reuse shared task,
-   execution, predicate, usage, lifecycle, and acceptance-harness mechanics;
-   do not add provider-specific branches to task, execution, or publication.
+3. Register the adapter once in the explicit catalog. `Registration.Prepare`
+   accepts the shared `PrepareCandidate` hook. For an ordinary finite profile
+   factory, use `provider.ReadyCandidate(Prepare)`; no inspection implementation
+   is needed. A provider that requires native metadata declares a
+   `ProfileCandidate` with static placement, an `InspectionDefinition`, and a
+   pure finalizer over nonsecret facts. Read the
+   [native inspection contract](../../docs/NATIVE-METADATA-INSPECTION.md) for that
+   conditional path and its current integration status. Core owns inspection
+   execution; never hide native commands in a preparation or finalizer callback.
+   Catalog finalization retains certification and artifact checks and refuses
+   changes to the candidate's workspace or writable roots. The compatibility
+   `Catalog.Prepare` method refuses inspection candidates.
+   Reuse shared task, execution, predicate, usage, lifecycle, and acceptance
+   mechanics; do not add provider-specific core branches.
 4. Add deterministic fixtures for valid and malformed envelopes, blank answers,
    refusal/error/timeout markers, exit conflicts, identity mismatch, policy
    drift, usage scope, and historical predicate revisions. Collection must stay

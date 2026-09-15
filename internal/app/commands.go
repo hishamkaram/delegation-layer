@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -116,17 +118,12 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 }
 
 func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, brief []byte, response Response) commandResult {
-	profile, err := prepareProfile(deps, req)
+	prepared, err := prepareAdmission(a, deps, store, req)
 	if err != nil {
+		err = annotateMissingDispatchStage("preparing inspection admission", err)
 		return failed(response, err, classifyCode(err, 2))
 	}
-	if err = profile.ValidateStatePlacement(store.Root); err != nil {
-		return failed(response, err, classifyCode(err, 2))
-	}
-	supervisor, err := bindInitial(a, deps)
-	if err != nil {
-		return failed(response, err, classifyCode(err, 1))
-	}
+	profile, supervisor := prepared.Profile, prepared.Supervisor
 	if err = profile.Validate(req); err != nil {
 		return failed(response, err, classifyCode(err, 2))
 	}
@@ -134,14 +131,35 @@ func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.
 	if brief == nil {
 		brief, err = readBriefFileForRequest(a.Brief, req)
 		if err != nil {
+			err = annotateMissingDispatchStage("reading brief", err)
 			return failed(response, err, classifyCode(err, 1))
 		}
 	}
+	if !prepared.InspectionDeadline.IsZero() && !time.Now().Before(prepared.InspectionDeadline) {
+		return failed(response, inspection.ErrAdmissionExpired, 1)
+	}
 	td, err := store.CreateTask(req.TaskID, &req, brief, &meta)
 	if err != nil {
+		err = annotateMissingDispatchStage("creating ordinary task", err)
 		return failed(response, err, classifyCode(err, 1))
 	}
-	return submitPreparedWithProfile(a, deps, td, &req, &meta, supervisor, profile, response)
+	result := submitPreparedWithProfile(a, deps, td, &req, &meta, supervisor, profile, response)
+	if result.err != nil {
+		result.err = annotateMissingDispatchStage("submitting ordinary task", result.err)
+		result.response.setError(result.err)
+	}
+	return result
+}
+
+// annotateMissingDispatchStage adds only a fixed operation label to an
+// otherwise opaque missing-file error. This keeps errors.Is(os.ErrNotExist)
+// behavior intact while making the failing admission boundary diagnosable;
+// no path, record bytes, or native diagnostic is included.
+func annotateMissingDispatchStage(stage string, err error) error {
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return fmt.Errorf("dispatch %s: %w", stage, err)
 }
 
 func readBriefFileForRequest(path string, req task.TaskRecord) ([]byte, error) {
@@ -168,6 +186,9 @@ func submitPrepared(a Arguments, deps Dependencies, td *taskdir.TaskDir, req *ta
 	if err != nil {
 		return failed(response, err, classifyCode(err, 2))
 	}
+	if err = validateSubmissionRunner(deps, td, req, runner); err != nil {
+		return failed(response, err, classifyCode(err, 2))
+	}
 	if req.PriorSession != nil {
 		if err = td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 			return failed(response, err, classifyCode(err, 1))
@@ -190,6 +211,9 @@ func submitPreparedWithProfile(a Arguments, deps Dependencies, td *taskdir.TaskD
 	if err != nil {
 		return failed(response, err, classifyCode(err, 2))
 	}
+	if err = validateSubmissionRunner(deps, td, req, runner); err != nil {
+		return failed(response, err, classifyCode(err, 2))
+	}
 	if req.PriorSession != nil {
 		if err = td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 			return failed(response, err, classifyCode(err, 1))
@@ -201,6 +225,42 @@ func submitPreparedWithProfile(a Arguments, deps Dependencies, td *taskdir.TaskD
 	}
 	defer func() { mergeCommandClose(&result, permit.Release) }()
 	return submitWithClient(td, req, meta, client, runner, permit, response)
+}
+
+// validateSubmissionRunner binds every ordinary retry to the worker executable
+// that was fingerprinted during inspection admission. The inspection journal
+// is optional for ordinary profiles; when present, its immutable binding is
+// authoritative for this launch boundary.
+func validateSubmissionRunner(deps Dependencies, td *taskdir.TaskDir, req *task.TaskRecord, runner string) (resultErr error) {
+	if td == nil || req == nil {
+		return task.ErrEvidenceFault
+	}
+	root := filepath.Clean(filepath.Dir(filepath.Dir(td.Dir)))
+	store, err := openStore(root, deps.normalized().storeDependencies(), false)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
+	inspectionDir := filepath.Join(root, "inspections", req.TaskID)
+	if _, statErr := os.Lstat(inspectionDir); errors.Is(statErr, os.ErrNotExist) {
+		return nil
+	} else if statErr != nil {
+		return statErr
+	}
+	operation, err := inspection.LoadOperation(store, req.TaskID)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
+	binding := operation.Request().Binding
+	if runner != binding.WorkerExecutable {
+		return task.ErrIdentityMismatch
+	}
+	digest, err := commonprovider.FingerprintExecutable(runner)
+	if err != nil || digest != binding.WorkerSHA256 {
+		return task.ErrEvidenceFault
+	}
+	return nil
 }
 
 func submitWithClient(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, client *pueue.Client, runner string, permit *taskdir.SubmissionPermit, response Response) commandResult {

@@ -1,6 +1,8 @@
 package taskdir
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -181,4 +183,71 @@ func (td *TaskDir) recordSame(name string, record any, readSame func() (bool, er
 		return errors.Join(td.acknowledgeRecord(name), cleanup)
 	}
 	return errors.Join(err, cleanup)
+}
+
+// recordSameContext is the cancellation-aware counterpart to recordSame. It
+// checks the context before reading or staging, then delegates staging to the
+// durable context path. Once staging starts, stageReaderContext retains
+// ownership of barriers and cleanup even when cancellation is observed.
+func (td *TaskDir) recordSameContext(ctx context.Context, name string, record any, readSame func() (bool, error)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	same, err := readSame()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if err == nil {
+		return td.acknowledgeSameContext(ctx, name, same)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	data, err := marshalControlRecord(record)
+	if err != nil {
+		return err
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	dirPath := filepath.Dir(filepath.Join(td.Dir, name))
+	filename := filepath.Base(name)
+	_, cleanup, commitErr := td.store.stageReaderContext(ctx, dirPath, filename, bytes.NewReader(data), td.store.faultInjector)
+	if errors.Is(commitErr, os.ErrExist) {
+		return td.reconcileStagedWinnerContext(ctx, name, cleanup, readSame)
+	}
+	return errors.Join(commitErr, cleanup)
+}
+
+func (td *TaskDir) acknowledgeSameContext(ctx context.Context, name string, same bool) error {
+	if !same {
+		return task.ErrIdentityMismatch
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return td.acknowledgeRecord(name)
+}
+
+func (td *TaskDir) reconcileStagedWinnerContext(ctx context.Context, name string, cleanup error, readSame func() (bool, error)) error {
+	if err := ctx.Err(); err != nil {
+		return errors.Join(cleanup, err)
+	}
+	same, readErr := readSame()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return errors.Join(cleanup, ctxErr)
+	}
+	if readErr != nil {
+		return errors.Join(readErr, cleanup)
+	}
+	if !same {
+		return errors.Join(task.ErrIdentityMismatch, cleanup)
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(cleanup, err)
+	}
+	return errors.Join(td.acknowledgeRecord(name), cleanup)
 }

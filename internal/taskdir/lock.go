@@ -54,23 +54,31 @@ func OpenLockFile(path string, level LockLevel) (*LockFile, error) {
 		return nil, fmt.Errorf("creating lock parent directory %s: %w", dir, err)
 	}
 
-	fd, err := unix.Open(path, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0o600)
+	f, err := openLockInode(func(flags int) (*os.File, error) {
+		fd, openErr := unix.Open(path, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0o600)
+		if openErr != nil {
+			return nil, openErr
+		}
+		return os.NewFile(uintptr(fd), path), nil
+	}, true)
 	if err != nil {
 		return nil, err
 	}
-	return finishLockOpen(os.NewFile(uintptr(fd), path), path, level, func() error { return platformBarrierDir(dir) }, nil)
+	return finishLockOpen(f, path, level, func() error { return platformBarrierDir(dir) }, nil)
 }
 
 func (s *Store) openLock(path string, level LockLevel) (*LockFile, error) {
-	return s.openLockFlags(path, level, unix.O_CREAT|unix.O_RDWR)
+	return s.openRootedLock(path, level, true)
 }
 
 func (s *Store) openExistingLock(path string, level LockLevel) (*LockFile, error) {
-	return s.openLockFlags(path, level, unix.O_RDWR)
+	return s.openRootedLock(path, level, false)
 }
 
-func (s *Store) openLockFlags(path string, level LockLevel, flags int) (*LockFile, error) {
-	f, err := s.openFile(path, flags)
+func (s *Store) openRootedLock(path string, level LockLevel, create bool) (*LockFile, error) {
+	f, err := openLockInode(func(flags int) (*os.File, error) {
+		return s.openFile(path, flags)
+	}, create)
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +87,21 @@ func (s *Store) openLockFlags(path string, level LockLevel, flags int) (*LockFil
 		lock.faultSource = s.FaultInjector
 	}
 	return lock, err
+}
+
+// openLockInode creates a stable lock inode exactly once, or opens the existing
+// winner. Concurrent nonexclusive O_CREAT opens can return ENOENT on Darwin.
+// Only EEXIST from exclusive creation permits opening an existing inode; an
+// absent lock on an existing-only path is never recreated or retried.
+func openLockInode(open func(int) (*os.File, error), create bool) (*os.File, error) {
+	if !create {
+		return open(unix.O_RDWR)
+	}
+	f, err := open(unix.O_CREAT | unix.O_EXCL | unix.O_RDWR)
+	if errors.Is(err, os.ErrExist) {
+		return open(unix.O_RDWR)
+	}
+	return f, err
 }
 
 func finishLockOpen(f *os.File, path string, level LockLevel, parentBarrier func() error, injector FaultInjector) (*LockFile, error) {

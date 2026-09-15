@@ -187,6 +187,6 @@ type Description struct {
 // authority.
 type Registration struct {
 	Description  Description
-	Prepare      PrepareProfile
+	Prepare      PrepareCandidate
 	Interpreters []predicate.Interpreter
 }

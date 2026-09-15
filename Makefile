@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy acceptance-codex codex-qualification-tools
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy acceptance-codex codex-qualification-tools acceptance-claude claude-qualification-tools
 
 tools:
 	./scripts/install-tools.sh
@@ -111,6 +111,15 @@ acceptance-codex: build test-native-harness
 	go test -race -count=1 ./internal/provider/codex
 	./scripts/acceptance_codex.sh
 
+claude-qualification-tools: tool-versions
+	@mkdir -p bin/claude-qualification
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/claude-qualification/delegate ./internal/testutil/claudequalification/cmd/delegate
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/claude-qualification/delegate-run ./internal/testutil/claudequalification/cmd/delegate-run
+
+acceptance-claude: build test-native-harness
+	go test -race -count=1 ./internal/provider/claude
+	./scripts/acceptance_claude.sh
+
 # Note: vuln requires access to the public vulnerability database (https://vuln.go.dev);
 # the mandatory behavioral and unit tests remain hermetic.
 vuln: tool-versions
@@ -129,3 +138,14 @@ check:
 	$(MAKE) build
 	$(MAKE) smoke-cli
 	$(MAKE) vuln
+
+.PHONY: inspection-fixtures acceptance-inspection
+inspection-fixtures: tool-versions
+	@mkdir -p bin/inspection-fixture
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/delegate ./internal/testutil/inspectionfixture/cmd/delegate
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/delegate-run ./internal/testutil/inspectionfixture/cmd/delegate-run
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/inspection-helper ./internal/testutil/inspectionfixture/cmd/inspection-helper
+	CGO_ENABLED=0 go build -buildvcs=false -o bin/inspection-fixture/provider ./internal/testutil/phase2fixture/cmd/provider
+
+acceptance-inspection: inspection-fixtures test-native-harness
+	./scripts/acceptance-inspection.sh

@@ -1,0 +1,16 @@
+{
+  "mode": "read-only",
+  "approval": "dontAsk",
+  "status": "Pending",
+  "provider_version": "2.1.270",
+  "os": "darwin",
+  "arch": "arm64",
+  "runtime_sha256": "a506b6d970a4cf44f6abdb53a81ddcd5d3b0ce042a95c502fe9d1f946bdb8807",
+  "profile_revision": "claude-2.1.270-darwin-arm64-read-only-1",
+  "predicate": {
+    "adapter": "claude:print",
+    "mode": "read-only",
+    "version": "2.1.270",
+    "sha256": "256087e579c3f8cf7aeba0e2e87df64e9132129bc92c8f03c7ac03bd531fb059"
+  }
+}

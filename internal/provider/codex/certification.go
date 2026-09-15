@@ -42,18 +42,13 @@ func Registration() commonprovider.Registration {
 	if record.Status == "Executed" {
 		registration.Description.Discoverable = true
 		registration.Description.Profiles = []commonprovider.CertifiedProfile{record}
-		registration.Prepare = Prepare
+		registration.Prepare = commonprovider.ReadyCandidate(Prepare)
 	}
 	return registration
 }
 
 func validateCertification(prepared commonprovider.PreparedProfile, record commonprovider.CertifiedProfile, osName, arch string) error {
-	policy := prepared.Effective.Policy
-	if record.Status != "Executed" || record.ProviderVersion != prepared.ObservedVersion ||
-		record.OS != osName || record.Arch != arch || record.Mode != prepared.Effective.Containment ||
-		record.Approval != prepared.Effective.Approval || !record.Predicate.Equal(prepared.Plan.Predicate) ||
-		record.OutputWriterContract != prepared.Plan.OutputWriterContract || policy == nil ||
-		record.RuntimeSHA256 != policy.RuntimeSHA256 || record.ProfileRevision != policy.ProfileRevision {
+	if !record.MatchesPrepared(prepared, osName, arch) {
 		return fmt.Errorf("%w: Codex runtime, policy or interpreter lacks Executed certification", ErrUnsupportedProfile)
 	}
 	return nil

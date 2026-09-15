@@ -11,6 +11,11 @@ This document defines the normative requirements for provider adapters (`antigra
 | `claude:print` | `read-only` | `dontAsk` | `claude --print --input-format text --output-format stream-json --verbose --safe-mode --restricted --tools Read,Glob,Grep --disallowedTools mcp__* --strict-mcp-config --mcp-config <empty-mcp.json> --settings <profile.json> --permission-mode dontAsk --permission-prompts none --disable-slash-commands --no-chrome --session-id <uuid>` | `workspace-write`, shell execution, Agent/subagents, custom tools, background mode |
 
 ## 2. Launch Planning and Preflight Policy
+- **Claude Storage Selection**: The pinned Claude profile supplies invocation-local
+  `CLAUDE_CODE_HOVER_REST=0`, preserving its native Keychain service/account while
+  fixing the settings/cache backend. Conflicting ambient values and a present
+  plaintext credential fallback are refused. This implementation-specific control
+  is bound to the inspected binary and must be requalified on upgrades.
 - **Input Delivery**: Brief text is delivered exclusively via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv. Brief size limit is 8 MiB.
 - **Argv Construction**: Built strictly as Go string slices (`[]string`), executed directly via `exec.Command` without shell wrapper or reparsing.
 - **Working Directory**: Set strictly to the validated canonical workspace directory (`Cmd.Dir = workdir`).

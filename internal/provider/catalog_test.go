@@ -38,9 +38,9 @@ func testRegistration(id, mode string, options ...string) Registration {
 				Predicate:       ref,
 			}},
 		},
-		Prepare: func(task.TaskRecord) (PreparedProfile, error) {
+		Prepare: ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) {
 			return PreparedProfile{}, nil
-		},
+		}),
 		Interpreters: []predicate.Interpreter{catalogTestInterpreter{ref: ref}},
 	}
 }
@@ -152,10 +152,10 @@ func TestCatalogDescriptionsAreDeterministicAndDefensive(t *testing.T) {
 func TestCatalogRejectsUnsupportedOptionBeforePreparation(t *testing.T) {
 	called := false
 	registration := testRegistration("alpha:print", "read-only", OptionContinuation)
-	registration.Prepare = func(task.TaskRecord) (PreparedProfile, error) {
+	registration.Prepare = ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) {
 		called = true
 		return PreparedProfile{}, nil
-	}
+	})
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
@@ -172,10 +172,10 @@ func TestCatalogRejectsUnsupportedOptionBeforePreparation(t *testing.T) {
 func TestCatalogTreatsDefaultEffortAsProviderDefault(t *testing.T) {
 	called := false
 	registration := testRegistration("alpha:print", "read-only")
-	registration.Prepare = func(request task.TaskRecord) (PreparedProfile, error) {
+	registration.Prepare = ReadyCandidate(func(request task.TaskRecord) (PreparedProfile, error) {
 		called = true
-		return PreparedProfile{Plan: executionPlanForCatalogTest(request)}, nil
-	}
+		return catalogTestProfile(executionPlanForCatalogTest(request)), nil
+	})
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
@@ -220,11 +220,11 @@ func TestCatalogAcceptsPreparedPredicateFromAnyMatchingModeProfile(t *testing.T)
 		Predicate:       secondRef,
 	})
 	registration.Interpreters = append(registration.Interpreters, catalogTestInterpreter{ref: secondRef})
-	registration.Prepare = func(request task.TaskRecord) (PreparedProfile, error) {
+	registration.Prepare = ReadyCandidate(func(request task.TaskRecord) (PreparedProfile, error) {
 		plan := executionPlanForCatalogTest(request)
 		plan.Predicate = secondRef
-		return PreparedProfile{Plan: plan}, nil
-	}
+		return catalogTestProfile(plan), nil
+	})
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
@@ -267,11 +267,11 @@ func TestCatalogRejectsPreparedHistoricalOrUnknownPredicate(t *testing.T) {
 			if tc.addInterp {
 				registration.Interpreters = append(registration.Interpreters, catalogTestInterpreter{ref: preparedRef})
 			}
-			registration.Prepare = func(request task.TaskRecord) (PreparedProfile, error) {
+			registration.Prepare = ReadyCandidate(func(request task.TaskRecord) (PreparedProfile, error) {
 				plan := executionPlanForCatalogTest(request)
 				plan.Predicate = preparedRef
-				return PreparedProfile{Plan: plan}, nil
-			}
+				return catalogTestProfile(plan), nil
+			})
 			catalog, err := NewCatalog(registration)
 			if err != nil {
 				t.Fatal(err)
@@ -305,10 +305,10 @@ func TestCatalogKeepsHistoricalInterpreterWithoutLaunchProfile(t *testing.T) {
 func TestCatalogAcceptsValidRequestAndDoesNotTouchExternalState(t *testing.T) {
 	called := 0
 	registration := testRegistration("alpha:print", "read-only", OptionNativeTimeout)
-	registration.Prepare = func(request task.TaskRecord) (PreparedProfile, error) {
+	registration.Prepare = ReadyCandidate(func(request task.TaskRecord) (PreparedProfile, error) {
 		called++
-		return PreparedProfile{Plan: executionPlanForCatalogTest(request)}, nil
-	}
+		return catalogTestProfile(executionPlanForCatalogTest(request)), nil
+	})
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
@@ -327,4 +327,8 @@ func TestCatalogAcceptsValidRequestAndDoesNotTouchExternalState(t *testing.T) {
 
 func executionPlanForCatalogTest(request task.TaskRecord) execution.Plan {
 	return execution.Plan{Executable: "/bin/provider", Directory: request.CanonicalCwd, Predicate: task.PredicateRef{Adapter: request.Provider, Mode: request.Mode, Version: "1", SHA256: task.ComputeSHA256([]byte(request.Provider + "/" + request.Mode))}}
+}
+
+func catalogTestProfile(plan execution.Plan) PreparedProfile {
+	return PreparedProfile{Plan: plan, ObservedVersion: "test-1", Effective: task.EffectiveConfig{Containment: "read-only", Approval: "test", Digest: task.ComputeSHA256([]byte("test-config"))}}
 }

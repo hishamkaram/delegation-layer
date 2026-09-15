@@ -131,6 +131,17 @@ class Process:
 
     def poll(self):
         if self.result is not None:
+            completed = self.directory / "completed.json"
+            require(not completed.is_symlink(),
+                    "completed process receipt is a symlink: " + str(completed))
+            if not completed.is_file():
+                # A previous observation may have recorded the in-memory
+                # result before a receipt write failed.  Retry that receipt
+                # before treating the process as fully observed.
+                write_json(completed, self.result)
+            else:
+                require(read_json(completed) == self.result,
+                        "completed process receipt does not match observation: " + str(completed))
             return self.result
         if self.process.poll() is None:
             return None

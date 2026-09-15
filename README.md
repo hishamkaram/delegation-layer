@@ -2,7 +2,7 @@
 
 A durable single-machine agent delegation layer: a frontier model leads, cheaper agents from provider CLIs do the donkey work, and **a worker's turn survives its launcher.**
 
-**Status: Phases 0–3 and provider redesign guidance, catalog and contributor proof are accepted (PRs #1–7 merged). Codex / Phase 4 has passed native qualification; review passed; CI and merge remain pending.**
+**Status: Phases 0–4 and provider redesign guidance, catalog and contributor proof are accepted (PRs #1–8 merged). Claude / Phase 5 is in progress.**
 The shared `delegate` commands and `delegate-run` process owner provide durable protocol and supervisor handling. Production launch profiles require version-specific native certification; historical collection does not require an installed or currently launchable provider. agy, Codex, and Claude are all required before the private first release.
 
 - [`docs/EXECUTION-PLAN.md`](docs/EXECUTION-PLAN.md) — Normative, authoritative execution plan for all phases.
@@ -23,7 +23,7 @@ The shared `delegate` commands and `delegate-run` process owner provide durable 
 - **Input Delivery**: The prompt brief is delivered via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv, and provider commands are never shell-reparsed.
 - **Provider Scope (v1 Private Release)**:
   - `antigravity:print`: Accepted pinned `workspace-write` profile within validated roots. Read-only is unsupported; `--sandbox` does not imply read-only.
-  - `codex:exec`: Executed pinned `read-only` profile for Codex 0.154.0 on Darwin/arm64; see [configuration limits and evidence](docs/CODEX-ACCEPTANCE.md). Review passed; CI and merge remain pending.
+  - `codex:exec`: Executed pinned `read-only` profile for Codex 0.154.0 on Darwin/arm64; see [configuration limits and evidence](docs/CODEX-ACCEPTANCE.md).
   - `claude:print`: Required candidate profile for `read-only` via restricted built-in tools, pending adapter-phase live acceptance receipts.
   All three provider profiles are required before the v1 release.
 - **Private Delivery**: The repository and release assets remain private. Authenticated GitHub tooling is required for installation; public repository distribution, public Homebrew taps, and unauthenticated `go install` are out of scope.

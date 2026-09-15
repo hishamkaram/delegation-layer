@@ -16,6 +16,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -69,6 +70,7 @@ type Dependencies struct {
 	// is empty, normalized constructs the production catalog once.
 	Catalog                     commonprovider.Catalog
 	PrepareProfile              PrepareProfile
+	PrepareCandidate            commonprovider.PrepareCandidate
 	PredicateRegistry           func() predicate.Registry
 	SupervisorOptions           pueue.Options
 	InitialSupervisorExecutable string
@@ -96,8 +98,12 @@ func (d Dependencies) normalized() Dependencies {
 	if d.Catalog.IsZero() {
 		d.Catalog = NativeCatalog()
 	}
-	if d.PrepareProfile == nil {
-		d.PrepareProfile = d.Catalog.Prepare
+	if d.PrepareCandidate == nil {
+		if d.PrepareProfile != nil {
+			d.PrepareCandidate = commonprovider.ReadyCandidate(d.PrepareProfile)
+		} else {
+			d.PrepareCandidate = d.Catalog.Candidate
+		}
 	}
 	if d.PredicateRegistry == nil {
 		d.PredicateRegistry = d.Catalog.Registry
@@ -473,7 +479,14 @@ func buildRequest(rootID, id, provider, cwd string, requested task.TaskConfig, b
 }
 
 func prepareProfile(deps Dependencies, req task.TaskRecord) (PreparedProfile, error) {
-	profile, err := deps.PrepareProfile(req)
+	candidate, err := deps.normalized().PrepareCandidate(req)
+	if err != nil {
+		return PreparedProfile{}, err
+	}
+	if candidate.Inspection != nil || candidate.Finalize == nil {
+		return PreparedProfile{}, ErrProfileUnavailable
+	}
+	profile, err := candidate.Finalize(nil, time.Now())
 	if err != nil {
 		return PreparedProfile{}, err
 	}
@@ -643,7 +656,7 @@ func classifyCode(err error, fallback int) int {
 			return 2
 		}
 	}
-	if errors.Is(err, pueue.ErrBinding) {
+	if errors.Is(err, pueue.ErrBinding) || errors.Is(err, inspection.ErrAdmissionExpired) {
 		return 1
 	}
 	if errors.Is(err, ErrProfileUnavailable) {

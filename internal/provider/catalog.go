@@ -1,10 +1,12 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
@@ -316,24 +318,68 @@ func (c Catalog) ValidateRequest(request task.TaskRecord) error {
 	return nil
 }
 
-// Prepare validates capabilities and invokes the adapter's preparation hook.
-// The hook is the only provider-specific operation here and must return before
-// the caller acquires any submission or start permit.
-func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
+// Candidate validates capabilities and obtains static preparation inputs. Its
+// finalizer retains catalog certification and artifact checks after inspection.
+func (c Catalog) Candidate(request task.TaskRecord) (ProfileCandidate, error) {
 	if err := c.ValidateRequest(request); err != nil {
-		return PreparedProfile{}, err
+		return ProfileCandidate{}, err
 	}
 	registration, err := c.Lookup(request.Provider)
 	if err != nil {
+		return ProfileCandidate{}, err
+	}
+	candidate, err := registration.Prepare(request)
+	if err != nil {
+		return ProfileCandidate{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, err)
+	}
+	if candidate.Directory != request.CanonicalCwd {
+		return ProfileCandidate{}, task.ErrIdentityMismatch
+	}
+	if candidate.Finalize == nil {
+		return ProfileCandidate{}, fmt.Errorf("%w: missing candidate finalizer", ErrProfileUnavailable)
+	}
+	candidate.WritableRoots = slices.Clone(candidate.WritableRoots)
+	if candidate.Inspection != nil {
+		definition, _, snapshotErr := candidate.Inspection.Snapshot()
+		if snapshotErr != nil {
+			return ProfileCandidate{}, snapshotErr
+		}
+		candidate.Inspection = &definition
+	}
+	directory := candidate.Directory
+	writableRoots := slices.Clone(candidate.WritableRoots)
+	finalize := candidate.Finalize
+	candidate.Finalize = func(facts json.RawMessage, now time.Time) (PreparedProfile, error) {
+		profile, finalizeErr := finalize(facts, now)
+		if finalizeErr != nil {
+			return PreparedProfile{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, finalizeErr)
+		}
+		if profile.Plan.Directory != directory || !slices.Equal(profile.WritableRoots, writableRoots) {
+			return PreparedProfile{}, task.ErrIdentityMismatch
+		}
+		return finalizeCatalogProfile(registration.Description, request, profile)
+	}
+	return candidate, nil
+}
+
+// Prepare preserves the finite preparation path for providers without native
+// inspection. It cannot bypass an inspection-dependent candidate's proof.
+func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
+	candidate, err := c.Candidate(request)
+	if err != nil {
 		return PreparedProfile{}, err
 	}
-	profile, err := registration.Prepare(request)
-	if err != nil {
-		return PreparedProfile{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, err)
+	if candidate.Inspection != nil {
+		return PreparedProfile{}, fmt.Errorf("%w: native inspection is required", ErrProfileUnavailable)
 	}
-	if !hasCertifiedPreparedProfile(registration.Description, request.Mode, profile.Plan.Predicate, profile.Plan.OutputWriterContract) {
+	return candidate.Finalize(nil, time.Now())
+}
+
+func finalizeCatalogProfile(description Description, request task.TaskRecord, profile PreparedProfile) (PreparedProfile, error) {
+	if !hasCertifiedPreparedProfile(description, request.Mode, profile.Plan.Predicate, profile.Plan.OutputWriterContract) {
 		return PreparedProfile{}, fmt.Errorf("%w: %s returned an uncertified predicate or writer contract", ErrProfileUnavailable, request.Provider)
 	}
+	var err error
 	profile.Plan.InputFiles, err = task.NormalizeInputFiles(profile.Plan.InputFiles)
 	if err != nil {
 		return PreparedProfile{}, fmt.Errorf("%w: invalid prepared input files: %w", ErrProfileUnavailable, err)
@@ -348,7 +394,10 @@ func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
 	if err = task.ValidateOutputArtifacts(profile.Plan.OutputArtifacts, profile.Plan.OutputWriterContract); err != nil {
 		return PreparedProfile{}, fmt.Errorf("%w: invalid prepared output contract: %w", ErrProfileUnavailable, err)
 	}
-	return profile, nil
+	if err = profile.Validate(request); err != nil {
+		return PreparedProfile{}, fmt.Errorf("%w: invalid finalized profile: %w", ErrProfileUnavailable, err)
+	}
+	return cloneCandidateProfile(profile), nil
 }
 
 func hasCertifiedProfileMode(description Description, mode string) bool {

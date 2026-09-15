@@ -1,7 +1,9 @@
 # Codex adapter acceptance
 
-Status: native qualification passed for profile revision 2; production
-certification is Executed. Independent review passed; CI and merge gates are pending.
+Status: accepted in PR #8, squash `d6c3b3b`. Profile revision 2 is Executed;
+independent review and Linux/macOS PR and main CI passed. The implementation
+worktree is retired. Earlier validation notes below preserve the intermediate
+findings; the final handoff receipt records acceptance.
 
 ## Version-specific evidence
 
@@ -201,3 +203,21 @@ passed but did not cover lint. The correction extracts the metadata assertions
 into a named helper with an expected-provider table. Full lint and focused
 race tests pass, and direct Codex review confirmed every assertion is retained.
 A new full local gate and exact-head CI are required for the corrected head.
+
+## Final handoff receipt
+
+[PR #8](https://github.com/hishamkaram/delegation-layer/pull/8) merged on
+2026-09-14 at 16:50:54 UTC. Reviewed head was
+`c437ad0d0e31720579ff5c6513072b0aaf29bd7d`; squash commit is
+`d6c3b3b4a8daf54850b9966a4727baefd86c801e`. Both platforms passed the
+[PR run](https://github.com/hishamkaram/delegation-layer/actions/runs/34870598943),
+[branch run](https://github.com/hishamkaram/delegation-layer/actions/runs/34870593816)
+and [post-merge main run](https://github.com/hishamkaram/delegation-layer/actions/runs/34871131198).
+The corrected full local quality gate also passed. All review findings were
+fixed or closed against concrete contract evidence and independently rechecked.
+
+The private `codex-provider` archive contains the complete source bundle,
+generated files, native and review receipts, failed-attempt evidence, main-CI
+receipt and retirement manifest. The implementation branch matched main's tree;
+no process held its working directory. The worktree and owned local/remote
+branches were retired only after main CI passed.

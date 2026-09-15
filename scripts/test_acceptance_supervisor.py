@@ -8,10 +8,53 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+import acceptance_supervisor_common as supervisor_common
 from acceptance_supervisor_hermetic import Case, HermeticSuite
 
 
 class SupervisorDiagnosticsTests(unittest.TestCase):
+    def test_process_start_receipt_failure_retains_spawned_process(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cwd = root / "cwd"
+            cwd.mkdir()
+
+            class FakePopen:
+                def __init__(self, *_args, **_kwargs):
+                    self.pid = 701
+                    self.returncode = None
+
+                def poll(self):
+                    return self.returncode
+
+                def wait(self):
+                    return self.returncode
+
+            original_write_json = supervisor_common.write_json
+
+            def fail_started(path, *args, **kwargs):
+                if Path(path).name == "started.json":
+                    raise OSError("injected started receipt failure")
+                return original_write_json(path, *args, **kwargs)
+
+            processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
+            with patch.object(supervisor_common.subprocess, "Popen", FakePopen), \
+                    patch.object(supervisor_common, "write_json", side_effect=fail_started):
+                with self.assertRaisesRegex(OSError, "started receipt"):
+                    processes.start("caller", ["/bin/sh"], cwd)
+
+            self.assertEqual(len(processes.entries), 1)
+            process = processes.entries[0]
+            self.assertEqual(process.pid, 701)
+            self.assertEqual(processes.drain(timeout=0), [{
+                "pid": 701, "argv": ["/bin/sh"],
+                "directory": str(root / "processes" / "001-caller"),
+            }])
+
+            process.process.returncode = 0
+            self.assertEqual(process.poll()["exit_code"], 0)
+            self.assertEqual(processes.drain(timeout=0), [])
+
     def test_failed_case_snapshot_retains_logs_and_symlinks(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

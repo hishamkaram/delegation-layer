@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -102,7 +103,11 @@ func canonicalExecutable(path string) (string, error) {
 }
 
 func (c *Client) resolution() (ResolutionContext, error) {
-	current, err := resolutionContext(environmentForCommand(c.options.Environment))
+	return c.resolutionForEnvironment(environmentForCommand(c.options.Environment))
+}
+
+func (c *Client) resolutionForEnvironment(environment []string) (ResolutionContext, error) {
+	current, err := resolutionContext(environment)
 	if err != nil {
 		return ResolutionContext{}, err
 	}
@@ -123,7 +128,33 @@ func environmentForCommand(environment []string) []string {
 	if environment != nil {
 		return environment
 	}
-	return os.Environ()
+	return defaultEnvironment()
+}
+
+// defaultEnvironment bounds the environment inherited by the pueue client.
+// It is rebuilt for each invocation so HOME/XDG changes are observed by both
+// resolution and the child process without carrying unrelated ambient state.
+func defaultEnvironment() []string {
+	ambient := os.Environ()
+	filtered := make([]string, 0, len(ambient))
+	for _, entry := range ambient {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && defaultEnvironmentKey(key) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func defaultEnvironmentKey(key string) bool {
+	switch key {
+	case "HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP", "__CF_USER_TEXT_ENCODING":
+		return true
+	case "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR":
+		return runtime.GOOS == "linux"
+	default:
+		return false
+	}
 }
 
 func sameEnvironmentResolution(resolution, current ResolutionContext) bool {
@@ -240,13 +271,10 @@ func (c *Client) command(ctx context.Context, consume func() error, args ...stri
 	if err := ctx.Err(); err != nil {
 		return CommandResult{}, err
 	}
-	resolution, err := c.resolution()
+	cmd, err := c.prepareCommand(args...)
 	if err != nil {
 		return CommandResult{}, err
 	}
-	cmd := exec.Command(c.binding.ClientExecutable, append([]string{"-c", c.binding.ConfigPath}, args...)...)
-	cmd.Dir = resolution.Cwd
-	cmd.Env = c.options.Environment
 	commandID := ""
 	if c.options.Observer != nil {
 		commandID, err = task.NewRandomID()
@@ -260,6 +288,25 @@ func (c *Client) command(ctx context.Context, consume func() error, args ...stri
 		}
 	}
 	return observeCommand(ctx, startOwnedObserved(cmd, commandID, c.options.Observer), c.options.ObservationTimeout)
+}
+
+// prepareCommand constructs the fully bound supervisor command without
+// starting a process. It is kept separate so command construction can be
+// inspected independently from observer setup, permit consumption, and
+// process ownership.
+func (c *Client) prepareCommand(args ...string) (*exec.Cmd, error) {
+	environment := environmentForCommand(c.options.Environment)
+	resolution, err := c.resolutionForEnvironment(environment)
+	if err != nil {
+		return nil, err
+	}
+	commandArgs := make([]string, 0, len(args)+2)
+	commandArgs = append(commandArgs, "-c", c.binding.ConfigPath)
+	commandArgs = append(commandArgs, args...)
+	cmd := exec.Command(c.binding.ClientExecutable, commandArgs...)
+	cmd.Dir = resolution.Cwd
+	cmd.Env = environment
+	return cmd, nil
 }
 
 func validateIdentity(i Identity) error {

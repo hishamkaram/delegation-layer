@@ -99,35 +99,44 @@ func (td *TaskDir) Close() error {
 func (s *Store) CreateTask(id string, req *task.TaskRecord, brief []byte, meta *task.MetaRecord) (_ *TaskDir, resultErr error) {
 	reqData, metaData, err := s.validateCreateInput(id, req, brief, meta)
 	if err != nil {
-		return nil, err
+		return nil, annotateTaskCreationError("validating task creation", err)
 	}
 	if err = s.maintLock.LockSHNonblocking(); err != nil {
-		return nil, err
+		return nil, annotateTaskCreationError("acquiring task maintenance", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, s.maintLock.Unlock()) }()
 	dir := filepath.Join(s.Root, "tasks", id)
 	if err = s.mkdir(dir, s.faultInjector); err != nil {
-		return nil, err
+		return nil, annotateTaskCreationError("creating task directory", err)
 	}
 	createLocks, err := s.allowInitialLocks(dir)
 	if err != nil {
-		return nil, err
+		return nil, annotateTaskCreationError("checking initial task locks", err)
 	}
 	td, err := s.newTaskHandle(id, createLocks)
 	if err != nil {
-		return nil, err
+		return nil, annotateTaskCreationError(fmt.Sprintf("opening task locks (create=%t)", createLocks), err)
 	}
 	if err = td.admissionLock.LockEXNonblocking(); err != nil {
 		closeTaskQuietly(td)
-		return nil, err
+		return nil, annotateTaskCreationError("acquiring task admission", err)
 	}
 	err = td.prepareSet(brief, reqData, metaData)
 	err = errors.Join(err, td.admissionLock.Unlock())
 	if err != nil {
 		closeTaskQuietly(td)
-		return nil, err
+		return nil, annotateTaskCreationError("preparing task records", err)
 	}
 	return td, nil
+}
+
+// Keep established error classifications and messages intact while adding a
+// fixed stage to otherwise opaque missing-file failures during initialization.
+func annotateTaskCreationError(stage string, err error) error {
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return fmt.Errorf("%s: %w", stage, err)
 }
 
 func (s *Store) validateCreateInput(id string, req *task.TaskRecord, brief []byte, meta *task.MetaRecord) ([]byte, []byte, error) {

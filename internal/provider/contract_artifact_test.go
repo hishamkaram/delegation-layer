@@ -51,11 +51,11 @@ func TestCatalogNormalizesPreparedDeclarationsAndChecksCertifiedWriter(t *testin
 	request := artifactRequest()
 	registration := testRegistration(request.Provider, request.Mode)
 	registration.Description.Profiles[0].OutputWriterContract = task.OutputWriterProcessExitEOF
-	registration.Prepare = func(req task.TaskRecord) (PreparedProfile, error) {
+	registration.Prepare = ReadyCandidate(func(req task.TaskRecord) (PreparedProfile, error) {
 		plan := artifactPlan(req)
 		plan.InputFiles = append(plan.InputFiles, task.InputFile{Name: "a.json", ArgumentIndex: 3, Content: "a"})
-		return PreparedProfile{Plan: plan}, nil
-	}
+		return catalogTestProfile(plan), nil
+	})
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
@@ -89,9 +89,9 @@ func TestCatalogRejectsPreparedWriterContractNotCertifiedByPredicateProfile(t *t
 	request := artifactRequest()
 	plan := artifactPlan(request)
 	registration := testRegistration(request.Provider, request.Mode)
-	registration.Prepare = func(task.TaskRecord) (PreparedProfile, error) {
-		return PreparedProfile{Plan: plan}, nil
-	}
+	registration.Prepare = ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) {
+		return catalogTestProfile(plan), nil
+	})
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
@@ -126,9 +126,9 @@ func TestCatalogSelectsMatchingWriterContractAcrossCertifiedProfiles(t *testing.
 	withOutput := registration.Description.Profiles[0]
 	withOutput.OutputWriterContract = task.OutputWriterProcessExitEOF
 	registration.Description.Profiles = append(registration.Description.Profiles, withOutput)
-	registration.Prepare = func(req task.TaskRecord) (PreparedProfile, error) {
-		return PreparedProfile{Plan: artifactPlan(req)}, nil
-	}
+	registration.Prepare = ReadyCandidate(func(req task.TaskRecord) (PreparedProfile, error) {
+		return catalogTestProfile(artifactPlan(req)), nil
+	})
 	catalog, err := NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)

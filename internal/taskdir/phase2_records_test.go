@@ -2,6 +2,7 @@ package taskdir
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -376,6 +377,65 @@ func TestStopReceiptsRemainDistinctAndBound(t *testing.T) {
 	}
 	testAbsent(t, filepath.Join(td.Dir, "provider.exit"))
 	testAbsent(t, filepath.Join(td.Dir, "outcome.json"))
+}
+
+func TestContextStopRecordsRejectCanceledBeforeStaging(t *testing.T) {
+	s := testStore(t)
+	td := phase2Task(t, s)
+	phase2Submit(t, td)
+	phase2Receipt(t, td)
+	id := strings.Repeat("7", 32)
+	permit, err := td.PrepareStop(id, "user", time.Time{})
+	must(t, err)
+	must(t, permit.Release())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	facts := task.StopReplyFacts{NumericTaskID: 7, Action: "kill", Acknowledged: true, Message: "accepted"}
+	if err = td.RecordStopReplyContext(ctx, id, facts); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled stop reply was staged: %v", err)
+	}
+	if err = td.RecordStopObservationContext(ctx, id, task.StopObservationFacts{NumericTaskID: 7, State: "ended", Terminated: true}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled stop observation was staged: %v", err)
+	}
+	testAbsent(t, filepath.Join(td.Dir, "stop", id+".reply.json"))
+	testAbsent(t, filepath.Join(td.Dir, "stop", id+".observed.json"))
+}
+
+func TestContextStopRecordsReplayAndConflictPreserveBytes(t *testing.T) {
+	s := testStore(t)
+	td := phase2Task(t, s)
+	phase2Submit(t, td)
+	phase2Receipt(t, td)
+	id := strings.Repeat("8", 32)
+	permit, err := td.PrepareStop(id, "user", time.Time{})
+	must(t, err)
+	must(t, permit.Release())
+	ctx := context.Background()
+	facts := task.StopReplyFacts{NumericTaskID: 7, Action: "kill", Acknowledged: true, Message: "accepted"}
+	must(t, td.RecordStopReplyContext(ctx, id, facts))
+	replyBytes := readTestFile(t, filepath.Join(td.Dir, "stop", id+".reply.json"))
+	must(t, td.RecordStopReplyContext(ctx, id, facts))
+	if !bytes.Equal(replyBytes, readTestFile(t, filepath.Join(td.Dir, "stop", id+".reply.json"))) {
+		t.Fatal("identical stop reply replay replaced authoritative bytes")
+	}
+	conflict := facts
+	conflict.Acknowledged = false
+	if err = td.RecordStopReplyContext(ctx, id, conflict); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("conflicting stop reply was accepted: %v", err)
+	}
+	if !bytes.Equal(replyBytes, readTestFile(t, filepath.Join(td.Dir, "stop", id+".reply.json"))) {
+		t.Fatal("conflicting stop reply mutated authoritative bytes")
+	}
+
+	observationFacts := task.StopObservationFacts{NumericTaskID: 7, State: "ended", Terminated: true}
+	must(t, td.RecordStopObservationContext(ctx, id, observationFacts))
+	observationPath := filepath.Join(td.Dir, "stop", id+".observed.json")
+	observationBytes := readTestFile(t, observationPath)
+	must(t, td.RecordStopObservationContext(ctx, id, observationFacts))
+	if !bytes.Equal(observationBytes, readTestFile(t, observationPath)) {
+		t.Fatal("identical stop observation replay replaced authoritative bytes")
+	}
 }
 
 func TestReadStopRecordsPreservesUnknownOptionalFacts(t *testing.T) {

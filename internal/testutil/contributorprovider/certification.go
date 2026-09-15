@@ -97,7 +97,7 @@ func Description() commonprovider.Description {
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
 		Description:  Description(),
-		Prepare:      Prepare,
+		Prepare:      commonprovider.ReadyCandidate(Prepare),
 		Interpreters: []predicate.Interpreter{NewInterpreter()},
 	}
 }

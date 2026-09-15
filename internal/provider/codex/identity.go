@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -19,9 +20,7 @@ type identityObserver struct {
 	mu       sync.Mutex
 	expected task.SessionExpectation
 	record   func(task.SessionIdentity) error
-	line     []byte
-	tooBig   bool
-	semantic bool
+	framer   *commonprovider.JSONLFramer
 	threadID string
 	seen     bool
 	done     bool
@@ -44,7 +43,9 @@ func NewIdentityObserver(taskID string, expected task.SessionExpectation, record
 	if record == nil {
 		return nil, errors.New("nil codex identity recorder")
 	}
-	return &identityObserver{expected: expected, record: record}, nil
+	observer := &identityObserver{expected: expected, record: record}
+	observer.framer = commonprovider.NewJSONLFramer(maxEventLineBytes, observer.processLine)
+	return observer, nil
 }
 
 func (o *identityObserver) Observe(data []byte) {
@@ -53,24 +54,7 @@ func (o *identityObserver) Observe(data []byte) {
 	if o.done {
 		return
 	}
-	for _, byteValue := range data {
-		if o.semantic {
-			return
-		}
-		if byteValue == '\n' {
-			o.finishLine(true)
-			continue
-		}
-		if o.tooBig {
-			continue
-		}
-		if len(o.line) >= maxEventLineBytes {
-			o.tooBig = true
-			o.semantic = true
-			continue
-		}
-		o.line = append(o.line, byteValue)
-	}
+	o.framer.Feed(data)
 }
 
 func (o *identityObserver) Complete() error {
@@ -79,58 +63,35 @@ func (o *identityObserver) Complete() error {
 	if o.done {
 		return o.callback
 	}
-	if o.tooBig || len(o.line) != 0 {
-		o.finishLine(false)
-	}
-	o.line = nil
+	o.framer.Finish()
 	o.done = true
 	return o.callback
 }
 
-func (o *identityObserver) finishLine(blankLineIsFault bool) {
-	if o.tooBig {
-		o.tooBig = false
-		o.line = o.line[:0]
-		return
-	}
-	if len(o.line) == 0 {
-		if blankLineIsFault {
-			o.semantic = true
-		}
-		return
-	}
-	line := o.line
-	o.line = o.line[:0]
+func (o *identityObserver) processLine(line []byte) error {
 	if len(bytes.TrimSpace(line)) == 0 {
-		o.semantic = true
-		return
+		return errors.New("blank codex JSONL event line")
 	}
-	if !validIdentityLine(line) {
-		o.semantic = true
-		return
+	if !utf8.Valid(line) {
+		return errors.New("codex identity event line is not valid UTF-8")
 	}
 	event, err := decodeEvent(line)
 	if err != nil {
-		o.semantic = true
-		return
+		return err
 	}
 	if event.typeName != eventThreadStarted {
-		return
+		return nil
 	}
 	threadID, err := requiredString(event.fields, "thread_id")
 	if err != nil || !validThreadID(threadID) || o.seen {
-		o.semantic = true
-		return
+		return errors.New("invalid or duplicate thread.started identity")
 	}
 	o.threadID = threadID
 	o.seen = true
 	if identityMatchesExpectation(o.expected, threadID) {
 		o.callback = o.record(task.SessionIdentity{Provider: Provider, ConversationID: threadID})
 	}
-}
-
-func validIdentityLine(line []byte) bool {
-	return len(line) <= maxEventLineBytes && utf8.Valid(line)
+	return nil
 }
 
 var _ execution.IdentityObserver = (*identityObserver)(nil)

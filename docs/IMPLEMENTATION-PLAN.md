@@ -1,6 +1,6 @@
 # Implementation plan and milestones
 
-**Status: Phases 0–3 accepted; Phase 3 merged in [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4), squash c094d03. Provider redesign is authorized; engineering guidance, catalog/agy proof and contributor proof are accepted in PRs #5–7. Codex / Phase 4 is in progress; Claude / Phase 5 remains planned.**
+**Status: Phases 0–3 accepted; Phase 3 merged in [PR #4](https://github.com/hishamkaram/delegation-layer/pull/4), squash c094d03. Provider redesign is authorized; engineering guidance, catalog/agy proof, contributor proof and Codex / Phase 4 are accepted in PRs #5–8. Claude / Phase 5 is in progress.**
 
 [EXECUTION-PLAN.md](EXECUTION-PLAN.md) is normative, including its [provider redesign amendment](PROVIDER-REDESIGN.md). Historical planning below is retained as history, not current verification evidence.
 
@@ -11,8 +11,8 @@
 | Engineering guidance and skills | Accepted | [PR #5](https://github.com/hishamkaram/delegation-layer/pull/5), squash `84a1a4a`; 32 validator tests, full local gate, direct Codex review, Linux/macOS PR and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34829586220) passed |
 | Catalog and agy proof | Accepted | [PR #6](https://github.com/hishamkaram/delegation-layer/pull/6), squash `38e3da4`; [local acceptance](PROVIDER-CATALOG-ACCEPTANCE.md), direct review, exact-head PR CI and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34840061876) passed |
 | Shared infrastructure and contributor proof | Accepted | [PR #7](https://github.com/hishamkaram/delegation-layer/pull/7), squash `2a4cb8a`; [fifteen-case compiled CLI proof](PROVIDER-CONTRIBUTION-ACCEPTANCE.md), three zero-admission cases, agy revalidation, full quality/protocol/supervisor gates, completed direct reviews, exact-head CI and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34859837834) passed; worktree retired with private archive |
-| Codex / Phase 4 | In progress | [Version-specific evidence](CODEX-ACCEPTANCE.md); two native turns passed, certification Executed; review passed; CI/merge pending |
-| Claude / Phase 5 | Not started | Required |
+| Codex / Phase 4 | Accepted | [PR #8](https://github.com/hishamkaram/delegation-layer/pull/8), squash `d6c3b3b`; two native turns, tool-free resume revalidation, full gate, direct review, Linux/macOS PR and [main CI](https://github.com/hishamkaram/delegation-layer/actions/runs/34871131198) passed; worktree retired |
+| Claude / Phase 5 | In progress | [Pinned runtime and policy evidence](CLAUDE-ACCEPTANCE.md); provider and supervised inspection implemented; concurrent lock-creation defect reproduced and corrected, scoped lock review clean; full quality and eight-caller inspection gates passed, supervisor 48 hermetic/five native cases passed; 49 protocol cases and compiled CLI workflow passed; context review finding fixed and corrective review clean; final full quality rerun passed; user switched to personal account but plaintext fallback remains, so strict live qualification is paused; no PR or merge |
 | Integrated verification | Not started | Required |
 
 ## How this plan was produced
@@ -383,35 +383,35 @@ Every exit command for future phases is **proposed future work**, not claimed to
 - **Accepted:** direct review and CI completed; PR #4 was squash-merged as `c094d03`. The requested stop after Phase 3 was fulfilled. The subsequently authorized provider-redesign amendment governs the current Codex, Claude and integrated acceptance work.
 - **Exit:** `make acceptance-agy` — fixtures plus required live cases, followed by the review and merge gates.
 
-### Phase 4 — the second adapter, Codex (IN PROGRESS)
+### Phase 4 — the second adapter, Codex (ACCEPTED)
 
 - **Goal:** prove the interface is not shaped around `agy`.
 - **Candidate implemented:** `internal/provider/codex` — pinned `codex exec` preparation, bounded JSONL/identity interpretation, core-owned output staging, read-only policy verification, and exact thread resume. Transcript discovery remains explicitly unavailable; no session path is guessed.
-- **Verification:** the full local gate, protocol/supervisor gates and contributor regression passed. After preserving the failed initial attempt, profile revision 2 passed fresh/read/denial/resume/replay controls in two native turns. Certification is Executed and shipped discovery/replay passed; review passed; CI and merge remain pending. See [the current acceptance receipt](CODEX-ACCEPTANCE.md).
+- **Verification:** the full local gate, protocol/supervisor gates and contributor regression passed. After preserving the failed initial attempt, profile revision 2 passed fresh/read/denial/resume/replay controls in two native turns. Certification is Executed and shipped discovery/replay passed; PR #8 and main CI passed; the worktree is retired. See [the acceptance receipt](CODEX-ACCEPTANCE.md).
 - **Exit:** `make acceptance-codex`.
 
-### Phase 5 — the third adapter, Claude print (PLANNED)
+### Phase 5 — the third adapter, Claude print (IN PROGRESS)
 
 - **Goal:** provide a strictly contained read-only Claude adapter before release.
-- **Built:** `internal/provider/claude` — `claude --print`, stream-json parsing, strict tool restriction (`Read,Glob,Grep`), empty MCP config, `dontAsk` permission mode, disabled hooks, session resumption.
+- **Planned deliverables:** `internal/provider/claude` — `claude --print`, stream-json parsing, strict tool restriction (`Read,Glob,Grep`), empty MCP config, `dontAsk` permission mode, disabled hooks, session resumption.
 - **Exit:** `make acceptance-claude`.
 
 ### Phase 6 — consumer acceptance and private release (PLANNED)
 
 - **Goal:** prove consumer acceptance across all three adapters and ship private v0.1.0 release assets.
-- **Built:** mixed-provider consumer acceptance, GoReleaser platform packaging (`delegate` and `delegate-run`), checksum manifests, private authenticated Homebrew tap formula generator.
+- **Planned deliverables:** mixed-provider consumer acceptance, GoReleaser platform packaging (`delegate` and `delegate-run`), checksum manifests, private authenticated Homebrew tap formula generator.
 - **Exit:** `make acceptance-release` and authenticated release verification.
 
 ### Phase 7 — port `claude-codex-duo` Phase 2 fan-out (PLANNED)
 
 - **Goal:** opt-in transport for the existing duo review runner with unmodified skill.
-- **Built:** `CODEX_RUN_TRANSPORT=delegate`, sidecar translation, gate-compatible claim release, exact-ID attach/cancel.
+- **Planned deliverables:** `CODEX_RUN_TRANSPORT=delegate`, sidecar translation, gate-compatible claim release, exact-ID attach/cancel.
 - **Exit:** real review Phase 2 fanout test with byte-identical `SKILL.md`.
 
 ### Phase 8 — resumable declared-plan workflow (PLANNED)
 
 - **Goal:** execute a declared DAG of tasks with bounded concurrency and detached coordinator.
-- **Built:** `delegate workflow start|status|collect|resume`, manifest validation, epoch-fenced coordinator, immutable aggregate publication.
+- **Planned deliverables:** `delegate workflow start|status|collect|resume`, manifest validation, epoch-fenced coordinator, immutable aggregate publication.
 - **Exit:** multi-provider fork/join execution and detached recovery.
 
 ---

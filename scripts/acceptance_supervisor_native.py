@@ -19,11 +19,69 @@ from acceptance_supervisor_common import (
     Processes, config_for, digest, inherited_environment, read_json,
     require, sha, wait_until, write_json,
 )
+from acceptance_provider_common import AcceptanceFailure, NativeTaskOps
 from acceptance_supervisor_yaml import YAMLChecks
 
 
 COMMAND_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 EVENT_FILE_RE = re.compile(r"^event-(\d{6})\.json$")
+
+
+# These events are emitted by execution.Run for one ordinary finite provider
+# task. The stdout/stderr capture pairs may interleave, so the validator below
+# checks their per-stream order while requiring every event exactly once.
+EXPECTED_EXECUTION_EVENTS = (
+    "start-permit-consumed", "timer-armed", "start-entry",
+    "preflight-authorized", "start-authorized", "started",
+    "parent-fds-closed", "started-receipt", "wait-completed",
+    "stdout-eof", "stderr-eof", "stdout-raw-closed", "stderr-raw-closed",
+    "completion-observed", "timer-disarmed", "sealed", "published",
+)
+
+
+def validate_execution_event_sequence(names):
+    """Validate the exact runner ownership events and their causal order.
+
+    The two capture goroutines are independent. Their eof/close events may
+    therefore interleave, while each stream's eof must precede its close and
+    both closes must precede completion. Requiring the closed set and these
+    source-backed edges rejects missing, duplicate, extra, and reordered
+    events without pretending the concurrent pair has a total order.
+    """
+    require(isinstance(names, list), "runner event names are not a list")
+    require(all(isinstance(name, str) for name in names), "runner event name is not a string")
+    expected = list(EXPECTED_EXECUTION_EVENTS)
+    require(len(names) == len(expected), "runner emitted an unexpected event count")
+    require(set(names) == set(expected), "runner emitted an unexpected or incomplete ownership event sequence")
+    for name in expected:
+        require(names.count(name) == 1, "missing or duplicate provider ownership event: " + name)
+    positions = {name: names.index(name) for name in expected}
+
+    def before(left, right):
+        require(positions[left] < positions[right],
+                "runner event order changed: %s must precede %s" % (left, right))
+
+    for left, right in (
+        ("start-permit-consumed", "timer-armed"),
+        ("timer-armed", "start-entry"),
+        ("start-entry", "preflight-authorized"),
+        ("preflight-authorized", "start-authorized"),
+        ("start-authorized", "started"),
+        ("started", "parent-fds-closed"),
+        ("parent-fds-closed", "started-receipt"),
+        ("started", "wait-completed"),
+        ("stdout-eof", "stdout-raw-closed"),
+        ("stderr-eof", "stderr-raw-closed"),
+        ("wait-completed", "completion-observed"),
+        ("stdout-raw-closed", "completion-observed"),
+        ("stderr-raw-closed", "completion-observed"),
+        ("completion-observed", "timer-disarmed"),
+        ("timer-disarmed", "sealed"),
+        ("sealed", "published"),
+    ):
+        before(left, right)
+
+    require("deadline-observed" not in names, "native acceptance budget expired")
 
 
 class NativeSuite:
@@ -38,6 +96,9 @@ class NativeSuite:
         self.daemon = None
         self.native_job = None
         self.shutdown_gate = False
+        self.native_terminal_proven = False
+        self.dispatch_attempted = False
+        self.admitted = False
         self.task_id = uuid.uuid4().hex
         self.case_ids = []
 
@@ -139,6 +200,7 @@ class NativeSuite:
         return self.processes.run(name, [self.delegate, "--root", self.root, command, self.task_id, "--json", *extra], self.base, expected, timeout)
 
     def dispatch_and_observe(self):
+        self.dispatch_attempted = True
         dispatched = self.processes.run("dispatch", [
             self.delegate, "--root", self.root, "--pueue-config", self.config_path,
             "--runner", self.runner, "dispatch", "--provider", "fixture:test",
@@ -147,6 +209,7 @@ class NativeSuite:
         ], self.base)
         reply = dispatched.json()
         require(reply["task_id"] == self.task_id, "dispatcher returned another task")
+        self.admitted = True
         self.root_id = read_json(self.root / "root.json")["root_id"]
         self.task_dir = self.root / "tasks" / self.task_id
         wait_until(lambda: Path(str(self.release) + ".waiting").exists(), timeout=12, description="provider finite hold")
@@ -192,9 +255,10 @@ class NativeSuite:
             else:
                 require("size" not in item and "sha256" not in item, "live log descriptor claimed final bytes")
 
-    def validate_terminal(self, reply):
+    def validate_terminal(self, reply=None):
         outcome, seal = read_json(self.task_dir / "outcome.json"), read_json(self.task_dir / "provider.exit")
-        require(reply["outcome"] == outcome, "CLI outcome differs from durable bytes")
+        if reply is not None:
+            require(reply["outcome"] == outcome, "CLI outcome differs from durable bytes")
         for record in (outcome, seal):
             require(record["task_id"] == self.task_id and record["root_id"] == self.root_id, "terminal identity mismatch")
         descriptor = outcome["payload"]
@@ -297,6 +361,7 @@ class NativeSuite:
             raise RuntimeError("supervised job did not finish naturally")
         self.native_job = job
         self.validate_events()
+        self.native_terminal_proven = True
         # Historical reads use only saved task evidence after all work is done.
         for path in (self.profile, self.provider_config, self.provider, self.work):
             path.rename(path.with_name(path.name + ".offline"))
@@ -362,31 +427,10 @@ class NativeSuite:
         require(verbs.count("add") == 1 and "kill" not in verbs and "remove" not in verbs, "native mutation counts violated")
 
         names = [event["name"] for event in runner_events]
-        expected = {
-            "start-permit-consumed": 1, "timer-armed": 1, "start-entry": 1,
-            "started": 1, "parent-fds-closed": 1, "started-receipt": 1,
-            "wait-completed": 1, "stdout-eof": 1, "stderr-eof": 1,
-            "stdout-raw-closed": 1, "stderr-raw-closed": 1,
-            "completion-observed": 1, "timer-disarmed": 1,
-            "sealed": 1, "published": 1,
-        }
-        require(set(names) == set(expected), "runner emitted an unexpected or incomplete ownership event sequence")
-        for name, count in expected.items():
-            require(names.count(name) == count, "missing or duplicate provider ownership event: " + name)
-        require("deadline-observed" not in names, "native acceptance budget expired")
+        validate_execution_event_sequence(names)
         positions = {name: names.index(name) for name in names}
-        require(positions["start-permit-consumed"] < positions["timer-armed"] < positions["start-entry"], "runner start permit/timer order changed")
-        require(positions["start-entry"] < positions["started"] < positions["wait-completed"], "runner Start/Wait event order changed")
-        require(positions["started"] < positions["parent-fds-closed"] < positions["started-receipt"], "runner start receipt order changed")
-        require(positions["stdout-eof"] < positions["stdout-raw-closed"], "runner stdout close events are out of order")
-        require(positions["stderr-eof"] < positions["stderr-raw-closed"], "runner stderr close events are out of order")
-        require(positions["wait-completed"] < positions["completion-observed"], "runner Wait/completion events are out of order")
-        require(positions["stdout-raw-closed"] < positions["completion-observed"], "runner stdout/completion events are out of order")
-        require(positions["stderr-raw-closed"] < positions["completion-observed"], "runner stderr/completion events are out of order")
-        require(positions["completion-observed"] < positions["timer-disarmed"], "runner timer completion order changed")
         for name in ("wait-completed", "stdout-eof", "stderr-eof", "stdout-raw-closed", "stderr-raw-closed", "completion-observed", "timer-disarmed"):
             require(positions[name] < positions["sealed"], "provider sealed before " + name)
-        require(positions["sealed"] < positions["published"], "provider published before seal")
         provider_entry, _ = self.provider_receipts()
         provider_entries = [self.base / "provider-records" / "invocations" / provider_entry["invocation_id"] / "provider.entry.json"]
         child_entries = []
@@ -490,6 +534,122 @@ class NativeSuite:
         require([number for number, _ in paths] == list(range(1, len(paths) + 1)), "event file sequence is not contiguous")
         return [path for _, path in paths]
 
+    def failure_terminal_proof(self):
+        """Require durable task/capture evidence before failure shutdown.
+
+        NativeTaskOps proves that every owned caller has naturally Waited and
+        that the exact queue row is terminal. This additional gate proves the
+        dispatched provider task has its sealed raw streams and paired native
+        completion receipts before the daemon shutdown request is allowed.
+        Unknown dispatch or incomplete evidence keeps ownership retained.
+        """
+        if not self.dispatch_attempted:
+            return True
+        if not self.admitted or not hasattr(self, "root_id") or not hasattr(self, "task_dir"):
+            return False
+        try:
+            native_job = getattr(self, "native_job", None)
+            if not isinstance(native_job, dict):
+                return False
+            if not self.task_dir.is_dir() or not (self.task_dir / "provider.exit").is_file():
+                return False
+            supervisor_ref = read_json(self.task_dir / "supervisor.ref.json")
+            require(isinstance(supervisor_ref, dict), "supervisor reference is not an object")
+            numeric_task_id = supervisor_ref.get("numeric_task_id")
+            require(isinstance(numeric_task_id, int) and not isinstance(numeric_task_id, bool) and numeric_task_id >= 0,
+                    "supervisor reference has no numeric task identity")
+            require(native_job.get("id") == numeric_task_id and
+                    native_job.get("label") == "delegate:" + self.root_id + ":" + self.task_id,
+                    "fresh supervisor row identity mismatch")
+            status = native_job.get("status")
+            require(isinstance(status, dict) and
+                    isinstance(status.get("Done"), dict) and
+                    status["Done"].get("result") == "Success",
+                    "fresh supervisor row is not Done.Success")
+            # A failure in finish() can occur before it records this proof.
+            # Re-run the complete event/receipt oracle then; once it passed,
+            # preserve that proof across the later offline replay checks.
+            if not getattr(self, "native_terminal_proven", False):
+                self.validate_events()
+                self.native_terminal_proven = True
+            self.validate_terminal()
+        except (AcceptanceFailure, AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError, RecursionError):
+            return False
+        return True
+
+    def retained_failure_cleanup(self):
+        """Use shared observation-only cleanup with a native proof gate.
+
+        NativeTaskOps obtains a fresh private queue snapshot immediately before
+        its shutdown request.  Install the gate at that point, rather than
+        checking self.native_job first: finish() may have failed before it had
+        a chance to retain the terminal row.
+        """
+        config_path = getattr(self, "config_path", None)
+        if self.daemon is None or config_path is None:
+            return False
+        owner = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
+                              self.base, getattr(self, "root", self.base), self.output)
+        owner.bind_supervisor(config_path, self.daemon)
+        if self.admitted and hasattr(self, "root_id"):
+            owner.root_id = self.root_id
+            owner.tasks = {"native": self.task_id}
+            owner.labels = {"native": "delegate:" + self.root_id + ":" + self.task_id}
+            owner.dispatch_attempts = {self.task_id}
+        elif self.dispatch_attempted:
+            # A dispatch response that did not establish an exact admission
+            # identity is unknown. Keep the owner from treating an empty
+            # snapshot as evidence that no native task was admitted.
+            owner.dispatch_attempts = {self.task_id}
+
+        queue_finished = owner.failure_queue_finished
+
+        def guarded_queue_finished(status):
+            if not queue_finished(status):
+                return False
+            if not self.dispatch_attempted:
+                return True
+            if not self.admitted or not hasattr(self, "root_id"):
+                return False
+            rows = status.get("tasks") if isinstance(status, dict) else None
+            label = "delegate:" + self.root_id + ":" + self.task_id
+            matches = [row for row in (rows.values() if isinstance(rows, dict) else ())
+                       if isinstance(row, dict) and row.get("label") == label]
+            if len(matches) != 1:
+                return False
+            # The shared queue oracle has just positively checked this fresh
+            # row as Done.Success and bound its command to runner/root/task.
+            self.native_job = matches[0]
+            return self.failure_terminal_proof()
+
+        # This is an instance callback, so it intentionally accepts the one
+        # status argument supplied by NativeTaskOps.safe_failure_shutdown.
+        owner.failure_queue_finished = guarded_queue_finished
+        return owner.retain_failure_ownership()
+
+    def retain_unknown_failure_ownership(self):
+        """Retain handles when setting up the normal proof path itself faults.
+
+        The fallback deliberately has no shutdown authority.  The shared
+        retainer still observes owned callers and the daemon until they end
+        naturally, but an accessor, receipt, or setup fault cannot be turned
+        into evidence that the private queue is safe to close.
+        """
+        config_path = getattr(self, "config_path", None)
+        if self.daemon is None or config_path is None:
+            return False
+        owner = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
+                              self.base, getattr(self, "root", self.base), self.output)
+        owner.bind_supervisor(config_path, self.daemon)
+        if self.dispatch_attempted:
+            owner.dispatch_attempts = {self.task_id}
+
+        def no_shutdown_authority(_status):
+            return False
+
+        owner.failure_queue_finished = no_shutdown_authority
+        return owner.retain_failure_ownership()
+
     def run(self):
         try:
             self.setup()
@@ -497,7 +657,16 @@ class NativeSuite:
             self.dispatch_and_observe()
             self.finish()
         except BaseException as error:
-            active = self.processes.drain(exclude=(() if self.daemon is None else (self.daemon,)))
+            cleanup = False
+            try:
+                cleanup = self.retained_failure_cleanup()
+            except BaseException:
+                # The common retainer handles operational faults during its
+                # observation loop. If constructing the gated owner itself
+                # fails, keep the same handles under a no-authority owner
+                # instead of exiting while a caller or daemon is active.
+                cleanup = self.retain_unknown_failure_ownership()
+            active = self.processes.drain(timeout=0, exclude=(() if self.daemon is None else (self.daemon,)))
             if self.daemon is not None:
                 self.daemon.poll()
             write_json(self.output / "failure.json", {
@@ -505,6 +674,7 @@ class NativeSuite:
                 "daemon_pid": None if self.daemon is None else self.daemon.pid,
                 "daemon_result": None if self.daemon is None else self.daemon.result,
                 "unresolved_owned_clients": active, "shutdown_gate": self.shutdown_gate,
+                "natural_failure_cleanup": cleanup,
                 "unknown_termination_preserved": True, "signals_sent": 0,
             })
             raise
