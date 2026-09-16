@@ -45,7 +45,7 @@ func TestProvidersJSONIsBoundedDeterministicAndDoesNotUseTaskFields(t *testing.T
 
 func assertNativeProviderMetadata(t *testing.T, response ProviderResponse) {
 	t.Helper()
-	expectedIDs := []string{"antigravity:print", "claude:print", "codex:exec"}
+	expectedIDs := []string{"antigravity:print", "claude:print", "codex:exec", "opencode:run", "pi:json"}
 	if response.SchemaVersion != OutputSchemaVersion || len(response.Providers) != len(expectedIDs) {
 		t.Fatalf("unexpected compiled provider metadata: %+v", response)
 	}
@@ -54,7 +54,7 @@ func assertNativeProviderMetadata(t *testing.T, response ProviderResponse) {
 		if description.ID != expectedID {
 			t.Fatalf("provider at index %d: got %s, want %s", index, description.ID, expectedID)
 		}
-		if len(description.SupportedModes) != 1 {
+		if len(description.SupportedModes) == 0 {
 			t.Fatalf("supported mode metadata missing: %+v", description)
 		}
 		if len(description.Runtime.RequiredFlags) == 0 {

@@ -7,7 +7,7 @@ authenticated using its own supported login flow.
 ## Prepare the host
 
 Install Go 1.27.1, Pueue 4.0.4 (`pueue` and `pueued`), and at least one
-of `agy`, `codex`, or `claude`. Start a Pueue daemon with a private
+of `agy`, `codex`, `claude`, `pi`, or `opencode`. Start a Pueue daemon with a private
 configuration and Unix socket. Keep that configuration outside the Delegation
 Layer state root and workspace.
 
@@ -100,10 +100,13 @@ request.
 ## Choose another provider
 
 Run `delegate providers --json` and compare the advertised modes and options
-with [the provider guide](providers.md). Antigravity is the profile that can
-write inside its approved workspace. Codex and Claude are read-only profiles;
-their adapters reject unsupported permission or option combinations before
-admission.
+with [the provider guide](providers.md). Every listed profile reports its
+caller-selected permission modes and supported native options; unsupported
+combinations are rejected before admission. `workspace-write` gives the
+provider's native write capability for the selected workspace when the catalog
+advertises that mode. Pi currently advertises only read-only because its
+built-in write and edit tools do not provide a native workspace boundary;
+`read-only` keeps the adapter's read boundary.
 
 ## Keep state recoverable
 

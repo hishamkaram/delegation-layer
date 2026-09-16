@@ -171,6 +171,37 @@ func TestChangedCLIReportedVersionIsAccepted(t *testing.T) {
 	}
 }
 
+func TestWorkspaceWriteInterpreterAcceptsNativeWriteProfile(t *testing.T) {
+	stdout := jsonl(writeInitLine(claudeTestUUID), resultLine(claudeTestUUID, "edited"))
+	var answer bytes.Buffer
+	seal := claudeTestSealForPredicate(stdout, WorkspaceWriteReference())
+	input := predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}
+	interp, err := NewWorkspaceWriteInterpreter().Evaluate(input, &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "edited" {
+		t.Fatalf("workspace-write interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestWorkspaceWriteInterpreterRejectsReadOnlyInit(t *testing.T) {
+	stdout := jsonl(initLine(claudeTestUUID), resultLine(claudeTestUUID, "answer"))
+	seal := claudeTestSealForPredicate(stdout, WorkspaceWriteReference())
+	interp, err := NewWorkspaceWriteInterpreter().Evaluate(predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}, &claudeTestEvidence{stdout: stdout}, &bytes.Buffer{})
+	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalMalformed {
+		t.Fatalf("read-only init accepted by workspace interpreter=%+v err=%v", interp, err)
+	}
+}
+
+func TestWorkspaceWriteInterpreterAcceptsEditToolEvent(t *testing.T) {
+	edit := `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tool-1","name":"Edit","input":{"file_path":"/workspace/file.txt","old_string":"before","new_string":"after"}}]},"session_id":"` + claudeTestUUID + `"}`
+	stdout := jsonl(writeInitLine(claudeTestUUID), edit, resultLine(claudeTestUUID, "edited"))
+	var answer bytes.Buffer
+	seal := claudeTestSealForPredicate(stdout, WorkspaceWriteReference())
+	interp, err := NewWorkspaceWriteInterpreter().Evaluate(predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}, &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "edited" {
+		t.Fatalf("workspace edit event interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
 func TestResultErrorsRefusalLimitsAndMissingTerminalReject(t *testing.T) {
 	for _, subtype := range []string{resultErrorDuringExecution, resultErrorMaxTurns, resultErrorMaxBudget, resultErrorMaxStructuredOutputRetries} {
 		t.Run(subtype, func(t *testing.T) {
@@ -532,6 +563,10 @@ func claudeContinuationInput(stdout []byte, sessionID string) predicate.Input {
 }
 
 func claudeTestSeal(stdout []byte) task.ProviderExitRecord {
+	return claudeTestSealForPredicate(stdout, Reference())
+}
+
+func claudeTestSealForPredicate(stdout []byte, ref task.PredicateRef) task.ProviderExitRecord {
 	manifest := []task.RawManifestEntry{
 		{Path: "raw/stderr", Size: 0, SHA256: task.ComputeSHA256(nil)},
 		{Path: "raw/stdout", Size: int64(len(stdout)), SHA256: task.ComputeSHA256(stdout)},
@@ -545,7 +580,7 @@ func claudeTestSeal(stdout []byte) task.ProviderExitRecord {
 		RootID:        claudeTestRootID, TaskID: claudeTestTaskID,
 		SpecSHA256: claudeTestSpecHash, MetaSHA256: claudeTestMetaHash,
 		InvocationState: task.InvocationStarted, ExitCode: 0,
-		Predicate: Reference(), RawManifest: manifest,
+		Predicate: ref, RawManifest: manifest,
 		ManifestSHA256: task.ComputeSHA256(data), ClosedAt: "2026-09-13T00:00:00Z",
 	}
 }

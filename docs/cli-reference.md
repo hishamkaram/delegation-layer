@@ -42,8 +42,8 @@ paths must remain disjoint.
 | `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID. Omit to allocate one. |
 | `--permission MODE` | `read-only` (default) or `workspace-write`. |
 | `--budget DURATION` | Positive Go duration; default `30m`. Queue time is excluded. |
-| `--model MODEL` | Reserved for a profile that advertises model selection; current profiles reject it. |
-| `--effort EFFORT` | Current profiles accept only `default`, which keeps the provider default. |
+| `--model MODEL` | Model selector when the chosen profile advertises `model` (currently Pi and OpenCode). |
+| `--effort EFFORT` | Provider effort/variant selector when the chosen profile advertises it (Pi maps this to `--thinking`; OpenCode maps it to `--variant`). `default` keeps the provider default. |
 | `--native-timeout DURATION` | Antigravity's native print timeout, no greater than `--budget`. |
 | `--resume-task TASK_ID` | Exact predecessor for a continuation; creates a new task. |
 | `--json` | Emit the versioned control response. |

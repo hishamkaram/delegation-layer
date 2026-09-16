@@ -2,7 +2,7 @@ package antigravity
 
 import "testing"
 
-func TestDescriptionExposesRuntimeCapabilitiesWithoutReleaseGate(t *testing.T) {
+func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 	description := Description()
 	if description.ID != Provider || !description.Discoverable || len(description.SupportedModes) != 1 || description.SupportedModes[0] != Mode {
 		t.Fatalf("unexpected description: %+v", description)

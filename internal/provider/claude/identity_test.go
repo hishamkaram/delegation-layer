@@ -154,4 +154,8 @@ func initLine(sessionID string) string {
 	return fmt.Sprintf(`{"type":"system","subtype":"init","session_id":%q,"claude_code_version":%q,"apiKeySource":"none","cwd":"/workspace","tools":["Read","Glob","Grep"],"mcp_servers":[],"model":"claude-test","permissionMode":"dontAsk"}`, sessionID, Version)
 }
 
+func writeInitLine(sessionID string) string {
+	return fmt.Sprintf(`{"type":"system","subtype":"init","session_id":%q,"claude_code_version":%q,"apiKeySource":"none","cwd":"/workspace","tools":["Read","Edit","Write","Glob","Grep"],"mcp_servers":[],"model":"claude-test","permissionMode":"acceptEdits"}`, sessionID, Version)
+}
+
 func jsonl(lines ...string) []byte { return []byte(strings.Join(lines, "\n")) }

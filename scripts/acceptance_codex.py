@@ -53,8 +53,11 @@ from acceptance_supervisor_common import (
 PROVIDER = "codex:exec"
 MODE = "read-only"
 APPROVAL = "never"
-PREDICATE_VERSION = "0.154.0"
-PREDICATE_SHA256 = "7d40d9c4627e58d8906e816d3fc6e1eed7f0d6b14ab5fc1f18b4c704415d3a8d"
+# The predicate revision describes the adapter's output contract. It is
+# deliberately independent of the installed Codex CLI release, which is
+# admitted through the runtime capability probe.
+PREDICATE_VERSION = "runtime-reported"
+PREDICATE_SHA256 = "3c5bdc1866330d2e7280422f9ad865c9ad29b16ceea16c19796c991ba7e1cb67"
 OUTPUT_NAME = "codex-last-message.txt"
 OUTPUT_WRITER_CONTRACT = "process-exit-eof-v1"
 TASK_BUDGET = "120s"

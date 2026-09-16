@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -21,6 +22,69 @@ type admissionPreparation struct {
 	InspectionDeadline time.Time
 }
 
+// supervisorOptionsForCandidate carries the provider's bounded, nonsecret
+// launch environment into the supervisor client used for inspection and the
+// ordinary task. The inspection worker is started by that supervisor and
+// reconstructs the candidate from its process environment; using the same
+// values here keeps its immutable definition identical to admission. The
+// caller's explicit supervisor environment remains authoritative for keys it
+// does not share with the provider profile.
+func supervisorOptionsForCandidate(base pueue.Options, candidate commonprovider.ProfileCandidate) (pueue.Options, error) {
+	if candidate.Inspection == nil {
+		return base, nil
+	}
+	definition, _, err := candidate.Inspection.Snapshot()
+	if err != nil {
+		return pueue.Options{}, err
+	}
+	return supervisorOptionsWithEnvironment(base, definition.Environment), nil
+}
+
+// supervisorOptionsForProfile is the retry/recovery counterpart of
+// supervisorOptionsForCandidate. A task that was admitted but whose ordinary
+// submission must be retried still needs the exact provider environment that
+// was used to construct its immutable plan.
+func supervisorOptionsForProfile(base pueue.Options, profile PreparedProfile) pueue.Options {
+	return supervisorOptionsWithEnvironment(base, profile.Plan.Environment)
+}
+
+func supervisorOptionsWithEnvironment(base pueue.Options, providerEnvironment []string) pueue.Options {
+	if len(providerEnvironment) == 0 {
+		return base
+	}
+	var merged []string
+	if base.Environment == nil {
+		merged = pueue.DefaultEnvironment()
+	} else {
+		// Preserve the caller's explicit empty environment. A nil slice means
+		// "use the client default"; a non-nil empty slice intentionally means
+		// "launch without inherited variables".
+		merged = make([]string, len(base.Environment))
+		copy(merged, base.Environment)
+	}
+	positions := make(map[string]int, len(merged)+len(providerEnvironment))
+	for index, entry := range merged {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && key != "" {
+			positions[key] = index
+		}
+	}
+	for _, entry := range providerEnvironment {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		if index, exists := positions[key]; exists {
+			merged[index] = entry
+			continue
+		}
+		positions[key] = len(merged)
+		merged = append(merged, entry)
+	}
+	base.Environment = merged
+	return base
+}
+
 func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord) (admissionPreparation, error) {
 	candidate, err := prepareCandidate(deps, store.Root, req)
 	if err != nil {
@@ -33,7 +97,11 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 			return admissionPreparation{}, err
 		}
 	}
-	supervisor, err := bindInitial(a, deps)
+	supervisorOptions, err := supervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
+	if err != nil {
+		return admissionPreparation{}, err
+	}
+	supervisor, err := bindInitialWithOptions(a, deps, supervisorOptions)
 	if err != nil {
 		return admissionPreparation{}, err
 	}

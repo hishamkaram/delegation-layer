@@ -1,14 +1,16 @@
 # Provider guide
 
-Delegation Layer ships three launchable provider profiles. The profile name is
+Delegation Layer ships five launchable provider profiles. The profile name is
 part of the task request and determines the command, environment, policy,
 identity observer, input transport, output interpreter, and supported options.
 
 | Profile | Permission mode | Request options | Native command |
 | --- | --- | --- | --- |
 | `antigravity:print` | `workspace-write` | `continuation`, `native-timeout` | `agy` |
-| `codex:exec` | `read-only` | `continuation` | `codex exec` |
-| `claude:print` | `read-only` | `continuation` | `claude` print mode |
+| `codex:exec` | `read-only`, `workspace-write` | `continuation` | `codex exec` |
+| `claude:print` | `read-only`, `workspace-write` | `continuation` | `claude` print mode |
+| `pi:json` | `read-only` | `continuation`, `model`, `thinking` | `pi --mode json` |
+| `opencode:run` | `read-only`, `workspace-write` | `continuation`, `model`, `variant` | `opencode run --format json` |
 
 The catalog is available locally with `delegate providers --json`. Its runtime
 metadata describes the help arguments and flags required by each adapter.
@@ -55,10 +57,9 @@ Delegation Layer to copy credentials into task state.
 
 ## Codex
 
-`codex:exec` is a `read-only` adapter. It invokes the `exec` subcommand with
-strict native launch settings, sends the brief through standard input, and
-validates the structured output and session identity. Continuation uses the
-exact predecessor task ID.
+`codex:exec` invokes the `exec` subcommand with strict native launch settings.
+The caller chooses `read-only` or `workspace-write`, which is passed to Codex's
+native sandbox flag. Continuation uses the exact predecessor task ID.
 
 The adapter deliberately rejects unsupported model, effort, policy, and native
 timeout combinations. Codex's own authentication remains in the native Codex
@@ -66,8 +67,9 @@ home and is evaluated by the CLI at launch.
 
 ## Claude
 
-`claude:print` is a `read-only` adapter. It launches Claude in restricted print
-mode with the adapter's declared tool and policy settings, sends the brief via
+`claude:print` launches Claude in print mode with the adapter's declared tool
+and policy settings. The caller chooses `read-only` or `workspace-write`; that
+choice is passed through Claude's native permission mode. It sends the brief via
 the recorded input binding, and validates the structured stream, identity, and
 result artifact. Continuation names an exact predecessor task.
 
@@ -79,6 +81,36 @@ On Darwin, the strict profile may use the system credential helper for a bounded
 native policy check; only non-secret policy facts are persisted. Other hosts
 report the native policy prerequisite as unavailable until an equivalent
 platform contract is implemented.
+
+## Pi
+
+`pi:json` runs Pi's JSON event mode directly in read-only mode. Its native
+allowlist is limited to `read`, `grep`, `find`, and `ls`; `--no-extensions` and
+`--offline` also prevent extension execution and startup package or network
+work. Continuation uses the exact Pi session identifier, and `model` and
+`thinking` are passed through when requested. Pi's built-in `write` and `edit`
+tools accept arbitrary absolute paths and do not expose a native workspace
+boundary, so `workspace-write` is not advertised until Pi provides one.
+
+## OpenCode
+
+`opencode:run` runs OpenCode's JSON event mode directly in the requested
+workspace. The caller chooses the permission mode. Read-only binds the run to
+an adapter-owned agent, uses OpenCode's pure mode, and supplies an inline native
+permission configuration with deny rules at both global and agent scope for
+mutation, shell, subagents, network, and unknown tools while allowing inspection
+tools, and disables automatic compaction. Workspace-write binds a separate
+adapter-owned agent that allows file inspection and edits while denying shell,
+subagents, network, and unknown tools; it disables project configuration and
+automatic compaction, keeps OpenCode's native
+`external_directory: deny` boundary, and uses the caller-selected `--auto`
+approval. The launch also disables system and global Git configuration so an
+ambient `core.worktree` setting cannot change the native checkout boundary.
+OpenCode's native patch-move handling checks the source path but treats
+destinations anywhere in the enclosing Git checkout as internal, so
+workspace-write is admitted only when the selected workspace is that checkout's
+root. Symlinked workspace trees and permission glob metacharacters are refused.
+Continuation, model, and variant are passed through as native options.
 
 ## Adding a provider
 

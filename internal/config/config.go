@@ -20,6 +20,8 @@ const (
 	ProviderAntigravityPrint = "antigravity:print"
 	ProviderCodexExec        = "codex:exec"
 	ProviderClaudePrint      = "claude:print"
+	ProviderPiJSON           = "pi:json"
+	ProviderOpenCodeRun      = "opencode:run"
 	ProviderFixture          = "fixture:test"
 )
 

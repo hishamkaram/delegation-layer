@@ -49,10 +49,14 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 			if runtime.Executable != cli.Path || runtime.SHA256 != cli.SHA256 {
 				return commonprovider.PreparedProfile{}, fmt.Errorf("%w: runtime executable changed during inspection", ErrUnsupportedProfile)
 			}
+			predicateReference := Reference()
+			if request.Mode == WorkspaceWriteMode {
+				predicateReference = WorkspaceWriteReference()
+			}
 			prepared := commonprovider.PreparedProfile{
 				Plan: execution.Plan{
 					Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
-					Environment: slices.Clone(environment.Values), Predicate: Reference(),
+					Environment: slices.Clone(environment.Values), Predicate: predicateReference,
 					OutputArtifacts:      []task.OutputArtifact{{Name: OutputName, ArgumentIndex: output}},
 					OutputWriterContract: OutputWriterContract,
 				},

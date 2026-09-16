@@ -38,9 +38,26 @@ func TestExecArgumentsKeepReadOnlyControlsBeforeResume(t *testing.T) {
 	}
 }
 
+func TestExecArgumentsUseNativeWorkspaceWriteSandbox(t *testing.T) {
+	request := profileRequest()
+	request.Mode = WorkspaceWriteMode
+	request.RequestedConfig.Permission = WorkspaceWriteMode
+	args, output, err := execArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args[8] != "workspace-write" || output != 30 {
+		t.Fatalf("workspace-write argv=%q output=%d", args, output)
+	}
+	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "0199a213-81c0-7800-8aa1-bbab2a035a53", PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
+	resumed, _, err := execArguments(request)
+	if err != nil || !slices.Contains(resumed, "resume") || !slices.Contains(resumed, request.PriorSession.ConversationID) || resumed[8] != "workspace-write" {
+		t.Fatalf("workspace-write continuation argv=%q err=%v", resumed, err)
+	}
+}
+
 func TestExecArgumentsRejectUnsupportedRequests(t *testing.T) {
 	cases := map[string]func(*task.TaskRecord){
-		"write permission":   func(r *task.TaskRecord) { r.RequestedConfig.Permission = "workspace-write" },
 		"model":              func(r *task.TaskRecord) { r.RequestedConfig.Model = "arbitrary" },
 		"effort":             func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max" },
 		"native timeout":     func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "3s" },

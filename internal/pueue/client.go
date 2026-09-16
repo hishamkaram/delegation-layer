@@ -146,6 +146,12 @@ func defaultEnvironment() []string {
 	return filtered
 }
 
+// DefaultEnvironment exposes the same bounded control environment used by a
+// client with nil Options.Environment. Composition roots can add a provider's
+// explicitly declared nonsecret variables without dropping platform-specific
+// values such as Linux XDG socket/configuration selectors.
+func DefaultEnvironment() []string { return defaultEnvironment() }
+
 func defaultEnvironmentKey(key string) bool {
 	switch key {
 	case "HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP", "__CF_USER_TEXT_ENCODING":

@@ -296,10 +296,11 @@ func validatePolicySourceInputs(request task.TaskRecord, environment profileEnvi
 	return nil
 }
 
-// validateMCPArguments binds the source projection below to the
-// exact read-only Claude profile that passes --strict-mcp-config and supplies
-// a task-owned empty --mcp-config file. A future profile change must update
-// this gate before ordinary user/project MCP can be treated as bypassed.
+// validateMCPArguments binds the source projection below to the exact
+// mode-specific Claude profile. Both modes pass --strict-mcp-config and
+// supply a task-owned empty --mcp-config file; the write profile additionally
+// enables the native file-edit tools. A future profile change must update this
+// gate before ordinary user/project MCP can be treated as bypassed.
 func validateMCPArguments(request task.TaskRecord) error {
 	arguments, inputs, err := printArguments(request)
 	if err != nil {
@@ -311,11 +312,15 @@ func validateMCPArguments(request task.TaskRecord) error {
 		}
 	}
 	mcpArgumentIndex := -1
+	tools := "Read,Glob,Grep"
+	if request.Mode == WorkspaceWriteMode {
+		tools = "Read,Edit,Write,Glob,Grep"
+	}
 	for _, required := range []struct {
 		flag  string
 		value string
 	}{
-		{flag: "--tools", value: "Read,Glob,Grep"},
+		{flag: "--tools", value: tools},
 		{flag: "--disallowedTools", value: "mcp__*"},
 		{flag: "--mcp-config", value: ""},
 	} {

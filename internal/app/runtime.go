@@ -561,6 +561,10 @@ func resolveRunner(raw string, deps Dependencies) (string, error) {
 }
 
 func bindInitial(a Arguments, deps Dependencies) (*pueue.Client, error) {
+	return bindInitialWithOptions(a, deps, deps.SupervisorOptions)
+}
+
+func bindInitialWithOptions(a Arguments, deps Dependencies, supervisorOptions pueue.Options) (*pueue.Client, error) {
 	configPath, err := resolveInitialConfig(a)
 	if err != nil {
 		return nil, err
@@ -569,7 +573,7 @@ func bindInitial(a Arguments, deps Dependencies) (*pueue.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return pueue.Bind(context.Background(), executable, configPath, deps.SupervisorOptions)
+	return pueue.Bind(context.Background(), executable, configPath, supervisorOptions)
 }
 
 func newMeta(req task.TaskRecord, profile PreparedProfile, supervisor task.SupervisorRef, publisher string) task.MetaRecord {

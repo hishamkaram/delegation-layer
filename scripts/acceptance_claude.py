@@ -50,8 +50,11 @@ from acceptance_supervisor_common import Processes, config_for, digest, read_jso
 PROVIDER = "claude:print"
 MODE = "read-only"
 APPROVAL = "dontAsk"
-PREDICATE_VERSION = "2.1.270"
-PREDICATE_SHA256 = "b92db06be971c081c653322a6cc9d12ff6996066019df05e0dd6989ab62b3021"
+# The predicate revision describes the adapter's output contract. It is
+# deliberately independent of the installed Claude CLI release, which is
+# admitted through runtime capability and native policy checks.
+PREDICATE_VERSION = "runtime-reported"
+PREDICATE_SHA256 = "9a0930cd353551a2f4f2cb4fc86dd4322175853c6b62cffdb5f662139dc0481c"
 # Claude's restricted native OAuth profile rejects environment/API-key/helper
 # overrides; the producer must report a non-empty source marker.
 EXPECTED_API_KEY_SOURCE = "none"
@@ -725,12 +728,12 @@ def validate_fresh_controls(parsed: dict[str, object], nonce_file: Path,
     }
 
 
-def validate_tool_free_resume(parsed: dict[str, object], nonce: bytes,
+def validate_tool_free_resume(parsed: dict[str, object], expected_answer: bytes,
                               expected_session: str | None = None) -> dict[str, object]:
     """Accept a continuation only when no Claude tool item/event occurred."""
     init = validate_init_profile(parsed, expected_session)
     answer = validate_claude_result(parsed, expected_session=str(init["session_id"]))
-    require(answer == nonce, "Claude resume did not recover exactly the prior nonce")
+    require(answer == expected_answer, "Claude resume returned an unexpected continuation answer")
     uses = parsed.get("tool_uses")
     results = parsed.get("tool_results")
     require(isinstance(uses, list) and not uses, "Claude resume used a tool")
@@ -1080,10 +1083,20 @@ class ClaudeAcceptance:
 
     def resume_brief(self) -> Path:
         path = self.briefs / "resume.md"
-        text = "Continue the exact previous Claude conversation. Use no tools. Return only the remembered nonce."
+        text = ("Use no tools. For each of the 48 hexadecimal characters in the answer from the previous turn, "
+                "write two bits: the first bit is 1 for a-f and 0 for 0-9; the second bit is 1 for odd and 0 "
+                "for even. Concatenate the 48 pairs and reply only with that 96-bit string.")
         write_bytes(path, text.encode())
         require(self.nonce.decode() not in path.read_text(), "resume Claude brief contains the nonce")
         return path
+
+    def resume_challenge(self) -> bytes:
+        """Require a high-entropy, nonce-dependent continuation transform."""
+        return "".join(
+            ("1" if character in "abcdef" else "0") +
+            ("1" if int(character, 16) % 2 else "0")
+            for character in self.nonce.decode("ascii")
+        ).encode("ascii")
 
     def dispatch_arguments(self, task: str, brief: Path, predecessor: str | None = None) -> list[object]:
         require(self.pueue_config is not None, "pueue is not configured")
@@ -1299,7 +1312,7 @@ class ClaudeAcceptance:
         self.wait_task("resume", task)
         collected = self.collect("resume-collect", task)
         outcome, data = verify_collected_outcome(collected, self.state / "tasks" / task, "committed")
-        require(data == self.nonce, "Claude resume did not recover exactly the prior nonce")
+        require(data == self.resume_challenge(), "Claude resume did not recover the prior answer context")
         predecessor_reference = predecessor.get("reference")
         require(isinstance(predecessor_reference, dict) and
                 is_session_id(predecessor_reference.get("conversation_id")),
@@ -1321,8 +1334,8 @@ class ClaudeAcceptance:
         self.records["resume"] = record
         write_json(self.output / "resume-control.json", {
             "task_id": task, "predecessor_task_id": predecessor_task,
-            "conversation_id": record["reference"]["conversation_id"], "nonce_sha256": sha(data),
-            "resume_brief_contains_nonce": False, "tool_free": True,
+            "conversation_id": record["reference"]["conversation_id"], "nonce_sha256": sha(self.nonce),
+            "resume_challenge_sha256": sha(data), "resume_brief_contains_nonce": False, "tool_free": True,
             "resume_item_count": controls["item_count"], "resume_item_types": controls["item_types"],
             "original_records_unchanged": True, "provider_exit_manifest_sha256": record["seal"]["manifest_sha256"],
             "outcome_sha256": digest(record["directory"] / "outcome.json"), "outcome": outcome,

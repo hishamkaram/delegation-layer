@@ -19,7 +19,7 @@ from acceptance_supervisor_common import sha
 
 
 SESSION = "0199a213-81c0-7800-8aa1-bbab2a035a53"
-NONCE = b"nonce-value-7f3a"
+NONCE = b"0123456789abcdef0123456789abcdef0123456789abcdef"
 
 
 def event(value: dict[str, object]) -> bytes:
@@ -350,7 +350,7 @@ class ClaudeOracleTests(unittest.TestCase):
                 pass
             with self.assertRaisesRegex(RuntimeError, "tool"):
                 gate.validate_tool_free_resume(gate.parse_claude_events(stream(values)), NONCE, SESSION)
-        with self.assertRaisesRegex(RuntimeError, "exactly the prior nonce"):
+        with self.assertRaisesRegex(RuntimeError, "unexpected continuation answer"):
             gate.validate_tool_free_resume(gate.parse_claude_events(stream([init_event(), answer_event(b"other")])), NONCE)
         denied = answer_event()
         denied["permission_denials"] = [permission_denial("Bash")]

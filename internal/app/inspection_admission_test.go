@@ -292,7 +292,7 @@ set -eu
 } >> "$FAKE_LOG"
 case "${3-}" in
   --version) printf '%s\n' 'pueue 4.0.4' ;;
-  status) sleep 0.2; cat "$FAKE_STATUS" ;;
+  status) sleep 0.5; cat "$FAKE_STATUS" ;;
   *) exit 64 ;;
 esac
 `
@@ -331,7 +331,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := pueue.NewClient(bound.Binding(), pueue.Options{Environment: environment, ObservationTimeout: 50 * time.Millisecond})
+	client, err := pueue.NewClient(bound.Binding(), pueue.Options{Environment: environment, ObservationTimeout: 150 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ case "${3-}" in
   status) cat "$FAKE_STATUS" ;;
   group)
     [ "${4-}" = add ] && [ "${5-}" = --parallel ] && [ "${6-}" = 1 ]
-    sleep 0.2
+    sleep 0.5
     cp "$FAKE_AFTER" "$FAKE_STATUS"
     : > "$FAKE_DONE"
     ;;
@@ -410,7 +410,7 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := pueue.NewClient(bound.Binding(), pueue.Options{Environment: environment, ObservationTimeout: 50 * time.Millisecond})
+	client, err := pueue.NewClient(bound.Binding(), pueue.Options{Environment: environment, ObservationTimeout: 150 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

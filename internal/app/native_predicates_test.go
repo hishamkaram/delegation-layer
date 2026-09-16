@@ -5,12 +5,18 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/provider/antigravity"
+	"github.com/hishamkaram/delegation-layer/internal/provider/claude"
+	"github.com/hishamkaram/delegation-layer/internal/provider/codex"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func TestProductionCollectionRegistryRetainsExactContracts(t *testing.T) {
 	registry := (Dependencies{}).storeDependencies().registry()
-	for _, reference := range []task.PredicateRef{task.FixturePredicateRef(), antigravity.NewPrintInterpreter().Reference(), antigravity.NewCurrentPrintInterpreter().Reference()} {
+	for _, reference := range []task.PredicateRef{
+		task.FixturePredicateRef(),
+		antigravity.NewPrintInterpreter().Reference(), antigravity.NewCurrentPrintInterpreter().Reference(),
+		codex.LegacyReference(), claude.LegacyReference(),
+	} {
 		interpreter, err := registry.Resolve(reference)
 		if err != nil {
 			t.Fatalf("resolve %s: %v", reference.Adapter, err)

@@ -30,9 +30,11 @@ reported authentication result is authoritative for that turn.
 ## Mode or option is unsupported
 
 Compare the request with the catalog entry. `antigravity:print` supports
-`workspace-write`, `continuation`, and `native-timeout`; `codex:exec` and
-`claude:print` are read-only and support continuation. Unsupported model,
-effort, policy, or timeout combinations are rejected before supervisor
+`workspace-write`, `continuation`, and `native-timeout`; `codex:exec`,
+`claude:print` and `opencode:run` support both permission modes; `pi:json`
+supports read-only mode. Every provider supports continuation; Pi and OpenCode
+also expose their documented model or thinking options. Unsupported
+model, effort, policy, or timeout combinations are rejected before supervisor
 admission.
 
 ## Supervisor configuration fails
