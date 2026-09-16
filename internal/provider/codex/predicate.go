@@ -20,15 +20,43 @@ const (
 	refusalProviderFailed = "provider-failed"
 )
 
-type interpreter struct{}
+type interpreter struct {
+	mode   string
+	legacy bool
+}
 
 // NewInterpreter returns the immutable Codex exec JSONL interpreter.
-func NewInterpreter() predicate.Interpreter { return interpreter{} }
+// An omitted mode preserves the historical read-only constructor behavior.
+func NewInterpreter(modes ...string) predicate.Interpreter {
+	mode := Mode
+	if len(modes) > 0 {
+		mode = modes[0]
+	}
+	return interpreter{mode: mode}
+}
 
-func (interpreter) Reference() task.PredicateRef { return Reference() }
+func newLegacyInterpreter() predicate.Interpreter {
+	return interpreter{mode: Mode, legacy: true}
+}
 
-func (interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
-	if err := validateEvaluationInput(input, raw, out); err != nil {
+// NewWorkspaceWriteInterpreter returns the Codex interpreter bound to the
+// native workspace-write sandbox contract.
+func NewWorkspaceWriteInterpreter() predicate.Interpreter {
+	return NewInterpreter(WorkspaceWriteMode)
+}
+
+func (v interpreter) Reference() task.PredicateRef {
+	if v.legacy {
+		return LegacyReference()
+	}
+	if v.mode == WorkspaceWriteMode {
+		return WorkspaceWriteReference()
+	}
+	return Reference()
+}
+
+func (v interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
+	if err := validateEvaluationInput(v, input, raw, out); err != nil {
 		return task.Interpretation{}, err
 	}
 
@@ -101,8 +129,8 @@ func outputConflicts(artifact []byte, present, oversized bool, finalMessage []by
 	return present && (oversized || len(artifact) == 0 || !bytes.Equal(artifact, finalMessage))
 }
 
-func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out io.Writer) error {
-	if !input.Seal.Predicate.Equal(Reference()) {
+func validateEvaluationInput(v interpreter, input predicate.Input, raw predicate.Evidence, out io.Writer) error {
+	if !input.Seal.Predicate.Equal(v.Reference()) {
 		return fmt.Errorf("%w: codex predicate reference mismatch", task.ErrIdentityMismatch)
 	}
 	if err := task.ValidateProviderExitRecord(&input.Seal); err != nil {

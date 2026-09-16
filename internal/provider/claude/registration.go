@@ -10,7 +10,7 @@ import (
 func Description() commonprovider.Description {
 	return commonprovider.Description{
 		ID:               Provider,
-		SupportedModes:   []string{Mode},
+		SupportedModes:   []string{Mode, WorkspaceWriteMode},
 		SupportedOptions: []string{commonprovider.OptionContinuation},
 		Runtime:          RuntimeRequirements(),
 		Discoverable:     true,
@@ -23,6 +23,6 @@ func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
 		Description:  Description(),
 		Prepare:      PrepareCandidate,
-		Interpreters: []predicate.Interpreter{NewInterpreter()},
+		Interpreters: []predicate.Interpreter{NewInterpreter(Mode), NewInterpreter(WorkspaceWriteMode), newLegacyInterpreter()},
 	}
 }

@@ -66,8 +66,12 @@ func sealPolicy(request task.TaskRecord, environment profileEnvironment, sources
 		}
 		return cmp.Compare(a.Kind, b.Kind)
 	})
-	effective := task.EffectiveConfig{Containment: Mode, Approval: "never", Policy: &task.PolicyDetails{
-		ProfileRevision: ProfileRevision, RuntimeSHA256: runtimeSHA256,
+	profileRevision := ProfileRevision
+	if request.Mode == WorkspaceWriteMode {
+		profileRevision = WorkspaceWriteProfileRevision
+	}
+	effective := task.EffectiveConfig{Containment: request.Mode, Approval: "never", Policy: &task.PolicyDetails{
+		ProfileRevision: profileRevision, RuntimeSHA256: runtimeSHA256,
 		Workspace: request.CanonicalCwd, WritableRoots: slices.Clone(environment.WritableRoots), Sources: sources,
 	}}
 	encoded, err := task.MarshalCanonical(effective)

@@ -59,27 +59,45 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
 		Finalize: func(data json.RawMessage, now time.Time) (commonprovider.PreparedProfile, error) {
-			facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
-			if decodeErr != nil || facts.Runtime == nil || len(facts.Native) == 0 || facts.Runtime.Executable != cli.Path || facts.Runtime.SHA256 != cli.SHA256 {
-				return commonprovider.PreparedProfile{}, unsupportedNativeFacts()
-			}
-			effective, finalErr := finalizePolicy(request, environment, sources, definitionDigest, facts.Native, now)
-			if finalErr != nil {
-				return commonprovider.PreparedProfile{}, finalErr
-			}
-			prepared := commonprovider.PreparedProfile{
-				Plan:            execution.Plan{Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd, Environment: slices.Clone(environment.Values), Predicate: Reference(), InputFiles: slices.Clone(inputs)},
-				ObservedVersion: facts.Runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
-				Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
-					return NewIdentityObserver(request.RootID, request.TaskID, expected, record)
-				},
-			}
-			if finalErr = prepared.Validate(request); finalErr != nil {
-				return commonprovider.PreparedProfile{}, finalErr
-			}
-			return prepared, nil
+			return finalizePreparedProfile(request, arguments, inputs, cli, environment, sources, definitionDigest, data, now)
 		},
 	}, nil
+}
+
+func finalizePreparedProfile(
+	request task.TaskRecord,
+	arguments []string,
+	inputs []task.InputFile,
+	cli commonprovider.CLIInfo,
+	environment profileEnvironment,
+	sources []task.PolicySourceDigest,
+	definitionDigest string,
+	data json.RawMessage,
+	now time.Time,
+) (commonprovider.PreparedProfile, error) {
+	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
+	if decodeErr != nil || facts.Runtime == nil || len(facts.Native) == 0 || facts.Runtime.Executable != cli.Path || facts.Runtime.SHA256 != cli.SHA256 {
+		return commonprovider.PreparedProfile{}, unsupportedNativeFacts()
+	}
+	effective, err := finalizePolicy(request, environment, sources, definitionDigest, facts.Native, now)
+	if err != nil {
+		return commonprovider.PreparedProfile{}, err
+	}
+	predicateReference := ReferenceForMode(request.Mode)
+	prepared := commonprovider.PreparedProfile{
+		Plan: execution.Plan{
+			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
+			Environment: slices.Clone(environment.Values), Predicate: predicateReference, InputFiles: slices.Clone(inputs),
+		},
+		ObservedVersion: facts.Runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
+		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
+			return NewIdentityObserver(request.RootID, request.TaskID, expected, record)
+		},
+	}
+	if err = prepared.Validate(request); err != nil {
+		return commonprovider.PreparedProfile{}, err
+	}
+	return prepared, nil
 }
 
 func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest, definitionDigest string, data json.RawMessage, now time.Time) (task.EffectiveConfig, error) {
@@ -110,8 +128,12 @@ func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sou
 	if err = task.ValidateSHA256(environment.RuntimeSHA256); err != nil {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: runtime identity: %w", ErrUnsupportedProfile, err)
 	}
-	effective := task.EffectiveConfig{Containment: Mode, Approval: "dontAsk", Policy: &task.PolicyDetails{
-		ProfileRevision: ProfileRevision, RuntimeSHA256: environment.RuntimeSHA256,
+	profileRevision, approval := ProfileRevision, "dontAsk"
+	if request.Mode == WorkspaceWriteMode {
+		profileRevision, approval = WorkspaceWriteProfileRevision, "acceptEdits"
+	}
+	effective := task.EffectiveConfig{Containment: request.Mode, Approval: approval, Policy: &task.PolicyDetails{
+		ProfileRevision: profileRevision, RuntimeSHA256: environment.RuntimeSHA256,
 		Workspace: request.CanonicalCwd, WritableRoots: slices.Clone(environment.WritableRoots), Sources: sources,
 	}}
 	encoded, err := task.MarshalCanonical(effective)

@@ -1,14 +1,18 @@
 # Adapter Contract and Runtime Capability Checks
 
-This document defines the normative requirements for provider adapters (`antigravity:print`, `codex:exec`, and `claude:print`). All three adapters are supported dependencies for the private preview.
+This document defines the normative requirements for provider adapters
+(`antigravity:print`, `codex:exec`, `claude:print`, `pi:json`, and
+`opencode:run`).
 
 ## 1. Supported Runtime Profiles
 
 | Adapter | Capability Profile | Approval Policy | Command Shape & Flags | Deferred Capabilities |
 |---|---|---|---|---|
-| `antigravity:print` | `workspace-write` | Accept workspace file edits; deny other unapproved requests; pre-approved sandboxed commands may run | `agy --sandbox --mode accept-edits --add-dir <canonical-workspace> --output-format json --input-format text --disable-slash-commands --print-timeout <duration>` | `read-only`, auto-approve (`--dangerously-skip-permissions`), extra writable roots |
-| `codex:exec` | `read-only` | `never` | `codex exec --json --color never --ignore-user-config --ignore-rules --strict-config --sandbox read-only -c approval_policy="never" -c approvals_reviewer="user" -c allow_login_shell=false -c features.shell_snapshot=false -c features.shell_snapshot_v2=false -c features.apps=false -c features.hooks=false -c features.plugins=false -c cli_auth_credentials_store="file" --cd <workspace> --output-last-message <path> -` | `workspace-write`, unrestricted execution, ephemeral sessions |
-| `claude:print` | `read-only` | `dontAsk` | `claude --print --input-format text --output-format stream-json --verbose --safe-mode --restricted --tools Read,Glob,Grep --disallowedTools mcp__* --strict-mcp-config --mcp-config <empty-mcp.json> --settings <profile.json> --permission-mode dontAsk --permission-prompts none --disable-slash-commands --no-chrome --session-id <uuid>` | `workspace-write`, shell execution, Agent/subagents, custom tools, background mode |
+| `antigravity:print` | `workspace-write` | Accept workspace file edits; deny other unapproved requests; pre-approved sandboxed commands may run | `agy --sandbox --mode accept-edits --add-dir <canonical-workspace> --output-format json --input-format text --disable-slash-commands --print-timeout <duration>` | `read-only`, unrestricted auto-approval, extra writable roots |
+| `codex:exec` | `read-only`, `workspace-write` | native sandbox | `codex exec ... --sandbox <mode> ...` | unrestricted execution, ephemeral sessions |
+| `claude:print` | `read-only`, `workspace-write` | native permission mode | `claude --print ... --permission-mode <mode> ...` | shell execution, Agent/subagents, custom tools, background mode |
+| `pi:json` | `read-only` | native read,grep,find,ls allowlist with `--no-extensions --offline`; startup migration states that could mutate the workspace are refused | `pi --mode json --tools read,grep,find,ls ...` | workspace-write is deferred because Pi's built-in write/edit tools have no native workspace boundary |
+| `opencode:run` | `read-only`, `workspace-write` | adapter-owned native agents, pure mode, project-config disablement, automatic-compaction disablement, explicit file-edit/read rules, and `external_directory:deny`; native `--auto` for workspace-write; workspace-write requires a symlink-free Git checkout root because native patch moves can widen destinations within a checkout | `opencode run --format json --dir <workspace> ...` | shell, subagent, network, and unknown tools remain denied in both adapter-owned modes |
 
 Each native adapter locates its executable during static preparation and records
 the executable identity in the immutable candidate. The already-supervised

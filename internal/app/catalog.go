@@ -7,6 +7,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/provider/antigravity"
 	"github.com/hishamkaram/delegation-layer/internal/provider/claude"
 	"github.com/hishamkaram/delegation-layer/internal/provider/codex"
+	"github.com/hishamkaram/delegation-layer/internal/provider/opencode"
+	"github.com/hishamkaram/delegation-layer/internal/provider/pi"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -23,6 +25,8 @@ func NativeCatalog() commonprovider.Catalog {
 		antigravity.Registration(),
 		codex.Registration(),
 		claude.Registration(),
+		pi.Registration(),
+		opencode.Registration(),
 		commonprovider.Registration{
 			Description: commonprovider.Description{
 				ID:           config.ProviderFixture,

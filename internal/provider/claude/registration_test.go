@@ -1,17 +1,23 @@
 package claude
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
-func TestDescriptionExposesRuntimeCapabilitiesWithoutReleaseGate(t *testing.T) {
+func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 	description := Description()
-	if description.ID != Provider || !description.Discoverable || len(description.SupportedModes) != 1 || description.SupportedModes[0] != Mode {
+	if description.ID != Provider || !description.Discoverable || !slices.Contains(description.SupportedModes, Mode) || !slices.Contains(description.SupportedModes, WorkspaceWriteMode) {
 		t.Fatalf("unexpected description: %+v", description)
 	}
 	if len(description.Runtime.RequiredFlags) == 0 {
 		t.Fatalf("runtime flag requirements are missing: %+v", description)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 1 {
+	if registration.Prepare == nil || len(registration.Interpreters) != 3 {
 		t.Fatalf("registration did not expose preparation and interpreter: %+v", registration)
+	}
+	if !registration.Interpreters[2].Reference().Equal(LegacyReference()) {
+		t.Fatalf("legacy predicate reference is not registered: %+v", registration.Interpreters[2].Reference())
 	}
 }

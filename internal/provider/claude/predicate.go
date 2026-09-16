@@ -20,21 +20,49 @@ const (
 	refusalProviderFailed = "provider-failed"
 )
 
-type interpreter struct{}
+type interpreter struct {
+	mode   string
+	legacy bool
+}
 
 // NewInterpreter returns the immutable Claude print stream-json interpreter.
-func NewInterpreter() predicate.Interpreter { return interpreter{} }
+// An omitted mode preserves the historical read-only constructor behavior.
+func NewInterpreter(modes ...string) predicate.Interpreter {
+	mode := Mode
+	if len(modes) > 0 {
+		mode = modes[0]
+	}
+	return interpreter{mode: mode}
+}
 
-func (interpreter) Reference() task.PredicateRef { return Reference() }
+func newLegacyInterpreter() predicate.Interpreter {
+	return interpreter{mode: Mode, legacy: true}
+}
+
+// NewWorkspaceWriteInterpreter returns the Claude interpreter bound to the
+// native acceptEdits profile.
+func NewWorkspaceWriteInterpreter() predicate.Interpreter {
+	return NewInterpreter(WorkspaceWriteMode)
+}
+
+func (v interpreter) Reference() task.PredicateRef {
+	if v.legacy {
+		return LegacyReference()
+	}
+	if v.mode == WorkspaceWriteMode {
+		return WorkspaceWriteReference()
+	}
+	return Reference()
+}
 
 // Evaluate interprets sealed stdout/stderr only. It does not own capture,
 // process lifetime, sealing, or publication, and it returns operational reader
 // and answer-writer faults to the core instead of turning them into a refusal.
-func (interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
-	if err := validateEvaluationInput(input, raw, out); err != nil {
+func (v interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
+	if err := validateEvaluationInput(v, input, raw, out); err != nil {
 		return task.Interpretation{}, err
 	}
-	state, err := readEvidence(raw)
+	state, err := readEvidence(raw, v.mode)
 	if err != nil {
 		return task.Interpretation{}, err
 	}
@@ -52,8 +80,8 @@ func (interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out i
 	}, nil
 }
 
-func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out io.Writer) error {
-	if !input.Seal.Predicate.Equal(Reference()) {
+func validateEvaluationInput(v interpreter, input predicate.Input, raw predicate.Evidence, out io.Writer) error {
+	if !input.Seal.Predicate.Equal(v.Reference()) {
 		return fmt.Errorf("%w: Claude predicate reference mismatch", task.ErrIdentityMismatch)
 	}
 	if err := task.ValidateProviderExitRecord(&input.Seal); err != nil {
@@ -68,11 +96,11 @@ func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out 
 	return nil
 }
 
-func readEvidence(raw predicate.Evidence) (eventState, error) {
+func readEvidence(raw predicate.Evidence, mode string) (eventState, error) {
 	var stdout eventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {
 		var err error
-		stdout, err = parseStdout(reader)
+		stdout, err = parseStdoutForMode(reader, mode)
 		return err
 	})
 	stderrErr := raw.Read(predicate.Stderr, commonprovider.DrainReader)

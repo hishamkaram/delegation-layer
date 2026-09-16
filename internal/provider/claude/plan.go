@@ -11,8 +11,9 @@ import (
 var ErrUnsupportedProfile = errors.New("unsupported-effective-config")
 
 const (
-	profileSettings  = `{"disableAllHooks":true,"permissions":{"defaultMode":"dontAsk","disableBypassPermissionsMode":"disable"}}` + "\n"
-	emptyMCPSettings = `{"mcpServers":{}}` + "\n"
+	profileSettings               = `{"disableAllHooks":true,"permissions":{"defaultMode":"dontAsk","disableBypassPermissionsMode":"disable"}}` + "\n"
+	workspaceWriteProfileSettings = `{"disableAllHooks":true,"permissions":{"defaultMode":"acceptEdits","disableBypassPermissionsMode":"disable"}}` + "\n"
+	emptyMCPSettings              = `{"mcpServers":{}}` + "\n"
 )
 
 // printArguments declares only finite task-owned settings. The shared runner
@@ -21,15 +22,23 @@ func printArguments(request task.TaskRecord) ([]string, []task.InputFile, error)
 	if err := validateRequest(request); err != nil {
 		return nil, nil, err
 	}
+	tools := "Read,Glob,Grep"
+	permissionMode := "dontAsk"
+	settings := profileSettings
+	if request.Mode == WorkspaceWriteMode {
+		tools = "Read,Edit,Write,Glob,Grep"
+		permissionMode = "acceptEdits"
+		settings = workspaceWriteProfileSettings
+	}
 	arguments := []string{
 		"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose",
-		"--safe-mode", "--restricted", "--tools", "Read,Glob,Grep",
+		"--safe-mode", "--restricted", "--tools", tools,
 		"--disallowedTools", "mcp__*", "--strict-mcp-config", "--mcp-config", "",
-		"--settings", "", "--permission-mode", "dontAsk", "--permission-prompts", "none",
+		"--settings", "", "--permission-mode", permissionMode, "--permission-prompts", "none",
 		"--disable-slash-commands", "--no-chrome",
 	}
 	inputs := []task.InputFile{
-		{Name: "claude-profile.json", ArgumentIndex: 16, Content: profileSettings},
+		{Name: "claude-profile.json", ArgumentIndex: 16, Content: settings},
 		{Name: "empty-mcp.json", ArgumentIndex: 14, Content: emptyMCPSettings},
 	}
 	if prior := request.PriorSession; prior != nil {
@@ -46,18 +55,50 @@ func printArguments(request task.TaskRecord) ([]string, []task.InputFile, error)
 }
 
 func validateRequest(request task.TaskRecord) error {
-	if request.Provider != Provider || request.Mode != Mode || request.RequestedConfig.Permission != Mode {
-		return fmt.Errorf("%w: Claude requires read-only permission", ErrUnsupportedProfile)
+	validators := []func(task.TaskRecord) error{
+		validateRequestIdentity,
+		validateRequestOptions,
+		validateRequestBounds,
+		validateRequestWorkspace,
+		validateRequestIDs,
 	}
+	for _, validate := range validators {
+		if err := validate(request); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRequestIdentity(request task.TaskRecord) error {
+	if request.Provider != Provider || (request.Mode != Mode && request.Mode != WorkspaceWriteMode) || request.RequestedConfig.Permission != request.Mode {
+		return fmt.Errorf("%w: Claude does not support the requested permission mode", ErrUnsupportedProfile)
+	}
+	return nil
+}
+
+func validateRequestOptions(request task.TaskRecord) error {
 	if request.RequestedConfig.Model != "" || (request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default") || request.RequestedConfig.NativeTimeout != "" {
 		return fmt.Errorf("%w: only provider-default model and effort are supported", ErrUnsupportedProfile)
 	}
+	return nil
+}
+
+func validateRequestBounds(request task.TaskRecord) error {
 	if request.BudgetNanos <= 0 || request.BriefLength <= 0 || request.BriefLength > task.MaxBriefSize {
 		return fmt.Errorf("%w: finite brief and positive budget are required", ErrUnsupportedProfile)
 	}
+	return nil
+}
+
+func validateRequestWorkspace(request task.TaskRecord) error {
 	if !filepath.IsAbs(request.CanonicalCwd) || filepath.Clean(request.CanonicalCwd) != request.CanonicalCwd {
 		return fmt.Errorf("%w: workspace must be an absolute canonical path", ErrUnsupportedProfile)
 	}
+	return nil
+}
+
+func validateRequestIDs(request task.TaskRecord) error {
 	if err := task.ValidateRootID(request.RootID); err != nil {
 		return fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}

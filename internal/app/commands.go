@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -111,10 +112,12 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 	if inspection.StartExists {
 		return failed(response, task.ErrAlreadyStarted, 1)
 	}
-	if _, profileErr := prepareMatchedProfile(deps, store.Root, *oldReq, *oldMeta); profileErr != nil {
+	profile, profileErr := prepareMatchedProfile(deps, store.Root, *oldReq, *oldMeta)
+	if profileErr != nil {
 		return failed(response, profileErr, classifyCode(profileErr, 2))
 	}
-	return submitPrepared(a, deps, td, oldReq, oldMeta, oldMeta.SupervisorConfig, response)
+	return submitPreparedWithOptions(a, deps, td, oldReq, oldMeta, oldMeta.SupervisorConfig,
+		supervisorOptionsForProfile(deps.SupervisorOptions, profile), response)
 }
 
 func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, brief []byte, response Response) commandResult {
@@ -178,7 +181,11 @@ func readBriefFileForRequest(path string, req task.TaskRecord) ([]byte, error) {
 }
 
 func submitPrepared(a Arguments, deps Dependencies, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisor task.SupervisorRef, response Response) (result commandResult) {
-	client, err := pueue.NewClient(supervisor, deps.SupervisorOptions)
+	return submitPreparedWithOptions(a, deps, td, req, meta, supervisor, deps.SupervisorOptions, response)
+}
+
+func submitPreparedWithOptions(a Arguments, deps Dependencies, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisor task.SupervisorRef, supervisorOptions pueue.Options, response Response) (result commandResult) {
+	client, err := pueue.NewClient(supervisor, supervisorOptions)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
@@ -721,8 +728,11 @@ func resolvePredecessor(store *taskdir.Store, request task.TaskRecord, id string
 	if err != nil {
 		return nil, err
 	}
-	if predecessorReq.Provider != request.Provider || predecessorReq.Mode != request.Mode {
-		return nil, task.ErrIdentityMismatch
+	if predecessorReq == nil {
+		return nil, task.ErrInvariantFault
+	}
+	if err = validatePredecessorCompatibility(request, *predecessorReq); err != nil {
+		return nil, err
 	}
 	identity, err := td.ReadProviderIdentity()
 	if err != nil {
@@ -732,6 +742,20 @@ func resolvePredecessor(store *taskdir.Store, request task.TaskRecord, id string
 		return nil, err
 	}
 	return &task.PriorSession{Provider: identity.Provider, ConversationID: identity.ConversationID, PredecessorTaskID: id}, nil
+}
+
+func validatePredecessorCompatibility(request, predecessor task.TaskRecord) error {
+	if predecessor.Provider != request.Provider || predecessor.Mode != request.Mode {
+		return task.ErrIdentityMismatch
+	}
+	if request.Provider == config.ProviderPiJSON && predecessor.CanonicalCwd != request.CanonicalCwd {
+		// Pi's exact-session resume searches globally and prompts to fork when
+		// the stored session belongs to another workspace. The direct JSON
+		// adapter cannot answer that prompt while preserving the requested
+		// session identity, so reject the continuation before admission.
+		return task.ErrIdentityMismatch
+	}
+	return nil
 }
 
 func predecessorTerminated(td *taskdir.TaskDir, req *task.TaskRecord, supervisorOptions pueue.Options) error {

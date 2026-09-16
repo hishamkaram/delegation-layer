@@ -53,6 +53,8 @@ func TestValidateProvider(t *testing.T) {
 		ProviderAntigravityPrint,
 		ProviderCodexExec,
 		ProviderClaudePrint,
+		ProviderPiJSON,
+		ProviderOpenCodeRun,
 		ProviderFixture,
 	}
 	for _, p := range valid {

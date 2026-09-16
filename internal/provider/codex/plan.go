@@ -18,7 +18,7 @@ func execArguments(request task.TaskRecord) ([]string, int, error) {
 	}
 	arguments := []string{
 		"exec", "--json", "--color", "never", "--ignore-user-config", "--ignore-rules", "--strict-config",
-		"--sandbox", "read-only", "-c", `approval_policy="never"`, "-c", `approvals_reviewer="user"`, "-c", "allow_login_shell=false",
+		"--sandbox", request.Mode, "-c", `approval_policy="never"`, "-c", `approvals_reviewer="user"`, "-c", "allow_login_shell=false",
 		"-c", "features.shell_snapshot=false", "-c", "features.shell_snapshot_v2=false", "-c", "features.apps=false",
 		"-c", "features.hooks=false", "-c", "features.plugins=false", "-c", `cli_auth_credentials_store="file"`,
 		"--cd", request.CanonicalCwd, "--output-last-message", "",
@@ -34,8 +34,8 @@ func execArguments(request task.TaskRecord) ([]string, int, error) {
 }
 
 func validateRequest(request task.TaskRecord) error {
-	if request.Provider != Provider || request.Mode != Mode || request.RequestedConfig.Permission != Mode {
-		return fmt.Errorf("%w: Codex requires read-only permission", ErrUnsupportedProfile)
+	if request.Provider != Provider || (request.Mode != Mode && request.Mode != WorkspaceWriteMode) || request.RequestedConfig.Permission != request.Mode {
+		return fmt.Errorf("%w: Codex does not support the requested permission mode", ErrUnsupportedProfile)
 	}
 	if request.RequestedConfig.Model != "" || (request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default") || request.RequestedConfig.NativeTimeout != "" {
 		return fmt.Errorf("%w: only provider-default model and effort are supported", ErrUnsupportedProfile)

@@ -152,6 +152,23 @@ func TestPolicyDigestBindsFactsWithoutObservationTime(t *testing.T) {
 	}
 }
 
+func TestWorkspaceWritePolicyUsesNativeWriteMode(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	facts, err := projectNativePolicy(nativePolicyFixture(t, "team", now.Add(time.Hour).UnixMilli()), 404, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := task.TaskRecord{CanonicalCwd: "/workspace", Mode: WorkspaceWriteMode, RequestedConfig: task.TaskConfig{Permission: WorkspaceWriteMode}, BudgetNanos: int64(time.Minute)}
+	environment := profileEnvironment{WritableRoots: []string{"/home/test/.claude"}, RuntimeSHA256: strings.Repeat("c", 64)}
+	effective, err := finalizePolicy(request, environment, nil, strings.Repeat("a", 64), facts, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effective.Containment != WorkspaceWriteMode || effective.Approval != "acceptEdits" || effective.Policy == nil || effective.Policy.ProfileRevision != WorkspaceWriteProfileRevision {
+		t.Fatalf("workspace-write effective policy=%+v", effective)
+	}
+}
+
 func TestNativeAuthorizationRefusesMalformedTokenBeforeNetwork(t *testing.T) {
 	now := time.Unix(2_000_000_000, 0)
 	for _, token := range []string{"", " ", "\t", "\n", "secret token", "\u2003", "secret\x7f", "=", "=abc", "abc=def"} {

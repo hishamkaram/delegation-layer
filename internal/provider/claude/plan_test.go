@@ -56,11 +56,31 @@ func TestPrintArgumentsPreserveContainmentAndTaskOwnedFilesOnResume(t *testing.T
 	}
 }
 
+func TestPrintArgumentsUseNativeWorkspaceWritePermission(t *testing.T) {
+	request := profileRequest()
+	request.Mode = WorkspaceWriteMode
+	request.RequestedConfig.Permission = WorkspaceWriteMode
+	args, inputs, err := printArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(args, "acceptEdits") || !slices.Contains(args, "Read,Edit,Write,Glob,Grep") {
+		t.Fatalf("workspace-write argv=%q", args)
+	}
+	if len(inputs) != 2 || inputs[0].Content != workspaceWriteProfileSettings {
+		t.Fatalf("workspace-write profile inputs=%+v", inputs)
+	}
+	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "123e4567-e89b-12d3-a456-426614174000", PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
+	resumed, _, err := printArguments(request)
+	if err != nil || !slices.Contains(resumed, "--resume") || !slices.Contains(resumed, request.PriorSession.ConversationID) {
+		t.Fatalf("workspace-write continuation argv=%q err=%v", resumed, err)
+	}
+}
+
 func TestPrintArgumentsRejectUnsupportedRequests(t *testing.T) {
 	cases := map[string]func(*task.TaskRecord){
 		"provider":          func(r *task.TaskRecord) { r.Provider = "codex:exec" },
 		"mode":              func(r *task.TaskRecord) { r.Mode = "workspace-write" },
-		"permission":        func(r *task.TaskRecord) { r.RequestedConfig.Permission = "workspace-write" },
 		"model":             func(r *task.TaskRecord) { r.RequestedConfig.Model = "other" },
 		"effort":            func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max" },
 		"timeout":           func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "3s" },

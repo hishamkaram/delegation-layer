@@ -28,7 +28,7 @@ outcome without launching the provider again.
 - Go 1.27.1, the repository's pinned toolchain.
 - Pueue 4.0.4 and a running `pueued` daemon using a private configuration.
 - A signed-in installation of one or more supported provider CLIs: `agy`,
-  `codex`, or `claude`.
+  `codex`, `claude`, `pi`, or `opencode`.
 - A Darwin or Linux host on amd64 or arm64 for the supplied build targets.
   Provider availability is profile-specific; see the provider guide for native
   platform prerequisites.
@@ -94,11 +94,13 @@ recent conversation.
 
 ## Providers
 
-| Profile | Mode | Options |
+| Profile | Modes | Options |
 | --- | --- | --- |
 | `antigravity:print` | `workspace-write` | `continuation`, `native-timeout` |
-| `codex:exec` | `read-only` | `continuation` |
-| `claude:print` | `read-only` | `continuation` |
+| `codex:exec` | `read-only`, `workspace-write` | `continuation` |
+| `claude:print` | `read-only`, `workspace-write` | `continuation` |
+| `pi:json` | `read-only` | `continuation`, `model`, `thinking` |
+| `opencode:run` | `read-only`, `workspace-write` | `continuation`, `model`, `variant` |
 
 Run `delegate providers --json` for the compiled capability catalog. See
 [providers](docs/providers.md) for launch behavior, policy boundaries, and

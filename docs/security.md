@@ -33,7 +33,7 @@ Before admission and again immediately before launch, the system compares the
 executable identity, command profile, canonical workspace, effective policy,
 input/output bindings, and session expectation. A provider executable replaced
 between checks is rejected. Provider version numbers are observed for evidence
-but are not hardcoded release gates.
+but are not hardcoded release constraints.
 
 ## Process and output safety
 

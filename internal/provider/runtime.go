@@ -106,7 +106,8 @@ func isCLIFlagRune(value byte) bool {
 }
 
 // FingerprintExecutable reads a canonical regular executable without launching
-// it. The digest is an admission identity observation, not a release gate.
+// it. The digest is an admission identity observation, not a release
+// constraint.
 func FingerprintExecutable(path string) (digest string, resultErr error) {
 	canonical, err := config.CanonicalizePath(path)
 	if err != nil || canonical != path || !filepath.IsAbs(path) {

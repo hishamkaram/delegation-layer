@@ -623,3 +623,15 @@ func writeAppTestFile(t *testing.T, path string, data []byte) {
 		t.Fatal(err)
 	}
 }
+
+func TestPiContinuationRequiresMatchingWorkspace(t *testing.T) {
+	request := task.TaskRecord{Provider: config.ProviderPiJSON, Mode: config.ModeReadOnly, CanonicalCwd: "/workspace/current"}
+	predecessor := request
+	if err := validatePredecessorCompatibility(request, predecessor); err != nil {
+		t.Fatalf("same workspace rejected: %v", err)
+	}
+	predecessor.CanonicalCwd = "/workspace/other"
+	if err := validatePredecessorCompatibility(request, predecessor); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("cross-workspace Pi continuation error=%v", err)
+	}
+}
