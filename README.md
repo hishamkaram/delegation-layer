@@ -99,12 +99,15 @@ recent conversation.
 | `antigravity:print` | `workspace-write` | `continuation`, `native-timeout` |
 | `codex:exec` | `read-only`, `workspace-write` | `continuation` |
 | `claude:print` | `read-only`, `workspace-write` | `continuation` |
-| `pi:json` | `read-only` | `continuation`, `model`, `thinking` |
-| `opencode:run` | `read-only`, `workspace-write` | `continuation`, `model`, `variant` |
+| `pi:json` | `read-only` | `continuation`, `model`, `effort` |
+| `opencode:run` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` |
 
 Run `delegate providers --json` for the compiled capability catalog. See
 [providers](docs/providers.md) for launch behavior, policy boundaries, and
 runtime compatibility checks.
+
+The catalog uses public request option names. The public `effort` option maps
+to Pi's native `--thinking` flag and OpenCode's native `--variant` flag.
 
 ## Safety model
 
@@ -133,6 +136,8 @@ limitations.
 - [Provider guide](docs/providers.md) — supported profiles and compatibility
   behavior.
 - [Architecture](docs/architecture.md) — task lifecycle and ownership.
+- [System components](diagrams/components.html) — current Archify component map.
+- [Task lifecycle](diagrams/lead-interface.html) — current Archify sequence view.
 - [Security](docs/security.md) — isolation, policy, and result integrity.
 - [Troubleshooting](docs/troubleshooting.md) — common setup and runtime
   failures.
