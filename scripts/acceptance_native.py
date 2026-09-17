@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shlex
 import shutil
 import sys
 import time
@@ -22,6 +23,8 @@ import traceback
 
 from acceptance_provider_common import (
     AcceptanceFailure,
+    INSPECTION_GROUP_PREFIX,
+    NativeTaskOps,
     clean_absolute,
     done_result,
     parse_json_output,
@@ -305,29 +308,113 @@ class NativeAcceptance:
         raise AcceptanceFailure(f"{name} runner completion was not observed")
 
     def terminal_private_queue(self, status: dict[str, object]) -> bool:
+        try:
+            if self.root_id is None:
+                return self._empty_private_queue(status)
+            return self._terminal_private_queue(status)
+        except (AcceptanceFailure, KeyError, OSError, RuntimeError, TypeError,
+                UnicodeError, ValueError, RecursionError):
+            return False
+
+    @staticmethod
+    def _empty_private_queue(status: dict[str, object]) -> bool:
         rows = status.get("tasks")
-        if not isinstance(rows, dict) or len(rows) != len(self.tasks):
+        groups = status.get("groups")
+        if not isinstance(rows, dict) or not isinstance(groups, dict) or rows:
             return False
-        expected: dict[str, str] = {}
+        if not groups:
+            return True
+        if set(groups) != {"default"}:
+            return False
+        default = groups["default"]
+        return (isinstance(default, dict) and default.get("status") == "Running" and
+                type(default.get("parallel_tasks")) is int and
+                default.get("parallel_tasks") == 1)
+
+    def _inspection_queue_records(self) -> dict[str, dict[str, object]]:
+        """Return complete inspection journals owned by every admitted task."""
+        require(self.root_id is not None, "root identity is unavailable")
+        task_ids = set(self.tasks.values())
+        validator = NativeTaskOps(
+            self.processes, self.delegate, self.runner, self.pueue,
+            self.state.parent, self.state, self.output)
+        validator.bind_supervisor(self.config, self.daemon)
+        validator.root_id = self.root_id
+        validator.dispatch_attempts = set(task_ids)
+        validator.inspection_attempts = set(task_ids)
+        records = validator.validate_inspection_journals(
+            allow_failure=False, expected_binding_required=False)
+        require(set(records) == task_ids,
+                "inspection journal coverage is incomplete for admitted tasks")
+        require(isinstance(self.provider_sha256, str) and self.provider_sha256,
+                "provider executable digest is unavailable")
+        for task_id, record in records.items():
+            request = record.get("request")
+            require(isinstance(request, dict), f"inspection request is absent for {task_id}")
+            binding = request.get("binding")
+            require(isinstance(binding, dict) and
+                    binding.get("helper_executable") == str(self.provider_executable) and
+                    binding.get("helper_sha256") == self.provider_sha256,
+                    f"inspection helper binding is not the selected provider for {task_id}")
+        return records
+
+    def _terminal_private_queue(self, status: dict[str, object]) -> bool:
+        rows = status.get("tasks")
+        groups = status.get("groups")
+        require(isinstance(rows, dict) and isinstance(groups, dict),
+                "private queue status is malformed")
+        require(self.root_id is not None, "root identity is unavailable")
+        inspection_records = self._inspection_queue_records()
+        inspection_group = INSPECTION_GROUP_PREFIX + self.root_id
+        expected_groups = {"default"} | ({inspection_group} if inspection_records else set())
+        require(set(groups) == expected_groups, "private queue contains an unknown supervisor group")
+        for name in expected_groups:
+            group = groups[name]
+            require(isinstance(group, dict) and group.get("status") == "Running" and
+                    type(group.get("parallel_tasks")) is int and
+                    group.get("parallel_tasks") == 1,
+                    f"private queue group is not running at parallelism one: {name}")
+
+        expected: dict[str, tuple[str, str]] = {}
         for task_id in self.tasks.values():
-            if task_id not in self.numeric_ids or self.root_id is None:
-                return False
-            expected[f"delegate:{self.root_id}:{task_id}"] = task_id
-        if len(expected) != len(rows):
-            return False
+            require(task_id in self.numeric_ids, f"ordinary task has no numeric supervisor identity: {task_id}")
+            label = f"delegate:{self.root_id}:{task_id}"
+            require(label not in expected, "ordinary task labels are not unique")
+            expected[label] = ("ordinary", task_id)
+        for task_id, record in inspection_records.items():
+            label = record["label"]
+            require(isinstance(label, str) and label not in expected,
+                    "inspection task labels are not unique")
+            expected[label] = ("inspection", task_id)
+        require(len(rows) == len(expected), "private queue membership is not exact")
+
+        seen: set[str] = set()
         for row in rows.values():
-            if not isinstance(row, dict) or row.get("label") not in expected:
-                return False
-            label = row["label"]
-            task_id = expected[label]
-            try:
+            require(isinstance(row, dict), "private queue contains a malformed row")
+            label = row.get("label")
+            require(isinstance(label, str) and label in expected and label not in seen,
+                    "private queue labels are not exact")
+            seen.add(label)
+            kind, task_id = expected[label]
+            if kind == "ordinary":
                 validate_queue_row(row, label, self.runner, self.state, task_id,
                                    self.numeric_ids[task_id], "default")
-            except AcceptanceFailure:
-                return False
-            if done_result(row) != "Success":
-                return False
-        return True
+            else:
+                record = inspection_records[task_id]
+                require(row.get("group") == record["group"] and
+                        row.get("id") == record["numeric_task_id"],
+                        f"inspection queue identity is invalid for {task_id}")
+                expected_command = [str(self.runner), "--inspection", "--root",
+                                    str(self.state), task_id]
+                commands = []
+                for key in ("original_command", "command"):
+                    value = row.get(key)
+                    require(isinstance(value, str), f"inspection queue row missing {key}")
+                    commands.append(shlex.split(value))
+                require(commands == [expected_command, expected_command],
+                        f"inspection queue argv is invalid for {task_id}")
+            require(done_result(row) == "Success", f"private queue task is not successful: {task_id}")
+        return seen == set(expected)
 
     def collect(self, name: str, task_id: str) -> dict[str, object]:
         process = self.direct(name, [self.delegate, "--root", self.state, "--pueue-config", self.config,

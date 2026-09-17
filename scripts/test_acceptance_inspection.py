@@ -798,11 +798,14 @@ class InspectionHarnessTests(unittest.TestCase):
         self.ops.daemon = SimpleNamespace(poll=lambda: next(states))
         self.ops.safe_failure_shutdown = lambda: False
 
-        with patch("acceptance_provider_common.time.sleep") as sleep:
+        with patch("acceptance_provider_common.time.sleep") as sleep, \
+                patch("acceptance_provider_common.time.monotonic",
+                      side_effect=(10.0, 10.1, 10.2)):
             self.assertFalse(self.ops.retain_failure_ownership())
 
         self.assertEqual(sleep.call_count, 1)
-        self.assertAlmostEqual(sleep.call_args.args[0], 0.25, places=3)
+        self.assertGreater(sleep.call_args.args[0], 0.0)
+        self.assertAlmostEqual(sleep.call_args.args[0], 0.15, places=3)
 
     def test_retain_failure_ownership_retries_failed_completion_receipt(self):
         class FakePopen:

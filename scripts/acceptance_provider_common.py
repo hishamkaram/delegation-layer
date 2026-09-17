@@ -920,8 +920,23 @@ class NativeTaskOps:
         self.inspection_attempts.update(paths)
         return paths
 
+    def validate_inspection_journal(self, task: str, directory: Path,
+                                    allow_failure: bool = False,
+                                    expected_binding_required: bool = True) -> dict[str, object]:
+        """Validate one complete inspection journal for an acceptance gate.
+
+        Provider-specific gates normally compare the journal binding with a
+        definition they constructed before dispatch.  A native provider gate
+        cannot reconstruct that definition without duplicating provider setup,
+        so it may disable only that equality check while retaining every
+        structural, timing, executable, supervisor, and result predicate.
+        """
+        return self._validate_inspection_journal(
+            task, directory, allow_failure, expected_binding_required)
+
     def _validate_inspection_journal(self, task: str, directory: Path,
-                                     allow_failure: bool) -> dict[str, object]:
+                                     allow_failure: bool,
+                                     expected_binding_required: bool = True) -> dict[str, object]:
         root = self._known_root_id()
         request_path = directory / "request.json"
         request = _read_control_record(request_path, f"inspection request for {task}")
@@ -970,10 +985,11 @@ class NativeTaskOps:
         binding = request.get("binding")
         _validate_inspection_binding(binding, f"inspection request binding for {task}")
         expected_binding = self.inspection_bindings.get(task)
-        require(expected_binding is not None,
-                f"inspection request has no expected source binding for {task}")
-        require(binding == expected_binding,
-                f"inspection request binding changed from expected source for {task}")
+        if expected_binding_required:
+            require(expected_binding is not None,
+                    f"inspection request has no expected source binding for {task}")
+            require(binding == expected_binding,
+                    f"inspection request binding changed from expected source for {task}")
         require(binding.get("worker_executable") == str(self.runner),
                 f"inspection request worker mismatch for {task}")
         require(binding.get("worker_sha256") == digest(self.runner),
@@ -1095,10 +1111,17 @@ class NativeTaskOps:
                 "result": result, "completion": completion,
                 "worker_observation": observation}
 
-    def _inspection_journals(self, allow_failure: bool) -> dict[str, dict[str, object]]:
+    def validate_inspection_journals(self, allow_failure: bool = False,
+                                     expected_binding_required: bool = True) -> dict[str, dict[str, object]]:
+        """Validate every inspection journal and require exact expected coverage."""
+        return self._inspection_journals(allow_failure, expected_binding_required)
+
+    def _inspection_journals(self, allow_failure: bool,
+                             expected_binding_required: bool = True) -> dict[str, dict[str, object]]:
         journals = {}
         for task, directory in self._inspection_journal_paths().items():
-            journals[task] = self._validate_inspection_journal(task, directory, allow_failure)
+            journals[task] = self._validate_inspection_journal(
+                task, directory, allow_failure, expected_binding_required)
         require(self.inspection_attempts <= set(journals),
                 "an expected inspection journal is missing")
         return journals
