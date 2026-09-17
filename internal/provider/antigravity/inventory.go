@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -691,23 +692,17 @@ func readStableDirectoryEntries(path string, before os.FileInfo) (result []Direc
 	defer func() {
 		returnErr = errors.Join(returnErr, file.Close())
 	}()
-	entries, err := file.ReadDir(MaxInventoryEntries + 1)
-	if err != nil && !errors.Is(err, io.EOF) {
+	result, err = readDirectoryEntries(file, path)
+	if err != nil {
+		if errors.Is(err, ErrInventoryTooLarge) {
+			return nil, err
+		}
 		return nil, inventoryError("cannot enumerate configured directory %s: %v", path, err)
 	}
-	if len(entries) > MaxInventoryEntries {
-		return nil, inventoryTooLarge("directory entry count")
-	}
-	sort.Slice(entries, func(left, right int) bool { return entries[left].Name() < entries[right].Name() })
-	result = make([]DirectoryEntry, 0, len(entries))
-	for _, entry := range entries {
-		entryKind, err := classifyDirectoryEntry(entry)
-		if err != nil {
-			return nil, inventoryError("unsafe configured entry %s: %v", filepath.Join(path, entry.Name()), err)
+	if err := checkPolicyDirectoryAfterRead(path, file, before, result); err != nil {
+		if errors.Is(err, ErrInventoryTooLarge) {
+			return nil, err
 		}
-		result = append(result, DirectoryEntry{Name: entry.Name(), Kind: entryKind})
-	}
-	if err := checkPolicyDirectoryAfterRead(path, file, before); err != nil {
 		return nil, inventoryError("configured directory changed during read %s: %v", path, err)
 	}
 	return result, returnErr
@@ -732,7 +727,27 @@ func openStablePolicyDirectory(path string, before os.FileInfo) (*os.File, error
 	return file, nil
 }
 
-func checkPolicyDirectoryAfterRead(path string, file *os.File, opened os.FileInfo) error {
+func readDirectoryEntries(file *os.File, path string) (result []DirectoryEntry, returnErr error) {
+	entries, err := file.ReadDir(MaxInventoryEntries + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if len(entries) > MaxInventoryEntries {
+		return nil, inventoryTooLarge("directory entry count")
+	}
+	sort.Slice(entries, func(left, right int) bool { return entries[left].Name() < entries[right].Name() })
+	result = make([]DirectoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		entryKind, classifyErr := classifyDirectoryEntry(entry)
+		if classifyErr != nil {
+			return nil, fmt.Errorf("unsafe configured entry %s: %w", filepath.Join(path, entry.Name()), classifyErr)
+		}
+		result = append(result, DirectoryEntry{Name: entry.Name(), Kind: entryKind})
+	}
+	return result, nil
+}
+
+func checkPolicyDirectoryAfterRead(path string, file *os.File, opened os.FileInfo, expected []DirectoryEntry) error {
 	final, err := file.Stat()
 	if err != nil {
 		return err
@@ -744,6 +759,25 @@ func checkPolicyDirectoryAfterRead(path string, file *os.File, opened os.FileInf
 	if !final.IsDir() || !named.IsDir() || !os.SameFile(final, opened) || !os.SameFile(named, opened) ||
 		final.Size() != opened.Size() || !final.ModTime().Equal(opened.ModTime()) {
 		return errors.New("policy directory changed during read")
+	}
+	// Directory mtime resolution is filesystem-dependent and can remain
+	// unchanged after an entry is created. Re-open the same canonical inode and
+	// compare membership so the stability check does not rely on wall-clock
+	// metadata precision.
+	currentFile, err := openStablePolicyDirectory(path, opened)
+	if err != nil {
+		return err
+	}
+	current, readErr := readDirectoryEntries(currentFile, path)
+	closeErr := currentFile.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if !slices.Equal(current, expected) {
+		return errors.New("policy directory membership changed during read")
 	}
 	return nil
 }

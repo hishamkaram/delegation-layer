@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy codex-acceptance-tools acceptance-codex claude-acceptance-tools acceptance-claude
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy codex-acceptance-tools acceptance-codex claude-acceptance-tools acceptance-claude acceptance-pi acceptance-opencode acceptance-native
 
 tools:
 	./scripts/install-tools.sh
@@ -119,6 +119,18 @@ claude-acceptance-tools: tool-versions
 acceptance-claude: build test-native-harness claude-acceptance-tools
 	go test -race -count=1 ./internal/provider/claude
 	./scripts/acceptance_claude.sh
+
+acceptance-pi: build test-native-harness
+	./scripts/acceptance_native.sh pi:json
+
+acceptance-opencode: build test-native-harness
+	./scripts/acceptance_native.sh opencode:run
+
+# Individual native gates return 2 when the executable, supervisor, or native
+# login prerequisite is unavailable. The aggregate keeps that explicit state
+# neutral while still failing on a real acceptance failure (exit 1).
+acceptance-native: build test-native-harness
+	./scripts/acceptance_native_all.sh
 
 # Note: vuln requires access to the public vulnerability database (https://vuln.go.dev);
 # the mandatory behavioral and unit tests remain hermetic.

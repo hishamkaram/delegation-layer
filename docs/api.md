@@ -108,7 +108,10 @@ shows one catalog entry):
 
 The catalog describes compiled support. It does not claim that the executable
 is installed, authenticated, or compatible on the current host. Dispatch does
-that runtime capability check and records the observed executable identity.
+that runtime capability check and records the observed executable identity and
+version. The version is descriptive evidence; flags, executable identity, and
+behavior predicates establish compatibility without a web release lookup or
+semver allowlist.
 
 ## Idempotency and continuation
 

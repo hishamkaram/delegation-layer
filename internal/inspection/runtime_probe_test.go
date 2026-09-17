@@ -38,6 +38,8 @@ func TestRuntimeCapabilityRejectsMissingRequiredFlag(t *testing.T) {
 	definition := runtimeDefinition(t, root, path, []string{"--sandbox", "--missing"})
 	if _, err := runRuntimeProbe(t, definition); err == nil {
 		t.Fatal("missing required flag was accepted")
+	} else if !strings.Contains(err.Error(), "missing-required-flag---missing") {
+		t.Fatalf("missing capability diagnostic = %v", err)
 	}
 }
 

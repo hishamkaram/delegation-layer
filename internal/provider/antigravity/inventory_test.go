@@ -310,7 +310,7 @@ func testStableDirectoryOpen(t *testing.T, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkErr := checkPolicyDirectoryAfterRead(directory, file, opened)
+	checkErr := checkPolicyDirectoryAfterRead(directory, file, opened, nil)
 	if checkErr != nil {
 		t.Fatal(checkErr)
 	}
@@ -402,7 +402,7 @@ func TestPolicyDirectoryDetectsMutationAfterRead(t *testing.T) {
 	if writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	checkErr := checkPolicyDirectoryAfterRead(directory, file, opened)
+	checkErr := checkPolicyDirectoryAfterRead(directory, file, opened, nil)
 	if checkErr == nil {
 		t.Fatal("directory mutation accepted")
 	}

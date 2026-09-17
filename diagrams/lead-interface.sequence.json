@@ -127,7 +127,8 @@
       "from": "inspect",
       "to": "delegate",
       "y": 226,
-      "label": "observed flags and executable identity",
+      "label": "observed version, flags, executable identity",
+      "note": "Version is descriptive evidence; required behavior flags and executable identity establish compatibility.",
       "variant": "return"
     },
     {
@@ -198,7 +199,7 @@
       "from": "runner",
       "to": "predicate",
       "y": 490,
-      "label": "interpret sealed evidence"
+      "label": "validate sealed behavior"
     },
     {
       "id": "outcome",

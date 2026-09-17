@@ -41,9 +41,38 @@ is valid when it is trimmed nonempty UTF-8 text without control characters; no
 semantic-version pattern is required. A newer provider build is accepted when
 it preserves the command capabilities the adapter needs.
 
+The observed version is descriptive evidence stored with the task. It does not
+authorize a release by itself, and Delegation Layer does not query a web release
+list or maintain a semver allowlist. The inspection definition and executable
+digest bind the capability result to the exact command that was checked; the
+runner repeats the check before launch. Probe failures expose only a bounded
+reason class, such as a missing required flag or executable identity drift,
+and never provider output or process diagnostics.
+
 The probe does not replace provider behavior validation. Each adapter still
 requires its expected output shape, task and session identity, containment,
 effective policy, authentication result, and output artifact integrity.
+
+## Live acceptance
+
+The Pi and OpenCode live gates use the shipped dispatcher and runner with a
+private Pueue instance. They perform a fresh turn, an exact continuation, and
+collection replay, then verify provider evidence, session identity, and the
+read-only workspace boundary:
+
+```sh
+make acceptance-pi
+make acceptance-opencode
+make acceptance-native
+```
+
+These commands require the selected CLI, Pueue 4.0.4, and a usable native
+provider login. Exit `0` means the gate passed. Exit `2` means `BLOCKED`: a
+required executable, supervisor, or authentication prerequisite was unavailable
+and a sanitized `failure.json` receipt was written. The aggregate
+`acceptance-native` target treats blocked profiles as neutral and still fails
+on a real acceptance failure. The gate never copies credentials, retries a
+provider turn, or reports an authentication refusal as a pass.
 
 ## Antigravity
 

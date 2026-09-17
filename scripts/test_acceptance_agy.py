@@ -12,6 +12,22 @@ import acceptance_agy as gate
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_authentication_unavailable_requires_rejected_outcome_and_marker(self):
+        with tempfile.TemporaryDirectory(prefix='agy-auth-unit-') as directory:
+            root = Path(directory)
+            raw = root / 'raw'
+            raw.mkdir()
+            (root / 'outcome.json').write_text(json.dumps({'verdict': 'rejected'}))
+            (raw / 'stderr').write_text('provider returned authentication required')
+            self.assertTrue(gate.authentication_unavailable(root))
+
+            (root / 'outcome.json').write_text(json.dumps({'verdict': 'committed'}))
+            self.assertFalse(gate.authentication_unavailable(root))
+
+            (root / 'outcome.json').write_text(json.dumps({'verdict': 'rejected'}))
+            (raw / 'stderr').write_text('provider rejected the request')
+            self.assertFalse(gate.authentication_unavailable(root))
+
     def test_status_capture_never_persists_environment_values(self):
         with tempfile.TemporaryDirectory(prefix='agy-status-unit-') as directory:
             root = Path(directory)
@@ -106,7 +122,8 @@ class NativeHarnessTests(unittest.TestCase):
             run = gate.NativeRun.__new__(gate.NativeRun)
             run.output = root
             run.prepared = SimpleNamespace(workspace=workspace, nonce_file=nonce,
-                                           inside=inside, outside=outside, ids={'L1': 'a' * 32})
+                                           inside=inside, outside=outside, state=root / 'state',
+                                           ids={'L1': 'a' * 32})
             run.task_results = {}
             run.copy_brief = lambda name: root / 'brief'
             run.dispatch = lambda *args: inside.write_bytes(b'unit-nonce\n')

@@ -65,6 +65,14 @@ unit and race suites, script tests, and `make check`. Review the resulting
 diff for private paths, account identifiers, raw provider output, and stale
 release or compatibility claims.
 
+When native provider credentials are available, run the relevant live gate with
+a disposable workspace. Pi and OpenCode are covered by `make acceptance-pi`,
+`make acceptance-opencode`, or the aggregate `make acceptance-native`. A live
+gate returns `0` for a pass, `1` for a real behavior or evidence failure, and
+`2` for a sanitized `BLOCKED` prerequisite receipt. The aggregate target keeps
+blocked profiles neutral so an unavailable login does not block unrelated
+development.
+
 ## Documentation changes
 
 Product documentation belongs in the README or focused files under `docs/`.
