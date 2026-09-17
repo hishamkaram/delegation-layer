@@ -46,6 +46,10 @@ CANONICAL_TASK_BUDGET = "2m0s"
 L3_NATIVE_TIMEOUT = "3s"
 WATCH_SECONDS = 150
 TIMEOUT_MARKER = b"[agy] print timeout"
+AUTHENTICATION_MARKERS = (
+    b"authentication required", b"not authenticated", b"please log in", b"sign in",
+    b"unauthorized", b"api key", b"credentials", b"login required",
+)
 PUEUE_VERSION = "4.0.4"
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
@@ -53,6 +57,7 @@ DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delega
 DEFAULT_WORKSPACE_PARENT = Path.home() / "Active-Projects" / "delegation-layer-acceptance"
 PUEUE_PARENT = Path("/Users/Shared")
 MAX_STATUS_BYTES = 8 * 1024 * 1024
+MAX_PROVIDER_BYTES = 8 * 1024 * 1024
 
 
 def provider_runtime_roots(environment: dict[str, str]) -> list[Path]:
@@ -441,6 +446,10 @@ class Prepared:
         return result
 
 
+class BlockedFailure(AcceptanceFailure):
+    """A required native authentication or prerequisite is unavailable."""
+
+
 def fresh_prepared() -> Prepared:
     stamp = f"{utc_stamp()}-{secrets.token_hex(4)}"
     scratch = ensure_private_directory(DEFAULT_WORKSPACE_PARENT / f"agy-{stamp}", "fresh scratch", create=True)
@@ -533,6 +542,30 @@ def parse_json_output(process: OwnedProcess, label: str) -> dict[str, object]:
         raise AcceptanceFailure(f"{label} did not produce one JSON object: {error}") from error
     require(isinstance(value, dict), f"{label} JSON response must be an object")
     return value
+
+
+def authentication_unavailable(directory: Path) -> bool:
+    """Classify only a terminal provider refusal with a bounded auth marker."""
+    try:
+        outcome = read_json(directory / "outcome.json")
+    except (OSError, ValueError, TypeError, RecursionError, RuntimeError):
+        # Authentication is a positive classification. An absent or
+        # unreadable terminal record cannot establish it.
+        return False
+    if not isinstance(outcome, dict) or outcome.get("verdict") != "rejected":
+        return False
+    for relative in ("raw/stderr", "raw/stdout", "publish.reject"):
+        path = directory / relative
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            with path.open("rb") as stream:
+                data = stream.read(MAX_PROVIDER_BYTES).lower()
+        except OSError:
+            continue
+        if any(marker in data for marker in AUTHENTICATION_MARKERS):
+            return True
+    return False
 
 
 def status_jobs(process: OwnedProcess) -> dict[str, object]:
@@ -959,6 +992,8 @@ class NativeRun:
         self.dispatch("L1", task, brief, None, None)
         self.wait_task("L1", task)
         _, response = self.collect("L1-collect", task, {0, 4})
+        if authentication_unavailable(self.prepared.state / "tasks" / task):
+            raise BlockedFailure("Antigravity authentication is unavailable")
         verdict = self.read_record(task, "outcome.json").get("verdict")
         require(verdict in {"committed", "rejected"}, "L1 has no terminal outcome")
         evidence = self.validate_evidence("L1", task, verdict)
@@ -1329,7 +1364,7 @@ def choose_output(prepared: Prepared | None, explicit: str | None) -> Path:
 def failure_receipt(output: Path | None, error: BaseException, run: NativeRun | None) -> None:
     details: dict[str, object] = {
         "gate": "acceptance-agy",
-        "status": "failed",
+        "status": "BLOCKED" if isinstance(error, BlockedFailure) else "failed",
         "error": str(error),
         "no_retry": True,
         "signals_sent": 0,
@@ -1376,6 +1411,13 @@ def main(argv: list[str]) -> int:
         run.run()
         print(json.dumps({"gate": "acceptance-agy", "status": "passed", "evidence": str(output)}, sort_keys=True))
         return 0
+    except BlockedFailure as error:
+        failure_receipt(output, error, run)
+        print(f"BLOCKED acceptance-agy: {error}", file=sys.stderr, flush=True)
+        if run is not None:
+            run.failure_shutdown()
+            failure_receipt(output, error, run)
+        return 2
     except (AcceptanceFailure, OSError, ValueError, json.JSONDecodeError) as error:
         failure_receipt(output, error, run)
         print(f"FAIL acceptance-agy: {error}", file=sys.stderr, flush=True)

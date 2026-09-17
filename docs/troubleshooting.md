@@ -13,6 +13,12 @@ commands and requires every adapter flag to appear in help output. A missing
 flag or an unreadable executable is a capability failure, not a release-version
 failure.
 
+The observed version is evidence for diagnostics and task binding only. It is
+not checked against a hardcoded release, semver range, web lookup, or binary
+allowlist. If a probe is rejected, inspect the bounded reason class in the
+control response and compare the selected CLI's current help output with the
+adapter's required flags.
+
 Use `delegate providers --json` to confirm the profile ID and required runtime
 flags. Discovery does not prove that the current host has the executable.
 
@@ -26,6 +32,12 @@ Authenticate with the provider's own CLI workflow and retry a new task. Do not
 copy credential files into the Delegation Layer state root. Native login caches
 and account policy can change between preparation and launch; the provider's
 reported authentication result is authoritative for that turn.
+
+For a live acceptance command, an unavailable native login is reported as
+`BLOCKED` with exit status `2` after a terminal authentication refusal is
+positively identified. The receipt is sanitized and the aggregate live gate
+treats that status as neutral; a non-authentication rejection remains a
+failure.
 
 ## Mode or option is unsupported
 

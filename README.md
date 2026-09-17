@@ -36,9 +36,12 @@ outcome without launching the provider again.
 The provider executable must be available to the process that dispatches the
 task. Delegation Layer runs the provider's version and help commands before
 admission and accepts any reported version that is valid and advertises every
-flag required by the adapter. It does not pin a provider release or binary
-hash. A valid version here means nonempty trimmed UTF-8 output without control
-characters; it is not required to match a semantic-version pattern.
+flag required by the adapter. It does not pin a provider release or predeclared
+binary hash. A valid version here means nonempty trimmed UTF-8 output without control
+characters; it is not required to match a semantic-version pattern. The
+observed version is diagnostic evidence, while capability flags, executable
+identity, and provider behavior decide compatibility. No web release lookup or
+semver allowlist is used.
 
 ## Install
 
@@ -105,6 +108,12 @@ recent conversation.
 Run `delegate providers --json` for the compiled capability catalog. See
 [providers](docs/providers.md) for launch behavior, policy boundaries, and
 runtime compatibility checks.
+
+When native logins are available, `make acceptance-native` runs the Pi and
+OpenCode live gates through a private supervisor. A pass exits `0`; an
+unavailable executable, supervisor, or login emits a sanitized `BLOCKED`
+receipt and exits `2`, which the aggregate target treats as neutral. Real
+behavior and evidence failures still fail the target.
 
 The catalog uses public request option names. The public `effort` option maps
 to Pi's native `--thinking` flag and OpenCode's native `--variant` flag.

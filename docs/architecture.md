@@ -10,15 +10,16 @@ flowchart TD
     A[delegate dispatch] --> B[Validate request and canonical paths]
     B --> C[Prepare provider candidate]
     C --> D[Supervised runtime capability probe]
-    D --> E[Finalize profile and effective policy]
-    E --> F[Persist immutable task records]
-    F --> G[Submit one job to Pueue]
-    G --> H[delegate-run reconstructs and rechecks]
-    H --> I[Start provider and observe identity]
-    I --> J[Bounded stdout/stderr capture]
-    J --> K[Seal artifacts and interpret output]
-    K --> L[Publish outcome.json]
-    L --> M[status / collect / logs]
+    D --> E[Capability evidence and diagnostics]
+    E --> F[Finalize profile and effective policy]
+    F --> G[Persist immutable task records]
+    G --> H[Submit one job to Pueue]
+    H --> I[delegate-run reconstructs and rechecks]
+    I --> J[Start provider and observe identity]
+    J --> K[Bounded stdout/stderr capture]
+    K --> L[Seal artifacts and validate behavior]
+    L --> M[Publish outcome.json]
+    M --> N[status / collect / logs]
 ```
 
 The maintained Archify views are [system components](../diagrams/components.html)
@@ -35,8 +36,9 @@ observer. It does not start a process.
 
 The inspection worker performs the provider's version and help checks under a
 bounded timeout. Its non-secret facts are passed to the profile finalizer,
-which records the observed executable identity and effective policy in the
-task metadata.
+which records the observed version, executable identity, and effective policy
+in the task metadata. The version is an observation; advertised behavior and
+the executable identity decide compatibility.
 
 Pueue owns queueing and process supervision. `delegate-run` receives only the
 saved root and task ID, reconstructs the recorded profile, and refuses to start
@@ -73,3 +75,9 @@ process exit, or stop acknowledgment alone cannot create a successful outcome.
 If a boundary is uncertain, later observation reconciles the saved evidence and
 preserves the terminal winner. Explicit cancellation records a request and
 observes its effect; it never authorizes an unverified retry.
+
+Live provider acceptance is a separate verification gate. It requires the
+provider executable, supervisor, and native authentication to be available. A
+terminal authentication refusal produces a sanitized `BLOCKED` receipt with
+exit status `2`; it is neutral in the aggregate live gate, while behavior or
+evidence failures remain failures.

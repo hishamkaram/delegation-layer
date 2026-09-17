@@ -75,6 +75,11 @@ rejects the request. The
 executable is fingerprinted again before launch so a replacement cannot be
 silently substituted.
 
+The observed version is descriptive task evidence, not a release authorization.
+The compatibility check does not use a web release lookup, semver allowlist, or
+hardcoded provider version. Probe diagnostics expose bounded reason classes;
+provider output and process diagnostics are not copied into control fields.
+
 The compatibility probe is only a startup check. Provider output shape,
 identity, containment, policy, authentication, and result integrity remain
 strict runtime contracts; a CLI that starts successfully can still produce a

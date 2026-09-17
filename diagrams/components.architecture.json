@@ -6,7 +6,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/hishamkaram/delegation-layer",
-      "revision": "0a84b1e75c65cb4b4f2c59d39c0f72a52163dd89",
+      "revision": "8345216c71d41a59f8eca1792e8948385c1bff85",
       "provider": "github"
     },
     "viewBox": [
@@ -23,7 +23,8 @@
           "catalog",
           "inspection",
           "store",
-          "pueue"
+          "pueue",
+          "acceptance"
         ],
         "note": "The CLI validates intent, probes the selected provider, persists task records, and submits one supervised job."
       },
@@ -35,7 +36,8 @@
           "runner",
           "providers",
           "predicate",
-          "store"
+          "store",
+          "acceptance"
         ],
         "note": "delegate-run reconstructs the recorded profile, captures sealed evidence, and publishes only a validated outcome."
       },
@@ -123,7 +125,8 @@
       "id": "inspection",
       "type": "security",
       "label": "Runtime inspection",
-      "sublabel": "version, help, flags, identity",
+      "sublabel": "version, flags, behavior, identity",
+      "tag": "no release allowlist",
       "sources": [
         {
           "path": "internal/inspection/runtime_probe.go"
@@ -264,7 +267,7 @@
     {
       "id": "predicate",
       "type": "security",
-      "label": "Predicate registry",
+      "label": "Behavior predicates",
       "sublabel": "strict interpretation of sealed evidence",
       "sources": [
         {
@@ -285,6 +288,32 @@
         255,
         88
       ]
+    },
+    {
+      "id": "acceptance",
+      "type": "security",
+      "label": "Live acceptance gate",
+      "sublabel": "auth-gated provider proof",
+      "tag": "BLOCKED is neutral",
+      "sources": [
+        {
+          "path": "scripts/acceptance_native.py"
+        },
+        {
+          "path": "scripts/acceptance_agy.py"
+        },
+        {
+          "path": "docs/providers.md"
+        }
+      ],
+      "pos": [
+        40,
+        490
+      ],
+      "size": [
+        215,
+        88
+      ]
     }
   ],
   "boundaries": [
@@ -300,7 +329,8 @@
         "workspace",
         "runner",
         "providers",
-        "predicate"
+        "predicate",
+        "acceptance"
       ],
       "pad": 28
     }
@@ -338,7 +368,7 @@
       "id": "inspection-to-delegate",
       "from": "inspection",
       "to": "delegate",
-      "label": "facts and executable identity",
+      "label": "capability facts and bounded diagnostics",
       "variant": "dashed",
       "fromSide": "bottom",
       "toSide": "bottom",
@@ -410,10 +440,26 @@
       "id": "runner-to-predicate",
       "from": "runner",
       "to": "predicate",
-      "label": "interpret sealed evidence",
+      "label": "validate sealed behavior",
       "fromSide": "left",
       "toSide": "right",
       "labelAt": [570, 600]
+    },
+    {
+      "id": "acceptance-to-delegate",
+      "from": "acceptance",
+      "to": "delegate",
+      "label": "fresh turn · continuation · replay",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [147.5, 450],
+        [20, 450],
+        [20, 130],
+        [410, 130]
+      ],
+      "labelAt": [120, 425]
     },
     {
       "id": "predicate-to-store",
