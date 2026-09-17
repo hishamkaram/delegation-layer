@@ -85,7 +85,7 @@ shows one catalog entry):
   "providers": [
     {
       "id": "codex:exec",
-      "supported_modes": ["read-only"],
+      "supported_modes": ["read-only", "workspace-write"],
       "supported_options": ["continuation"],
       "runtime": {
         "help_args": ["exec"],

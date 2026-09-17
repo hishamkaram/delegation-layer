@@ -9,11 +9,13 @@ identity observer, input transport, output interpreter, and supported options.
 | `antigravity:print` | `workspace-write` | `continuation`, `native-timeout` | `agy` |
 | `codex:exec` | `read-only`, `workspace-write` | `continuation` | `codex exec` |
 | `claude:print` | `read-only`, `workspace-write` | `continuation` | `claude` print mode |
-| `pi:json` | `read-only` | `continuation`, `model`, `thinking` | `pi --mode json` |
-| `opencode:run` | `read-only`, `workspace-write` | `continuation`, `model`, `variant` | `opencode run --format json` |
+| `pi:json` | `read-only` | `continuation`, `model`, `effort` | `pi --mode json` |
+| `opencode:run` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `opencode run --format json` |
 
 The catalog is available locally with `delegate providers --json`. Its runtime
 metadata describes the help arguments and flags required by each adapter.
+The catalog uses public request option names; the native flag mapping is
+documented in each provider section below.
 
 The binaries build for Darwin and Linux targets, but native policy checks can
 be more restrictive. The Codex profile currently requires Darwin to inspect
@@ -87,8 +89,9 @@ platform contract is implemented.
 `pi:json` runs Pi's JSON event mode directly in read-only mode. Its native
 allowlist is limited to `read`, `grep`, `find`, and `ls`; `--no-extensions` and
 `--offline` also prevent extension execution and startup package or network
-work. Continuation uses the exact Pi session identifier, and `model` and
-`thinking` are passed through when requested. Pi's built-in `write` and `edit`
+work. Continuation uses the exact Pi session identifier. The public `model`
+option is passed through, and public `effort` maps to Pi's native
+`--thinking` flag. Pi's built-in `write` and `edit`
 tools accept arbitrary absolute paths and do not expose a native workspace
 boundary, so `workspace-write` is not advertised until Pi provides one.
 
@@ -110,7 +113,8 @@ OpenCode's native patch-move handling checks the source path but treats
 destinations anywhere in the enclosing Git checkout as internal, so
 workspace-write is admitted only when the selected workspace is that checkout's
 root. Symlinked workspace trees and permission glob metacharacters are refused.
-Continuation, model, and variant are passed through as native options.
+Continuation and model are passed through as native options. Public `effort`
+maps to OpenCode's native `--variant` option.
 
 ## Adding a provider
 

@@ -2,337 +2,342 @@
   "schema_version": 1,
   "diagram_type": "sequence",
   "meta": {
-    "title": "How the Lead AI Talks to the Layer",
+    "title": "Delegation Layer — One Task Lifecycle",
     "viewBox": [
-      1360,
-      700
+      1600,
+      800
     ],
     "column_fit": "spread",
     "quality_profile": "showcase",
     "views": [
       {
-        "id": "dispatch",
-        "label": "Dispatch and return",
+        "id": "admission",
+        "label": "Admission",
         "focus": [
-          "lead",
-          "cli",
-          "tasks",
-          "pueued",
-          "publisher"
+          "caller",
+          "delegate",
+          "inspect",
+          "store",
+          "pueue"
         ],
-        "note": "submit.json is written before pueued is called; dispatch then returns a task id."
+        "note": "The request is validated, capability-checked, persisted, and queued before the caller receives the task id."
       },
       {
         "id": "publish",
-        "label": "Publication",
+        "label": "Run and publish",
         "focus": [
-          "publisher",
-          "worker",
-          "tasks"
+          "pueue",
+          "runner",
+          "provider",
+          "predicate",
+          "store"
         ],
-        "note": "delegate-run keeps the raw output, then renames only on adapter-confirmed success."
+        "note": "The supervisor owns delegate-run, which seals provider evidence before the predicate can commit an outcome."
       },
       {
-        "id": "collect",
-        "label": "Poll and collect",
+        "id": "observe",
+        "label": "Observe and continue",
         "focus": [
-          "lead",
-          "cli",
-          "tasks",
-          "pueued"
+          "caller",
+          "delegate",
+          "store",
+          "pueue"
         ],
-        "note": "Every command is a fresh process reading durable files."
+        "note": "Collection reads durable evidence without launching work; cancellation and continuation remain explicit operations."
       }
     ]
   },
   "participants": [
     {
-      "id": "lead",
+      "id": "caller",
       "type": "external",
-      "label": "Lead AI"
+      "label": "Caller"
     },
     {
-      "id": "cli",
+      "id": "delegate",
       "type": "backend",
-      "label": "delegate CLI"
+      "label": "delegate"
     },
     {
-      "id": "tasks",
+      "id": "store",
       "type": "database",
-      "label": "Task Store"
+      "label": "Task store"
     },
     {
-      "id": "pueued",
+      "id": "inspect",
+      "type": "security",
+      "label": "Runtime probe"
+    },
+    {
+      "id": "pueue",
       "type": "messagebus",
       "label": "pueued"
     },
     {
-      "id": "publisher",
+      "id": "runner",
       "type": "backend",
       "label": "delegate-run"
     },
     {
-      "id": "worker",
+      "id": "provider",
       "type": "external",
-      "label": "Worker CLI"
+      "label": "Provider CLI"
+    },
+    {
+      "id": "predicate",
+      "type": "security",
+      "label": "Predicate"
     }
   ],
   "segments": [
     {
       "from": 150,
-      "to": 306,
-      "label": "Dispatch — returns immediately"
+      "to": 330,
+      "label": "Admission and durable enqueue"
     },
     {
-      "from": 308,
-      "to": 362,
-      "label": "Work and publish — the lead need not be alive for any of this"
+      "from": 330,
+      "to": 535,
+      "label": "Supervised run and publication"
     },
     {
-      "from": 364,
-      "to": 558,
-      "label": "Poll and collect"
-    },
-    {
-      "from": 560,
-      "to": 618,
-      "label": "Cancel — pueue sends the only signal"
+      "from": 535,
+      "to": 735,
+      "label": "Observation, cancellation, and continuation"
     }
   ],
   "messages": [
     {
-      "id": "m-dispatch",
-      "from": "lead",
-      "to": "cli",
-      "y": 180,
-      "label": "delegate dispatch --brief brief.md",
+      "id": "dispatch",
+      "from": "caller",
+      "to": "delegate",
+      "y": 170,
+      "label": "dispatch --provider PROFILE --brief FILE",
       "variant": "emphasis"
     },
     {
-      "id": "m-submit",
-      "from": "cli",
-      "to": "tasks",
-      "y": 208,
-      "label": "brief.md + task.json + submit.json",
+      "id": "probe",
+      "from": "delegate",
+      "to": "inspect",
+      "y": 198,
+      "label": "run bounded version/help capability probe"
+    },
+    {
+      "id": "probe-facts",
+      "from": "inspect",
+      "to": "delegate",
+      "y": 226,
+      "label": "observed flags and executable identity",
+      "variant": "return"
+    },
+    {
+      "id": "persist",
+      "from": "delegate",
+      "to": "store",
+      "y": 254,
+      "label": "brief, task.json, meta.json",
       "variant": "emphasis",
-      "note": "submit.json is fsynced BEFORE the supervisor is called, so its absence proves nothing ran."
+      "note": "The immutable request and metadata are durably recorded before supervisor admission."
     },
     {
-      "id": "m-add",
-      "from": "cli",
-      "to": "pueued",
-      "y": 236,
-      "label": "pueue add --escape --label <task id>",
-      "variant": "default"
+      "id": "enqueue",
+      "from": "delegate",
+      "to": "pueue",
+      "y": 282,
+      "label": "submit one delegate-run job"
     },
     {
-      "id": "m-spawn",
-      "from": "pueued",
-      "to": "publisher",
-      "y": 264,
-      "label": "spawns and owns delegate-run",
+      "id": "accepted",
+      "from": "delegate",
+      "to": "caller",
+      "y": 310,
+      "label": "task id + admission/liveness fields",
+      "variant": "return"
+    },
+    {
+      "id": "spawn",
+      "from": "pueue",
+      "to": "runner",
+      "y": 350,
+      "label": "spawn and supervise delegate-run",
       "variant": "emphasis"
     },
     {
-      "id": "m-taskid",
-      "from": "cli",
-      "to": "lead",
-      "y": 292,
-      "label": "task id, then exit",
-      "variant": "return"
+      "id": "reconstruct",
+      "from": "runner",
+      "to": "store",
+      "y": 378,
+      "label": "read recorded profile and recheck bindings"
     },
     {
-      "id": "m-invoke",
-      "from": "publisher",
-      "to": "worker",
-      "y": 320,
-      "label": "invokes the provider, waits",
-      "variant": "emphasis",
-      "note": "delegate-run forks the worker and waits on it. It supervises nothing and signals nothing."
-    },
-    {
-      "id": "m-publish",
-      "from": "publisher",
-      "to": "tasks",
-      "y": 348,
-      "label": "raw/ first, then rename on confirmed success",
-      "variant": "emphasis",
-      "note": "Publication needs adapter-confirmed success, a non-empty answer and no abort marker. Otherwise publish.reject."
-    },
-    {
-      "id": "m-status",
-      "from": "lead",
-      "to": "cli",
-      "y": 376,
-      "label": "delegate status <id>",
-      "variant": "default"
-    },
-    {
-      "id": "m-ladder",
-      "from": "cli",
-      "to": "tasks",
-      "y": 404,
-      "label": "result.txt? publish.reject? which exit?",
-      "variant": "default"
-    },
-    {
-      "id": "m-check-pueue",
-      "from": "cli",
-      "to": "pueued",
-      "y": 432,
-      "label": "pueue status --json — the label proves admission",
-      "variant": "default"
-    },
-    {
-      "id": "m-status-out",
-      "from": "cli",
-      "to": "lead",
-      "y": 460,
-      "label": "{state, source, idle, paths}",
-      "variant": "return"
-    },
-    {
-      "id": "m-collect",
-      "from": "lead",
-      "to": "cli",
-      "y": 488,
-      "label": "delegate collect <id>",
+      "id": "invoke",
+      "from": "runner",
+      "to": "provider",
+      "y": 406,
+      "label": "invoke one bounded provider turn",
       "variant": "emphasis"
     },
     {
-      "id": "m-read",
-      "from": "cli",
-      "to": "tasks",
-      "y": 516,
-      "label": "read result.txt, else re-judge raw/",
-      "variant": "default",
-      "note": "collect never executes a turn. If the publisher died mid-decision, the same predicate runs again over the same bytes."
-    },
-    {
-      "id": "m-answer",
-      "from": "cli",
-      "to": "lead",
-      "y": 544,
-      "label": "the worker's answer",
+      "id": "capture",
+      "from": "provider",
+      "to": "runner",
+      "y": 434,
+      "label": "stdout, stderr, identity, exit",
       "variant": "return"
     },
     {
-      "id": "m-cancel",
-      "from": "lead",
-      "to": "cli",
-      "y": 572,
-      "label": "delegate cancel <id>",
+      "id": "seal",
+      "from": "runner",
+      "to": "store",
+      "y": 462,
+      "label": "provider.exit seals raw evidence",
+      "variant": "emphasis"
+    },
+    {
+      "id": "interpret",
+      "from": "runner",
+      "to": "predicate",
+      "y": 490,
+      "label": "interpret sealed evidence"
+    },
+    {
+      "id": "outcome",
+      "from": "predicate",
+      "to": "store",
+      "y": 518,
+      "label": "commit outcome.json: committed or rejected",
+      "variant": "emphasis",
+      "note": "outcome.json is the terminal authority; result.txt and publish.reject are payload evidence."
+    },
+    {
+      "id": "observe",
+      "from": "caller",
+      "to": "delegate",
+      "y": 558,
+      "label": "status / logs / collect"
+    },
+    {
+      "id": "read",
+      "from": "delegate",
+      "to": "store",
+      "y": 586,
+      "label": "read durable state; never relaunch"
+    },
+    {
+      "id": "observed",
+      "from": "store",
+      "to": "delegate",
+      "y": 614,
+      "label": "state, descriptors, and validated outcome",
+      "variant": "return"
+    },
+    {
+      "id": "returned",
+      "from": "delegate",
+      "to": "caller",
+      "y": 642,
+      "label": "bounded control response",
+      "variant": "return"
+    },
+    {
+      "id": "cancel",
+      "from": "caller",
+      "to": "delegate",
+      "y": 670,
+      "label": "cancel TASK_ID",
       "variant": "dashed"
     },
     {
-      "id": "m-kill",
-      "from": "cli",
-      "to": "pueued",
-      "y": 600,
-      "label": "pueue kill <task id>",
+      "id": "stop",
+      "from": "delegate",
+      "to": "pueue",
+      "y": 698,
+      "label": "request supervisor stop",
       "variant": "dashed"
     }
   ],
   "activations": [
     {
-      "participant": "cli",
+      "participant": "delegate",
       "from": 174,
-      "to": 298,
+      "to": 330,
       "type": "backend"
     },
     {
-      "participant": "tasks",
-      "from": 202,
-      "to": 214,
+      "participant": "inspect",
+      "from": 196,
+      "to": 238,
+      "type": "security"
+    },
+    {
+      "participant": "store",
+      "from": 246,
+      "to": 540,
       "type": "database"
     },
     {
-      "participant": "pueued",
-      "from": 230,
-      "to": 242,
+      "participant": "pueue",
+      "from": 275,
+      "to": 365,
       "type": "messagebus"
     },
     {
-      "participant": "publisher",
-      "from": 258,
-      "to": 362,
+      "participant": "runner",
+      "from": 343,
+      "to": 530,
       "type": "backend"
     },
     {
-      "participant": "worker",
-      "from": 314,
-      "to": 340,
+      "participant": "provider",
+      "from": 399,
+      "to": 444,
       "type": "external"
     },
     {
-      "participant": "tasks",
-      "from": 342,
-      "to": 354,
-      "type": "database"
+      "participant": "predicate",
+      "from": 483,
+      "to": 528,
+      "type": "security"
     },
     {
-      "participant": "cli",
-      "from": 370,
-      "to": 550,
+      "participant": "delegate",
+      "from": 550,
+      "to": 675,
       "type": "backend"
     },
     {
-      "participant": "tasks",
-      "from": 398,
-      "to": 410,
-      "type": "database"
-    },
-    {
-      "participant": "pueued",
-      "from": 426,
-      "to": 438,
-      "type": "messagebus"
-    },
-    {
-      "participant": "tasks",
-      "from": 510,
-      "to": 522,
-      "type": "database"
-    },
-    {
-      "participant": "cli",
-      "from": 566,
-      "to": 606,
-      "type": "backend"
-    },
-    {
-      "participant": "pueued",
-      "from": 594,
-      "to": 606,
+      "participant": "pueue",
+      "from": 690,
+      "to": 703,
       "type": "messagebus"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "The whole interface",
+      "title": "Admission",
       "items": [
-        "Five commands: dispatch · status · logs · collect · cancel",
-        "Config is intent — model, permission, effort — resolved per provider",
-        "status returns WHERE to look: result path, transcript, session id"
+        "The request is persisted before supervisor submission",
+        "Runtime capability evidence is checked before launch",
+        "The caller receives a task id and separate admission/liveness fields"
       ]
     },
     {
       "dot": "emerald",
-      "title": "Why it survives the lead",
+      "title": "Publication",
       "items": [
-        "dispatch returns a task id and exits — nothing is held open",
-        "Every command is a fresh process reading durable files",
-        "The lead can die between any two commands and lose nothing"
+        "Pueue owns process lifetime and stopping",
+        "Raw streams are sealed before result interpretation",
+        "Only outcome.json establishes a terminal verdict"
       ]
     },
     {
-      "dot": "amber",
-      "title": "What the lead decides",
+      "dot": "violet",
+      "title": "Observation",
       "items": [
-        "Four outcomes: usable · recoverable · terminal · undetermined",
-        "idle_seconds is reported; the threshold belongs to the lead",
-        "admission-unknown is surfaced, never auto-resubmitted — only the lead may relaunch"
+        "Collection reads committed evidence without launching work",
+        "Cancellation requests a supervisor stop and observes its effect",
+        "Continuation creates a new task with an exact predecessor"
       ]
     }
   ]

@@ -4,324 +4,463 @@
   "meta": {
     "title": "Delegation Layer — System Components",
     "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/hishamkaram/delegation-layer",
+      "revision": "0a84b1e75c65cb4b4f2c59d39c0f72a52163dd89",
+      "provider": "github"
+    },
     "viewBox": [
-      1310,
-      610
+      1390,
+      680
     ],
     "views": [
       {
-        "id": "dispatch",
-        "label": "Dispatch path",
+        "id": "admission",
+        "label": "Admission",
         "focus": [
-          "lead",
-          "layer",
-          "adapters",
-          "pueued",
-          "publisher"
+          "caller",
+          "delegate",
+          "catalog",
+          "inspection",
+          "store",
+          "pueue"
         ],
-        "note": "A brief becomes a supervised delegate-run, which invokes one provider CLI."
+        "note": "The CLI validates intent, probes the selected provider, persists task records, and submits one supervised job."
       },
       {
-        "id": "publication",
-        "label": "Publication path",
+        "id": "execution",
+        "label": "Execution and publication",
         "focus": [
-          "publisher",
-          "codex",
-          "altclis",
-          "claudecc",
-          "tasks"
+          "pueue",
+          "runner",
+          "providers",
+          "predicate",
+          "store"
         ],
-        "note": "delegate-run keeps the raw output, then publishes only on adapter-confirmed success."
+        "note": "delegate-run reconstructs the recorded profile, captures sealed evidence, and publishes only a validated outcome."
       },
       {
-        "id": "providers",
-        "label": "Provider surface",
+        "id": "recovery",
+        "label": "Observation and recovery",
         "focus": [
-          "publisher",
-          "codex",
-          "altclis",
-          "claudecc",
-          "ccr"
+          "caller",
+          "delegate",
+          "store",
+          "pueue",
+          "runner"
         ],
-        "note": "Every CLI reaches the layer through one adapter shape and one publisher."
+        "note": "Status, logs, collection, cancellation, and continuation operate through durable records and supervisor ownership."
       }
     ]
   },
   "components": [
     {
-      "id": "lead",
+      "id": "caller",
       "type": "external",
-      "label": "Lead AI",
-      "sublabel": "frontier model",
-      "tag": "restartable",
-      "pos": [
-        60,
-        110
+      "label": "Caller or automation",
+      "sources": [
+        {
+          "path": "README.md"
+        },
+        {
+          "path": "docs/cli-reference.md"
+        }
       ],
-      "size": [
-        165,
-        66
-      ]
-    },
-    {
-      "id": "layer",
-      "type": "backend",
-      "label": "Delegation Layer",
-      "sublabel": "Node / TypeScript",
       "pos": [
-        320,
-        110
-      ],
-      "size": [
-        170,
-        66
-      ]
-    },
-    {
-      "id": "adapters",
-      "type": "backend",
-      "label": "Provider Adapters",
-      "sublabel": "intent → flags · predicate",
-      "pos": [
-        580,
-        110
+        40,
+        165
       ],
       "size": [
         200,
-        66
+        78
       ]
     },
     {
-      "id": "pueued",
+      "id": "delegate",
+      "type": "backend",
+      "label": "delegate",
+      "sublabel": "request validation and orchestration",
+      "sources": [
+        {
+          "path": "cmd/delegate/main.go"
+        },
+        {
+          "path": "internal/app/commands.go"
+        }
+      ],
+      "pos": [
+        300,
+        145
+      ],
+      "size": [
+        220,
+        86
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "backend",
+      "label": "Provider catalog",
+      "sublabel": "profiles, modes, options, predicates",
+      "sources": [
+        {
+          "path": "internal/app/catalog.go"
+        },
+        {
+          "path": "internal/provider/catalog.go"
+        }
+      ],
+      "pos": [
+        580,
+        95
+      ],
+      "size": [
+        255,
+        86
+      ]
+    },
+    {
+      "id": "inspection",
+      "type": "security",
+      "label": "Runtime inspection",
+      "sublabel": "version, help, flags, identity",
+      "sources": [
+        {
+          "path": "internal/inspection/runtime_probe.go"
+        },
+        {
+          "path": "docs/providers.md"
+        }
+      ],
+      "pos": [
+        895,
+        95
+      ],
+      "size": [
+        270,
+        86
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "Task store",
+      "sublabel": "immutable records and sealed evidence",
+      "tag": "outcome.json is terminal authority",
+      "sources": [
+        {
+          "path": "internal/taskdir/store.go"
+        },
+        {
+          "path": "docs/architecture.md"
+        },
+        {
+          "path": "agents/_data/delegation-invariants.md"
+        }
+      ],
+      "pos": [
+        285,
+        300
+      ],
+      "size": [
+        285,
+        94
+      ]
+    },
+    {
+      "id": "pueue",
       "type": "messagebus",
       "label": "pueued",
-      "sublabel": "supervisor daemon",
-      "tag": "owns every job",
-      "pos": [
-        900,
-        110
+      "sublabel": "queue and process supervisor",
+      "tag": "owns stopping",
+      "sources": [
+        {
+          "path": "internal/pueue/client.go"
+        },
+        {
+          "path": "agents/_data/delegation-invariants.md"
+        }
       ],
-      "size": [
-        165,
-        66
-      ]
-    },
-    {
-      "id": "tasks",
-      "type": "database",
-      "label": "Task Store",
-      "sublabel": "tasks/<id>/ on disk",
-      "tag": "submit · raw · result · exits",
       "pos": [
-        250,
+        895,
         300
       ],
       "size": [
-        240,
-        76
+        245,
+        86
       ]
     },
     {
-      "id": "publisher",
+      "id": "workspace",
+      "type": "security",
+      "label": "Workspace and runtime",
+      "sublabel": "canonical paths kept disjoint",
+      "sources": [
+        {
+          "path": "docs/security.md"
+        },
+        {
+          "path": "agents/_data/adapter-contract.md"
+        }
+      ],
+      "pos": [
+        1148,
+        300
+      ],
+      "size": [
+        205,
+        86
+      ]
+    },
+    {
+      "id": "runner",
       "type": "backend",
       "label": "delegate-run",
-      "sublabel": "our publisher process",
-      "tag": "supervises nothing",
+      "sublabel": "reconstruct, capture, seal",
+      "tag": "one provider turn",
+      "sources": [
+        {
+          "path": "cmd/delegate-run/main.go"
+        },
+        {
+          "path": "internal/app/runner.go"
+        }
+      ],
       "pos": [
-        700,
-        300
+        600,
+        490
+      ],
+      "size": [
+        250,
+        88
+      ]
+    },
+    {
+      "id": "providers",
+      "type": "external",
+      "label": "Provider CLIs",
+      "sublabel": "agy · codex · claude · pi · opencode",
+      "tag": "native login and output",
+      "sources": [
+        {
+          "path": "internal/provider/antigravity/registration.go"
+        },
+        {
+          "path": "internal/provider/pi/registration.go"
+        },
+        {
+          "path": "docs/providers.md"
+        }
+      ],
+      "pos": [
+        1050,
+        490
       ],
       "size": [
         300,
-        62
+        96
       ]
     },
     {
-      "id": "codex",
-      "type": "external",
-      "label": "Codex CLI",
-      "sublabel": "exec --sandbox read-only",
+      "id": "predicate",
+      "type": "security",
+      "label": "Predicate registry",
+      "sublabel": "strict interpretation of sealed evidence",
+      "sources": [
+        {
+          "path": "internal/predicate/registry.go"
+        },
+        {
+          "path": "internal/provider/jsonl.go"
+        },
+        {
+          "path": "docs/architecture.md"
+        }
+      ],
       "pos": [
-        470,
-        500
+        285,
+        490
       ],
       "size": [
-        165,
-        60
-      ]
-    },
-    {
-      "id": "altclis",
-      "type": "external",
-      "label": "Antigravity · Kimi",
-      "sublabel": "Pi · OpenCode — print modes",
-      "pos": [
-        675,
-        500
-      ],
-      "size": [
-        165,
-        60
-      ]
-    },
-    {
-      "id": "claudecc",
-      "type": "external",
-      "label": "Claude Code",
-      "sublabel": "-p print · --bg",
-      "pos": [
-        880,
-        500
-      ],
-      "size": [
-        165,
-        60
-      ]
-    },
-    {
-      "id": "ccr",
-      "type": "cloud",
-      "label": "claude-code-router",
-      "sublabel": "GLM · DeepSeek · MiniMax",
-      "pos": [
-        1085,
-        500
-      ],
-      "size": [
-        165,
-        60
+        255,
+        88
       ]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "Single host — no server, no cross-machine tasks",
+      "label": "Single-host supervised runtime",
       "wraps": [
-        "layer",
-        "adapters",
-        "pueued",
-        "tasks",
-        "publisher",
-        "codex",
-        "altclis",
-        "claudecc",
-        "ccr"
-      ]
+        "delegate",
+        "catalog",
+        "inspection",
+        "store",
+        "pueue",
+        "workspace",
+        "runner",
+        "providers",
+        "predicate"
+      ],
+      "pad": 28
     }
   ],
   "connections": [
     {
-      "id": "dispatch-brief",
-      "from": "lead",
-      "to": "layer",
-      "label": "dispatch brief",
+      "id": "caller-to-delegate",
+      "from": "caller",
+      "to": "delegate",
+      "label": "dispatch · status · collect · cancel",
       "variant": "emphasis",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "pick-mode",
-      "from": "layer",
-      "to": "adapters",
-      "label": "select mode",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "drive-pueue",
-      "from": "adapters",
-      "to": "pueued",
-      "label": "add --escape --label",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "record-intent",
-      "from": "layer",
-      "to": "tasks",
-      "label": "submit.json before the call",
-      "fromSide": "bottom",
-      "toSide": "top"
-    },
-    {
-      "id": "spawn-publisher",
-      "from": "pueued",
-      "to": "publisher",
-      "label": "spawns · owns · kills",
-      "variant": "emphasis",
-      "fromSide": "bottom",
-      "toSide": "top"
-    },
-    {
-      "id": "publish",
-      "from": "publisher",
-      "to": "tasks",
-      "label": "raw/ first, then result.txt by rename",
-      "variant": "emphasis",
-      "fromSide": "left",
-      "toSide": "right",
-      "labelDy": -37
-    },
-    {
-      "id": "run-codex",
-      "from": "publisher",
-      "to": "codex",
-      "label": "invokes · waits",
-      "fromSide": "bottom",
-      "toSide": "top"
-    },
-    {
-      "id": "run-alt",
-      "from": "publisher",
-      "to": "altclis",
-      "fromSide": "bottom",
-      "toSide": "top"
-    },
-    {
-      "id": "run-claude",
-      "from": "publisher",
-      "to": "claudecc",
-      "fromSide": "bottom",
-      "toSide": "top"
-    },
-    {
-      "id": "base-url-swap",
-      "from": "claudecc",
-      "to": "ccr",
-      "label": "ANTHROPIC_BASE_URL",
-      "variant": "dashed",
       "fromSide": "right",
       "toSide": "left",
-      "labelDy": 54
+      "labelAt": [270, 110]
+    },
+    {
+      "id": "delegate-to-catalog",
+      "from": "delegate",
+      "to": "catalog",
+      "label": "resolve profile, mode, options",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [550, 50]
+    },
+    {
+      "id": "catalog-to-inspection",
+      "from": "catalog",
+      "to": "inspection",
+      "label": "run capability probe",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [865, 50]
+    },
+    {
+      "id": "inspection-to-delegate",
+      "from": "inspection",
+      "to": "delegate",
+      "label": "facts and executable identity",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [[1030, 270], [410, 270]],
+      "labelAt": [720, 250]
+    },
+    {
+      "id": "delegate-to-store",
+      "from": "delegate",
+      "to": "store",
+      "label": "persist immutable task records",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [250, 265]
+    },
+    {
+      "id": "delegate-to-pueue",
+      "from": "delegate",
+      "to": "pueue",
+      "label": "enqueue one supervised job",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [410, 285],
+        [1017.5, 285]
+      ],
+      "labelAt": [710, 335]
+    },
+    {
+      "id": "pueue-to-runner",
+      "from": "pueue",
+      "to": "runner",
+      "label": "spawn, own, stop",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "runner-to-store",
+      "from": "runner",
+      "to": "store",
+      "label": "capture and seal raw evidence",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [[725, 435], [427.5, 435]],
+      "labelAt": [575, 410]
+    },
+    {
+      "id": "runner-to-providers",
+      "from": "runner",
+      "to": "providers",
+      "label": "invoke one bounded provider turn",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [950, 465]
+    },
+    {
+      "id": "providers-to-workspace",
+      "from": "providers",
+      "to": "workspace",
+      "label": "read or native writes by mode",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "runner-to-predicate",
+      "from": "runner",
+      "to": "predicate",
+      "label": "interpret sealed evidence",
+      "fromSide": "left",
+      "toSide": "right",
+      "labelAt": [570, 600]
+    },
+    {
+      "id": "predicate-to-store",
+      "from": "predicate",
+      "to": "store",
+      "label": "commit accepted or rejected outcome",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "delegate-to-caller",
+      "from": "delegate",
+      "to": "caller",
+      "label": "task id and observations",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right",
+      "labelAt": [270, 260]
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "Durability",
+      "title": "Ownership",
       "items": [
-        "pueued owns every job, so a worker outlives the lead",
-        "result.txt is published by atomic rename — its existence IS the completion signal",
-        "Admission is tri-state: retry needs proof of non-submission, never a missing id"
+        "The core owns admission, scheduling, execution, capture, sealing, collection, and publication",
+        "Adapters own native arguments, policy, identity, and evidence interpretation",
+        "Pueue owns process lifetime and stopping"
       ]
     },
     {
       "dot": "emerald",
-      "title": "Publication and recovery",
+      "title": "Evidence",
       "items": [
-        "delegate-run preserves raw output BEFORE deciding, so publication is recoverable",
-        "Publish only on adapter-confirmed success — never on the exit code, never on 'terminal'",
-        "provider.exit and publish.exit are separate: a pending publish is not a failure"
+        "provider.exit seals the raw provider evidence before publication",
+        "outcome.json is the sole terminal authority",
+        "result.txt and publish.reject are payload evidence, not completion signals"
       ]
     },
     {
       "dot": "violet",
-      "title": "Intent and providers",
+      "title": "Provider surface",
       "items": [
-        "The lead sets intent: model · permission · effort — adapters own the spelling",
-        "An unsupported OR unverified config key fails the dispatch, never silently dropped",
-        "GLM · DeepSeek · MiniMax need no adapter — they are base-URL swaps"
+        "Five discoverable profiles are checked dynamically at runtime",
+        "Pi exposes read-only only because its native write tools lack a workspace boundary",
+        "Unsupported modes and options fail before supervisor admission"
       ]
     }
   ]

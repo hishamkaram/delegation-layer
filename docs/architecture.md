@@ -21,6 +21,11 @@ flowchart TD
     L --> M[status / collect / logs]
 ```
 
+The maintained Archify views are [system components](../diagrams/components.html)
+and [one task lifecycle](../diagrams/lead-interface.html). Their editable
+sources are [components.architecture.json](../diagrams/components.architecture.json)
+and [lead-interface.sequence.json](../diagrams/lead-interface.sequence.json).
+
 ## Ownership boundaries
 
 The CLI validates user input, resolves the catalog entry, and persists the

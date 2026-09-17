@@ -33,7 +33,8 @@ Compare the request with the catalog entry. `antigravity:print` supports
 `workspace-write`, `continuation`, and `native-timeout`; `codex:exec`,
 `claude:print` and `opencode:run` support both permission modes; `pi:json`
 supports read-only mode. Every provider supports continuation; Pi and OpenCode
-also expose their documented model or thinking options. Unsupported
+also expose their documented model and effort options. Pi maps effort to its
+native `--thinking` flag, while OpenCode maps it to `--variant`. Unsupported
 model, effort, policy, or timeout combinations are rejected before supervisor
 admission.
 
