@@ -47,7 +47,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             target.chmod(0o700)
             alias = root / "provider-alias"
             alias.symlink_to(target)
-            self.assertEqual(gate.resolve_executable(str(alias), target, "provider"), target)
+            self.assertEqual(gate.resolve_executable(str(alias), target, "provider"), target.resolve())
 
     def test_dispatch_binding_requires_exact_supervisor_identity(self):
         response = {
