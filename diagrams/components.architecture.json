@@ -6,7 +6,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/hishamkaram/delegation-layer",
-      "revision": "b5e8ee8c516abc39ea069003f1c4e5767ac316c7",
+      "revision": "8345216c71d41a59f8eca1792e8948385c1bff85",
       "provider": "github"
     },
     "viewBox": [
@@ -296,6 +296,9 @@
       "sublabel": "auth-gated provider proof",
       "tag": "BLOCKED is neutral",
       "sources": [
+        {
+          "path": "scripts/acceptance_native.py"
+        },
         {
           "path": "scripts/acceptance_agy.py"
         },
