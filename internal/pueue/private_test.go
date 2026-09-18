@@ -21,6 +21,50 @@ func TestReadyRequiresTheBoundedQueueSchema(t *testing.T) {
 	}
 }
 
+func TestWaitReadyJoinsTimedOutStatusCommand(t *testing.T) {
+	fake := newFakeSupervisor(t, "delay-status")
+	result := make(chan error, 1)
+	go func() {
+		result <- waitReady(context.Background(), fake.client, 20*time.Millisecond)
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("waitReady returned before its status command was reaped: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := <-result; err == nil {
+		t.Fatal("waitReady accepted an expired readiness observation")
+	}
+}
+
+func TestCreatePrivateConfigPublishesCompleteFile(t *testing.T) {
+	base := filepath.Join(canonicalTemp(t), "supervisor")
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(base, "pueue.yml")
+	want := "private-config\n"
+	if err := createPrivateConfig(configPath, base, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("published private config=%q, want %q", got, want)
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".pueue.yml-") {
+			t.Fatalf("staged private config was left behind: %s", entry.Name())
+		}
+	}
+}
+
 func TestBindPrivateBootstrapsAndReusesSupervisor(t *testing.T) {
 	base := canonicalTemp(t)
 	stateRoot := filepath.Join(base, "state")

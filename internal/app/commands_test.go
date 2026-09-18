@@ -382,6 +382,23 @@ func TestMissingInitialSupervisorConfigUsesPrivateSupervisorPath(t *testing.T) {
 	}
 }
 
+func TestConfiguredSupervisorDoesNotFallBackToPath(t *testing.T) {
+	pathDir := t.TempDir()
+	for _, name := range []string{"pueue", "pueued"} {
+		path := filepath.Join(pathDir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", pathDir)
+	configured := filepath.Join(t.TempDir(), "configured", "pueue")
+	for _, name := range []string{"pueue", "pueued"} {
+		if _, err := resolveBundledExecutable(Dependencies{InitialSupervisorExecutable: configured}, name); !errors.Is(err, pueue.ErrConfiguration) {
+			t.Fatalf("configured supervisor %s fell back to PATH: %v", name, err)
+		}
+	}
+}
+
 func TestReadBriefUsesNoFollowNonblockingOpen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "brief.md")

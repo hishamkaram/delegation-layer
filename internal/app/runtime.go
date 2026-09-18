@@ -536,7 +536,8 @@ func resolveInitialExecutable(deps Dependencies) (string, error) {
 
 func resolveBundledExecutable(deps Dependencies, name string) (string, error) {
 	var candidate string
-	if deps.InitialSupervisorExecutable != "" {
+	explicit := deps.InitialSupervisorExecutable != ""
+	if explicit {
 		candidate = filepath.Join(filepath.Dir(deps.InitialSupervisorExecutable), name)
 	} else {
 		self, err := os.Executable()
@@ -550,6 +551,9 @@ func resolveBundledExecutable(deps Dependencies, name string) (string, error) {
 		if statErr == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
 			return path, nil
 		}
+	}
+	if explicit {
+		return "", fmt.Errorf("%w: bundled %s executable not found beside the configured supervisor", pueue.ErrConfiguration, name)
 	}
 	if path, err := exec.LookPath(name); err == nil {
 		absolute, absErr := filepath.Abs(path)

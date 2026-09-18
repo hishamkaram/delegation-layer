@@ -12,10 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
 )
 
 const privateSupervisorDirectory = ".supervisor"
+
+const privateSupervisorPendingGrace = time.Second
 
 // BindPrivate creates or reuses a supervisor owned by one Delegation Layer
 // state root. The daemon is started only when the private endpoint is not
@@ -105,39 +108,86 @@ func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (config
 		return "", "", fmt.Errorf("%w: inspect private supervisor config: %w", ErrConfiguration, err)
 	}
 
-	data := privateConfigYAML(base)
-	file, err := os.OpenFile(configPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			if validateErr := validatePrivateConfig(configPath, base, resolution); validateErr != nil {
-				return "", "", validateErr
-			}
-			return configPath, base, nil
-		}
-		return "", "", fmt.Errorf("%w: create private supervisor config: %w", ErrConfiguration, err)
+	if err := createPrivateConfig(configPath, base, privateConfigYAML(base)); err != nil {
+		return "", "", err
 	}
-	if _, err = file.WriteString(data); err != nil {
-		return "", "", errors.Join(
-			fmt.Errorf("%w: write private supervisor config: %w", ErrConfiguration, err),
+	if err := validatePrivateConfig(configPath, base, resolution); err != nil {
+		return "", "", err
+	}
+	return configPath, base, nil
+}
+
+func createPrivateConfig(configPath, base, data string) (resultErr error) {
+	file, stagePath, err := createPrivateConfigStage(base)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if stagePath != "" {
+			resultErr = errors.Join(resultErr, os.Remove(stagePath))
+		}
+	}()
+
+	written, writeErr := file.WriteString(data)
+	if writeErr != nil || written != len(data) {
+		if writeErr == nil {
+			writeErr = io.ErrShortWrite
+		}
+		return errors.Join(
+			fmt.Errorf("%w: write staged private supervisor config: %w", ErrConfiguration, writeErr),
 			file.Close(),
 		)
 	}
 	if err = file.Sync(); err != nil {
-		return "", "", errors.Join(
-			fmt.Errorf("%w: sync private supervisor config: %w", ErrConfiguration, err),
+		return errors.Join(
+			fmt.Errorf("%w: sync staged private supervisor config: %w", ErrConfiguration, err),
 			file.Close(),
 		)
 	}
 	if err = file.Close(); err != nil {
-		return "", "", fmt.Errorf("%w: close private supervisor config: %w", ErrConfiguration, err)
+		return fmt.Errorf("%w: close staged private supervisor config: %w", ErrConfiguration, err)
+	}
+
+	if err = os.Link(stagePath, configPath); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%w: publish private supervisor config: %w", ErrConfiguration, err)
+		}
+		if removeErr := os.Remove(stagePath); removeErr != nil {
+			return errors.Join(
+				fmt.Errorf("%w: discard competing private supervisor config: %w", ErrConfiguration, removeErr),
+				err,
+			)
+		}
+		stagePath = ""
+		return syncPrivateDirectory(base)
 	}
 	if err = syncPrivateDirectory(base); err != nil {
-		return "", "", err
+		return err
 	}
-	if err = validatePrivateConfig(configPath, base, resolution); err != nil {
-		return "", "", err
+	if err = os.Remove(stagePath); err != nil {
+		return fmt.Errorf("%w: remove staged private supervisor config: %w", ErrConfiguration, err)
 	}
-	return configPath, base, nil
+	stagePath = ""
+	return syncPrivateDirectory(base)
+}
+
+func createPrivateConfigStage(base string) (*os.File, string, error) {
+	for range 4 {
+		id, err := task.NewRandomID()
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: create staged private supervisor config: %w", ErrConfiguration, err)
+		}
+		stagePath := filepath.Join(base, ".pueue.yml-"+id)
+		file, err := os.OpenFile(stagePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return nil, "", fmt.Errorf("%w: create staged private supervisor config: %w", ErrConfiguration, err)
+		}
+		return file, stagePath, nil
+	}
+	return nil, "", fmt.Errorf("%w: create unique staged private supervisor config: %w", ErrConfiguration, os.ErrExist)
 }
 
 func ensurePrivateBase(base string) error {
@@ -250,7 +300,15 @@ func waitReady(ctx context.Context, client *Client, timeout time.Duration) error
 				select {
 				case <-pending.Done():
 				case <-readyContext.Done():
-					return errors.Join(lastErr, readyContext.Err())
+					reapTimer := time.NewTimer(privateSupervisorPendingGrace)
+					select {
+					case <-pending.Done():
+						reapTimer.Stop()
+						result, _ := pending.Result()
+						return errors.Join(lastErr, readyContext.Err(), result.Err)
+					case <-reapTimer.C:
+						return errors.Join(lastErr, readyContext.Err())
+					}
 				}
 			}
 		}
