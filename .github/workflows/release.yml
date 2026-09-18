@@ -63,7 +63,8 @@ jobs:
             exit 1
           fi
           release_commit="$(git rev-list -n 1 "${GITHUB_SHA}")"
-          git -c http.extraheader="AUTHORIZATION: bearer ${GH_TOKEN}" fetch origin main --no-tags
+          git fetch "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "main:refs/remotes/origin/main" --no-tags
           if ! git merge-base --is-ancestor "${release_commit}" origin/main; then
             echo 'Release tags must reference a commit reachable from origin/main.' >&2
             exit 1
