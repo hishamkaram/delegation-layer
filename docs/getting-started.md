@@ -6,15 +6,26 @@ separately so each part stays easy to understand.
 
 ## 1. Install the Agent Skill
 
-From the project where your agent works, run:
+Use the common Agent Skills installer from the project where your agent works:
+
+```sh
+npx --yes skills add hishamkaram/delegation-layer --skill agent-integration
+```
+
+The `--skill agent-integration` selection avoids installing the repository's
+maintainer skills. The installer detects supported agents and lets you choose
+the project or global scope. Use `--global` for all projects or `--agent codex`
+(and similar agent names) for a specific harness.
+
+The package also includes a guided installer with an interactive scope and
+harness picker:
 
 ```sh
 npx --yes delegation-layer install
 ```
 
-The installer detects supported Agent Skills harnesses, shows the detections,
-and asks whether the skill belongs in the current project or your user account.
-If it cannot identify a harness, choose the shared `.agents/skills` location.
+It selects global installation by default. If it cannot identify a specific
+harness, choose the shared `.agents/skills` location.
 
 For automation, select the destination explicitly:
 

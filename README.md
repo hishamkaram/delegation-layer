@@ -36,17 +36,26 @@ already use instead of replacing them.
 
 ### Install the Agent Skill
 
-From the project where you want the skill available, run:
+The standard Agent Skills installer works across popular coding agents. From
+the project where you want the skill available, run:
+
+```sh
+npx --yes skills add hishamkaram/delegation-layer --skill agent-integration
+```
+
+The `--skill agent-integration` selection matters because this repository also
+contains maintainer skills. The installer detects supported agents and lets you
+choose the project or global scope. Add `--global` to install for all projects,
+or `--agent codex` (and similar agent names) to choose a specific harness.
+
+If you want the Delegation Layer guided installer instead, run:
 
 ```sh
 npx --yes delegation-layer install
 ```
 
-The installer detects supported Agent Skills harnesses, shows what it found,
-and asks whether to install for the current project or your user account. It
-offers the shared `.agents/skills` location when no specific harness is found.
-
-For scripts or a choice without prompts:
+It provides an interactive scope and harness picker, with global installation
+selected by default. For scripts or a choice without prompts:
 
 ```sh
 npx --yes delegation-layer install \

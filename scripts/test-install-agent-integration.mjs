@@ -48,6 +48,15 @@ try {
   const detected = runInstaller(["install"], { cwd: project, home, path: bin });
   assert.equal(detected.status, 0, detected.stderr);
   assert.match(detected.stdout, /detected: project \.claude/);
+  assert.match(detected.stdout, /using global scope/);
+  await assertInstalled(join(home, ".claude", "skills", "agent-integration"));
+
+  const projectInstall = runInstaller(["install", "--scope", "project", "--harness", "claude", "--yes"], {
+    cwd: project,
+    home,
+    path: bin,
+  });
+  assert.equal(projectInstall.status, 0, projectInstall.stderr);
   await assertInstalled(join(project, ".claude", "skills", "agent-integration"));
 
   const idempotent = runInstaller(["install", "--scope", "project", "--harness", "claude"], {
@@ -72,11 +81,11 @@ try {
     path: join(root, "empty-bin"),
   });
   assert.equal(fallback.status, 0, fallback.stderr);
-  await assertInstalled(join(fallbackProject, ".agents", "skills", "agent-integration"));
+  await assertInstalled(join(fallbackHome, ".agents", "skills", "agent-integration"));
 
   const changedSkill = join(project, ".claude", "skills", "agent-integration", "SKILL.md");
   await writeFile(changedSkill, "local change\n");
-  const refusedOverwrite = runInstaller(["install", "--harness", "claude"], {
+  const refusedOverwrite = runInstaller(["install", "--scope", "project", "--harness", "claude"], {
     cwd: project,
     home,
     path: bin,
@@ -84,7 +93,7 @@ try {
   assert.equal(refusedOverwrite.status, 1);
   assert.match(refusedOverwrite.stderr, /use --force/);
 
-  const forcedOverwrite = runInstaller(["install", "--harness", "claude", "--force"], {
+  const forcedOverwrite = runInstaller(["install", "--scope", "project", "--harness", "claude", "--force"], {
     cwd: project,
     home,
     path: bin,
