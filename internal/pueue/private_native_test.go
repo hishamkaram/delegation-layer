@@ -17,7 +17,11 @@ func TestPrivateSupervisorNativeBootstrap(t *testing.T) {
 	if clientPath == "" || daemonPath == "" {
 		t.Skip("native supervisor paths are not configured")
 	}
-	stateRoot := filepath.Join(t.TempDir(), "state")
+	base, evalErr := filepath.EvalSymlinks(t.TempDir())
+	if evalErr != nil {
+		t.Fatal(evalErr)
+	}
+	stateRoot := filepath.Join(base, "state")
 	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
