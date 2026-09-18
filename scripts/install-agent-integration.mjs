@@ -2,7 +2,7 @@
 
 import { accessSync, constants } from "node:fs";
 import { copyFile, lstat, mkdir, readFile } from "node:fs/promises";
-import { createInterface } from "node:readline/promises";
+import { emitKeypressEvents } from "node:readline";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -97,7 +97,7 @@ function usage(message, exitCode = 2) {
 
 function help() {
   console.log(
-    "Usage:\n  delegation-layer install [--scope project|global] [--harness NAME[,NAME...]] [--yes] [--force]\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]\n\nThe install command detects supported agent harnesses and installs the skill for a project or user.\nUse --harness universal when no specific harness is detected.",
+    "Usage:\n  delegation-layer install [--scope project|global] [--harness NAME[,NAME...]] [--yes] [--force]\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]\n\nThe install command detects supported agent harnesses and installs the skill for a project or user.\nGlobal scope is the default; use --scope project for a project-local install.\nUse --harness universal when no specific harness is detected.",
   );
 }
 
@@ -280,25 +280,123 @@ function printDetections(detections) {
   });
 }
 
-function parseHarnessSelection(value, detections) {
-  const tokens = value
-    .split(",")
-    .map((token) => token.trim().toLowerCase())
-    .filter(Boolean);
-  const names = tokens.map((token) => {
-    if (/^\d+$/.test(token)) {
-      const detection = detections[Number(token) - 1];
-      if (!detection) {
-        throw new Error(`harness choice ${token} is out of range`);
-      }
-      return detection.harness.name;
+function renderPicker({ error, index, multiple, options, selected, title }) {
+  const lines = [title, ""];
+  options.forEach((option, optionIndex) => {
+    const current = optionIndex === index;
+    const marker = multiple ? (selected.has(option.value) ? "[x]" : "[ ]") : "";
+    const cursor = current ? "❯" : " ";
+    const color = current ? "\u001b[36m" : "";
+    const reset = current ? "\u001b[0m" : "";
+    lines.push(`${color}${cursor} ${marker ? `${marker} ` : ""}${option.label}${reset}`);
+    if (option.description) {
+      lines.push(`      ${option.description}`);
     }
-    if (!harnessByName.has(token)) {
-      throw new Error(`unknown harness ${token}`);
-    }
-    return token;
   });
-  return [...new Set(names)];
+  lines.push("");
+  lines.push(multiple ? "↑↓ move  Space select  Enter continue  a all  n none  q cancel" : "↑↓ move  Enter select  q cancel");
+  if (error) {
+    lines.push(`\u001b[31m${error}\u001b[0m`);
+  }
+  process.stdout.write(`\u001b[2J\u001b[H${lines.join("\n")}\n`);
+}
+
+function pickOptions({ initialValues = [], multiple = false, options, title }) {
+  const input = process.stdin;
+  const output = process.stdout;
+  if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== "function") {
+    return null;
+  }
+
+  let index = 0;
+  const selected = new Set(initialValues);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let error;
+
+    const cleanup = () => {
+      input.off("keypress", onKeypress);
+      try {
+        input.setRawMode(false);
+      } catch {
+        // The terminal may already be closed while handling cancellation.
+      }
+      input.pause();
+      output.write("\u001b[?25h\u001b[0m");
+    };
+
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+
+    const onKeypress = (character, key = {}) => {
+      if ((key.ctrl && key.name === "c") || key.name === "escape" || key.name === "q") {
+        finish(null);
+        return;
+      }
+      if (key.name === "up" || key.name === "k") {
+        index = (index + options.length - 1) % options.length;
+        error = undefined;
+        renderPicker({ error, index, multiple, options, selected, title });
+        return;
+      }
+      if (key.name === "down" || key.name === "j") {
+        index = (index + 1) % options.length;
+        error = undefined;
+        renderPicker({ error, index, multiple, options, selected, title });
+        return;
+      }
+      if (multiple && (key.name === "space" || character === " ")) {
+        const value = options[index].value;
+        if (selected.has(value)) {
+          selected.delete(value);
+        } else {
+          selected.add(value);
+        }
+        error = undefined;
+        renderPicker({ error, index, multiple, options, selected, title });
+        return;
+      }
+      if (multiple && key.name === "a") {
+        options.forEach((option) => selected.add(option.value));
+        error = undefined;
+        renderPicker({ error, index, multiple, options, selected, title });
+        return;
+      }
+      if (multiple && key.name === "n") {
+        selected.clear();
+        error = undefined;
+        renderPicker({ error, index, multiple, options, selected, title });
+        return;
+      }
+      if (key.name === "return" || key.name === "enter") {
+        if (multiple && selected.size === 0) {
+          error = "Select at least one harness, or press q to cancel.";
+          renderPicker({ error, index, multiple, options, selected, title });
+          return;
+        }
+        finish(multiple ? options.filter((option) => selected.has(option.value)).map((option) => option.value) : options[index].value);
+      }
+    };
+
+    try {
+      emitKeypressEvents(input);
+      input.setRawMode(true);
+      input.resume();
+      input.on("keypress", onKeypress);
+      output.write("\u001b[?25l");
+      renderPicker({ error, index, multiple, options, selected, title });
+    } catch (pickerError) {
+      cleanup();
+      reject(pickerError);
+    }
+  });
 }
 
 async function chooseInstallOptions({ force, harnessNames, scope, yes }) {
@@ -309,28 +407,45 @@ async function chooseInstallOptions({ force, harnessNames, scope, yes }) {
   const canPrompt = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   const needsPrompt = !yes && !harnessNames && !scope && canPrompt;
 
-  if (!harnessNames) {
+  if (!harnessNames && !needsPrompt) {
     printDetections(detections);
   }
   if (!canPrompt && !yes && !harnessNames && !scope) {
-    console.log("No interactive terminal detected; using project scope and detected harnesses.");
+    console.log("No interactive terminal detected; using global scope and detected harnesses.");
   }
 
   if (needsPrompt) {
-    const readline = createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      const selectedScope = (await readline.question("Install for [project/global] (project): ")).trim().toLowerCase();
-      scope = selectedScope || "project";
-      if (scope !== "project" && scope !== "global") {
-        throw new Error("scope must be project or global");
-      }
-      const defaultSelection = defaults
-        .map((name) => detections.findIndex(({ harness }) => harness.name === name) + 1)
-        .join(",");
-      const selection = await readline.question(`Choose harnesses [${defaultSelection}]: `);
-      harnessNames = selection.trim() ? parseHarnessSelection(selection, detections) : defaults;
-    } finally {
-      readline.close();
+    scope = await pickOptions({
+      initialValues: ["global"],
+      options: [
+        {
+          value: "global",
+          label: "Global",
+          description: `available to your agents from ${home}`,
+        },
+        {
+          value: "project",
+          label: "Project",
+          description: `available to this project from ${cwd}`,
+        },
+      ],
+      title: "Where should the agent skill be installed?",
+    });
+    if (!scope) {
+      return null;
+    }
+    harnessNames = await pickOptions({
+      initialValues: defaults,
+      multiple: true,
+      options: detections.map(({ harness, reasons }) => ({
+        value: harness.name,
+        label: `${harness.label}${formatDetected(reasons)}`,
+        description: targetFor(harness, scope, cwd, home),
+      })),
+      title: "Which harnesses should use the skill?",
+    });
+    if (!harnessNames) {
+      return null;
     }
   }
 
@@ -339,7 +454,7 @@ async function chooseInstallOptions({ force, harnessNames, scope, yes }) {
     force,
     harnessNames: harnessNames ?? defaults,
     home,
-    scope: scope ?? "project",
+    scope: scope ?? "global",
   };
 }
 
@@ -399,11 +514,15 @@ if (argumentsList[0] === "install-cli") {
   if (options) {
     try {
       const selected = await chooseInstallOptions(options);
-      const targets = selected.harnessNames.map((name) => targetFor(harnessByName.get(name), selected.scope, selected.cwd, selected.home));
-      const uniqueTargets = [...new Set(targets)];
-      console.log(`Installing for ${selected.scope}: ${uniqueTargets.join(", ")}`);
-      for (const target of uniqueTargets) {
-        await install({ force: selected.force, target });
+      if (!selected) {
+        console.log("Installation cancelled.");
+      } else {
+        const targets = selected.harnessNames.map((name) => targetFor(harnessByName.get(name), selected.scope, selected.cwd, selected.home));
+        const uniqueTargets = [...new Set(targets)];
+        console.log(`Installing for ${selected.scope}: ${uniqueTargets.join(", ")}`);
+        for (const target of uniqueTargets) {
+          await install({ force: selected.force, target });
+        }
       }
     } catch (error) {
       console.error(`Error: ${error.message}`);
