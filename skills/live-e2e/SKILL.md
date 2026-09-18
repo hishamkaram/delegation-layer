@@ -35,7 +35,8 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
    is accepted when those checks pass. Never put
    credentials, tokens, unrelated environment values, or private raw logs in a
    receipt.
-2. Launch through the shipped dispatcher/runner with isolated pueue, finite
+2. Launch through the shipped dispatcher/runner with its isolated private
+   supervisor, finite
    stdin followed by EOF, and the declared profile. Do not call the provider
    directly, pass the brief in argv, mutate global config, or use direct
    signals.

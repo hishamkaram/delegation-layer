@@ -1,4 +1,4 @@
-// Package pueue binds the supported supervisor CLI to immutable task identity.
+// Package pueue binds a compatible supervisor CLI to immutable task identity.
 // Observation deadlines never cancel an external process or grant a retry.
 package pueue
 
@@ -10,7 +10,10 @@ import (
 )
 
 const (
-	SupportedVersion          = "4.0.4"
+	// FixtureVersion names the serialized test fixture baseline. Runtime
+	// admission accepts any nonempty observed version whose behavior matches
+	// the validated command/schema contract.
+	FixtureVersion            = "4.0.4"
 	DefaultObservationTimeout = 5 * time.Second
 	MaxControlBytes           = 1 << 20
 )

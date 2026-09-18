@@ -508,7 +508,7 @@ func TestStopInspectionWithoutSavedTargetNeverReconcilesOrMutates(t *testing.T) 
 
 func newInspectionSupervisor(t *testing.T, mode string) *fakeSupervisor {
 	t.Helper()
-	fake := newFakeSupervisorPaths(t, mode, "pueue "+SupportedVersion)
+	fake := newFakeSupervisorPaths(t, mode, "pueue "+FixtureVersion)
 	if err := os.WriteFile(fake.executable, []byte(inspectionSupervisorScript), 0o700); err != nil {
 		t.Fatal(err)
 	}

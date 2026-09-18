@@ -374,11 +374,11 @@ func TestRequestHashesUseExactPreparedRecordBytes(t *testing.T) {
 	}
 }
 
-func TestMissingInitialSupervisorConfigIsConfigurationRefusal(t *testing.T) {
+func TestMissingInitialSupervisorConfigUsesPrivateSupervisorPath(t *testing.T) {
 	t.Setenv("DELEGATE_PUEUE_CONFIG", "")
-	_, err := resolveInitialConfig(Arguments{})
-	if !errors.Is(err, pueue.ErrConfiguration) || classifyCode(err, 1) != 2 {
-		t.Fatalf("missing initial config was not typed as refusal: %v", err)
+	path, err := resolveInitialConfig(Arguments{})
+	if err != nil || path != "" {
+		t.Fatalf("missing initial config was not left for private supervisor resolution: path=%q err=%v", path, err)
 	}
 }
 
@@ -578,7 +578,7 @@ func newAppTaskInStore(t *testing.T, store *taskdir.Store, id string, sealed boo
 	requested := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}
 	digest := task.ComputeSHA256([]byte("app-test"))
 	req := &task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, Provider: "fixture:test", Mode: "read-only", CanonicalCwd: cwd, RequestedConfig: requested, BudgetNanos: int64(time.Minute), PriorSession: prior, BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
-	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: "/tmp/app-provider", ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: task.SupervisorRef{ClientExecutable: "/tmp/app-pueue", ClientSHA256: digest, ResolvedConfigSHA256: digest, ConfigPath: "/tmp/app-pueue.yml", ConfigDigest: digest, Endpoint: "unix:/tmp/app-pueue.sock", ObservedVersion: pueue.SupportedVersion}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: "/tmp/app-provider", ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: task.SupervisorRef{ClientExecutable: "/tmp/app-pueue", ClientSHA256: digest, ResolvedConfigSHA256: digest, ConfigPath: "/tmp/app-pueue.yml", ConfigDigest: digest, Endpoint: "unix:/tmp/app-pueue.sock", ObservedVersion: pueue.FixtureVersion}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	td, err := store.CreateTask(id, req, brief, meta)
 	if err != nil {
 		t.Fatal(err)

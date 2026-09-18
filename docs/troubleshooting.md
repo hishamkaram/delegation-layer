@@ -22,9 +22,9 @@ adapter's required flags.
 Use `delegate providers --json` to confirm the profile ID and required runtime
 flags. Discovery does not prove that the current host has the executable.
 
-If the host is Linux, remember that the current Codex and Claude profiles also
-need their native Darwin policy checks; use a profile with a supported native
-contract for that host.
+Codex and Claude use the same portable runtime admission path on Linux and
+Darwin. If either is rejected, inspect the specific executable, required flag,
+policy, or authentication reason in the structured response.
 
 ## Authentication fails
 
@@ -52,11 +52,14 @@ admission.
 
 ## Supervisor configuration fails
 
-Pass an existing absolute `--pueue-config` path or set
-`DELEGATE_PUEUE_CONFIG` to that path. Use Pueue 4.0.4 with a private Unix socket
-and keep its configuration and credentials outside the task state root and
-workspace. A changed executable, configuration file, or resolved supervisor
-settings can invalidate a saved task binding.
+Normal dispatch starts the bundled Pueue client and daemon with a private Unix
+socket below the state root. For an advanced integration, pass an existing
+absolute `--pueue-config` path or set `DELEGATE_PUEUE_CONFIG` to that path and
+keep its configuration and credentials outside the task state root and
+workspace. The runtime accepts a nonempty observed supervisor version when its
+command, readiness, and queue behavior match the supported schema. A changed
+executable, configuration file, or resolved supervisor settings can invalidate
+a saved task binding.
 
 ## A task remains pending
 

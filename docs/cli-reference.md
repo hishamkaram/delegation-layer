@@ -24,8 +24,10 @@ delegate version
 ```
 
 Global paths must be absolute. `--root` defaults to the user's configuration
-directory joined with `delegation-layer`. Dispatch requires `--pueue-config`,
-unless `DELEGATE_PUEUE_CONFIG` supplies the same absolute path.
+directory joined with `delegation-layer`. Dispatch starts the bundled Pueue
+client and daemon in a private state-rooted configuration. `--pueue-config` or
+`DELEGATE_PUEUE_CONFIG` is optional and selects an existing compatible
+supervisor for advanced integrations.
 
 ## Dispatch
 
@@ -137,11 +139,13 @@ while authority fields and descriptors are retained.
 
 ## Supervisor binding
 
-The initial dispatch binds Pueue 4.0.4, the resolved executable, its absolute
-path, and the exact configuration and resolved settings used for that task.
-Later operations use that saved binding and reject a mismatched fresh
-authority. The configuration parser accepts YAML and JSON-form YAML with
-strict fields and bounded depth, aliases, nodes, and document size.
+The initial dispatch binds the resolved Pueue executable, its absolute path,
+the observed version, and the exact configuration and resolved settings used
+for that task. Later operations use that saved binding and reject a mismatched
+fresh authority. Runtime admission uses the command and status behavior plus
+the queue schema, rather than an exact supervisor release number. The
+configuration parser accepts YAML and JSON-form YAML with strict fields and
+bounded depth, aliases, nodes, and document size.
 
 `delegate-run` normally resolves beside `delegate`. Use the absolute global
 `--runner` option for a source-build layout or a custom integration.

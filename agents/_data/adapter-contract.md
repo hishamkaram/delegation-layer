@@ -25,11 +25,12 @@ profile revision, or digest is compared with a checked-in value.
 
 ## 2. Launch Planning and Preflight Policy
 - **Claude Storage Selection**: The restricted Claude profile supplies invocation-local
-  `CLAUDE_CODE_HOVER_REST=0`, preserving its native Keychain service/account while
-  fixing the settings/cache backend. The native inspection records the opaque
-  plaintext fallback's presence without opening it; the signed-in Keychain
-  account remains the authentication authority. Conflicting ambient selectors
-  are refused. This implementation-specific control is checked on every task.
+  `CLAUDE_CODE_HOVER_REST=0`, preserving its native account context while fixing
+  the settings/cache backend. The adapter records only opaque credential-fallback
+  presence metadata and does not require a platform-specific Keychain inspection
+  during admission; authentication remains the Claude CLI's live responsibility.
+  Conflicting ambient selectors are refused. This implementation-specific
+  control is checked on every task.
 - **Input Delivery**: Brief text is delivered exclusively via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv. Brief size limit is 8 MiB.
 - **Argv Construction**: Built strictly as Go string slices (`[]string`), executed directly via `exec.Command` without shell wrapper or reparsing.
 - **Working Directory**: Set strictly to the validated canonical workspace directory (`Cmd.Dir = workdir`).

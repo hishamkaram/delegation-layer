@@ -13,13 +13,17 @@ flowchart TD
     D --> E[Capability evidence and diagnostics]
     E --> F[Finalize profile and effective policy]
     F --> G[Persist immutable task records]
-    G --> H[Submit one job to Pueue]
-    H --> I[delegate-run reconstructs and rechecks]
-    I --> J[Start provider and observe identity]
-    J --> K[Bounded stdout/stderr capture]
-    K --> L[Seal artifacts and validate behavior]
-    L --> M[Publish outcome.json]
-    M --> N[status / collect / logs]
+    G --> H{Supervisor selection}
+    H -->|default| I[Create or reuse private bundled Pueue]
+    H -->|explicit config| I2[Bind compatible external Pueue]
+    I --> J[Submit one job to Pueue]
+    I2 --> J
+    J --> K[delegate-run reconstructs and rechecks]
+    K --> L[Start provider and observe identity]
+    L --> M[Bounded stdout/stderr capture]
+    M --> N[Seal artifacts and validate behavior]
+    N --> O[Publish outcome.json]
+    O --> P[status / collect / logs]
 ```
 
 The maintained Archify views are [system components](../diagrams/components.html)
@@ -40,8 +44,11 @@ which records the observed version, executable identity, and effective policy
 in the task metadata. The version is an observation; advertised behavior and
 the executable identity decide compatibility.
 
-Pueue owns queueing and process supervision. `delegate-run` receives only the
-saved root and task ID, reconstructs the recorded profile, and refuses to start
+Pueue owns queueing and process supervision. A normal release carries the
+`pueue` and `pueued` executables and creates a private state-rooted
+configuration on demand. An explicit `--pueue-config` can bind an existing
+compatible supervisor. `delegate-run` receives only the saved root and task ID,
+reconstructs the recorded profile, and refuses to start
 if the fresh profile no longer matches admission. The runner observes provider
 identity, captures bounded streams, verifies declared artifacts, and seals the
 evidence.

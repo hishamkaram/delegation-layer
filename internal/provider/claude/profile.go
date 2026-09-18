@@ -13,8 +13,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// PrepareCandidate resolves static inputs and describes native inspection.
-// The shared app owns the effect and supplies nonsecret facts to Finalize.
+// PrepareCandidate resolves static inputs and describes the portable runtime
+// probe. Authentication remains owned by the Claude CLI.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 	arguments, inputs, err := printArguments(request)
 	if err != nil {
@@ -33,21 +33,9 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	if err = validateLegacyAPIKeyInspection(inspectLegacyAPIKey(environment)); err != nil {
-		return commonprovider.ProfileCandidate{}, err
-	}
-	definition, err := nativeInspection(environment)
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, RuntimeRequirements())
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
-	}
-	requirements := RuntimeRequirements()
-	definition.Runtime = &commonprovider.RuntimeProbeDefinition{
-		Executable:       cli.Path,
-		ExecutableSHA256: cli.SHA256,
-		Directory:        request.CanonicalCwd,
-		Environment:      slices.Clone(environment.Values),
-		HelpArgs:         slices.Clone(requirements.HelpArgs),
-		RequiredFlags:    slices.Clone(requirements.RequiredFlags),
 	}
 	var definitionDigest string
 	definition, definitionDigest, err = definition.Snapshot()
@@ -76,10 +64,11 @@ func finalizePreparedProfile(
 	now time.Time,
 ) (commonprovider.PreparedProfile, error) {
 	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
-	if decodeErr != nil || facts.Runtime == nil || len(facts.Native) == 0 || facts.Runtime.Executable != cli.Path || facts.Runtime.SHA256 != cli.SHA256 {
-		return commonprovider.PreparedProfile{}, unsupportedNativeFacts()
+	if decodeErr != nil || task.ValidateSHA256(definitionDigest) != nil || facts.Runtime == nil || facts.Native != nil || facts.Runtime.Executable != cli.Path || facts.Runtime.SHA256 != cli.SHA256 {
+		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
 	}
-	effective, err := finalizePolicy(request, environment, sources, definitionDigest, facts.Native, now)
+	runtime := *facts.Runtime
+	effective, err := finalizePortablePolicy(request, environment, sources, now)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
@@ -89,7 +78,7 @@ func finalizePreparedProfile(
 			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(environment.Values), Predicate: predicateReference, InputFiles: slices.Clone(inputs),
 		},
-		ObservedVersion: facts.Runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
+		ObservedVersion: runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
 		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 			return NewIdentityObserver(request.RootID, request.TaskID, expected, record)
 		},
@@ -98,6 +87,39 @@ func finalizePreparedProfile(
 		return commonprovider.PreparedProfile{}, err
 	}
 	return prepared, nil
+}
+
+func finalizePortablePolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest, now time.Time) (task.EffectiveConfig, error) {
+	if now.IsZero() || request.BudgetNanos <= 0 {
+		return task.EffectiveConfig{}, fmt.Errorf("%w: invalid runtime inspection boundary", ErrUnsupportedProfile)
+	}
+	if err := task.ValidateSHA256(environment.RuntimeSHA256); err != nil {
+		return task.EffectiveConfig{}, fmt.Errorf("%w: runtime identity: %w", ErrUnsupportedProfile, err)
+	}
+	sources = slices.Clone(sources)
+	slices.SortFunc(sources, func(a, b task.PolicySourceDigest) int {
+		if order := cmp.Compare(a.Path, b.Path); order != 0 {
+			return order
+		}
+		return cmp.Compare(a.Kind, b.Kind)
+	})
+	profileRevision, approval := ProfileRevision, "dontAsk"
+	if request.Mode == WorkspaceWriteMode {
+		profileRevision, approval = WorkspaceWriteProfileRevision, "acceptEdits"
+	}
+	effective := task.EffectiveConfig{Containment: request.Mode, Approval: approval, Policy: &task.PolicyDetails{
+		ProfileRevision: profileRevision, RuntimeSHA256: environment.RuntimeSHA256,
+		Workspace: request.CanonicalCwd, WritableRoots: slices.Clone(environment.WritableRoots), Sources: sources,
+	}}
+	encoded, err := task.MarshalCanonical(effective)
+	if err != nil {
+		return task.EffectiveConfig{}, err
+	}
+	effective.Digest = task.ComputeSHA256(encoded)
+	if err = task.ValidateEffectiveConfig(effective); err != nil {
+		return task.EffectiveConfig{}, err
+	}
+	return effective, nil
 }
 
 func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest, definitionDigest string, data json.RawMessage, now time.Time) (task.EffectiveConfig, error) {

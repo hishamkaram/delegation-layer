@@ -102,7 +102,7 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	if err != nil {
 		return admissionPreparation{}, err
 	}
-	supervisor, err := bindInitialWithOptions(a, deps, supervisorOptions)
+	supervisor, err := bindInitialWithOptions(a, deps, store.Root, supervisorOptions)
 	if err != nil {
 		return admissionPreparation{}, err
 	}

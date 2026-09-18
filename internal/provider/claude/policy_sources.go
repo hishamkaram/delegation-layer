@@ -58,10 +58,11 @@ type claudePolicySourceReader func(string) (commonprovider.SourceBytes, error)
 //
 // The resolver never reads Keychain or credentials files. It records only the
 // metadata-only presence or absence of the direct plaintext OAuth fallback
-// used after the native Keychain lookup. Native inspection separately proves
-// the signed-in Keychain account before launch. A present managed plist/managed
-// JSON source is refused because this pure resolver cannot faithfully parse the
-// native whole-document policy semantics.
+// used by the native CLI. A present managed plist/managed JSON source is
+// refused because this pure resolver cannot faithfully parse the native
+// whole-document policy semantics. Authentication remains the provider CLI's
+// live responsibility; the legacy native inspection path is retained only for
+// compatibility tests and historical policy evidence.
 func resolvePolicySources(request task.TaskRecord, environment profileEnvironment) ([]task.PolicySourceDigest, error) {
 	username, err := currentClaudeOSUsername()
 	if err != nil {
@@ -412,9 +413,9 @@ const claudePlaintextCredentialsFallbackKind = "claude-plaintext-credentials-fal
 // ~/.claude/.credentials.json; the fallback is an OAuth credential store, so
 // its contents must never be read, parsed, or hashed by policy inspection.
 // An absent path is useful evidence. A present path is recorded as an opaque
-// marker without opening it; the native helper remains the authority for the
-// account actually used by the CLI. This allows a normal signed-in account to
-// retain Claude's native fallback file without copying or exposing it.
+// marker without opening it; the provider CLI remains the authority for the
+// account actually used. This allows a normal signed-in account to retain
+// Claude's native fallback file without copying or exposing it.
 func observeClaudePlaintextCredentialsFallback(path string) (task.PolicySourceDigest, error) {
 	result := claudeAbsentSource(path, claudePlaintextCredentialsFallbackKind)
 	_, err := os.Lstat(path)

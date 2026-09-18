@@ -38,7 +38,7 @@ func groupTestBinding() task.SupervisorRef {
 		Endpoint:             "unix:///tmp/pueue.sock",
 		ConfigPath:           "/etc/pueue.yml",
 		ConfigDigest:         task.ComputeSHA256([]byte("pueue-config")),
-		ObservedVersion:      pueue.SupportedVersion,
+		ObservedVersion:      pueue.FixtureVersion,
 	}
 }
 
@@ -107,18 +107,9 @@ func TestOpenGroupBindsRootAndReplaysCanonicalRequest(t *testing.T) {
 	}
 }
 
-func TestOpenGroupRejectsChangedBindingAndUnsupportedVersionBeforeDirectory(t *testing.T) {
+func TestOpenGroupRejectsChangedBindingBeforeDirectory(t *testing.T) {
 	store := groupTestStore(t)
 	binding := groupTestBinding()
-	unsupported := binding
-	unsupported.ObservedVersion = "3.0.0"
-	if _, err := OpenGroup(store, unsupported); !errors.Is(err, pueue.ErrBinding) {
-		t.Fatalf("unsupported version accepted: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(store.Root, "inspection-group")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("invalid binding created group directory: %v", err)
-	}
-
 	group, err := OpenGroup(store, binding)
 	if err != nil {
 		t.Fatal(err)

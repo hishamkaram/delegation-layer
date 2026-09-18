@@ -37,13 +37,13 @@ func validBindingForTest() task.SupervisorRef {
 		ConfigPath:           "/tmp/pueue.yml",
 		ConfigDigest:         digest,
 		Endpoint:             "unix:/tmp/pueue.sock",
-		ObservedVersion:      SupportedVersion,
+		ObservedVersion:      FixtureVersion,
 	}
 }
 
 func newFakeSupervisor(t *testing.T, mode string) *fakeSupervisor {
 	t.Helper()
-	fake := newFakeSupervisorPaths(t, mode, "pueue "+SupportedVersion)
+	fake := newFakeSupervisorPaths(t, mode, "pueue "+FixtureVersion)
 	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{ObservationTimeout: DefaultObservationTimeout, Environment: fake.environment})
 	if err != nil {
 		var inFlight *InFlightError
@@ -542,7 +542,7 @@ func assertTargetedStopAcknowledgment(t *testing.T, tc targetedStopCase, result 
 }
 
 func TestExplicitResolutionMustMatchChildEnvironment(t *testing.T) {
-	fake := newFakeSupervisorPaths(t, "ok", "pueue "+SupportedVersion)
+	fake := newFakeSupervisorPaths(t, "ok", "pueue "+FixtureVersion)
 	resolution, err := CurrentResolutionContext()
 	if err != nil {
 		t.Fatal(err)
@@ -603,7 +603,7 @@ func TestFreshBindingDetectsExecutableDrift(t *testing.T) {
 }
 
 func TestFreshBindingDetectsResolutionDrift(t *testing.T) {
-	fake := newFakeSupervisorPaths(t, "ok", "pueue "+SupportedVersion)
+	fake := newFakeSupervisorPaths(t, "ok", "pueue "+FixtureVersion)
 	if err := os.WriteFile(fake.configPath, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -628,14 +628,13 @@ func testIdentity() Identity {
 func TestNewClientRequiresEverySavedBindingComponent(t *testing.T) {
 	base := validBindingForTest()
 	cases := map[string]func(*task.SupervisorRef){
-		"client executable":   func(ref *task.SupervisorRef) { ref.ClientExecutable = "" },
-		"client digest":       func(ref *task.SupervisorRef) { ref.ClientSHA256 = "" },
-		"resolved digest":     func(ref *task.SupervisorRef) { ref.ResolvedConfigSHA256 = "" },
-		"config path":         func(ref *task.SupervisorRef) { ref.ConfigPath = "" },
-		"config digest":       func(ref *task.SupervisorRef) { ref.ConfigDigest = "" },
-		"endpoint":            func(ref *task.SupervisorRef) { ref.Endpoint = "" },
-		"version":             func(ref *task.SupervisorRef) { ref.ObservedVersion = "" },
-		"unsupported version": func(ref *task.SupervisorRef) { ref.ObservedVersion = "4.0.3" },
+		"client executable": func(ref *task.SupervisorRef) { ref.ClientExecutable = "" },
+		"client digest":     func(ref *task.SupervisorRef) { ref.ClientSHA256 = "" },
+		"resolved digest":   func(ref *task.SupervisorRef) { ref.ResolvedConfigSHA256 = "" },
+		"config path":       func(ref *task.SupervisorRef) { ref.ConfigPath = "" },
+		"config digest":     func(ref *task.SupervisorRef) { ref.ConfigDigest = "" },
+		"endpoint":          func(ref *task.SupervisorRef) { ref.Endpoint = "" },
+		"version":           func(ref *task.SupervisorRef) { ref.ObservedVersion = "" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

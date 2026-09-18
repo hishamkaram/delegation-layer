@@ -38,7 +38,8 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 	result := profileEnvironment{Home: home, ClaudeHome: claudeHome}
 	// The restricted runtime processes this explicit false value before its
 	// first-pin-wins storage latch. Remote feature evaluation cannot repin it.
-	// OAuth retains the same native Keychain service/account.
+	// OAuth retains the provider's native account context; authentication is
+	// checked by the Claude CLI during the live invocation.
 	result.Values = append(result.Values, storageBackendPin)
 	for _, key := range []string{"HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TMP", "TEMP", "__CF_USER_TEXT_ENCODING"} {
 		if value, exists := entries[key]; exists {

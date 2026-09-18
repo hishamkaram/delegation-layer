@@ -65,7 +65,7 @@ npx --yes delegation-layer install \
 ```
 
 The skill installer only installs guidance for your agent. It does not install
-the CLI, change provider logins, or configure a supervisor.
+the CLI, change provider logins, or run a task.
 
 ### Install the CLI
 
@@ -85,8 +85,9 @@ pnpm dlx delegation-layer install-cli
 bunx --bun delegation-layer install-cli
 ```
 
-The release installer verifies checksums and installs `delegate` and
-`delegate-run` into `$HOME/.local/bin` by default. Set
+The release installer verifies checksums and installs `delegate`,
+`delegate-run`, `pueue`, and `pueued` into `$HOME/.local/bin` by default. The
+CLI uses the bundled supervisor automatically. Set
 `DELEGATION_LAYER_INSTALL_DIR` to use another directory.
 
 Check the installation:
@@ -102,14 +103,16 @@ Normal users do not need Go or Node after choosing an installation method.
 Dispatching a task requires:
 
 - a released Delegation Layer CLI;
-- Pueue 4.0.4 with a private, running `pueued` daemon;
-- a signed-in supported provider CLI such as `agy`, `codex`, `claude`, `pi`,
-  or `opencode`;
+- a compatible provider CLI with an available native login;
+- a supported provider CLI such as `agy`, `codex`, `claude`, `pi`, or `opencode`;
 - Darwin or Linux on amd64 or arm64 for the supplied release builds.
 
-Go is only needed for source builds and contributor work. Node.js 18 or newer
-is needed for the npm-based installers; it is not a runtime requirement for the
-released Go CLI. Provider authentication remains native to each provider.
+The release contains the supervisor client and daemon and starts a private
+instance under the state root. An explicit `--pueue-config` or
+`DELEGATE_PUEUE_CONFIG` can still select an existing compatible supervisor for
+advanced integrations. Node.js 18 or newer is needed only for the npm-based
+installers; it is not a runtime requirement for the released Go CLI. Provider
+authentication remains native to each provider.
 
 ## Try one bounded task
 
@@ -119,7 +122,7 @@ Create a brief and a workspace outside the private state root:
 mkdir -p "$HOME/delegation-workspace"
 printf '%s\n' 'Inspect the repository and summarize the current build status.' > brief.txt
 
-delegate --pueue-config /absolute/path/to/pueue.yml dispatch \
+delegate --root "$HOME/delegation-state" dispatch \
   --provider codex:exec \
   --brief "$PWD/brief.txt" \
   --cwd "$HOME/delegation-workspace" \

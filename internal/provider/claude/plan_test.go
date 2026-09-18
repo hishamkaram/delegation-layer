@@ -1,11 +1,14 @@
 package claude
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -15,6 +18,34 @@ func profileRequest() task.TaskRecord {
 		Provider: Provider, Mode: Mode, CanonicalCwd: "/workspace with spaces",
 		BriefLength: 12, BudgetNanos: int64(120 * time.Second),
 		RequestedConfig: task.TaskConfig{Permission: Mode, Effort: "default"},
+	}
+}
+
+func TestFinalizePreparedProfileUsesPortableRuntimeFacts(t *testing.T) {
+	request := profileRequest()
+	arguments, inputs, err := printArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := commonprovider.CLIInfo{Path: "/usr/local/bin/claude", SHA256: strings.Repeat("a", 64)}
+	environment := profileEnvironment{
+		RuntimeSHA256: cli.SHA256,
+		WritableRoots: []string{"/home/test/.claude"},
+	}
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
+		Executable: cli.Path,
+		Version:    "Claude Code 99.7.3",
+		SHA256:     cli.SHA256,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := finalizePreparedProfile(request, arguments, inputs, cli, environment, nil, strings.Repeat("b", 64), json.RawMessage(facts), time.Unix(2_000_000_000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.ObservedVersion != "Claude Code 99.7.3" || prepared.Effective.Policy == nil {
+		t.Fatalf("portable runtime facts were not finalized: %+v", prepared)
 	}
 }
 

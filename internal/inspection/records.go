@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -106,9 +105,6 @@ func ValidateBinding(binding Binding) error {
 	}
 	if err := task.ValidateFreshSupervisorRef(binding.Supervisor); err != nil {
 		return fmt.Errorf("inspection supervisor binding: %w", err)
-	}
-	if binding.Supervisor.ObservedVersion != pueue.SupportedVersion {
-		return fmt.Errorf("inspection supervisor version %q is not supported", binding.Supervisor.ObservedVersion)
 	}
 	return nil
 }

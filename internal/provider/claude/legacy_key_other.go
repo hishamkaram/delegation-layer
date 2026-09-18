@@ -2,14 +2,13 @@
 
 package claude
 
-import "fmt"
-
 // inspectLegacyAPIKeyAbsence is unavailable where the Claude native
-// keychain backend cannot be inspected without a different platform contract.
+// keychain backend cannot be inspected. Authentication remains owned by the
+// Claude CLI, so this optional legacy check is treated as absent.
 func inspectLegacyAPIKeyAbsence(profileEnvironment) error {
-	return fmt.Errorf("%w: legacy Claude API-key inspection is unavailable on this platform", ErrUnsupportedProfile)
+	return nil
 }
 
 func inspectLegacyAPIKey(profileEnvironment) legacyAPIKeyInspection {
-	return legacyAPIKeyInspection{Err: fmt.Errorf("%w: legacy Claude API-key inspection is unavailable on this platform", ErrUnsupportedProfile)}
+	return legacyAPIKeyInspection{Verified: true}
 }

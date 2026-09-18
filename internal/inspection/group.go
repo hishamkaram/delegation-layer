@@ -110,10 +110,6 @@ func OpenGroup(store *taskdir.Store, binding task.SupervisorRef) (journal *Group
 	if bindingErr := task.ValidateFreshSupervisorRef(binding); bindingErr != nil {
 		return nil, bindingErr
 	}
-	if binding.ObservedVersion != pueue.SupportedVersion {
-		return nil, pueue.ErrBinding
-	}
-
 	expected := GroupRequestRecord{
 		SchemaVersion: task.SchemaVersion,
 		RootID:        store.RootID,
@@ -224,9 +220,6 @@ func validateGroupRequest(record GroupRequestRecord, rootID string, binding task
 	}
 	if err := task.ValidateFreshSupervisorRef(record.Supervisor); err != nil {
 		return err
-	}
-	if record.Supervisor.ObservedVersion != pueue.SupportedVersion {
-		return pueue.ErrBinding
 	}
 	if record.Name != groupForRoot(rootID) {
 		return task.ErrIdentityMismatch

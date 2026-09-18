@@ -507,7 +507,7 @@ func resolveInitialConfig(a Arguments) (string, error) {
 		path = os.Getenv("DELEGATE_PUEUE_CONFIG")
 	}
 	if path == "" {
-		return "", fmt.Errorf("%w: initial pueue config is required via --pueue-config or DELEGATE_PUEUE_CONFIG", pueue.ErrConfiguration)
+		return "", nil
 	}
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return "", pueue.ErrConfiguration
@@ -532,6 +532,33 @@ func resolveInitialExecutable(deps Dependencies) (string, error) {
 		path = absolute
 	}
 	return path, nil
+}
+
+func resolveBundledExecutable(deps Dependencies, name string) (string, error) {
+	var candidate string
+	if deps.InitialSupervisorExecutable != "" {
+		candidate = filepath.Join(filepath.Dir(deps.InitialSupervisorExecutable), name)
+	} else {
+		self, err := os.Executable()
+		if err != nil {
+			return "", err
+		}
+		candidate = filepath.Join(filepath.Dir(self), name)
+	}
+	if path, err := filepath.EvalSymlinks(candidate); err == nil {
+		info, statErr := os.Stat(path)
+		if statErr == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return path, nil
+		}
+	}
+	if path, err := exec.LookPath(name); err == nil {
+		absolute, absErr := filepath.Abs(path)
+		if absErr != nil {
+			return "", absErr
+		}
+		return filepath.EvalSymlinks(absolute)
+	}
+	return "", fmt.Errorf("%w: bundled %s executable not found beside delegate or on PATH", pueue.ErrConfiguration, name)
 }
 
 func resolveRunner(raw string, deps Dependencies) (string, error) {
@@ -566,13 +593,27 @@ func resolveRunner(raw string, deps Dependencies) (string, error) {
 }
 
 func bindInitial(a Arguments, deps Dependencies) (*pueue.Client, error) {
-	return bindInitialWithOptions(a, deps, deps.SupervisorOptions)
+	return bindInitialWithOptions(a, deps, "", deps.SupervisorOptions)
 }
 
-func bindInitialWithOptions(a Arguments, deps Dependencies, supervisorOptions pueue.Options) (*pueue.Client, error) {
+func bindInitialWithOptions(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options) (*pueue.Client, error) {
 	configPath, err := resolveInitialConfig(a)
 	if err != nil {
 		return nil, err
+	}
+	if configPath == "" {
+		clientExecutable, clientErr := resolveBundledExecutable(deps, "pueue")
+		if clientErr != nil {
+			return nil, clientErr
+		}
+		daemonExecutable, daemonErr := resolveBundledExecutable(deps, "pueued")
+		if daemonErr != nil {
+			return nil, daemonErr
+		}
+		if root == "" {
+			return nil, fmt.Errorf("%w: state root is required for the private supervisor", pueue.ErrConfiguration)
+		}
+		return pueue.BindPrivate(context.Background(), clientExecutable, daemonExecutable, root, supervisorOptions)
 	}
 	executable, err := resolveInitialExecutable(deps)
 	if err != nil {
