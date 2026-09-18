@@ -129,7 +129,7 @@ func TestDetachBudgetRequestContextOnlyDetachesOwnerContext(t *testing.T) {
 		t.Fatal("ordinary caller context was detached")
 	}
 
-	ownerContext := budgetRequestContext{Context: ctx}
+	ownerContext := context.WithValue(ctx, budgetRequestContextMarker, true)
 	detached := DetachBudgetRequestContext(ownerContext)
 	cancel()
 	if detached.Err() != nil || detached.Done() != nil {

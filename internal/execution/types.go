@@ -43,6 +43,10 @@ type Stopper interface {
 // BudgetRequest observes a prepared stop through the bound supervisor.
 type BudgetRequest func(context.Context) error
 
+type budgetRequestContextKey struct{}
+
+var budgetRequestContextMarker budgetRequestContextKey
+
 // DetachBudgetRequestContext removes runner completion cancellation only from
 // the context supplied by the budget owner to a prepared stop request. A
 // caller invoking a request directly keeps its normal cancellation semantics.
@@ -52,13 +56,11 @@ func DetachBudgetRequestContext(ctx context.Context) context.Context {
 	if ctx == nil {
 		return nil
 	}
-	if _, ok := ctx.(budgetRequestContext); !ok {
+	if ctx.Value(budgetRequestContextMarker) != true {
 		return ctx
 	}
 	return context.WithoutCancel(ctx)
 }
-
-type budgetRequestContext struct{ context.Context }
 
 // Clock supplies monotonic in-memory launch timing. Wall times are evidence only.
 type Clock interface {

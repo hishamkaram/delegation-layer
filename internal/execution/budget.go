@@ -69,7 +69,8 @@ func (b *budgetOwner) observe(ctx context.Context, deadline time.Time, opts Opti
 	request, err := b.prepareExpiry(deadline, opts)
 	b.recordStopError(err)
 	if request != nil {
-		b.recordStopError(request(budgetRequestContext{Context: ctx}))
+		requestContext := context.WithValue(ctx, budgetRequestContextMarker, true)
+		b.recordStopError(request(requestContext))
 	}
 }
 
