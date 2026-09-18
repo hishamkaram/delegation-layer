@@ -120,3 +120,19 @@ func TestBudgetPreparationErrorCannotGrantReturnedRequest(t *testing.T) {
 		t.Fatal("failed preparation granted a supervisor operation")
 	}
 }
+
+func TestDetachBudgetRequestContextOnlyDetachesOwnerContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if got := DetachBudgetRequestContext(ctx); got != ctx {
+		t.Fatal("ordinary caller context was detached")
+	}
+
+	ownerContext := context.WithValue(ctx, budgetRequestContextMarker, true)
+	detached := DetachBudgetRequestContext(ownerContext)
+	cancel()
+	if detached.Err() != nil || detached.Done() != nil {
+		t.Fatalf("owner context remained cancelable: err=%v done=%v", detached.Err(), detached.Done())
+	}
+}

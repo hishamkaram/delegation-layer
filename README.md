@@ -7,9 +7,9 @@ validated result that can be collected later.
 
 > **Preview release**
 >
-> The project publishes checksum-verified CLI archives and a separate npm
-> package for the integration skill. The provider CLI and Pueue remain host
-> prerequisites.
+> The project publishes checksum-verified CLI releases and an npm package with
+> installers for the CLI and integration skill. The provider CLI and Pueue
+> remain host prerequisites.
 
 ## What it does
 
@@ -26,14 +26,15 @@ outcome without launching the provider again.
 
 ## Requirements
 
-- Go 1.27.1, the repository's pinned toolchain.
+- Go 1.27.1 is needed only for source builds and the Homebrew formula.
 - Pueue 4.0.4 and a running `pueued` daemon using a private configuration.
 - A signed-in installation of one or more supported provider CLIs: `agy`,
   `codex`, `claude`, `pi`, or `opencode`.
 - A Darwin or Linux host on amd64 or arm64 for the supplied build targets.
   Provider availability is profile-specific; see the provider guide for native
   platform prerequisites.
-- Node.js 18 or newer is required only when using the npm skill installer.
+- Node.js 18 or newer is needed for the npm and pnpm installers; Bun is needed
+  for the Bun installer.
 
 The provider executable must be available to the process that dispatches the
 task. Delegation Layer runs the provider's version and help commands before
@@ -47,78 +48,77 @@ semver allowlist is used.
 
 ## Install
 
-### Tagged release artifacts
+### Install the CLI
 
-After a tagged release is published, download the archive that matches your
-operating system and architecture, verify its checksum, and place `delegate`
-and `delegate-run` on your `PATH`:
-
-```sh
-set -euo pipefail
-version=v0.1.0
-case "$(uname -s)" in
-  Linux) os=Linux ;;
-  Darwin) os=Darwin ;;
-  *) echo "Unsupported operating system" >&2; exit 1 ;;
-esac
-case "$(uname -m)" in
-  x86_64|amd64) arch=amd64 ;;
-  arm64|aarch64) arch=arm64 ;;
-  *) echo "Unsupported architecture" >&2; exit 1 ;;
-esac
-archive="delegation-layer_${version#v}_${os}_${arch}.tar.gz"
-release_url="https://github.com/hishamkaram/delegation-layer/releases/download/${version}"
-tmp_dir="$(mktemp -d)"
-trap 'rm -rf "$tmp_dir"' EXIT
-curl -fL -o "$tmp_dir/$archive" "$release_url/$archive"
-curl -fL -o "$tmp_dir/checksums.txt" "$release_url/checksums.txt"
-cd "$tmp_dir"
-checksum_line="$(grep -F "  $archive" checksums.txt)"
-if command -v sha256sum >/dev/null 2>&1; then
-  printf '%s\n' "$checksum_line" | sha256sum -c -
-else
-  printf '%s\n' "$checksum_line" | shasum -a 256 -c -
-fi
-tar -xzf "$archive"
-mkdir -p "$HOME/.local/bin"
-install -m 0755 delegate delegate-run "$HOME/.local/bin/"
-```
-
-### Build from source
+The shell installer downloads the latest published release, verifies its
+checksum, and installs both `delegate` and `delegate-run` in
+`$HOME/.local/bin`:
 
 ```sh
-git clone https://github.com/hishamkaram/delegation-layer.git
-cd delegation-layer
-mkdir -p "$HOME/.local/bin"
-CGO_ENABLED=0 go build -buildvcs=false -o "$HOME/.local/bin/delegate" ./cmd/delegate
-CGO_ENABLED=0 go build -buildvcs=false -o "$HOME/.local/bin/delegate-run" ./cmd/delegate-run
+curl -fsSL https://raw.githubusercontent.com/hishamkaram/delegation-layer/main/install.sh | sh
 ```
 
-Ensure `$HOME/.local/bin` is on `PATH`, or install the binaries in another
-directory already on `PATH`.
+Set `DELEGATION_LAYER_INSTALL_DIR` if you want to install somewhere other than
+`$HOME/.local/bin`.
+
+Homebrew installs the same two executables:
+
+```sh
+brew install hishamkaram/tap/delegation-layer
+```
+
+The npm package also provides a checksum-verified CLI installer through npm,
+pnpm, and Bun:
+
+```sh
+npx --yes delegation-layer install-cli
+pnpm dlx delegation-layer install-cli
+bunx --bun delegation-layer install-cli
+```
+
+For a source build, install both Go commands from the latest version:
+
+```sh
+go install github.com/hishamkaram/delegation-layer/cmd/delegate@latest
+go install github.com/hishamkaram/delegation-layer/cmd/delegate-run@latest
+```
+
+Ensure the directory used by the installer or Go is on `PATH`.
+
+Confirm the installation:
+
+```sh
+delegate --help
+delegate providers --json
+```
 
 ### Install the agent integration skill
 
-The provider-agnostic skill is independent of the CLI installation. From a
-published release tag, Hermes can install the immutable skill:
+The provider-agnostic skill is separate from the CLI installation. Hermes can
+install the current skill directly:
 
 ```sh
 hermes skills install \
-  https://raw.githubusercontent.com/hishamkaram/delegation-layer/v0.1.0/skills/agent-integration/SKILL.md
+  https://raw.githubusercontent.com/hishamkaram/delegation-layer/main/skills/agent-integration/SKILL.md
 ```
 
-After the npm package is published, any harness with a writable skill directory
-can use the installer:
+Any harness with a writable skill directory can use the dependency-free npm,
+pnpm, or Bun installer:
 
 ```sh
 npx --yes delegation-layer \
   --target "$HOME/.hermes/skills/agent-integration"
+pnpm dlx delegation-layer \
+  --target "$HOME/.hermes/skills/agent-integration"
+bunx --bun delegation-layer \
+  --target "$HOME/.hermes/skills/agent-integration"
 ```
 
-The installer copies only `SKILL.md` into the target directory. It does not
-install, build, upgrade, or configure `delegate`, `delegate-run`, Pueue, or a
-provider CLI. Install those host prerequisites separately before asking an
-agent to use the skill.
+The default package command copies only `SKILL.md` into the target directory.
+The package's explicit `install-cli` command installs the CLI separately; it
+does not change the skill or configure Pueue or a provider CLI. Release tags
+and `DELEGATION_LAYER_VERSION` remain available when a deployment needs a
+reproducible version.
 
 ## Quick start
 

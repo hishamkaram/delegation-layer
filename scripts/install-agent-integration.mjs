@@ -11,7 +11,9 @@ function usage(message) {
   if (message) {
     console.error(`Error: ${message}`);
   }
-  console.error("Usage: delegation-layer --target ABSOLUTE_SKILL_DIR [--force]");
+  console.error(
+    "Usage:\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]",
+  );
   process.exitCode = 2;
 }
 
@@ -31,7 +33,9 @@ function parseArguments(argumentsList) {
       continue;
     }
     if (argument === "--help" || argument === "-h") {
-      console.log("Usage: delegation-layer --target ABSOLUTE_SKILL_DIR [--force]");
+      console.log(
+        "Usage:\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]",
+      );
       process.exit(0);
     }
     usage(`unknown argument ${argument}`);
@@ -96,12 +100,23 @@ async function install({ force, target }) {
   console.log(`Installed agent integration skill: ${destination}`);
 }
 
-const options = parseArguments(process.argv.slice(2));
-if (options) {
+const argumentsList = process.argv.slice(2);
+if (argumentsList[0] === "install-cli") {
   try {
-    await install(options);
+    const { main } = await import("./install-cli.mjs");
+    await main(argumentsList.slice(1));
   } catch (error) {
     console.error(`Error: ${error.message}`);
     process.exitCode = 1;
+  }
+} else {
+  const options = parseArguments(argumentsList);
+  if (options) {
+    try {
+      await install(options);
+    } catch (error) {
+      console.error(`Error: ${error.message}`);
+      process.exitCode = 1;
+    }
   }
 }
