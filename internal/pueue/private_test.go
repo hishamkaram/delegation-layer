@@ -22,10 +22,7 @@ func TestReadyRequiresTheBoundedQueueSchema(t *testing.T) {
 }
 
 func TestBindPrivateBootstrapsAndReusesSupervisor(t *testing.T) {
-	base, evalErr := filepath.EvalSymlinks(t.TempDir())
-	if evalErr != nil {
-		t.Fatal(evalErr)
-	}
+	base := canonicalTemp(t)
 	stateRoot := filepath.Join(base, "state")
 	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
 		t.Fatal(err)
@@ -69,10 +66,7 @@ func TestBindPrivateBootstrapsAndReusesSupervisor(t *testing.T) {
 }
 
 func TestBindPrivateSerializesConcurrentBootstrap(t *testing.T) {
-	base, evalErr := filepath.EvalSymlinks(t.TempDir())
-	if evalErr != nil {
-		t.Fatal(evalErr)
-	}
+	base := canonicalTemp(t)
 	stateRoot := filepath.Join(base, "state")
 	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
 		t.Fatal(err)
