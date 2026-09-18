@@ -25,7 +25,7 @@ fi
 
 INSTALL_ROOT="${TMP_DIR}/install"
 npm install --ignore-scripts --no-save --prefix "${INSTALL_ROOT}" "${PACKAGE_TARBALL}" >/dev/null
-INSTALLER="${INSTALL_ROOT}/node_modules/.bin/delegation-layer-agent-integration"
+INSTALLER="${INSTALL_ROOT}/node_modules/.bin/delegation-layer"
 TARGET="${TMP_DIR}/installed/agent-integration"
 node "${INSTALLER}" --target "${TARGET}"
 cmp "${REPO_ROOT}/skills/agent-integration/SKILL.md" "${TARGET}/SKILL.md"

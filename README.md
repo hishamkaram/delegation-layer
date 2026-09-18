@@ -5,10 +5,11 @@ durable, supervised local task. It records the request before submission,
 checks the executable and its capabilities at runtime, and publishes a
 validated result that can be collected later.
 
-> **Public preview**
+> **Preview release**
 >
-> Release artifacts and the integration skill are available for evaluation. The
-> provider CLI and Pueue remain host prerequisites.
+> The project publishes checksum-verified CLI archives and a separate npm
+> package for the integration skill. The provider CLI and Pueue remain host
+> prerequisites.
 
 ## What it does
 
@@ -46,10 +47,11 @@ semver allowlist is used.
 
 ## Install
 
-### Public release artifacts
+### Tagged release artifacts
 
-Download the archive that matches your operating system and architecture, verify
-its checksum, and place `delegate` and `delegate-run` on your `PATH`:
+After a tagged release is published, download the archive that matches your
+operating system and architecture, verify its checksum, and place `delegate`
+and `delegate-run` on your `PATH`:
 
 ```sh
 set -euo pipefail
@@ -97,18 +99,19 @@ directory already on `PATH`.
 
 ### Install the agent integration skill
 
-The provider-agnostic skill is independent of the CLI installation. Hermes can
-install the immutable skill from the first release tag:
+The provider-agnostic skill is independent of the CLI installation. From a
+published release tag, Hermes can install the immutable skill:
 
 ```sh
 hermes skills install \
   https://raw.githubusercontent.com/hishamkaram/delegation-layer/v0.1.0/skills/agent-integration/SKILL.md
 ```
 
-Any harness with a writable skill directory can use the npm installer:
+After the npm package is published, any harness with a writable skill directory
+can use the installer:
 
 ```sh
-npx --yes delegation-layer-agent-integration \
+npx --yes delegation-layer \
   --target "$HOME/.hermes/skills/agent-integration"
 ```
 

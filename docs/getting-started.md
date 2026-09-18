@@ -19,10 +19,10 @@ strict profile may use its native credential helper for policy admission.
 
 ## Install Delegation Layer
 
-Install a public tagged release by following the checksum-verified archive
-instructions in the [README](../README.md#public-release-artifacts). The
-release archive contains both `delegate` and `delegate-run` for Darwin or Linux
-on amd64 or arm64. For a source checkout, build the executables directly:
+After a public tagged release is published, follow the checksum-verified archive
+instructions in the [README](../README.md#tagged-release-artifacts). The release
+archive contains both `delegate` and `delegate-run` for Darwin or Linux on amd64
+or arm64. For a source checkout, build the executables directly:
 
 ```sh
 git clone https://github.com/hishamkaram/delegation-layer.git
@@ -44,19 +44,19 @@ host-specific executable, version, and help checks.
 
 ## Install the agent skill
 
-The agent integration skill is installed separately from the CLI. Hermes can
-install the immutable skill from a release tag:
+The agent integration skill is installed separately from the CLI. From a
+published release tag, Hermes can install the immutable skill:
 
 ```sh
 hermes skills install \
   https://raw.githubusercontent.com/hishamkaram/delegation-layer/v0.1.0/skills/agent-integration/SKILL.md
 ```
 
-For a harness with a writable skill directory, use the dependency-free npm
-installer:
+After the npm package is published, a harness with a writable skill directory
+can use the dependency-free installer:
 
 ```sh
-npx --yes delegation-layer-agent-integration \
+npx --yes delegation-layer \
   --target "$HOME/.hermes/skills/agent-integration"
 ```
 
