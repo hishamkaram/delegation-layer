@@ -6,30 +6,39 @@ authenticated using its own supported login flow.
 
 ## Prepare the host
 
-Install Go 1.27.1, Pueue 4.0.4 (`pueue` and `pueued`), and at least one
+Install Pueue 4.0.4 (`pueue` and `pueued`) and at least one
 of `agy`, `codex`, `claude`, `pi`, or `opencode`. Start a Pueue daemon with a
 private configuration and Unix socket. Keep that configuration outside the
-Delegation Layer state root and workspace. Node.js 18 or newer is needed only
-for the optional npm skill installer.
+Delegation Layer state root and workspace. Node.js 18 or newer is needed for
+the optional npm or pnpm installer; Bun is needed for the Bun installer.
 
 Authenticate each provider with its normal CLI workflow. Delegation Layer
 passes the provider's native home and bounded control environment through to
 the child process. It does not copy account secrets into task state; Claude's
 strict profile may use its native credential helper for policy admission.
 
-## Install Delegation Layer
+## Install the CLI
 
-After a public tagged release is published, follow the checksum-verified archive
-instructions in the [README](../README.md#tagged-release-artifacts). The release
-archive contains both `delegate` and `delegate-run` for Darwin or Linux on amd64
-or arm64. For a source checkout, build the executables directly:
+Use the checksum-verified shell installer:
 
 ```sh
-git clone https://github.com/hishamkaram/delegation-layer.git
-cd delegation-layer
-mkdir -p "$HOME/.local/bin"
-CGO_ENABLED=0 go build -buildvcs=false -o "$HOME/.local/bin/delegate" ./cmd/delegate
-CGO_ENABLED=0 go build -buildvcs=false -o "$HOME/.local/bin/delegate-run" ./cmd/delegate-run
+curl -fsSL https://raw.githubusercontent.com/hishamkaram/delegation-layer/main/install.sh | sh
+```
+
+Or use Homebrew, npm, pnpm, or Bun:
+
+```sh
+brew install hishamkaram/tap/delegation-layer
+npx --yes delegation-layer install-cli
+pnpm dlx delegation-layer install-cli
+bunx --bun delegation-layer install-cli
+```
+
+For a source build, install Go 1.27.1 and run:
+
+```sh
+go install github.com/hishamkaram/delegation-layer/cmd/delegate@latest
+go install github.com/hishamkaram/delegation-layer/cmd/delegate-run@latest
 ```
 
 Confirm the installation:
@@ -40,28 +49,34 @@ delegate providers --json
 ```
 
 The discovery command lists compiled profiles only. Dispatch performs the
-host-specific executable, version, and help checks.
+host-specific executable, version, and help checks. See the [README install
+section](../README.md#install-the-cli) for version pinning and install
+directory options.
 
 ## Install the agent skill
 
-The agent integration skill is installed separately from the CLI. From a
-published release tag, Hermes can install the immutable skill:
+The agent integration skill is installed separately from the CLI. Hermes can
+install the current skill directly:
 
 ```sh
 hermes skills install \
-  https://raw.githubusercontent.com/hishamkaram/delegation-layer/v0.1.0/skills/agent-integration/SKILL.md
+  https://raw.githubusercontent.com/hishamkaram/delegation-layer/main/skills/agent-integration/SKILL.md
 ```
 
-After the npm package is published, a harness with a writable skill directory
-can use the dependency-free installer:
+For a harness with a writable skill directory, use any of the dependency-free
+package installers:
 
 ```sh
 npx --yes delegation-layer \
   --target "$HOME/.hermes/skills/agent-integration"
+pnpm dlx delegation-layer \
+  --target "$HOME/.hermes/skills/agent-integration"
+bunx --bun delegation-layer \
+  --target "$HOME/.hermes/skills/agent-integration"
 ```
 
-This installs only `SKILL.md`; it does not install or configure the CLI, Pueue,
-or a provider.
+The default package command installs only `SKILL.md`. Use the explicit
+`install-cli` command when installing the CLI through pnpm or Bun.
 
 ## Run a first task
 

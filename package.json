@@ -1,14 +1,16 @@
 {
   "name": "delegation-layer",
-  "version": "0.1.0",
-  "description": "Provider-agnostic agent skill for Delegation Layer capability and admission workflows.",
+  "version": "0.1.1",
+  "description": "Delegation Layer CLI and provider-agnostic agent skill installers.",
   "type": "module",
   "bin": {
     "delegation-layer": "scripts/install-agent-integration.mjs"
   },
   "files": [
+    "install.sh",
     "skills/agent-integration/SKILL.md",
-    "scripts/install-agent-integration.mjs"
+    "scripts/install-agent-integration.mjs",
+    "scripts/install-cli.mjs"
   ],
   "engines": {
     "node": ">=18"
