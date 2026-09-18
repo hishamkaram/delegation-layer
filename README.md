@@ -108,6 +108,9 @@ recent conversation.
 Run `delegate providers --json` for the compiled capability catalog. See
 [providers](docs/providers.md) for launch behavior, policy boundaries, and
 runtime compatibility checks.
+Use `delegate capabilities --provider PROFILE --json` for one provider's
+provider-neutral contract. Its catalog response is descriptive; dispatch is
+where the supervised runtime probe establishes host compatibility.
 
 When native logins are available, `make acceptance-native` runs the Pi and
 OpenCode live gates through a private supervisor. A pass exits `0`; an
@@ -152,6 +155,8 @@ limitations.
   failures.
 - [Contributing](docs/contributing.md) — development setup and adapter
   extension guidance.
+- [Agent integration skill](skills/agent-integration/SKILL.md) — provider-neutral
+  JSON and evidence handling guidance for agents.
 
 ## License
 

@@ -6,7 +6,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/hishamkaram/delegation-layer",
-      "revision": "8345216c71d41a59f8eca1792e8948385c1bff85",
+      "revision": "f560a6be7f77067eb526efd1268a52772d4c206d",
       "provider": "github"
     },
     "viewBox": [
@@ -26,7 +26,7 @@
           "pueue",
           "acceptance"
         ],
-        "note": "The CLI validates intent, probes the selected provider, persists task records, and submits one supervised job."
+        "note": "The CLI discovers capabilities, probes the provider, persists task records, and submits one supervised job."
       },
       {
         "id": "execution",
@@ -81,13 +81,16 @@
       "id": "delegate",
       "type": "backend",
       "label": "delegate",
-      "sublabel": "request validation and orchestration",
+      "sublabel": "capabilities and orchestration",
       "sources": [
         {
-          "path": "cmd/delegate/main.go"
+          "path": "internal/app/commands.go"
         },
         {
-          "path": "internal/app/commands.go"
+          "path": "internal/app/capabilities.go"
+        },
+        {
+          "path": "skills/agent-integration/SKILL.md"
         }
       ],
       "pos": [
@@ -340,7 +343,7 @@
       "id": "caller-to-delegate",
       "from": "caller",
       "to": "delegate",
-      "label": "dispatch · status · collect · cancel",
+      "label": "capabilities · dispatch · status · collect · cancel",
       "variant": "emphasis",
       "fromSide": "right",
       "toSide": "left",

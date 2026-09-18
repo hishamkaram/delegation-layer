@@ -25,7 +25,7 @@ PASSED_CASES=0
 assert_case() {
     local name="$1"
     local expected_code="$2"
-    local stdout_mode="$3" # "empty", "usage", "version", "providers"
+    local stdout_mode="$3" # "empty", "usage", "version", "providers", "capabilities"
     local stderr_mode="$4" # "empty", "error"
     local expected_err_substr="$5"
     shift 5
@@ -74,6 +74,12 @@ assert_case() {
                 exit 1
             fi
             ;;
+        capabilities)
+            if ! grep -q '"command":"capabilities"' "${stdout_file}" || ! grep -q 'runtime-capability-v1' "${stdout_file}" || ! grep -q '"status":"unknown"' "${stdout_file}"; then
+                echo "FAIL [${name}]: stdout missing capability contract metadata. Got: $(cat "${stdout_file}")" >&2
+                exit 1
+            fi
+            ;;
     esac
 
     # Check stderr
@@ -97,7 +103,7 @@ assert_case() {
     esac
 
     PASSED_CASES=$((PASSED_CASES + 1))
-    echo "PASS [${PASSED_CASES}/12]: ${name}"
+    echo "PASS [${PASSED_CASES}/13]: ${name}"
 }
 
 # 1. No arguments: exit 0, usage on stdout, empty stderr
@@ -121,24 +127,27 @@ assert_case "--version flag" 0 version empty "" --version
 # 7. providers discovery: exit 0, bounded JSON on stdout, empty stderr
 assert_case "providers discovery" 0 providers empty "" providers --json
 
-# 8. unknown command: exit 2, error+usage on stderr, empty stdout
+# 8. capability contract: exit 0, bounded JSON on stdout, empty stderr
+assert_case "capability contract" 0 capabilities empty "" capabilities --provider pi:json --json
+
+# 9. unknown command: exit 2, error+usage on stderr, empty stdout
 assert_case "unknown command" 2 empty error 'error: unknown command or flag "unknown-cmd"' unknown-cmd
 
-# 9. unknown flag: exit 2, error+usage on stderr, empty stdout
+# 10. unknown flag: exit 2, error+usage on stderr, empty stdout
 assert_case "unknown flag" 2 empty error 'error: unknown command or flag "--invalid-flag"' --invalid-flag
 
-# 10. extra argument to help: exit 2, error+usage on stderr, empty stdout
+# 11. extra argument to help: exit 2, error+usage on stderr, empty stdout
 assert_case "extra argument to help" 2 empty error 'unexpected extra argument "extra-arg" for help' help extra-arg
 
-# 11. extra argument to version: exit 2, error+usage on stderr, empty stdout
+# 12. extra argument to version: exit 2, error+usage on stderr, empty stdout
 assert_case "extra argument to version" 2 empty error 'unexpected extra argument "extra-arg" for version' version extra-arg
 
-# 12. extra argument to providers: exit 2, error+usage on stderr, empty stdout
+# 13. extra argument to providers: exit 2, error+usage on stderr, empty stdout
 assert_case "extra argument to providers" 2 empty error 'unexpected extra argument "extra-arg" for providers' providers extra-arg
 
-if [[ "${PASSED_CASES}" -ne 12 ]]; then
-    echo "FAIL: Expected 12 smoke test cases to execute, but only ${PASSED_CASES} passed." >&2
+if [[ "${PASSED_CASES}" -ne 13 ]]; then
+    echo "FAIL: Expected 13 smoke test cases to execute, but only ${PASSED_CASES} passed." >&2
     exit 1
 fi
 
-echo "All smoke tests passed (${PASSED_CASES}/12 cases executed)."
+echo "All smoke tests passed (${PASSED_CASES}/13 cases executed)."

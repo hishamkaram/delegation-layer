@@ -20,6 +20,7 @@ type admissionPreparation struct {
 	Profile            PreparedProfile
 	Supervisor         *pueue.Client
 	InspectionDeadline time.Time
+	Capability         CapabilityReport
 }
 
 // supervisorOptionsForCandidate carries the provider's bounded, nonsecret
@@ -116,6 +117,10 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 			return admissionPreparation{}, err
 		}
 		prepared.InspectionDeadline = deadline
+	}
+	prepared.Capability, err = runtimeCapability(req.Provider, candidate, prepared.Profile)
+	if err != nil {
+		return admissionPreparation{}, err
 	}
 	if err = prepared.Profile.ValidateStatePlacement(store.Root); err != nil {
 		return admissionPreparation{}, err

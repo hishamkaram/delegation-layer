@@ -14,6 +14,7 @@ delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
   [--resume-task PREDECESSOR_ID] [--json]
 
 delegate [--root ABS] providers [--json]
+delegate [--root ABS] capabilities --provider PROFILE [--json]
 delegate [--root ABS] status TASK_ID [--json]
 delegate [--root ABS] collect TASK_ID [--watch DURATION] [--json]
 delegate [--root ABS] logs TASK_ID [--json]
@@ -84,6 +85,21 @@ The compatibility probe is only a startup check. Provider output shape,
 identity, containment, policy, authentication, and result integrity remain
 strict runtime contracts; a CLI that starts successfully can still produce a
 rejected task outcome if it violates those contracts.
+
+## Capabilities
+
+`capabilities --provider PROFILE --json` returns the selected provider's
+compiled runtime contract without creating a task, contacting Pueue, or
+starting the provider. The response uses the same `runtime-capability-v1`
+contract that dispatch projects after its supervised probe. A catalog response
+has `status: "unknown"`, `verification: "catalog"`, and
+`live_acceptance.status: "not_run"`; it must not be treated as host readiness.
+
+The dispatch response reports `status: "ready"` and
+`verification: "runtime"` only after the required behavior and executable
+identity have passed the shared probe. Version text is descriptive. Live
+acceptance is a separate gate: authenticated evidence is `passed`, while an
+unavailable authentication prerequisite is `blocked` and neutral.
 
 ## Observation commands
 

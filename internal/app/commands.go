@@ -126,6 +126,7 @@ func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.
 		err = annotateMissingDispatchStage("preparing inspection admission", err)
 		return failed(response, err, classifyCode(err, 2))
 	}
+	response.Capability = &prepared.Capability
 	profile, supervisor := prepared.Profile, prepared.Supervisor
 	if err = profile.Validate(req); err != nil {
 		return failed(response, err, classifyCode(err, 2))

@@ -75,7 +75,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "providers", "status", "collect", "cancel", "logs":
+		case "help", "version", "dispatch", "providers", "capabilities", "status", "collect", "cancel", "logs":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -96,6 +96,10 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
 	if a.Command == "collect" {
 		fs.StringVar(watch, "watch", "0s", "finite observation bound")
+	}
+	if a.Command == "capabilities" {
+		fs.StringVar(&a.Provider, "provider", "", "provider profile")
+		return
 	}
 	if a.Command != "dispatch" {
 		return
@@ -161,6 +165,13 @@ func (a *Arguments) validate(positional []string, watch string) error {
 	case "help", "version", "providers":
 		if len(positional) != 0 {
 			return fmt.Errorf("unexpected extra argument %q for %s", positional[0], a.Command)
+		}
+	case "capabilities":
+		if len(positional) != 0 {
+			return fmt.Errorf("unexpected extra argument %q for capabilities", positional[0])
+		}
+		if err := config.ValidateProvider(a.Provider); err != nil {
+			return err
 		}
 	case "dispatch":
 		return a.validateDispatch(positional)
