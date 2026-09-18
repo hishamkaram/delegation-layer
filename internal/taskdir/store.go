@@ -288,8 +288,8 @@ func (s *Store) Close() error {
 	return s.rootHandle.Close()
 }
 
-// ProbeFilesystemSupport verifies platform filesystem policy, hardlinks,
-// file/directory sync barriers, and flock support.
+// ProbeFilesystemSupport verifies hardlinks, file/directory sync barriers,
+// and flock support without allowlisting a filesystem type.
 func (s *Store) ProbeFilesystemSupport() (resultErr error) {
 	if err := s.maintLock.LockSHNonblocking(); err != nil {
 		return err
