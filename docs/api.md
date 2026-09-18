@@ -130,7 +130,6 @@ not host readiness or live acceptance.
     "provider": "PROFILE",
     "status": "unknown",
     "verification": "catalog",
-    "help_args": [],
     "required_flags": ["…"],
     "reason_code": "runtime_probe_not_run",
     "live_acceptance": {
