@@ -26,6 +26,10 @@ if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx 'package/install.sh' >/dev/null; t
     echo "ERROR: package archive does not contain the CLI installer." >&2
     exit 1
 fi
+if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx 'package/docs/assets/delegation-layer-hero.jpg' >/dev/null; then
+    echo "ERROR: package archive does not contain the README hero asset." >&2
+    exit 1
+fi
 
 INSTALL_ROOT="${TMP_DIR}/install"
 npm install --ignore-scripts --no-save --prefix "${INSTALL_ROOT}" "${PACKAGE_TARBALL}" >/dev/null
@@ -35,5 +39,6 @@ node "${INSTALLER}" --target "${TARGET}"
 cmp "${REPO_ROOT}/skills/agent-integration/SKILL.md" "${TARGET}/SKILL.md"
 node "${INSTALLER}" --target "${TARGET}"
 node "${INSTALLER}" install-cli --help >/dev/null
+node "${REPO_ROOT}/scripts/test-install-agent-integration.mjs" "${INSTALLER}"
 
 echo "Agent skill package check passed: ${PACKAGE_TARBALL}"

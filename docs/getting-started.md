@@ -1,88 +1,84 @@
 # Getting started
 
-This guide takes a local installation from zero to one supervised provider
-turn. It assumes the provider CLI itself is already installed and can be
-authenticated using its own supported login flow.
+Delegation Layer gives an agent a supervised way to send one bounded task to a
+provider CLI and collect the validated result later. Install the skill and CLI
+separately so each part stays easy to understand.
 
-## Prepare the host
+## 1. Install the Agent Skill
 
-Install Pueue 4.0.4 (`pueue` and `pueued`) and at least one
-of `agy`, `codex`, `claude`, `pi`, or `opencode`. Start a Pueue daemon with a
-private configuration and Unix socket. Keep that configuration outside the
-Delegation Layer state root and workspace. Node.js 18 or newer is needed for
-the optional npm or pnpm installer; Bun is needed for the Bun installer.
+From the project where your agent works, run:
 
-Authenticate each provider with its normal CLI workflow. Delegation Layer
-passes the provider's native home and bounded control environment through to
-the child process. It does not copy account secrets into task state; Claude's
-strict profile may use its native credential helper for policy admission.
+```sh
+npx --yes delegation-layer install
+```
 
-## Install the CLI
+The installer detects supported Agent Skills harnesses, shows the detections,
+and asks whether the skill belongs in the current project or your user account.
+If it cannot identify a harness, choose the shared `.agents/skills` location.
 
-Use the checksum-verified shell installer:
+For automation, select the destination explicitly:
+
+```sh
+npx --yes delegation-layer install \
+  --scope project \
+  --harness universal \
+  --yes
+```
+
+This step installs agent guidance only. It does not install provider CLIs,
+configure Pueue, or change authentication.
+
+## 2. Install the CLI
+
+Choose one released CLI installer:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/hishamkaram/delegation-layer/main/install.sh | sh
 ```
 
-Or use Homebrew, npm, pnpm, or Bun:
-
 ```sh
 brew install hishamkaram/tap/delegation-layer
+```
+
+```sh
 npx --yes delegation-layer install-cli
 pnpm dlx delegation-layer install-cli
 bunx --bun delegation-layer install-cli
 ```
 
-For a source build, install Go 1.27.1 and run:
-
-```sh
-go install github.com/hishamkaram/delegation-layer/cmd/delegate@latest
-go install github.com/hishamkaram/delegation-layer/cmd/delegate-run@latest
-```
-
-Confirm the installation:
+The release installer verifies checksums and installs `delegate` and
+`delegate-run` into `$HOME/.local/bin` unless
+`DELEGATION_LAYER_INSTALL_DIR` is set.
 
 ```sh
 delegate --help
 delegate providers --json
 ```
 
-The discovery command lists compiled profiles only. Dispatch performs the
-host-specific executable, version, and help checks. See the [README install
-section](../README.md#install-the-cli) for version pinning and install
-directory options.
+Go is needed only for source builds and contributor work. Node.js 18 or newer
+is needed for the npm-based installers, not for the released Go CLI at runtime.
 
-## Install the agent skill
+## 3. Prepare the runtime
 
-The agent integration skill is installed separately from the CLI. Hermes can
-install the current skill directly:
+Dispatching a task requires:
 
-```sh
-hermes skills install \
-  https://raw.githubusercontent.com/hishamkaram/delegation-layer/main/skills/agent-integration/SKILL.md
-```
+- Pueue 4.0.4 (`pueue` and `pueued`) with a private configuration and running
+  daemon;
+- at least one signed-in provider CLI, such as `agy`, `codex`, `claude`, `pi`,
+  or `opencode`;
+- a Darwin or Linux host on amd64 or arm64 for the supplied builds.
 
-For a harness with a writable skill directory, use any of the dependency-free
-package installers:
+Authenticate providers with their own login flows. Delegation Layer keeps
+provider credentials in the provider's native environment and does not copy
+them into task state.
 
-```sh
-npx --yes delegation-layer \
-  --target "$HOME/.hermes/skills/agent-integration"
-pnpm dlx delegation-layer \
-  --target "$HOME/.hermes/skills/agent-integration"
-bunx --bun delegation-layer \
-  --target "$HOME/.hermes/skills/agent-integration"
-```
+Keep the state root, workspace, provider runtime directories, and Pueue
+configuration separate. The workspace is the directory the provider may inspect
+or edit; the state root contains task records and sealed evidence.
 
-The default package command installs only `SKILL.md`. Use the explicit
-`install-cli` command when installing the CLI through pnpm or Bun.
+## 4. Dispatch one task
 
-## Run a first task
-
-Choose two separate absolute directories: a workspace the provider may inspect
-and a state root where task records will live. Write a finite brief outside the
-workspace if you do not want the provider to edit it.
+Create a finite brief and a workspace outside the state root:
 
 ```sh
 mkdir -p "$HOME/delegation-workspace" "$HOME/delegation-state"
@@ -99,27 +95,44 @@ delegate --root "$HOME/delegation-state" \
   --json
 ```
 
-Save the returned `task_id`. The command records the request and submits one
-bounded provider turn. It does not wait for the provider's answer.
+The command records the request and submits exactly one bounded provider turn.
+It returns a `task_id`; it does not wait for the provider's final response.
 
-## Observe and collect
+## 5. Observe and collect
 
-Use the task ID to inspect progress:
+Use the task ID to inspect progress and collect the terminal result:
 
 ```sh
 delegate --root "$HOME/delegation-state" status TASK_ID --json
 delegate --root "$HOME/delegation-state" collect TASK_ID --watch 5s --json
 ```
 
-Repeat `collect` while the response is pending. Once publication is terminal,
-the JSON response includes an outcome and validated descriptors for the result
-payload and raw streams. A rejected outcome is still a terminal, inspectable
-result and exits with code 4.
+Collection is observational. It can recover sealed evidence from an existing
+task but never launches, retries, or resumes provider work. A rejected outcome
+is still a terminal, inspectable result and exits with code 4.
+
+## 6. Discover capabilities
+
+List the compiled provider catalog:
+
+```sh
+delegate providers --json
+```
+
+Inspect one provider's provider-neutral contract:
+
+```sh
+delegate capabilities --provider codex:exec --json
+```
+
+Capability discovery is side-effect-free and reports the catalog projection. It
+does not prove that the executable, supervisor, or authentication is available
+on the current host. Dispatch performs those runtime checks before admission.
 
 ## Continue a conversation
 
-When the provider profile supports continuation, create a new task and name the
-exact predecessor:
+When a provider supports continuation, create a new task and name its exact
+predecessor:
 
 ```sh
 delegate --root "$HOME/delegation-state" \
@@ -133,28 +146,8 @@ delegate --root "$HOME/delegation-state" \
 ```
 
 The predecessor must have a validated terminal outcome and released its
-conversation reservation. The new task receives its own ID and immutable
-request.
+conversation reservation. The continuation receives a new immutable task ID.
 
-## Choose another provider
-
-Run `delegate providers --json` and compare the advertised modes and options
-with [the provider guide](providers.md). Every listed profile reports its
-caller-selected permission modes and supported native options; unsupported
-combinations are rejected before admission. `workspace-write` gives the
-provider's native write capability for the selected workspace when the catalog
-advertises that mode. Pi currently advertises only read-only because its
-built-in write and edit tools do not provide a native workspace boundary;
-`read-only` keeps the adapter's read boundary.
-
-For an agent-facing contract, run
-`delegate capabilities --provider PROFILE --json`. This is side-effect-free
-catalog discovery and reports `status: "unknown"` until dispatch performs the
-supervised runtime probe; it does not prove host readiness or authentication.
-
-## Keep state recoverable
-
-Back up the state root if task history matters. Do not move task directories,
-replace the bound supervisor configuration, or reuse a task ID by hand. The
-state root, provider runtime directories, and workspace are validated against
-canonical paths on every launch boundary.
+See the [provider guide](providers.md) for modes, options, and runtime
+compatibility behavior, or the [CLI reference](cli-reference.md) for every
+command and exit code.
