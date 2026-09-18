@@ -1,12 +1,13 @@
 {
   "name": "delegation-layer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Delegation Layer CLI and provider-agnostic agent skill installers.",
   "type": "module",
   "bin": {
     "delegation-layer": "scripts/install-agent-integration.mjs"
   },
   "files": [
+    "LICENSE",
     "install.sh",
     "skills/agent-integration/SKILL.md",
     "scripts/install-agent-integration.mjs",
@@ -23,5 +24,5 @@
   "bugs": {
     "url": "https://github.com/hishamkaram/delegation-layer/issues"
   },
-  "license": "UNLICENSED"
+  "license": "MIT"
 }
