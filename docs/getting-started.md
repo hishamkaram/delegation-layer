@@ -7,9 +7,10 @@ authenticated using its own supported login flow.
 ## Prepare the host
 
 Install Go 1.27.1, Pueue 4.0.4 (`pueue` and `pueued`), and at least one
-of `agy`, `codex`, `claude`, `pi`, or `opencode`. Start a Pueue daemon with a private
-configuration and Unix socket. Keep that configuration outside the Delegation
-Layer state root and workspace.
+of `agy`, `codex`, `claude`, `pi`, or `opencode`. Start a Pueue daemon with a
+private configuration and Unix socket. Keep that configuration outside the
+Delegation Layer state root and workspace. Node.js 18 or newer is needed only
+for the optional npm skill installer.
 
 Authenticate each provider with its normal CLI workflow. Delegation Layer
 passes the provider's native home and bounded control environment through to
@@ -18,8 +19,10 @@ strict profile may use its native credential helper for policy admission.
 
 ## Install Delegation Layer
 
-Use a private release archive when one has been published, or build the two
-executables from source:
+Install a public tagged release by following the checksum-verified archive
+instructions in the [README](../README.md#public-release-artifacts). The
+release archive contains both `delegate` and `delegate-run` for Darwin or Linux
+on amd64 or arm64. For a source checkout, build the executables directly:
 
 ```sh
 git clone https://github.com/hishamkaram/delegation-layer.git
@@ -38,6 +41,27 @@ delegate providers --json
 
 The discovery command lists compiled profiles only. Dispatch performs the
 host-specific executable, version, and help checks.
+
+## Install the agent skill
+
+The agent integration skill is installed separately from the CLI. Hermes can
+install the immutable skill from a release tag:
+
+```sh
+hermes skills install \
+  https://raw.githubusercontent.com/hishamkaram/delegation-layer/v0.1.0/skills/agent-integration/SKILL.md
+```
+
+For a harness with a writable skill directory, use the dependency-free npm
+installer:
+
+```sh
+npx --yes delegation-layer-agent-integration \
+  --target "$HOME/.hermes/skills/agent-integration"
+```
+
+This installs only `SKILL.md`; it does not install or configure the CLI, Pueue,
+or a provider.
 
 ## Run a first task
 

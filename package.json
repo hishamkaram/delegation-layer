@@ -1,0 +1,25 @@
+{
+  "name": "delegation-layer-agent-integration",
+  "version": "0.1.0",
+  "description": "Provider-agnostic agent skill for Delegation Layer capability and admission workflows.",
+  "type": "module",
+  "bin": {
+    "delegation-layer-agent-integration": "scripts/install-agent-integration.mjs"
+  },
+  "files": [
+    "skills/agent-integration/SKILL.md",
+    "scripts/install-agent-integration.mjs"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hishamkaram/delegation-layer.git"
+  },
+  "homepage": "https://github.com/hishamkaram/delegation-layer",
+  "bugs": {
+    "url": "https://github.com/hishamkaram/delegation-layer/issues"
+  },
+  "license": "UNLICENSED"
+}

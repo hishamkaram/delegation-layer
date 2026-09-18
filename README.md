@@ -5,10 +5,10 @@ durable, supervised local task. It records the request before submission,
 checks the executable and its capabilities at runtime, and publishes a
 validated result that can be collected later.
 
-> **Private preview**
+> **Public preview**
 >
-> The project is under active development. Keep the repository and any release
-> artifacts private while evaluating it.
+> Release artifacts and the integration skill are available for evaluation. The
+> provider CLI and Pueue remain host prerequisites.
 
 ## What it does
 
@@ -32,6 +32,7 @@ outcome without launching the provider again.
 - A Darwin or Linux host on amd64 or arm64 for the supplied build targets.
   Provider availability is profile-specific; see the provider guide for native
   platform prerequisites.
+- Node.js 18 or newer is required only when using the npm skill installer.
 
 The provider executable must be available to the process that dispatches the
 task. Delegation Layer runs the provider's version and help commands before
@@ -45,11 +46,41 @@ semver allowlist is used.
 
 ## Install
 
-### Private release artifacts
+### Public release artifacts
 
-When a private release is published, download the archive for your operating
-system and architecture with an authenticated GitHub client, verify its
-checksum, and place `delegate` and `delegate-run` on your `PATH`.
+Download the archive that matches your operating system and architecture, verify
+its checksum, and place `delegate` and `delegate-run` on your `PATH`:
+
+```sh
+set -euo pipefail
+version=v0.1.0
+case "$(uname -s)" in
+  Linux) os=Linux ;;
+  Darwin) os=Darwin ;;
+  *) echo "Unsupported operating system" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) arch=amd64 ;;
+  arm64|aarch64) arch=arm64 ;;
+  *) echo "Unsupported architecture" >&2; exit 1 ;;
+esac
+archive="delegation-layer_${version#v}_${os}_${arch}.tar.gz"
+release_url="https://github.com/hishamkaram/delegation-layer/releases/download/${version}"
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+curl -fL -o "$tmp_dir/$archive" "$release_url/$archive"
+curl -fL -o "$tmp_dir/checksums.txt" "$release_url/checksums.txt"
+cd "$tmp_dir"
+checksum_line="$(grep -F "  $archive" checksums.txt)"
+if command -v sha256sum >/dev/null 2>&1; then
+  printf '%s\n' "$checksum_line" | sha256sum -c -
+else
+  printf '%s\n' "$checksum_line" | shasum -a 256 -c -
+fi
+tar -xzf "$archive"
+mkdir -p "$HOME/.local/bin"
+install -m 0755 delegate delegate-run "$HOME/.local/bin/"
+```
 
 ### Build from source
 
@@ -66,17 +97,25 @@ directory already on `PATH`.
 
 ### Install the agent integration skill
 
-The provider-agnostic integration skill is shipped with the source checkout.
-Copy it into the target agent's skill directory; for Codex:
+The provider-agnostic skill is independent of the CLI installation. Hermes can
+install the immutable skill from the first release tag:
 
 ```sh
-skill_root="${CODEX_HOME:-$HOME/.codex}/skills/agent-integration"
-mkdir -p "$skill_root"
-cp skills/agent-integration/SKILL.md "$skill_root/SKILL.md"
+hermes skills install \
+  https://raw.githubusercontent.com/hishamkaram/delegation-layer/v0.1.0/skills/agent-integration/SKILL.md
 ```
 
-The skill is self-contained and includes the installation, capability discovery,
-first dispatch, collection, and acceptance workflow.
+Any harness with a writable skill directory can use the npm installer:
+
+```sh
+npx --yes delegation-layer-agent-integration \
+  --target "$HOME/.hermes/skills/agent-integration"
+```
+
+The installer copies only `SKILL.md` into the target directory. It does not
+install, build, upgrade, or configure `delegate`, `delegate-run`, Pueue, or a
+provider CLI. Install those host prerequisites separately before asking an
+agent to use the skill.
 
 ## Quick start
 
@@ -174,5 +213,6 @@ limitations.
 
 ## License
 
-No public license has been declared yet. Treat this private preview as
-proprietary and do not redistribute it without the project owner's permission.
+No public license has been declared yet. Treat the source and release artifacts
+as proprietary and do not redistribute them without the project owner's
+permission.

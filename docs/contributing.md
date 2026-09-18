@@ -13,6 +13,7 @@ go test ./...
 go test -race ./...
 python3 -m unittest discover -s scripts -p 'test_*.py'
 make check
+make skill-package-check
 ```
 
 The repository's `AGENTS.md`, invariant contracts under `agents/_data/`, and
@@ -66,9 +67,11 @@ real signed-in account and a disposable workspace; it must not modify account
 credentials or global settings.
 
 Before opening a change, run `gofmt` (or the repository's `make fmt`), the full
-unit and race suites, script tests, and `make check`. Review the resulting
-diff for private paths, account identifiers, raw provider output, and stale
-release or compatibility claims.
+unit and race suites, script tests, `make check`, and
+`make skill-package-check`. Review the resulting diff for private paths,
+account identifiers, raw provider output, and stale release or compatibility
+claims. The package version must stay aligned with the release tag used by the
+release workflow.
 
 When native provider credentials are available, run the relevant live gate with
 a disposable workspace. Pi and OpenCode are covered by `make acceptance-pi`,
