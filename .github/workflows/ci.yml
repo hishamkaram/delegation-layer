@@ -10,6 +10,22 @@ permissions:
   contents: read
 
 jobs:
+  skill-package:
+    name: Agent skill package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.x'
+
+      - name: Check the installable skill package
+        run: make skill-package-check
+
   gate-linux:
     name: Gate (Linux ubuntu-24.04)
     runs-on: ubuntu-24.04
