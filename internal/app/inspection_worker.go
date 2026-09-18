@@ -204,8 +204,9 @@ func (s *inspectionBudgetStopper) PrepareBudget(deadline time.Time) (execution.B
 		return nil, err
 	}
 	return func(ctx context.Context) error {
-		result, stopErr := s.client.StopInspection(ctx, permit, s.identity)
-		recordErr := recordInspectionStop(ctx, s.operation, result)
+		requestCtx := execution.DetachBudgetRequestContext(ctx)
+		result, stopErr := s.client.StopInspection(requestCtx, permit, s.identity)
+		recordErr := recordInspectionStop(requestCtx, s.operation, result)
 		return errors.Join(stopErr, recordErr)
 	}, nil
 }

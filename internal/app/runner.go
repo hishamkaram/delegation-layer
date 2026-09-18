@@ -348,9 +348,10 @@ func (s *budgetStopper) PrepareBudget(deadline time.Time) (execution.BudgetReque
 		return nil, err
 	}
 	return func(ctx context.Context) error {
-		result, stopErr := s.client.Stop(ctx, permit)
+		requestCtx := execution.DetachBudgetRequestContext(ctx)
+		result, stopErr := s.client.Stop(requestCtx, permit)
 		releaseErr := permit.Release()
-		return errors.Join(stopErr, releaseErr, s.recordStopResult(ctx, request, result))
+		return errors.Join(stopErr, releaseErr, s.recordStopResult(requestCtx, request, result))
 	}, nil
 }
 
