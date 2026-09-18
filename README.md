@@ -108,7 +108,7 @@ hermes skills install \
 Any harness with a writable skill directory can use the npm installer:
 
 ```sh
-npx --yes delegation-layer-agent-integration \
+npx --yes delegation-layer \
   --target "$HOME/.hermes/skills/agent-integration"
 ```
 

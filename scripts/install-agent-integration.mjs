@@ -11,7 +11,7 @@ function usage(message) {
   if (message) {
     console.error(`Error: ${message}`);
   }
-  console.error("Usage: delegation-layer-agent-integration --target ABSOLUTE_SKILL_DIR [--force]");
+  console.error("Usage: delegation-layer --target ABSOLUTE_SKILL_DIR [--force]");
   process.exitCode = 2;
 }
 
@@ -31,7 +31,7 @@ function parseArguments(argumentsList) {
       continue;
     }
     if (argument === "--help" || argument === "-h") {
-      console.log("Usage: delegation-layer-agent-integration --target ABSOLUTE_SKILL_DIR [--force]");
+      console.log("Usage: delegation-layer --target ABSOLUTE_SKILL_DIR [--force]");
       process.exit(0);
     }
     usage(`unknown argument ${argument}`);

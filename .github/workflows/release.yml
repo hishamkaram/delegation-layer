@@ -199,7 +199,7 @@ jobs:
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npmrc
           TAG: ${{ inputs.tag }}
         run: |
-          package="delegation-layer-agent-integration@${TAG#v}"
+          package="delegation-layer@${TAG#v}"
           package_dir="${RUNNER_TEMP}/package"
           mkdir -p "${package_dir}"
           npm pack --ignore-scripts --json --pack-destination "${package_dir}" > "${RUNNER_TEMP}/pack.json"
