@@ -17,6 +17,11 @@ metadata describes the help arguments and flags required by each adapter.
 The catalog uses public request option names; the native flag mapping is
 documented in each provider section below.
 
+Agents can request one provider's provider-neutral contract with
+`delegate capabilities --provider PROFILE --json`. This command is
+side-effect-free and reports `status: "unknown"` until dispatch performs the
+supervised runtime probe. It does not claim authentication or live acceptance.
+
 The binaries build for Darwin and Linux targets, but native policy checks can
 be more restrictive. The Codex profile currently requires Darwin to inspect
 managed preferences, and the Claude profile currently requires Darwin to use
@@ -43,15 +48,22 @@ it preserves the command capabilities the adapter needs.
 
 The observed version is descriptive evidence stored with the task. It does not
 authorize a release by itself, and Delegation Layer does not query a web release
-list or maintain a semver allowlist. The inspection definition and executable
-digest bind the capability result to the exact command that was checked; the
-runner repeats the check before launch. Probe failures expose only a bounded
-reason class, such as a missing required flag or executable identity drift,
-and never provider output or process diagnostics.
+list or maintain a semver allowlist. An unusually large version observation is
+omitted from the bounded JSON projection while the exact validated value stays
+bound in task metadata. The inspection definition and executable digest bind
+the capability result to the exact command that was checked; the runner
+repeats the check before launch. Probe failures expose only a bounded reason
+class, such as a missing required flag or executable identity drift, and never
+provider output or process diagnostics.
 
 The probe does not replace provider behavior validation. Each adapter still
 requires its expected output shape, task and session identity, containment,
 effective policy, authentication result, and output artifact integrity.
+
+When dispatch returns a capability projection, `status: "ready"` means the
+shared probe observed the required behavior and executable identity for that
+admission boundary. A live acceptance receipt remains separate: authenticated
+proof is `passed`, and unavailable authentication is `blocked` and neutral.
 
 ## Live acceptance
 
@@ -69,7 +81,9 @@ make acceptance-native
 These commands require the selected CLI, Pueue 4.0.4, and a usable native
 provider login. Exit `0` means the gate passed. Exit `2` means `BLOCKED`: a
 required executable, supervisor, or authentication prerequisite was unavailable
-and a sanitized `failure.json` receipt was written. The aggregate
+and a sanitized `failure.json` receipt was written. Textual login refusals and
+structured provider authorization responses such as HTTP 401 or 403 are both
+classified as authentication prerequisites. The aggregate
 `acceptance-native` target treats blocked profiles as neutral and still fails
 on a real acceptance failure. The gate never copies credentials, retries a
 provider turn, or reports an authentication refusal as a pass.

@@ -143,6 +143,37 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             (raw / "stderr").write_text("provider returned a normal task refusal")
             self.assertFalse(gate.authentication_unavailable(root))
 
+    def test_structured_authentication_refusal_is_blocked(self):
+        with tempfile.TemporaryDirectory(prefix="native-auth-unit-") as directory:
+            root = Path(directory)
+            raw = root / "raw"
+            raw.mkdir()
+            (root / "outcome.json").write_text(json.dumps({"verdict": "rejected"}))
+            for status_code in (401, 403):
+                (raw / "stdout").write_text(json.dumps({
+                    "type": "error",
+                    "error": {
+                        "name": "APIError",
+                        "data": {"statusCode": status_code, "message": "redacted"},
+                    },
+                }) + "\n")
+                self.assertTrue(gate.authentication_unavailable(root))
+
+            (raw / "stdout").write_text(json.dumps({
+                "type": "error",
+                "error": {"name": "APIError", "data": {"statusCode": 500}},
+            }) + "\n")
+            self.assertFalse(gate.authentication_unavailable(root))
+
+    def test_deeply_nested_structured_failure_is_bounded(self):
+        with tempfile.TemporaryDirectory(prefix="native-auth-unit-") as directory:
+            root = Path(directory)
+            raw = root / "raw"
+            raw.mkdir()
+            (root / "outcome.json").write_text(json.dumps({"verdict": "rejected"}))
+            (raw / "stdout").write_text("[" * 20_000 + "0" + "]" * 20_000 + "\n")
+            self.assertFalse(gate.authentication_unavailable(root))
+
     def test_missing_or_unreadable_outcome_cannot_block(self):
         with tempfile.TemporaryDirectory(prefix="native-auth-unit-") as directory:
             root = Path(directory)

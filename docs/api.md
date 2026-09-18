@@ -48,9 +48,9 @@ bounded admission, liveness, and publication fields:
 }
 ```
 
-The exact response can also contain `supervisor`, `raw`, `pending`, `stops`,
-`stop`, `error`, and `error_truncated` fields depending on the command and
-observation. Payload and sealed raw output are descriptors, so a client reads
+The exact response can also contain `capability`, `supervisor`, `raw`,
+`pending`, `stops`, `stop`, `error`, and `error_truncated` fields depending on
+the command and observation. Payload and sealed raw output are descriptors, so a client reads
 the named file only after validating that its rooted path, length, and digest
 match the response.
 
@@ -112,6 +112,44 @@ that runtime capability check and records the observed executable identity and
 version. The version is descriptive evidence; flags, executable identity, and
 behavior predicates establish compatibility without a web release lookup or
 semver allowlist.
+
+## Capability contract
+
+`delegate capabilities --provider PROFILE --json` returns the selected
+provider's compiled capability contract without creating state, contacting the
+supervisor, or launching a provider. Its `status: "unknown"` and
+`verification: "catalog"` values are deliberate: this response is discovery,
+not host readiness or live acceptance.
+
+```json
+{
+  "schema_version": 1,
+  "command": "capabilities",
+  "capability": {
+    "contract": "runtime-capability-v1",
+    "provider": "PROFILE",
+    "status": "unknown",
+    "verification": "catalog",
+    "help_args": [],
+    "required_flags": ["…"],
+    "reason_code": "runtime_probe_not_run",
+    "live_acceptance": {
+      "status": "not_run",
+      "authentication": "unknown",
+      "reason_code": "runtime_probe_not_run"
+    }
+  }
+}
+```
+
+After successful runtime preparation, a dispatch JSON response contains the
+same `capability` object with `status: "ready"`,
+`verification: "runtime"`, the observed version, and the executable digest.
+The observed version is omitted from this projection if its diagnostic text is
+unusually large; the exact validated value remains bound in task metadata.
+This proves only the bounded compatibility probe for that admission boundary.
+Live acceptance remains separate: `passed` requires authenticated provider
+evidence, while missing authentication is `blocked` and neutral.
 
 ## Idempotency and continuation
 

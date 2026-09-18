@@ -20,6 +20,11 @@ focused skills under `skills/` are the authoritative contributor instructions.
 They cover ownership, path and process invariants, concurrency, testing, and
 documentation hygiene.
 
+Agent integrations should follow the provider-agnostic
+[agent-integration skill](../skills/agent-integration/SKILL.md), which uses the
+same capability, admission, evidence, authentication, and bounded-output
+criteria as the runtime and acceptance tests.
+
 ## Adapter boundary
 
 An adapter is responsible for:

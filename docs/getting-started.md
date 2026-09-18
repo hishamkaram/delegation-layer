@@ -108,6 +108,11 @@ advertises that mode. Pi currently advertises only read-only because its
 built-in write and edit tools do not provide a native workspace boundary;
 `read-only` keeps the adapter's read boundary.
 
+For an agent-facing contract, run
+`delegate capabilities --provider PROFILE --json`. This is side-effect-free
+catalog discovery and reports `status: "unknown"` until dispatch performs the
+supervised runtime probe; it does not prove host readiness or authentication.
+
 ## Keep state recoverable
 
 Back up the state root if task history matters. Do not move task directories,

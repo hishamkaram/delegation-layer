@@ -61,6 +61,7 @@ AUTHENTICATION_MARKERS = (
     "authentication required", "not authenticated", "please log in", "sign in",
     "unauthorized", "api key", "credentials", "login required", "no provider",
 )
+AUTHENTICATION_STATUS_CODES = frozenset({401, 403})
 
 
 class BlockedFailure(AcceptanceFailure):
@@ -122,6 +123,27 @@ def authentication_unavailable(directory: Path) -> bool:
             continue
         if any(marker in data for marker in AUTHENTICATION_MARKERS):
             return True
+    for relative in ("raw/stdout", "raw/stderr", "publish.reject"):
+        path = directory / relative
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            with path.open("rb") as stream:
+                data = stream.read(MAX_RAW_BYTES).decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in data.splitlines():
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError, RecursionError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            error = event.get("error")
+            details = error.get("data") if isinstance(error, dict) else None
+            status_code = details.get("statusCode") if isinstance(details, dict) else None
+            if type(status_code) is int and status_code in AUTHENTICATION_STATUS_CODES:
+                return True
     return False
 
 

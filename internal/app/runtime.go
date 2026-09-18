@@ -45,21 +45,22 @@ const UsageText = `Usage: delegate [global flags] <command> [command flags]
 A durable single-machine agent delegation layer.
 
 Commands:
-  dispatch   Persist and submit one bounded provider turn
-  providers  Describe compiled provider capabilities
-  status     Observe admission, liveness, and publication
-  collect    Recover or read the immutable publication
-  cancel     Request one explicit supervisor stop
-  logs       Return validated output descriptors
-  help       Show this help message
-  version    Print version information
+  dispatch      Persist and submit one bounded provider turn
+  providers     Describe compiled provider capabilities
+  capabilities  Report one provider capability contract
+  status        Observe admission, liveness, and publication
+  collect       Recover or read the immutable publication
+  cancel        Request one explicit supervisor stop
+  logs          Return validated output descriptors
+  help          Show this help message
+  version       Print version information
 
 Global flags:
   --root ABS              State root (default: user config directory)
   --pueue-config ABS      Initial supervisor configuration
   --runner ABS            Runner executable for dispatch
 
-Use --json on task and providers commands for the versioned response.
+Use --json on task, providers, and capabilities commands for the versioned response.
 `
 
 // Dependencies is the explicit composition boundary for production and the
@@ -134,6 +135,7 @@ type Response struct {
 	Stops          []StopResponse          `json:"stops,omitempty"`
 	Stop           *StopResponse           `json:"stop,omitempty"`
 	Pending        *PendingResponse        `json:"pending,omitempty"`
+	Capability     *CapabilityReport       `json:"capability,omitempty"`
 	Error          string                  `json:"error,omitempty"`
 	ErrorTruncated bool                    `json:"error_truncated,omitempty"`
 }
@@ -205,6 +207,9 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	normalized := deps.normalized()
 	if parsed.Command == "providers" {
 		return runProviders(parsed.JSON, stdout, stderr, normalized.Catalog)
+	}
+	if parsed.Command == "capabilities" {
+		return runCapabilities(parsed.JSON, stdout, stderr, normalized.Catalog, parsed.Provider)
 	}
 	result := runCommand(parsed, normalized)
 	if parsed.JSON {
