@@ -1,65 +1,43 @@
 ---
 name: agent-integration
-description: Install and use Delegation Layer from a provider-agnostic agent workflow, including capability discovery, bounded dispatch, terminal collection, and live authentication handling.
+description: Use Delegation Layer from a provider-agnostic agent workflow, including capability discovery, bounded dispatch, terminal collection, and live authentication handling.
 ---
 
 # Agent integration
 
-This skill is self-contained. It gives an agent enough information to install
-the `delegate` CLI and this skill, prepare a safe first run, choose a provider
-from observed capabilities, and collect a terminal result. It applies to every
-provider profile and does not encode provider names, release versions, or
-native CLI syntax.
+This skill is self-contained as an operating guide. It gives an agent enough
+information to prepare a safe run, choose a provider from observed
+capabilities, and collect a terminal result when the host exposes the
+Delegation Layer CLI. It applies to every provider profile and does not encode
+provider names, release versions, or native CLI syntax.
 
-## Install the CLI and skill
+## Preconditions
 
-Install `delegate` and its companion `delegate-run` from a project release
-archive when one is available, or build them from a source checkout:
+The host is responsible for installing and configuring the CLI and supervisor.
+This skill must not install, build, upgrade, or repair either one. It may check
+whether `delegate` is available, use a configured private supervisor
+configuration and socket, and create separate task and state directories that
+it is authorized to use.
+Authentication is a separate live gate; do not invent a provider-specific
+login check or classify a missing login as static incompatibility.
 
-```sh
-git clone https://github.com/hishamkaram/delegation-layer.git
-cd delegation-layer
-mkdir -p "${HOME}/.local/bin"
-CGO_ENABLED=0 go build -buildvcs=false -o "${HOME}/.local/bin/delegate" ./cmd/delegate
-CGO_ENABLED=0 go build -buildvcs=false -o "${HOME}/.local/bin/delegate-run" ./cmd/delegate-run
-```
-
-Put that directory on `PATH`. A source build needs the project's pinned Go
-toolchain. A release install does not need Go.
-
-Install this file into the target agent's skill directory. For Codex, a source
-checkout can be installed with:
-
-```sh
-skill_root="${CODEX_HOME:-${HOME}/.codex}/skills/agent-integration"
-mkdir -p "${skill_root}"
-cp skills/agent-integration/SKILL.md "${skill_root}/SKILL.md"
-```
-
-For another agent, copy the same `SKILL.md` into that agent's documented skill
-directory or use its skill installer. The file has no required repository
-references or supporting files.
-
-Before the first dispatch, the host also needs:
-
-- `pueue` and `pueued` from the version supported by the installed Delegation
-  Layer release, with a private configuration and socket;
-- at least one provider CLI discoverable by the selected compiled profile; and
-- an authenticated provider session created through that provider's normal
-  login flow.
-
-Keep the Pueue configuration, Delegation Layer state root, and task workspace
-as separate canonical paths. Do not put credentials in a brief, task option,
-environment value recorded by the task, or agent-visible output.
+Keep the supervisor configuration, Delegation Layer state root, and task
+workspace as separate canonical paths. Do not put credentials in a brief, task
+option, environment value recorded by the task, or agent-visible output.
 
 ## Start safely
 
-Check the installation and discover compiled profiles:
+First check that the already-installed CLI is available, then discover compiled
+profiles:
 
 ```sh
-delegate --help
+command -v delegate
+delegate help
 delegate providers --json
 ```
+
+If `command -v delegate` fails, stop and report that the host prerequisite is
+missing. Do not install or build the CLI from this skill.
 
 `providers --json` is static discovery. It lists provider IDs, supported
 permission modes and options, and the help arguments and flags required by the
@@ -78,8 +56,9 @@ launch a provider. A successful catalog response has
 `live_acceptance.status: "not_run"`. Unknown here means that dispatch has not
 run the host probe yet; it is neither a compatibility failure nor live proof.
 
-Prepare a finite brief and two separate absolute directories, then dispatch
-one bounded task:
+Choose a listed `PROFILE`, ensure its provider executable is available to the
+dispatch environment, and prepare a finite brief and two separate absolute
+directories. Then dispatch one bounded task:
 
 ```sh
 mkdir -p "${HOME}/delegation-workspace" "${HOME}/delegation-state"
@@ -95,6 +74,13 @@ delegate --root "${HOME}/delegation-state" \
   --budget 30m \
   --json
 ```
+
+Use the host's configured private supervisor path (or its
+`DELEGATE_PUEUE_CONFIG` equivalent); the placeholder above is not a path to
+create. If the supervisor or provider executable is unavailable, stop on the
+CLI's structured error. For live acceptance, an unavailable authentication
+prerequisite is `blocked`; preserve that evidence and never relabel it as
+incompatible or passed.
 
 Save the returned `task_id`. Admission records one immutable request and at
 most one provider launch attempt; the command does not wait for completion.
@@ -113,7 +99,9 @@ continuation support.
 
 ## Read the JSON contract
 
-The capability response has this stable shape:
+The capability response has this stable shape. The two arrays are
+profile-specific and can be non-empty; empty arrays below only keep the example
+provider-agnostic:
 
 ```json
 {
@@ -192,6 +180,3 @@ An integration is complete when it can provide:
 - the terminal committed or rejected outcome and validated evidence
   descriptors; and
 - a sanitized live-acceptance receipt marked `passed`, `failed`, or `blocked`.
-
-Run the repository's skill verification after changing this file when working
-from the source checkout.
