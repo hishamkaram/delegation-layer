@@ -216,6 +216,4 @@ limitations.
 
 ## License
 
-No public license has been declared yet. Treat the source and release artifacts
-as proprietary and do not redistribute them without the project owner's
-permission.
+This project is licensed under the [MIT License](LICENSE).
