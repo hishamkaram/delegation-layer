@@ -64,6 +64,20 @@ CGO_ENABLED=0 go build -buildvcs=false -o "$HOME/.local/bin/delegate-run" ./cmd/
 Ensure `$HOME/.local/bin` is on `PATH`, or install the binaries in another
 directory already on `PATH`.
 
+### Install the agent integration skill
+
+The provider-agnostic integration skill is shipped with the source checkout.
+Copy it into the target agent's skill directory; for Codex:
+
+```sh
+skill_root="${CODEX_HOME:-$HOME/.codex}/skills/agent-integration"
+mkdir -p "$skill_root"
+cp skills/agent-integration/SKILL.md "$skill_root/SKILL.md"
+```
+
+The skill is self-contained and includes the installation, capability discovery,
+first dispatch, collection, and acceptance workflow.
+
 ## Quick start
 
 Create a brief and a workspace outside the state root. Use an absolute path to
