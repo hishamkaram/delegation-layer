@@ -17,15 +17,13 @@ arbitrary path supplied as raw arguments.
 Provider authentication is native. The child process can use the provider's
 own account home and login cache, while Delegation Layer persists only bounded
 control values needed to reproduce the launch. It does not copy, rewrite, or
-move provider credentials into task state. Claude's strict profile may invoke
-its native credential helper to authorize policy inspection; any returned secret
-is used transiently for that check and is never recorded in task metadata,
-logs, or receipts. Native provider behavior may still update its own cache or
-account metadata as part of a normal invocation.
+move provider credentials into task state. Native provider behavior may still
+update its own cache or account metadata as part of a normal invocation.
 
-Pueue configuration and daemon credentials remain under the supervisor's own
-controls. Keep the configuration, socket, keys, and state root private and
-outside any provider-writable workspace.
+The released CLI creates a private Pueue configuration, socket, keys, and
+daemon data below the state root. Keep the state root private and outside any
+provider-writable workspace. An explicitly selected external configuration
+remains under the caller's supervisor controls.
 
 ## Policy and drift checks
 

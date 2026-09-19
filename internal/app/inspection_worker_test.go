@@ -171,7 +171,7 @@ func newInspectionWorkerOperation(t *testing.T, created time.Time) (*taskdir.Sto
 			Endpoint:             "/private/pueue.sock",
 			ConfigPath:           filepath.Join(workspace, "pueue.yml"),
 			ConfigDigest:         digest,
-			ObservedVersion:      pueue.SupportedVersion,
+			ObservedVersion:      pueue.FixtureVersion,
 		},
 	}
 	operation, err := inspection.OpenOperation(store, request, binding, created)

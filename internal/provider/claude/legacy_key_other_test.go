@@ -2,13 +2,13 @@
 
 package claude
 
-import (
-	"errors"
-	"testing"
-)
+import "testing"
 
-func TestLegacyAPIKeyAbsenceIsUnsupportedOutsideDarwin(t *testing.T) {
-	if err := inspectLegacyAPIKeyAbsence(profileEnvironment{}); !errors.Is(err, ErrUnsupportedProfile) {
-		t.Fatalf("got %v", err)
+func TestLegacyAPIKeyAbsenceIsOptionalOutsideDarwin(t *testing.T) {
+	if err := inspectLegacyAPIKeyAbsence(profileEnvironment{}); err != nil {
+		t.Fatalf("optional legacy check failed: %v", err)
+	}
+	if result := inspectLegacyAPIKey(profileEnvironment{}); !result.Verified || result.Err != nil {
+		t.Fatalf("optional legacy check was not treated as absent: %+v", result)
 	}
 }

@@ -32,6 +32,11 @@ func (o Observation) Receipt() (*task.SupervisorReceipt, error) {
 		ConfigDigest: o.Binding.ConfigDigest, ConfigPath: o.Binding.ConfigPath,
 		Endpoint: o.Binding.Endpoint, ObservedVersion: o.Binding.ObservedVersion,
 		ClientExecutable: o.Binding.ClientExecutable, ClientSHA256: o.Binding.ClientSHA256,
+		DaemonExecutable: o.Binding.DaemonExecutable, DaemonSHA256: o.Binding.DaemonSHA256,
+		ResolutionOS: o.Binding.ResolutionOS, ResolutionHome: o.Binding.ResolutionHome,
+		ResolutionDataLocal: o.Binding.ResolutionDataLocal, ResolutionConfig: o.Binding.ResolutionConfig,
+		ResolutionRuntime: o.Binding.ResolutionRuntime, ResolutionUsername: o.Binding.ResolutionUsername,
+		ResolutionCwd:        o.Binding.ResolutionCwd,
 		ResolvedConfigSHA256: o.Binding.ResolvedConfigSHA256,
 	}, nil
 }

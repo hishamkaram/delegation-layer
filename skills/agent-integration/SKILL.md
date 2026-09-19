@@ -13,11 +13,12 @@ provider names, release versions, or native CLI syntax.
 
 ## Preconditions
 
-The host is responsible for installing and configuring the CLI and supervisor.
-This skill must not install, build, upgrade, or repair either one. It may check
-whether `delegate` is available, use a configured private supervisor
-configuration and socket, and create separate task and state directories that
-it is authorized to use.
+The host is responsible for installing the CLI. This skill must not install,
+build, upgrade, or repair it. It may check whether `delegate` is available and
+create separate task and state directories that it is authorized to use. A
+released CLI carries the compatible `pueue` and `pueued` supervisor binaries
+and starts or recovers a private instance automatically; an explicit supervisor
+config is only needed for an advanced integration.
 Authentication is a separate live gate; do not invent a provider-specific
 login check or classify a missing login as static incompatibility.
 
@@ -65,7 +66,6 @@ mkdir -p "${HOME}/delegation-workspace" "${HOME}/delegation-state"
 printf '%s\n' 'Inspect the workspace and return a short summary.' > "${HOME}/delegation-brief.txt"
 
 delegate --root "${HOME}/delegation-state" \
-  --pueue-config /absolute/path/to/private-pueue.yml \
   dispatch \
   --provider PROFILE \
   --brief "${HOME}/delegation-brief.txt" \
@@ -75,11 +75,14 @@ delegate --root "${HOME}/delegation-state" \
   --json
 ```
 
-Use the host's configured private supervisor path (or its
-`DELEGATE_PUEUE_CONFIG` equivalent); the placeholder above is not a path to
-create. If the supervisor or provider executable is unavailable, stop on the
-CLI's structured error. For live acceptance, an unavailable authentication
-prerequisite is `blocked`; preserve that evidence and never relabel it as
+The default release owns the private supervisor lifecycle under the state root
+and recovers its bundled daemon when control commands find it stopped. Collection
+stays observational and does not start a supervisor. If an existing compatible
+supervisor must be used, pass its absolute
+`--pueue-config` path or set `DELEGATE_PUEUE_CONFIG`. If the CLI or provider
+executable is unavailable, stop on the CLI's structured error. For live
+acceptance, an unavailable authentication prerequisite is `blocked`; preserve
+that evidence and never relabel it as
 incompatible or passed.
 
 Save the returned `task_id`. Admission records one immutable request and at

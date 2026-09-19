@@ -11,7 +11,7 @@ import (
 )
 
 func TestClientObserverCannotChangeCommandAndRetainsNaturalCompletion(t *testing.T) {
-	fake := newFakeSupervisorPaths(t, "ok", "pueue "+SupportedVersion)
+	fake := newFakeSupervisorPaths(t, "ok", "pueue "+FixtureVersion)
 	var mu sync.Mutex
 	var events []CommandEvent
 	observer := func(event CommandEvent) {

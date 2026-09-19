@@ -67,6 +67,7 @@ def fixture_inspection_binding(helper: Path, helper_config: Path, workspace: Pat
         "helper_sha256": digest(helper),
         "worker_executable": str(runner),
         "worker_sha256": digest(runner),
+        "environment": [key + "=" + environment[key] for key in sorted(environment)],
         "supervisor": supervisor,
     }
 

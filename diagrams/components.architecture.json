@@ -6,7 +6,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/hishamkaram/delegation-layer",
-      "revision": "240269c9c818ffb5044c024250062aa2487fad26",
+      "revision": "f2fcc07bcc6fd4c4e4700665f3616ef97050feb3",
       "provider": "github"
     },
     "viewBox": [
@@ -26,7 +26,7 @@
           "pueue",
           "acceptance"
         ],
-        "note": "The CLI discovers capabilities, probes the provider, persists task records, and submits one supervised job."
+        "note": "The CLI discovers capabilities, probes the provider, persists task records, bootstraps a private supervisor, and submits one supervised job."
       },
       {
         "id": "execution",
@@ -39,7 +39,7 @@
           "store",
           "acceptance"
         ],
-        "note": "delegate-run reconstructs the recorded profile, captures sealed evidence, and publishes only a validated outcome."
+        "note": "delegate-run rechecks the profile, captures evidence, and publishes a validated outcome; behavior and identity establish compatibility."
       },
       {
         "id": "recovery",
@@ -51,7 +51,7 @@
           "pueue",
           "runner"
         ],
-        "note": "Status, logs, collection, cancellation, and continuation operate through durable records and supervisor ownership."
+        "note": "Observation and recovery use durable records and supervisor ownership; the default supervisor is private to the state root."
       }
     ]
   },
@@ -176,15 +176,18 @@
     {
       "id": "pueue",
       "type": "messagebus",
-      "label": "pueued",
-      "sublabel": "queue and process supervisor",
-      "tag": "owns stopping",
+      "label": "Private supervisor",
+      "sublabel": "bundled pueue + pueued",
+      "tag": "auto-start · owns stopping",
       "sources": [
         {
           "path": "internal/pueue/client.go"
         },
         {
-          "path": "agents/_data/delegation-invariants.md"
+          "path": "internal/pueue/private.go"
+        },
+        {
+          "path": "internal/app/runtime.go"
         }
       ],
       "pos": [
@@ -392,7 +395,7 @@
       "id": "delegate-to-pueue",
       "from": "delegate",
       "to": "pueue",
-      "label": "enqueue one supervised job",
+      "label": "bootstrap or bind · enqueue",
       "fromSide": "bottom",
       "toSide": "top",
       "via": [
@@ -405,7 +408,7 @@
       "id": "pueue-to-runner",
       "from": "pueue",
       "to": "runner",
-      "label": "spawn, own, stop",
+      "label": "queue, own, stop",
       "variant": "emphasis",
       "fromSide": "bottom",
       "toSide": "top"
@@ -491,7 +494,7 @@
       "items": [
         "The core owns admission, scheduling, execution, capture, sealing, collection, and publication",
         "Adapters own native arguments, policy, identity, and evidence interpretation",
-        "Pueue owns process lifetime and stopping"
+        "The bundled supervisor is private to the state root; Pueue owns process lifetime and stopping"
       ]
     },
     {
@@ -507,8 +510,9 @@
       "dot": "violet",
       "title": "Provider surface",
       "items": [
-        "Five discoverable profiles are checked dynamically at runtime",
-        "Pi exposes read-only only because its native write tools lack a workspace boundary",
+        "Runtime checks observe provider versions and required behavior",
+        "Executable identity and queue schema establish compatibility",
+        "Live acceptance is authentication-gated; blocked stays neutral",
         "Unsupported modes and options fail before supervisor admission"
       ]
     }

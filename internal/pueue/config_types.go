@@ -1,6 +1,6 @@
 package pueue
 
-// Config is the supported pueue 4.0.4 base configuration. Profiles are validated
+// Config is the supported Pueue base configuration. Profiles are validated
 // during parsing but never selected: delegate supplies no profile option.
 type Config struct {
 	Client ClientConfig

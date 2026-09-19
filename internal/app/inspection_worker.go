@@ -13,6 +13,7 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 // errInspectionWorkerUnavailable is the only failure returned by the worker.
@@ -43,7 +44,10 @@ func runInspectionWorker(root, taskID string, deps Dependencies) (resultErr erro
 			resultErr = errInspectionWorkerUnavailable
 		}
 	}()
+	return runInspectionWorkerOperation(canonicalRoot, taskID, deps, store)
+}
 
+func runInspectionWorkerOperation(canonicalRoot, taskID string, deps Dependencies, store *taskdir.Store) (resultErr error) {
 	operation, err := inspection.LoadOperation(store, taskID)
 	if err != nil {
 		return errInspectionWorkerUnavailable
@@ -55,11 +59,20 @@ func runInspectionWorker(root, taskID string, deps Dependencies) (resultErr erro
 	}()
 
 	record := operation.Request()
-	if err = validateInspectionWorkerStartup(operation, record.Binding); err != nil {
+	meta, err := loadInspectionWorkerMeta(store, taskID)
+	if err != nil {
 		return errInspectionWorkerUnavailable
 	}
+	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
+	observeContext, cancel := context.WithDeadline(context.Background(), operation.Deadline())
+	defer cancel()
+	restoreEnvironment, err := prepareInspectionWorkerEnvironment(operation, record.Binding)
+	if err != nil {
+		return errInspectionWorkerUnavailable
+	}
+	defer func() { resultErr = errors.Join(resultErr, restoreEnvironment()) }()
 
-	supervisor, identity, err := reconcileInspectionWorker(operation, record.Binding.Supervisor, deps.SupervisorOptions)
+	supervisor, identity, err := reconcileInspectionWorker(observeContext, canonicalRoot, operation, record.Binding.Supervisor, supervisorOptionsWithEnvironment(supervisorOptions, record.Binding.Environment))
 	if err != nil {
 		return errInspectionWorkerUnavailable
 	}
@@ -72,7 +85,7 @@ func runInspectionWorker(root, taskID string, deps Dependencies) (resultErr erro
 		return completeInspectionFailure(operation)
 	}
 
-	facts, workErr, stopErr := runSupervisedInspection(operation, supervisor, identity, deps, canonicalRoot, record)
+	facts, workErr, stopErr := runSupervisedInspection(operation, supervisor, identity, deps, canonicalRoot, record, meta)
 	if workErr != nil || stopErr != nil {
 		return completeInspectionFailure(operation)
 	}
@@ -87,6 +100,19 @@ func runInspectionWorker(root, taskID string, deps Dependencies) (resultErr erro
 	return nil
 }
 
+func loadInspectionWorkerMeta(store *taskdir.Store, taskID string) (meta *task.MetaRecord, resultErr error) {
+	td, err := store.OpenTask(taskID)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
+	_, meta, resultErr = td.PreparedRecords()
+	return meta, resultErr
+}
+
 func validateInspectionWorkerStartup(operation *inspection.Operation, binding inspection.Binding) error {
 	if operation == nil || operation.Expired(time.Now()) {
 		return task.ErrEvidenceFault
@@ -94,18 +120,23 @@ func validateInspectionWorkerStartup(operation *inspection.Operation, binding in
 	return validateCurrentInspectionWorker(binding)
 }
 
-func reconcileInspectionWorker(operation *inspection.Operation, binding task.SupervisorRef, options pueue.Options) (*pueue.Client, pueue.InspectionIdentity, error) {
-	supervisor, err := pueue.NewClient(binding, options)
+func prepareInspectionWorkerEnvironment(operation *inspection.Operation, binding inspection.Binding) (func() error, error) {
+	if err := validateInspectionWorkerStartup(operation, binding); err != nil {
+		return nil, err
+	}
+	return applySavedEnvironment(binding.Environment)
+}
+
+func reconcileInspectionWorker(ctx context.Context, root string, operation *inspection.Operation, binding task.SupervisorRef, options pueue.Options) (*pueue.Client, pueue.InspectionIdentity, error) {
+	supervisor, err := newSupervisorClient(ctx, root, binding, options, true)
 	if err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
-	identity, err := inspectionIdentity(operation)
+	identity, err := inspectionIdentityContext(ctx, operation)
 	if err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
-	observeContext, cancel := context.WithDeadline(context.Background(), operation.Deadline())
-	defer cancel()
-	observation, err := supervisor.ReconcileInspection(observeContext, identity)
+	observation, err := supervisor.ReconcileInspection(ctx, identity)
 	if err != nil || !observation.Matched || observation.Job.State != pueue.StateRunning {
 		return nil, pueue.InspectionIdentity{}, errInspectionWorkerUnavailable
 	}
@@ -113,27 +144,27 @@ func reconcileInspectionWorker(operation *inspection.Operation, binding task.Sup
 		return nil, pueue.InspectionIdentity{}, errInspectionWorkerUnavailable
 	}
 	observedID := observation.Job.ID
-	if err = operation.RecordReceiptContext(observeContext, observedID); err != nil {
+	if err = operation.RecordReceiptContext(ctx, observedID); err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
 	identity.NumericTaskID = &observedID
 	return supervisor, identity, nil
 }
 
-func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, deps Dependencies, root string, record inspection.RequestRecord) (json.RawMessage, error, error) {
+func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, deps Dependencies, root string, record inspection.RequestRecord, meta *task.MetaRecord) (json.RawMessage, error, error) {
 	stopper := &inspectionBudgetStopper{operation: operation, client: supervisor, identity: identity}
 	var facts json.RawMessage
 	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: stopper}, func(scope execution.PreflightScope) error {
-		return runInspectionCallback(scope, operation, deps, root, record, &facts)
+		return runInspectionCallback(scope, operation, deps, root, record, meta, &facts)
 	})
 	return facts, workErr, stopErr
 }
 
-func runInspectionCallback(scope execution.PreflightScope, operation *inspection.Operation, deps Dependencies, root string, record inspection.RequestRecord, facts *json.RawMessage) error {
+func runInspectionCallback(scope execution.PreflightScope, operation *inspection.Operation, deps Dependencies, root string, record inspection.RequestRecord, meta *task.MetaRecord, facts *json.RawMessage) error {
 	// Candidate preparation may perform the compiled attributes-only native
 	// lookup. Keep it inside the armed lifetime so expiry owns its stop
 	// boundary before any such work can block the worker.
-	candidate, err := prepareCandidate(deps, root, record.Task)
+	candidate, err := prepareInspectionWorkerCandidate(deps, root, record.Task, meta)
 	if err != nil {
 		return err
 	}

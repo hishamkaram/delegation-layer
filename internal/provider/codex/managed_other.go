@@ -2,12 +2,11 @@
 
 package codex
 
-import (
-	"fmt"
-
-	"github.com/hishamkaram/delegation-layer/internal/task"
-)
+import "github.com/hishamkaram/delegation-layer/internal/task"
 
 func managedSources() ([]task.PolicySourceDigest, error) {
-	return nil, fmt.Errorf("%w: managed policy inspection is unavailable on this platform", ErrUnsupportedProfile)
+	// Darwin exposes an additional managed-preference API. Portable policy
+	// files are still inventoried by policy.go; unavailable native metadata is
+	// optional and must not make the provider unsupported.
+	return nil, nil
 }

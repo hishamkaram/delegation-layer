@@ -372,7 +372,7 @@ func inspectionFixture(t *testing.T) (*taskdir.Store, task.TaskRecord, Binding) 
 			Endpoint:             "/private/pueue.sock",
 			ConfigPath:           "/private/pueue.yml",
 			ConfigDigest:         digest,
-			ObservedVersion:      pueue.SupportedVersion,
+			ObservedVersion:      pueue.FixtureVersion,
 		},
 	}
 	return store, request, binding

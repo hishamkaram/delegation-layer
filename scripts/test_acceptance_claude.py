@@ -460,7 +460,7 @@ class ClaudeOracleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "leaked"):
                 no_prompt_argv(["delegate", brief.read_text()], [brief])
 
-    def test_expected_inspection_binding_matches_native_sources_and_go_hashes(self):
+    def test_expected_inspection_binding_matches_portable_runtime_and_go_hashes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             base = root / "pueue"
@@ -470,10 +470,9 @@ class ClaudeOracleTests(unittest.TestCase):
             gate.write_json(config, gate.config_for(base))
             pueue = root / "pueue-bin"
             runner = root / "delegate-run"
-            helper = root / "security"
             claude = root / "claude"
             for path, content in ((pueue, b"pueue"), (runner, b"runner"),
-                                  (helper, b"helper"), (claude, b"claude")):
+                                  (claude, b"claude")):
                 path.write_bytes(content)
                 path.chmod(0o700)
             home = root / "home"
@@ -484,14 +483,13 @@ class ClaudeOracleTests(unittest.TestCase):
 
             binding = gate.expected_claude_inspection_binding(
                 pueue, config, base, gate.digest(config), workspace, claude,
-                runner, environment, helper)
+                runner, environment)
             definition = {
-                "revision": gate.NATIVE_INSPECTION_REVISION,
-                "executable": str(helper.resolve()),
-                "executable_sha256": gate.digest(helper),
-                "arguments": ["find-generic-password", "-s", "Claude Code-credentials",
-                              "-a", "fixture-user", "-w"],
-                "directory": str(home.resolve()),
+                "revision": gate.RUNTIME_INSPECTION_REVISION,
+                "executable": str(claude.resolve()),
+                "executable_sha256": gate.digest(claude),
+                "arguments": None,
+                "directory": str(workspace.resolve()),
                 "environment": ["CLAUDE_CODE_HOVER_REST=0", "HOME=" + str(home),
                                 "LANG=C", "PATH=/usr/bin", "USER=fixture-user"],
                 "output_limit": 1 << 20,
@@ -504,24 +502,19 @@ class ClaudeOracleTests(unittest.TestCase):
                     "help_args": None,
                     "required_flags": list(gate.RUNTIME_REQUIRED_FLAGS),
                 },
-                "remote": {
-                    "url": gate.NATIVE_POLICY_ENDPOINT,
-                    "headers": {"Cache-Control": "no-cache", "Pragma": "no-cache",
-                                 "User-Agent": "claude-cli (external, cli)",
-                                 "anthropic-beta": "oauth-2025-04-20"},
-                },
             }
             self.assertEqual(binding["definition_sha256"],
                              sha(gate.canonical_go_json(definition)))
             self.assertNotEqual(binding["definition_sha256"],
                                 sha(gate.canonical_go_json(definition, newline=False)))
-            self.assertEqual(binding["helper_executable"], str(helper.resolve()))
+            self.assertEqual(binding["helper_executable"], str(claude.resolve()))
             self.assertEqual(binding["worker_executable"], str(runner.resolve()))
+            self.assertEqual(binding["environment"], definition["environment"])
             self.assertEqual(binding["supervisor"]["config_digest"], gate.digest(config))
             self.assertEqual(binding["supervisor"]["endpoint"],
                              "unix:" + str(base.resolve() / "run" / "p.sock"))
 
-    def test_expected_inspection_binding_mirrors_account_fallback_and_rejects_selectors(self):
+    def test_expected_inspection_binding_rejects_selectors(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             base = root / "pueue"
@@ -530,7 +523,7 @@ class ClaudeOracleTests(unittest.TestCase):
             config = root / "pueue.yml"
             gate.write_json(config, gate.config_for(base))
             paths = []
-            for name in ("pueue-bin", "delegate-run", "security"):
+            for name in ("pueue-bin", "delegate-run", "claude"):
                 path = root / name
                 path.write_bytes(name.encode())
                 path.chmod(0o700)
@@ -538,11 +531,10 @@ class ClaudeOracleTests(unittest.TestCase):
             home = root / "home"
             home.mkdir()
             environment = {"HOME": str(home), "PATH": "/usr/bin", "USER": "bad/user"}
-            self.assertEqual(gate._native_account(environment), "claude-code-user")
             with self.assertRaisesRegex(gate.BlockedFailure, "alternate Claude environment"):
                 gate.expected_claude_inspection_binding(
                     paths[0], config, base, gate.digest(config), home, paths[2], paths[1],
-                    {**environment, "ANTHROPIC_API_KEY": "ambient"}, paths[2])
+                    {**environment, "ANTHROPIC_API_KEY": "ambient"})
 
     def test_dispatch_registers_complete_expected_binding_before_admission(self):
         class FakeOps:
@@ -561,12 +553,13 @@ class ClaudeOracleTests(unittest.TestCase):
         owner = object.__new__(gate.ClaudeAcceptance)
         owner.root_id = None
         owner.inspection_binding = {
-            "definition_revision": gate.NATIVE_INSPECTION_REVISION,
+            "definition_revision": gate.RUNTIME_INSPECTION_REVISION,
             "definition_sha256": "a" * 64,
-            "helper_executable": "/fixture/security",
+            "helper_executable": "/fixture/claude",
             "helper_sha256": "b" * 64,
             "worker_executable": "/fixture/runner",
             "worker_sha256": "c" * 64,
+            "environment": ["HOME=/fixture/home"],
             "supervisor": {"expected": True},
         }
         owner.ops = FakeOps()

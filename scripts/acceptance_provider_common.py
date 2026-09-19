@@ -13,8 +13,10 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import shlex
+import sys
 import time
 from typing import Callable
 
@@ -69,9 +71,16 @@ _INSPECTION_BINDING_KEYS = {
     "definition_revision", "definition_sha256", "helper_executable", "helper_sha256",
     "worker_executable", "worker_sha256", "supervisor",
 }
+_INSPECTION_BINDING_OPTIONAL_KEYS = {"environment"}
 _SUPERVISOR_BINDING_KEYS = {
     "client_executable", "client_sha256", "resolved_config_sha256", "endpoint",
     "config_path", "config_digest", "observed_version",
+}
+_SUPERVISOR_BINDING_OPTIONAL_KEYS = {
+    "resolution_os", "resolution_home", "resolution_data_local",
+    "resolution_config", "resolution_runtime", "resolution_username",
+    # Accepted for records written before recovery stopped using the caller cwd.
+    "resolution_cwd",
 }
 _PUEUE_STATUS_KEYS = {"tasks", "groups"}
 _PUEUE_GROUP_KEYS = {"status", "parallel_tasks"}
@@ -305,15 +314,57 @@ def supervisor_binding(pueue: Path, config: Path, base: Path,
     base = Path(base).resolve()
     config = Path(config).resolve()
     pueue = Path(pueue).resolve()
-    return {
+    binding = {
         "client_executable": str(pueue),
         "client_sha256": digest(pueue),
         "resolved_config_sha256": resolved_supervisor_config_digest(base),
         "endpoint": "unix:" + str(base / "run" / "p.sock"),
         "config_path": str(config),
         "config_digest": config_digest,
-        "observed_version": PUEUE_VERSION,
+        "observed_version": "pueue " + PUEUE_VERSION,
     }
+    binding.update(supervisor_resolution())
+    return binding
+
+
+def supervisor_resolution() -> dict[str, str]:
+    """Mirror the Go supervisor path selectors used by acceptance processes."""
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key in {"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"}
+    }
+    home = os.path.normpath(environment.get("HOME") or pwd.getpwuid(os.getuid()).pw_dir)
+    if sys.platform == "linux":
+        operating_system = "linux"
+        data_local = _absolute_environment_or(
+            environment, "XDG_DATA_HOME", os.path.join(home, ".local", "share"))
+        config = _absolute_environment_or(
+            environment, "XDG_CONFIG_HOME", os.path.join(home, ".config"))
+        runtime = _absolute_environment_or(environment, "XDG_RUNTIME_DIR", "")
+    elif sys.platform == "darwin":
+        operating_system = "darwin"
+        data_local = os.path.normpath(os.path.join(home, "Library", "Application Support"))
+        config = data_local
+        runtime = ""
+    else:
+        raise AcceptanceFailure("unsupported acceptance platform: " + sys.platform)
+    result = {
+        "resolution_os": operating_system,
+        "resolution_home": home,
+        "resolution_data_local": data_local,
+        "resolution_config": config,
+        "resolution_username": pwd.getpwuid(os.getuid()).pw_name,
+    }
+    if runtime:
+        result["resolution_runtime"] = runtime
+    return result
+
+
+def _absolute_environment_or(environment: dict[str, str], key: str, fallback: str) -> str:
+    value = environment.get(key, "")
+    if value and os.path.isabs(value):
+        return os.path.normpath(value)
+    return os.path.normpath(fallback) if fallback else ""
 
 
 def verify_collected_outcome(collected: object, directory: Path, expected: str) -> tuple[dict[str, object], bytes]:
@@ -578,7 +629,7 @@ def _inspection_label(root_id: str, task_id: str) -> str:
 
 def _validate_supervisor_binding(value: object, label: str) -> None:
     require(isinstance(value, dict), f"{label} is not an object")
-    _exact_keys(value, _SUPERVISOR_BINDING_KEYS, label=label)
+    _exact_keys(value, _SUPERVISOR_BINDING_KEYS, _SUPERVISOR_BINDING_OPTIONAL_KEYS, label)
     for key in ("client_executable", "config_path"):
         path = value.get(key)
         require(isinstance(path, str) and Path(path).is_absolute() and
@@ -588,13 +639,37 @@ def _validate_supervisor_binding(value: object, label: str) -> None:
         require(_hex_digest(value.get(key)), f"{label} {key} is invalid")
     require(isinstance(value.get("endpoint"), str) and value["endpoint"],
             f"{label} endpoint is invalid")
-    require(value.get("observed_version") == PUEUE_VERSION,
+    require(value.get("observed_version") == "pueue " + PUEUE_VERSION,
             f"{label} version is unsupported")
+    resolution_keys = _SUPERVISOR_BINDING_OPTIONAL_KEYS & set(value)
+    if resolution_keys == {"resolution_cwd"}:
+        path = value["resolution_cwd"]
+        require(isinstance(path, str) and Path(path).is_absolute() and
+                Path(path) == Path(os.path.normpath(path)),
+                f"{label} resolution_cwd is invalid")
+        return
+    if resolution_keys:
+        required = {"resolution_os", "resolution_home", "resolution_data_local",
+                    "resolution_config", "resolution_username"}
+        require(required <= resolution_keys, f"{label} resolution is incomplete")
+        require(value["resolution_os"] in {"linux", "darwin"},
+                f"{label} resolution operating system is invalid")
+        for key in ("resolution_home", "resolution_data_local", "resolution_config",
+                    "resolution_runtime", "resolution_cwd"):
+            if key in value:
+                path = value[key]
+                require(isinstance(path, str) and Path(path).is_absolute() and
+                        Path(path) == Path(os.path.normpath(path)),
+                        f"{label} {key} is invalid")
+        username = value["resolution_username"]
+        require(isinstance(username, str) and username and
+                "/" not in username and "\\" not in username and "\x00" not in username,
+                f"{label} resolution username is invalid")
 
 
 def _validate_inspection_binding(value: object, label: str) -> None:
     require(isinstance(value, dict), f"{label} is not an object")
-    _exact_keys(value, _INSPECTION_BINDING_KEYS, label=label)
+    _exact_keys(value, _INSPECTION_BINDING_KEYS, _INSPECTION_BINDING_OPTIONAL_KEYS, label)
     require(isinstance(value.get("definition_revision"), str) and
             value["definition_revision"], f"{label} definition revision is invalid")
     for key in ("definition_sha256", "helper_sha256", "worker_sha256"):
@@ -604,6 +679,12 @@ def _validate_inspection_binding(value: object, label: str) -> None:
         require(isinstance(path, str) and Path(path).is_absolute() and
                 Path(path) == Path(os.path.normpath(path)),
                 f"{label} {key} is invalid")
+    if "environment" in value:
+        environment = value["environment"]
+        require(isinstance(environment, list) and
+                all(isinstance(entry, str) and "=" in entry and
+                    entry.split("=", 1)[0] for entry in environment),
+                f"{label} environment is invalid")
     _validate_supervisor_binding(value.get("supervisor"), label + " supervisor")
 
 
@@ -1000,7 +1081,7 @@ class NativeTaskOps:
                 supervisor.get("client_sha256") == digest(self.pueue) and
                 supervisor.get("config_path") == str(self.pueue_config) and
                 supervisor.get("config_digest") == digest(self.pueue_config) and
-                supervisor.get("observed_version") == PUEUE_VERSION,
+                supervisor.get("observed_version") == "pueue " + PUEUE_VERSION,
                 f"inspection request supervisor binding mismatch for {task}")
 
         request_digest = digest(request_path)

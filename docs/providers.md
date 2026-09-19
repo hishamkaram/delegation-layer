@@ -22,12 +22,11 @@ Agents can request one provider's provider-neutral contract with
 side-effect-free and reports `status: "unknown"` until dispatch performs the
 supervised runtime probe. It does not claim authentication or live acceptance.
 
-The binaries build for Darwin and Linux targets, but native policy checks can
-be more restrictive. The Codex profile currently requires Darwin to inspect
-managed preferences, and the Claude profile currently requires Darwin to use
-the system Keychain policy check. Antigravity has no corresponding macOS-only
-helper gate; its native CLI and workspace policy still determine whether a task
-can run on a given host.
+The released binaries target Darwin and Linux. Provider authentication and
+native policy are evaluated through the provider's own CLI and portable policy
+inputs; Codex and Claude do not require a Darwin-only admission helper. A
+provider can still be rejected when its executable, required flags, policy
+inputs, or output contract are unavailable on the current host.
 
 ## Shared compatibility behavior
 
@@ -78,10 +77,12 @@ make acceptance-opencode
 make acceptance-native
 ```
 
-These commands require the selected CLI, Pueue 4.0.4, and a usable native
-provider login. Exit `0` means the gate passed. Exit `2` means `BLOCKED`: a
-required executable, supervisor, or authentication prerequisite was unavailable
-and a sanitized `failure.json` receipt was written. Textual login refusals and
+These commands require the selected CLI, a usable native provider login, and
+the test supervisor supplied by the development workflow. Released users do
+not install a separate supervisor. Exit `0` means the gate passed. Exit `2`
+means `BLOCKED`: a required executable, supervisor, or authentication
+prerequisite was unavailable and a sanitized `failure.json` receipt was
+written. Textual login refusals and
 structured provider authorization responses such as HTTP 401 or 403 are both
 classified as authentication prerequisites. The aggregate
 `acceptance-native` target treats blocked profiles as neutral and still fails
@@ -108,7 +109,8 @@ native sandbox flag. Continuation uses the exact predecessor task ID.
 
 The adapter deliberately rejects unsupported model, effort, policy, and native
 timeout combinations. Codex's own authentication remains in the native Codex
-home and is evaluated by the CLI at launch.
+home; the fixed personal profile checks its nonsecret eligibility before
+admission and the provider CLI still validates the active account at launch.
 
 ## Claude
 
@@ -120,12 +122,9 @@ result artifact. Continuation names an exact predecessor task.
 
 The adapter accepts any valid version reported by the current Claude CLI after
 the shared capability probe. It still rejects changed output shape, missing
-required flags, policy drift, identity mismatch, or an invalid result.
-
-On Darwin, the strict profile may use the system credential helper for a bounded
-native policy check; only non-secret policy facts are persisted. Other hosts
-report the native policy prerequisite as unavailable until an equivalent
-platform contract is implemented.
+required flags, policy drift, identity mismatch, or an invalid result. Native
+authentication remains a live provider concern and is never copied into task
+state.
 
 ## Pi
 

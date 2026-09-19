@@ -37,13 +37,13 @@ func validBindingForTest() task.SupervisorRef {
 		ConfigPath:           "/tmp/pueue.yml",
 		ConfigDigest:         digest,
 		Endpoint:             "unix:/tmp/pueue.sock",
-		ObservedVersion:      SupportedVersion,
+		ObservedVersion:      FixtureVersion,
 	}
 }
 
 func newFakeSupervisor(t *testing.T, mode string) *fakeSupervisor {
 	t.Helper()
-	fake := newFakeSupervisorPaths(t, mode, "pueue "+SupportedVersion)
+	fake := newFakeSupervisorPaths(t, mode, "pueue "+FixtureVersion)
 	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{ObservationTimeout: DefaultObservationTimeout, Environment: fake.environment})
 	if err != nil {
 		var inFlight *InFlightError
@@ -122,10 +122,11 @@ set -eu
 mode=${FAKE_MODE:-ok}
 case "${3-}" in
   --version)
+    if [ "${FAKE_VERSION_DELAY:-}" != "" ]; then sleep "$FAKE_VERSION_DELAY"; fi
     printf '%s\n' "${FAKE_VERSION:-pueue 4.0.4}"
     ;;
   status)
-    if [ "$mode" = "delay-status" ]; then sleep 0.08; fi
+    if [ "${FAKE_STATUS_DELAY:-}" != "" ]; then sleep "$FAKE_STATUS_DELAY"; elif [ "$mode" = "delay-status" ]; then sleep 0.08; elif [ "$mode" = "delay-status-fail" ]; then sleep 0.08; [ -f "${FAKE_READY:?}" ] || exit 1; fi
     cat "$FAKE_STATUS"
     ;;
   add)
@@ -542,7 +543,7 @@ func assertTargetedStopAcknowledgment(t *testing.T, tc targetedStopCase, result 
 }
 
 func TestExplicitResolutionMustMatchChildEnvironment(t *testing.T) {
-	fake := newFakeSupervisorPaths(t, "ok", "pueue "+SupportedVersion)
+	fake := newFakeSupervisorPaths(t, "ok", "pueue "+FixtureVersion)
 	resolution, err := CurrentResolutionContext()
 	if err != nil {
 		t.Fatal(err)
@@ -603,7 +604,7 @@ func TestFreshBindingDetectsExecutableDrift(t *testing.T) {
 }
 
 func TestFreshBindingDetectsResolutionDrift(t *testing.T) {
-	fake := newFakeSupervisorPaths(t, "ok", "pueue "+SupportedVersion)
+	fake := newFakeSupervisorPaths(t, "ok", "pueue "+FixtureVersion)
 	if err := os.WriteFile(fake.configPath, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -616,8 +617,55 @@ func TestFreshBindingDetectsResolutionDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Reconcile(context.Background(), testIdentity()); !errors.Is(err, ErrBinding) {
-		t.Fatalf("environment drift was accepted: %v", err)
+	if err := client.Ready(context.Background()); err != nil {
+		t.Fatalf("saved supervisor resolution was not reused after ambient drift: %v", err)
+	}
+	if client.Binding().ResolutionOS == "" {
+		t.Fatal("admission did not persist supervisor resolution")
+	}
+}
+
+func TestSavedBindingDoesNotPinWorkingDirectory(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	saved := fake.client.Binding()
+	saved.ResolutionCwd = filepath.Join(t.TempDir(), "removed-before-recovery")
+	client, err := NewClient(saved, Options{Environment: fake.environment, ObservationTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := t.TempDir()
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(current); chdirErr != nil {
+			t.Errorf("restore working directory: %v", chdirErr)
+		}
+	})
+	if err := os.Chdir(removed); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(removed); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ready(context.Background()); err != nil {
+		t.Fatalf("saved supervisor binding depended on a removed working directory: %v", err)
+	}
+}
+
+func TestSavedBindingPreservesExplicitEmptyEnvironment(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	client, err := NewClient(fake.client.Binding(), Options{Environment: []string{}, ObservationTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := client.prepareCommand("status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Env == nil || len(command.Env) != 0 {
+		t.Fatalf("saved binding changed an explicit empty environment: %#v", command.Env)
 	}
 }
 
@@ -628,14 +676,13 @@ func testIdentity() Identity {
 func TestNewClientRequiresEverySavedBindingComponent(t *testing.T) {
 	base := validBindingForTest()
 	cases := map[string]func(*task.SupervisorRef){
-		"client executable":   func(ref *task.SupervisorRef) { ref.ClientExecutable = "" },
-		"client digest":       func(ref *task.SupervisorRef) { ref.ClientSHA256 = "" },
-		"resolved digest":     func(ref *task.SupervisorRef) { ref.ResolvedConfigSHA256 = "" },
-		"config path":         func(ref *task.SupervisorRef) { ref.ConfigPath = "" },
-		"config digest":       func(ref *task.SupervisorRef) { ref.ConfigDigest = "" },
-		"endpoint":            func(ref *task.SupervisorRef) { ref.Endpoint = "" },
-		"version":             func(ref *task.SupervisorRef) { ref.ObservedVersion = "" },
-		"unsupported version": func(ref *task.SupervisorRef) { ref.ObservedVersion = "4.0.3" },
+		"client executable": func(ref *task.SupervisorRef) { ref.ClientExecutable = "" },
+		"client digest":     func(ref *task.SupervisorRef) { ref.ClientSHA256 = "" },
+		"resolved digest":   func(ref *task.SupervisorRef) { ref.ResolvedConfigSHA256 = "" },
+		"config path":       func(ref *task.SupervisorRef) { ref.ConfigPath = "" },
+		"config digest":     func(ref *task.SupervisorRef) { ref.ConfigDigest = "" },
+		"endpoint":          func(ref *task.SupervisorRef) { ref.Endpoint = "" },
+		"version":           func(ref *task.SupervisorRef) { ref.ObservedVersion = "" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

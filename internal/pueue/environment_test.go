@@ -156,3 +156,42 @@ func TestDefaultEnvironmentRejectsFreshResolutionDrift(t *testing.T) {
 		t.Fatalf("fresh HOME/XDG drift was accepted: %v", err)
 	}
 }
+
+func TestResolutionContextCanonicalizesAbsolutePaths(t *testing.T) {
+	base := t.TempDir()
+	home := base + "/home/../home"
+	data := base + "/data/../data"
+	config := base + "/config/../config"
+	runtimeDir := base + "/runtime/../runtime"
+	environment := []string{"HOME=" + home}
+	if runtime.GOOS == "linux" {
+		environment = append(environment,
+			"XDG_DATA_HOME="+data,
+			"XDG_CONFIG_HOME="+config,
+			"XDG_RUNTIME_DIR="+runtimeDir,
+		)
+	}
+
+	resolution, err := resolutionContext(environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Home != filepath.Clean(home) {
+		t.Fatalf("home path was not canonicalized: got=%q want=%q", resolution.Home, filepath.Clean(home))
+	}
+	if runtime.GOOS == "linux" {
+		for _, path := range []struct {
+			name string
+			got  string
+			want string
+		}{
+			{name: "data", got: resolution.DataLocalDirectory, want: filepath.Clean(data)},
+			{name: "config", got: resolution.ConfigDirectory, want: filepath.Clean(config)},
+			{name: "runtime", got: resolution.RuntimeDirectory, want: filepath.Clean(runtimeDir)},
+		} {
+			if path.got != path.want {
+				t.Fatalf("%s path was not canonicalized: got=%q want=%q", path.name, path.got, path.want)
+			}
+		}
+	}
+}

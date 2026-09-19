@@ -107,7 +107,17 @@ func prepareExistingCandidate(deps Dependencies, root string, req task.TaskRecor
 }
 
 func prepareExistingCandidateContext(ctx context.Context, deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, json.RawMessage, error) {
-	candidate, err := prepareCandidate(deps, root, req)
+	normalized := deps.normalized()
+	var candidate commonprovider.ProfileCandidate
+	var err error
+	if !normalized.useCatalogExistingFor(req) {
+		candidate, err = prepareCandidate(normalized, root, req)
+	} else {
+		candidate, err = normalized.Catalog.ExistingCandidate(req, meta)
+		if err == nil {
+			err = candidate.ValidateStatePlacement(root)
+		}
+	}
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, nil, err
 	}
@@ -116,6 +126,32 @@ func prepareExistingCandidateContext(ctx context.Context, deps Dependencies, roo
 	}
 	facts, err := storedInspectionFactsContext(ctx, deps, root, req, meta, candidate)
 	return candidate, facts, err
+}
+
+func prepareInspectionWorkerCandidate(deps Dependencies, root string, req task.TaskRecord, meta *task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+	normalized := deps.normalized()
+	if meta == nil || !normalized.useCatalogExistingFor(req) {
+		return prepareCandidate(normalized, root, req)
+	}
+	candidate, err := normalized.Catalog.ExistingCandidate(req, *meta)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	if err = candidate.ValidateStatePlacement(root); err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	return candidate, nil
+}
+
+func (d Dependencies) useCatalogExistingFor(request task.TaskRecord) bool {
+	if d.useCatalogExisting {
+		return true
+	}
+	if d.PrepareProfile != nil {
+		return false
+	}
+	registration, err := d.Catalog.Lookup(request.Provider)
+	return err == nil && registration.PrepareExisting != nil
 }
 
 func freshPreflightProfile(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord, scope execution.PreflightScope) error {

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -35,6 +34,7 @@ type Binding struct {
 	HelperSHA256       string             `json:"helper_sha256"`
 	WorkerExecutable   string             `json:"worker_executable"`
 	WorkerSHA256       string             `json:"worker_sha256"`
+	Environment        []string           `json:"environment,omitempty"`
 	Supervisor         task.SupervisorRef `json:"supervisor"`
 }
 
@@ -82,6 +82,9 @@ func validateAbsoluteCleanPath(name, value string) error {
 // admission. The shared supervisor validator permits historical optional
 // fields, so this boundary explicitly requires every fresh binding field.
 func ValidateBinding(binding Binding) error {
+	if err := task.ValidateEnvironment(binding.Environment); err != nil {
+		return fmt.Errorf("inspection environment: %w", err)
+	}
 	if !validText(binding.DefinitionRevision) {
 		return errors.New("missing inspection definition revision")
 	}
@@ -106,9 +109,6 @@ func ValidateBinding(binding Binding) error {
 	}
 	if err := task.ValidateFreshSupervisorRef(binding.Supervisor); err != nil {
 		return fmt.Errorf("inspection supervisor binding: %w", err)
-	}
-	if binding.Supervisor.ObservedVersion != pueue.SupportedVersion {
-		return fmt.Errorf("inspection supervisor version %q is not supported", binding.Supervisor.ObservedVersion)
 	}
 	return nil
 }
@@ -220,5 +220,6 @@ func cloneTaskRecord(record task.TaskRecord) task.TaskRecord {
 
 func cloneRequestRecord(record RequestRecord) RequestRecord {
 	record.Task = cloneTaskRecord(record.Task)
+	record.Binding.Environment = append([]string(nil), record.Binding.Environment...)
 	return record
 }

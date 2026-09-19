@@ -49,6 +49,24 @@ func supervisorOptionsForProfile(base pueue.Options, profile PreparedProfile) pu
 	return supervisorOptionsWithEnvironment(base, profile.Plan.Environment)
 }
 
+func supervisorOptionsForMeta(base pueue.Options, meta task.MetaRecord) pueue.Options {
+	return supervisorOptionsWithEnvironment(base, meta.Environment)
+}
+
+// supervisorOptionsForCurrentEnvironment snapshots the bounded supervisor
+// control environment before runner reconstruction applies a task's provider
+// environment to the process. This preserves Linux XDG socket/configuration
+// selectors for external supervisors while keeping task credentials out of
+// the supervisor context.
+func supervisorOptionsForCurrentEnvironment(base pueue.Options) pueue.Options {
+	if base.Environment != nil {
+		base.Environment = append([]string(nil), base.Environment...)
+		return base
+	}
+	base.Environment = pueue.DefaultEnvironment()
+	return base
+}
+
 func supervisorOptionsWithEnvironment(base pueue.Options, providerEnvironment []string) pueue.Options {
 	if len(providerEnvironment) == 0 {
 		return base
@@ -102,7 +120,7 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	if err != nil {
 		return admissionPreparation{}, err
 	}
-	supervisor, err := bindInitialWithOptions(a, deps, supervisorOptions)
+	supervisor, err := bindInitialWithOptions(a, deps, store.Root, supervisorOptions)
 	if err != nil {
 		return admissionPreparation{}, err
 	}
@@ -196,7 +214,8 @@ func admissionInspectionFacts(a Arguments, deps Dependencies, store *taskdir.Sto
 	operation, err := inspection.OpenOperation(store, req, inspection.Binding{
 		DefinitionRevision: definition.Revision, DefinitionSHA256: definitionSHA,
 		HelperExecutable: definition.Executable, HelperSHA256: definition.ExecutableSHA256,
-		WorkerExecutable: runner, WorkerSHA256: workerSHA, Supervisor: supervisor.Binding(),
+		WorkerExecutable: runner, WorkerSHA256: workerSHA,
+		Environment: append([]string(nil), definition.Environment...), Supervisor: supervisor.Binding(),
 	}, time.Now())
 	if err != nil {
 		return nil, time.Time{}, annotateMissingInspectionStage("opening inspection operation", err)

@@ -77,6 +77,9 @@ jobs:
       - name: Validate GoReleaser configuration
         run: bin/goreleaser check
 
+      - name: Fetch and verify bundled Pueue artifacts
+        run: ./scripts/fetch-pueue-assets.sh .release/pueue
+
       - name: Publish draft GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -140,6 +143,10 @@ jobs:
           tar -xzf "${archive}" -C extracted
           cd extracted
           test "$(./delegate version | awk '{print $2}')" = "${TAG#v}"
+          test -x ./pueue
+          test -x ./pueued
+          test -n "$(./pueue --version)"
+          test -n "$(./pueued --version)"
           ./delegate providers --json >/dev/null
           ./delegate capabilities --provider pi:json --json >/dev/null
           test -x ./delegate-run

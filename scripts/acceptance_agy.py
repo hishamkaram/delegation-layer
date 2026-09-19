@@ -825,7 +825,7 @@ class NativeRun:
                 submit.get("label") == self.labels[task], f"{name} submit evidence identity mismatch")
         supervisor = submit.get("supervisor")
         require(isinstance(supervisor, dict) and supervisor.get("config_path") == str(self.pueue_config) and
-                supervisor.get("observed_version") == PUEUE_VERSION and supervisor.get("client_executable") == str(self.pueue),
+                supervisor.get("observed_version") == f"pueue {PUEUE_VERSION}" and supervisor.get("client_executable") == str(self.pueue),
                 f"{name} submit supervisor binding mismatch")
         start = self.read_record(task, "provider.start")
         require(start.get("root_id") == self.root_id and start.get("task_id") == task and

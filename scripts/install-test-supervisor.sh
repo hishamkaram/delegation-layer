@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Download only. The acceptance harness supplies an explicit private config
+# Download only. The acceptance harness controls the supervisor configuration
 # before invoking either executable; this script never contacts a queue.
 supervisor_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 supervisor_bin_dir="${supervisor_script_dir}/../bin/test-supervisor"

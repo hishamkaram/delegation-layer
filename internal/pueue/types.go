@@ -1,4 +1,4 @@
-// Package pueue binds the supported supervisor CLI to immutable task identity.
+// Package pueue binds a compatible supervisor CLI to immutable task identity.
 // Observation deadlines never cancel an external process or grant a retry.
 package pueue
 
@@ -10,7 +10,10 @@ import (
 )
 
 const (
-	SupportedVersion          = "4.0.4"
+	// FixtureVersion names the serialized test fixture baseline. Runtime
+	// admission accepts any nonempty observed version whose behavior matches
+	// the validated command/schema contract.
+	FixtureVersion            = "4.0.4"
 	DefaultObservationTimeout = 5 * time.Second
 	MaxControlBytes           = 1 << 20
 )
@@ -31,6 +34,7 @@ type Options struct {
 	ObservationTimeout time.Duration
 	Resolution         *ResolutionContext
 	Environment        []string
+	resolutionPinned   bool
 	// Observer is an optional finite, concurrency-safe acceptance recorder.
 	// It receives copied values and must not block process ownership.
 	Observer func(CommandEvent)
@@ -112,9 +116,14 @@ type CommandResult struct {
 type Pending struct {
 	done   chan struct{}
 	result CommandResult
+	args   []string
 }
 
 func (p *Pending) Done() <-chan struct{} { return p.done }
+
+func (p *Pending) versionProbe() bool {
+	return p != nil && len(p.args) > 0 && p.args[len(p.args)-1] == "--version"
+}
 
 // Result returns copied output only after synchronization with natural Wait.
 func (p *Pending) Result() (CommandResult, bool) {

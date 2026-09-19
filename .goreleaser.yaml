@@ -35,6 +35,11 @@ archives:
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ title .Os }}_{{ .Arch }}"
+    files:
+      - src: .release/pueue/{{ .Os }}/{{ .Arch }}/pueue
+        dst: pueue
+      - src: .release/pueue/{{ .Os }}/{{ .Arch }}/pueued
+        dst: pueued
 
 checksum:
   name_template: "checksums.txt"

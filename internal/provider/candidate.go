@@ -14,6 +14,11 @@ import (
 // requested native inspection before finalizing and admitting an ordinary task.
 type PrepareCandidate func(task.TaskRecord) (ProfileCandidate, error)
 
+// PrepareExistingCandidate reconstructs a previously admitted profile when a
+// provider has to retain a historical preparation contract across a release.
+// New admission always uses PrepareCandidate.
+type PrepareExistingCandidate func(task.TaskRecord, task.MetaRecord) (ProfileCandidate, error)
+
 // ProfileCandidate separates a compiled policy description from its external
 // inspection. Finalize is pure; it accepts only validated nonsecret facts.
 // No process, storage, or supervisor authority crosses this boundary.

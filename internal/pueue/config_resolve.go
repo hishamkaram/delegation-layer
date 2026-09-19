@@ -23,7 +23,10 @@ type ResolutionContext struct {
 	ConfigDirectory    string
 	RuntimeDirectory   string
 	Username           string
-	Cwd                string
+	// Cwd is the local process directory used for command execution. It is
+	// intentionally not persisted as supervisor path-resolution state because
+	// the original caller directory may be removed before recovery.
+	Cwd string
 }
 
 type ResolvedConfig struct {
@@ -57,9 +60,10 @@ func resolutionContext(environment []string) (ResolutionContext, error) {
 	if home == "" {
 		home = u.HomeDir
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return ResolutionContext{}, err
+	home = filepath.Clean(home)
+	cwd := ""
+	if current, cwdErr := os.Getwd(); cwdErr == nil {
+		cwd = filepath.Clean(current)
 	}
 	r := ResolutionContext{OS: runtime.GOOS, Home: home, Username: u.Username, Cwd: cwd}
 	switch runtime.GOOS {
@@ -76,11 +80,45 @@ func resolutionContext(environment []string) (ResolutionContext, error) {
 	return r, nil
 }
 
+func resolutionFromBinding(binding task.SupervisorRef) (ResolutionContext, bool, error) {
+	if binding.ResolutionOS == "" {
+		return ResolutionContext{}, false, nil
+	}
+	resolution := ResolutionContext{
+		OS:                 binding.ResolutionOS,
+		Home:               binding.ResolutionHome,
+		DataLocalDirectory: binding.ResolutionDataLocal,
+		ConfigDirectory:    binding.ResolutionConfig,
+		RuntimeDirectory:   binding.ResolutionRuntime,
+		Username:           binding.ResolutionUsername,
+	}
+	if err := validateResolutionContext(resolution); err != nil {
+		return ResolutionContext{}, false, err
+	}
+	return resolution, true, nil
+}
+
+func setBindingResolution(binding *task.SupervisorRef, resolution ResolutionContext) {
+	binding.ResolutionOS = resolution.OS
+	binding.ResolutionHome = cleanResolutionPath(resolution.Home)
+	binding.ResolutionDataLocal = cleanResolutionPath(resolution.DataLocalDirectory)
+	binding.ResolutionConfig = cleanResolutionPath(resolution.ConfigDirectory)
+	binding.ResolutionRuntime = cleanResolutionPath(resolution.RuntimeDirectory)
+	binding.ResolutionUsername = resolution.Username
+}
+
 func absoluteEnvironmentOr(environment []string, key, fallback string) string {
 	if v := environmentValue(environment, key); filepath.IsAbs(v) {
-		return v
+		return filepath.Clean(v)
 	}
-	return fallback
+	return cleanResolutionPath(fallback)
+}
+
+func cleanResolutionPath(value string) string {
+	if value == "" {
+		return ""
+	}
+	return filepath.Clean(value)
 }
 
 func environmentValue(environment []string, key string) string {

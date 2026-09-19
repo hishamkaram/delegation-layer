@@ -24,3 +24,6 @@ python3 "${SCRIPT_DIR}/acceptance_supervisor_hermetic.py" \
 python3 "${SCRIPT_DIR}/acceptance_supervisor_native.py" \
     --tools "${REPO_ROOT}/bin/harness-tools" --pueue "${PUEUE_TEST_CLIENT}" \
     --pueued "${PUEUE_TEST_DAEMON}" --output "${ACCEPTANCE_OUTPUT}/native"
+DELEGATE_TEST_PUEUE="${PUEUE_TEST_CLIENT}" \
+DELEGATE_TEST_PUEUED="${PUEUE_TEST_DAEMON}" \
+    go test -race -count=1 -run '^TestPrivateSupervisorNativeBootstrap$' ./internal/pueue

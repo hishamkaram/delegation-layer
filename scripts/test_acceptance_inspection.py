@@ -96,7 +96,7 @@ class InspectionHarnessTests(unittest.TestCase):
                     "endpoint": str(self.base / "pueue.sock"),
                     "config_path": str(self.config),
                     "config_digest": digest(self.config),
-                    "observed_version": "4.0.4",
+                    "observed_version": "pueue 4.0.4",
                 },
             },
             "group": _inspection_group(ROOT),
@@ -536,6 +536,16 @@ class InspectionHarnessTests(unittest.TestCase):
             helper, changed_helper_config, self.base / "workspace", environment,
             self.runner, supervisor)
         self.assertNotEqual(binding["definition_sha256"], changed_path["definition_sha256"])
+
+    def test_legacy_supervisor_binding_accepts_cwd_only_resolution(self):
+        binding = provider_common.supervisor_binding(
+            self.pueue, self.config, self.base, digest(self.config))
+        for key in ("resolution_os", "resolution_home", "resolution_data_local",
+                    "resolution_config", "resolution_runtime", "resolution_username"):
+            binding.pop(key, None)
+        binding["resolution_cwd"] = str(self.base)
+
+        provider_common._validate_supervisor_binding(binding, "legacy supervisor")
 
     def test_noneligible_inspection_facts_and_exit_must_be_empty_and_unavailable(self):
         directory = self.inspection_records(result="unavailable")

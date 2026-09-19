@@ -5,8 +5,9 @@ provider differences explicit at the adapter boundary.
 
 ## Development setup
 
-Install Go 1.27.1, Pueue 4.0.4, and the repository's pinned verification tools.
-Clone the repository and run the local checks before editing:
+Install Go 1.27.1 and the repository's pinned verification tools. The unit and
+hermetic acceptance suites provide their own supervisor fixtures. Clone the
+repository and run the local checks before editing:
 
 ```sh
 go test ./...
