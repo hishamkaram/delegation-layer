@@ -163,10 +163,18 @@ func ValidatePredicateRef(ref PredicateRef) error {
 
 // ValidateSupervisorRef checks the complete pinned supervisor coordinates.
 func ValidateSupervisorRef(ref SupervisorRef) error {
-	if ref.ClientExecutable != "" && (!nonblank(ref.ClientExecutable) || !filepath.IsAbs(ref.ClientExecutable) || filepath.Clean(ref.ClientExecutable) != ref.ClientExecutable) {
-		return errors.New("supervisor client must be a clean absolute path")
+	for _, executable := range []struct {
+		name  string
+		value string
+	}{
+		{name: "client", value: ref.ClientExecutable},
+		{name: "daemon", value: ref.DaemonExecutable},
+	} {
+		if err := validateOptionalSupervisorExecutable(executable.name, executable.value); err != nil {
+			return err
+		}
 	}
-	for _, digest := range []string{ref.ClientSHA256, ref.ResolvedConfigSHA256} {
+	for _, digest := range []string{ref.ClientSHA256, ref.DaemonSHA256, ref.ResolvedConfigSHA256} {
 		if digest != "" {
 			if err := ValidateSHA256(digest); err != nil {
 				return err
@@ -182,7 +190,38 @@ func ValidateSupervisorRef(ref SupervisorRef) error {
 	return ValidateSHA256(ref.ConfigDigest)
 }
 
+func validateOptionalSupervisorExecutable(name, value string) error {
+	if value == "" {
+		return nil
+	}
+	if !nonblank(value) || !filepath.IsAbs(value) || filepath.Clean(value) != value {
+		return fmt.Errorf("supervisor %s must be a clean absolute path", name)
+	}
+	return nil
+}
+
+// ValidateEnvironment checks the bounded nonsecret environment persisted with
+// a prepared task. A nil or empty environment preserves compatibility with
+// records written before task environments became explicit.
+func ValidateEnvironment(values []string) error {
+	seen := make(map[string]struct{}, len(values))
+	for _, entry := range values {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" || strings.ContainsRune(key, '\x00') || strings.ContainsRune(value, '\x00') {
+			return errors.New("environment entries must be nonempty key-value pairs without NUL bytes")
+		}
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("duplicate environment key %q", key)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 func validateMetaConfiguration(r *MetaRecord) error {
+	if err := ValidateEnvironment(r.Environment); err != nil {
+		return err
+	}
 	if err := ValidatePredicateRef(r.Predicate); err != nil {
 		return err
 	}

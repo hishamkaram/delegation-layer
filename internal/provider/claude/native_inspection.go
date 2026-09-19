@@ -29,9 +29,9 @@ type nativePolicyFacts struct {
 	RemotePolicy   string `json:"remote_policy"`
 }
 
-// nativeInspection is retained for the historical native-policy projection
-// and its compatibility tests. Ordinary admission uses the portable runtime
-// inspection in profile.go and leaves authentication to the Claude CLI.
+// nativeInspection is retained for reconstructing tasks admitted under the
+// historical native-policy contract. Ordinary admission uses the portable
+// runtime inspection in profile.go and leaves authentication to the Claude CLI.
 func nativeInspection(environment profileEnvironment) (commonprovider.InspectionDefinition, error) {
 	account, err := legacyAPIKeyAccount(environment)
 	if err != nil {

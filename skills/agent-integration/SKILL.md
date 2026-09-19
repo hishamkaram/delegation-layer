@@ -17,8 +17,8 @@ The host is responsible for installing the CLI. This skill must not install,
 build, upgrade, or repair it. It may check whether `delegate` is available and
 create separate task and state directories that it is authorized to use. A
 released CLI carries the compatible `pueue` and `pueued` supervisor binaries
-and starts a private instance automatically; an explicit supervisor config is
-only needed for an advanced integration.
+and starts or recovers a private instance automatically; an explicit supervisor
+config is only needed for an advanced integration.
 Authentication is a separate live gate; do not invent a provider-specific
 login check or classify a missing login as static incompatibility.
 
@@ -75,8 +75,10 @@ delegate --root "${HOME}/delegation-state" \
   --json
 ```
 
-The default release owns the private supervisor lifecycle under the state root.
-If an existing compatible supervisor must be used, pass its absolute
+The default release owns the private supervisor lifecycle under the state root
+and recovers its bundled daemon when control commands find it stopped. Collection
+stays observational and does not start a supervisor. If an existing compatible
+supervisor must be used, pass its absolute
 `--pueue-config` path or set `DELEGATE_PUEUE_CONFIG`. If the CLI or provider
 executable is unavailable, stop on the CLI's structured error. For live
 acceptance, an unavailable authentication prerequisite is `blocked`; preserve

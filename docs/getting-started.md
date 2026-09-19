@@ -60,7 +60,7 @@ bunx --bun delegation-layer install-cli
 The release installer verifies checksums and installs `delegate`,
 `delegate-run`, `pueue`, and `pueued` into `$HOME/.local/bin` unless
 `DELEGATION_LAYER_INSTALL_DIR` is set. The CLI starts its private supervisor
-automatically.
+automatically and recovers it when a control command finds it stopped.
 
 ```sh
 delegate --help

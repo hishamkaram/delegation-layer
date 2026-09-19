@@ -96,7 +96,7 @@ class InspectionHarnessTests(unittest.TestCase):
                     "endpoint": str(self.base / "pueue.sock"),
                     "config_path": str(self.config),
                     "config_digest": digest(self.config),
-                    "observed_version": "4.0.4",
+                    "observed_version": "pueue 4.0.4",
                 },
             },
             "group": _inspection_group(ROOT),

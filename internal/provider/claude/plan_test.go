@@ -49,6 +49,43 @@ func TestFinalizePreparedProfileUsesPortableRuntimeFacts(t *testing.T) {
 	}
 }
 
+func TestLegacyNativePolicyMarkerIsRecognizedForExistingTasks(t *testing.T) {
+	without := task.MetaRecord{EffectiveConfig: task.EffectiveConfig{Policy: &task.PolicyDetails{Sources: []task.PolicySourceDigest{{Kind: "claude-user-settings", Present: true}}}}}
+	if hasLegacyNativePolicy(without) {
+		t.Fatal("ordinary portable policy was classified as legacy")
+	}
+	with := task.MetaRecord{EffectiveConfig: task.EffectiveConfig{Policy: &task.PolicyDetails{Sources: []task.PolicySourceDigest{{Kind: "native-oauth-policy-proof", Present: true}}}}}
+	if !hasLegacyNativePolicy(with) {
+		t.Fatal("legacy native policy marker was not recognized")
+	}
+}
+
+func TestFinalizeLegacyPreparedProfilePreservesStoredPredicate(t *testing.T) {
+	request := profileRequest()
+	arguments, inputs, err := printArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := commonprovider.CLIInfo{Path: "/usr/local/bin/claude", SHA256: strings.Repeat("a", 64)}
+	environment := profileEnvironment{RuntimeSHA256: cli.SHA256}
+	native, err := projectNativePolicy(nativePolicyFixture(t, "team", time.Unix(2_000_000_000, 0).Add(time.Hour).UnixMilli()), 404, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: cli.Path, Version: "Claude Code 2.1.270", SHA256: cli.SHA256}, native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPredicate := LegacyReference()
+	prepared, err := finalizeLegacyPreparedProfile(request, arguments, inputs, cli, environment, nil, strings.Repeat("b", 64), wantPredicate, facts, time.Unix(2_000_000_000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prepared.Plan.Predicate.Equal(wantPredicate) || prepared.Effective.Policy == nil {
+		t.Fatalf("legacy profile did not preserve stored predicate and policy: %+v", prepared)
+	}
+}
+
 func TestPrintArgumentsPreserveContainmentAndTaskOwnedFilesOnResume(t *testing.T) {
 	request := profileRequest()
 	args, inputs, err := printArguments(request)

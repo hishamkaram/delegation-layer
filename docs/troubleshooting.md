@@ -53,20 +53,23 @@ admission.
 ## Supervisor configuration fails
 
 Normal dispatch starts the bundled Pueue client and daemon with a private Unix
-socket below the state root. For an advanced integration, pass an existing
-absolute `--pueue-config` path or set `DELEGATE_PUEUE_CONFIG` to that path and
-keep its configuration and credentials outside the task state root and
-workspace. The runtime accepts a nonempty observed supervisor version when its
-command, readiness, and queue behavior match the supported schema. A changed
-executable, configuration file, or resolved supervisor settings can invalidate
-a saved task binding.
+socket below the state root. `dispatch`, `status`, `cancel`, and continuation
+checks restart that private daemon after a restart when the saved binding still
+matches; `collect` remains observational and does not start it. For an advanced
+integration, pass an existing absolute `--pueue-config` path or set
+`DELEGATE_PUEUE_CONFIG` to that path and keep its configuration and credentials
+outside the task state root and workspace. The runtime accepts a nonempty
+observed supervisor version when its command, readiness, and queue behavior
+match the supported schema. A changed executable, configuration file, or
+resolved supervisor settings can invalidate a saved task binding.
 
 ## A task remains pending
 
-`status` reports what is known without starting another process. `collect --watch
-5s` waits for one bounded observation interval; repeat it if the supervisor is
-still running. Queue time does not consume the provider budget. Do not delete
-the task directory or reuse its ID while the state is uncertain.
+`status` reports what is known and may recover the private supervisor. `collect
+--watch 5s` waits for one bounded observation interval without starting a
+supervisor; repeat it if the supervisor is still running. Queue time does not
+consume the provider budget. Do not delete the task directory or reuse its ID
+while the state is uncertain.
 
 ## A continuation is busy
 

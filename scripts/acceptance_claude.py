@@ -52,11 +52,11 @@ MODE = "read-only"
 APPROVAL = "dontAsk"
 # The predicate revision describes the adapter's output contract. It is
 # deliberately independent of the installed Claude CLI release, which is
-# admitted through runtime capability and native policy checks.
+# admitted through runtime capability and live authentication checks.
 PREDICATE_VERSION = "runtime-reported"
 PREDICATE_SHA256 = "9a0930cd353551a2f4f2cb4fc86dd4322175853c6b62cffdb5f662139dc0481c"
-# Claude's restricted native OAuth profile rejects environment/API-key/helper
-# overrides; the producer must report a non-empty source marker.
+# Claude's portable runtime profile keeps authentication in the provider CLI;
+# the producer must report a non-empty runtime capability observation.
 EXPECTED_API_KEY_SOURCE = "none"
 TASK_BUDGET = "120s"
 CANONICAL_TASK_BUDGET = "2m0s"
@@ -70,9 +70,7 @@ MAX_PROVIDER_BYTES = 8 << 20
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
 PUEUE_PARENT = Path("/Users/Shared")
-NATIVE_INSPECTION_REVISION = "claude-native-oauth-policy-v1"
-NATIVE_CREDENTIAL_HELPER = Path("/usr/bin/security")
-NATIVE_POLICY_ENDPOINT = "https://api.anthropic.com/api/claude_code/settings"
+RUNTIME_INSPECTION_REVISION = "runtime-capability-v1"
 NATIVE_STORAGE_BACKEND_PIN = "CLAUDE_CODE_HOVER_REST=0"
 RUNTIME_HELP_ARGS: list[str] | None = None
 RUNTIME_REQUIRED_FLAGS = (
@@ -193,50 +191,36 @@ def _native_environment(environment: dict[str, str]) -> list[str]:
 def expected_claude_inspection_binding(
         pueue: Path, config: Path, base: Path, config_digest: str,
         workspace: Path, executable: Path,
-        runner: Path, environment: dict[str, str],
-        helper: Path = NATIVE_CREDENTIAL_HELPER) -> dict[str, object]:
-    """Build Claude's expected inspection binding from setup-owned sources."""
-    helper = Path(helper).resolve()
+        runner: Path, environment: dict[str, str]) -> dict[str, object]:
+    """Build Claude's expected portable runtime inspection binding."""
+    executable = Path(executable).resolve()
     runner = Path(runner).resolve()
-    home_value = environment.get("HOME")
-    require(isinstance(home_value, str) and home_value,
-            "Claude inspection environment has no HOME")
-    home = Path(home_value).resolve(strict=True)
-    helper_digest = digest(helper)
+    values = _native_environment(environment)
     definition = {
-        "revision": NATIVE_INSPECTION_REVISION,
-        "executable": str(helper),
-        "executable_sha256": helper_digest,
-        "arguments": ["find-generic-password", "-s", "Claude Code-credentials",
-                      "-a", _native_account(environment), "-w"],
-        "directory": str(home),
-        "environment": _native_environment(environment),
+        "revision": RUNTIME_INSPECTION_REVISION,
+        "executable": str(executable),
+        "executable_sha256": digest(executable),
+        "arguments": None,
+        "directory": str(Path(workspace).resolve(strict=True)),
+        "environment": values,
         "output_limit": 1 << 20,
         "runtime": {
-            "executable": str(Path(executable).resolve(strict=True)),
+            "executable": str(executable),
             "executable_sha256": digest(executable),
             "directory": str(Path(workspace).resolve(strict=True)),
-            "environment": _native_environment(environment),
+            "environment": values,
             "help_args": RUNTIME_HELP_ARGS,
             "required_flags": list(RUNTIME_REQUIRED_FLAGS),
         },
-        "remote": {
-            "url": NATIVE_POLICY_ENDPOINT,
-            "headers": {key: value for key, value in sorted({
-                "anthropic-beta": "oauth-2025-04-20",
-                "User-Agent": "claude-cli (external, cli)",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-            }.items())},
-        },
     }
     return {
-        "definition_revision": NATIVE_INSPECTION_REVISION,
+        "definition_revision": RUNTIME_INSPECTION_REVISION,
         "definition_sha256": sha(canonical_go_json(definition)),
-        "helper_executable": str(helper),
-        "helper_sha256": helper_digest,
+        "helper_executable": str(executable),
+        "helper_sha256": digest(executable),
         "worker_executable": str(runner),
         "worker_sha256": digest(runner),
+        "environment": values,
         "supervisor": supervisor_binding(pueue, config, base, config_digest),
     }
 
@@ -1210,7 +1194,7 @@ class ClaudeAcceptance:
                 f"{name} submit binding mismatch")
         supervisor = submit.get("supervisor")
         require(isinstance(supervisor, dict) and supervisor.get("config_path") == str(self.pueue_config) and
-                supervisor.get("observed_version") == PUEUE_VERSION and
+                supervisor.get("observed_version") == "pueue " + PUEUE_VERSION and
                 supervisor.get("client_executable") == str(self.pueue),
                 f"{name} submit supervisor binding mismatch")
         start = self.read_record(task, "provider.start")

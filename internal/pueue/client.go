@@ -205,7 +205,7 @@ func (c *Client) readBinding() (task.SupervisorRef, error) {
 	if err != nil {
 		return task.SupervisorRef{}, err
 	}
-	return task.SupervisorRef{ClientExecutable: executable, ClientSHA256: digest, ConfigPath: c.binding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: c.binding.ObservedVersion}, nil
+	return task.SupervisorRef{ClientExecutable: executable, ClientSHA256: digest, DaemonExecutable: c.binding.DaemonExecutable, DaemonSHA256: c.binding.DaemonSHA256, ConfigPath: c.binding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: c.binding.ObservedVersion}, nil
 }
 
 func readRegular(path string, limit int64) (data []byte, err error) {
@@ -291,6 +291,13 @@ func (c *Client) Ready(ctx context.Context) error {
 	result, err := c.command(ctx, nil, "status", "--json")
 	if err != nil {
 		return errors.Join(ErrBinding, err)
+	}
+	return c.validateReadyResult(result)
+}
+
+func (c *Client) validateReadyResult(result CommandResult) error {
+	if result.Err != nil {
+		return errors.Join(ErrBinding, result.Err)
 	}
 	status := strings.TrimSpace(string(result.Stdout))
 	if status == "" {

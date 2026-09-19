@@ -69,6 +69,7 @@ _INSPECTION_BINDING_KEYS = {
     "definition_revision", "definition_sha256", "helper_executable", "helper_sha256",
     "worker_executable", "worker_sha256", "supervisor",
 }
+_INSPECTION_BINDING_OPTIONAL_KEYS = {"environment"}
 _SUPERVISOR_BINDING_KEYS = {
     "client_executable", "client_sha256", "resolved_config_sha256", "endpoint",
     "config_path", "config_digest", "observed_version",
@@ -312,7 +313,7 @@ def supervisor_binding(pueue: Path, config: Path, base: Path,
         "endpoint": "unix:" + str(base / "run" / "p.sock"),
         "config_path": str(config),
         "config_digest": config_digest,
-        "observed_version": PUEUE_VERSION,
+        "observed_version": "pueue " + PUEUE_VERSION,
     }
 
 
@@ -588,13 +589,13 @@ def _validate_supervisor_binding(value: object, label: str) -> None:
         require(_hex_digest(value.get(key)), f"{label} {key} is invalid")
     require(isinstance(value.get("endpoint"), str) and value["endpoint"],
             f"{label} endpoint is invalid")
-    require(value.get("observed_version") == PUEUE_VERSION,
+    require(value.get("observed_version") == "pueue " + PUEUE_VERSION,
             f"{label} version is unsupported")
 
 
 def _validate_inspection_binding(value: object, label: str) -> None:
     require(isinstance(value, dict), f"{label} is not an object")
-    _exact_keys(value, _INSPECTION_BINDING_KEYS, label=label)
+    _exact_keys(value, _INSPECTION_BINDING_KEYS, _INSPECTION_BINDING_OPTIONAL_KEYS, label)
     require(isinstance(value.get("definition_revision"), str) and
             value["definition_revision"], f"{label} definition revision is invalid")
     for key in ("definition_sha256", "helper_sha256", "worker_sha256"):
@@ -604,6 +605,12 @@ def _validate_inspection_binding(value: object, label: str) -> None:
         require(isinstance(path, str) and Path(path).is_absolute() and
                 Path(path) == Path(os.path.normpath(path)),
                 f"{label} {key} is invalid")
+    if "environment" in value:
+        environment = value["environment"]
+        require(isinstance(environment, list) and
+                all(isinstance(entry, str) and "=" in entry and
+                    entry.split("=", 1)[0] for entry in environment),
+                f"{label} environment is invalid")
     _validate_supervisor_binding(value.get("supervisor"), label + " supervisor")
 
 
@@ -1000,7 +1007,7 @@ class NativeTaskOps:
                 supervisor.get("client_sha256") == digest(self.pueue) and
                 supervisor.get("config_path") == str(self.pueue_config) and
                 supervisor.get("config_digest") == digest(self.pueue_config) and
-                supervisor.get("observed_version") == PUEUE_VERSION,
+                supervisor.get("observed_version") == "pueue " + PUEUE_VERSION,
                 f"inspection request supervisor binding mismatch for {task}")
 
         request_digest = digest(request_path)

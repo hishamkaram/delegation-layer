@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -382,6 +383,72 @@ func TestMissingInitialSupervisorConfigUsesPrivateSupervisorPath(t *testing.T) {
 	}
 }
 
+func TestExplicitSupervisorConfigCannotClaimPrivateStatePath(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	_, err := bindInitialWithOptions(Arguments{PueueConfig: pueue.PrivateConfigPath(root)}, Dependencies{}, root, pueue.Options{})
+	if !errors.Is(err, pueue.ErrConfiguration) {
+		t.Fatalf("private state config was accepted as an explicit supervisor: %v", err)
+	}
+}
+
+func TestLegacyBindingAtPrivateConfigPathUsesSavedSupervisor(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	digest := task.ComputeSHA256([]byte("legacy supervisor"))
+	saved := task.SupervisorRef{
+		ClientExecutable:     "/tmp/pueue",
+		ClientSHA256:         digest,
+		ResolvedConfigSHA256: digest,
+		Endpoint:             "unix:/tmp/pueue.sock",
+		ConfigPath:           pueue.PrivateConfigPath(root),
+		ConfigDigest:         digest,
+		ObservedVersion:      "legacy-pueue",
+	}
+	client, err := newSupervisorClient(root, saved, pueue.Options{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Binding() != saved {
+		t.Fatalf("legacy binding was routed to private recovery: got=%+v want=%+v", client.Binding(), saved)
+	}
+}
+
+func TestPartialPrivateDaemonIdentityIsRejected(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	digest := task.ComputeSHA256([]byte("legacy supervisor"))
+	saved := task.SupervisorRef{
+		ClientExecutable: "/tmp/pueue", ClientSHA256: digest,
+		DaemonExecutable: "/tmp/pueued", ResolvedConfigSHA256: digest,
+		Endpoint: "unix:/tmp/pueue.sock", ConfigPath: pueue.PrivateConfigPath(root),
+		ConfigDigest: digest, ObservedVersion: "legacy-pueue",
+	}
+	if _, err := newSupervisorClient(root, saved, pueue.Options{}, true); !errors.Is(err, pueue.ErrBinding) {
+		t.Fatalf("partial private daemon identity was accepted: %v", err)
+	}
+}
+
+func TestSupervisorOptionsForMetaPreservesSavedEnvironment(t *testing.T) {
+	base := pueue.Options{Environment: []string{"HOME=/base", "PATH=/base/bin"}}
+	meta := task.MetaRecord{Environment: []string{"HOME=/task", "CODEX_HOME=/task/.codex"}}
+	options := supervisorOptionsForMeta(base, meta)
+	if !strings.Contains(strings.Join(options.Environment, "\x00"), "HOME=/task") || !strings.Contains(strings.Join(options.Environment, "\x00"), "CODEX_HOME=/task/.codex") {
+		t.Fatalf("saved task environment was not carried to supervisor operations: %v", options.Environment)
+	}
+}
+
+func TestSupervisorOptionsSnapshotPreservesCurrentControlEnvironment(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "home"))
+	if runtime.GOOS == "linux" {
+		t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "runtime"))
+	}
+	options := supervisorOptionsForCurrentEnvironment(pueue.Options{})
+	if options.Environment == nil || !strings.Contains(strings.Join(options.Environment, "\x00"), "HOME=") {
+		t.Fatalf("current supervisor environment was not captured: %v", options.Environment)
+	}
+	if runtime.GOOS == "linux" && !strings.Contains(strings.Join(options.Environment, "\x00"), "XDG_RUNTIME_DIR=") {
+		t.Fatalf("Linux XDG runtime selector was not captured: %v", options.Environment)
+	}
+}
+
 func TestConfiguredSupervisorDoesNotFallBackToPath(t *testing.T) {
 	pathDir := t.TempDir()
 	for _, name := range []string{"pueue", "pueued"} {
@@ -396,6 +463,16 @@ func TestConfiguredSupervisorDoesNotFallBackToPath(t *testing.T) {
 		if _, err := resolveBundledExecutable(Dependencies{InitialSupervisorExecutable: configured}, name); !errors.Is(err, pueue.ErrConfiguration) {
 			t.Fatalf("configured supervisor %s fell back to PATH: %v", name, err)
 		}
+	}
+}
+
+func TestPrivateSupervisorPairDoesNotMixExecutables(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "pueue"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resolveSupervisorPair(directory); !errors.Is(err, pueue.ErrConfiguration) {
+		t.Fatalf("partial supervisor bundle was accepted: %v", err)
 	}
 }
 

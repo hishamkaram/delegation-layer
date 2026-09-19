@@ -108,7 +108,8 @@ Dispatching a task requires:
 - Darwin or Linux on amd64 or arm64 for the supplied release builds.
 
 The release contains the supervisor client and daemon and starts a private
-instance under the state root. An explicit `--pueue-config` or
+instance under the state root, recovering it when a control command finds it
+stopped. An explicit `--pueue-config` or
 `DELEGATE_PUEUE_CONFIG` can still select an existing compatible supervisor for
 advanced integrations. Node.js 18 or newer is needed only for the npm-based
 installers; it is not a runtime requirement for the released Go CLI. Provider

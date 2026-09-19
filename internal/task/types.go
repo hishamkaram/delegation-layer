@@ -207,6 +207,8 @@ type PriorSession struct {
 type SupervisorRef struct {
 	ClientExecutable     string `json:"client_executable,omitempty"`
 	ClientSHA256         string `json:"client_sha256,omitempty"`
+	DaemonExecutable     string `json:"daemon_executable,omitempty"`
+	DaemonSHA256         string `json:"daemon_sha256,omitempty"`
 	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
 	Endpoint             string `json:"endpoint"`
 	ConfigPath           string `json:"config_path"`
@@ -238,18 +240,20 @@ type TaskRecord struct {
 
 // MetaRecord is stored in meta.json (the immutable prepared execution plan).
 type MetaRecord struct {
-	SchemaVersion        int              `json:"schema_version"`
-	RootID               string           `json:"root_id"`
-	TaskID               string           `json:"task_id"`
-	SpecSHA256           string           `json:"spec_sha256"`
-	RequestedConfig      TaskConfig       `json:"requested_config"`
-	EffectiveConfig      EffectiveConfig  `json:"effective_config"`
-	Containment          string           `json:"containment"`
-	Approval             string           `json:"approval"`
-	ProviderExecutable   string           `json:"provider_executable"`
-	ProviderVersion      string           `json:"provider_version"`
-	PublisherBuild       string           `json:"publisher_build"`
-	PublisherVersion     string           `json:"publisher_version"`
+	SchemaVersion      int             `json:"schema_version"`
+	RootID             string          `json:"root_id"`
+	TaskID             string          `json:"task_id"`
+	SpecSHA256         string          `json:"spec_sha256"`
+	RequestedConfig    TaskConfig      `json:"requested_config"`
+	EffectiveConfig    EffectiveConfig `json:"effective_config"`
+	Containment        string          `json:"containment"`
+	Approval           string          `json:"approval"`
+	ProviderExecutable string          `json:"provider_executable"`
+	ProviderVersion    string          `json:"provider_version"`
+	PublisherBuild     string          `json:"publisher_build"`
+	PublisherVersion   string          `json:"publisher_version"`
+	// Environment is the adapter's bounded, nonsecret launch environment.
+	Environment          []string         `json:"environment,omitempty"`
 	Predicate            PredicateRef     `json:"predicate"`
 	SupervisorConfig     SupervisorRef    `json:"supervisor_config"`
 	CreatedAt            string           `json:"created_at"`
@@ -276,6 +280,8 @@ type SupervisorReceipt struct {
 	ConfigPath           string `json:"config_path,omitempty"`
 	ClientExecutable     string `json:"client_executable,omitempty"`
 	ClientSHA256         string `json:"client_sha256,omitempty"`
+	DaemonExecutable     string `json:"daemon_executable,omitempty"`
+	DaemonSHA256         string `json:"daemon_sha256,omitempty"`
 	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
 	SchemaVersion        int    `json:"schema_version"`
 	RootID               string `json:"root_id"`

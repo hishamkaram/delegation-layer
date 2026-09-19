@@ -150,5 +150,10 @@ bounded depth, aliases, nodes, and document size.
 `delegate-run` normally resolves beside `delegate`. Use the absolute global
 `--runner` option for a source-build layout or a custom integration.
 
+When a saved binding points to the private state-rooted supervisor, `dispatch`,
+`status`, `cancel`, and continuation checks restart its bundled daemon when it
+is unavailable. `collect` remains observational and never starts or restarts a
+supervisor.
+
 For setup failures, see [Troubleshooting](troubleshooting.md). For provider
 specific behavior, see [Providers](providers.md).

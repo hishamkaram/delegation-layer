@@ -40,14 +40,18 @@ observer. It does not start a process.
 
 The inspection worker performs the provider's version and help checks under a
 bounded timeout. Its non-secret facts are passed to the profile finalizer,
-which records the observed version, executable identity, and effective policy
-in the task metadata. The version is an observation; advertised behavior and
-the executable identity decide compatibility.
+which records the observed version, executable identity, effective policy, and
+bounded launch environment in the task metadata. The inspection binding keeps
+the same environment for a queued worker, including when a private daemon is
+reused for another task. The version is an observation; advertised behavior
+and the executable identity decide compatibility.
 
 Pueue owns queueing and process supervision. A normal release carries the
 `pueue` and `pueued` executables and creates a private state-rooted
-configuration on demand. An explicit `--pueue-config` can bind an existing
-compatible supervisor. `delegate-run` receives only the saved root and task ID,
+configuration on demand. Commands that need supervisor control recover that
+private daemon from the saved binding after a restart. An explicit
+`--pueue-config` can bind an existing compatible supervisor. `delegate-run`
+receives only the saved root and task ID,
 reconstructs the recorded profile, and refuses to start
 if the fresh profile no longer matches admission. The runner observes provider
 identity, captures bounded streams, verifies declared artifacts, and seals the

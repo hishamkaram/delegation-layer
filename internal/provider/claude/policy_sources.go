@@ -62,7 +62,7 @@ type claudePolicySourceReader func(string) (commonprovider.SourceBytes, error)
 // refused because this pure resolver cannot faithfully parse the native
 // whole-document policy semantics. Authentication remains the provider CLI's
 // live responsibility; the legacy native inspection path is retained only for
-// compatibility tests and historical policy evidence.
+// historical task reconstruction.
 func resolvePolicySources(request task.TaskRecord, environment profileEnvironment) ([]task.PolicySourceDigest, error) {
 	username, err := currentClaudeOSUsername()
 	if err != nil {
