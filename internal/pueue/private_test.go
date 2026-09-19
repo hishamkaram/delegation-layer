@@ -88,8 +88,8 @@ func TestBindPrivateUsesLateSuccessfulReadinessWithoutStartingDaemon(t *testing.
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 	seedPrivateDaemonIdentity(t, privateBase, daemonPath)
 	options := Options{
-		ObservationTimeout: 20 * time.Millisecond,
-		Environment:        append(os.Environ(), "PRIVATE_DELAY_STATUS=1"),
+		ObservationTimeout: 100 * time.Millisecond,
+		Environment:        append(os.Environ(), "PRIVATE_STATUS_DELAY=0.25"),
 	}
 	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options)
 	if err != nil {
@@ -446,7 +446,7 @@ while [ "$#" -gt 0 ]; do
       if [ "${PRIVATE_VERSION_MARKER:-}" != "" ]; then printf '%s\n' completed >> "$PRIVATE_VERSION_MARKER"; fi
       printf '%s\n' 'pueue 99.7.3'; exit 0 ;;
     status)
-      if [ "${PRIVATE_DELAY_STATUS:-}" = "1" ]; then sleep 0.08; fi
+      if [ "${PRIVATE_STATUS_DELAY:-}" != "" ]; then sleep "$PRIVATE_STATUS_DELAY"; fi
       marker="$(dirname "$config")/ready"
       [ -f "$marker" ] || exit 1
       if [ "${PRIVATE_INVALID_STATUS:-}" = "1" ]; then
