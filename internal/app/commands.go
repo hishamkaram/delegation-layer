@@ -104,7 +104,7 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 	}
 	submit, submitErr := td.ReadSubmission()
 	if submitErr == nil {
-		return reconcileExisting(td, oldReq, oldMeta, submit, deps.SupervisorOptions, response)
+		return reconcileExisting(store.Root, td, oldReq, oldMeta, submit, deps.SupervisorOptions, response)
 	}
 	if !errors.Is(submitErr, os.ErrNotExist) {
 		return failed(response, submitErr, classifyCode(submitErr, 1))
@@ -112,12 +112,17 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 	if inspection.StartExists {
 		return failed(response, task.ErrAlreadyStarted, 1)
 	}
+	restoreEnvironment, restoreErr := applySavedEnvironment(oldMeta.Environment)
+	if restoreErr != nil {
+		return failed(response, restoreErr, 1)
+	}
+	defer restoreRunnerEnvironment(&result, restoreEnvironment)
 	profile, profileErr := prepareMatchedProfile(deps, store.Root, *oldReq, *oldMeta)
 	if profileErr != nil {
 		return failed(response, profileErr, classifyCode(profileErr, 2))
 	}
 	return submitPreparedWithOptions(a, deps, td, oldReq, oldMeta, oldMeta.SupervisorConfig,
-		supervisorOptionsForProfile(deps.SupervisorOptions, profile), response)
+		supervisorOptionsForProfile(deps.SupervisorOptions, profile), store.Root, response)
 }
 
 func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, brief []byte, response Response) commandResult {
@@ -182,11 +187,14 @@ func readBriefFileForRequest(path string, req task.TaskRecord) ([]byte, error) {
 }
 
 func submitPrepared(a Arguments, deps Dependencies, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisor task.SupervisorRef, response Response) (result commandResult) {
-	return submitPreparedWithOptions(a, deps, td, req, meta, supervisor, deps.SupervisorOptions, response)
+	return submitPreparedWithOptions(a, deps, td, req, meta, supervisor, deps.SupervisorOptions, "", response)
 }
 
-func submitPreparedWithOptions(a Arguments, deps Dependencies, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisor task.SupervisorRef, supervisorOptions pueue.Options, response Response) (result commandResult) {
-	client, err := pueue.NewClient(supervisor, supervisorOptions)
+func submitPreparedWithOptions(a Arguments, deps Dependencies, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisor task.SupervisorRef, supervisorOptions pueue.Options, recoveryRoot string, response Response) (result commandResult) {
+	if meta != nil {
+		supervisorOptions = supervisorOptionsForMeta(supervisorOptions, *meta)
+	}
+	client, err := newSupervisorClient(recoveryRoot, supervisor, supervisorOptions, recoveryRoot != "")
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
@@ -299,8 +307,9 @@ func submitWithClient(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.Meta
 	return commandResult{response: response, code: 0}
 }
 
-func reconcileExisting(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, submit *task.SubmitRecord, supervisorOptions pueue.Options, response Response) commandResult {
-	client, err := pueue.NewClient(submit.Supervisor, supervisorOptions)
+func reconcileExisting(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, submit *task.SubmitRecord, supervisorOptions pueue.Options, response Response) commandResult {
+	supervisorOptions = supervisorOptionsForMeta(supervisorOptions, *meta)
+	client, err := newSupervisorClient(root, submit.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
@@ -333,12 +342,13 @@ func reconcileExisting(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.Met
 	return commandResult{response: response, code: 0}
 }
 
-func reconcileStatus(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string, supervisorOptions pueue.Options, response *Response) (pueue.Observation, error) {
+func reconcileStatus(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string, supervisorOptions pueue.Options, response *Response) (pueue.Observation, error) {
+	supervisorOptions = supervisorOptionsForMeta(supervisorOptions, *meta)
 	submit, err := td.ReadSubmission()
 	if err != nil {
 		return pueue.Observation{}, err
 	}
-	client, err := pueue.NewClient(submit.Supervisor, supervisorOptions)
+	client, err := newSupervisorClient(root, submit.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return pueue.Observation{}, err
 	}
@@ -423,7 +433,7 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	observation, reconcileErr := reconcileStatus(td, req, meta, spec, metaHash, deps.SupervisorOptions, &response)
+	observation, reconcileErr := reconcileStatus(root, td, req, meta, spec, metaHash, deps.SupervisorOptions, &response)
 	reconcileErr = errors.Join(reconcileErr, updateStatusStops(td, &response, observation))
 	if reconcileErr != nil {
 		if isPureSupervisorUncertaintyError(reconcileErr) {
@@ -550,7 +560,12 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	}
 }
 
-func stopTask(td *taskdir.TaskDir, requestID, cause string, supervisorOptions pueue.Options) (StopResponse, error) {
+func stopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervisorOptions pueue.Options) (StopResponse, error) {
+	_, meta, err := td.PreparedRecords()
+	if err != nil {
+		return StopResponse{}, err
+	}
+	supervisorOptions = supervisorOptionsForMeta(supervisorOptions, *meta)
 	permit, err := td.PrepareStop(requestID, cause, time.Time{})
 	if err != nil {
 		return StopResponse{}, err
@@ -559,7 +574,7 @@ func stopTask(td *taskdir.TaskDir, requestID, cause string, supervisorOptions pu
 	if err != nil {
 		return StopResponse{}, errors.Join(err, permit.Release())
 	}
-	client, err := pueue.NewClient(request.Supervisor, supervisorOptions)
+	client, err := newSupervisorClient(root, request.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return StopResponse{}, errors.Join(err, permit.Release())
 	}
@@ -603,7 +618,7 @@ func cancel(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	stopResponse, stopErr := stopTask(td, requestID, "user", deps.SupervisorOptions)
+	stopResponse, stopErr := stopTask(root, td, requestID, "user", deps.SupervisorOptions)
 	if errors.Is(stopErr, task.ErrTerminalTask) {
 		return terminalAfterCancelRace(response, td)
 	}
@@ -739,7 +754,7 @@ func resolvePredecessor(store *taskdir.Store, request task.TaskRecord, id string
 	if err != nil {
 		return nil, fmt.Errorf("predecessor session is unavailable: %w", err)
 	}
-	if err = predecessorTerminated(td, predecessorReq, supervisorOptions); err != nil {
+	if err = predecessorTerminated(store.Root, td, predecessorReq, supervisorOptions); err != nil {
 		return nil, err
 	}
 	return &task.PriorSession{Provider: identity.Provider, ConversationID: identity.ConversationID, PredecessorTaskID: id}, nil
@@ -759,7 +774,7 @@ func validatePredecessorCompatibility(request, predecessor task.TaskRecord) erro
 	return nil
 }
 
-func predecessorTerminated(td *taskdir.TaskDir, req *task.TaskRecord, supervisorOptions pueue.Options) error {
+func predecessorTerminated(root string, td *taskdir.TaskDir, req *task.TaskRecord, supervisorOptions pueue.Options) error {
 	inspection, err := td.Inspect()
 	if err != nil {
 		return err
@@ -771,7 +786,12 @@ func predecessorTerminated(td *taskdir.TaskDir, req *task.TaskRecord, supervisor
 	if err != nil {
 		return err
 	}
-	client, err := pueue.NewClient(submit.Supervisor, supervisorOptions)
+	_, meta, err := td.PreparedRecords()
+	if err != nil {
+		return err
+	}
+	supervisorOptions = supervisorOptionsForMeta(supervisorOptions, *meta)
+	client, err := newSupervisorClient(root, submit.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return err
 	}

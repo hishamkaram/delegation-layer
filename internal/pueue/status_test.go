@@ -15,7 +15,7 @@ func TestParseActualQueuedStatusFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs, err := ParseStatus(data, SupportedVersion)
+	jobs, err := ParseStatus(data, FixtureVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestParseStatusAcceptsEverySupportedLifecycleState(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			jobs := map[string]any{"7": statusTestJob(7, "delegate:"+strings.Repeat("a", 32)+":"+strings.Repeat("b", 32), state)}
 			jobsData := statusTestPayload(t, jobs, map[string]any{})
-			parsed, err := ParseStatus(jobsData, SupportedVersion)
+			parsed, err := ParseStatus(jobsData, FixtureVersion)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -90,7 +90,7 @@ func TestParseStatusAcceptsTaskResultVariants(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			state := map[string]any{"Done": map[string]any{"enqueued_at": statusTestTime, "start": statusTestTime, "end": statusTestTime, "result": result}}
 			data := statusTestPayload(t, map[string]any{"7": statusTestJob(7, "label", state)}, map[string]any{})
-			jobs, err := ParseStatus(data, SupportedVersion)
+			jobs, err := ParseStatus(data, FixtureVersion)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +108,7 @@ func TestQueueSnapshotPreservesInspectionSchedulingFacts(t *testing.T) {
 		"inspection-root": map[string]any{"status": "Running", "parallel_tasks": 1},
 		"unrelated":       map[string]any{"status": "Paused", "parallel_tasks": 3},
 	})
-	snapshot, err := ParseQueueSnapshot(data, SupportedVersion)
+	snapshot, err := ParseQueueSnapshot(data, FixtureVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestQueueSnapshotPreservesInspectionSchedulingFacts(t *testing.T) {
 	}
 }
 
-func TestParseStatusRejectsMalformedRowsAndBindingVersion(t *testing.T) {
+func TestParseStatusRejectsMalformedRowsButAcceptsObservedVersion(t *testing.T) {
 	validJob := statusTestJob(7, "label", map[string]any{"Queued": map[string]any{"enqueued_at": statusTestTime}})
 	valid := statusTestPayload(t, map[string]any{"7": validJob}, map[string]any{})
 	cases := map[string][]byte{
@@ -141,13 +141,20 @@ func TestParseStatusRejectsMalformedRowsAndBindingVersion(t *testing.T) {
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
-			version := SupportedVersion
+			version := FixtureVersion
 			if name == "wrong version" {
 				version = "4.0.3"
 			}
-			if _, err := ParseStatus(data, version); err == nil {
+			_, err := ParseStatus(data, version)
+			if name == "wrong version" {
+				if err != nil {
+					t.Fatalf("valid status was rejected for a different observed version: %v", err)
+				}
+				return
+			}
+			if err == nil {
 				t.Fatal("malformed status accepted")
-			} else if name != "wrong version" && !errors.Is(err, ErrUnknown) {
+			} else if !errors.Is(err, ErrUnknown) {
 				t.Fatalf("malformed status did not remain unknown: %v", err)
 			}
 		})
@@ -163,15 +170,15 @@ func statusPayloadWithPriorityOverflow(t *testing.T) []byte {
 
 func TestParseStatusRejectsDuplicateKeysAndRows(t *testing.T) {
 	duplicateField := `{"tasks":{"7":{"id":7,"created_at":"` + statusTestTime + `","original_command":"x","command":"x","path":"/tmp","envs":{},"group":"default","dependencies":[],"priority":0,"label":"label","status":{"Queued":{"enqueued_at":"` + statusTestTime + `"}},"label":"other"}},"groups":{}}`
-	if _, err := ParseStatus([]byte(duplicateField), SupportedVersion); err == nil {
+	if _, err := ParseStatus([]byte(duplicateField), FixtureVersion); err == nil {
 		t.Fatal("duplicate field accepted")
 	}
 	duplicateCase := `{"tasks":{"7":{"id":7,"created_at":"` + statusTestTime + `","original_command":"x","command":"x","path":"/tmp","envs":{},"group":"default","dependencies":[],"priority":0,"label":"label","LABEL":"other","status":{"Queued":{"enqueued_at":"` + statusTestTime + `"}}}},"groups":{}}`
-	if _, err := ParseStatus([]byte(duplicateCase), SupportedVersion); err == nil {
+	if _, err := ParseStatus([]byte(duplicateCase), FixtureVersion); err == nil {
 		t.Fatal("case-folded duplicate field accepted")
 	}
 	duplicateRows := `{"tasks":{"7":{"id":7,"created_at":"` + statusTestTime + `","original_command":"x","command":"x","path":"/tmp","envs":{},"group":"default","dependencies":[],"priority":0,"label":"label","status":{"Queued":{"enqueued_at":"` + statusTestTime + `"}}},"8":{"id":7,"created_at":"` + statusTestTime + `","original_command":"x","command":"x","path":"/tmp","envs":{},"group":"default","dependencies":[],"priority":0,"label":"label","status":{"Queued":{"enqueued_at":"` + statusTestTime + `"}}}},"groups":{}}`
-	if _, err := ParseStatus([]byte(duplicateRows), SupportedVersion); err == nil {
+	if _, err := ParseStatus([]byte(duplicateRows), FixtureVersion); err == nil {
 		t.Fatal("reused task ID accepted")
 	}
 }

@@ -124,6 +124,7 @@ def expected_codex_inspection_binding(
         "helper_sha256": provider_digest,
         "worker_executable": str(runner),
         "worker_sha256": digest(runner),
+        "environment": values,
         "supervisor": supervisor_binding(pueue, config, base, config_digest),
     }
 
@@ -1042,7 +1043,7 @@ class CodexAcceptance:
                 f"{name} submit binding mismatch")
         supervisor = submit.get("supervisor")
         require(isinstance(supervisor, dict) and supervisor.get("config_path") == str(self.pueue_config) and
-                supervisor.get("observed_version") == PUEUE_VERSION and
+                supervisor.get("observed_version") == "pueue " + PUEUE_VERSION and
                 supervisor.get("client_executable") == str(self.pueue),
                 f"{name} submit supervisor binding mismatch")
 

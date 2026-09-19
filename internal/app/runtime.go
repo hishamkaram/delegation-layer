@@ -78,6 +78,7 @@ type Dependencies struct {
 	RunnerExecutable            string
 	PublisherVersion            string
 	ExecutionHooks              execution.Hooks
+	useCatalogExisting          bool
 }
 
 // storeDependencies is the narrow composition passed to read-only task-store
@@ -104,6 +105,7 @@ func (d Dependencies) normalized() Dependencies {
 			d.PrepareCandidate = commonprovider.ReadyCandidate(d.PrepareProfile)
 		} else {
 			d.PrepareCandidate = d.Catalog.Candidate
+			d.useCatalogExisting = true
 		}
 	}
 	if d.PredicateRegistry == nil {
@@ -507,7 +509,7 @@ func resolveInitialConfig(a Arguments) (string, error) {
 		path = os.Getenv("DELEGATE_PUEUE_CONFIG")
 	}
 	if path == "" {
-		return "", fmt.Errorf("%w: initial pueue config is required via --pueue-config or DELEGATE_PUEUE_CONFIG", pueue.ErrConfiguration)
+		return "", nil
 	}
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return "", pueue.ErrConfiguration
@@ -530,6 +532,89 @@ func resolveInitialExecutable(deps Dependencies) (string, error) {
 			return "", err
 		}
 		path = absolute
+	}
+	return path, nil
+}
+
+func resolveBundledExecutable(deps Dependencies, name string) (string, error) {
+	directory, err := bundledSupervisorDirectory(deps)
+	if err != nil {
+		return "", err
+	}
+	return resolveSupervisorExecutable(filepath.Join(directory, name), name)
+}
+
+func resolveBundledExecutables(deps Dependencies) (client, daemon string, resultErr error) {
+	directory, err := bundledSupervisorDirectory(deps)
+	if err != nil {
+		return "", "", err
+	}
+	client, daemon, clientErr := resolveSupervisorPair(directory)
+	if clientErr == nil {
+		return client, daemon, nil
+	}
+	if deps.InitialSupervisorExecutable != "" || bundledSupervisorPairHasEntry(directory) {
+		return "", "", clientErr
+	}
+
+	pathClient, pathErr := exec.LookPath("pueue")
+	if pathErr != nil {
+		return "", "", clientErr
+	}
+	client, err = resolveSupervisorExecutable(pathClient, "pueue")
+	if err != nil {
+		return "", "", err
+	}
+	daemon, err = resolveSupervisorExecutable(filepath.Join(filepath.Dir(client), "pueued"), "pueued")
+	if err != nil {
+		return "", "", fmt.Errorf("%w: pueue and pueued must be installed as one executable pair: %w", pueue.ErrConfiguration, err)
+	}
+	return client, daemon, nil
+}
+
+func resolveSupervisorPair(directory string) (client, daemon string, resultErr error) {
+	client, err := resolveSupervisorExecutable(filepath.Join(directory, "pueue"), "pueue")
+	if err != nil {
+		return "", "", err
+	}
+	daemon, err = resolveSupervisorExecutable(filepath.Join(directory, "pueued"), "pueued")
+	if err != nil {
+		return "", "", fmt.Errorf("%w: pueue and pueued must be installed as one executable pair: %w", pueue.ErrConfiguration, err)
+	}
+	return client, daemon, nil
+}
+
+func bundledSupervisorPairHasEntry(directory string) bool {
+	for _, name := range []string{"pueue", "pueued"} {
+		if _, err := os.Lstat(filepath.Join(directory, name)); err == nil || !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
+}
+
+func bundledSupervisorDirectory(deps Dependencies) (string, error) {
+	if deps.InitialSupervisorExecutable != "" {
+		return filepath.Dir(deps.InitialSupervisorExecutable), nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(self), nil
+}
+
+func resolveSupervisorExecutable(candidate, name string) (string, error) {
+	path, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s executable is unavailable: %w", pueue.ErrConfiguration, name, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("%w: inspect %s executable: %w", pueue.ErrConfiguration, name, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("%w: %s executable must be executable regular file", pueue.ErrConfiguration, name)
 	}
 	return path, nil
 }
@@ -566,13 +651,40 @@ func resolveRunner(raw string, deps Dependencies) (string, error) {
 }
 
 func bindInitial(a Arguments, deps Dependencies) (*pueue.Client, error) {
-	return bindInitialWithOptions(a, deps, deps.SupervisorOptions)
+	return bindInitialWithOptions(a, deps, "", deps.SupervisorOptions)
 }
 
-func bindInitialWithOptions(a Arguments, deps Dependencies, supervisorOptions pueue.Options) (*pueue.Client, error) {
+func newSupervisorClient(root string, saved task.SupervisorRef, options pueue.Options, recoverPrivate bool) (*pueue.Client, error) {
+	if recoverPrivate && pueue.IsPrivateConfig(root, saved.ConfigPath) {
+		hasDaemonPath := saved.DaemonExecutable != ""
+		hasDaemonDigest := saved.DaemonSHA256 != ""
+		if hasDaemonPath != hasDaemonDigest {
+			return nil, pueue.ErrBinding
+		}
+		if hasDaemonPath {
+			return pueue.RecoverPrivate(context.Background(), root, saved, options)
+		}
+	}
+	return pueue.NewClient(saved, options)
+}
+
+func bindInitialWithOptions(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options) (*pueue.Client, error) {
 	configPath, err := resolveInitialConfig(a)
 	if err != nil {
 		return nil, err
+	}
+	if configPath != "" && root != "" && pueue.IsPrivateConfig(root, configPath) {
+		return nil, fmt.Errorf("%w: explicit supervisor config collides with the private state-rooted supervisor", pueue.ErrConfiguration)
+	}
+	if configPath == "" {
+		clientExecutable, daemonExecutable, resolveErr := resolveBundledExecutables(deps)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if root == "" {
+			return nil, fmt.Errorf("%w: state root is required for the private supervisor", pueue.ErrConfiguration)
+		}
+		return pueue.BindPrivate(context.Background(), clientExecutable, daemonExecutable, root, supervisorOptions)
 	}
 	executable, err := resolveInitialExecutable(deps)
 	if err != nil {
@@ -583,7 +695,7 @@ func bindInitialWithOptions(a Arguments, deps Dependencies, supervisorOptions pu
 
 func newMeta(req task.TaskRecord, profile PreparedProfile, supervisor task.SupervisorRef, publisher string) task.MetaRecord {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, PublisherBuild: publisher, PublisherVersion: publisher, Predicate: profile.Plan.Predicate, InputFiles: profile.Plan.InputFiles, OutputArtifacts: profile.Plan.OutputArtifacts, OutputWriterContract: profile.Plan.OutputWriterContract, SupervisorConfig: supervisor, CreatedAt: now}
+	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, PublisherBuild: publisher, PublisherVersion: publisher, Environment: append([]string(nil), profile.Plan.Environment...), Predicate: profile.Plan.Predicate, InputFiles: profile.Plan.InputFiles, OutputArtifacts: profile.Plan.OutputArtifacts, OutputWriterContract: profile.Plan.OutputWriterContract, SupervisorConfig: supervisor, CreatedAt: now}
 }
 
 func taskIdentity(req *task.TaskRecord, meta *task.MetaRecord, specHash, metaHash string, receipt *task.SupervisorReceipt) pueue.Identity {

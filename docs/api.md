@@ -9,7 +9,7 @@ are not a public import API.
 A client creates a task with `dispatch`:
 
 ```sh
-delegate --pueue-config /absolute/path/to/pueue.yml dispatch \
+delegate --root /absolute/path/to/state dispatch \
   --provider codex:exec \
   --brief /absolute/path/to/brief.txt \
   --cwd /absolute/path/to/workspace \

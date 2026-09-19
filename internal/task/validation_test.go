@@ -139,6 +139,8 @@ func TestCompleteMetaRecord(t *testing.T) {
 		{"predicate-mode", func(r *MetaRecord) { r.Predicate.Mode = "workspace-write" }},
 		{"requested-budget", func(r *MetaRecord) { r.RequestedConfig.Budget = "" }},
 		{"supervisor-path", func(r *MetaRecord) { r.SupervisorConfig.ConfigPath = "relative" }},
+		{"supervisor-daemon-path", func(r *MetaRecord) { r.SupervisorConfig.DaemonExecutable = "relative" }},
+		{"supervisor-daemon-digest", func(r *MetaRecord) { r.SupervisorConfig.DaemonSHA256 = "invalid" }},
 		{"supervisor-endpoint", func(r *MetaRecord) { r.SupervisorConfig.Endpoint = "" }},
 		{"supervisor-digest", func(r *MetaRecord) { r.SupervisorConfig.ConfigDigest = "" }},
 		{"supervisor-version", func(r *MetaRecord) { r.SupervisorConfig.ObservedVersion = "" }},

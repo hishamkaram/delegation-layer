@@ -100,6 +100,14 @@ func TestPreparedProfileMatchesInputContentAndOutputDeclarations(t *testing.T) {
 	if err := profile.Matches(request, meta); err != nil {
 		t.Fatal(err)
 	}
+	meta.Environment = []string{"HOME=/different"}
+	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
+		t.Fatal("changed launch environment matched immutable metadata")
+	}
+	meta.Environment = nil
+	if err := profile.Matches(request, meta); err != nil {
+		t.Fatalf("legacy metadata without a launch environment was rejected: %v", err)
+	}
 	profile.Plan.InputFiles[0].Content = `{"mode":"workspace-write"}`
 	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed input content matched immutable metadata")

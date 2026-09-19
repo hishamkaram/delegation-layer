@@ -517,7 +517,7 @@ class NativeAcceptance:
                 submit.get("label") == label and isinstance(supervisor, dict) and
                 supervisor.get("client_executable") == str(self.pueue) and
                 supervisor.get("config_path") == str(self.config) and
-                supervisor.get("observed_version") == PUEUE_VERSION,
+                supervisor.get("observed_version") == f"pueue {PUEUE_VERSION}",
                 f"task {task_id} supervisor submission binding is invalid")
         for name in ("provider.start", "provider.started.json"):
             evidence = read_json(directory / name)

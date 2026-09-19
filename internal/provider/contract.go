@@ -120,7 +120,11 @@ func (p PreparedProfile) Matches(request task.TaskRecord, meta task.MetaRecord) 
 	if err != nil {
 		return err
 	}
-	if p.Plan.Executable != meta.ProviderExecutable || p.ObservedVersion != meta.ProviderVersion || !task.CompareEffectiveConfigs(p.Effective, meta.EffectiveConfig) || !p.Plan.Predicate.Equal(meta.Predicate) || !task.CompareInputFiles(inputs, meta.InputFiles) || !task.CompareOutputArtifacts(outputs, meta.OutputArtifacts) || p.Plan.OutputWriterContract != meta.OutputWriterContract {
+	// Metadata written before task environments became explicit has no
+	// environment field. Keep those queued tasks recoverable while still
+	// binding every current record that carries the bounded environment.
+	environmentChanged := len(meta.Environment) > 0 && !slices.Equal(p.Plan.Environment, meta.Environment)
+	if p.Plan.Executable != meta.ProviderExecutable || p.ObservedVersion != meta.ProviderVersion || environmentChanged || !task.CompareEffectiveConfigs(p.Effective, meta.EffectiveConfig) || !p.Plan.Predicate.Equal(meta.Predicate) || !task.CompareInputFiles(inputs, meta.InputFiles) || !task.CompareOutputArtifacts(outputs, meta.OutputArtifacts) || p.Plan.OutputWriterContract != meta.OutputWriterContract {
 		return task.ErrIdentityMismatch
 	}
 	return nil
@@ -179,7 +183,8 @@ type Description struct {
 // valid for historical-only predicate registrations and never grants launch
 // authority.
 type Registration struct {
-	Description  Description
-	Prepare      PrepareCandidate
-	Interpreters []predicate.Interpreter
+	Description     Description
+	Prepare         PrepareCandidate
+	PrepareExisting PrepareExistingCandidate
+	Interpreters    []predicate.Interpreter
 }

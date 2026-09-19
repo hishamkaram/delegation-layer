@@ -157,12 +157,12 @@ func releaseContinuationSession(td *taskdir.TaskDir, req *task.TaskRecord, outco
 	return td.ReleaseSession(req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
 }
 
-func reconcileRunner(response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options) (*pueue.Client, pueue.Observation, error) {
+func reconcileRunner(root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options) (*pueue.Client, pueue.Observation, error) {
 	submit, err := td.ReadSubmission()
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
-	client, err := pueue.NewClient(submit.Supervisor, supervisorOptions)
+	client, err := newSupervisorClient(root, submit.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
@@ -257,6 +257,12 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 	if err != nil {
 		return failed(response, err, 1)
 	}
+	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
+	restoreEnvironment, err := applySavedEnvironment(meta.Environment)
+	if err != nil {
+		return failed(response, err, 1)
+	}
+	defer restoreRunnerEnvironment(&result, restoreEnvironment)
 	if isTerminal(inspection) {
 		releaseErr := releaseContinuationSession(td, req, inspection.Outcome)
 		if releaseErr != nil {
@@ -274,7 +280,7 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
-	client, observation, reconcileErr := reconcileRunner(&response, td, req, meta, deps.SupervisorOptions)
+	client, observation, reconcileErr := reconcileRunner(root, &response, td, req, meta, supervisorOptionsForMeta(supervisorOptions, *meta))
 	if reconcileErr != nil {
 		return failed(response, reconcileErr, 1)
 	}
@@ -286,6 +292,46 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 		return failed(response, err, classifyCode(err, 1))
 	}
 	return runProvider(response, td, req, profile, client, deps)
+}
+
+func applySavedEnvironment(values []string) (func() error, error) {
+	if len(values) == 0 {
+		return func() error { return nil }, nil
+	}
+	if err := task.ValidateEnvironment(values); err != nil {
+		return nil, err
+	}
+	original := os.Environ()
+	os.Clearenv()
+	for _, entry := range values {
+		key, value, _ := strings.Cut(entry, "=")
+		if err := os.Setenv(key, value); err != nil {
+			return nil, errors.Join(err, restoreEnvironment(original))
+		}
+	}
+	return func() error { return restoreEnvironment(original) }, nil
+}
+
+func restoreEnvironment(values []string) (resultErr error) {
+	os.Clearenv()
+	for _, entry := range values {
+		key, value, _ := strings.Cut(entry, "=")
+		resultErr = errors.Join(resultErr, os.Setenv(key, value))
+	}
+	return resultErr
+}
+
+func restoreRunnerEnvironment(result *commandResult, restore func() error) {
+	if result == nil || restore == nil {
+		return
+	}
+	if restoreErr := restore(); restoreErr != nil {
+		result.err = errors.Join(result.err, restoreErr)
+		if result.code == 0 {
+			result.code = 1
+		}
+		result.response.setError(restoreErr)
+	}
 }
 
 // prepareMatchedProfile refreshes the provider's compiled launch profile and

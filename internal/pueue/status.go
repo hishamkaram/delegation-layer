@@ -32,17 +32,18 @@ type QueueSnapshot struct {
 	Groups map[string]Group
 }
 
-// ParseStatus validates the exact serialized State/Task schema from pueue4.0.4.
-// It does not return commands or task environment values in observations.
+// ParseStatus validates the observed serialized State/Task schema without
+// pinning the supervisor release string. It does not return commands or task
+// environment values in observations.
 func ParseStatus(data []byte, version string) ([]Job, error) {
 	snapshot, err := ParseQueueSnapshot(data, version)
 	return snapshot.Jobs, err
 }
 
-// ParseQueueSnapshot validates the same pinned status schema as ParseStatus,
+// ParseQueueSnapshot validates the same bounded status schema as ParseStatus,
 // retaining the group and worker-success facts used by native inspection.
 func ParseQueueSnapshot(data []byte, version string) (QueueSnapshot, error) {
-	if version != SupportedVersion {
+	if version == "" {
 		return QueueSnapshot{}, ErrBinding
 	}
 	if err := task.ValidateJSONStructure(data); err != nil {

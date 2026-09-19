@@ -65,12 +65,12 @@ fi
 
 tar -xzf "$ARCHIVE" -C "$TEMP_DIR" || fail "could not extract $ARCHIVE"
 mkdir -p "$INSTALL_DIR"
-for binary in delegate delegate-run; do
+for binary in delegate delegate-run pueue pueued; do
   [ -f "$TEMP_DIR/$binary" ] || fail "release archive does not contain $binary"
   install -m 0755 "$TEMP_DIR/$binary" "$INSTALL_DIR/$binary"
 done
 
-printf 'Installed delegate and delegate-run %s in %s\n' "$VERSION" "$INSTALL_DIR"
+printf 'Installed delegation-layer CLI and bundled supervisor %s in %s\n' "$VERSION" "$INSTALL_DIR"
 case ":${PATH:-}:" in
   *:"$INSTALL_DIR":*) ;;
   *) printf 'Add %s to PATH if it is not already there.\n' "$INSTALL_DIR" ;;

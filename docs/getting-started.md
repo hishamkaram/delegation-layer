@@ -37,7 +37,7 @@ npx --yes delegation-layer install \
 ```
 
 This step installs agent guidance only. It does not install provider CLIs,
-configure Pueue, or change authentication.
+change authentication, or run a task.
 
 ## 2. Install the CLI
 
@@ -57,9 +57,10 @@ pnpm dlx delegation-layer install-cli
 bunx --bun delegation-layer install-cli
 ```
 
-The release installer verifies checksums and installs `delegate` and
-`delegate-run` into `$HOME/.local/bin` unless
-`DELEGATION_LAYER_INSTALL_DIR` is set.
+The release installer verifies checksums and installs `delegate`,
+`delegate-run`, `pueue`, and `pueued` into `$HOME/.local/bin` unless
+`DELEGATION_LAYER_INSTALL_DIR` is set. The CLI starts its private supervisor
+automatically and recovers it when a control command finds it stopped.
 
 ```sh
 delegate --help
@@ -73,19 +74,20 @@ is needed for the npm-based installers, not for the released Go CLI at runtime.
 
 Dispatching a task requires:
 
-- Pueue 4.0.4 (`pueue` and `pueued`) with a private configuration and running
-  daemon;
-- at least one signed-in provider CLI, such as `agy`, `codex`, `claude`, `pi`,
-  or `opencode`;
+- at least one provider CLI with an available native login, such as `agy`,
+  `codex`, `claude`, `pi`, or `opencode`;
 - a Darwin or Linux host on amd64 or arm64 for the supplied builds.
 
 Authenticate providers with their own login flows. Delegation Layer keeps
 provider credentials in the provider's native environment and does not copy
 them into task state.
 
-Keep the state root, workspace, provider runtime directories, and Pueue
-configuration separate. The workspace is the directory the provider may inspect
-or edit; the state root contains task records and sealed evidence.
+Keep the state root, workspace, and provider runtime directories separate. The
+private supervisor configuration and data live below the state root. The
+workspace is the directory the provider may inspect or edit; the state root
+contains task records and sealed evidence. An explicit `--pueue-config` or
+`DELEGATE_PUEUE_CONFIG` remains available when an existing compatible
+supervisor must be used.
 
 ## 4. Dispatch one task
 
@@ -96,7 +98,6 @@ mkdir -p "$HOME/delegation-workspace" "$HOME/delegation-state"
 printf '%s\n' 'List the top-level files and summarize the project.' > "$HOME/delegation-brief.txt"
 
 delegate --root "$HOME/delegation-state" \
-  --pueue-config /absolute/path/to/pueue.yml \
   dispatch \
   --provider codex:exec \
   --brief "$HOME/delegation-brief.txt" \
@@ -147,7 +148,6 @@ predecessor:
 
 ```sh
 delegate --root "$HOME/delegation-state" \
-  --pueue-config /absolute/path/to/pueue.yml \
   dispatch \
   --provider codex:exec \
   --brief "$HOME/follow-up.txt" \

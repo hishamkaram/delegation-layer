@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,12 +10,91 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := task.FixturePredicateRef()
+	interpreter, err := predicate.Default().Resolve(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := task.TaskRecord{
+		Provider:     config.ProviderFixture,
+		Mode:         config.ModeReadOnly,
+		CanonicalCwd: workspace,
+		RequestedConfig: task.TaskConfig{
+			Permission: config.ModeReadOnly,
+		},
+	}
+	profileCandidate := func(version string) commonprovider.ProfileCandidate {
+		profile := PreparedProfile{
+			Plan: execution.Plan{
+				Executable: "/bin/true",
+				Directory:  workspace,
+				Predicate:  ref,
+			},
+			ObservedVersion: version,
+			Effective: task.EffectiveConfig{
+				Containment: config.ModeReadOnly,
+				Approval:    "never",
+				Digest:      task.ComputeSHA256([]byte(version)),
+			},
+		}
+		return commonprovider.ProfileCandidate{
+			Directory: workspace,
+			Finalize: func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
+				return profile, nil
+			},
+		}
+	}
+	var prepareCalls, existingCalls int
+	catalog, err := commonprovider.NewCatalog(commonprovider.Registration{
+		Description: commonprovider.Description{
+			ID:             config.ProviderFixture,
+			SupportedModes: []string{config.ModeReadOnly},
+			Runtime:        commonprovider.RuntimeCapability{RequiredFlags: []string{"--fixture"}},
+			Discoverable:   true,
+		},
+		Prepare: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+			prepareCalls++
+			return profileCandidate("portable"), nil
+		},
+		PrepareExisting: func(task.TaskRecord, task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+			existingCalls++
+			return profileCandidate("legacy"), nil
+		},
+		Interpreters: []predicate.Interpreter{interpreter},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := (Dependencies{Catalog: catalog}).normalized()
+	candidate, facts, err := prepareExistingCandidateContext(context.Background(), deps, root, request, task.MetaRecord{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if existingCalls != 1 || prepareCalls != 0 {
+		t.Fatalf("historical catalog hook calls: existing=%d prepare=%d", existingCalls, prepareCalls)
+	}
+	if candidate.Finalize == nil || facts != nil {
+		t.Fatalf("historical candidate was not reconstructed cleanly: candidate=%+v facts=%s", candidate, facts)
+	}
+}
 
 type appInspectionProofFixture struct {
 	store         *taskdir.Store

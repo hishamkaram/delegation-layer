@@ -32,6 +32,7 @@ func (o Observation) Receipt() (*task.SupervisorReceipt, error) {
 		ConfigDigest: o.Binding.ConfigDigest, ConfigPath: o.Binding.ConfigPath,
 		Endpoint: o.Binding.Endpoint, ObservedVersion: o.Binding.ObservedVersion,
 		ClientExecutable: o.Binding.ClientExecutable, ClientSHA256: o.Binding.ClientSHA256,
+		DaemonExecutable: o.Binding.DaemonExecutable, DaemonSHA256: o.Binding.DaemonSHA256,
 		ResolvedConfigSHA256: o.Binding.ResolvedConfigSHA256,
 	}, nil
 }

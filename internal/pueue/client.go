@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
@@ -37,15 +39,17 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 	if !filepath.IsAbs(configPath) || filepath.Clean(configPath) != configPath {
 		return nil, ErrConfiguration
 	}
-	c := &Client{options: options, binding: task.SupervisorRef{ClientExecutable: path, ConfigPath: configPath, ObservedVersion: SupportedVersion}}
+	c := &Client{options: options, binding: task.SupervisorRef{ClientExecutable: path, ConfigPath: configPath}}
 	current, err := c.readBinding()
 	if err != nil {
 		return nil, err
 	}
-	c.binding = current
-	if err := c.checkVersion(ctx); err != nil {
+	version, err := c.checkVersion(ctx)
+	if err != nil {
 		return c, err
 	}
+	current.ObservedVersion = version
+	c.binding = current
 	return c, nil
 }
 
@@ -54,9 +58,6 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 func NewClient(saved task.SupervisorRef, options Options) (*Client, error) {
 	if err := task.ValidateFreshSupervisorRef(saved); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBinding, err)
-	}
-	if saved.ObservedVersion != SupportedVersion {
-		return nil, ErrBinding
 	}
 	options, err := normalizeOptions(options)
 	if err != nil {
@@ -204,7 +205,7 @@ func (c *Client) readBinding() (task.SupervisorRef, error) {
 	if err != nil {
 		return task.SupervisorRef{}, err
 	}
-	return task.SupervisorRef{ClientExecutable: executable, ClientSHA256: digest, ConfigPath: c.binding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: SupportedVersion}, nil
+	return task.SupervisorRef{ClientExecutable: executable, ClientSHA256: digest, DaemonExecutable: c.binding.DaemonExecutable, DaemonSHA256: c.binding.DaemonSHA256, ConfigPath: c.binding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: c.binding.ObservedVersion}, nil
 }
 
 func readRegular(path string, limit int64) (data []byte, err error) {
@@ -256,19 +257,54 @@ func (c *Client) verify(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(ErrBinding, err)
 	}
+	current.ObservedVersion = c.binding.ObservedVersion
 	if current != c.binding {
 		return ErrBinding
 	}
-	return c.checkVersion(ctx)
+	_, err = c.checkVersion(ctx)
+	return err
 }
 
-func (c *Client) checkVersion(ctx context.Context) error {
+func (c *Client) checkVersion(ctx context.Context) (string, error) {
 	result, err := c.command(ctx, nil, "--version")
+	if err != nil {
+		return "", errors.Join(ErrBinding, err)
+	}
+	if len(result.Stdout) == 0 || len(result.Stdout) > MaxControlBytes || !utf8.Valid(result.Stdout) {
+		return "", fmt.Errorf("%w: supervisor did not report a usable version", ErrBinding)
+	}
+	version := strings.TrimSpace(string(result.Stdout))
+	if version == "" {
+		return "", fmt.Errorf("%w: supervisor did not report a usable version", ErrBinding)
+	}
+	for _, character := range version {
+		if unicode.IsControl(character) {
+			return "", fmt.Errorf("%w: supervisor did not report a usable version", ErrBinding)
+		}
+	}
+	return version, nil
+}
+
+// Ready verifies that the configured daemon accepts a bounded status request
+// with the queue schema required by this client. An empty queue is healthy.
+func (c *Client) Ready(ctx context.Context) error {
+	result, err := c.command(ctx, nil, "status", "--json")
 	if err != nil {
 		return errors.Join(ErrBinding, err)
 	}
-	if strings.TrimSpace(string(result.Stdout)) != "pueue "+SupportedVersion {
-		return fmt.Errorf("%w: unsupported client version", ErrBinding)
+	return c.validateReadyResult(result)
+}
+
+func (c *Client) validateReadyResult(result CommandResult) error {
+	if result.Err != nil {
+		return errors.Join(ErrBinding, result.Err)
+	}
+	status := strings.TrimSpace(string(result.Stdout))
+	if status == "" {
+		return fmt.Errorf("%w: supervisor returned an empty status response", ErrBinding)
+	}
+	if _, err := ParseQueueSnapshot([]byte(status), strings.TrimSpace(c.binding.ObservedVersion)); err != nil {
+		return errors.Join(ErrBinding, err)
 	}
 	return nil
 }

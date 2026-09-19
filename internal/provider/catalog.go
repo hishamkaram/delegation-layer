@@ -301,6 +301,17 @@ func (c Catalog) ValidateRequest(request task.TaskRecord) error {
 // Candidate validates capabilities and obtains static preparation inputs. Its
 // finalizer retains artifact and effective-profile checks after inspection.
 func (c Catalog) Candidate(request task.TaskRecord) (ProfileCandidate, error) {
+	return c.candidate(request, nil)
+}
+
+// ExistingCandidate reconstructs a profile for an already admitted task. A
+// provider may use this boundary to retain a historical preparation contract;
+// new admission remains on Candidate.
+func (c Catalog) ExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (ProfileCandidate, error) {
+	return c.candidate(request, &meta)
+}
+
+func (c Catalog) candidate(request task.TaskRecord, existing *task.MetaRecord) (ProfileCandidate, error) {
 	if err := c.ValidateRequest(request); err != nil {
 		return ProfileCandidate{}, err
 	}
@@ -308,7 +319,12 @@ func (c Catalog) Candidate(request task.TaskRecord) (ProfileCandidate, error) {
 	if err != nil {
 		return ProfileCandidate{}, err
 	}
-	candidate, err := registration.Prepare(request)
+	var candidate ProfileCandidate
+	if existing != nil && registration.PrepareExisting != nil {
+		candidate, err = registration.PrepareExisting(request, *existing)
+	} else {
+		candidate, err = registration.Prepare(request)
+	}
 	if err != nil {
 		return ProfileCandidate{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, err)
 	}
