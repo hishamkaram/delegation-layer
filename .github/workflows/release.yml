@@ -223,6 +223,16 @@ jobs:
             exit 0
           fi
           npm publish "${package_dir}/${package_tarball}" --access public --provenance
+          for attempt in {1..12}; do
+            published_integrity="$(npm view "${package}" dist.integrity 2>/dev/null || true)"
+            if [[ "${published_integrity}" == "${package_integrity}" ]]; then
+              echo "npm package version ${package} is visible with matching contents."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "npm package version ${package} was published but did not become visible with matching contents after ${attempt} checks." >&2
+          exit 1
 
       - name: Publish GitHub Release
         env:
