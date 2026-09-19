@@ -64,13 +64,15 @@ func runInspectionWorkerOperation(canonicalRoot, taskID string, deps Dependencie
 		return errInspectionWorkerUnavailable
 	}
 	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
+	observeContext, cancel := context.WithDeadline(context.Background(), operation.Deadline())
+	defer cancel()
 	restoreEnvironment, err := prepareInspectionWorkerEnvironment(operation, record.Binding)
 	if err != nil {
 		return errInspectionWorkerUnavailable
 	}
 	defer func() { resultErr = errors.Join(resultErr, restoreEnvironment()) }()
 
-	supervisor, identity, err := reconcileInspectionWorker(canonicalRoot, operation, record.Binding.Supervisor, supervisorOptionsWithEnvironment(supervisorOptions, record.Binding.Environment))
+	supervisor, identity, err := reconcileInspectionWorker(observeContext, canonicalRoot, operation, record.Binding.Supervisor, supervisorOptionsWithEnvironment(supervisorOptions, record.Binding.Environment))
 	if err != nil {
 		return errInspectionWorkerUnavailable
 	}
@@ -125,18 +127,16 @@ func prepareInspectionWorkerEnvironment(operation *inspection.Operation, binding
 	return applySavedEnvironment(binding.Environment)
 }
 
-func reconcileInspectionWorker(root string, operation *inspection.Operation, binding task.SupervisorRef, options pueue.Options) (*pueue.Client, pueue.InspectionIdentity, error) {
-	supervisor, err := newSupervisorClient(root, binding, options, true)
+func reconcileInspectionWorker(ctx context.Context, root string, operation *inspection.Operation, binding task.SupervisorRef, options pueue.Options) (*pueue.Client, pueue.InspectionIdentity, error) {
+	supervisor, err := newSupervisorClient(ctx, root, binding, options, true)
 	if err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
-	identity, err := inspectionIdentity(operation)
+	identity, err := inspectionIdentityContext(ctx, operation)
 	if err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
-	observeContext, cancel := context.WithDeadline(context.Background(), operation.Deadline())
-	defer cancel()
-	observation, err := supervisor.ReconcileInspection(observeContext, identity)
+	observation, err := supervisor.ReconcileInspection(ctx, identity)
 	if err != nil || !observation.Matched || observation.Job.State != pueue.StateRunning {
 		return nil, pueue.InspectionIdentity{}, errInspectionWorkerUnavailable
 	}
@@ -144,7 +144,7 @@ func reconcileInspectionWorker(root string, operation *inspection.Operation, bin
 		return nil, pueue.InspectionIdentity{}, errInspectionWorkerUnavailable
 	}
 	observedID := observation.Job.ID
-	if err = operation.RecordReceiptContext(observeContext, observedID); err != nil {
+	if err = operation.RecordReceiptContext(ctx, observedID); err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
 	identity.NumericTaskID = &observedID

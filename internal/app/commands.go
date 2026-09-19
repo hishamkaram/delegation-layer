@@ -112,6 +112,7 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 	if inspection.StartExists {
 		return failed(response, task.ErrAlreadyStarted, 1)
 	}
+	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
 	restoreEnvironment, restoreErr := applySavedEnvironment(oldMeta.Environment)
 	if restoreErr != nil {
 		return failed(response, restoreErr, 1)
@@ -122,7 +123,7 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 		return failed(response, profileErr, classifyCode(profileErr, 2))
 	}
 	return submitPreparedWithOptions(a, deps, td, oldReq, oldMeta, oldMeta.SupervisorConfig,
-		supervisorOptionsForProfile(deps.SupervisorOptions, profile), store.Root, response)
+		supervisorOptionsForProfile(supervisorOptions, profile), store.Root, response)
 }
 
 func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, brief []byte, response Response) commandResult {
@@ -194,7 +195,7 @@ func submitPreparedWithOptions(a Arguments, deps Dependencies, td *taskdir.TaskD
 	if meta != nil {
 		supervisorOptions = supervisorOptionsForMeta(supervisorOptions, *meta)
 	}
-	client, err := newSupervisorClient(recoveryRoot, supervisor, supervisorOptions, recoveryRoot != "")
+	client, err := newSupervisorClient(context.Background(), recoveryRoot, supervisor, supervisorOptions, recoveryRoot != "")
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
@@ -309,7 +310,7 @@ func submitWithClient(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.Meta
 
 func reconcileExisting(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, submit *task.SubmitRecord, supervisorOptions pueue.Options, response Response) commandResult {
 	supervisorOptions = supervisorOptionsForMeta(supervisorOptions, *meta)
-	client, err := newSupervisorClient(root, submit.Supervisor, supervisorOptions, true)
+	client, err := newSupervisorClient(context.Background(), root, submit.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
@@ -348,7 +349,7 @@ func reconcileStatus(root string, td *taskdir.TaskDir, req *task.TaskRecord, met
 	if err != nil {
 		return pueue.Observation{}, err
 	}
-	client, err := newSupervisorClient(root, submit.Supervisor, supervisorOptions, true)
+	client, err := newSupervisorClient(context.Background(), root, submit.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return pueue.Observation{}, err
 	}
@@ -574,7 +575,7 @@ func stopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 	if err != nil {
 		return StopResponse{}, errors.Join(err, permit.Release())
 	}
-	client, err := newSupervisorClient(root, request.Supervisor, supervisorOptions, true)
+	client, err := newSupervisorClient(context.Background(), root, request.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return StopResponse{}, errors.Join(err, permit.Release())
 	}
@@ -791,7 +792,7 @@ func predecessorTerminated(root string, td *taskdir.TaskDir, req *task.TaskRecor
 		return err
 	}
 	supervisorOptions = supervisorOptionsForMeta(supervisorOptions, *meta)
-	client, err := newSupervisorClient(root, submit.Supervisor, supervisorOptions, true)
+	client, err := newSupervisorClient(context.Background(), root, submit.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return err
 	}

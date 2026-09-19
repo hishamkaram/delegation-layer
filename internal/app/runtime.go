@@ -654,7 +654,7 @@ func bindInitial(a Arguments, deps Dependencies) (*pueue.Client, error) {
 	return bindInitialWithOptions(a, deps, "", deps.SupervisorOptions)
 }
 
-func newSupervisorClient(root string, saved task.SupervisorRef, options pueue.Options, recoverPrivate bool) (*pueue.Client, error) {
+func newSupervisorClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, recoverPrivate bool) (*pueue.Client, error) {
 	if recoverPrivate && pueue.IsPrivateConfig(root, saved.ConfigPath) {
 		hasDaemonPath := saved.DaemonExecutable != ""
 		hasDaemonDigest := saved.DaemonSHA256 != ""
@@ -662,7 +662,7 @@ func newSupervisorClient(root string, saved task.SupervisorRef, options pueue.Op
 			return nil, pueue.ErrBinding
 		}
 		if hasDaemonPath {
-			return pueue.RecoverPrivate(context.Background(), root, saved, options)
+			return pueue.RecoverPrivate(ctx, root, saved, options)
 		}
 	}
 	return pueue.NewClient(saved, options)

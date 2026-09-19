@@ -63,6 +63,18 @@ func NewClient(saved task.SupervisorRef, options Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	if resolution, present, resolutionErr := resolutionFromBinding(saved); resolutionErr != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBinding, resolutionErr)
+	} else if present {
+		if options.Resolution != nil && !sameEnvironmentResolution(*options.Resolution, resolution) {
+			return nil, ErrConfiguration
+		}
+		options.Resolution = &resolution
+		options.resolutionPinned = true
+		if options.Environment == nil || len(options.Environment) > 0 {
+			options.Environment = environmentForResolution(options.Environment, resolution)
+		}
+	}
 	return &Client{binding: saved, options: options}, nil
 }
 
@@ -108,6 +120,16 @@ func (c *Client) resolution() (ResolutionContext, error) {
 }
 
 func (c *Client) resolutionForEnvironment(environment []string) (ResolutionContext, error) {
+	if c.options.resolutionPinned {
+		if c.options.Resolution == nil {
+			return ResolutionContext{}, ErrConfiguration
+		}
+		resolution := *c.options.Resolution
+		if err := validateResolutionContext(resolution); err != nil {
+			return ResolutionContext{}, err
+		}
+		return resolution, nil
+	}
 	current, err := resolutionContext(environment)
 	if err != nil {
 		return ResolutionContext{}, err
@@ -123,6 +145,37 @@ func (c *Client) resolutionForEnvironment(environment []string) (ResolutionConte
 		return ResolutionContext{}, fmt.Errorf("%w: resolution does not match command environment", ErrConfiguration)
 	}
 	return resolution, nil
+}
+
+func environmentForResolution(environment []string, resolution ResolutionContext) []string {
+	merged := append([]string(nil), environmentForCommand(environment)...)
+	for _, value := range []struct {
+		key   string
+		value string
+	}{
+		{key: "HOME", value: resolution.Home},
+		{key: "XDG_DATA_HOME", value: resolution.DataLocalDirectory},
+		{key: "XDG_CONFIG_HOME", value: resolution.ConfigDirectory},
+		{key: "XDG_RUNTIME_DIR", value: resolution.RuntimeDirectory},
+	} {
+		if resolution.OS != "linux" && value.key != "HOME" {
+			continue
+		}
+		merged = replaceEnvironmentValue(merged, value.key, value.value)
+	}
+	return merged
+}
+
+func replaceEnvironmentValue(environment []string, key, value string) []string {
+	entry := key + "=" + value
+	for index, current := range environment {
+		name, _, ok := strings.Cut(current, "=")
+		if ok && name == key {
+			environment[index] = entry
+			return environment
+		}
+	}
+	return append(environment, entry)
 }
 
 func environmentForCommand(environment []string) []string {
@@ -205,7 +258,11 @@ func (c *Client) readBinding() (task.SupervisorRef, error) {
 	if err != nil {
 		return task.SupervisorRef{}, err
 	}
-	return task.SupervisorRef{ClientExecutable: executable, ClientSHA256: digest, DaemonExecutable: c.binding.DaemonExecutable, DaemonSHA256: c.binding.DaemonSHA256, ConfigPath: c.binding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: c.binding.ObservedVersion}, nil
+	binding := task.SupervisorRef{ClientExecutable: executable, ClientSHA256: digest, DaemonExecutable: c.binding.DaemonExecutable, DaemonSHA256: c.binding.DaemonSHA256, ResolutionCwd: c.binding.ResolutionCwd, ConfigPath: c.binding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: c.binding.ObservedVersion}
+	if c.binding.Endpoint == "" || c.binding.ResolutionOS != "" {
+		setBindingResolution(&binding, resolution)
+	}
+	return binding, nil
 }
 
 func readRegular(path string, limit int64) (data []byte, err error) {
@@ -253,6 +310,14 @@ func (c *Client) verify(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := c.verifyBinding(); err != nil {
+		return err
+	}
+	_, err := c.checkVersion(ctx)
+	return err
+}
+
+func (c *Client) verifyBinding() error {
 	current, err := c.readBinding()
 	if err != nil {
 		return errors.Join(ErrBinding, err)
@@ -261,14 +326,20 @@ func (c *Client) verify(ctx context.Context) error {
 	if current != c.binding {
 		return ErrBinding
 	}
-	_, err = c.checkVersion(ctx)
-	return err
+	return nil
 }
 
 func (c *Client) checkVersion(ctx context.Context) (string, error) {
 	result, err := c.command(ctx, nil, "--version")
 	if err != nil {
 		return "", errors.Join(ErrBinding, err)
+	}
+	return validateVersionResult(result)
+}
+
+func validateVersionResult(result CommandResult) (string, error) {
+	if result.Err != nil {
+		return "", errors.Join(ErrBinding, result.Err)
 	}
 	if len(result.Stdout) == 0 || len(result.Stdout) > MaxControlBytes || !utf8.Valid(result.Stdout) {
 		return "", fmt.Errorf("%w: supervisor did not report a usable version", ErrBinding)
@@ -288,11 +359,48 @@ func (c *Client) checkVersion(ctx context.Context) (string, error) {
 // Ready verifies that the configured daemon accepts a bounded status request
 // with the queue schema required by this client. An empty queue is healthy.
 func (c *Client) Ready(ctx context.Context) error {
-	result, err := c.command(ctx, nil, "status", "--json")
+	result, err := c.readyCommand(ctx)
 	if err != nil {
 		return errors.Join(ErrBinding, err)
 	}
 	return c.validateReadyResult(result)
+}
+
+// readyCommand validates the binding immediately before the status probe.
+// A version probe that outlives observation remains owned by its Pending
+// handle; it is never mistaken for status data or waited on past the caller's
+// deadline.
+func (c *Client) readyCommand(ctx context.Context) (CommandResult, error) {
+	if err := c.verify(ctx); err != nil {
+		if pending := pendingFrom(err); pending != nil {
+			result, waitErr := awaitPending(ctx, pending)
+			if waitErr != nil {
+				return CommandResult{}, errors.Join(err, waitErr)
+			}
+			if _, versionErr := validateVersionResult(result); versionErr != nil {
+				return CommandResult{}, versionErr
+			}
+			if contextErr := ctx.Err(); contextErr != nil {
+				return CommandResult{}, contextErr
+			}
+			if bindingErr := c.verifyBinding(); bindingErr != nil {
+				return CommandResult{}, bindingErr
+			}
+		} else {
+			return CommandResult{}, err
+		}
+	}
+	return c.command(ctx, nil, "status", "--json")
+}
+
+func (c *Client) statusAfterVerifiedVersion(ctx context.Context) (CommandResult, error) {
+	if err := ctx.Err(); err != nil {
+		return CommandResult{}, err
+	}
+	if err := c.verifyBinding(); err != nil {
+		return CommandResult{}, err
+	}
+	return c.command(ctx, nil, "status", "--json")
 }
 
 func (c *Client) validateReadyResult(result CommandResult) error {
@@ -347,6 +455,12 @@ func (c *Client) prepareCommand(args ...string) (*exec.Cmd, error) {
 	commandArgs = append(commandArgs, args...)
 	cmd := exec.Command(c.binding.ClientExecutable, commandArgs...)
 	cmd.Dir = resolution.Cwd
+	if cmd.Dir == "" {
+		// Saved bindings intentionally omit the caller's working directory. Use
+		// the existing config directory for recovery so a removed ambient cwd
+		// cannot prevent a bound supervisor command from starting.
+		cmd.Dir = filepath.Dir(c.binding.ConfigPath)
+	}
 	cmd.Env = environment
 	return cmd, nil
 }

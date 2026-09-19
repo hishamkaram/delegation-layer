@@ -83,7 +83,13 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := (Dependencies{Catalog: catalog}).normalized()
+	deps := (Dependencies{
+		Catalog: catalog,
+		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+			prepareCalls++
+			return profileCandidate("portable"), nil
+		},
+	}).normalized()
 	candidate, facts, err := prepareExistingCandidateContext(context.Background(), deps, root, request, task.MetaRecord{})
 	if err != nil {
 		t.Fatal(err)

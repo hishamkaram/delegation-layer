@@ -100,6 +100,27 @@ func (td *TaskDir) RecordSupervisorReceipt(r task.SupervisorReceipt) (resultErr 
 	})
 }
 
+func (td *TaskDir) RecordSupervisorReceiptContext(ctx context.Context, r task.SupervisorReceipt) (resultErr error) {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := td.store.maintLock.LockSH(ctx); err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
+	submit, err := td.ReadSubmission()
+	if err != nil {
+		return err
+	}
+	if err = matchSupervisorReceipt(&r, submit); err != nil {
+		return err
+	}
+	return td.recordSameContext(ctx, "supervisor.ref.json", r, func() (bool, error) {
+		old, e := td.ReadSupervisorReceipt()
+		return e == nil && reflect.DeepEqual(old, &r), e
+	})
+}
+
 // ReadProviderIdentity validates the optional side record without requiring a
 // current workspace or external supervisor. Terminal readback does not call it.
 func (td *TaskDir) ReadProviderIdentity() (*task.ProviderRefRecord, error) {

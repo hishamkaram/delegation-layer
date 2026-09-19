@@ -209,6 +209,13 @@ type SupervisorRef struct {
 	ClientSHA256         string `json:"client_sha256,omitempty"`
 	DaemonExecutable     string `json:"daemon_executable,omitempty"`
 	DaemonSHA256         string `json:"daemon_sha256,omitempty"`
+	ResolutionOS         string `json:"resolution_os,omitempty"`
+	ResolutionHome       string `json:"resolution_home,omitempty"`
+	ResolutionDataLocal  string `json:"resolution_data_local,omitempty"`
+	ResolutionConfig     string `json:"resolution_config,omitempty"`
+	ResolutionRuntime    string `json:"resolution_runtime,omitempty"`
+	ResolutionUsername   string `json:"resolution_username,omitempty"`
+	ResolutionCwd        string `json:"resolution_cwd,omitempty"`
 	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
 	Endpoint             string `json:"endpoint"`
 	ConfigPath           string `json:"config_path"`
@@ -282,6 +289,13 @@ type SupervisorReceipt struct {
 	ClientSHA256         string `json:"client_sha256,omitempty"`
 	DaemonExecutable     string `json:"daemon_executable,omitempty"`
 	DaemonSHA256         string `json:"daemon_sha256,omitempty"`
+	ResolutionOS         string `json:"resolution_os,omitempty"`
+	ResolutionHome       string `json:"resolution_home,omitempty"`
+	ResolutionDataLocal  string `json:"resolution_data_local,omitempty"`
+	ResolutionConfig     string `json:"resolution_config,omitempty"`
+	ResolutionRuntime    string `json:"resolution_runtime,omitempty"`
+	ResolutionUsername   string `json:"resolution_username,omitempty"`
+	ResolutionCwd        string `json:"resolution_cwd,omitempty"`
 	ResolvedConfigSHA256 string `json:"resolved_config_sha256,omitempty"`
 	SchemaVersion        int    `json:"schema_version"`
 	RootID               string `json:"root_id"`

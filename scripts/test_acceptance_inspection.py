@@ -537,6 +537,16 @@ class InspectionHarnessTests(unittest.TestCase):
             self.runner, supervisor)
         self.assertNotEqual(binding["definition_sha256"], changed_path["definition_sha256"])
 
+    def test_legacy_supervisor_binding_accepts_cwd_only_resolution(self):
+        binding = provider_common.supervisor_binding(
+            self.pueue, self.config, self.base, digest(self.config))
+        for key in ("resolution_os", "resolution_home", "resolution_data_local",
+                    "resolution_config", "resolution_runtime", "resolution_username"):
+            binding.pop(key, None)
+        binding["resolution_cwd"] = str(self.base)
+
+        provider_common._validate_supervisor_binding(binding, "legacy supervisor")
+
     def test_noneligible_inspection_facts_and_exit_must_be_empty_and_unavailable(self):
         directory = self.inspection_records(result="unavailable")
         result_path = directory / "result.json"

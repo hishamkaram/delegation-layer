@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -403,7 +404,7 @@ func TestLegacyBindingAtPrivateConfigPathUsesSavedSupervisor(t *testing.T) {
 		ConfigDigest:         digest,
 		ObservedVersion:      "legacy-pueue",
 	}
-	client, err := newSupervisorClient(root, saved, pueue.Options{}, true)
+	client, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +422,7 @@ func TestPartialPrivateDaemonIdentityIsRejected(t *testing.T) {
 		Endpoint: "unix:/tmp/pueue.sock", ConfigPath: pueue.PrivateConfigPath(root),
 		ConfigDigest: digest, ObservedVersion: "legacy-pueue",
 	}
-	if _, err := newSupervisorClient(root, saved, pueue.Options{}, true); !errors.Is(err, pueue.ErrBinding) {
+	if _, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true); !errors.Is(err, pueue.ErrBinding) {
 		t.Fatalf("partial private daemon identity was accepted: %v", err)
 	}
 }

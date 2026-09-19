@@ -31,7 +31,7 @@ func ValidateSupervisorReceipt(r *SupervisorReceipt) error {
 }
 
 func (r SupervisorReceipt) SupervisorRef() SupervisorRef {
-	return SupervisorRef{ConfigPath: r.ConfigPath, Endpoint: r.Endpoint, ConfigDigest: r.ConfigDigest, ObservedVersion: r.ObservedVersion, ClientExecutable: r.ClientExecutable, ClientSHA256: r.ClientSHA256, DaemonExecutable: r.DaemonExecutable, DaemonSHA256: r.DaemonSHA256, ResolvedConfigSHA256: r.ResolvedConfigSHA256}
+	return SupervisorRef{ConfigPath: r.ConfigPath, Endpoint: r.Endpoint, ConfigDigest: r.ConfigDigest, ObservedVersion: r.ObservedVersion, ClientExecutable: r.ClientExecutable, ClientSHA256: r.ClientSHA256, DaemonExecutable: r.DaemonExecutable, DaemonSHA256: r.DaemonSHA256, ResolutionOS: r.ResolutionOS, ResolutionHome: r.ResolutionHome, ResolutionDataLocal: r.ResolutionDataLocal, ResolutionConfig: r.ResolutionConfig, ResolutionRuntime: r.ResolutionRuntime, ResolutionUsername: r.ResolutionUsername, ResolutionCwd: r.ResolutionCwd, ResolvedConfigSHA256: r.ResolvedConfigSHA256}
 }
 
 func ValidateProviderRefRecord(r *ProviderRefRecord) error {

@@ -23,23 +23,104 @@ func TestReadyRequiresTheBoundedQueueSchema(t *testing.T) {
 	}
 }
 
-func TestWaitReadyJoinsTimedOutStatusCommand(t *testing.T) {
-	fake := newFakeSupervisor(t, "delay-status")
-	result := make(chan error, 1)
-	go func() {
-		result <- waitReady(context.Background(), fake.client, 20*time.Millisecond)
-	}()
-	select {
-	case err := <-result:
-		t.Fatalf("waitReady returned before its status command was reaped: %v", err)
-	case <-time.After(50 * time.Millisecond):
+func TestReadyRevalidatesBindingBeforeStatus(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	data, err := os.ReadFile(fake.configPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := <-result; err == nil {
-		t.Fatal("waitReady accepted an expired readiness observation")
+	if err := os.WriteFile(fake.configPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := fake.client.Ready(context.Background()); !errors.Is(err, ErrBinding) {
+		t.Fatalf("Ready accepted a changed binding: %v", err)
 	}
 }
 
-func TestBindPrivateJoinsTimedOutVersionProbeBeforeReturning(t *testing.T) {
+func TestWaitReadyAcceptsLateSuccessfulStatusAfterReaping(t *testing.T) {
+	fake := newFakeSupervisor(t, "delay-status")
+	started := time.Now()
+	if err := waitReady(context.Background(), fake.client, 20*time.Millisecond); err != nil {
+		t.Fatalf("late successful readiness was rejected: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed < 50*time.Millisecond {
+		t.Fatalf("waitReady returned before its status command was reaped: %s", elapsed)
+	}
+}
+
+func TestWaitReadyAcceptsLateVersionBeforeStatus(t *testing.T) {
+	fake := newFakeSupervisorPaths(t, "ok", "pueue "+FixtureVersion)
+	fake.environment = append(fake.environment, "FAKE_VERSION_DELAY=0.08")
+	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
+		ObservationTimeout: DefaultObservationTimeout,
+		Environment:        fake.environment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.options.ObservationTimeout = 20 * time.Millisecond
+	if err := waitReady(context.Background(), client, time.Second); err != nil {
+		t.Fatalf("late version probe prevented readiness: %v", err)
+	}
+}
+
+func TestPrivateClientReadyAcceptsLateVersionBeforeStatus(t *testing.T) {
+	fake := newFakeSupervisorPaths(t, "ok", "pueue "+FixtureVersion)
+	fake.environment = append(fake.environment, "FAKE_VERSION_DELAY=0.08")
+	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
+		ObservationTimeout: DefaultObservationTimeout,
+		Environment:        fake.environment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.options.ObservationTimeout = 20 * time.Millisecond
+	ready, err := privateClientReady(context.Background(), client)
+	if err != nil || !ready {
+		t.Fatalf("late version probe did not lead to a ready client: ready=%v err=%v", ready, err)
+	}
+}
+
+func TestWaitReadyRejectsParentCancellationAfterReaping(t *testing.T) {
+	fake := newFakeSupervisor(t, "delay-status")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	if err := waitReady(ctx, fake.client, time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitReady accepted readiness after caller cancellation: %v", err)
+	}
+}
+
+func TestWaitReadyRetriesReapedUnavailableStatus(t *testing.T) {
+	fake := newFakeSupervisorPaths(t, "delay-status-fail", "pueue "+FixtureVersion)
+	readyPath := fake.statusPath + ".ready"
+	fake.environment = append(fake.environment, "FAKE_READY="+readyPath)
+	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
+		// Keep the initial version probe independent from the short status
+		// observation window. Shell startup can exceed 20ms under -race.
+		ObservationTimeout: DefaultObservationTimeout,
+		Environment:        fake.environment,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyWritten := make(chan error, 1)
+	go func() {
+		time.Sleep(120 * time.Millisecond)
+		readyWritten <- os.WriteFile(readyPath, nil, 0o600)
+	}()
+	if err := waitReady(context.Background(), client, time.Second); err != nil {
+		t.Fatalf("waitReady did not retry a transient unavailable endpoint: %v", err)
+	}
+	if err := <-readyWritten; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBindPrivateBoundsTimedOutVersionProbeBeforeReturning(t *testing.T) {
 	base := canonicalTemp(t)
 	stateRoot := filepath.Join(base, "state")
 	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
@@ -57,15 +138,27 @@ func TestBindPrivateJoinsTimedOutVersionProbeBeforeReturning(t *testing.T) {
 			"PRIVATE_VERSION_MARKER="+marker,
 		),
 	}
-	if _, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options); err == nil {
+	started := time.Now()
+	_, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options)
+	if err == nil {
 		t.Fatal("timed out version probe unexpectedly bootstrapped the supervisor")
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("timed out version probe was not bounded: %s", elapsed)
+	}
+	var inFlight *InFlightError
+	if !errors.As(err, &inFlight) || inFlight.Pending == nil {
+		t.Fatalf("timed out version probe lost its pending ownership: %v", err)
+	}
+	if !awaitPendingNaturally(inFlight.Pending, time.Second) {
+		t.Fatal("version probe remained in flight after the bounded return")
 	}
 	data, err := os.ReadFile(marker)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != "started\ncompleted\n" {
-		t.Fatalf("version probe was not reaped before return: %q", data)
+		t.Fatalf("version probe did not finish under retained ownership: %q", data)
 	}
 	if _, err := os.Stat(filepath.Join(stateRoot, privateSupervisorDirectory, "daemon-started")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("daemon started after a failed version probe: %v", err)
@@ -100,6 +193,45 @@ func TestBindPrivateUsesLateSuccessfulReadinessWithoutStartingDaemon(t *testing.
 	}
 	if _, err := os.Stat(filepath.Join(privateBase, "daemon-started")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("daemon started despite a successful late readiness result: %v", err)
+	}
+}
+
+func TestBindPrivateBoundsSlowReadinessBeforeReturning(t *testing.T) {
+	base := canonicalTemp(t)
+	stateRoot := filepath.Join(base, "state")
+	privateBase := filepath.Join(stateRoot, privateSupervisorDirectory)
+	if err := os.MkdirAll(privateBase, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(privateBase, "ready"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clientPath := filepath.Join(base, "pueue")
+	daemonPath := filepath.Join(base, "pueued")
+	writeExecutable(t, clientPath, privateClientFixture)
+	writeExecutable(t, daemonPath, privateDaemonFixture)
+	seedPrivateDaemonIdentity(t, privateBase, daemonPath)
+	options := Options{
+		ObservationTimeout: 20 * time.Millisecond,
+		Environment:        append(os.Environ(), "PRIVATE_STATUS_DELAY=0.25"),
+	}
+	started := time.Now()
+	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options)
+	if err == nil || client != nil {
+		t.Fatalf("slow readiness unexpectedly completed: client=%v err=%v", client, err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("slow readiness was not bounded: %s", elapsed)
+	}
+	var inFlight *InFlightError
+	if !errors.As(err, &inFlight) || inFlight.Pending == nil {
+		t.Fatalf("slow readiness lost its pending ownership: %v", err)
+	}
+	if !awaitPendingNaturally(inFlight.Pending, time.Second) {
+		t.Fatal("slow readiness remained in flight after the bounded return")
+	}
+	if _, err := os.Stat(filepath.Join(privateBase, "daemon-started")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("daemon started despite a successful slow readiness result: %v", err)
 	}
 }
 
@@ -260,12 +392,14 @@ func TestRecoverPrivateRestartsStoppedSupervisor(t *testing.T) {
 	if err = os.Remove(filepath.Join(stateRoot, privateSupervisorDirectory, "ready")); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := RecoverPrivate(context.Background(), stateRoot, first.Binding(), options)
+	saved := first.Binding()
+	saved.ResolutionCwd = filepath.Join(base, "removed-before-recovery")
+	recovered, err := RecoverPrivate(context.Background(), stateRoot, saved, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.Binding() != first.Binding() {
-		t.Fatalf("recovery changed the saved supervisor binding: first=%+v recovered=%+v", first.Binding(), recovered.Binding())
+	if recovered.Binding() != saved {
+		t.Fatalf("recovery changed the saved supervisor binding: saved=%+v recovered=%+v", saved, recovered.Binding())
 	}
 	log, err := os.ReadFile(filepath.Join(stateRoot, privateSupervisorDirectory, "daemon-started"))
 	if err != nil {
@@ -273,6 +407,64 @@ func TestRecoverPrivateRestartsStoppedSupervisor(t *testing.T) {
 	}
 	if got := strings.Count(string(log), "started\n"); got != 2 {
 		t.Fatalf("private daemon was restarted %d times, want 2: %q", got, log)
+	}
+}
+
+func TestRecoverPrivateBoundsHungBootstrapAndRetainsLock(t *testing.T) {
+	base := canonicalTemp(t)
+	stateRoot := filepath.Join(base, "state")
+	if err := os.MkdirAll(stateRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	clientPath := filepath.Join(base, "pueue")
+	daemonPath := filepath.Join(base, "pueued")
+	writeExecutable(t, clientPath, privateClientFixture)
+	writeExecutable(t, daemonPath, privateDaemonFixture)
+	first, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{ObservationTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(filepath.Join(stateRoot, privateSupervisorDirectory, "ready")); err != nil {
+		t.Fatal(err)
+	}
+
+	options := Options{
+		ObservationTimeout: 20 * time.Millisecond,
+		Environment:        append(os.Environ(), "PRIVATE_STATUS_DELAY=0.5"),
+	}
+	started := time.Now()
+	_, err = RecoverPrivate(context.Background(), stateRoot, first.Binding(), options)
+	if err == nil {
+		t.Fatal("hung private bootstrap unexpectedly recovered")
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("private recovery was not bounded: %s", elapsed)
+	}
+	var inFlight *InFlightError
+	if !errors.As(err, &inFlight) || inFlight.Pending == nil {
+		t.Fatalf("private recovery lost its pending ownership: %v", err)
+	}
+
+	lockContext, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	deferredLock, lockErr := acquireBootstrapLock(lockContext, filepath.Join(stateRoot, privateSupervisorDirectory, "bootstrap.lock"))
+	cancel()
+	if deferredLock != nil {
+		if closeErr := closeBootstrapLock(deferredLock); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}
+	if !errors.Is(lockErr, context.DeadlineExceeded) {
+		t.Fatalf("bootstrap lock was released while readiness was still running: %v", lockErr)
+	}
+	if !awaitPendingNaturally(inFlight.Pending, time.Second) {
+		t.Fatal("hung readiness process remained in flight")
+	}
+	lock, lockErr := acquireBootstrapLock(context.Background(), filepath.Join(stateRoot, privateSupervisorDirectory, "bootstrap.lock"))
+	if lockErr != nil {
+		t.Fatal(lockErr)
+	}
+	if err = closeBootstrapLock(lock); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -317,6 +509,30 @@ func TestRecoverPrivateRejectsDaemonIdentityDriftBeforeRestart(t *testing.T) {
 	}
 }
 
+func TestStartDaemonRevalidatesIdentityBeforeStart(t *testing.T) {
+	base := canonicalTemp(t)
+	configPath := filepath.Join(base, "pueue.yml")
+	daemonPath := filepath.Join(base, "pueued")
+	writeExecutable(t, daemonPath, privateDaemonFixture)
+	originalDigest, err := hashExecutable(daemonPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(daemonPath, []byte(privateDaemonFixture+"\nchanged\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := startDaemon(daemonPath, originalDigest, configPath, base, Options{}); !errors.Is(err, ErrBinding) {
+		t.Fatalf("changed daemon identity was started: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "daemon-started")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("daemon started after pre-start identity drift: %v", err)
+	}
+}
+
 func TestRecoverPrivateRejectsDeletedConfigBeforeRestart(t *testing.T) {
 	base := canonicalTemp(t)
 	stateRoot := filepath.Join(base, "state")
@@ -349,21 +565,6 @@ func TestRecoverPrivateRejectsDeletedConfigBeforeRestart(t *testing.T) {
 	}
 	if got := strings.Count(string(log), "started\n"); got != 1 {
 		t.Fatalf("private daemon restarted after stale binding rejection %d times, want 1: %q", got, log)
-	}
-}
-
-func TestJoinPendingWithinLeavesUnfinishedCommandOwned(t *testing.T) {
-	pending := &Pending{done: make(chan struct{})}
-	started := time.Now()
-	if joinPendingWithin(pending, 20*time.Millisecond) {
-		t.Fatal("unfinished pending command was reported complete")
-	}
-	if elapsed := time.Since(started); elapsed < 20*time.Millisecond || elapsed > 250*time.Millisecond {
-		t.Fatalf("pending grace was not bounded near its deadline: %s", elapsed)
-	}
-	close(pending.done)
-	if !joinPendingWithin(pending, time.Second) {
-		t.Fatal("completed pending command was not observed")
 	}
 }
 
@@ -471,6 +672,7 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
+[ -f "$(dirname "$config")/daemon.identity.json" ]
 printf '%s\n' started >> "$(dirname "$config")/daemon-started"
 touch "$(dirname "$config")/ready"
 `

@@ -95,8 +95,8 @@ func TestCatalogNormalizesPreparedDeclarationsAndChecksWriterContract(t *testing
 func TestPreparedProfileMatchesInputContentAndOutputDeclarations(t *testing.T) {
 	request := artifactRequest()
 	plan := artifactPlan(request)
-	profile := PreparedProfile{Plan: plan, ObservedVersion: "provider-1", Effective: task.EffectiveConfig{Containment: "read-only", Approval: "never", Digest: task.ComputeSHA256([]byte("config"))}}
-	meta := task.MetaRecord{ProviderExecutable: plan.Executable, ProviderVersion: profile.ObservedVersion, EffectiveConfig: profile.Effective, Predicate: plan.Predicate, InputFiles: []task.InputFile{{Name: "settings.json", ArgumentIndex: 1, Content: `{"mode":"read-only"}`}}, OutputArtifacts: []task.OutputArtifact{{Name: "answer.txt", ArgumentIndex: 5}}, OutputWriterContract: task.OutputWriterProcessExitEOF}
+	profile := PreparedProfile{Plan: plan, ObservedVersion: "provider-1", Effective: task.EffectiveConfig{Containment: "read-only", Approval: "never", Digest: task.ComputeSHA256([]byte("config")), Policy: &task.PolicyDetails{ProfileRevision: "fixture-v1", RuntimeSHA256: task.ComputeSHA256([]byte("runtime")), Workspace: "/workspace", WritableRoots: []string{"/runtime"}, Sources: []task.PolicySourceDigest{{Path: "/etc/provider/config", Kind: "fixture-source", Present: true, SHA256: task.ComputeSHA256([]byte("source"))}}}}, WritableRoots: []string{"/runtime"}}
+	meta := task.MetaRecord{ProviderExecutable: plan.Executable, ProviderVersion: profile.ObservedVersion, EffectiveConfig: task.CloneEffectiveConfig(profile.Effective), Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, Predicate: plan.Predicate, InputFiles: []task.InputFile{{Name: "settings.json", ArgumentIndex: 1, Content: `{"mode":"read-only"}`}}, OutputArtifacts: []task.OutputArtifact{{Name: "answer.txt", ArgumentIndex: 5}}, OutputWriterContract: task.OutputWriterProcessExitEOF}
 	if err := profile.Matches(request, meta); err != nil {
 		t.Fatal(err)
 	}
@@ -105,9 +105,22 @@ func TestPreparedProfileMatchesInputContentAndOutputDeclarations(t *testing.T) {
 		t.Fatal("changed launch environment matched immutable metadata")
 	}
 	meta.Environment = nil
+	meta.EffectiveConfig.Digest = task.ComputeSHA256([]byte("legacy-policy"))
 	if err := profile.Matches(request, meta); err != nil {
 		t.Fatalf("legacy metadata without a launch environment was rejected: %v", err)
 	}
+	meta.EffectiveConfig.Policy.Sources[0].SHA256 = task.ComputeSHA256([]byte("changed-source"))
+	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
+		t.Fatal("changed policy source matched legacy metadata")
+	}
+	meta.EffectiveConfig.Policy.Sources[0].SHA256 = profile.Effective.Policy.Sources[0].SHA256
+	profile.WritableRoots = []string{"/changed-runtime"}
+	profile.Effective.Policy.WritableRoots = []string{"/changed-runtime"}
+	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
+		t.Fatal("changed legacy writable-root policy matched immutable metadata")
+	}
+	profile.WritableRoots = []string{"/runtime"}
+	profile.Effective.Policy.WritableRoots = []string{"/runtime"}
 	profile.Plan.InputFiles[0].Content = `{"mode":"workspace-write"}`
 	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed input content matched immutable metadata")

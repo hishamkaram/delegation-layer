@@ -120,14 +120,36 @@ func (p PreparedProfile) Matches(request task.TaskRecord, meta task.MetaRecord) 
 	if err != nil {
 		return err
 	}
-	// Metadata written before task environments became explicit has no
-	// environment field. Keep those queued tasks recoverable while still
-	// binding every current record that carries the bounded environment.
-	environmentChanged := len(meta.Environment) > 0 && !slices.Equal(p.Plan.Environment, meta.Environment)
-	if p.Plan.Executable != meta.ProviderExecutable || p.ObservedVersion != meta.ProviderVersion || environmentChanged || !task.CompareEffectiveConfigs(p.Effective, meta.EffectiveConfig) || !p.Plan.Predicate.Equal(meta.Predicate) || !task.CompareInputFiles(inputs, meta.InputFiles) || !task.CompareOutputArtifacts(outputs, meta.OutputArtifacts) || p.Plan.OutputWriterContract != meta.OutputWriterContract {
+	if p.Plan.Executable != meta.ProviderExecutable || p.ObservedVersion != meta.ProviderVersion || !environmentMatches(p, meta) || !effectiveConfigMatches(p, meta) || !p.Plan.Predicate.Equal(meta.Predicate) || !task.CompareInputFiles(inputs, meta.InputFiles) || !task.CompareOutputArtifacts(outputs, meta.OutputArtifacts) || p.Plan.OutputWriterContract != meta.OutputWriterContract {
 		return task.ErrIdentityMismatch
 	}
 	return nil
+}
+
+func environmentMatches(profile PreparedProfile, meta task.MetaRecord) bool {
+	if meta.Environment == nil {
+		return true
+	}
+	return slices.Equal(profile.Plan.Environment, meta.Environment)
+}
+
+func effectiveConfigMatches(profile PreparedProfile, meta task.MetaRecord) bool {
+	if meta.Environment == nil {
+		if meta.EffectiveConfig.Policy == nil || profile.Effective.Policy == nil {
+			return task.CompareEffectiveConfigs(profile.Effective, meta.EffectiveConfig)
+		}
+		// The original record did not retain the launch environment, so its
+		// environment-derived policy digest cannot be reconstructed. Persisted
+		// writable roots remain authoritative and are compared here so a changed
+		// runtime or cache placement cannot broaden the launch policy.
+		return profile.Effective.Containment == meta.Containment && profile.Effective.Approval == meta.Approval &&
+			profile.Effective.Policy.ProfileRevision == meta.EffectiveConfig.Policy.ProfileRevision &&
+			profile.Effective.Policy.RuntimeSHA256 == meta.EffectiveConfig.Policy.RuntimeSHA256 &&
+			profile.Effective.Policy.Workspace == meta.EffectiveConfig.Policy.Workspace &&
+			slices.Equal(profile.Effective.Policy.WritableRoots, meta.EffectiveConfig.Policy.WritableRoots) &&
+			slices.Equal(profile.Effective.Policy.Sources, meta.EffectiveConfig.Policy.Sources)
+	}
+	return task.CompareEffectiveConfigs(profile.Effective, meta.EffectiveConfig)
 }
 
 func validatePlanBindings(plan execution.Plan) error {

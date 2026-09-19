@@ -122,10 +122,11 @@ set -eu
 mode=${FAKE_MODE:-ok}
 case "${3-}" in
   --version)
+    if [ "${FAKE_VERSION_DELAY:-}" != "" ]; then sleep "$FAKE_VERSION_DELAY"; fi
     printf '%s\n' "${FAKE_VERSION:-pueue 4.0.4}"
     ;;
   status)
-    if [ "$mode" = "delay-status" ]; then sleep 0.08; fi
+    if [ "${FAKE_STATUS_DELAY:-}" != "" ]; then sleep "$FAKE_STATUS_DELAY"; elif [ "$mode" = "delay-status" ]; then sleep 0.08; elif [ "$mode" = "delay-status-fail" ]; then sleep 0.08; [ -f "${FAKE_READY:?}" ] || exit 1; fi
     cat "$FAKE_STATUS"
     ;;
   add)
@@ -616,8 +617,55 @@ func TestFreshBindingDetectsResolutionDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Reconcile(context.Background(), testIdentity()); !errors.Is(err, ErrBinding) {
-		t.Fatalf("environment drift was accepted: %v", err)
+	if err := client.Ready(context.Background()); err != nil {
+		t.Fatalf("saved supervisor resolution was not reused after ambient drift: %v", err)
+	}
+	if client.Binding().ResolutionOS == "" {
+		t.Fatal("admission did not persist supervisor resolution")
+	}
+}
+
+func TestSavedBindingDoesNotPinWorkingDirectory(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	saved := fake.client.Binding()
+	saved.ResolutionCwd = filepath.Join(t.TempDir(), "removed-before-recovery")
+	client, err := NewClient(saved, Options{Environment: fake.environment, ObservationTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := t.TempDir()
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(current); chdirErr != nil {
+			t.Errorf("restore working directory: %v", chdirErr)
+		}
+	})
+	if err := os.Chdir(removed); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(removed); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Ready(context.Background()); err != nil {
+		t.Fatalf("saved supervisor binding depended on a removed working directory: %v", err)
+	}
+}
+
+func TestSavedBindingPreservesExplicitEmptyEnvironment(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	client, err := NewClient(fake.client.Binding(), Options{Environment: []string{}, ObservationTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := client.prepareCommand("status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Env == nil || len(command.Env) != 0 {
+		t.Fatalf("saved binding changed an explicit empty environment: %#v", command.Env)
 	}
 }
 

@@ -157,12 +157,12 @@ func releaseContinuationSession(td *taskdir.TaskDir, req *task.TaskRecord, outco
 	return td.ReleaseSession(req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
 }
 
-func reconcileRunner(root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options) (*pueue.Client, pueue.Observation, error) {
+func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options) (*pueue.Client, pueue.Observation, error) {
 	submit, err := td.ReadSubmission()
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
-	client, err := newSupervisorClient(root, submit.Supervisor, supervisorOptions, true)
+	client, err := newSupervisorClient(ctx, root, submit.Supervisor, supervisorOptions, true)
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
@@ -174,7 +174,7 @@ func reconcileRunner(root string, response *Response, td *taskdir.TaskDir, req *
 	if receiptErr != nil && !errors.Is(receiptErr, os.ErrNotExist) {
 		return nil, pueue.Observation{}, receiptErr
 	}
-	observation, reconcileErr := client.Reconcile(context.Background(), taskIdentity(req, meta, spec, metaHash, receipt))
+	observation, reconcileErr := client.Reconcile(ctx, taskIdentity(req, meta, spec, metaHash, receipt))
 	response.Supervisor = supervisorResponse(observation)
 	response.Liveness = mapPueueState(observation.State)
 	response.Pending = pendingResponse(observation)
@@ -190,7 +190,7 @@ func reconcileRunner(root string, response *Response, td *taskdir.TaskDir, req *
 	if err != nil {
 		return client, observation, err
 	}
-	reconcileErr = errors.Join(reconcileErr, td.RecordSupervisorReceipt(*positive))
+	reconcileErr = errors.Join(reconcileErr, td.RecordSupervisorReceiptContext(ctx, *positive))
 	return client, observation, reconcileErr
 }
 
@@ -280,7 +280,10 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
-	client, observation, reconcileErr := reconcileRunner(root, &response, td, req, meta, supervisorOptionsForMeta(supervisorOptions, *meta))
+	taskSupervisorOptions := supervisorOptionsForMeta(supervisorOptions, *meta)
+	supervisorContext, cancelSupervisor := supervisorContextForRunner(req, taskSupervisorOptions)
+	defer cancelSupervisor()
+	client, observation, reconcileErr := reconcileRunner(supervisorContext, root, &response, td, req, meta, taskSupervisorOptions)
 	if reconcileErr != nil {
 		return failed(response, reconcileErr, 1)
 	}
@@ -292,6 +295,14 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 		return failed(response, err, classifyCode(err, 1))
 	}
 	return runProvider(response, td, req, profile, client, deps)
+}
+
+func supervisorContextForRunner(req *task.TaskRecord, options pueue.Options) (context.Context, context.CancelFunc) {
+	controlTimeout := pueue.PrivateControlTimeout(options)
+	if budget := time.Duration(req.BudgetNanos); budget > controlTimeout {
+		controlTimeout = budget
+	}
+	return context.WithTimeout(context.Background(), controlTimeout)
 }
 
 func applySavedEnvironment(values []string) (func() error, error) {

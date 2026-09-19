@@ -36,7 +36,7 @@ func startOwned(cmd *exec.Cmd) *Pending {
 }
 
 func startOwnedObserved(cmd *exec.Cmd, commandID string, observer func(CommandEvent)) *Pending {
-	p := &Pending{done: make(chan struct{})}
+	p := &Pending{done: make(chan struct{}), args: append([]string(nil), cmd.Args...)}
 	go func() {
 		stdout, stderr := &cappedCapture{}, &cappedCapture{}
 		cmd.Stdout, cmd.Stderr = stdout, stderr
@@ -94,4 +94,35 @@ func pendingFrom(err error) *Pending {
 		return inFlight.Pending
 	}
 	return nil
+}
+
+// awaitPending preserves process ownership when the caller's finite wait
+// expires. The pending handle remains embedded in the returned error so a
+// bootstrap owner can keep its serialization lock until Wait completes.
+func awaitPending(ctx context.Context, pending *Pending) (CommandResult, error) {
+	if pending == nil {
+		return CommandResult{}, nil
+	}
+	if ctx == nil {
+		return CommandResult{}, errors.Join(context.Canceled, &InFlightError{Pending: pending})
+	}
+	select {
+	case <-pending.Done():
+		result, _ := pending.Result()
+		return result, result.Err
+	case <-ctx.Done():
+		return CommandResult{}, errors.Join(ctx.Err(), &InFlightError{Pending: pending})
+	}
+}
+
+// reapPending keeps command ownership until the process has naturally
+// completed and Wait has published its result. Bootstrap callers release
+// their lock only after this point.
+func reapPending(pending *Pending) CommandResult {
+	if pending == nil {
+		return CommandResult{}
+	}
+	<-pending.Done()
+	result, _ := pending.Result()
+	return result
 }

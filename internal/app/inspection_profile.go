@@ -110,7 +110,7 @@ func prepareExistingCandidateContext(ctx context.Context, deps Dependencies, roo
 	normalized := deps.normalized()
 	var candidate commonprovider.ProfileCandidate
 	var err error
-	if !normalized.useCatalogExisting {
+	if !normalized.useCatalogExistingFor(req) {
 		candidate, err = prepareCandidate(normalized, root, req)
 	} else {
 		candidate, err = normalized.Catalog.ExistingCandidate(req, meta)
@@ -130,7 +130,7 @@ func prepareExistingCandidateContext(ctx context.Context, deps Dependencies, roo
 
 func prepareInspectionWorkerCandidate(deps Dependencies, root string, req task.TaskRecord, meta *task.MetaRecord) (commonprovider.ProfileCandidate, error) {
 	normalized := deps.normalized()
-	if meta == nil || !normalized.useCatalogExisting {
+	if meta == nil || !normalized.useCatalogExistingFor(req) {
 		return prepareCandidate(normalized, root, req)
 	}
 	candidate, err := normalized.Catalog.ExistingCandidate(req, *meta)
@@ -141,6 +141,17 @@ func prepareInspectionWorkerCandidate(deps Dependencies, root string, req task.T
 		return commonprovider.ProfileCandidate{}, err
 	}
 	return candidate, nil
+}
+
+func (d Dependencies) useCatalogExistingFor(request task.TaskRecord) bool {
+	if d.useCatalogExisting {
+		return true
+	}
+	if d.PrepareProfile != nil {
+		return false
+	}
+	registration, err := d.Catalog.Lookup(request.Provider)
+	return err == nil && registration.PrepareExisting != nil
 }
 
 func freshPreflightProfile(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord, scope execution.PreflightScope) error {

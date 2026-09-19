@@ -34,6 +34,7 @@ type Options struct {
 	ObservationTimeout time.Duration
 	Resolution         *ResolutionContext
 	Environment        []string
+	resolutionPinned   bool
 	// Observer is an optional finite, concurrency-safe acceptance recorder.
 	// It receives copied values and must not block process ownership.
 	Observer func(CommandEvent)
@@ -115,9 +116,14 @@ type CommandResult struct {
 type Pending struct {
 	done   chan struct{}
 	result CommandResult
+	args   []string
 }
 
 func (p *Pending) Done() <-chan struct{} { return p.done }
+
+func (p *Pending) versionProbe() bool {
+	return p != nil && len(p.args) > 0 && p.args[len(p.args)-1] == "--version"
+}
 
 // Result returns copied output only after synchronization with natural Wait.
 func (p *Pending) Result() (CommandResult, bool) {

@@ -19,8 +19,6 @@ import (
 
 const privateSupervisorDirectory = ".supervisor"
 
-const privateSupervisorPendingGrace = time.Second
-
 // PrivateConfigPath returns the canonical config path owned by a state root.
 func PrivateConfigPath(stateRoot string) string {
 	return filepath.Join(stateRoot, privateSupervisorDirectory, "pueue.yml")
@@ -40,19 +38,24 @@ func BindPrivate(ctx context.Context, clientExecutable, daemonExecutable, stateR
 }
 
 func bindPrivate(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options, expected *task.SupervisorRef) (client *Client, resultErr error) {
-	options, resolution, clientPath, daemonPath, base, lock, err := preparePrivateBootstrap(ctx, clientExecutable, daemonExecutable, stateRoot, options)
+	bootstrapContext, cancel, options, err := privateBootstrapOptions(ctx, options)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, closeBootstrapLock(lock)) }()
+	defer cancel()
+	options, resolution, clientPath, daemonPath, base, lock, err := preparePrivateBootstrap(bootstrapContext, clientExecutable, daemonExecutable, stateRoot, options)
+	if err != nil {
+		return nil, err
+	}
+	defer finishPrivateBootstrap(&lock, &resultErr)
 	configPath, base, err := privateBindingConfig(stateRoot, base, resolution, expected)
 	if err != nil {
 		return nil, err
 	}
-	if err = verifyExpectedPrivateBinding(ctx, clientPath, daemonPath, configPath, options, expected); err != nil {
+	if err = verifyExpectedPrivateBinding(bootstrapContext, clientPath, daemonPath, configPath, options, expected); err != nil {
 		return nil, err
 	}
-	client, ready, err := bindPrivateClient(ctx, clientPath, daemonPath, configPath, options)
+	client, ready, err := bindPrivateClient(bootstrapContext, clientPath, daemonPath, configPath, options)
 	if err != nil {
 		return nil, err
 	}
@@ -65,22 +68,75 @@ func bindPrivate(ctx context.Context, clientExecutable, daemonExecutable, stateR
 		}
 		return client, nil
 	}
-	if err = verifyExpectedPrivateBinding(ctx, clientPath, daemonPath, configPath, options, expected); err != nil {
+	if err = verifyExpectedPrivateBinding(bootstrapContext, clientPath, daemonPath, configPath, options, expected); err != nil {
 		return nil, err
 	}
 	if identityErr := checkPrivateDaemonIdentity(base, client.Binding()); identityErr != nil && !errors.Is(identityErr, os.ErrNotExist) {
 		return nil, identityErr
 	}
-	if err = startDaemon(daemonPath, configPath, base, options); err != nil {
-		return nil, err
-	}
-	if err = waitReady(ctx, client, options.ObservationTimeout); err != nil {
-		return nil, fmt.Errorf("%w: private pueued did not become ready: %w", ErrBinding, err)
-	}
 	if err = publishPrivateDaemonIdentity(base, client.Binding()); err != nil {
 		return nil, err
 	}
+	if err = startDaemon(daemonPath, client.Binding().DaemonSHA256, configPath, base, options); err != nil {
+		return nil, err
+	}
+	if err = waitReady(bootstrapContext, client, options.ObservationTimeout); err != nil {
+		return nil, fmt.Errorf("%w: private pueued did not become ready: %w", ErrBinding, err)
+	}
 	return client, nil
+}
+
+// Fresh bootstrap observes the supervisor once while binding the client, twice
+// while checking an existing endpoint, and twice while checking a daemon just
+// started by this process. Saved-binding recovery adds two exact binding
+// probes before a restart, so the shared budget covers that maximum path.
+const (
+	privateBootstrapObservationPhases      = 7
+	privateReconciliationObservationPhases = 2
+)
+
+// PrivateControlTimeout bounds private bootstrap plus the final supervisor
+// version and status reconciliation. It gives callers a finite control
+// deadline while keeping the provider's queue-excluded execution budget
+// independent from recovery.
+func PrivateControlTimeout(options Options) time.Duration {
+	observationTimeout := options.ObservationTimeout
+	if observationTimeout <= 0 {
+		observationTimeout = DefaultObservationTimeout
+	}
+	const maxDuration = time.Duration(1<<63 - 1)
+	const phases = privateBootstrapObservationPhases + privateReconciliationObservationPhases
+	if observationTimeout > maxDuration/phases {
+		return maxDuration
+	}
+	return observationTimeout * phases
+}
+
+func privateBootstrapOptions(ctx context.Context, options Options) (context.Context, context.CancelFunc, Options, error) {
+	if ctx == nil {
+		return nil, nil, Options{}, context.Canceled
+	}
+	normalized, err := normalizeOptions(options)
+	if err != nil {
+		return nil, nil, Options{}, err
+	}
+	bootstrapContext, cancel, err := privateBootstrapContext(ctx, normalized.ObservationTimeout)
+	if err != nil {
+		return nil, nil, Options{}, err
+	}
+	return bootstrapContext, cancel, normalized, nil
+}
+
+func privateBootstrapContext(ctx context.Context, observationTimeout time.Duration) (context.Context, context.CancelFunc, error) {
+	if ctx == nil {
+		return nil, nil, context.Canceled
+	}
+	const maxDuration = time.Duration(1<<63 - 1)
+	if observationTimeout <= 0 || observationTimeout > maxDuration/privateBootstrapObservationPhases {
+		return nil, nil, ErrConfiguration
+	}
+	bootstrapContext, cancel := context.WithTimeout(ctx, observationTimeout*privateBootstrapObservationPhases)
+	return bootstrapContext, cancel, nil
 }
 
 func preparePrivateBootstrap(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options) (normalized Options, resolution ResolutionContext, clientPath, daemonPath, base string, lock *bootstrapLock, resultErr error) {
@@ -143,7 +199,6 @@ func verifyExpectedPrivateBinding(ctx context.Context, clientPath, daemonPath, c
 	}
 	bound, err := Bind(ctx, clientPath, configPath, options)
 	if err != nil {
-		joinPendingWithin(pendingFrom(err), privateSupervisorPendingGrace)
 		return err
 	}
 	if err := attachPrivateDaemon(bound, daemonPath); err != nil {
@@ -153,10 +208,19 @@ func verifyExpectedPrivateBinding(ctx context.Context, clientPath, daemonPath, c
 }
 
 func matchExpectedPrivateBinding(client *Client, expected *task.SupervisorRef) error {
-	if expected != nil && client.Binding() != *expected {
+	if expected != nil && !privateBindingsMatch(client.Binding(), *expected) {
 		return ErrBinding
 	}
 	return nil
+}
+
+func privateBindingsMatch(actual, expected task.SupervisorRef) bool {
+	// ResolutionCwd was persisted by an older format. It is deliberately not
+	// part of private supervisor identity because recovery must survive its
+	// removal and must not consult the ambient caller directory.
+	actual.ResolutionCwd = ""
+	expected.ResolutionCwd = ""
+	return actual == expected
 }
 
 // RecoverPrivate verifies the saved private binding and restarts its daemon
@@ -169,20 +233,42 @@ func RecoverPrivate(ctx context.Context, stateRoot string, saved task.Supervisor
 	if err := validatePrivateSupervisorRef(saved); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBinding, err)
 	}
+	options, err := optionsForSavedBinding(saved, options)
+	if err != nil {
+		return nil, err
+	}
 	bound, err := bindPrivate(ctx, saved.ClientExecutable, saved.DaemonExecutable, stateRoot, options, &saved)
 	if err != nil {
 		return nil, err
 	}
-	if bound.Binding() != saved {
+	if !privateBindingsMatch(bound.Binding(), saved) {
 		return nil, ErrBinding
 	}
 	return NewClient(saved, options)
 }
 
+func optionsForSavedBinding(saved task.SupervisorRef, options Options) (Options, error) {
+	resolution, present, err := resolutionFromBinding(saved)
+	if err != nil {
+		return Options{}, fmt.Errorf("%w: %w", ErrBinding, err)
+	}
+	if !present {
+		return options, nil
+	}
+	if options.Resolution != nil && !sameEnvironmentResolution(*options.Resolution, resolution) {
+		return Options{}, ErrConfiguration
+	}
+	options.Resolution = &resolution
+	options.resolutionPinned = true
+	if options.Environment == nil || len(options.Environment) > 0 {
+		options.Environment = environmentForResolution(options.Environment, resolution)
+	}
+	return options, nil
+}
+
 func bindPrivateClient(ctx context.Context, clientPath, daemonPath, configPath string, options Options) (*Client, bool, error) {
 	client, err := Bind(ctx, clientPath, configPath, options)
 	if err != nil {
-		joinPendingWithin(pendingFrom(err), privateSupervisorPendingGrace)
 		return nil, false, err
 	}
 	if err = attachPrivateDaemon(client, daemonPath); err != nil {
@@ -322,20 +408,9 @@ func publishPrivateRecord(base, destination string, data []byte) (resultErr erro
 }
 
 func privateClientReady(ctx context.Context, client *Client) (bool, error) {
-	result, err := client.command(ctx, nil, "status", "--json")
+	result, err := client.readyCommand(ctx)
 	if pending := pendingFrom(err); pending != nil {
-		if !joinPendingWithin(pending, privateSupervisorPendingGrace) {
-			return false, err
-		}
-		if ctx.Err() != nil {
-			return false, errors.Join(err, ctx.Err())
-		}
-		var done bool
-		result, done = pending.Result()
-		if !done {
-			return false, err
-		}
-		err = result.Err
+		result, err = awaitReadyPending(ctx, client, pending)
 	}
 	if err != nil {
 		// A normally completed nonzero status command means the endpoint is
@@ -353,7 +428,61 @@ func privateClientReady(ctx context.Context, client *Client) (bool, error) {
 	return true, nil
 }
 
+func reapReadyPending(ctx context.Context, pending *Pending) (CommandResult, error) {
+	return awaitPending(ctx, pending)
+}
+
+func awaitReadyPending(ctx context.Context, client *Client, pending *Pending) (CommandResult, error) {
+	for pending != nil {
+		result, contextErr := reapReadyPending(ctx, pending)
+		if contextErr != nil {
+			return CommandResult{}, contextErr
+		}
+		if !pending.versionProbe() {
+			return result, result.Err
+		}
+		if _, versionErr := validateVersionResult(result); versionErr != nil {
+			return CommandResult{}, versionErr
+		}
+		status, statusErr := client.statusAfterVerifiedVersion(ctx)
+		if statusErr == nil {
+			return status, nil
+		}
+		if next := pendingFrom(statusErr); next != nil {
+			pending = next
+			continue
+		}
+		return status, statusErr
+	}
+	return CommandResult{}, nil
+}
+
+func classifyReadyProcess(result CommandResult) (error, bool) {
+	if result.Err == nil {
+		return nil, false
+	}
+	err := errors.Join(ErrBinding, result.Err)
+	return err, result.Started && result.ExitCode != 0
+}
+
+func processReadyPending(ctx context.Context, client *Client, lastErr error, pending *Pending) (error, bool) {
+	result, contextErr := awaitReadyPending(ctx, client, pending)
+	if contextErr != nil {
+		return errors.Join(lastErr, contextErr), true
+	}
+	if processErr, retry := classifyReadyProcess(result); processErr != nil {
+		if retry {
+			return processErr, false
+		}
+		return processErr, true
+	}
+	return client.validateReadyResult(result), true
+}
+
 func privateResolution(options Options) (ResolutionContext, error) {
+	if options.resolutionPinned && options.Resolution != nil {
+		return *options.Resolution, nil
+	}
 	current, err := resolutionContext(environmentForCommand(options.Environment))
 	if err != nil {
 		return ResolutionContext{}, err
@@ -589,7 +718,14 @@ func privateConfigYAML(base string) string {
 	}, "\n")
 }
 
-func startDaemon(executable, configPath, base string, options Options) error {
+func startDaemon(executable, expectedSHA256, configPath, base string, options Options) error {
+	digest, err := hashExecutable(executable)
+	if err != nil {
+		return fmt.Errorf("%w: verify private pueued identity before start: %w", ErrBinding, err)
+	}
+	if digest != expectedSHA256 {
+		return fmt.Errorf("%w: private pueued identity changed before start", ErrBinding)
+	}
 	cmd := exec.Command(executable, "-c", configPath)
 	cmd.Dir = base
 	cmd.Env = environmentForCommand(options.Environment)
@@ -605,54 +741,36 @@ func startDaemon(executable, configPath, base string, options Options) error {
 }
 
 func waitReady(ctx context.Context, client *Client, timeout time.Duration) error {
+	if ctx == nil {
+		return context.Canceled
+	}
 	if timeout <= 0 {
 		return ErrConfiguration
 	}
-	readyContext, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	var lastErr error
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if err := client.Ready(readyContext); err == nil {
+		readyContext, cancel := context.WithTimeout(ctx, timeout)
+		err := client.Ready(readyContext)
+		cancel()
+		if err == nil {
 			return nil
 		} else {
 			lastErr = err
 			if pending := pendingFrom(err); pending != nil {
-				if !joinPendingWithin(pending, privateSupervisorPendingGrace) {
-					return errors.Join(lastErr, readyContext.Err())
+				var done bool
+				lastErr, done = processReadyPending(ctx, client, lastErr, pending)
+				if done {
+					return lastErr
 				}
-				result, _ := pending.Result()
-				return errors.Join(lastErr, readyContext.Err(), result.Err)
 			}
 		}
 		select {
-		case <-readyContext.Done():
-			return errors.Join(lastErr, readyContext.Err())
+		case <-ctx.Done():
+			return errors.Join(lastErr, ctx.Err())
 		case <-ticker.C:
 		}
-	}
-}
-
-func joinPendingWithin(pending *Pending, grace time.Duration) bool {
-	if pending == nil {
-		return true
-	}
-	if grace <= 0 {
-		select {
-		case <-pending.Done():
-			return true
-		default:
-			return false
-		}
-	}
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-	select {
-	case <-pending.Done():
-		return true
-	case <-timer.C:
-		return false
 	}
 }
 
@@ -661,6 +779,12 @@ type bootstrapLock struct {
 }
 
 func acquireBootstrapLock(ctx context.Context, path string) (*bootstrapLock, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := rejectSymlinkComponents(path); err != nil {
 		return nil, err
 	}
@@ -682,6 +806,25 @@ func acquireBootstrapLock(ctx context.Context, path string) (*bootstrapLock, err
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
+}
+
+func retainBootstrapLock(lock **bootstrapLock, pending *Pending) {
+	if lock == nil || *lock == nil || pending == nil {
+		return
+	}
+	retained := *lock
+	*lock = nil
+	go func() {
+		<-pending.Done()
+		if err := closeBootstrapLock(retained); err != nil {
+			return
+		}
+	}()
+}
+
+func finishPrivateBootstrap(lock **bootstrapLock, resultErr *error) {
+	retainBootstrapLock(lock, pendingFrom(*resultErr))
+	*resultErr = errors.Join(*resultErr, closeBootstrapLock(*lock))
 }
 
 func closeBootstrapLock(lock *bootstrapLock) error {

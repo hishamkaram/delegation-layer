@@ -181,6 +181,9 @@ func ValidateSupervisorRef(ref SupervisorRef) error {
 			}
 		}
 	}
+	if err := validateSupervisorResolution(ref); err != nil {
+		return err
+	}
 	if !filepath.IsAbs(ref.ConfigPath) || filepath.Clean(ref.ConfigPath) != ref.ConfigPath {
 		return errors.New("supervisor config path must be canonical and absolute")
 	}
@@ -188,6 +191,65 @@ func ValidateSupervisorRef(ref SupervisorRef) error {
 		return errors.New("missing supervisor endpoint or version")
 	}
 	return ValidateSHA256(ref.ConfigDigest)
+}
+
+func validateSupervisorResolution(ref SupervisorRef) error {
+	if ref.ResolutionOS == "" {
+		return validateLegacySupervisorResolution(ref)
+	}
+	if ref.ResolutionOS != "linux" && ref.ResolutionOS != "darwin" {
+		return errors.New("supervisor resolution has an unsupported operating system")
+	}
+	if err := validateRequiredResolutionPaths(ref); err != nil {
+		return err
+	}
+	if err := validateResolutionPathOptional("working directory", ref.ResolutionCwd); err != nil {
+		return err
+	}
+	if err := validateResolutionPathOptional("runtime directory", ref.ResolutionRuntime); err != nil {
+		return err
+	}
+	if ref.ResolutionUsername == "" || strings.ContainsAny(ref.ResolutionUsername, "/\\\x00") {
+		return errors.New("supervisor resolution username is invalid")
+	}
+	return nil
+}
+
+func validateLegacySupervisorResolution(ref SupervisorRef) error {
+	if ref.ResolutionHome != "" || ref.ResolutionDataLocal != "" || ref.ResolutionConfig != "" || ref.ResolutionRuntime != "" || ref.ResolutionUsername != "" {
+		return errors.New("supervisor resolution is incomplete")
+	}
+	return validateResolutionPathOptional("working directory", ref.ResolutionCwd)
+}
+
+func validateRequiredResolutionPaths(ref SupervisorRef) error {
+	for _, path := range []struct {
+		name  string
+		value string
+	}{
+		{"home", ref.ResolutionHome},
+		{"data directory", ref.ResolutionDataLocal},
+		{"config directory", ref.ResolutionConfig},
+	} {
+		if err := validateResolutionPath(path.name, path.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateResolutionPathOptional(name, value string) error {
+	if value == "" {
+		return nil
+	}
+	return validateResolutionPath(name, value)
+}
+
+func validateResolutionPath(name, value string) error {
+	if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsRune(value, '\x00') {
+		return fmt.Errorf("supervisor resolution %s must be a clean absolute path", name)
+	}
+	return nil
 }
 
 func validateOptionalSupervisorExecutable(name, value string) error {
