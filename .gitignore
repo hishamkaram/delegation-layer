@@ -1,6 +1,7 @@
 .DS_Store
 /bin/
 /dist/
+/.release/
 *.out
 *.prof
 /coverage/
