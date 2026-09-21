@@ -23,7 +23,8 @@ const (
 	ProfileRevision      = "opencode-direct-cli-v1"
 	OutputWriterContract = ""
 
-	predicateVersion = "1"
+	predicateVersion       = "2"
+	legacyPredicateVersion = "1"
 
 	maxEventLineBytes = task.MaxControlRecordSize
 	maxAnswerBytes    = task.MaxBriefSize
@@ -38,14 +39,28 @@ const contractReadOnly = `{"adapter":"opencode:run","mode":"read-only","version"
 
 const contractWorkspaceWrite = `{"adapter":"opencode:run","mode":"workspace-write","version":"1","native":"OpenCode run JSONL producer","permissions":"workspace-write uses an adapter-owned agent with explicit read, search, and edit allows plus deny rules for shell, subagents, network, and unknown tools, keeps external_directory:deny for path-based tools, disables project configuration and automatic compaction, runs in pure mode, and passes the caller-selected native --auto approval; workspace-write requires the selected workspace to be the Git checkout root because native patch moves can widen destinations within a checkout","events":{"line":"one UTF-8 JSON object per line, at most 1048576 bytes; final line may omit newline","identity":"every event has one exact sessionID in the ses_ form; exactly one session is accepted and fresh or resumed identity is checked","steps":"step_start opens one step; step_finish closes it; reason=tool-calls permits another step and reason=stop is the sole terminal result","text":"text part.text strings are accumulated only inside an active step; reasoning and completed tool events are structurally checked but are not answers","error":"error events are provider failures","unknown":"unknown event types and malformed or conflicting event shapes reject","bounds":"captured event lines, retained answer text, and at most 1024 usage rows are bounded"},"success":"exit_code=0, sealed error empty, one matching session identity, at least one step_start, a terminal step_finish with reason stop, and non-whitespace text","failure":"malformed or oversized JSONL, invalid UTF-8, missing or conflicting identity, missing terminal step_finish, empty answer, provider error, nonzero exit, start failure, seal error, workspace policy drift, or usage row bound exceeded rejects","usage":"each completed step's part.tokens and part.cost are copied as an independent provider-event record with unknown scope; no conversation total is synthesized"}` + "\n"
 
+const nativeContractReadOnly = `{"adapter":"opencode:run","mode":"read-only","version":"2","native":"OpenCode run JSONL producer","permissions":"read-only selects the native plan agent; OpenCode owns configuration, MCP servers, hooks, plugins, skills, authentication, and permissions; the adapter supplies no inline policy or pure-mode override","events":"the current interpreter preserves the legacy JSONL identity, step lifecycle, text selection, tool-state, malformed-event, and bounded-output rules","success":"exit_code=0, sealed error empty, one matching session identity, at least one step_start, a terminal step_finish with reason stop, and non-whitespace text","failure":"malformed or oversized JSONL, invalid UTF-8, missing or conflicting identity, missing terminal step_finish, empty answer, provider error, nonzero exit, start failure, seal error, or usage row bound exceeded rejects","usage":"each completed step's provider-event accounting is exposed with unknown scope; no conversation total is synthesized"}` + "\n"
+
+const nativeContractWorkspaceWrite = `{"adapter":"opencode:run","mode":"workspace-write","version":"2","native":"OpenCode run JSONL producer","permissions":"workspace-write selects the native build agent and passes native --auto approval; OpenCode owns configuration, MCP servers, hooks, plugins, skills, authentication, permissions, and Git settings; the adapter does not impose an independent workspace boundary","events":"the current interpreter preserves the legacy JSONL identity, step lifecycle, text selection, tool-state, malformed-event, and bounded-output rules","success":"exit_code=0, sealed error empty, one matching session identity, at least one step_start, a terminal step_finish with reason stop, and non-whitespace text","failure":"malformed or oversized JSONL, invalid UTF-8, missing or conflicting identity, missing terminal step_finish, empty answer, provider error, nonzero exit, start failure, seal error, or usage row bound exceeded rejects","usage":"each completed step's part.tokens and part.cost are copied as an independent provider-event record with unknown scope; no conversation total is synthesized"}` + "\n"
+
 // Contract returns the default workspace-write predicate contract.
-func Contract() string { return contractWorkspaceWrite }
+func Contract() string { return nativeContractWorkspaceWrite }
 
 // ContractDigest returns the digest of the default workspace-write contract.
-func ContractDigest() string { return task.ComputeSHA256([]byte(contractWorkspaceWrite)) }
+func ContractDigest() string { return task.ComputeSHA256([]byte(Contract())) }
 
 // ContractForMode returns the immutable contract bytes for a supported mode.
 func ContractForMode(mode string) string {
+	if mode == ModeReadOnly {
+		return nativeContractReadOnly
+	}
+	if mode == ModeWorkspaceWrite {
+		return nativeContractWorkspaceWrite
+	}
+	return ""
+}
+
+func legacyContractForMode(mode string) string {
 	if mode == ModeReadOnly {
 		return contractReadOnly
 	}
@@ -71,6 +86,25 @@ func ReferenceForMode(mode string) task.PredicateRef {
 		Adapter: Provider,
 		Mode:    mode,
 		Version: predicateVersion,
+		SHA256:  task.ComputeSHA256([]byte(contract)),
+	}
+}
+
+// LegacyReference returns the historical workspace-write predicate reference
+// for callers that use the provider's default mode.
+func LegacyReference() task.PredicateRef { return LegacyReferenceForMode(ModeWorkspaceWrite) }
+
+// LegacyReferenceForMode returns the exact predicate reference used by the
+// historical isolated OpenCode profile.
+func LegacyReferenceForMode(mode string) task.PredicateRef {
+	contract := legacyContractForMode(mode)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	return task.PredicateRef{
+		Adapter: Provider,
+		Mode:    mode,
+		Version: legacyPredicateVersion,
 		SHA256:  task.ComputeSHA256([]byte(contract)),
 	}
 }

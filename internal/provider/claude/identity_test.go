@@ -151,7 +151,11 @@ func TestIdentityObserverConstructionRejectsInvalidInputs(t *testing.T) {
 }
 
 func initLine(sessionID string) string {
-	return fmt.Sprintf(`{"type":"system","subtype":"init","session_id":%q,"claude_code_version":%q,"apiKeySource":"none","cwd":"/workspace","tools":["Read","Glob","Grep"],"mcp_servers":[],"model":"claude-test","permissionMode":"dontAsk"}`, sessionID, Version)
+	return fmt.Sprintf(`{"type":"system","subtype":"init","session_id":%q,"claude_code_version":%q,"apiKeySource":"none","cwd":"/workspace","tools":["Read","Glob","Grep"],"mcp_servers":[],"model":"claude-test","permissionMode":"plan"}`, sessionID, Version)
+}
+
+func legacyInitLine(sessionID string) string {
+	return strings.Replace(initLine(sessionID), `"permissionMode":"plan"`, `"permissionMode":"dontAsk"`, 1)
 }
 
 func writeInitLine(sessionID string) string {

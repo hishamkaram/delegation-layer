@@ -23,10 +23,21 @@ const (
 	piSessionDirEnv = "PI_CODING_AGENT_SESSION_DIR"
 )
 
-// prepareEnvironment retains only nonsecret process settings. Pi resolves
-// authentication from its native account store; credentials and arbitrary
-// ambient variables must not enter persisted inspection metadata.
+var nativeRuntimePathKeys = []string{
+	"TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+	"GOCACHE", "GOMODCACHE", "CARGO_HOME", "RUSTUP_HOME", "GRADLE_USER_HOME",
+	"NPM_CONFIG_CACHE", "GOPATH",
+}
+
+// prepareEnvironment retains the historical isolated environment contract.
 func prepareEnvironment(values []string) (profileEnvironment, error) {
+	return prepareProfileEnvironment(values, false)
+}
+
+// prepareProfileEnvironment retains native nonsecret discovery and session
+// selectors for new tasks while keeping the historical environment contract
+// available to reconstruction of older tasks.
+func prepareProfileEnvironment(values []string, native bool) (profileEnvironment, error) {
 	entries, err := parseEnvironment(values)
 	if err != nil {
 		return profileEnvironment{}, err
@@ -47,44 +58,102 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 	if err != nil {
 		return profileEnvironment{}, err
 	}
-	result := profileEnvironment{Home: home, PiRoot: piRoot, AgentDir: agentDir, SessionDir: sessionDir}
+	environmentValues := profileEnvironmentValues(entries, native, agentDir, sessionDir)
+	writableRoots, err := profileWritableRoots(home, piRoot, agentDir, sessionDir, entries, native)
+	if err != nil {
+		return profileEnvironment{}, err
+	}
+	return profileEnvironment{Home: home, PiRoot: piRoot, AgentDir: agentDir, SessionDir: sessionDir, Values: environmentValues, WritableRoots: writableRoots}, nil
+}
+
+func profileEnvironmentValues(entries map[string]string, native bool, agentDir, sessionDir string) []string {
+	values := make([]string, 0, len(entries))
 	for _, key := range []string{
 		"HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
 		"TMPDIR", "TMP", "TEMP", "__CF_USER_TEXT_ENCODING",
 	} {
 		if value, exists := entries[key]; exists {
-			result.Values = append(result.Values, key+"="+value)
+			values = append(values, key+"="+value)
 		}
 	}
 	if _, exists := entries[piAgentDirEnv]; exists {
-		result.Values = append(result.Values, piAgentDirEnv+"="+agentDir)
+		values = append(values, piAgentDirEnv+"="+agentDir)
 	}
-	// Pin the resolved session directory even when the caller did not set the
-	// selector. Pi reads settings.json before handling --help; without this
-	// value a native sessionDir setting could make the capability probe create
-	// files in the task workspace.
-	result.Values = append(result.Values, piSessionDirEnv+"="+sessionDir)
-	result.WritableRoots = []string{
+	if native {
+		if _, exists := entries[piSessionDirEnv]; exists {
+			values = append(values, piSessionDirEnv+"="+sessionDir)
+		}
+		values = appendNativeDiscoveryValues(values, entries)
+	} else {
+		// Pin the resolved session directory for historical read-only tasks.
+		values = append(values, piSessionDirEnv+"="+sessionDir)
+	}
+	slices.Sort(values)
+	return values
+}
+
+func appendNativeDiscoveryValues(values []string, entries map[string]string) []string {
+	for key, value := range entries {
+		if nativeDiscoveryKey(key) {
+			values = append(values, key+"="+value)
+		}
+	}
+	return values
+}
+
+func profileWritableRoots(home, piRoot, agentDir, sessionDir string, entries map[string]string, native bool) ([]string, error) {
+	roots := []string{
 		piRoot, agentDir, sessionDir,
 		"/tmp", "/var/tmp", "/var/folders", "/dev",
 		filepath.Join(home, "Library/Caches"), filepath.Join(home, "Library/Logs"),
 	}
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		if entries[key] != "" {
-			result.WritableRoots = append(result.WritableRoots, entries[key])
+			roots = append(roots, entries[key])
 		}
 	}
-	for index, path := range result.WritableRoots {
+	if native {
+		roots = appendNativeRuntimeRoots(roots, entries)
+	}
+	return canonicalWritableRoots(roots)
+}
+
+func appendNativeRuntimeRoots(roots []string, entries map[string]string) []string {
+	for _, key := range nativeRuntimePathKeys {
+		values := []string{entries[key]}
+		if key == "GOPATH" {
+			values = filepath.SplitList(entries[key])
+		}
+		for _, value := range values {
+			if value == "" || (key == "GOCACHE" && value == "off") {
+				continue
+			}
+			roots = append(roots, value)
+		}
+	}
+	return roots
+}
+
+func canonicalWritableRoots(roots []string) ([]string, error) {
+	for index, path := range roots {
 		canonical, pathErr := config.CanonicalizePath(path)
 		if pathErr != nil {
-			return profileEnvironment{}, fmt.Errorf("%w: invalid runtime writable root", ErrUnsupportedProfile)
+			return nil, fmt.Errorf("%w: invalid runtime writable root", ErrUnsupportedProfile)
 		}
-		result.WritableRoots[index] = canonical
+		roots[index] = canonical
 	}
-	slices.Sort(result.Values)
-	slices.Sort(result.WritableRoots)
-	result.WritableRoots = slices.Compact(result.WritableRoots)
-	return result, nil
+	slices.Sort(roots)
+	return slices.Compact(roots), nil
+}
+
+func nativeDiscoveryKey(key string) bool {
+	switch key {
+	case "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_HOME", "XDG_DATA_DIRS", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+		"GOCACHE", "GOMODCACHE", "CARGO_HOME", "RUSTUP_HOME", "GRADLE_USER_HOME", "NPM_CONFIG_CACHE", "GOPATH":
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveNativeDirectory(entries map[string]string, key, fallback, label string) (string, error) {

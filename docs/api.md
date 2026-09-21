@@ -94,12 +94,9 @@ shows one catalog entry):
         "required_flags": [
           "--cd",
           "--color",
-          "--ignore-rules",
-          "--ignore-user-config",
           "--json",
           "--output-last-message",
           "--sandbox",
-          "--strict-config",
           "-c"
         ]
       }

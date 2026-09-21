@@ -29,6 +29,18 @@ var nativeEnvironmentKeys = map[string]struct{}{
 // bounded process-control values. Unrelated ambient variables, including
 // credential values, never cross the supervisor boundary.
 func prepareEnvironment(values []string) (profileEnvironment, error) {
+	return prepareProfileEnvironment(values, false)
+}
+
+func prepareProfileEnvironment(values []string, native bool) (profileEnvironment, error) {
+	return prepareProfileEnvironmentWithOptions(values, native, native)
+}
+
+func prepareHistoricalNativeEnvironment(values []string, _ bool) (profileEnvironment, error) {
+	return prepareProfileEnvironmentWithOptions(values, true, false)
+}
+
+func prepareProfileEnvironmentWithOptions(values []string, native, includeNativeDiscoveryRoots bool) (profileEnvironment, error) {
 	environment := make(map[string]string, len(values))
 	for _, entry := range values {
 		key, value, ok := strings.Cut(entry, "=")
@@ -47,20 +59,22 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 		}
 		environment[key] = value
 	}
-	if err := rejectAlternateDiscovery(environment); err != nil {
-		return profileEnvironment{}, err
+	if !native {
+		if err := rejectAlternateDiscovery(environment); err != nil {
+			return profileEnvironment{}, err
+		}
 	}
 	home, err := config.CanonicalizePath(environment["HOME"])
 	if err != nil {
 		return profileEnvironment{}, fmt.Errorf("%w: HOME must resolve to an absolute directory", ErrUnsupportedProfile)
 	}
-	roots, err := runtimeStateExclusions(home, environment)
+	roots, err := runtimeStateExclusionsWithOptions(home, environment, includeNativeDiscoveryRoots)
 	if err != nil {
 		return profileEnvironment{}, err
 	}
 	filtered := make([]string, 0, len(nativeEnvironmentKeys))
 	for key, value := range environment {
-		if _, allowed := nativeEnvironmentKeys[key]; !allowed {
+		if _, allowed := nativeEnvironmentKeys[key]; !allowed && (!native || !nativeDiscoveryKey(key)) {
 			continue
 		}
 		filtered = append(filtered, key+"="+value)
@@ -98,6 +112,10 @@ func rejectAlternateDiscovery(environment map[string]string) error {
 // broader than the provider's actual grants; this is a state-placement check,
 // never an assertion that the agent is authorized to write every listed path.
 func runtimeStateExclusions(home string, environment map[string]string) ([]string, error) {
+	return runtimeStateExclusionsWithOptions(home, environment, true)
+}
+
+func runtimeStateExclusionsWithOptions(home string, environment map[string]string, includeNativeDiscoveryRoots bool) ([]string, error) {
 	roots := []string{"/tmp", "/var/tmp", "/var/folders", "/dev"}
 	for _, relative := range []string{
 		".gemini", ".cache", ".cargo", ".rustup", ".npm", ".nvm", ".bun", ".gradle", ".m2",
@@ -117,6 +135,9 @@ func runtimeStateExclusions(home string, environment map[string]string) ([]strin
 	if value := environment["GOPATH"]; value != "" {
 		roots = append(roots, filepath.SplitList(value)...)
 	}
+	if includeNativeDiscoveryRoots {
+		roots = append(roots, nativeDiscoveryRoots(environment)...)
+	}
 	for index, path := range roots {
 		canonical, err := config.CanonicalizePath(path)
 		if err != nil {
@@ -126,4 +147,29 @@ func runtimeStateExclusions(home string, environment map[string]string) ([]strin
 	}
 	slices.Sort(roots)
 	return slices.Compact(roots), nil
+}
+
+func nativeDiscoveryRoots(environment map[string]string) []string {
+	roots := make([]string, 0, 12)
+	for _, name := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "GEMINI_HOME", "GEMINI_CLI_HOME", "ANTIGRAVITY_HOME", "ANTIGRAVITY_CONFIG_HOME", "AGY_HOME", "AGY_CONFIG_HOME"} {
+		if value := environment[name]; value != "" {
+			roots = append(roots, value)
+		}
+	}
+	for _, name := range []string{"XDG_CONFIG_DIRS", "XDG_DATA_DIRS"} {
+		roots = append(roots, filepath.SplitList(environment[name])...)
+	}
+	return roots
+}
+
+// nativeDiscoveryKey preserves nonsecret native configuration and session locations.
+func nativeDiscoveryKey(key string) bool {
+	switch key {
+	case "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_HOME", "XDG_DATA_DIRS", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+		"GEMINI_HOME", "GEMINI_CLI_HOME", "ANTIGRAVITY_HOME", "ANTIGRAVITY_CONFIG_HOME", "AGY_HOME", "AGY_CONFIG_HOME",
+		"GOCACHE", "GOMODCACHE", "CARGO_HOME", "RUSTUP_HOME", "GRADLE_USER_HOME", "NPM_CONFIG_CACHE", "GOPATH":
+		return true
+	default:
+		return false
+	}
 }

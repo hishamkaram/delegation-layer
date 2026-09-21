@@ -8,11 +8,11 @@ This document defines the normative requirements for provider adapters
 
 | Adapter | Capability Profile | Approval Policy | Command Shape & Flags | Deferred Capabilities |
 |---|---|---|---|---|
-| `antigravity:print` | `workspace-write` | Accept workspace file edits; deny other unapproved requests; pre-approved sandboxed commands may run | `agy --sandbox --mode accept-edits --add-dir <canonical-workspace> --output-format json --input-format text --disable-slash-commands --print-timeout <duration>` | `read-only`, unrestricted auto-approval, extra writable roots |
+| `antigravity:print` | `workspace-write` | Accept workspace file edits; deny other unapproved requests; pre-approved sandboxed commands may run | `agy --sandbox --mode accept-edits --add-dir <canonical-workspace> --output-format json --input-format text --print-timeout <duration>` | `read-only`, unrestricted auto-approval, extra writable roots |
 | `codex:exec` | `read-only`, `workspace-write` | native sandbox | `codex exec ... --sandbox <mode> ...` | unrestricted execution, ephemeral sessions |
-| `claude:print` | `read-only`, `workspace-write` | native permission mode | `claude --print ... --permission-mode <mode> ...` | shell execution, Agent/subagents, custom tools, background mode |
-| `pi:json` | `read-only` | native read,grep,find,ls allowlist with `--no-extensions --offline`; startup migration states that could mutate the workspace are refused | `pi --mode json --tools read,grep,find,ls ...` | workspace-write is deferred because Pi's built-in write/edit tools have no native workspace boundary |
-| `opencode:run` | `read-only`, `workspace-write` | adapter-owned native agents, pure mode, project-config disablement, automatic-compaction disablement, explicit file-edit/read rules, and `external_directory:deny`; native `--auto` for workspace-write; workspace-write requires a symlink-free Git checkout root because native patch moves can widen destinations within a checkout | `opencode run --format json --dir <workspace> ...` | shell, subagent, network, and unknown tools remain denied in both adapter-owned modes |
+| `claude:print` | `read-only`, `workspace-write` | native `plan` or `acceptEdits` permission mode | `claude --print ... --permission-mode <mode> ...` | unrestricted execution |
+| `pi:json` | `read-only` | native read,grep,find,ls tool selection; native extensions remain enabled | `pi --mode json --tools read,grep,find,ls ...` | workspace-write |
+| `opencode:run` | `read-only`, `workspace-write` | native plan/build agent; native `--auto` for workspace-write | `opencode run --format json --dir <workspace> ...` | unrestricted execution |
 
 Each native adapter locates its executable during static preparation and records
 the executable identity in the immutable candidate. The already-supervised
@@ -24,19 +24,18 @@ admission and start identity; no release version, operating system, architecture
 profile revision, or digest is compared with a checked-in value.
 
 ## 2. Launch Planning and Preflight Policy
-- **Claude Storage Selection**: The restricted Claude profile supplies invocation-local
-  `CLAUDE_CODE_HOVER_REST=0`, preserving its native account context while fixing
-  the settings/cache backend. The adapter records only opaque credential-fallback
-  presence metadata and does not require a platform-specific Keychain inspection
-  during admission; authentication remains the Claude CLI's live responsibility.
-  Conflicting ambient selectors are refused. This implementation-specific
-  control is checked on every task.
+- **Native Configuration**: Provider CLIs own configuration, authentication,
+  MCP servers, hooks, plugins, skills, and native policy. New admission does not
+  inventory these sources or inject settings to disable them. Permission modes
+  select native behavior; they do not establish independent containment.
 - **Input Delivery**: Brief text is delivered exclusively via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv. Brief size limit is 8 MiB.
 - **Argv Construction**: Built strictly as Go string slices (`[]string`), executed directly via `exec.Command` without shell wrapper or reparsing.
 - **Working Directory**: Set strictly to the validated canonical workspace directory (`Cmd.Dir = workdir`).
-- **Policy Verification**:
-  - Resolves non-secret effective configuration across applicable project, user, system, and managed sources.
-  - Computes a normalized policy digest at task admission and re-verifies it immediately before launch. Any configuration drift or unrecognized policy fails closed with `unsupported-effective-config`.
+- **Launch Verification**:
+  - Records the requested native permission mode, runtime identity, and workspace.
+  - Rechecks the admitted launch contract immediately before launch. Personal
+    provider configuration is not hashed or rejected for drift by new profiles.
+  - Previously admitted tasks retain their original preparation contract.
 - **Credential Safety**: Credentials, tokens, and unrelated user environment variables are never included in command arguments, logs, metadata, or committed fixtures.
 
 ## 3. Evidence Capture and Publication Predicates

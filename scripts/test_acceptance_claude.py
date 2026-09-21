@@ -7,6 +7,7 @@ never invoke Claude, the shipped delegate, pueue, or a network service.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shlex
 import tempfile
@@ -27,7 +28,7 @@ def event(value: dict[str, object]) -> bytes:
 
 
 def init_event(session: str = SESSION, tools: list[str] | None = None,
-               permission: str = "dontAsk") -> dict[str, object]:
+               permission: str = "plan") -> dict[str, object]:
     return {
         "type": "system", "subtype": "init", "session_id": session,
         "claude_code_version": "2.1.270", "cwd": "/workspace",
@@ -66,23 +67,34 @@ def stream(values: list[dict[str, object]]) -> bytes:
 
 
 def fresh_stream(nonce_file: Path, workspace: Path, nonce: bytes = NONCE,
-                 denied_tools: tuple[str, ...] = ()) -> bytes:
-    values: list[dict[str, object]] = [init_event()]
+                 denied_tools: tuple[str, ...] = (), tool_name: str = "Bash",
+                 tool_input: dict[str, object] | None = None, tool_output: str | None = None,
+                 repeated_reads: int = 0) -> bytes:
+    values: list[dict[str, object]] = [init_event(tools=[tool_name])]
     values[0]["cwd"] = str(workspace)
-    values.extend([
-        tool_use("read", "Read", file_path=str(nonce_file)),
-        tool_result("read", nonce.decode() + "\n"),
-        tool_use("glob", "Glob", pattern=str(workspace / "*"), path=str(workspace)),
-        tool_result("glob", [str(workspace / "nonce.txt"), str(workspace / "workspace-sentinel.txt")]),
-        tool_use("grep", "Grep", pattern="SENTINEL", path=str(workspace)),
-        tool_result("grep", "workspace-sentinel.txt:1:SENTINEL"),
-        {"type": "assistant", "session_id": SESSION,
-         "message": {"role": "assistant", "content": [{"type": "text", "text": nonce.decode()}]}},
-    ])
+    inputs = tool_input or {"command": f"cat -- {nonce_file}"}
+    output = tool_output or nonce.decode() + "\n"
+    for index in range(repeated_reads + 1):
+        identifier = "nonce" if index == 0 else f"nonce-{index}"
+        values.extend([tool_use(identifier, tool_name, **inputs), tool_result(identifier, output)])
+    values.append({"type": "assistant", "session_id": SESSION,
+                   "message": {"role": "assistant", "content": [{"type": "text", "text": nonce.decode()}]}})
     result = answer_event(nonce)
     result["permission_denials"] = [permission_denial(name) for name in sorted(denied_tools)]
     values.append(result)
     return stream(values)
+
+
+def bash_plain_stream(nonce_file: Path, workspace: Path, nonce: bytes = NONCE) -> bytes:
+    return fresh_stream(nonce_file, workspace, nonce, tool_name="Bash",
+                        tool_input={"command": f"cat -- {nonce_file}"},
+                        tool_output=nonce.decode() + "\n")
+
+
+def native_numbered_read_stream(nonce_file: Path, workspace: Path, nonce: bytes = NONCE) -> bytes:
+    return fresh_stream(nonce_file, workspace, nonce, tool_name="Read",
+                        tool_input={"file_path": str(nonce_file)},
+                        tool_output=f"     1→{nonce.decode()}\n", repeated_reads=1)
 
 
 class ClaudeOracleTests(unittest.TestCase):
@@ -229,18 +241,21 @@ class ClaudeOracleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "input is not an object"):
             gate.parse_claude_events(stream([init_event(), bad, answer_event()]))
 
-    def test_init_profile_is_exact_and_reports_api_key_source(self):
+    def test_init_profile_preserves_identity_and_provider_owned_policy(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             parsed = gate.parse_claude_events(stream([init_event(), answer_event()]))
             profile = gate.validate_init_profile(parsed, SESSION)
             self.assertEqual(profile["tools"], ["Read", "Glob", "Grep"])
-            self.assertEqual(profile["permission_mode"], "dontAsk")
+            self.assertEqual(profile["permission_mode"], "plan")
             self.assertEqual(parsed["init"].get("apiKeySource"), "none")
             for tools in (["Read", "Glob", "Grep", "Bash"], ["Read", "Glob"], ["Read", "Read", "Glob", "Grep"]):
                 changed = init_event(tools=list(tools))
                 changed_stream = gate.parse_claude_events(stream([changed, answer_event()]))
-                with self.assertRaisesRegex(RuntimeError, "tool (surface|list)"):
+                if len(tools) != len(set(tools)):
+                    with self.assertRaisesRegex(RuntimeError, "duplicated"):
+                        gate.validate_init_profile(changed_stream)
+                else:
                     gate.validate_init_profile(changed_stream)
             changed = gate.parse_claude_events(stream([init_event(permission="acceptEdits"), answer_event()]))
             with self.assertRaisesRegex(RuntimeError, "permission mode"):
@@ -251,19 +266,25 @@ class ClaudeOracleTests(unittest.TestCase):
                 gate.validate_init_profile(gate.parse_claude_events(stream([alias, answer_event()])))
             changed = init_event()
             changed["mcp_servers"] = [{"name": "unexpected"}]
-            with self.assertRaisesRegex(RuntimeError, "mcp_servers"):
-                gate.validate_init_profile(gate.parse_claude_events(stream([changed, answer_event()])))
+            profile = gate.validate_init_profile(gate.parse_claude_events(stream([changed, answer_event()])))
+            self.assertEqual(profile["mcp_server_count"], 1)
             for source in ("env", None):
                 changed = init_event()
                 if source is None:
                     del changed["apiKeySource"]
                 else:
                     changed["apiKeySource"] = source
-                with self.assertRaisesRegex(RuntimeError, "apiKeySource"):
-                    gate.validate_init_profile(
-                        gate.parse_claude_events(stream([changed, answer_event()])))
+                if source is None:
+                    with self.assertRaisesRegex(RuntimeError, "apiKeySource"):
+                        gate.validate_init_profile(
+                            gate.parse_claude_events(stream([changed, answer_event()])))
+                else:
+                    self.assertEqual(
+                        gate.validate_init_profile(
+                            gate.parse_claude_events(stream([changed, answer_event()])))["api_key_source"],
+                        source)
 
-    def test_fresh_controls_require_actual_read_glob_grep_and_blocked_routes(self):
+    def test_fresh_controls_require_exact_nonce_tool_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workspace = root / "workspace"
@@ -271,24 +292,29 @@ class ClaudeOracleTests(unittest.TestCase):
             workspace.mkdir()
             sibling.mkdir()
             nonce_file = workspace / "nonce.txt"
-            parsed = gate.parse_claude_events(fresh_stream(nonce_file, workspace))
+            parsed = gate.parse_claude_events(bash_plain_stream(nonce_file, workspace))
             controls = gate.validate_fresh_controls(parsed, nonce_file, workspace, sibling, NONCE)
             self.assertTrue(controls["nonce_read"])
-            self.assertEqual(set(controls["blocked_tools"]), gate.REQUIRED_BLOCKED_TOOLS)
-            self.assertEqual(
-                controls["blocked_tool_evidence"],
-                {name: "unavailable_init_tools" for name in gate.REQUIRED_BLOCKED_TOOLS},
-            )
-            for name in ("Read", "Glob", "Grep"):
-                mutated = gate.parse_claude_events(fresh_stream(nonce_file, workspace))
-                uses = [use for use in mutated["tool_uses"] if use["name"] == name]
-                uses[0]["input"] = {"path": str(root / "other")}
-                with self.assertRaisesRegex(RuntimeError, "exactly one nonce Read|positive .*workspace"):
-                    gate.validate_fresh_controls(mutated, nonce_file, workspace, sibling, NONCE)
-            blocked = fresh_stream(nonce_file, workspace).decode().replace(
-                '"tools":["Read","Glob","Grep"]', '"tools":["Read","Glob","Grep","Bash"]')
-            with self.assertRaisesRegex(RuntimeError, "tool surface"):
-                gate.validate_fresh_controls(gate.parse_claude_events(blocked.encode()), nonce_file, workspace, sibling, NONCE)
+            self.assertEqual(controls["nonce_tool_name"], "Bash")
+            self.assertEqual(controls["nonce_read_count"], 1)
+            self.assertEqual(controls["tool_use_count"], 1)
+            self.assertEqual(controls["mcp_server_count"], 0)
+            self.assertEqual(controls["permission_denial_count"], 0)
+            native_read = gate.parse_claude_events(native_numbered_read_stream(nonce_file, workspace))
+            native_controls = gate.validate_fresh_controls(
+                native_read, nonce_file, workspace, sibling, NONCE)
+            self.assertEqual(native_controls["nonce_tool_name"], "Read")
+            self.assertEqual(native_controls["nonce_read_count"], 2)
+            provider_owned = fresh_stream(nonce_file, workspace).decode().replace(
+                '"tools":["Bash"]', '"tools":["NativeRead"]')
+            provider_owned = provider_owned.replace('"name":"Bash"', '"name":"NativeRead"')
+            provider_controls = gate.validate_fresh_controls(
+                gate.parse_claude_events(provider_owned.encode()), nonce_file, workspace, sibling, NONCE)
+            self.assertEqual(provider_controls["nonce_tool_name"], "NativeRead")
+            wrong_path = gate.parse_claude_events(fresh_stream(nonce_file, workspace))
+            wrong_path["tool_uses"][0]["input"]["command"] = f"cat -- {root / 'other'}"
+            with self.assertRaisesRegex(RuntimeError, "hidden nonce"):
+                gate.validate_fresh_controls(wrong_path, nonce_file, workspace, sibling, NONCE)
             wrong_session = gate.fresh_session_id(
                 "fedcba9876543210fedcba9876543210",
                 "0123456789abcdef0123456789abcdef",
@@ -302,18 +328,9 @@ class ClaudeOracleTests(unittest.TestCase):
                 fresh_stream(nonce_file, workspace, denied_tools=("Bash",)))
             denied_controls = gate.validate_fresh_controls(
                 denied, nonce_file, workspace, sibling, NONCE)
-            self.assertEqual(denied_controls["blocked_tool_evidence"]["Bash"],
-                             "permission_denied")
-            self.assertEqual(denied_controls["blocked_tool_evidence"]["Write"],
-                             "unavailable_init_tools")
-            values = [json.loads(line) for line in fresh_stream(nonce_file, workspace).splitlines()]
-            for value in values:
-                if value.get("type") == "user" and value["message"]["content"][0].get("tool_use_id") == "glob":
-                    value["message"]["content"][0]["content"] = []
-            with self.assertRaisesRegex(RuntimeError, "Glob returned an empty result"):
-                gate.validate_fresh_controls(gate.parse_claude_events(stream(values)), nonce_file, workspace, sibling, NONCE)
+            self.assertEqual(denied_controls["permission_denial_count"], 1)
 
-    def test_fresh_controls_reject_tool_failure_and_nonce_prose(self):
+    def test_fresh_controls_reject_tool_failure_and_missing_nonce_result(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workspace = root / "workspace"
@@ -323,12 +340,12 @@ class ClaudeOracleTests(unittest.TestCase):
             nonce_file = workspace / "nonce.txt"
             values = [json.loads(line) for line in fresh_stream(nonce_file, workspace).splitlines()]
             for value in values:
-                if value.get("type") == "user" and value["message"]["content"][0].get("tool_use_id") == "read":
+                if value.get("type") == "user" and value["message"]["content"][0].get("tool_use_id") == "nonce":
                     value["message"]["content"][0]["is_error"] = True
             with self.assertRaisesRegex(RuntimeError, "tool failed"):
                 gate.validate_fresh_controls(gate.parse_claude_events(stream(values)), nonce_file, workspace, sibling, NONCE)
             values = [value for value in values if not (
-                value.get("type") == "user" and value["message"]["content"][0].get("tool_use_id") == "read")]
+                value.get("type") == "user" and value["message"]["content"][0].get("tool_use_id") == "nonce")]
             with self.assertRaisesRegex(RuntimeError, "unique result"):
                 gate.validate_fresh_controls(gate.parse_claude_events(stream(values)), nonce_file, workspace, sibling, NONCE)
 
@@ -358,14 +375,17 @@ class ClaudeOracleTests(unittest.TestCase):
             gate.validate_tool_free_resume(
                 gate.parse_claude_events(stream([init_event(), denied])), NONCE, SESSION)
 
-    def test_parser_binds_preinit_identity_and_rejects_out_of_profile_tools(self):
+    def test_parser_binds_preinit_identity_and_accepts_provider_owned_tools(self):
         preinit = {"type": "user", "session_id": "0199a213-81c0-7800-8aa1-bbab2a035a54",
                    "message": {"content": []}}
         with self.assertRaisesRegex(RuntimeError, "identity|precedes system/init"):
             gate.parse_claude_events(stream([preinit, init_event(), answer_event()]))
-        blocked = tool_use("blocked", "Bash", command="true")
-        with self.assertRaisesRegex(RuntimeError, "outside the restricted tool profile"):
-            gate.parse_claude_events(stream([init_event(), blocked, answer_event()]))
+        provider_owned = tool_use("provider-owned", "Bash", command="true")
+        parsed = gate.parse_claude_events(stream([init_event(), provider_owned, answer_event()]))
+        self.assertEqual(parsed["tool_uses"][0]["name"], "Bash")
+        malformed = tool_use("malformed", "", command="true")
+        with self.assertRaisesRegex(RuntimeError, "no name"):
+            gate.parse_claude_events(stream([init_event(), malformed, answer_event()]))
 
     def test_nullable_usage_envelopes_are_absent_and_fresh_session_is_uuidv5(self):
         result = answer_event()
@@ -440,8 +460,6 @@ class ClaudeOracleTests(unittest.TestCase):
     def test_provider_argv_fresh_resume_parity_and_prompt_transport(self):
         owner = object.__new__(gate.ClaudeAcceptance)
         owner.claude = Path("/opt/homebrew/Caskroom/claude-code@latest/2.1.270/claude")
-        owner.profile = Path("/state/claude-profile.json")
-        owner.empty_mcp = Path("/state/empty-mcp.json")
         fresh = owner.provider_argv(SESSION)
         resume = owner.provider_argv(SESSION, resume=True)
         self.assertIn("--session-id", fresh)
@@ -449,9 +467,10 @@ class ClaudeOracleTests(unittest.TestCase):
         self.assertIn("--resume", resume)
         self.assertNotIn("--session-id", resume)
         self.assertEqual(fresh[:-2], resume[:-2])
-        self.assertIn("mcp__*", fresh)
-        self.assertIn("--safe-mode", fresh)
-        self.assertIn("--restricted", fresh)
+        for removed in ("--safe-mode", "--restricted", "--tools", "--disallowedTools",
+                        "--strict-mcp-config", "--mcp-config", "--settings",
+                        "--disable-slash-commands", "--no-chrome"):
+            self.assertNotIn(removed, fresh)
         with tempfile.TemporaryDirectory() as temporary:
             brief = Path(temporary) / "brief.md"
             brief.write_text("sensitive prompt $(touch nope)")
@@ -460,7 +479,24 @@ class ClaudeOracleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "leaked"):
                 no_prompt_argv(["delegate", brief.read_text()], [brief])
 
-    def test_expected_inspection_binding_matches_portable_runtime_and_go_hashes(self):
+    def test_fresh_brief_uses_available_native_tool_without_fixed_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            owner = object.__new__(gate.ClaudeAcceptance)
+            owner.briefs = root / "briefs"
+            owner.briefs.mkdir()
+            owner.workspace = root / "workspace"
+            owner.nonce_file = owner.workspace / "nonce.txt"
+            owner.nonce = NONCE
+            brief = owner.fresh_brief()
+            text = brief.read_text()
+            self.assertIn("available native read-only tool", text)
+            self.assertIn(str(owner.nonce_file), text)
+            self.assertNotIn(NONCE.decode(), text)
+            for unavailable in ("Read", "Glob", "Grep"):
+                self.assertNotIn(unavailable, text)
+
+    def test_expected_inspection_binding_matches_native_runtime_and_go_hashes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             base = root / "pueue"
@@ -479,7 +515,8 @@ class ClaudeOracleTests(unittest.TestCase):
             home.mkdir()
             workspace = root / "workspace"
             workspace.mkdir()
-            environment = {"HOME": str(home), "PATH": "/usr/bin", "USER": "fixture-user", "LANG": "C"}
+            environment = {"HOME": str(home), "PATH": "/usr/bin", "USER": "fixture-user", "LANG": "C",
+                           "XDG_CONFIG_HOME": str(root / "config")}
 
             binding = gate.expected_claude_inspection_binding(
                 pueue, config, base, gate.digest(config), workspace, claude,
@@ -490,15 +527,15 @@ class ClaudeOracleTests(unittest.TestCase):
                 "executable_sha256": gate.digest(claude),
                 "arguments": None,
                 "directory": str(workspace.resolve()),
-                "environment": ["CLAUDE_CODE_HOVER_REST=0", "HOME=" + str(home),
-                                "LANG=C", "PATH=/usr/bin", "USER=fixture-user"],
+                "environment": ["HOME=" + str(home), "LANG=C", "PATH=/usr/bin",
+                                "USER=fixture-user", "XDG_CONFIG_HOME=" + str(root / "config")],
                 "output_limit": 1 << 20,
                 "runtime": {
                     "executable": str(claude.resolve()),
                     "executable_sha256": gate.digest(claude),
                     "directory": str(workspace.resolve()),
-                    "environment": ["CLAUDE_CODE_HOVER_REST=0", "HOME=" + str(home),
-                                    "LANG=C", "PATH=/usr/bin", "USER=fixture-user"],
+                    "environment": ["HOME=" + str(home), "LANG=C", "PATH=/usr/bin",
+                                    "USER=fixture-user", "XDG_CONFIG_HOME=" + str(root / "config")],
                     "help_args": None,
                     "required_flags": list(gate.RUNTIME_REQUIRED_FLAGS),
                 },
@@ -514,7 +551,7 @@ class ClaudeOracleTests(unittest.TestCase):
             self.assertEqual(binding["supervisor"]["endpoint"],
                              "unix:" + str(base.resolve() / "run" / "p.sock"))
 
-    def test_expected_inspection_binding_rejects_selectors(self):
+    def test_expected_inspection_binding_keeps_native_discovery_without_secrets(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             base = root / "pueue"
@@ -530,11 +567,15 @@ class ClaudeOracleTests(unittest.TestCase):
                 paths.append(path)
             home = root / "home"
             home.mkdir()
-            environment = {"HOME": str(home), "PATH": "/usr/bin", "USER": "bad/user"}
-            with self.assertRaisesRegex(gate.BlockedFailure, "alternate Claude environment"):
-                gate.expected_claude_inspection_binding(
-                    paths[0], config, base, gate.digest(config), home, paths[2], paths[1],
-                    {**environment, "ANTHROPIC_API_KEY": "ambient"})
+            environment = {"HOME": str(home), "PATH": "/usr/bin", "USER": "bad/user",
+                           "XDG_CONFIG_HOME": str(root / "config"),
+                           "CLAUDE_CONFIG_DIR": str(root / "claude-config"),
+                           "ANTHROPIC_API_KEY": "ambient-secret"}
+            binding = gate.expected_claude_inspection_binding(
+                paths[0], config, base, gate.digest(config), home, paths[2], paths[1], environment)
+            self.assertIn("XDG_CONFIG_HOME=" + str(root / "config"), binding["environment"])
+            self.assertIn("CLAUDE_CONFIG_DIR=" + str(root / "claude-config"), binding["environment"])
+            self.assertNotIn("ANTHROPIC_API_KEY=ambient-secret", binding["environment"])
 
     def test_dispatch_registers_complete_expected_binding_before_admission(self):
         class FakeOps:
@@ -584,6 +625,45 @@ class ClaudeOracleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "runtime root"):
             gate.reject_runtime_roots(Path.home() / ".claude" / "sessions", "state", environment)
 
+    def test_runtime_roots_scope_xdg_to_claude_and_split_lists(self):
+        environment = {
+            "HOME": "/fixture/home",
+            "XDG_CONFIG_HOME": "/fixture/config:personal",
+            "XDG_CONFIG_DIRS": os.pathsep.join(("/fixture/config-a", "/fixture/config-b")),
+            "XDG_DATA_HOME": "/fixture/data",
+            "XDG_DATA_DIRS": os.pathsep.join(("/fixture/data-a", "/fixture/data-b")),
+            "XDG_STATE_HOME": "/fixture/state",
+            "XDG_CACHE_HOME": "/fixture/cache",
+            "XDG_RUNTIME_DIR": "/fixture/runtime",
+            "CLAUDE_CONFIG_DIR": "/fixture/claude-config",
+        }
+        roots = gate.provider_runtime_roots(environment)
+        for shared in ("/fixture/config:personal", "/fixture/config-a", "/fixture/config-b",
+                       "/fixture/data", "/fixture/data-a", "/fixture/data-b",
+                       "/fixture/state", "/fixture/cache", "/fixture/runtime"):
+            self.assertNotIn(Path(shared), roots)
+        for provider_root in ("/fixture/config:personal/claude", "/fixture/config-a/claude",
+                              "/fixture/config-b/claude", "/fixture/data/claude",
+                              "/fixture/data-a/claude", "/fixture/data-b/claude",
+                              "/fixture/state/claude", "/fixture/cache/claude",
+                              "/fixture/claude-config"):
+            self.assertIn(Path(provider_root), roots)
+        self.assertNotIn(Path("/fixture/config-a:/fixture/config-b"), roots)
+        gate.reject_runtime_roots(Path("/fixture/config:personal/delegation-layer"), "state", environment)
+
+    def test_live_parent_is_platform_specific_and_private_before_mkdtemp(self):
+        home = Path("/Users/example")
+        self.assertEqual(gate.pueue_parent_for_platform("darwin", home), Path("/Users/Shared"))
+        self.assertEqual(gate.pueue_parent_for_platform("linux", home), home / ".dl-acceptance")
+        with tempfile.TemporaryDirectory(dir=str(Path.cwd())) as temporary:
+            root = Path(temporary)
+            with patch.object(gate, "PUEUE_PARENT", root / "parent"):
+                parent = gate.acceptance_temp_parent()
+                child = gate.private_mkdtemp("claude-", "test acceptance directory")
+            self.assertEqual(parent, (root / "parent").resolve())
+            self.assertEqual(child.parent, parent)
+            self.assertEqual(parent.stat().st_mode & 0o077, 0)
+
     def test_live_profile_environment_is_task_owned(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -596,6 +676,8 @@ class ClaudeOracleTests(unittest.TestCase):
                 "CLAUDE_CODE_COZY_TEAPOT": "relaxed",
                 "ANTHROPIC_API_KEY": "ambient-secret",
                 "XDG_CONFIG_HOME": "/real/config",
+                "CLAUDE_CONFIG_DIR": "/real/claude-config",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/real/run/bus",
                 "TMPDIR": "/real/tmp",
             }
             isolated = gate.isolated_acceptance_environment(inherited, home, scratch)
@@ -611,7 +693,8 @@ class ClaudeOracleTests(unittest.TestCase):
             self.assertEqual(validation["TMPDIR"], "/real/tmp")
             self.assertNotIn("ANTHROPIC_API_KEY", validation)
             self.assertNotIn("CLAUDE_CODE_COZY_TEAPOT", validation)
-            self.assertNotIn("XDG_CONFIG_HOME", validation)
+            self.assertEqual(validation["XDG_CONFIG_HOME"], "/real/config")
+            self.assertEqual(validation["CLAUDE_CONFIG_DIR"], "/real/claude-config")
 
     def test_native_account_environment_keeps_login_and_relocates_mutable_temp(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -625,6 +708,9 @@ class ClaudeOracleTests(unittest.TestCase):
                 "PATH": "/usr/bin",
                 "USER": "fixture-user",
                 "TMPDIR": "/real/tmp",
+                "XDG_CONFIG_HOME": "/real/config",
+                "CLAUDE_CONFIG_DIR": "/real/claude-config",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/real/run/bus",
                 "ANTHROPIC_API_KEY": "ambient-secret",
             }
             environment = gate.native_account_acceptance_environment(inherited, home, scratch)
@@ -632,22 +718,10 @@ class ClaudeOracleTests(unittest.TestCase):
             self.assertEqual(environment["TMPDIR"], str(scratch.resolve()))
             self.assertEqual(environment["TMP"], str(scratch.resolve()))
             self.assertEqual(environment["TEMP"], str(scratch.resolve()))
+            self.assertEqual(environment["XDG_CONFIG_HOME"], "/real/config")
+            self.assertEqual(environment["CLAUDE_CONFIG_DIR"], "/real/claude-config")
+            self.assertEqual(environment["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/real/run/bus")
             self.assertNotIn("ANTHROPIC_API_KEY", environment)
-
-    def test_plaintext_fallback_observation_uses_metadata_only(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            absent = root / "missing" / ".credentials.json"
-            self.assertFalse(gate.observe_plaintext_fallback(absent))
-            present = root / "present" / ".credentials.json"
-            present.parent.mkdir()
-            present.write_bytes(b"synthetic credential bytes")
-            self.assertTrue(gate.observe_plaintext_fallback(present))
-            target = root / "target"
-            target.write_bytes(b"synthetic credential bytes")
-            link = root / "link"
-            link.symlink_to(target)
-            self.assertTrue(gate.observe_plaintext_fallback(link))
 
     def test_acceptance_receipt_labels_are_neutral(self):
         self.assertEqual(gate.ACCEPTANCE_STATUS, "acceptance-passed")

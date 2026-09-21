@@ -46,7 +46,10 @@ which records the observed version, executable identity, effective policy, and
 bounded launch environment in the task metadata. The inspection binding keeps
 the same environment for a queued worker, including when a private daemon is
 reused for another task. The version is an observation; advertised behavior
-and the executable identity decide compatibility.
+and the executable identity decide compatibility. New profiles record native
+permission selections without inventorying provider configuration. MCP servers,
+hooks, plugins, skills, and authentication are owned by the provider CLI.
+Historical tasks retain their recorded preparation contract.
 
 Pueue owns queueing and process supervision. A normal release carries the
 `pueue` and `pueued` executables and creates a private state-rooted

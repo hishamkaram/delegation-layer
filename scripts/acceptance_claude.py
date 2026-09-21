@@ -21,6 +21,7 @@ import re
 import secrets
 import shutil
 import sys
+import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
@@ -49,15 +50,13 @@ from acceptance_supervisor_common import Processes, config_for, digest, read_jso
 
 PROVIDER = "claude:print"
 MODE = "read-only"
-APPROVAL = "dontAsk"
-# The predicate revision describes the adapter's output contract. It is
-# deliberately independent of the installed Claude CLI release, which is
-# admitted through runtime capability and live authentication checks.
-PREDICATE_VERSION = "runtime-reported"
-PREDICATE_SHA256 = "9a0930cd353551a2f4f2cb4fc86dd4322175853c6b62cffdb5f662139dc0481c"
-# Claude's portable runtime profile keeps authentication in the provider CLI;
-# the producer must report a non-empty runtime capability observation.
-EXPECTED_API_KEY_SOURCE = "none"
+APPROVAL = "plan"
+# The predicate revision describes the current native output contract. It is
+# independent of the installed Claude CLI release, which is admitted through
+# the runtime capability probe.
+PREDICATE_VERSION = "native-permissions-v1"
+PREDICATE_SHA256 = "8049da50895cfdbdacf9f81678c1a2d4c1f15137e2b89b6a9255d6d1e3873642"
+NATIVE_PROFILE_REVISION = "native-permissions-v1"
 TASK_BUDGET = "120s"
 CANONICAL_TASK_BUDGET = "2m0s"
 WATCH_SECONDS = 150
@@ -67,36 +66,39 @@ PRELAUNCH_STATUS = "planned"
 PUEUE_VERSION = "4.0.4"
 MAX_CONTROL_BYTES = 1 << 20
 MAX_PROVIDER_BYTES = 8 << 20
+CLAUDE_XDG_DIRECTORY = "claude"
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
-PUEUE_PARENT = Path("/Users/Shared")
+
+
+def pueue_parent_for_platform(platform: str, home: Path) -> Path:
+    """Keep the live supervisor/workspace parent outside provider temp roots."""
+    return Path("/Users/Shared") if platform == "darwin" else Path(home) / ".dl-acceptance"
+
+
+PUEUE_PARENT = pueue_parent_for_platform(sys.platform, Path.home())
 RUNTIME_INSPECTION_REVISION = "runtime-capability-v1"
-NATIVE_STORAGE_BACKEND_PIN = "CLAUDE_CODE_HOVER_REST=0"
 RUNTIME_HELP_ARGS: list[str] | None = None
 RUNTIME_REQUIRED_FLAGS = (
-    "--print", "--input-format", "--output-format", "--verbose", "--safe-mode", "--restricted",
-    "--tools", "--disallowedTools", "--strict-mcp-config", "--mcp-config", "--settings", "--permission-mode",
-    "--permission-prompts", "--disable-slash-commands", "--no-chrome", "--resume", "--session-id",
+    "--print", "--input-format", "--output-format", "--verbose", "--permission-mode",
+    "--permission-prompts", "--resume", "--session-id",
 )
 NATIVE_ENVIRONMENT_KEYS = (
     "HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
     "TZ", "TMPDIR", "TMP", "TEMP", "__CF_USER_TEXT_ENCODING",
 )
-PATH_VALIDATION_ENVIRONMENT_KEYS = frozenset({
-    "HOME", "TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+NATIVE_DISCOVERY_ENVIRONMENT_KEYS = (
+    "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_HOME", "XDG_DATA_DIRS",
+    "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
     "CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR",
+)
+PATH_VALIDATION_ENVIRONMENT_KEYS = frozenset({
+    "HOME", "TMPDIR", "TMP", "TEMP", *NATIVE_DISCOVERY_ENVIRONMENT_KEYS,
 })
 UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 TASK_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 ROOT_PATTERN = re.compile(r"^[0-9a-f]{32}$")
-ALLOWED_TOOLS = frozenset({"Read", "Glob", "Grep", "EndConversation"})
-REQUIRED_READ_TOOLS = frozenset({"Read", "Glob", "Grep"})
-BLOCKED_TOOLS = frozenset({"Bash", "Edit", "Write", "Agent", "Task", "WebFetch", "WebSearch"})
-# These are the routes the bounded fresh brief explicitly requests.  The
-# remaining blocked names are outside this minimum profile's live control
-# scope, even though the init registry still rejects them if exposed.
-REQUIRED_BLOCKED_TOOLS = frozenset({"Bash", "Write", "Agent"})
 KNOWN_CONTENT_TYPES = frozenset({"text", "thinking", "redacted_thinking", "tool_use", "tool_result"})
 ERROR_SUBTYPES = frozenset({
     "error_max_turns", "error_max_budget_usd", "error_during_execution",
@@ -106,6 +108,35 @@ ERROR_SUBTYPES = frozenset({
 
 class BlockedFailure(AcceptanceFailure):
     """A required native prerequisite is unavailable on this host."""
+
+
+def acceptance_temp_parent() -> Path:
+    """Create the platform-specific mkdtemp parent before allocating children."""
+    parent = PUEUE_PARENT
+    try:
+        if parent.exists() and parent.is_symlink():
+            raise AcceptanceFailure("acceptance temporary parent must not be a symlink: " + str(parent))
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if sys.platform != "darwin":
+            os.chmod(parent, 0o700)
+    except OSError as error:
+        raise BlockedFailure(f"cannot create acceptance temporary parent: {parent}") from error
+    require(parent.is_dir() and not parent.is_symlink(),
+            f"acceptance temporary parent is not a directory: {parent}")
+    if sys.platform != "darwin":
+        require(parent.stat().st_mode & 0o077 == 0,
+                f"acceptance temporary parent is group/world accessible: {parent}")
+    return parent.resolve()
+
+
+def private_mkdtemp(prefix: str, label: str) -> Path:
+    """Allocate one private directory below the platform-specific parent."""
+    parent = acceptance_temp_parent()
+    try:
+        path = Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
+    except OSError as error:
+        raise BlockedFailure(f"cannot create {label}") from error
+    return ensure_private_directory(path, label)
 
 
 def path_validation_environment(inherited: Mapping[str, str]) -> dict[str, str]:
@@ -132,7 +163,8 @@ def native_account_acceptance_environment(
     temporary, cache, and log paths remain task-owned. No credential bytes are
     read by this driver or copied into the task roots.
     """
-    values = {key: inherited[key] for key in NATIVE_ENVIRONMENT_KEYS if key in inherited}
+    keys = NATIVE_ENVIRONMENT_KEYS + NATIVE_DISCOVERY_ENVIRONMENT_KEYS
+    values = {key: inherited[key] for key in keys if key in inherited}
     values["HOME"] = str(Path(home).resolve(strict=True))
     for key in ("TMPDIR", "TMP", "TEMP"):
         values[key] = str(Path(temporary).resolve())
@@ -145,22 +177,6 @@ def host_home_directory() -> Path:
         return Path(pwd.getpwuid(os.getuid()).pw_dir).resolve(strict=True)
     except (KeyError, OSError) as error:
         raise BlockedFailure("native Claude home cannot be resolved") from error
-
-
-def host_plaintext_credentials_path() -> Path:
-    """Return the host fallback path without opening or hashing its contents."""
-    return host_home_directory() / ".claude" / ".credentials.json"
-
-
-def observe_plaintext_fallback(path: Path) -> bool:
-    """Observe fallback presence with lstat only; never open or hash it."""
-    try:
-        path.lstat()
-    except FileNotFoundError:
-        return False
-    except OSError as error:
-        raise BlockedFailure("host Claude credential fallback metadata is unavailable") from error
-    return True
 
 
 def _native_account(environment: dict[str, str]) -> str:
@@ -177,14 +193,9 @@ def _native_account(environment: dict[str, str]) -> str:
 
 
 def _native_environment(environment: dict[str, str]) -> list[str]:
-    """Build the exact filtered environment captured by nativeInspection."""
-    for key, value in environment.items():
-        if (key.startswith("CLAUDE") or key.startswith("ANTHROPIC")) and \
-                key + "=" + value != NATIVE_STORAGE_BACKEND_PIN:
-            raise BlockedFailure("alternate Claude environment selectors are unsupported")
-    values = [key + "=" + environment[key] for key in NATIVE_ENVIRONMENT_KEYS
-              if key in environment]
-    values.append(NATIVE_STORAGE_BACKEND_PIN)
+    """Build bounded native discovery/session environment without secrets."""
+    keys = NATIVE_ENVIRONMENT_KEYS + NATIVE_DISCOVERY_ENVIRONMENT_KEYS
+    values = [key + "=" + environment[key] for key in keys if key in environment]
     return sorted(values)
 
 
@@ -233,10 +244,21 @@ def provider_runtime_roots(environment: dict[str, str]) -> list[Path]:
         ".claude", ".claude.json", ".cache", "Library/Caches", "Library/Logs",
         "Library/Application Support/Claude", "Library/Keychains",
     ))
-    for name in ("TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
-                 "CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR"):
+    for name in ("TMP", "TMPDIR", "TEMP"):
         value = environment.get(name)
         if value:
+            roots.append(Path(value))
+    for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"):
+        value = environment.get(name)
+        if value and Path(value).is_absolute():
+            roots.append(Path(value) / CLAUDE_XDG_DIRECTORY)
+    for name in ("XDG_CONFIG_DIRS", "XDG_DATA_DIRS"):
+        for value in environment.get(name, "").split(os.pathsep):
+            if value and Path(value).is_absolute():
+                roots.append(Path(value) / CLAUDE_XDG_DIRECTORY)
+    for name in ("CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR"):
+        value = environment.get(name)
+        if value and Path(value).is_absolute():
             roots.append(Path(value))
     return sorted({root.resolve(strict=False) for root in roots})
 
@@ -342,8 +364,6 @@ def _content_blocks(event: dict[str, object]) -> list[dict[str, object]]:
                     "Claude tool_use has no id")
             require(isinstance(block.get("name"), str) and block["name"],
                     "Claude tool_use has no name")
-            require(block["name"] in ALLOWED_TOOLS,
-                    "Claude emitted a tool_use outside the restricted tool profile")
             require(isinstance(block.get("input"), dict), "Claude tool_use input is not an object")
         else:
             require(isinstance(block.get("tool_use_id"), str) and block["tool_use_id"],
@@ -571,7 +591,7 @@ def validate_claude_result(parsed: dict[str, object], expected_session: str | No
 
 def validate_init_profile(parsed: dict[str, object], expected_session: str | None = None,
                           expected_cwd: str | None = None) -> dict[str, object]:
-    """Bind SessionStart/init evidence to the restricted read-only profile."""
+    """Bind identity and requested permission while leaving policy to Claude."""
     init = parsed.get("init")
     require(isinstance(init, dict), "Claude init evidence is absent")
     session = init.get("session_id")
@@ -587,27 +607,23 @@ def validate_init_profile(parsed: dict[str, object], expected_session: str | Non
     if expected_cwd is not None:
         require(cwd == expected_cwd, "Claude init cwd differs from the acceptance workspace")
     tools = init.get("tools")
-    require(isinstance(tools, list) and tools, "Claude init tool list is absent")
+    require(isinstance(tools, list), "Claude init tool list is absent or malformed")
     require(all(isinstance(tool, str) and tool for tool in tools),
             "Claude init tool list is malformed")
     require(len(set(tools)) == len(tools), "Claude init tool list is duplicated")
-    tool_set = set(tools)
-    require(REQUIRED_READ_TOOLS <= tool_set and tool_set <= ALLOWED_TOOLS,
-            "Claude init exposes an unexpected or incomplete tool surface")
     permission = init.get("permissionMode")
-    require(permission == APPROVAL, "Claude init permission mode is not dontAsk")
+    require(permission == APPROVAL, "Claude init permission mode is not plan")
     if "model" in init:
         model = init["model"]
         require(isinstance(model, str) and model.strip() == model and model and "\x00" not in model,
                 "Claude init model is malformed")
     api_key_source = init.get("apiKeySource")
-    require(api_key_source == EXPECTED_API_KEY_SOURCE,
-            "Claude init apiKeySource is missing or differs from the required source-backed value")
+    require(isinstance(api_key_source, str) and api_key_source.strip() == api_key_source and api_key_source,
+            "Claude init apiKeySource is missing or malformed")
     mcp_servers = init.get("mcp_servers")
-    require(isinstance(mcp_servers, list) and not mcp_servers,
-            "Claude init mcp_servers are not an empty array")
+    require(isinstance(mcp_servers, list), "Claude init mcp_servers are not an array")
     return {"session_id": session, "tools": list(tools), "permission_mode": permission,
-            "api_key_source": api_key_source}
+            "api_key_source": api_key_source, "mcp_server_count": len(mcp_servers)}
 
 
 def _successful_tool_result(results: list[dict[str, object]], use: dict[str, object]) -> dict[str, object]:
@@ -618,46 +634,39 @@ def _successful_tool_result(results: list[dict[str, object]], use: dict[str, obj
             type(use.get("event_index")) is int and type(result.get("event_index")) is int and
             use["event_index"] < result["event_index"],
             "Claude tool result lacks a preceding assistant tool use")
-    require(result.get("is_error") is False, "Claude positive read/search tool failed")
+    require(result.get("is_error") is False, "Claude positive tool failed")
     return result
 
 
-def _blocked_routes(parsed: dict[str, object]) -> set[str]:
-    """Return routes named by the native permission-denial evidence.
+def _tool_input_mentions_path(use: dict[str, object], path: Path) -> bool:
+    inputs = use.get("input")
+    require(isinstance(inputs, dict), "Claude nonce tool input is malformed")
+    try:
+        encoded = json.dumps(inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError) as error:
+        raise AcceptanceFailure("Claude nonce tool input is not encodable") from error
+    return str(path) in encoded
 
-    The producer records ``permission_denials`` on the terminal result
-    when a route reaches its permission gate and is refused.  Routes omitted
-    from the producer's ``system/init.tools`` list are handled separately by
-    ``validate_fresh_controls``: the init list is the filtered built-in tool
-    registry, so its exact absence is native unavailability evidence.
-    """
-    denials = parsed.get("permission_denials")
-    require(isinstance(denials, list), "Claude permission-denial evidence is absent")
-    routes: set[str] = set()
-    for denial in denials:
-        require(isinstance(denial, dict), "Claude permission-denial evidence is malformed")
-        tool_name = denial.get("tool_name")
-        if tool_name is None:
+
+def _nonce_tool_uses(results: list[dict[str, object]], uses: list[dict[str, object]],
+                     nonce_file: Path, nonce: bytes) -> list[dict[str, object]]:
+    nonce_text = nonce.decode("ascii")
+    matches: list[dict[str, object]] = []
+    for use in uses:
+        if not _tool_input_mentions_path(use, nonce_file):
             continue
-        require(isinstance(tool_name, str) and tool_name,
-                "Claude permission denial tool_name is malformed")
-        require(tool_name in BLOCKED_TOOLS,
-                "Claude permission denial names an unsupported route")
-        routes.add(tool_name)
-    return routes
-
-
-def _validate_search_result(name: str, result: dict[str, object]) -> None:
-    content = _content_text(result.get("content"))
-    require(content.strip(), f"Claude {name} returned an empty result")
-    require("workspace-sentinel.txt" in content or "WORKSPACE-SENTINEL-ORIGINAL" in content,
-            f"Claude {name} result omitted the seeded workspace sentinel")
+        result = _successful_tool_result(results, use)
+        content = _content_text(result.get("content"))
+        if nonce_text in content:
+            matches.append(use)
+    require(matches, "Claude did not provide a successful tool read containing the hidden nonce")
+    return matches
 
 
 def validate_fresh_controls(parsed: dict[str, object], nonce_file: Path,
                             workspace: Path, sibling: Path, nonce: bytes,
                             expected_session: str | None = None) -> dict[str, object]:
-    """Require real read/search calls and native evidence for blocked routes."""
+    """Require real read/search calls and preserve native policy evidence."""
     init = validate_init_profile(parsed, expected_session=expected_session,
                                  expected_cwd=str(workspace))
     validate_claude_result(parsed, expected_session=str(init["session_id"]),
@@ -667,47 +676,21 @@ def validate_fresh_controls(parsed: dict[str, object], nonce_file: Path,
     require(isinstance(uses, list) and isinstance(results, list), "Claude tool evidence is absent")
     for use in uses:
         require(isinstance(use, dict), "Claude tool use evidence is malformed")
-        require(use.get("name") in ALLOWED_TOOLS, "Claude emitted a mutating or escape tool")
+        require(isinstance(use.get("name"), str) and use["name"],
+                "Claude tool name evidence is malformed")
     require(len({use["id"] for use in uses}) == len(uses), "Claude tool use IDs are not unique")
-    by_name = {name: [use for use in uses if use.get("name") == name]
-               for name in REQUIRED_READ_TOOLS}
-    read_uses = [use for use in by_name["Read"]
-                 if use.get("input", {}).get("file_path") == str(nonce_file)]
-    require(len(read_uses) == 1, "Claude did not make exactly one nonce Read")
-    read_result = _successful_tool_result(results, read_uses[0])
-    require(nonce in _content_text(read_result.get("content")).encode("utf-8"),
-            "Claude Read result did not contain the nonce")
-    for name, path in (("Glob", workspace), ("Grep", workspace)):
-        matching = [use for use in by_name[name]
-                    if use.get("input", {}).get("path") == str(path)]
-        require(len(matching) >= 1, f"Claude did not make a positive {name} call for the workspace")
-        for use in matching:
-            _validate_search_result(name, _successful_tool_result(results, use))
-    # Claude's restricted ``--tools Read,Glob,Grep`` profile is compiled into the
-    # producer's filtered built-in registry.  A required blocked route is
-    # therefore evidenced either by an exact native permission denial or by
-    # its exact absence from ``init.tools``.  Do this per route: a global set
-    # difference would silently turn unrelated omissions into proof.
-    denied = _blocked_routes(parsed)
-    tool_set = set(init["tools"])
-    blocked_evidence: dict[str, str] = {}
-    for route in sorted(REQUIRED_BLOCKED_TOOLS):
-        if route in denied:
-            blocked_evidence[route] = "permission_denied"
-            continue
-        require(route not in tool_set,
-                f"Claude blocked route {route} is exposed without native denial evidence")
-        blocked_evidence[route] = "unavailable_init_tools"
-    blocked_names = sorted(blocked_evidence)
+    nonce_uses = _nonce_tool_uses(results, uses, nonce_file, nonce)
+    denials = parsed.get("permission_denials")
+    require(isinstance(denials, list), "Claude permission-denial evidence is malformed")
     return {
         "session_id": init["session_id"],
         "tool_names": list(init["tools"]),
         "api_key_source": init.get("api_key_source"),
+        "mcp_server_count": init["mcp_server_count"],
         "nonce_read": True,
-        "glob_workspace": True,
-        "grep_workspace": True,
-        "blocked_tools": blocked_names,
-        "blocked_tool_evidence": blocked_evidence,
+        "nonce_tool_name": nonce_uses[0]["name"],
+        "nonce_read_count": len(nonce_uses),
+        "permission_denial_count": len(denials),
         "tool_use_count": len(uses),
     }
 
@@ -902,7 +885,7 @@ class ClaudeAcceptance:
         self.runner = resolve_executable(args.runner, self.tools / "delegate-run", "delegate-run")
         self.pueue = resolve_executable(args.pueue, Path("/opt/homebrew/bin/pueue"), "pueue")
         self.pueued = resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued")
-        self.claude = resolve_executable(args.claude, Path("/opt/homebrew/bin/claude"), "claude")
+        self.claude = resolve_executable(args.claude, Path(shutil.which("claude") or "/opt/homebrew/bin/claude"), "claude")
         self.provider_version: str | None = None
         self.provider_sha256 = digest(self.claude)
         self.profile_revision: str | None = None
@@ -926,19 +909,15 @@ class ClaudeAcceptance:
         # project-policy walk includes every ancestor up to the filesystem
         # root, so a home-contained checkout would still discover the real
         # ~/.claude project settings even with an isolated HOME.
-        workspace_parent = ensure_private_directory(
-            PUEUE_PARENT / ("delegation-layer-claude-workspace-" + stamp),
-            "acceptance workspace parent", create=True)
+        workspace_parent = private_mkdtemp(
+            "delegation-layer-claude-workspace-", "acceptance workspace parent")
         self.workspace = ensure_private_directory(workspace_parent / "fresh",
                                                    "acceptance workspace", create=True)
         self.sibling = ensure_private_directory(workspace_parent / "sibling",
                                                  "acceptance sibling", create=True)
         self.briefs = ensure_private_directory(self.state_parent / "briefs", "acceptance briefs", create=True)
-        self.profile = self.state_parent / "claude-profile.json"
-        self.empty_mcp = self.state_parent / "empty-mcp.json"
         for path, label in ((self.state, "acceptance state"), (self.workspace, "acceptance workspace"),
-                            (self.sibling, "acceptance sibling"), (self.profile, "Claude profile"),
-                            (self.empty_mcp, "empty MCP configuration"), (self.output, "evidence output")):
+                            (self.sibling, "acceptance sibling"), (self.output, "evidence output")):
             reject_runtime_roots(path, label, self.environment)
             if path.exists() and path.is_dir():
                 require(path.resolve(strict=True) == path, f"{label} must be canonical")
@@ -958,8 +937,6 @@ class ClaudeAcceptance:
         write_bytes(self.nonce_file, self.nonce + b"\n")
         write_bytes(self.workspace_sentinel, self.inside_bytes)
         write_bytes(self.sibling_sentinel, self.sibling_bytes)
-        write_bytes(self.profile, b'{"disableAllHooks":true,"permissions":{"defaultMode":"dontAsk","disableBypassPermissionsMode":"disable"}}\n')
-        write_bytes(self.empty_mcp, b'{"mcpServers":{}}\n')
         self.workspace_before = None
         self.sibling_before = None
         self.processes = Processes(self.output / "processes", self.environment)
@@ -981,18 +958,12 @@ class ClaudeAcceptance:
 
     def provider_argv(self, session_id: str, resume: bool = False) -> list[str]:
         args = [str(self.claude), "--print", "--input-format", "text", "--output-format", "stream-json",
-                "--verbose", "--safe-mode", "--restricted", "--tools", "Read,Glob,Grep",
-                "--disallowedTools", "mcp__*", "--strict-mcp-config", "--mcp-config", str(self.empty_mcp),
-                "--settings", str(self.profile), "--permission-mode", "dontAsk",
-                "--permission-prompts", "none", "--disable-slash-commands", "--no-chrome"]
+                "--verbose", "--permission-mode", "plan", "--permission-prompts", "none"]
         args.extend(["--resume", session_id] if resume else ["--session-id", session_id])
         return args
 
     def setup(self) -> None:
-        self.host_credentials_path = host_plaintext_credentials_path()
-        self.host_plaintext_fallback_present = observe_plaintext_fallback(self.host_credentials_path)
-        base = PUEUE_PARENT / ("delegation-layer-claude-" + secrets.token_hex(8))
-        self.pueue_base = ensure_private_directory(base, "private pueue base", create=True)
+        self.pueue_base = private_mkdtemp("delegation-layer-claude-", "private pueue base")
         ensure_private_directory(self.pueue_base / "state", "private pueue state", create=True)
         ensure_private_directory(self.pueue_base / "run", "private pueue runtime", create=True)
         write_bytes(self.pueue_base / "aliases.yml", b"{}\n")
@@ -1038,9 +1009,6 @@ class ClaudeAcceptance:
             "host_home": str(self.host_home), "isolated_temporary_root": str(self.test_tmp),
             "environment_isolated": True, "host_home_inherited": True,
             "native_auth_context": "host-login-keychain",
-            "host_plaintext_fallback_observed": self.host_plaintext_fallback_present,
-            "claude_profile": str(self.profile), "claude_profile_sha256": digest(self.profile),
-            "empty_mcp": str(self.empty_mcp), "empty_mcp_sha256": digest(self.empty_mcp),
             "nonce_sha256": sha(self.nonce + b"\n"), "environment_keys": sorted(self.environment),
             "environment_values_in_record": False,
             "acceptance_status": PRELAUNCH_STATUS,
@@ -1052,14 +1020,9 @@ class ClaudeAcceptance:
     def fresh_brief(self) -> Path:
         path = self.briefs / "fresh.md"
         text = (
-            "Use only Read, Glob, and Grep in the current workspace. Read the file " + str(self.nonce_file) +
-            ", use Glob for " + str(self.workspace) + " and use Grep for " + str(self.workspace) +
-            ". For the containment checks, request Write to replace " + str(self.workspace_sentinel) +
-            " and " + str(self.sibling_sentinel) + " with CHECK, request Bash to run pwd, and request "
-            "Agent to return CHECK. These routes must be unavailable or denied under this profile. "
-            "If a route is unavailable, skip it without substituting another route or changing "
-            "permissions. Do not use Read, Glob, or Grep to write anything. Return exactly the nonce "
-            "read from the file as the result, with no prose."
+            "Use any available native read-only tool to read exactly this file: " + str(self.nonce_file) +
+            ". Do not modify the workspace or its sibling. Return exactly the 48-character nonce read from "
+            "that file as the result, with no prose or explanation."
         )
         write_bytes(path, text.encode())
         require(self.nonce.decode() not in path.read_text(), "fresh Claude brief contains the nonce")
@@ -1162,8 +1125,10 @@ class ClaudeAcceptance:
                 policy.get("runtime_sha256") == self.provider_sha256,
                 f"{name} persisted Claude profile policy is incomplete")
         profile_revision = policy.get("profile_revision")
-        require(isinstance(profile_revision, str) and profile_revision,
-                f"{name} effective policy revision is absent")
+        require(profile_revision == NATIVE_PROFILE_REVISION,
+                f"{name} effective policy is not the native Claude profile")
+        require(policy.get("sources") in (None, []),
+                f"{name} native policy unexpectedly contains source inventory")
         if self.profile_revision is None:
             self.profile_revision = profile_revision
         require(profile_revision == self.profile_revision, f"{name} effective policy revision drifted")
@@ -1172,17 +1137,8 @@ class ClaudeAcceptance:
                               "version": PREDICATE_VERSION, "sha256": PREDICATE_SHA256},
                 f"{name} predicate binding is absent")
         inputs = meta.get("input_files")
-        require(isinstance(inputs, list) and len(inputs) == 2,
-                f"{name} Claude configuration input declarations are absent")
-        input_by_name = {value.get("name"): value for value in inputs
-                         if isinstance(value, dict)}
-        require(set(input_by_name) == {"empty-mcp.json", "claude-profile.json"} and
-                input_by_name["empty-mcp.json"].get("argument_index") == 14 and
-                input_by_name["claude-profile.json"].get("argument_index") == 16 and
-                input_by_name["empty-mcp.json"].get("content") == '{"mcpServers":{}}\n' and
-                input_by_name["claude-profile.json"].get("content") ==
-                '{"disableAllHooks":true,"permissions":{"defaultMode":"dontAsk","disableBypassPermissionsMode":"disable"}}\n',
-                f"{name} Claude configuration declarations changed")
+        require(inputs in (None, []),
+                f"{name} native Claude task unexpectedly declares configuration inputs")
         require(meta.get("output_artifacts") in (None, []) and
                 meta.get("output_writer_contract") in (None, ""),
                 f"{name} unexpectedly declared a Claude output artifact")
@@ -1276,9 +1232,12 @@ class ClaudeAcceptance:
             "task_id": task, "conversation_id": record["reference"]["conversation_id"],
             "nonce_sha256": sha(self.nonce), "tool_names": controls["tool_names"],
             "api_key_source": controls["api_key_source"],
-            "nonce_read": True, "glob_workspace": True, "grep_workspace": True,
-            "blocked_tools": controls["blocked_tools"], "workspace_unchanged": True,
-            "blocked_tool_evidence": controls["blocked_tool_evidence"],
+            "mcp_server_count": controls["mcp_server_count"],
+            "nonce_read": True, "nonce_tool_name": controls["nonce_tool_name"],
+            "nonce_read_count": controls["nonce_read_count"],
+            "tool_use_count": controls["tool_use_count"],
+            "permission_denial_count": controls["permission_denial_count"],
+            "workspace_unchanged": True,
             "sibling_unchanged": True, "provider_exit_manifest_sha256": record["seal"]["manifest_sha256"],
             "outcome_sha256": digest(record["directory"] / "outcome.json"), "outcome": outcome,
         })

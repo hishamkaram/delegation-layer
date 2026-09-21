@@ -31,6 +31,10 @@ inspect, authenticate, or install a provider CLI directly.
    successful, or failed provider behavior, and do not invent login commands.
 8. Never put credentials, tokens, or unrestricted provider output in a brief,
    option, receipt, or agent message.
+9. Permission modes select provider-native behavior, not an independent sandbox.
+   Providers load their own configuration and extensions. If a task is rejected,
+   report delegate's evidence; do not assume the user's configuration is faulty
+   or remove MCP servers, plugins, settings, or credentials to make it pass.
 
 ## Operating procedure
 

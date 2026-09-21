@@ -13,8 +13,17 @@ func RuntimeRequirements() commonprovider.RuntimeCapability {
 	return commonprovider.RuntimeCapability{
 		HelpArgs: []string{"run"},
 		RequiredFlags: []string{
-			"--format", "--dir", "--session", "--model", "--variant", "--agent", "--pure", "--auto",
+			"--format", "--dir", "--session", "--model", "--variant", "--agent", "--auto",
 		},
+	}
+}
+
+// legacyRuntimeRequirements retains the historical capability description for
+// reconstruction of tasks admitted with the adapter-owned pure-mode profile.
+func legacyRuntimeRequirements() commonprovider.RuntimeCapability {
+	return commonprovider.RuntimeCapability{
+		HelpArgs:      []string{"run"},
+		RequiredFlags: []string{"--format", "--dir", "--session", "--model", "--variant", "--agent", "--pure", "--auto"},
 	}
 }
 

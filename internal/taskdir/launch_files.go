@@ -123,8 +123,9 @@ func (td *TaskDir) validateManifestDeclarations(manifest []task.RawManifestEntry
 	return nil
 }
 
-// openNativeOutput tolerates native-created read permissions inside a private
-// 0700 directory, but never follows links or accepts writable-by-others files.
+// openNativeOutput accepts native file permissions inside a verified private
+// 0700 directory chain, regardless of the caller's umask. It never follows links
+// or accepts another owner or an inode reachable through additional hard links.
 // Imported protocol evidence always uses the core's stricter 0600 mode.
 func (td *TaskDir) openNativeOutput(name string) (*os.File, error) {
 	dir, err := td.store.openDir(filepath.Join(td.Dir, "provider-output"))
@@ -143,7 +144,7 @@ func (td *TaskDir) openNativeOutput(name string) (*os.File, error) {
 	var st unix.Stat_t
 	info, statErr := f.Stat()
 	err = errors.Join(statErr, unix.Fstat(fd, &st))
-	if err == nil && (!info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1) {
+	if err == nil && (!info.Mode().IsRegular() || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1) {
 		err = task.ErrEvidenceFault
 	}
 	if err != nil {

@@ -16,9 +16,35 @@ const (
 	emptyMCPSettings              = `{"mcpServers":{}}` + "\n"
 )
 
-// printArguments declares only finite task-owned settings. The shared runner
-// materializes their reserved argv slots and delivers the brief over stdin.
+// printArguments declares Claude's native headless print plan. The shared
+// runner delivers the brief over stdin and owns the process lifetime.
 func printArguments(request task.TaskRecord) ([]string, []task.InputFile, error) {
+	return printArgumentsWithReadOnlyPermission(request, "plan")
+}
+
+func historicalNativePrintArguments(request task.TaskRecord) ([]string, []task.InputFile, error) {
+	return printArgumentsWithReadOnlyPermission(request, "dontAsk")
+}
+
+func printArgumentsWithReadOnlyPermission(request task.TaskRecord, readOnlyPermission string) ([]string, []task.InputFile, error) {
+	if err := validateRequest(request); err != nil {
+		return nil, nil, err
+	}
+	permissionMode := readOnlyPermission
+	if request.Mode == WorkspaceWriteMode {
+		permissionMode = "acceptEdits"
+	}
+	arguments := []string{
+		"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose",
+		"--permission-mode", permissionMode, "--permission-prompts", "none",
+	}
+	return appendSessionArguments(request, arguments, nil)
+}
+
+// legacyPrintArguments preserves the adapter-owned restrictions recorded by
+// older Claude tasks. New admission uses printArguments above; this helper is
+// selected only while reconstructing a historical profile.
+func legacyPrintArguments(request task.TaskRecord) ([]string, []task.InputFile, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, nil, err
 	}
@@ -32,15 +58,18 @@ func printArguments(request task.TaskRecord) ([]string, []task.InputFile, error)
 	}
 	arguments := []string{
 		"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose",
-		"--safe-mode", "--restricted", "--tools", tools,
-		"--disallowedTools", "mcp__*", "--strict-mcp-config", "--mcp-config", "",
-		"--settings", "", "--permission-mode", permissionMode, "--permission-prompts", "none",
-		"--disable-slash-commands", "--no-chrome",
+		"--safe-mode", "--restricted", "--tools", tools, "--disallowedTools", "mcp__*",
+		"--strict-mcp-config", "--mcp-config", "", "--settings", "", "--permission-mode", permissionMode,
+		"--permission-prompts", "none", "--disable-slash-commands", "--no-chrome",
 	}
 	inputs := []task.InputFile{
 		{Name: "claude-profile.json", ArgumentIndex: 16, Content: settings},
 		{Name: "empty-mcp.json", ArgumentIndex: 14, Content: emptyMCPSettings},
 	}
+	return appendSessionArguments(request, arguments, inputs)
+}
+
+func appendSessionArguments(request task.TaskRecord, arguments []string, inputs []task.InputFile) ([]string, []task.InputFile, error) {
 	if prior := request.PriorSession; prior != nil {
 		if prior.Provider != Provider || !validSessionID(prior.ConversationID) || task.ValidateTaskID(prior.PredecessorTaskID) != nil {
 			return nil, nil, fmt.Errorf("%w: invalid exact continuation identity", ErrUnsupportedProfile)

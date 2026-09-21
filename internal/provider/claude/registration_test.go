@@ -14,10 +14,13 @@ func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 		t.Fatalf("runtime flag requirements are missing: %+v", description)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 3 {
+	if registration.Prepare == nil || len(registration.Interpreters) != 6 {
 		t.Fatalf("registration did not expose preparation and interpreter: %+v", registration)
 	}
-	if !registration.Interpreters[2].Reference().Equal(LegacyReference()) {
+	if !registration.Interpreters[2].Reference().Equal(legacyNativeReferenceForMode(Mode)) ||
+		!registration.Interpreters[3].Reference().Equal(legacyPortableReferenceForMode(Mode)) ||
+		!registration.Interpreters[4].Reference().Equal(legacyPortableReferenceForMode(WorkspaceWriteMode)) ||
+		!registration.Interpreters[5].Reference().Equal(LegacyReference()) {
 		t.Fatalf("legacy predicate reference is not registered: %+v", registration.Interpreters[2].Reference())
 	}
 }

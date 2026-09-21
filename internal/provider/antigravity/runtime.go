@@ -19,7 +19,7 @@ func RuntimeRequirements() commonprovider.RuntimeCapability {
 	return commonprovider.RuntimeCapability{
 		RequiredFlags: []string{
 			"--input-format", "--output-format", "--sandbox", "--mode", "--add-dir",
-			"--disable-slash-commands", "--print-timeout", "--conversation",
+			"--print-timeout", "--conversation",
 		},
 	}
 }

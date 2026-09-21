@@ -13,16 +13,28 @@ var ErrUnsupportedProfile = errors.New("unsupported-effective-config")
 // execArguments reserves the task-owned output path and places exec-only
 // options before the resume subcommand. The finite brief is always stdin.
 func execArguments(request task.TaskRecord) ([]string, int, error) {
+	return execArgumentsForProfile(request, true)
+}
+
+func legacyExecArguments(request task.TaskRecord) ([]string, int, error) {
+	return execArgumentsForProfile(request, false)
+}
+
+func execArgumentsForProfile(request task.TaskRecord, native bool) ([]string, int, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, 0, err
 	}
-	arguments := []string{
-		"exec", "--json", "--color", "never", "--ignore-user-config", "--ignore-rules", "--strict-config",
-		"--sandbox", request.Mode, "-c", `approval_policy="never"`, "-c", `approvals_reviewer="user"`, "-c", "allow_login_shell=false",
-		"-c", "features.shell_snapshot=false", "-c", "features.shell_snapshot_v2=false", "-c", "features.apps=false",
-		"-c", "features.hooks=false", "-c", "features.plugins=false", "-c", `cli_auth_credentials_store="file"`,
-		"--cd", request.CanonicalCwd, "--output-last-message", "",
+	arguments := []string{"exec", "--json", "--color", "never"}
+	if native {
+		arguments = append(arguments, "--sandbox", request.Mode, "-c", `approval_policy="never"`)
+	} else {
+		arguments = append(arguments,
+			"--ignore-user-config", "--ignore-rules", "--strict-config",
+			"--sandbox", request.Mode, "-c", `approval_policy="never"`, "-c", `approvals_reviewer="user"`, "-c", "allow_login_shell=false",
+			"-c", "features.shell_snapshot=false", "-c", "features.shell_snapshot_v2=false", "-c", "features.apps=false",
+			"-c", "features.hooks=false", "-c", "features.plugins=false", "-c", `cli_auth_credentials_store="file"`)
 	}
+	arguments = append(arguments, "--cd", request.CanonicalCwd, "--output-last-message", "")
 	outputIndex := len(arguments) - 1
 	if prior := request.PriorSession; prior != nil {
 		if prior.Provider != Provider || !validThreadID(prior.ConversationID) || task.ValidateTaskID(prior.PredecessorTaskID) != nil {
