@@ -21,9 +21,10 @@ const (
 )
 
 type interpreter struct {
-	mode           string
-	legacy         bool
-	legacyPortable bool
+	mode             string
+	legacy           bool
+	legacyPortable   bool
+	nativeHistorical bool
 }
 
 // NewInterpreter returns the immutable Claude print stream-json interpreter.
@@ -40,6 +41,10 @@ func newLegacyInterpreter() predicate.Interpreter {
 	return interpreter{mode: Mode, legacy: true}
 }
 
+func newLegacyNativeInterpreter() predicate.Interpreter {
+	return interpreter{mode: Mode, nativeHistorical: true}
+}
+
 func newLegacyPortableInterpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, legacyPortable: true}
 }
@@ -51,6 +56,9 @@ func NewWorkspaceWriteInterpreter() predicate.Interpreter {
 }
 
 func (v interpreter) Reference() task.PredicateRef {
+	if v.nativeHistorical {
+		return legacyNativeReferenceForMode(v.mode)
+	}
 	if v.legacy {
 		return LegacyReference()
 	}
@@ -70,7 +78,7 @@ func (v interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out
 	if err := validateEvaluationInput(v, input, raw, out); err != nil {
 		return task.Interpretation{}, err
 	}
-	state, err := readEvidence(raw, v.mode, v.legacy || v.legacyPortable)
+	state, err := readEvidence(raw, v.mode, v.legacy || v.legacyPortable, v.nativeHistorical)
 	if err != nil {
 		return task.Interpretation{}, err
 	}
@@ -104,11 +112,13 @@ func validateEvaluationInput(v interpreter, input predicate.Input, raw predicate
 	return nil
 }
 
-func readEvidence(raw predicate.Evidence, mode string, strict bool) (eventState, error) {
+func readEvidence(raw predicate.Evidence, mode string, strict, nativeHistorical bool) (eventState, error) {
 	var stdout eventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {
 		var err error
-		if strict {
+		if nativeHistorical {
+			stdout, err = parseHistoricalNativeStdoutForMode(reader, mode)
+		} else if strict {
 			stdout, err = parseLegacyStdoutForMode(reader, mode)
 		} else {
 			stdout, err = parseStdoutForMode(reader, mode)

@@ -29,39 +29,47 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 
 // PrepareExistingCandidate retains the preparation contract of admitted tasks.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision)
+	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
+	if !native {
+		return prepareCandidate(request, false)
+	}
+	var recordedRoots []string
+	if meta.EffectiveConfig.Policy != nil {
+		recordedRoots = meta.EffectiveConfig.Policy.WritableRoots
+	}
+	return prepareCandidateWithEnvironment(request, true, meta.Environment, recordedRoots)
 }
 
 func prepareCandidate(request task.TaskRecord, native bool) (commonprovider.ProfileCandidate, error) {
-	arguments, err := printArguments(request)
+	return prepareCandidateWithEnvironment(request, native, nil, nil)
+}
+
+func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, recordedEnvironment, recordedRoots []string) (commonprovider.ProfileCandidate, error) {
+	arguments, err := candidateArguments(request, native)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	environment, err := prepareProfileEnvironment(os.Environ(), native)
+	prepareEnvironment := prepareProfileEnvironment
+	if recordedEnvironment != nil || len(recordedRoots) > 0 {
+		prepareEnvironment = prepareHistoricalNativeEnvironment
+	}
+	environment, err := prepareEnvironment(candidateEnvironmentValues(recordedEnvironment), native)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	if native {
-		arguments = slices.DeleteFunc(arguments, func(argument string) bool { return argument == "--disable-slash-commands" })
-	}
+	environment.WritableRoots = recordedWritableRoots(environment.WritableRoots, recordedRoots)
 	located, err := commonprovider.LocateCLI("agy")
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}
-	requirements := RuntimeRequirements()
-	if !native {
-		requirements.RequiredFlags = slices.Insert(requirements.RequiredFlags, 5, "--disable-slash-commands")
-	}
+	requirements := candidateRuntimeRequirements(native)
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(located, request.CanonicalCwd, environment.Values, requirements)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
 	}
-	var inventory PolicyInventory
-	if !native {
-		inventory, err = InventorySources(InventoryRequest{Home: environment.Home, Workspace: request.CanonicalCwd})
-		if err != nil {
-			return commonprovider.ProfileCandidate{}, err
-		}
+	inventory, err := candidateInventory(request, environment, native)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
 	}
 	return commonprovider.ProfileCandidate{
 		Directory:     request.CanonicalCwd,
@@ -93,6 +101,46 @@ func prepareCandidate(request task.TaskRecord, native bool) (commonprovider.Prof
 			return prepared, nil
 		},
 	}, nil
+}
+
+func candidateArguments(request task.TaskRecord, native bool) ([]string, error) {
+	arguments, err := printArguments(request)
+	if err != nil {
+		return nil, err
+	}
+	if native {
+		arguments = slices.DeleteFunc(arguments, func(argument string) bool { return argument == "--disable-slash-commands" })
+	}
+	return arguments, nil
+}
+
+func candidateEnvironmentValues(recorded []string) []string {
+	if recorded != nil {
+		return recorded
+	}
+	return os.Environ()
+}
+
+func recordedWritableRoots(current, recorded []string) []string {
+	if len(recorded) != 0 {
+		return slices.Clone(recorded)
+	}
+	return current
+}
+
+func candidateRuntimeRequirements(native bool) commonprovider.RuntimeCapability {
+	requirements := RuntimeRequirements()
+	if !native {
+		requirements.RequiredFlags = slices.Insert(requirements.RequiredFlags, 5, "--disable-slash-commands")
+	}
+	return requirements
+}
+
+func candidateInventory(request task.TaskRecord, environment profileEnvironment, native bool) (PolicyInventory, error) {
+	if native {
+		return PolicyInventory{}, nil
+	}
+	return InventorySources(InventoryRequest{Home: environment.Home, Workspace: request.CanonicalCwd})
 }
 
 func resolveEffectivePolicy(identity runtimeIdentity, environment profileEnvironment, inventory PolicyInventory) (task.EffectiveConfig, error) {

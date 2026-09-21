@@ -3,6 +3,8 @@ package claude
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -44,8 +46,91 @@ func TestFinalizeNativePreparedProfileUsesRuntimeFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.ObservedVersion != "Claude Code 99.7.3" || prepared.Effective.Policy == nil || prepared.Effective.Policy.ProfileRevision != commonprovider.NativeProfileRevision || len(prepared.Effective.Policy.Sources) != 0 || len(prepared.Plan.InputFiles) != 0 {
+	if prepared.ObservedVersion != "Claude Code 99.7.3" || prepared.Effective.Approval != "plan" || prepared.Effective.Policy == nil || prepared.Effective.Policy.ProfileRevision != commonprovider.NativeProfileRevision || len(prepared.Effective.Policy.Sources) != 0 || len(prepared.Plan.InputFiles) != 0 {
 		t.Fatalf("native runtime facts were not finalized: %+v", prepared)
+	}
+}
+
+func TestFinalizeHistoricalNativePreparedProfilePreservesRecordedContract(t *testing.T) {
+	request := profileRequest()
+	arguments, inputs, err := historicalNativePrintArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := commonprovider.CLIInfo{Path: "/usr/local/bin/claude", SHA256: strings.Repeat("a", 64)}
+	environment := profileEnvironment{
+		RuntimeSHA256: cli.SHA256,
+		WritableRoots: []string{"/home/test/.claude"},
+	}
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
+		Executable: cli.Path,
+		Version:    "Claude Code 2.1.270",
+		SHA256:     cli.SHA256,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := finalizeNativePreparedProfileWithContract(request, arguments, inputs, cli, environment, strings.Repeat("b", 64), json.RawMessage(facts), time.Unix(2_000_000_000, 0), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Effective.Approval != "dontAsk" || !prepared.Plan.Predicate.Equal(legacyNativeReferenceForMode(Mode)) {
+		t.Fatalf("historical native contract changed: %+v", prepared)
+	}
+}
+
+func TestExistingNativeReadOnlyReconstructsRecordedLaunchContract(t *testing.T) {
+	home := t.TempDir()
+	binDir := t.TempDir()
+	claude := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(claude, []byte("fixture executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cli, err := commonprovider.LocateCLIPath(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", binDir)
+	request := profileRequest()
+	request.CanonicalCwd = filepath.Join(home, "workspace")
+	meta := task.MetaRecord{
+		Environment: []string{"HOME=" + home, "PATH=" + binDir, "XDG_CONFIG_HOME=relative"},
+		Predicate:   legacyNativeReferenceForMode(Mode),
+		EffectiveConfig: task.EffectiveConfig{
+			Approval: "dontAsk",
+			Policy: &task.PolicyDetails{
+				ProfileRevision: commonprovider.NativeProfileRevision,
+				WritableRoots:   []string{"/tmp", filepath.Join(home, ".claude")},
+			},
+		},
+	}
+	candidate, err := PrepareExistingCandidate(request, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(candidate.Inspection.Environment, "XDG_CONFIG_HOME=relative") {
+		t.Fatalf("historical environment was not retained: %q", candidate.Inspection.Environment)
+	}
+	if candidate.Inspection.Runtime == nil || !slices.Contains(candidate.Inspection.Runtime.RequiredFlags, "--permission-mode") {
+		t.Fatalf("runtime inspection omitted permission flag: %+v", candidate.Inspection)
+	}
+	if !slices.Contains(candidate.WritableRoots, "/tmp") || !slices.Equal(candidate.WritableRoots, meta.EffectiveConfig.Policy.WritableRoots) {
+		t.Fatalf("recorded roots changed: got=%q want=%q", candidate.WritableRoots, meta.EffectiveConfig.Policy.WritableRoots)
+	}
+	if !slices.Contains(candidate.Inspection.Environment, "HOME="+home) {
+		t.Fatalf("recorded HOME was not used: %q", candidate.Inspection.Environment)
+	}
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: cli.Path, SHA256: cli.SHA256, Version: "Claude Code 2.1.270"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := candidate.Finalize(facts, time.Unix(2_000_000_000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Effective.Approval != "dontAsk" || !profile.Plan.Predicate.Equal(legacyNativeReferenceForMode(Mode)) {
+		t.Fatalf("recorded native contract changed: %+v", profile)
 	}
 }
 
@@ -92,7 +177,7 @@ func TestPrintArgumentsPreserveContainmentAndTaskOwnedFilesOnResume(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose", "--permission-mode", "dontAsk", "--permission-prompts", "none"}
+	want := []string{"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--permission-prompts", "none"}
 	fresh, err := FreshSessionID(request.RootID, request.TaskID)
 	if err != nil {
 		t.Fatal(err)

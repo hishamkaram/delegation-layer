@@ -134,6 +134,20 @@ func TestNativeEnvironmentScopesXDGRootsAndAdmitsDefaultState(t *testing.T) {
 	}
 }
 
+func TestNativeEnvironmentRejectsRelativeDiscoveryPaths(t *testing.T) {
+	home := t.TempDir()
+	for _, entry := range []string{
+		"XDG_CONFIG_HOME=relative",
+		"XDG_CONFIG_DIRS=relative:/absolute",
+		"CLAUDE_CONFIG_DIR=relative",
+		"ANTHROPIC_CONFIG_DIR=relative",
+	} {
+		if _, err := prepareNativeEnvironment([]string{"HOME=" + home, entry}); !errors.Is(err, ErrUnsupportedProfile) {
+			t.Fatalf("relative discovery path accepted: %s; err=%v", entry, err)
+		}
+	}
+}
+
 func TestStorageBackendPinCannotBeOverriddenOrDuplicated(t *testing.T) {
 	home := t.TempDir()
 	for _, value := range []string{"", "1", "true", "false", "unknown"} {

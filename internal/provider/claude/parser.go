@@ -30,10 +30,11 @@ var knownResultSubtypes = map[string]struct{}{
 }
 
 type eventState struct {
-	mode     string
-	strict   bool
-	initSeen bool
-	init     initState
+	mode             string
+	strict           bool
+	nativeHistorical bool
+	initSeen         bool
+	init             initState
 
 	// observedSessionID binds identities on every event, including events that
 	// arrive before system/init.  A later init cannot make an earlier
@@ -109,11 +110,19 @@ func parseLegacyStdoutForMode(reader io.Reader, mode string) (eventState, error)
 	return parseStdoutForModeWithPolicy(reader, mode, true)
 }
 
+func parseHistoricalNativeStdoutForMode(reader io.Reader, mode string) (eventState, error) {
+	return parseStdoutForModeWithOptions(reader, mode, false, true)
+}
+
 func parseStdoutForModeWithPolicy(reader io.Reader, mode string, strict bool) (eventState, error) {
+	return parseStdoutForModeWithOptions(reader, mode, strict, false)
+}
+
+func parseStdoutForModeWithOptions(reader io.Reader, mode string, strict, nativeHistorical bool) (eventState, error) {
 	if mode != Mode && mode != WorkspaceWriteMode {
-		return eventState{mode: mode, strict: strict, semanticErr: fmt.Errorf("unsupported Claude permission mode %q", mode)}, nil
+		return eventState{mode: mode, strict: strict, nativeHistorical: nativeHistorical, semanticErr: fmt.Errorf("unsupported Claude permission mode %q", mode)}, nil
 	}
-	state := eventState{mode: mode, strict: strict}
+	state := eventState{mode: mode, strict: strict, nativeHistorical: nativeHistorical}
 	semanticErr, readErr := commonprovider.ReadJSONL(reader, maxEventLineBytes, func(line []byte) error {
 		return processEventLine(&state, line)
 	})
@@ -235,7 +244,7 @@ func applyInitEvent(state *eventState, fields map[string]json.RawMessage) {
 		state.markSemantic("multiple system/init events")
 		return
 	}
-	init, err := decodeInitForModeWithPolicy(fields, state.mode, state.strict)
+	init, err := decodeInitForModeWithOptions(fields, state.mode, state.strict, state.nativeHistorical)
 	if err != nil {
 		state.markSemantic(err.Error())
 		return
@@ -253,11 +262,15 @@ func decodeInitForMode(fields map[string]json.RawMessage, mode string) (initStat
 }
 
 func decodeInitForModeWithPolicy(fields map[string]json.RawMessage, mode string, strict bool) (initState, error) {
+	return decodeInitForModeWithOptions(fields, mode, strict, false)
+}
+
+func decodeInitForModeWithOptions(fields map[string]json.RawMessage, mode string, strict, nativeHistorical bool) (initState, error) {
 	sessionID, version, err := decodeInitIdentity(fields)
 	if err != nil {
 		return initState{}, err
 	}
-	permission, apiKeySource, err := decodeInitPolicyForModeWithPolicy(fields, mode, strict)
+	permission, apiKeySource, err := decodeInitPolicyForModeWithOptions(fields, mode, strict, nativeHistorical)
 	if err != nil {
 		return initState{}, err
 	}
@@ -301,11 +314,18 @@ func decodeInitPolicyForMode(fields map[string]json.RawMessage, mode string) (st
 }
 
 func decodeInitPolicyForModeWithPolicy(fields map[string]json.RawMessage, mode string, strict bool) (string, string, error) {
+	return decodeInitPolicyForModeWithOptions(fields, mode, strict, false)
+}
+
+func decodeInitPolicyForModeWithOptions(fields map[string]json.RawMessage, mode string, strict, nativeHistorical bool) (string, string, error) {
 	permission, err := requiredString(fields, "permissionMode")
 	var wantPermission string
 	switch mode {
 	case Mode:
-		wantPermission = "dontAsk"
+		wantPermission = "plan"
+		if strict || nativeHistorical {
+			wantPermission = "dontAsk"
+		}
 	case WorkspaceWriteMode:
 		wantPermission = "acceptEdits"
 	default:

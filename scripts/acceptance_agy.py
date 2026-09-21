@@ -74,6 +74,13 @@ def provider_runtime_roots(environment: dict[str, str]) -> list[Path]:
             roots.append(Path(environment[name]))
     if environment.get("GOPATH"):
         roots.extend(Path(item) for item in environment["GOPATH"].split(os.pathsep) if item)
+    for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+                 "GEMINI_HOME", "GEMINI_CLI_HOME", "ANTIGRAVITY_HOME", "ANTIGRAVITY_CONFIG_HOME",
+                 "AGY_HOME", "AGY_CONFIG_HOME"):
+        if environment.get(name):
+            roots.append(Path(environment[name]))
+    for name in ("XDG_CONFIG_DIRS", "XDG_DATA_DIRS"):
+        roots.extend(Path(item) for item in environment.get(name, "").split(os.pathsep) if item)
     return sorted({root.resolve(strict=False) for root in roots})
 
 

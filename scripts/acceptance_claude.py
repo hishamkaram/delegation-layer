@@ -50,12 +50,12 @@ from acceptance_supervisor_common import Processes, config_for, digest, read_jso
 
 PROVIDER = "claude:print"
 MODE = "read-only"
-APPROVAL = "dontAsk"
+APPROVAL = "plan"
 # The predicate revision describes the current native output contract. It is
 # independent of the installed Claude CLI release, which is admitted through
 # the runtime capability probe.
 PREDICATE_VERSION = "native-permissions-v1"
-PREDICATE_SHA256 = "c69794753071f23db76e4b5b00cd0c054c0b9f00d30c4fcae093e29f6989ef2c"
+PREDICATE_SHA256 = "8049da50895cfdbdacf9f81678c1a2d4c1f15137e2b89b6a9255d6d1e3873642"
 NATIVE_PROFILE_REVISION = "native-permissions-v1"
 TASK_BUDGET = "120s"
 CANONICAL_TASK_BUDGET = "2m0s"
@@ -612,7 +612,7 @@ def validate_init_profile(parsed: dict[str, object], expected_session: str | Non
             "Claude init tool list is malformed")
     require(len(set(tools)) == len(tools), "Claude init tool list is duplicated")
     permission = init.get("permissionMode")
-    require(permission == APPROVAL, "Claude init permission mode is not dontAsk")
+    require(permission == APPROVAL, "Claude init permission mode is not plan")
     if "model" in init:
         model = init["model"]
         require(isinstance(model, str) and model.strip() == model and model and "\x00" not in model,
@@ -958,7 +958,7 @@ class ClaudeAcceptance:
 
     def provider_argv(self, session_id: str, resume: bool = False) -> list[str]:
         args = [str(self.claude), "--print", "--input-format", "text", "--output-format", "stream-json",
-                "--verbose", "--permission-mode", "dontAsk", "--permission-prompts", "none"]
+                "--verbose", "--permission-mode", "plan", "--permission-prompts", "none"]
         args.extend(["--resume", session_id] if resume else ["--session-id", session_id])
         return args
 

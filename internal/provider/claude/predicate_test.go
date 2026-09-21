@@ -138,7 +138,7 @@ func TestInitPolicyAndExactFieldNamesAreRequired(t *testing.T) {
 		init string
 		want string
 	}{
-		{name: "permission mode", init: strings.Replace(initLine(claudeTestUUID), `"permissionMode":"dontAsk"`, `"permissionMode":"default"`, 1), want: refusalMalformed},
+		{name: "permission mode", init: strings.Replace(initLine(claudeTestUUID), `"permissionMode":"plan"`, `"permissionMode":"default"`, 1), want: refusalMalformed},
 		{name: "wrong case type", init: strings.Replace(initLine(claudeTestUUID), `"type"`, `"Type"`, 1), want: refusalMalformed},
 		{name: "wrong case session", init: strings.Replace(initLine(claudeTestUUID), `"session_id"`, `"Session_ID"`, 1), want: refusalMalformed},
 		{name: "wrong case api key source", init: strings.Replace(initLine(claudeTestUUID), `"apiKeySource"`, `"apikeysource"`, 1), want: refusalMalformed},
@@ -169,6 +169,17 @@ func TestNativeInterpreterAcceptsProviderOwnedPolicyFields(t *testing.T) {
 	interp, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &answer)
 	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "answer" {
 		t.Fatalf("native provider-owned fields were rejected: interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestHistoricalNativeInterpreterAcceptsRecordedDontAskPolicy(t *testing.T) {
+	stdout := jsonl(legacyInitLine(claudeTestUUID), resultLine(claudeTestUUID, "answer"))
+	var answer bytes.Buffer
+	seal := claudeTestSealForPredicate(stdout, legacyNativeReferenceForMode(Mode))
+	input := predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}
+	interp, err := newLegacyNativeInterpreter().Evaluate(input, &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "answer" {
+		t.Fatalf("historical native interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 	}
 }
 
@@ -376,7 +387,7 @@ func TestNativeToolUseNamesAreProviderOwned(t *testing.T) {
 
 func TestLegacyPortableInterpreterRetainsToolRestriction(t *testing.T) {
 	stdout := jsonl(
-		initLine(claudeTestUUID),
+		legacyInitLine(claudeTestUUID),
 		fmt.Sprintf(`{"type":"assistant","session_id":%q,"message":{"content":[{"type":"tool_use","id":"blocked","name":"Bash","input":{"command":"true"}}]}}`, claudeTestUUID),
 		resultLine(claudeTestUUID, "answer"),
 	)

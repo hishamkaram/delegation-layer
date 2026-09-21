@@ -114,6 +114,19 @@ class NativeHarnessTests(unittest.TestCase):
         self.assertIn(Path('/controlled/cache'),
                       gate.provider_runtime_roots(dict(environment, GOCACHE='/controlled/cache')))
 
+    def test_runtime_roots_include_native_discovery_selectors(self):
+        environment = {
+            'HOME': '/controlled/home',
+            'XDG_CONFIG_HOME': '/controlled/config',
+            'XDG_CONFIG_DIRS': os.pathsep.join(('/controlled/config-a', '/controlled/config-b')),
+            'GEMINI_HOME': '/controlled/gemini',
+            'AGY_HOME': '/controlled/agy',
+        }
+        roots = gate.provider_runtime_roots(environment)
+        for root in ('/controlled/config', '/controlled/config-a', '/controlled/config-b',
+                     '/controlled/gemini', '/controlled/agy'):
+            self.assertIn(Path(root), roots)
+
     def test_prepared_evidence_excludes_unvalidated_receipt_data(self):
         prepared = gate.Prepared.__new__(gate.Prepared)
         prepared.data = {'envs': {'SECRET': 'must-not-persist'}, 'status': 'must-not-persist'}

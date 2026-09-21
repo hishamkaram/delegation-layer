@@ -19,10 +19,18 @@ const (
 // printArguments declares Claude's native headless print plan. The shared
 // runner delivers the brief over stdin and owns the process lifetime.
 func printArguments(request task.TaskRecord) ([]string, []task.InputFile, error) {
+	return printArgumentsWithReadOnlyPermission(request, "plan")
+}
+
+func historicalNativePrintArguments(request task.TaskRecord) ([]string, []task.InputFile, error) {
+	return printArgumentsWithReadOnlyPermission(request, "dontAsk")
+}
+
+func printArgumentsWithReadOnlyPermission(request task.TaskRecord, readOnlyPermission string) ([]string, []task.InputFile, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, nil, err
 	}
-	permissionMode := "dontAsk"
+	permissionMode := readOnlyPermission
 	if request.Mode == WorkspaceWriteMode {
 		permissionMode = "acceptEdits"
 	}

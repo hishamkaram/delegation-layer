@@ -28,7 +28,7 @@ def event(value: dict[str, object]) -> bytes:
 
 
 def init_event(session: str = SESSION, tools: list[str] | None = None,
-               permission: str = "dontAsk") -> dict[str, object]:
+               permission: str = "plan") -> dict[str, object]:
     return {
         "type": "system", "subtype": "init", "session_id": session,
         "claude_code_version": "2.1.270", "cwd": "/workspace",
@@ -247,7 +247,7 @@ class ClaudeOracleTests(unittest.TestCase):
             parsed = gate.parse_claude_events(stream([init_event(), answer_event()]))
             profile = gate.validate_init_profile(parsed, SESSION)
             self.assertEqual(profile["tools"], ["Read", "Glob", "Grep"])
-            self.assertEqual(profile["permission_mode"], "dontAsk")
+            self.assertEqual(profile["permission_mode"], "plan")
             self.assertEqual(parsed["init"].get("apiKeySource"), "none")
             for tools in (["Read", "Glob", "Grep", "Bash"], ["Read", "Glob"], ["Read", "Read", "Glob", "Grep"]):
                 changed = init_event(tools=list(tools))

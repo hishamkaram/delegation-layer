@@ -27,10 +27,18 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 }
 
 func prepareNativeEnvironment(values []string) (profileEnvironment, error) {
-	return prepareProfileEnvironment(values, true)
+	return prepareProfileEnvironmentWithOptions(values, true, true)
 }
 
 func prepareProfileEnvironment(values []string, native bool) (profileEnvironment, error) {
+	return prepareProfileEnvironmentWithOptions(values, native, native)
+}
+
+func prepareHistoricalNativeEnvironment(values []string) (profileEnvironment, error) {
+	return prepareProfileEnvironmentWithOptions(values, true, false)
+}
+
+func prepareProfileEnvironmentWithOptions(values []string, native, rejectRelativeNativeDiscovery bool) (profileEnvironment, error) {
 	entries, err := parseEnvironmentForProfile(values, native)
 	if err != nil {
 		return profileEnvironment{}, err
@@ -41,7 +49,7 @@ func prepareProfileEnvironment(values []string, native bool) (profileEnvironment
 	}
 	result := profileEnvironment{Home: home, ClaudeHome: claudeHome}
 	result.Values = profileEnvironmentValues(entries, native)
-	result.WritableRoots, err = profileWritableRoots(home, claudeHome, entries, native)
+	result.WritableRoots, err = profileWritableRootsWithOptions(home, claudeHome, entries, native, rejectRelativeNativeDiscovery)
 	if err != nil {
 		return profileEnvironment{}, err
 	}
@@ -85,36 +93,67 @@ func profileEnvironmentValues(entries map[string]string, native bool) []string {
 }
 
 func profileWritableRoots(home, claudeHome string, entries map[string]string, native bool) ([]string, error) {
+	return profileWritableRootsWithOptions(home, claudeHome, entries, native, native)
+}
+
+func profileWritableRootsWithOptions(home, claudeHome string, entries map[string]string, native, rejectRelativeNativeDiscovery bool) ([]string, error) {
 	roots := []string{claudeHome, filepath.Join(home, ".claude.json"), filepath.Join(home, ".cache"), filepath.Join(home, "Library/Application Support/Claude"), filepath.Join(home, "Library/Caches"), filepath.Join(home, "Library/Logs"), filepath.Join(home, "Library/Keychains"), "/tmp", "/var/tmp", "/var/folders", "/dev"}
+	var err error
 	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
 		if entries[key] != "" {
 			roots = append(roots, entries[key])
 		}
 	}
 	if native {
-		roots = appendNativeDiscoveryRoots(roots, entries)
+		roots, err = appendNativeDiscoveryRoots(roots, entries, rejectRelativeNativeDiscovery)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return canonicalizeWritableRoots(roots)
 }
 
-func appendNativeDiscoveryRoots(roots []string, entries map[string]string) []string {
+func appendNativeDiscoveryRoots(roots []string, entries map[string]string, rejectRelative bool) ([]string, error) {
 	for _, key := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_DIRS"} {
-		values := []string{entries[key]}
-		if strings.HasSuffix(key, "_DIRS") {
-			values = filepath.SplitList(entries[key])
-		}
-		for _, value := range values {
-			if filepath.IsAbs(value) {
-				roots = append(roots, filepath.Join(value, "claude"))
+		for _, value := range nativeDiscoveryValues(key, entries[key]) {
+			var err error
+			roots, err = appendNativeDiscoveryRoot(roots, key, value, rejectRelative, true)
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
 	for _, key := range []string{"CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR"} {
-		if value := entries[key]; filepath.IsAbs(value) {
-			roots = append(roots, value)
+		var err error
+		roots, err = appendNativeDiscoveryRoot(roots, key, entries[key], rejectRelative, false)
+		if err != nil {
+			return nil, err
 		}
 	}
-	return roots
+	return roots, nil
+}
+
+func nativeDiscoveryValues(key, value string) []string {
+	if strings.HasSuffix(key, "_DIRS") {
+		return filepath.SplitList(value)
+	}
+	return []string{value}
+}
+
+func appendNativeDiscoveryRoot(roots []string, key, value string, rejectRelative, appendClaudeChild bool) ([]string, error) {
+	if value == "" {
+		return roots, nil
+	}
+	if !filepath.IsAbs(value) {
+		if rejectRelative {
+			return nil, fmt.Errorf("%w: native Claude discovery path %s must be absolute", ErrUnsupportedProfile, key)
+		}
+		return roots, nil
+	}
+	if appendClaudeChild {
+		value = filepath.Join(value, "claude")
+	}
+	return append(roots, value), nil
 }
 
 func canonicalizeWritableRoots(roots []string) ([]string, error) {
