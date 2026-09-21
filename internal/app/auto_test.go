@@ -27,9 +27,17 @@ func (autoTestInterpreter) Evaluate(predicate.Input, predicate.Evidence, io.Writ
 }
 
 func TestSelectAutoProviderUsesStaticReadinessAndDefaultPermission(t *testing.T) {
-	workspace := filepath.Clean(t.TempDir())
-	root := filepath.Clean(t.TempDir())
-	runtimeRoot := filepath.Clean(t.TempDir())
+	canonicalTempDir := func() string {
+		t.Helper()
+		path, err := config.CanonicalizePath(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	workspace := canonicalTempDir()
+	root := canonicalTempDir()
+	runtimeRoot := canonicalTempDir()
 	makeRegistration := func(id string, prepare commonprovider.PrepareCandidate) commonprovider.Registration {
 		ref := task.PredicateRef{Adapter: id, Mode: config.ModeReadOnly, Version: "1", SHA256: task.ComputeSHA256([]byte(id))}
 		return commonprovider.Registration{

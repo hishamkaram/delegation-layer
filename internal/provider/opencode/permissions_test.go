@@ -21,7 +21,8 @@ type inlinePermissionConfig struct {
 }
 
 func TestReadOnlyEnvironmentInstallsNativePermissionOverrides(t *testing.T) {
-	values, err := environmentForMode([]string{"PATH=/bin", "HOME=/tmp/home"}, ModeReadOnly, "/workspace")
+	home := canonicalTestPath(t, "/tmp/home")
+	values, err := environmentForMode([]string{"PATH=/bin", "HOME=" + home}, ModeReadOnly, canonicalTestPath(t, "/workspace"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +32,7 @@ func TestReadOnlyEnvironmentInstallsNativePermissionOverrides(t *testing.T) {
 	if !slices.Contains(values, "OPENCODE_DISABLE_PROJECT_CONFIG=1") {
 		t.Fatal("read-only environment did not disable project configuration")
 	}
-	if !slices.Contains(values, "XDG_CONFIG_HOME=/tmp/home/.config/delegation-layer-opencode") {
+	if !slices.Contains(values, "XDG_CONFIG_HOME="+filepath.Join(home, ".config/delegation-layer-opencode")) {
 		t.Fatalf("read-only environment did not isolate OpenCode config: %q", values)
 	}
 	config := inlineConfig(t, values)
@@ -116,8 +117,9 @@ func TestPolicyProjectionRejectsAutomaticCompaction(t *testing.T) {
 }
 
 func TestWorkspaceEnvironmentInstallsNativeContainmentPolicy(t *testing.T) {
+	home := canonicalTestPath(t, "/tmp/home")
 	workspace := testWorkspace(t)
-	values, err := environmentForMode([]string{"PATH=/bin", "HOME=/tmp/home"}, ModeWorkspaceWrite, workspace)
+	values, err := environmentForMode([]string{"PATH=/bin", "HOME=" + home}, ModeWorkspaceWrite, workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +129,7 @@ func TestWorkspaceEnvironmentInstallsNativeContainmentPolicy(t *testing.T) {
 	if !slices.Contains(values, "OPENCODE_DISABLE_PROJECT_CONFIG=1") {
 		t.Fatal("workspace-write environment did not disable project configuration")
 	}
-	if !slices.Contains(values, "XDG_CONFIG_HOME=/tmp/home/.config/delegation-layer-opencode") {
+	if !slices.Contains(values, "XDG_CONFIG_HOME="+filepath.Join(home, ".config/delegation-layer-opencode")) {
 		t.Fatalf("workspace-write environment did not isolate OpenCode config: %q", values)
 	}
 	config := inlineConfig(t, values)
@@ -507,6 +509,15 @@ func testWorkspace(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return workspace
+}
+
+func canonicalTestPath(t *testing.T, path string) string {
+	t.Helper()
+	canonical, err := config.CanonicalizePath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }
 
 func writeGitConfig(t *testing.T, directory, contents string) {
