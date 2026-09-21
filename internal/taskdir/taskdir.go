@@ -96,6 +96,32 @@ func (td *TaskDir) Close() error {
 	return nil
 }
 
+// RunnerLeaseReleased checks the run lease without waiting. A busy run lease
+// means a budget-stop handoff is durable but the runner has not finished
+// releasing its execution authority yet.
+func (td *TaskDir) RunnerLeaseReleased() (released bool, resultErr error) {
+	if td == nil || td.runLock == nil || td.store == nil || td.store.maintLock == nil {
+		return false, task.ErrInvalidPermit
+	}
+	if err := td.store.maintLock.LockSHNonblocking(); err != nil {
+		if errors.Is(err, task.ErrLockBusy) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
+	if err := td.runLock.LockEXNonblocking(); err != nil {
+		if errors.Is(err, task.ErrLockBusy) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := td.runLock.Unlock(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) CreateTask(id string, req *task.TaskRecord, brief []byte, meta *task.MetaRecord) (_ *TaskDir, resultErr error) {
 	reqData, metaData, err := s.validateCreateInput(id, req, brief, meta)
 	if err != nil {

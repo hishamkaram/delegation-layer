@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const installerPath = resolve(process.argv[2] ?? join(repositoryRoot, "scripts", "install-agent-integration.mjs"));
-const sourcePath = join(repositoryRoot, "skills", "agent-integration", "SKILL.md");
+const sourceDirectory = join(repositoryRoot, "skills", "agent-integration");
 
 function runInstaller(args, { cwd, home, path, input = "" }) {
   const result = spawnSync(process.execPath, [installerPath, ...args], {
@@ -24,9 +24,28 @@ function runInstaller(args, { cwd, home, path, input = "" }) {
 }
 
 async function assertInstalled(target) {
-  const installed = await readFile(join(target, "SKILL.md"));
-  const source = await readFile(sourcePath);
-  assert.deepEqual(installed, source);
+  async function files(directory, relative = "") {
+    const entries = await readdir(join(directory, relative), { withFileTypes: true });
+    const result = [];
+    for (const entry of entries) {
+      const child = join(relative, entry.name);
+      if (entry.isDirectory()) {
+        result.push(...(await files(directory, child)));
+      } else {
+        result.push(child);
+      }
+    }
+    return result.sort();
+  }
+
+  const sourceFiles = await files(sourceDirectory);
+  const installedFiles = await files(target);
+  assert.deepEqual(installedFiles, sourceFiles);
+  for (const relative of sourceFiles) {
+    const installed = await readFile(join(target, relative));
+    const source = await readFile(join(sourceDirectory, relative));
+    assert.deepEqual(installed, source, relative);
+  }
 }
 
 const root = await mkdtemp(join(tmpdir(), "delegation-layer-installer-"));
@@ -105,6 +124,24 @@ try {
   const legacy = runInstaller(["--target", legacyTarget], { cwd: project, home, path: bin });
   assert.equal(legacy.status, 0, legacy.stderr);
   await assertInstalled(legacyTarget);
+
+  const nestedConflictTarget = join(root, "nested-conflict-target");
+  await mkdir(join(nestedConflictTarget, "references"), { recursive: true });
+  const nestedConflictFile = join(nestedConflictTarget, "references", "result-handling.md");
+  await writeFile(nestedConflictFile, "local customization\n");
+  const nestedConflict = runInstaller(["--target", nestedConflictTarget], { cwd: project, home, path: bin });
+  assert.equal(nestedConflict.status, 1);
+  assert.match(nestedConflict.stderr, /use --force/);
+  assert.equal(await readFile(nestedConflictFile, "utf8"), "local customization\n");
+
+  const symlinkTarget = join(root, "symlink-target");
+  const outside = join(root, "outside");
+  await mkdir(symlinkTarget, { recursive: true });
+  await mkdir(outside, { recursive: true });
+  await symlink(outside, join(symlinkTarget, "references"), "dir");
+  const symlinkInstall = runInstaller(["--target", symlinkTarget], { cwd: project, home, path: bin });
+  assert.equal(symlinkInstall.status, 1);
+  assert.match(symlinkInstall.stderr, /must not contain symlink components/);
 
   const invalidHarness = runInstaller(["install", "--harness", "unknown"], {
     cwd: project,

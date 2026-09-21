@@ -58,8 +58,13 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 }
 
 func runtimeWritableRoots(home string, entries map[string]string) ([]string, error) {
+	delegationConfigHome, err := delegationConfigHome(home, entries["XDG_CONFIG_HOME"])
+	if err != nil {
+		return nil, err
+	}
 	paths := []string{
 		"/tmp", "/var/tmp", "/var/folders", "/dev",
+		delegationConfigHome,
 		filepath.Join(home, ".opencode"),
 		filepath.Join(home, ".config/opencode"),
 		filepath.Join(home, ".local/share/opencode"),
@@ -79,7 +84,11 @@ func runtimeWritableRoots(home string, entries map[string]string) ([]string, err
 	// provider-specific child, so the entire shared directory must not be
 	// classified as writable. This also keeps delegation-layer's default state
 	// root ($XDG_CONFIG_HOME/delegation-layer on Linux) disjoint.
-	for _, name := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
+	// XDG_CONFIG_HOME is replaced by environmentForMode with the isolated
+	// delegation config root above. Including its provider child here would
+	// make the candidate depend on whether the caller already has that
+	// replacement applied (admission versus runner reconstruction).
+	for _, name := range []string{"XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
 		if value := entries[name]; value != "" {
 			paths = append(paths, filepath.Join(value, "opencode"))
 		}
@@ -93,4 +102,21 @@ func runtimeWritableRoots(home string, entries map[string]string) ([]string, err
 	}
 	slices.Sort(paths)
 	return slices.Compact(paths), nil
+}
+
+func delegationConfigHome(home, xdgConfigHome string) (string, error) {
+	base := xdgConfigHome
+	if base == "" {
+		base = filepath.Join(home, ".config")
+	}
+	base = filepath.Clean(base)
+	path := base
+	if filepath.Base(base) != "delegation-layer-opencode" {
+		path = filepath.Join(base, "delegation-layer-opencode")
+	}
+	path, err := config.CanonicalizePath(path)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid isolated config home", ErrUnsupportedProfile)
+	}
+	return path, nil
 }

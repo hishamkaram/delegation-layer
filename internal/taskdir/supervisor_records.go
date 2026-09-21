@@ -39,6 +39,17 @@ func (td *TaskDir) OpenBriefForExecution() (*os.File, error) {
 	return f, nil
 }
 
+// ReadBrief returns the validated immutable brief for a continuation request.
+// It is bounded by the same task brief limit used at creation and never
+// exposes the execution-only writable path.
+func (td *TaskDir) ReadBrief() ([]byte, error) {
+	brief, _, _, _, _, err := td.loadAndValidatePreparedSet()
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), brief...), nil
+}
+
 func (td *TaskDir) ReadSubmission() (*task.SubmitRecord, error) {
 	_, _, meta, spec, hash, err := td.loadAndValidatePreparedSet()
 	if err != nil {

@@ -101,6 +101,41 @@ func TestCatalogDescriptionsAreDeterministicAndDefensive(t *testing.T) {
 	}
 }
 
+func TestCatalogPreservesLegacyContinuationOption(t *testing.T) {
+	catalog, err := NewCatalog(testRegistration("alpha:print", "read-only", OptionContinuation))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, err := catalog.Lookup("alpha:print")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if registration.Description.Continuation != ContinuationNative {
+		t.Fatalf("legacy continuation option was downgraded: %q", registration.Description.Continuation)
+	}
+}
+
+func TestCatalogRejectsInconsistentContinuationMetadata(t *testing.T) {
+	cases := []struct {
+		name         string
+		continuation ContinuationMode
+		options      []string
+	}{
+		{name: "unsupported with option", continuation: ContinuationUnsupported, options: []string{OptionContinuation}},
+		{name: "native without option", continuation: ContinuationNative},
+		{name: "checkpoint", continuation: ContinuationCheckpoint, options: []string{OptionContinuation}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			registration := testRegistration("alpha:print", "read-only", testCase.options...)
+			registration.Description.Continuation = testCase.continuation
+			if _, err := NewCatalog(registration); !errors.Is(err, ErrInvalidDescriptor) {
+				t.Fatalf("inconsistent continuation metadata was accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestNewCatalogRejectsMalformedRuntimeCapability(t *testing.T) {
 	cases := []struct {
 		name string

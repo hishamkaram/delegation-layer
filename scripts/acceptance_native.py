@@ -303,6 +303,32 @@ class NativeAcceptance:
         self.tasks[name] = task_id
         return task_id
 
+    def continue_task(self, name: str, brief: Path, predecessor: str) -> str:
+        task_id = secrets.token_hex(16)
+        argv: list[object] = [self.delegate, "--root", self.state, "--pueue-config", self.config,
+                              "--runner", self.runner, "continue", "--task", predecessor,
+                              "--brief", brief, "--budget", TASK_BUDGET, "--json"]
+        if self.args.model:
+            argv.extend(["--model", self.args.model])
+        if self.args.effort:
+            argv.extend(["--effort", self.args.effort])
+        process = self.direct(name, argv, expected={0, 1, 2}, timeout=60)
+        response = parse_json_output(process, name)
+        write_json(self.output / f"{name}.json", response)
+        require(response.get("command") == "continue", f"{name} did not use the continuation command")
+        require(response.get("parent_task_id") == predecessor,
+                f"{name} changed the predecessor identity")
+        require(response.get("admission") == "admitted", f"{name} was not admitted")
+        successor = response.get("task_id")
+        require(isinstance(successor, str), f"{name} returned no successor task")
+        root_id, numeric_id = dispatch_binding(response, successor, name)
+        if self.root_id is None:
+            self.root_id = root_id
+        require(root_id == self.root_id, "continuation changed root identity")
+        self.numeric_ids[successor] = numeric_id
+        self.tasks[name] = successor
+        return successor
+
     def wait_done(self, name: str, task_id: str) -> None:
         require(self.root_id is not None, "root identity is unavailable")
         label = f"delegate:{self.root_id}:{task_id}"
@@ -620,7 +646,7 @@ class NativeAcceptance:
         self.task_binding(first)
         first_session = self.session_ref(first)
         first_record = task_digest_snapshot(self.records["fresh-collect"]["directory"])
-        second = self.dispatch("resume-dispatch", self.brief("resume", continuation=True), first)
+        second = self.continue_task("resume-dispatch", self.brief("resume", continuation=True), first)
         self.wait_done("resume", second)
         self.collect("resume-collect", second)
         self.task_binding(second, first, first_session)

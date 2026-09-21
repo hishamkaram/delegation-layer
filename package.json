@@ -1,6 +1,6 @@
 {
   "name": "delegation-layer",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Multi-provider AI agent delegation CLI and Agent Skill for running bounded coding tasks across provider CLIs.",
   "keywords": [
     "ai-agents",
@@ -24,7 +24,7 @@
     "LICENSE",
     "docs/assets/delegation-layer-hero.jpg",
     "install.sh",
-    "skills/agent-integration/SKILL.md",
+    "skills/agent-integration/",
     "scripts/install-agent-integration.mjs",
     "scripts/install-cli.mjs"
   ],

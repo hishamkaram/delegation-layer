@@ -379,6 +379,63 @@ func TestStopReceiptsRemainDistinctAndBound(t *testing.T) {
 	testAbsent(t, filepath.Join(td.Dir, "outcome.json"))
 }
 
+func TestTimeoutSessionReleaseAllowsExactContinuationBeforeOutcome(t *testing.T) {
+	s := testStore(t)
+	td := supervisorTask(t, s)
+	supervisorSubmit(t, td)
+	supervisorReceipt(t, td)
+	start := consumeStart(t, td)
+	stopID := "budget"
+	permit, err := td.PrepareStop(stopID, "budget", time.Now().Add(time.Minute))
+	must(t, err)
+	must(t, permit.Consume())
+	must(t, permit.Release())
+	must(t, td.RecordStopReply(stopID, task.StopReplyFacts{NumericTaskID: 7, Action: "kill", Acknowledged: true}))
+	must(t, td.RecordStopObservation(stopID, task.StopObservationFacts{NumericTaskID: 7, State: "ended", Terminated: true}))
+	must(t, start.Release())
+	writeTestFile(t, filepath.Join(td.Dir, "provider.exit"), []byte("sealed before outcome publication"))
+	must(t, td.ClaimSession("fixture:test", "timeout-session"))
+	must(t, td.ReleaseSessionAfterTimeout("fixture:test", "timeout-session"))
+
+	successor := supervisorTask(t, s)
+	must(t, successor.ClaimSession("fixture:test", "timeout-session"))
+}
+
+func TestTimeoutSessionReleaseRemainsValidAfterOutcomePublication(t *testing.T) {
+	s := testStore(t)
+	td := supervisorTask(t, s)
+	supervisorSubmit(t, td)
+	supervisorReceipt(t, td)
+	start := consumeStart(t, td)
+	must(t, td.RecordStarted(0))
+	must(t, td.WriteRawFiles("answer\n", ""))
+	must(t, func() error {
+		_, err := td.Seal(task.InvocationStarted, 0, "", task.FixturePredicateRef())
+		return err
+	}())
+	stopID := "budget"
+	permit, err := td.PrepareStop(stopID, "budget", time.Now().Add(time.Minute))
+	must(t, err)
+	must(t, permit.Consume())
+	must(t, permit.Release())
+	must(t, td.RecordStopReply(stopID, task.StopReplyFacts{NumericTaskID: 7, Action: "kill", Acknowledged: true}))
+	must(t, td.RecordStopObservation(stopID, task.StopObservationFacts{NumericTaskID: 7, State: "ended", Terminated: true}))
+	must(t, start.Release())
+	must(t, td.ClaimSession("fixture:test", "timeout-session"))
+	must(t, td.ReleaseSessionAfterTimeout("fixture:test", "timeout-session"))
+	outcome, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef())
+	if cleanupErr != nil || collectErr != nil {
+		t.Fatalf("publishing delayed outcome cleanup=%v collect=%v", cleanupErr, collectErr)
+	}
+	if outcome == nil {
+		t.Fatal("delayed outcome was not published")
+	}
+	must(t, td.ReleaseSession("fixture:test", "timeout-session", outcome.EvidenceSHA256))
+
+	successor := supervisorTask(t, s)
+	must(t, successor.ClaimSession("fixture:test", "timeout-session"))
+}
+
 func TestContextStopRecordsRejectCanceledBeforeStaging(t *testing.T) {
 	s := testStore(t)
 	td := supervisorTask(t, s)

@@ -47,7 +47,8 @@ profile revision, or digest is compared with a checked-in value.
   - Absolute absence of timeout markers (e.g. `[agy] print timeout`), refusal envelopes, or error payloads.
   - Nonzero exit code with a success-shaped body is treated as a conflicting completion and rejected.
 - **Continuation**:
-  - Continuation tasks reference layer-recorded session handles from completed tasks.
+  - Continuation tasks reference layer-recorded session handles from a predecessor with either a validated terminal outcome or durable supervisor-ended budget-stop evidence.
+  - Budget-stop evidence authorizes session handoff only; `outcome.json` remains the sole task-completion authority.
   - Active sessions are protected by durable session claims under `.session.lock`.
   - Continuation invokes the provider using explicit session resumption flags (e.g. `--conversation <id>`, `resume <uuid> -`, `--resume <uuid>`).
 

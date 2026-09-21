@@ -257,6 +257,7 @@ type MetaRecord struct {
 	Approval           string          `json:"approval"`
 	ProviderExecutable string          `json:"provider_executable"`
 	ProviderVersion    string          `json:"provider_version"`
+	RunnerExecutable   string          `json:"runner_executable,omitempty"`
 	PublisherBuild     string          `json:"publisher_build"`
 	PublisherVersion   string          `json:"publisher_version"`
 	// Environment is the adapter's bounded, nonsecret launch environment.

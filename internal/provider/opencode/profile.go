@@ -53,6 +53,54 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 	}, nil
 }
 
+// PrepareExistingCandidate reconstructs an admitted task from its recorded
+// launch environment. This keeps historical OpenCode tasks bound to the
+// environment and writable roots that were admitted with them while new tasks
+// use the current isolated configuration policy above.
+func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+	if len(meta.Environment) == 0 {
+		return PrepareCandidate(request)
+	}
+	arguments, err := runArguments(request)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	environment, err := prepareEnvironment(meta.Environment)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	if meta.EffectiveConfig.Policy != nil {
+		// Keep the exact writable roots admitted with an older task. The
+		// current environment policy may add the isolated config root, but
+		// recovery must continue to match the immutable historical profile.
+		environment.WritableRoots = slices.Clone(meta.EffectiveConfig.Policy.WritableRoots)
+	}
+	cli, err := resolveExecutable()
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	launchEnvironment := slices.Clone(meta.Environment)
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, launchEnvironment, RuntimeRequirements())
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
+	}
+	definition, err = configureInspection(definition, request.Mode, request.CanonicalCwd)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	if _, policyErr := effectivePolicy(request, environment, cli.SHA256, ""); policyErr != nil {
+		return commonprovider.ProfileCandidate{}, policyErr
+	}
+	return commonprovider.ProfileCandidate{
+		Directory:     request.CanonicalCwd,
+		WritableRoots: slices.Clone(environment.WritableRoots),
+		Inspection:    &definition,
+		Finalize: func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
+			return finalizeCandidate(request, arguments, launchEnvironment, cli, environment, data)
+		},
+	}, nil
+}
+
 func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, data json.RawMessage) (commonprovider.PreparedProfile, error) {
 	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
 	if decodeErr != nil || facts.Runtime == nil {

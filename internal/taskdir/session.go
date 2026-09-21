@@ -166,6 +166,12 @@ func (td *TaskDir) terminalProof(digest string) (resultErr error) {
 		if winner.EvidenceSHA256 == digest || winner.Payload.SHA256 == digest {
 			return td.acknowledgeRecord("outcome.json")
 		}
+		// A timeout release is a valid handoff proof even when the provider
+		// publishes its terminal outcome after the release. Keep the recorded
+		// handoff valid while outcome.json remains the terminal authority.
+		if td.matchesTimeoutProof(digest) {
+			return td.acknowledgeRecord("outcome.json")
+		}
 		return task.ErrEvidenceFault
 	}
 	if !errors.Is(err, errNoOutcome) {
@@ -178,6 +184,9 @@ func (td *TaskDir) terminalProof(digest string) (resultErr error) {
 	if exists {
 		return task.ErrEvidenceFault
 	}
+	if td.matchesTimeoutProof(digest) {
+		return nil
+	}
 	seal, err := td.readSeal(meta.Predicate, spec, metaHash)
 	if err != nil {
 		return fmt.Errorf("%w: %w", task.ErrSessionBusy, err)
@@ -188,43 +197,110 @@ func (td *TaskDir) terminalProof(digest string) (resultErr error) {
 	return task.ErrSessionBusy
 }
 
+func (td *TaskDir) matchesTimeoutProof(digest string) bool {
+	timeoutDigest, err := td.timeoutEvidenceDigest()
+	if err != nil {
+		// Timeout evidence is an optional handoff proof. An ordinary release
+		// must retain its established terminal-proof behavior when an optional
+		// stop side record is incomplete or malformed; the explicit timeout
+		// release path remains strict through timeoutEvidenceDigest directly.
+		return false
+	}
+	if timeoutDigest != digest {
+		return false
+	}
+	return true
+}
+
+// ReleaseSessionAfterTimeout transfers a continuation claim after a budget
+// stop has a durable ended observation but before the provider can publish an
+// outcome. The stop observation is the handoff proof; outcome.json remains the
+// task-completion authority even if provider.exit was sealed in the crash
+// window before publication.
+func (td *TaskDir) ReleaseSessionAfterTimeout(provider, conversation string) error {
+	digest, err := td.timeoutEvidenceDigest()
+	if err != nil {
+		return err
+	}
+	return td.ReleaseSession(provider, conversation, digest)
+}
+
+func (td *TaskDir) timeoutEvidenceDigest() (string, error) {
+	records, err := td.ReadStopRecords()
+	if err != nil {
+		return "", err
+	}
+	for _, record := range records {
+		if record.Request == nil || record.Request.Cause != "budget" || record.Observation == nil || !record.Observation.Terminated {
+			continue
+		}
+		data, err := task.MarshalCanonical(record.Observation)
+		if err != nil {
+			return "", err
+		}
+		return task.ComputeSHA256(data), nil
+	}
+	return "", os.ErrNotExist
+}
+
 func (td *TaskDir) ReleaseSession(provider, conversation, digest string) error {
 	rec := task.SessionReleaseRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, Provider: provider, ConversationID: conversation, PredecessorEvidenceSHA256: digest, ReleasedAt: timestamp()}
 	if err := task.ValidateSessionReleaseRecord(&rec); err != nil {
 		return err
 	}
 	return td.withSession(provider, conversation, func(dir string) error {
-		claim, e := td.readClaim(dir, td.TaskID, provider, conversation)
-		if e != nil {
-			return e
-		}
-		existing, e := td.readRelease(dir, claim)
-		if e == nil {
-			if existing.PredecessorEvidenceSHA256 != digest {
-				return task.ErrEvidenceFault
-			}
-			return td.store.barrierDir(dir)
-		}
-		if !errors.Is(e, os.ErrNotExist) {
-			return e
-		}
-		owner, e := td.activeSessionOwner(dir, provider, conversation)
-		if e != nil {
-			return e
-		}
-		if owner != td.TaskID {
-			return task.ErrSessionBusy
-		}
-		if e = td.terminalProof(digest); e != nil {
-			return e
-		}
-		data, e := marshalControlRecord(rec)
-		if e != nil {
-			return e
-		}
-		_, cleanup, e := td.store.stageAndCommit(dir, td.TaskID+".release.json", data, td.store.faultInjector)
-		return errors.Join(e, cleanup)
+		return td.releaseSessionRecord(dir, rec)
 	})
+}
+
+func (td *TaskDir) releaseSessionRecord(dir string, rec task.SessionReleaseRecord) error {
+	claim, err := td.readClaim(dir, rec.TaskID, rec.Provider, rec.ConversationID)
+	if err != nil {
+		return err
+	}
+	existing, err := td.readRelease(dir, claim)
+	if err == nil {
+		return td.reconcileSessionRelease(dir, existing, rec.PredecessorEvidenceSHA256)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	owner, err := td.activeSessionOwner(dir, rec.Provider, rec.ConversationID)
+	if err != nil {
+		return err
+	}
+	if owner != rec.TaskID {
+		return task.ErrSessionBusy
+	}
+	if err := td.terminalProof(rec.PredecessorEvidenceSHA256); err != nil {
+		return err
+	}
+	return td.commitSessionRelease(dir, rec)
+}
+
+func (td *TaskDir) reconcileSessionRelease(dir string, existing *task.SessionReleaseRecord, digest string) error {
+	if existing.PredecessorEvidenceSHA256 == digest {
+		return td.store.barrierDir(dir)
+	}
+	if !td.matchesTimeoutProof(existing.PredecessorEvidenceSHA256) {
+		return task.ErrEvidenceFault
+	}
+	// A timeout handoff can be recorded before the provider publishes
+	// its terminal outcome. Accept the later authoritative digest as
+	// the same completed release after validating it independently.
+	if err := td.terminalProof(digest); err != nil {
+		return err
+	}
+	return td.store.barrierDir(dir)
+}
+
+func (td *TaskDir) commitSessionRelease(dir string, rec task.SessionReleaseRecord) error {
+	data, err := marshalControlRecord(rec)
+	if err != nil {
+		return err
+	}
+	_, cleanup, err := td.store.stageAndCommit(dir, rec.TaskID+".release.json", data, td.store.faultInjector)
+	return errors.Join(err, cleanup)
 }
 
 func (td *TaskDir) validateReleaseNames(dir, provider, conversation string, entries []os.DirEntry) error {

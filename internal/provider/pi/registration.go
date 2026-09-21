@@ -16,6 +16,7 @@ func Description() commonprovider.Description {
 			commonprovider.OptionEffort,
 			commonprovider.OptionModel,
 		},
+		Continuation: commonprovider.ContinuationNative,
 		Runtime:      RuntimeRequirements(),
 		Discoverable: true,
 	}

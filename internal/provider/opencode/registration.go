@@ -16,6 +16,7 @@ func Description() commonprovider.Description {
 			commonprovider.OptionEffort,
 			commonprovider.OptionModel,
 		},
+		Continuation: commonprovider.ContinuationNative,
 		Runtime:      RuntimeRequirements(),
 		Discoverable: true,
 	}
@@ -26,8 +27,9 @@ func Description() commonprovider.Description {
 // immutable output contract.
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
-		Description: Description(),
-		Prepare:     PrepareCandidate,
+		Description:     Description(),
+		Prepare:         PrepareCandidate,
+		PrepareExisting: PrepareExistingCandidate,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(ModeReadOnly),
 			NewInterpreter(ModeWorkspaceWrite),

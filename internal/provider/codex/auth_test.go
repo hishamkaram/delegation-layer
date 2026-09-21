@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
 func fixtureJWT(t *testing.T, claims any) string {
@@ -56,7 +58,7 @@ func TestPersonalAuthRecognizesOnlyNonCloudPlans(t *testing.T) {
 		}
 	}
 	for _, plan := range []string{"", "business", "enterprise", "edu", "unknown", "future-plan"} {
-		if _, err := inspectPersonalAuth(marshalAuth(t, fixtureAuth(t, now, plan)), now, time.Minute); !errors.Is(err, ErrUnsupportedProfile) {
+		if _, err := inspectPersonalAuth(marshalAuth(t, fixtureAuth(t, now, plan)), now, time.Minute); !errors.Is(err, ErrUnsupportedProfile) || errors.Is(err, commonprovider.ErrAuthenticationBlocked) {
 			t.Fatalf("accepted unverified plan %q: %v", plan, err)
 		}
 	}

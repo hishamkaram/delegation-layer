@@ -58,6 +58,23 @@ func consumeStart(t *testing.T, td *TaskDir) *StartPermit {
 	return p
 }
 
+func TestRunnerLeaseReleasedReportsExecutionOwnership(t *testing.T) {
+	s := testStore(t)
+	td := preparedTask(t, s)
+	start := consumeStart(t, td)
+	released, err := td.RunnerLeaseReleased()
+	must(t, err)
+	if released {
+		t.Fatal("active runner lease was reported as released")
+	}
+	must(t, start.Release())
+	released, err = td.RunnerLeaseReleased()
+	must(t, err)
+	if !released {
+		t.Fatal("released runner lease was reported as active")
+	}
+}
+
 func sealedTask(t *testing.T, s *Store, answer string) *TaskDir {
 	t.Helper()
 	td := preparedTask(t, s)

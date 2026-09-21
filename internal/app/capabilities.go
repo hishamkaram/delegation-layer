@@ -20,7 +20,9 @@ const (
 	capabilityReasonReady         = "required_behavior_observed"
 	capabilityReasonUnavailable   = "provider_unavailable"
 	acceptanceStatusNotRun        = "not_run"
+	acceptanceStatusBlocked       = "blocked"
 	authenticationStatusUnknown   = "unknown"
+	authenticationStatusBlocked   = "blocked"
 	// maxCapabilityVersionBytes bounds the serialized observation carried in a
 	// dispatch response. It is an output bound, not a provider release policy.
 	maxCapabilityVersionBytes = 4 * 1024
@@ -44,6 +46,7 @@ type CapabilityReport struct {
 	Provider         string               `json:"provider"`
 	Status           string               `json:"status"`
 	Verification     string               `json:"verification"`
+	Continuation     string               `json:"continuation"`
 	Version          string               `json:"version,omitempty"`
 	ExecutableSHA256 string               `json:"executable_sha256,omitempty"`
 	HelpArgs         []string             `json:"help_args,omitempty"`
@@ -70,6 +73,7 @@ func runCapabilities(jsonOutput bool, stdout, stderr io.Writer, catalog commonpr
 			Provider:      providerID,
 			Status:        capabilityStatusUnsupported,
 			Verification:  capabilityVerificationCatalog,
+			Continuation:  string(commonprovider.ContinuationUnsupported),
 			RequiredFlags: []string{},
 			ReasonCode:    capabilityReasonUnavailable,
 			LiveAcceptance: LiveAcceptanceReport{
@@ -113,6 +117,7 @@ func declaredCapability(description commonprovider.Description) CapabilityReport
 		Provider:      description.ID,
 		Status:        capabilityStatusUnknown,
 		Verification:  capabilityVerificationCatalog,
+		Continuation:  capabilityContinuation(description),
 		HelpArgs:      cloneCapabilityStrings(description.Runtime.HelpArgs),
 		RequiredFlags: cloneCapabilityStrings(description.Runtime.RequiredFlags),
 		ReasonCode:    capabilityReasonNotRun,
@@ -124,6 +129,13 @@ func declaredCapability(description commonprovider.Description) CapabilityReport
 	}
 }
 
+func capabilityContinuation(description commonprovider.Description) string {
+	if description.Continuation == "" {
+		return string(commonprovider.ContinuationUnsupported)
+	}
+	return string(description.Continuation)
+}
+
 func cloneCapabilityStrings(values []string) []string {
 	if values == nil {
 		return []string{}
@@ -131,9 +143,13 @@ func cloneCapabilityStrings(values []string) []string {
 	return slices.Clone(values)
 }
 
-func runtimeCapability(providerID string, candidate commonprovider.ProfileCandidate, profile commonprovider.PreparedProfile) (CapabilityReport, error) {
+func runtimeCapability(providerID string, candidate commonprovider.ProfileCandidate, profile commonprovider.PreparedProfile, descriptions ...commonprovider.Description) (CapabilityReport, error) {
+	description := commonprovider.Description{ID: providerID}
+	if len(descriptions) > 0 {
+		description = descriptions[0]
+	}
 	if candidate.Inspection == nil || candidate.Inspection.Runtime == nil {
-		return declaredCapability(commonprovider.Description{ID: providerID}), nil
+		return declaredCapability(description), nil
 	}
 	runtime := candidate.Inspection.Runtime
 	report := CapabilityReport{
@@ -141,6 +157,7 @@ func runtimeCapability(providerID string, candidate commonprovider.ProfileCandid
 		Provider:      providerID,
 		Status:        capabilityStatusReady,
 		Verification:  capabilityVerificationRuntime,
+		Continuation:  capabilityContinuation(description),
 		ReasonCode:    capabilityReasonReady,
 		RequiredFlags: cloneCapabilityStrings(runtime.RequiredFlags),
 		LiveAcceptance: LiveAcceptanceReport{

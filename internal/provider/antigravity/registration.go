@@ -12,6 +12,7 @@ func Description() commonprovider.Description {
 		ID:               Provider,
 		SupportedModes:   []string{Mode},
 		SupportedOptions: []string{commonprovider.OptionContinuation, commonprovider.OptionNativeTimeout},
+		Continuation:     commonprovider.ContinuationNative,
 		Runtime:          RuntimeRequirements(),
 		Discoverable:     true,
 	}
