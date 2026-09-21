@@ -327,7 +327,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_pueue_discovery_rejects_same_bytes_at_a_different_path(self):
         with tempfile.TemporaryDirectory(prefix="native-pueue-discovery-unit-") as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             discovered = root / "pueue"
             selected = root / "selected-pueue"
             discovered.write_text("pueue 4.0.4\n")
