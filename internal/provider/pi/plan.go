@@ -16,16 +16,26 @@ var ErrUnsupportedProfile = errors.New("unsupported-effective-config")
 // noninteractive mode. Session continuation is bound to one exact ID rather
 // than Pi's "most recent" shorthand.
 func jsonArguments(request task.TaskRecord) ([]string, error) {
+	return jsonArgumentsForProfile(request, true)
+}
+
+func legacyJSONArguments(request task.TaskRecord) ([]string, error) {
+	return jsonArgumentsForProfile(request, false)
+}
+
+func jsonArgumentsForProfile(request task.TaskRecord, native bool) ([]string, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, err
 	}
 	arguments := []string{
 		"--mode", "json",
 		"--tools", readOnlyTools,
+	}
+	if !native {
 		// Extensions can replace built-in tools and run lifecycle hooks. A
 		// missing configured package can also trigger installation during
-		// startup, so offline mode is part of the read-only boundary as well.
-		"--no-extensions", "--offline",
+		// startup, so offline mode is part of the historical read-only boundary.
+		arguments = append(arguments, "--no-extensions", "--offline")
 	}
 	if request.RequestedConfig.Model != "" {
 		arguments = append(arguments, "--model", request.RequestedConfig.Model)

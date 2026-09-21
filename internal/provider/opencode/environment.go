@@ -15,9 +15,10 @@ type profileEnvironment struct {
 	WritableRoots []string
 }
 
-// nativeEnvironmentKeys are the nonsecret process controls needed for native
-// OpenCode discovery. Provider credentials remain in OpenCode's own native
-// store; arbitrary ambient variables are not copied into a queued task.
+// nativeEnvironmentKeys are the nonsecret process controls needed by both the
+// historical and native OpenCode profiles. Provider credentials remain in
+// OpenCode's own native store; arbitrary ambient variables are not copied into
+// a queued task.
 var nativeEnvironmentKeys = map[string]struct{}{
 	"HOME": {}, "PATH": {}, "USER": {}, "LOGNAME": {}, "SHELL": {},
 	"LANG": {}, "LC_ALL": {}, "LC_CTYPE": {}, "TZ": {},
@@ -27,7 +28,23 @@ var nativeEnvironmentKeys = map[string]struct{}{
 	"__CF_USER_TEXT_ENCODING": {},
 }
 
+var nativeOpenCodeEnvironmentKeys = map[string]struct{}{
+	"OPENCODE_CONFIG":     {},
+	"OPENCODE_CONFIG_DIR": {},
+	"OPENCODE_TUI_CONFIG": {},
+	"OPENCODE_PERMISSION": {},
+	"OPENCODE_AUTO_SHARE": {},
+}
+
 func prepareEnvironment(values []string) (profileEnvironment, error) {
+	return prepareProfileEnvironment(values, false)
+}
+
+// prepareProfileEnvironment keeps the historical isolated environment for
+// reconstruction while allowing new tasks to retain native OpenCode discovery
+// and session selectors. Sensitive inline configuration and authentication
+// values are deliberately excluded from both paths.
+func prepareProfileEnvironment(values []string, native bool) (profileEnvironment, error) {
 	entries := make(map[string]string, len(values))
 	for _, entry := range values {
 		key, value, ok := strings.Cut(entry, "=")
@@ -45,16 +62,33 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 	}
 	result := profileEnvironment{Home: home}
 	for key, value := range entries {
-		if _, allowed := nativeEnvironmentKeys[key]; allowed {
+		if _, allowed := nativeEnvironmentKeys[key]; allowed || native && nativeDiscoveryKey(key) {
 			result.Values = append(result.Values, key+"="+value)
 		}
 	}
 	slices.Sort(result.Values)
-	result.WritableRoots, err = runtimeWritableRoots(home, entries)
+	if native {
+		result.WritableRoots, err = nativeRuntimeWritableRoots(home, entries)
+	} else {
+		result.WritableRoots, err = runtimeWritableRoots(home, entries)
+	}
 	if err != nil {
 		return profileEnvironment{}, err
 	}
 	return result, nil
+}
+
+// nativeDiscoveryKey retains path and policy selectors that change where
+// OpenCode finds user configuration, extensions, authentication, or sessions.
+// Inline config/auth content is excluded because task metadata must remain
+// nonsecret and the provider can load the native files directly.
+func nativeDiscoveryKey(key string) bool {
+	switch key {
+	case "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_HOME", "XDG_DATA_DIRS", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK":
+		return true
+	}
+	_, allowed := nativeOpenCodeEnvironmentKeys[key]
+	return allowed
 }
 
 func runtimeWritableRoots(home string, entries map[string]string) ([]string, error) {
@@ -102,6 +136,78 @@ func runtimeWritableRoots(home string, entries map[string]string) ([]string, err
 	}
 	slices.Sort(paths)
 	return slices.Compact(paths), nil
+}
+
+func nativeRuntimeWritableRoots(home string, entries map[string]string) ([]string, error) {
+	paths := nativeRuntimeRootPaths(home, entries)
+	for index, path := range paths {
+		canonical, err := config.CanonicalizePath(path)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid native runtime writable root", ErrUnsupportedProfile)
+		}
+		paths[index] = canonical
+	}
+	slices.Sort(paths)
+	return slices.Compact(paths), nil
+}
+
+func nativeRuntimeRootPaths(home string, entries map[string]string) []string {
+	paths := []string{
+		"/tmp", "/var/tmp", "/var/folders", "/dev",
+		filepath.Join(home, ".opencode"),
+		filepath.Join(home, ".config/opencode"),
+		filepath.Join(home, ".local/share/opencode"),
+		filepath.Join(home, ".local/state/opencode"),
+		filepath.Join(home, ".cache/opencode"),
+		filepath.Join(home, ".cache"),
+		filepath.Join(home, "Library/Application Support/opencode"),
+		filepath.Join(home, "Library/Caches/opencode"),
+		filepath.Join(home, "Library/Logs/opencode"),
+	}
+	paths = appendEnvironmentRoots(paths, entries, []string{"TMPDIR", "TMP", "TEMP"})
+	paths = appendOpenCodeXDGHomeRoots(paths, entries)
+	paths = appendOpenCodeXDGListRoots(paths, entries)
+	paths = appendEnvironmentRoots(paths, entries, []string{"OPENCODE_CONFIG_DIR"})
+	paths = appendConfigFileRoots(paths, entries, []string{"OPENCODE_CONFIG", "OPENCODE_TUI_CONFIG"})
+	return paths
+}
+
+func appendEnvironmentRoots(paths []string, entries map[string]string, names []string) []string {
+	for _, name := range names {
+		if value := entries[name]; value != "" {
+			paths = append(paths, value)
+		}
+	}
+	return paths
+}
+
+func appendOpenCodeXDGHomeRoots(paths []string, entries map[string]string) []string {
+	for _, name := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
+		if value := entries[name]; value != "" {
+			paths = append(paths, filepath.Join(value, "opencode"))
+		}
+	}
+	return paths
+}
+
+func appendOpenCodeXDGListRoots(paths []string, entries map[string]string) []string {
+	for _, name := range []string{"XDG_CONFIG_DIRS", "XDG_DATA_DIRS"} {
+		for _, value := range filepath.SplitList(entries[name]) {
+			if value != "" {
+				paths = append(paths, filepath.Join(value, "opencode"))
+			}
+		}
+	}
+	return paths
+}
+
+func appendConfigFileRoots(paths []string, entries map[string]string, names []string) []string {
+	for _, name := range names {
+		if value := entries[name]; value != "" {
+			paths = append(paths, value)
+		}
+	}
+	return paths
 }
 
 func delegationConfigHome(home, xdgConfigHome string) (string, error) {

@@ -29,6 +29,10 @@ var nativeEnvironmentKeys = map[string]struct{}{
 // bounded process-control values. Unrelated ambient variables, including
 // credential values, never cross the supervisor boundary.
 func prepareEnvironment(values []string) (profileEnvironment, error) {
+	return prepareProfileEnvironment(values, false)
+}
+
+func prepareProfileEnvironment(values []string, native bool) (profileEnvironment, error) {
 	environment := make(map[string]string, len(values))
 	for _, entry := range values {
 		key, value, ok := strings.Cut(entry, "=")
@@ -47,8 +51,10 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 		}
 		environment[key] = value
 	}
-	if err := rejectAlternateDiscovery(environment); err != nil {
-		return profileEnvironment{}, err
+	if !native {
+		if err := rejectAlternateDiscovery(environment); err != nil {
+			return profileEnvironment{}, err
+		}
 	}
 	home, err := config.CanonicalizePath(environment["HOME"])
 	if err != nil {
@@ -60,7 +66,7 @@ func prepareEnvironment(values []string) (profileEnvironment, error) {
 	}
 	filtered := make([]string, 0, len(nativeEnvironmentKeys))
 	for key, value := range environment {
-		if _, allowed := nativeEnvironmentKeys[key]; !allowed {
+		if _, allowed := nativeEnvironmentKeys[key]; !allowed && (!native || !nativeDiscoveryKey(key)) {
 			continue
 		}
 		filtered = append(filtered, key+"="+value)
@@ -126,4 +132,16 @@ func runtimeStateExclusions(home string, environment map[string]string) ([]strin
 	}
 	slices.Sort(roots)
 	return slices.Compact(roots), nil
+}
+
+// nativeDiscoveryKey preserves nonsecret native configuration and session locations.
+func nativeDiscoveryKey(key string) bool {
+	switch key {
+	case "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_HOME", "XDG_DATA_DIRS", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+		"GEMINI_HOME", "GEMINI_CLI_HOME", "ANTIGRAVITY_HOME", "ANTIGRAVITY_CONFIG_HOME", "AGY_HOME", "AGY_CONFIG_HOME",
+		"GOCACHE", "GOMODCACHE", "CARGO_HOME", "RUSTUP_HOME", "GRADLE_USER_HOME", "NPM_CONFIG_CACHE", "GOPATH":
+		return true
+	default:
+		return false
+	}
 }

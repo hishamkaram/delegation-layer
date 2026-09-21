@@ -134,6 +134,17 @@ func TestPiInterpreterAcceptsMultipleToolTurns(t *testing.T) {
 	}
 }
 
+func TestPiInterpreterAcceptsNativeMCPEventAlongsideToolTurn(t *testing.T) {
+	stdout := append([]byte(`{"type":"mcp_tool_call","server":"fixture","tool":"read"}`+"\n"), piToolStream(testUUID, "final after MCP")...)
+	ref := ReferenceForMode(ModeReadOnly)
+	seal := validSeal(ref, stdout, nil)
+	var out bytes.Buffer
+	result, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: seal}, evidence{stdout: stdout}, &out)
+	if err != nil || result.Verdict != task.VerdictCommitted || out.String() != "final after MCP" {
+		t.Fatalf("result=%+v err=%v output=%q", result, err, out.String())
+	}
+}
+
 func TestPiAcceptsEmptyTextInIntermediateToolResult(t *testing.T) {
 	message := []byte(`{"role":"toolResult","content":[{"type":"text","text":""}],"toolCallId":"call-1","isError":false}`)
 	parsed, err := decodeMessage(message)

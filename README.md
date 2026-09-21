@@ -115,7 +115,9 @@ stopped. An explicit `--pueue-config` or
 `DELEGATE_PUEUE_CONFIG` can still select an existing compatible supervisor for
 advanced integrations. Node.js 18 or newer is needed only for the npm-based
 installers; it is not a runtime requirement for the released Go CLI. Provider
-authentication remains native to each provider.
+authentication remains native to each provider. Your provider settings, MCP
+servers, plugins, and skills stay with that provider. Permission modes select
+native behavior; Delegation Layer is not an independent sandbox.
 
 ## Try one bounded task
 

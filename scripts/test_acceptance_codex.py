@@ -269,6 +269,15 @@ class CodexOracleTests(unittest.TestCase):
         self.assertEqual(gate.PLANNED_NATIVE_AI_TURNS, 2)
         self.assertNotIn("candidate", gate.ACCEPTANCE_STATUS.lower())
 
+    def test_native_codex_binding_omits_removed_config_restrictions(self):
+        for removed in ("--ignore-user-config", "--ignore-rules", "--strict-config"):
+            self.assertNotIn(removed, gate.RUNTIME_REQUIRED_FLAGS)
+        self.assertEqual(gate.OUTPUT_ARGUMENT_INDEX, 11)
+        self.assertEqual(gate.NATIVE_PROFILE_REVISION, "native-permissions-v1")
+        self.assertIn("DBUS_SESSION_BUS_ADDRESS", gate.CODEX_ENVIRONMENT_KEYS)
+        for key in ("GOCACHE", "GOMODCACHE", "CARGO_HOME", "RUSTUP_HOME", "GRADLE_USER_HOME", "NPM_CONFIG_CACHE", "GOPATH"):
+            self.assertIn(key, gate.CODEX_ENVIRONMENT_KEYS)
+
     def test_probe_gate_accepts_one_shell_wrapped_probe(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -400,6 +409,16 @@ class CodexOracleTests(unittest.TestCase):
             self.assertFalse(gate.command_reads_path(
                 "/bin/zsh -c " + shlex.quote("cat " + str(nonce_file) + " && echo nonce"), nonce_file))
 
+    def test_probe_wrapper_accepts_bash_login_shell_with_whitespace_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            probe = Path(temporary) / "probe with space.sh"
+            inner = "/bin/sh " + shlex.quote(str(probe))
+            wrapped = f'/bin/bash -lc "{inner}"'
+            self.assertTrue(gate.exact_probe_command(wrapped, probe))
+            for flag in ("-x", "--login", "-ilc"):
+                rejected = "/bin/bash " + flag + " " + shlex.quote(inner)
+                self.assertFalse(gate.exact_probe_command(rejected, probe))
+
     def test_probe_file_requires_0400_exact_bytes_regular_non_symlink(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -451,6 +470,18 @@ class CodexOracleTests(unittest.TestCase):
         environment = {"HOME": str(Path.home()), "CODEX_HOME": str(Path.home() / ".codex")}
         with self.assertRaisesRegex(RuntimeError, "runtime root"):
             gate.reject_runtime_roots(Path.home() / ".codex" / "sessions", "state", environment)
+
+    def test_native_cache_roots_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for key in ("GRADLE_USER_HOME", "NPM_CONFIG_CACHE"):
+                with self.subTest(key=key):
+                    cache = root / key.lower()
+                    environment = {key: str(cache)}
+                    self.assertIn(cache.resolve(), gate.provider_runtime_roots(environment))
+                    self.assertNotIn(cache.resolve(), gate.provider_runtime_roots({}))
+                    with self.assertRaisesRegex(RuntimeError, "runtime root"):
+                        gate.reject_runtime_roots(cache / "state", "state", environment)
 
     def test_wait_runner_done_requires_one_successful_row(self):
         statuses = [

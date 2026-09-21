@@ -36,5 +36,5 @@ This document establishes the normative operational invariants for the delegatio
   5. Barrier destination directory to ensure directory entry persistence.
   6. Unlink stage file and barrier directory for cleanup.
 - **Filesystem Capability**: Filesystems are not rejected by type name. Admission probes the required file, directory, hard-link, sync/barrier, and lock operations; a root is refused only when one of those operations cannot be proven.
-- **State Root Isolation**: Task state root and workspace must never overlap in either direction, and state root must never lie within any provider-writable tree.
+- **State Root Isolation**: Task state root and workspace must never overlap in either direction. Admission also rejects overlap with declared provider runtime roots. Native provider configuration and extensions may grant wider access; these placement checks do not establish an independent sandbox.
 - **Advisory Locks**: Stable advisory locks (`.admission.lock`, `.run.lock`, `.maintenance.lock`) use `flock` on dedicated inodes without unlinking or passing file descriptors to child processes.

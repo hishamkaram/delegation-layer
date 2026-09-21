@@ -223,29 +223,54 @@ func mustOpenEvidence(t *testing.T, td *TaskDir, seal *task.ProviderExitRecord) 
 }
 
 func TestImportOutputArtifactsCopiesBytesToDistinctRawInode(t *testing.T) {
-	s := testStore(t)
-	td := launchOutputTask(t, s)
-	p, arguments := startAndPrepareLaunch(t, td, []string{"provider", ""})
-	defer func() { must(t, p.Release()) }()
-	content := []byte("same output bytes")
-	writeNativeOutput(t, arguments[1], content)
-	nativeInfo, err := os.Stat(arguments[1])
-	must(t, err)
-	seal := sealPreparedOutput(t, td, arguments[1], false)
-	rawPath := filepath.Join(td.Dir, "raw", "artifact.bin")
-	rawInfo, err := os.Stat(rawPath)
-	must(t, err)
-	if os.SameFile(nativeInfo, rawInfo) {
-		t.Fatal("raw evidence reused the native output inode")
+	for _, mode := range []os.FileMode{0o600, 0o644, 0o664, 0o666} {
+		t.Run(mode.String(), func(t *testing.T) {
+			s := testStore(t)
+			td := launchOutputTask(t, s)
+			p, arguments := startAndPrepareLaunch(t, td, []string{"provider", ""})
+			defer func() { must(t, p.Release()) }()
+			content := []byte("same output bytes")
+			writeNativeOutput(t, arguments[1], content)
+			must(t, os.Chmod(arguments[1], mode))
+			nativeInfo, err := os.Stat(arguments[1])
+			must(t, err)
+			seal := sealPreparedOutput(t, td, arguments[1], false)
+			rawPath := filepath.Join(td.Dir, "raw", "artifact.bin")
+			rawInfo, err := os.Stat(rawPath)
+			must(t, err)
+			if os.SameFile(nativeInfo, rawInfo) {
+				t.Fatal("raw evidence reused the native output inode")
+			}
+			if got := readTestFile(t, rawPath); !bytes.Equal(got, content) {
+				t.Fatalf("raw output bytes = %q, want %q", got, content)
+			}
+			if rawInfo.Mode().Perm() != 0o600 {
+				t.Fatalf("raw output mode = %o, want 0600", rawInfo.Mode().Perm())
+			}
+			if seal == nil {
+				t.Fatal("missing provider seal")
+			}
+		})
 	}
-	if got := readTestFile(t, rawPath); !bytes.Equal(got, content) {
-		t.Fatalf("raw output bytes = %q, want %q", got, content)
-	}
-	if rawInfo.Mode().Perm() != 0o600 {
-		t.Fatalf("raw output mode = %o, want 0600", rawInfo.Mode().Perm())
-	}
-	if seal == nil {
-		t.Fatal("missing provider seal")
+}
+
+func TestImportOutputArtifactsRejectsSharedDirectoryAndHardlink(t *testing.T) {
+	for _, kind := range []string{"shared-directory", "hardlink"} {
+		t.Run(kind, func(t *testing.T) {
+			s := testStore(t)
+			td := launchOutputTask(t, s)
+			permit, arguments := startAndPrepareLaunch(t, td, []string{"provider", ""})
+			defer func() { must(t, permit.Release()) }()
+			writeNativeOutput(t, arguments[1], []byte("native output"))
+			if kind == "shared-directory" {
+				must(t, os.Chmod(filepath.Dir(arguments[1]), 0o770))
+			} else {
+				must(t, os.Link(arguments[1], filepath.Join(td.Dir, "alias")))
+			}
+			if err := td.ImportOutputArtifacts(); !errors.Is(err, task.ErrEvidenceFault) {
+				t.Fatalf("unsafe %s was imported: %v", kind, err)
+			}
+		})
 	}
 }
 

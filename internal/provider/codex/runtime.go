@@ -12,6 +12,16 @@ func RuntimeRequirements() commonprovider.RuntimeCapability {
 	return commonprovider.RuntimeCapability{
 		HelpArgs: []string{"exec"},
 		RequiredFlags: []string{
+			"-c", "--sandbox", "--cd",
+			"--output-last-message", "--json", "--color",
+		},
+	}
+}
+
+func legacyRuntimeRequirements() commonprovider.RuntimeCapability {
+	return commonprovider.RuntimeCapability{
+		HelpArgs: []string{"exec"},
+		RequiredFlags: []string{
 			"-c", "--strict-config", "--sandbox", "--cd", "--ignore-user-config", "--ignore-rules",
 			"--output-last-message", "--json", "--color",
 		},

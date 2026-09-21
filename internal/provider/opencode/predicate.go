@@ -19,7 +19,10 @@ const (
 	refusalProviderFailed = "provider-failed"
 )
 
-type interpreter struct{ mode string }
+type interpreter struct {
+	mode   string
+	legacy bool
+}
 
 // NewInterpreter returns an OpenCode JSONL interpreter. With no argument it
 // returns the default workspace-write profile for compatibility with other
@@ -32,7 +35,16 @@ func NewInterpreter(modes ...string) predicate.Interpreter {
 	return interpreter{mode: mode}
 }
 
-func (v interpreter) Reference() task.PredicateRef { return ReferenceForMode(v.mode) }
+func newLegacyInterpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, legacy: true}
+}
+
+func (v interpreter) Reference() task.PredicateRef {
+	if v.legacy {
+		return LegacyReferenceForMode(v.mode)
+	}
+	return ReferenceForMode(v.mode)
+}
 
 func (v interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
 	if v.Reference() == (task.PredicateRef{}) {

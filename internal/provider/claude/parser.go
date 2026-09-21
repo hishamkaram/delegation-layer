@@ -31,6 +31,7 @@ var knownResultSubtypes = map[string]struct{}{
 
 type eventState struct {
 	mode     string
+	strict   bool
 	initSeen bool
 	init     initState
 
@@ -101,10 +102,18 @@ func parseStdout(reader io.Reader) (eventState, error) {
 }
 
 func parseStdoutForMode(reader io.Reader, mode string) (eventState, error) {
+	return parseStdoutForModeWithPolicy(reader, mode, false)
+}
+
+func parseLegacyStdoutForMode(reader io.Reader, mode string) (eventState, error) {
+	return parseStdoutForModeWithPolicy(reader, mode, true)
+}
+
+func parseStdoutForModeWithPolicy(reader io.Reader, mode string, strict bool) (eventState, error) {
 	if mode != Mode && mode != WorkspaceWriteMode {
-		return eventState{mode: mode, semanticErr: fmt.Errorf("unsupported Claude permission mode %q", mode)}, nil
+		return eventState{mode: mode, strict: strict, semanticErr: fmt.Errorf("unsupported Claude permission mode %q", mode)}, nil
 	}
-	state := eventState{mode: mode}
+	state := eventState{mode: mode, strict: strict}
 	semanticErr, readErr := commonprovider.ReadJSONL(reader, maxEventLineBytes, func(line []byte) error {
 		return processEventLine(&state, line)
 	})
@@ -226,7 +235,7 @@ func applyInitEvent(state *eventState, fields map[string]json.RawMessage) {
 		state.markSemantic("multiple system/init events")
 		return
 	}
-	init, err := decodeInitForMode(fields, state.mode)
+	init, err := decodeInitForModeWithPolicy(fields, state.mode, state.strict)
 	if err != nil {
 		state.markSemantic(err.Error())
 		return
@@ -240,11 +249,15 @@ func decodeInit(fields map[string]json.RawMessage) (initState, error) {
 }
 
 func decodeInitForMode(fields map[string]json.RawMessage, mode string) (initState, error) {
+	return decodeInitForModeWithPolicy(fields, mode, true)
+}
+
+func decodeInitForModeWithPolicy(fields map[string]json.RawMessage, mode string, strict bool) (initState, error) {
 	sessionID, version, err := decodeInitIdentity(fields)
 	if err != nil {
 		return initState{}, err
 	}
-	permission, apiKeySource, err := decodeInitPolicyForMode(fields, mode)
+	permission, apiKeySource, err := decodeInitPolicyForModeWithPolicy(fields, mode, strict)
 	if err != nil {
 		return initState{}, err
 	}
@@ -252,11 +265,11 @@ func decodeInitForMode(fields map[string]json.RawMessage, mode string) (initStat
 	if err != nil {
 		return initState{}, err
 	}
-	tools, err := allowedToolsForMode(fields, mode)
+	tools, err := allowedToolsForModeWithPolicy(fields, mode, strict)
 	if err != nil {
 		return initState{}, err
 	}
-	mcpCount, err := emptyMCPServers(fields)
+	mcpCount, err := mcpServersWithPolicy(fields, strict)
 	if err != nil {
 		return initState{}, err
 	}
@@ -284,6 +297,10 @@ func decodeInitPolicy(fields map[string]json.RawMessage) (string, string, error)
 }
 
 func decodeInitPolicyForMode(fields map[string]json.RawMessage, mode string) (string, string, error) {
+	return decodeInitPolicyForModeWithPolicy(fields, mode, true)
+}
+
+func decodeInitPolicyForModeWithPolicy(fields map[string]json.RawMessage, mode string, strict bool) (string, string, error) {
 	permission, err := requiredString(fields, "permissionMode")
 	var wantPermission string
 	switch mode {
@@ -297,9 +314,16 @@ func decodeInitPolicyForMode(fields map[string]json.RawMessage, mode string) (st
 	if err != nil || permission != wantPermission {
 		return "", "", fmt.Errorf("system/init permissionMode is not %s", wantPermission)
 	}
+	if strict {
+		apiKeySource, policyErr := requiredString(fields, "apiKeySource")
+		if policyErr != nil || apiKeySource != "none" {
+			return "", "", errors.New("system/init apiKeySource is not none")
+		}
+		return permission, apiKeySource, nil
+	}
 	apiKeySource, err := requiredString(fields, "apiKeySource")
-	if err != nil || apiKeySource != "none" {
-		return "", "", errors.New("system/init apiKeySource is not none")
+	if err != nil || !validText(apiKeySource) {
+		return "", "", errors.New("system/init apiKeySource is invalid")
 	}
 	return permission, apiKeySource, nil
 }
@@ -329,6 +353,21 @@ func allowedTools(fields map[string]json.RawMessage) ([]string, error) {
 }
 
 func allowedToolsForMode(fields map[string]json.RawMessage, mode string) ([]string, error) {
+	return allowedToolsForModeWithPolicy(fields, mode, true)
+}
+
+func allowedToolsForModeWithPolicy(fields map[string]json.RawMessage, mode string, strict bool) ([]string, error) {
+	tools, err := decodeToolList(fields)
+	if err != nil {
+		return nil, err
+	}
+	if !strict {
+		return validateNativeToolList(tools)
+	}
+	return validateLegacyToolList(tools, mode)
+}
+
+func decodeToolList(fields map[string]json.RawMessage) ([]string, error) {
 	raw, ok := fields["tools"]
 	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil, errors.New("system/init tools are missing")
@@ -337,6 +376,24 @@ func allowedToolsForMode(fields map[string]json.RawMessage, mode string) ([]stri
 	if err := json.Unmarshal(raw, &tools); err != nil || tools == nil {
 		return nil, errors.New("system/init tools are not an array of strings")
 	}
+	return tools, nil
+}
+
+func validateNativeToolList(tools []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if !validText(tool) {
+			return nil, errors.New("system/init tool name is invalid")
+		}
+		if _, exists := seen[tool]; exists {
+			return nil, fmt.Errorf("system/init tool %q is duplicated", tool)
+		}
+		seen[tool] = struct{}{}
+	}
+	return tools, nil
+}
+
+func validateLegacyToolList(tools []string, mode string) ([]string, error) {
 	seen := make(map[string]struct{}, len(tools))
 	required := map[string]bool{"Read": false, "Glob": false, "Grep": false}
 	if mode == WorkspaceWriteMode {
@@ -365,6 +422,10 @@ func allowedToolsForMode(fields map[string]json.RawMessage, mode string) ([]stri
 }
 
 func emptyMCPServers(fields map[string]json.RawMessage) (int, error) {
+	return mcpServersWithPolicy(fields, true)
+}
+
+func mcpServersWithPolicy(fields map[string]json.RawMessage, strict bool) (int, error) {
 	raw, ok := fields["mcp_servers"]
 	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return 0, errors.New("system/init mcp_servers are missing")
@@ -373,10 +434,10 @@ func emptyMCPServers(fields map[string]json.RawMessage) (int, error) {
 	if err := json.Unmarshal(raw, &servers); err != nil || servers == nil {
 		return 0, errors.New("system/init mcp_servers are not an array")
 	}
-	if len(servers) != 0 {
+	if strict && len(servers) != 0 {
 		return len(servers), errors.New("system/init exposes MCP servers")
 	}
-	return 0, nil
+	return len(servers), nil
 }
 
 func applyAssistantEvent(state *eventState, fields map[string]json.RawMessage) {
@@ -388,7 +449,7 @@ func applyAssistantEvent(state *eventState, fields map[string]json.RawMessage) {
 		state.markSemantic("assistant event precedes system/init")
 		return
 	}
-	if err := validateMessageContent(fields, "assistant", state.mode); err != nil {
+	if err := validateMessageContentWithPolicy(fields, "assistant", state.mode, state.strict); err != nil {
 		state.markSemantic(err.Error())
 	}
 }
@@ -402,12 +463,16 @@ func applyUserEvent(state *eventState, fields map[string]json.RawMessage) {
 		state.markSemantic("user event precedes system/init")
 		return
 	}
-	if err := validateMessageContent(fields, "user", state.mode); err != nil {
+	if err := validateMessageContentWithPolicy(fields, "user", state.mode, state.strict); err != nil {
 		state.markSemantic(err.Error())
 	}
 }
 
 func validateMessageContent(fields map[string]json.RawMessage, eventType, mode string) error {
+	return validateMessageContentWithPolicy(fields, eventType, mode, true)
+}
+
+func validateMessageContentWithPolicy(fields map[string]json.RawMessage, eventType, mode string, strict bool) error {
 	rawMessage, exists := fields["message"]
 	if !exists || bytes.Equal(bytes.TrimSpace(rawMessage), []byte("null")) {
 		return nil
@@ -425,7 +490,7 @@ func validateMessageContent(fields map[string]json.RawMessage, eventType, mode s
 		return fmt.Errorf("%s message content is not an array", eventType)
 	}
 	for _, rawBlock := range blocks {
-		if err := validateContentBlock(rawBlock, eventType, mode); err != nil {
+		if err := validateContentBlockWithPolicy(rawBlock, eventType, mode, strict); err != nil {
 			return err
 		}
 	}
@@ -433,6 +498,10 @@ func validateMessageContent(fields map[string]json.RawMessage, eventType, mode s
 }
 
 func validateContentBlock(rawBlock json.RawMessage, eventType, mode string) error {
+	return validateContentBlockWithPolicy(rawBlock, eventType, mode, true)
+}
+
+func validateContentBlockWithPolicy(rawBlock json.RawMessage, eventType, mode string, strict bool) error {
 	var block map[string]json.RawMessage
 	if err := json.Unmarshal(rawBlock, &block); err != nil || block == nil {
 		return fmt.Errorf("%s message content block is not an object", eventType)
@@ -441,10 +510,14 @@ func validateContentBlock(rawBlock json.RawMessage, eventType, mode string) erro
 	if err != nil || kind == "" {
 		return fmt.Errorf("%s message content block type is invalid", eventType)
 	}
-	return validateContentBlockKind(block, kind, eventType, mode)
+	return validateContentBlockKindWithPolicy(block, kind, eventType, mode, strict)
 }
 
 func validateContentBlockKind(block map[string]json.RawMessage, kind, eventType, mode string) error {
+	return validateContentBlockKindWithPolicy(block, kind, eventType, mode, true)
+}
+
+func validateContentBlockKindWithPolicy(block map[string]json.RawMessage, kind, eventType, mode string, strict bool) error {
 	switch kind {
 	case "text":
 		return validateTextBlock(block, eventType)
@@ -453,7 +526,7 @@ func validateContentBlockKind(block map[string]json.RawMessage, kind, eventType,
 	case "redacted_thinking":
 		return validateRedactedThinkingBlock(block, eventType)
 	case "tool_use":
-		return validateToolUseBlock(block, eventType, mode)
+		return validateToolUseBlockWithPolicy(block, eventType, mode, strict)
 	case "tool_result":
 		return validateToolResultBlock(block, eventType)
 	default:
@@ -483,6 +556,10 @@ func validateRedactedThinkingBlock(block map[string]json.RawMessage, eventType s
 }
 
 func validateToolUseBlock(block map[string]json.RawMessage, eventType, mode string) error {
+	return validateToolUseBlockWithPolicy(block, eventType, mode, true)
+}
+
+func validateToolUseBlockWithPolicy(block map[string]json.RawMessage, eventType, mode string, strict bool) error {
 	id, idErr := requiredString(block, "id")
 	name, nameErr := requiredString(block, "name")
 	if idErr != nil || !validText(id) {
@@ -491,7 +568,7 @@ func validateToolUseBlock(block map[string]json.RawMessage, eventType, mode stri
 	if nameErr != nil || !validText(name) {
 		return fmt.Errorf("%s tool_use name is invalid", eventType)
 	}
-	if !allowedToolNameForMode(name, mode) {
+	if strict && !allowedToolNameForMode(name, mode) {
 		return fmt.Errorf("%s emitted unsupported tool_use %q", eventType, name)
 	}
 	if err := requireObject(block, "input"); err != nil {

@@ -6,7 +6,7 @@ provider CLI or its account server trustworthy by itself.
 
 ## State and workspace boundaries
 
-The state root, workspace, provider runtime directories, and temporary paths
+The state root, workspace, declared provider runtime directories, and temporary paths
 are canonicalized and checked for overlap. Task records are stored in private
 directories with create-once files and bounded names. The provider receives the
 workspace selected by the request and the adapter's effective policy, not an
@@ -25,13 +25,19 @@ daemon data below the state root. Keep the state root private and outside any
 provider-writable workspace. An explicitly selected external configuration
 remains under the caller's supervisor controls.
 
-## Policy and drift checks
+## Native permissions and launch checks
 
 Before admission and again immediately before launch, the system compares the
 executable identity, command profile, canonical workspace, effective policy,
 input/output bindings, and session expectation. A provider executable replaced
 between checks is rejected. Provider version numbers are observed for evidence
 but are not hardcoded release constraints.
+
+Provider CLIs load and enforce their own settings, MCP servers, hooks, plugins,
+and skills. New tasks do not inventory these sources or disable them. Permission
+flags request native behavior; custom tools and extensions remain governed by
+the provider. Delegation Layer does not independently contain their effects.
+Previously admitted tasks retain their recorded preparation contract.
 
 ## Process and output safety
 

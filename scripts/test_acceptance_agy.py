@@ -12,6 +12,34 @@ import acceptance_agy as gate
 
 
 class NativeHarnessTests(unittest.TestCase):
+    def test_linux_supervisor_parent_is_private_before_child_creation(self):
+        with tempfile.TemporaryDirectory(prefix='agy-parent-unit-') as directory:
+            root = Path(directory).resolve()
+            parent = root / 'parent'
+            parent.mkdir(mode=0o777)
+            os.chmod(parent, 0o777)
+            run = gate.NativeRun.__new__(gate.NativeRun)
+            run.prepared = SimpleNamespace(state=root, data={})
+            run.output = root / 'evidence'
+            with patch.object(gate, 'PUEUE_PARENT', parent), \
+                    patch.object(gate.sys, 'platform', 'linux'), \
+                    patch.object(gate, 'write_json'), \
+                    patch('acceptance_provider_common.reject_tmp'), \
+                    patch.object(gate.tempfile, 'mkdtemp', side_effect=RuntimeError('child boundary')):
+                with self.assertRaisesRegex(RuntimeError, 'child boundary'):
+                    run.setup()
+            self.assertEqual(parent.stat().st_mode & 0o777, 0o700)
+            alias = root / 'alias'
+            alias.symlink_to(parent, target_is_directory=True)
+            with patch.object(gate, 'PUEUE_PARENT', alias), \
+                    patch.object(gate.sys, 'platform', 'linux'), \
+                    patch.object(gate, 'write_json'), \
+                    patch('acceptance_provider_common.reject_tmp'), \
+                    patch.object(gate.tempfile, 'mkdtemp') as allocate:
+                with self.assertRaisesRegex(gate.AcceptanceFailure, 'not a private directory'):
+                    run.setup()
+                allocate.assert_not_called()
+
     def test_authentication_unavailable_requires_rejected_outcome_and_marker(self):
         with tempfile.TemporaryDirectory(prefix='agy-auth-unit-') as directory:
             root = Path(directory)

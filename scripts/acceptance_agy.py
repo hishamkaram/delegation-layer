@@ -55,7 +55,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
 DEFAULT_WORKSPACE_PARENT = Path.home() / "Active-Projects" / "delegation-layer-acceptance"
-PUEUE_PARENT = Path("/Users/Shared")
+PUEUE_PARENT = Path("/Users/Shared") if sys.platform == "darwin" else Path.home() / ".dl-acceptance"
 MAX_STATUS_BYTES = 8 * 1024 * 1024
 MAX_PROVIDER_BYTES = 8 * 1024 * 1024
 
@@ -644,9 +644,9 @@ class NativeRun:
         self.nonprovider_tasks: dict[str, dict[str, object]] = {}
         self.delegate = resolve_executable(args.delegate, REPO_ROOT / "bin" / "delegate", "delegate")
         self.runner = resolve_executable(args.runner, REPO_ROOT / "bin" / "delegate-run", "delegate-run")
-        self.agy = resolve_executable(args.agy, Path("/opt/homebrew/bin/agy"), "agy")
-        self.pueue = selected_pueue(resolve_executable(args.pueue, Path("/opt/homebrew/bin/pueue"), "pueue"))
-        self.pueued = selected_pueued(resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued"))
+        self.agy = resolve_executable(args.agy, Path(shutil.which("agy") or "/opt/homebrew/bin/agy"), "agy")
+        self.pueue = selected_pueue(resolve_executable(args.pueue, Path(shutil.which("pueue") or "/opt/homebrew/bin/pueue"), "pueue"))
+        self.pueued = selected_pueued(resolve_executable(args.pueued, Path(shutil.which("pueued") or "/opt/homebrew/bin/pueued"), "pueued"))
         self.probe = selected_tools(REPO_ROOT)
         require_discovery("agy", self.agy)
         require_discovery("pueue", self.pueue)
@@ -663,6 +663,9 @@ class NativeRun:
     def setup(self) -> None:
         require(self.prepared.state.resolve() == self.prepared.state, "state path must be canonical")
         write_json(self.output / "prepared-input.json", self.prepared.data)
+        PUEUE_PARENT.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if sys.platform != "darwin":
+            ensure_private_directory(PUEUE_PARENT, "private supervisor parent")
         base = Path(tempfile.mkdtemp(dir=str(PUEUE_PARENT), prefix="dl-agy-"))
         os.chmod(base, 0o700)
         self.pueue_base = ensure_private_directory(base, "private pueue base")
@@ -861,13 +864,8 @@ class NativeRun:
         writable_roots = policy.get("writable_roots")
         expected_roots = [str(root) for root in provider_runtime_roots(self.environment)]
         require(writable_roots == expected_roots, f"{name} persisted writable runtime roots differ from the inherited environment")
-        sources = policy.get("sources")
-        require(isinstance(sources, list) and all(isinstance(source, dict) for source in sources),
-                f"{name} policy source inventory is absent")
-        for source in sources:
-            require(isinstance(source.get("path"), str) and isinstance(source.get("kind"), str) and
-                    isinstance(source.get("present"), bool) and isinstance(source.get("sha256"), str),
-                    f"{name} policy source digest is malformed")
+        require(profile_revision == "native-permissions-v1" and not policy.get("sources"),
+                f"{name} unexpectedly inventoried provider configuration")
         provider_exit = self.read_record(task, "provider.exit")
         require(provider_exit.get("root_id") == self.root_id and provider_exit.get("task_id") == task and
                 provider_exit.get("invocation_state") == "started" and provider_exit.get("predicate") == predicate,
@@ -918,6 +916,7 @@ class NativeRun:
                 "provider crossed Start while its queue was paused")
 
     def run_policy_drift(self) -> None:
+        """Historical profile oracle; not part of native-permission acceptance."""
         task = task_id()
         policy = self.prepared.workspace / "AGENTS.md"
         require(not os.path.lexists(policy), "policy drift fixture requires absent workspace AGENTS.md")
@@ -1331,7 +1330,6 @@ class NativeRun:
 
     def run(self) -> None:
         self.setup()
-        self.run_policy_drift()
         self.run_l1()
         self.run_l2()
         self.run_l3()

@@ -27,10 +27,12 @@ func Description() commonprovider.Description {
 // is intentionally unavailable until the CLI exposes one.
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
-		Description: Description(),
-		Prepare:     PrepareCandidate,
+		Description:     Description(),
+		Prepare:         PrepareCandidate,
+		PrepareExisting: PrepareExistingCandidate,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(ModeReadOnly),
+			newLegacyInterpreter(),
 		},
 	}
 }

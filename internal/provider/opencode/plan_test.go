@@ -29,9 +29,17 @@ func TestRunArgumentsMapCallerModeAndContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"run", "--format", "json", "--dir", readOnly.CanonicalCwd, "--agent", readOnlyAgentName, "--pure"}
+	want := []string{"run", "--format", "json", "--dir", readOnly.CanonicalCwd, "--agent", nativeReadOnlyAgent}
 	if !slices.Equal(got, want) {
 		t.Fatalf("read-only argv=%q want=%q", got, want)
+	}
+	legacy, err := legacyRunArguments(readOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLegacy := []string{"run", "--format", "json", "--dir", readOnly.CanonicalCwd, "--agent", readOnlyAgentName, "--pure"}
+	if !slices.Equal(legacy, wantLegacy) {
+		t.Fatalf("legacy read-only argv=%q want=%q", legacy, wantLegacy)
 	}
 
 	write := profileRequest(ModeWorkspaceWrite)
@@ -42,9 +50,17 @@ func TestRunArgumentsMapCallerModeAndContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = []string{"run", "--format", "json", "--dir", write.CanonicalCwd, "--agent", workspaceWriteAgentName, "--pure", "--model", "anthropic/claude-sonnet", "--variant", "high", "--auto", "--session", testSession}
+	want = []string{"run", "--format", "json", "--dir", write.CanonicalCwd, "--agent", nativeWorkspaceWriteAgent, "--model", "anthropic/claude-sonnet", "--variant", "high", "--auto", "--session", testSession}
 	if !slices.Equal(got, want) {
 		t.Fatalf("workspace-write argv=%q want=%q", got, want)
+	}
+	legacy, err = legacyRunArguments(write)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLegacy = []string{"run", "--format", "json", "--dir", write.CanonicalCwd, "--agent", workspaceWriteAgentName, "--pure", "--model", "anthropic/claude-sonnet", "--variant", "high", "--auto", "--session", testSession}
+	if !slices.Equal(legacy, wantLegacy) {
+		t.Fatalf("legacy workspace-write argv=%q want=%q", legacy, wantLegacy)
 	}
 }
 
@@ -88,7 +104,10 @@ func TestDescriptionAdvertisesDirectRuntimeCapabilities(t *testing.T) {
 		t.Fatalf("runtime=%+v", description.Runtime)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 2 {
+	if registration.Prepare == nil || len(registration.Interpreters) != 4 {
 		t.Fatalf("registration=%+v", registration)
+	}
+	if !registration.Interpreters[2].Reference().Equal(LegacyReferenceForMode(ModeReadOnly)) || !registration.Interpreters[3].Reference().Equal(LegacyReferenceForMode(ModeWorkspaceWrite)) {
+		t.Fatalf("legacy interpreter references are not registered: %+v", registration.Interpreters)
 	}
 }

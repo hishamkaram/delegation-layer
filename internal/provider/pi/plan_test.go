@@ -30,7 +30,7 @@ func TestJSONArgumentsMapCallerPermissionAndContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--mode", "json", "--tools", readOnlyTools, "--no-extensions", "--offline"}
+	want := []string{"--mode", "json", "--tools", readOnlyTools}
 	if !slices.Equal(args, want) {
 		t.Fatalf("read-only argv=%q want=%q", args, want)
 	}
@@ -41,6 +41,17 @@ func TestJSONArgumentsMapCallerPermissionAndContinuation(t *testing.T) {
 	unsupportedWrite.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: testUUID, PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
 	if _, err = printArguments(unsupportedWrite); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("workspace-write error=%v want unsupported profile", err)
+	}
+}
+
+func TestLegacyJSONArgumentsRetainHistoricalStartupControls(t *testing.T) {
+	args, err := legacyJSONArguments(planRequest(ModeReadOnly))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--mode", "json", "--tools", readOnlyTools, "--no-extensions", "--offline"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("historical argv=%q want=%q", args, want)
 	}
 }
 
@@ -73,9 +84,27 @@ func TestJSONArgumentsRejectUnsupportedRequests(t *testing.T) {
 
 func TestRuntimeRequirementsCoverAllLaunchFlags(t *testing.T) {
 	requirements := RuntimeRequirements()
-	for _, flag := range []string{"--mode", "--tools", "--model", "--thinking", "--session", "--session-dir", "--no-extensions", "--offline"} {
+	for _, flag := range []string{"--mode", "--tools", "--model", "--thinking", "--session"} {
 		if !slices.Contains(requirements.RequiredFlags, flag) {
 			t.Fatalf("required flags=%q missing %q", requirements.RequiredFlags, flag)
 		}
+	}
+	if len(requirements.HelpArgs) != 0 {
+		t.Fatalf("native Pi help args=%q want empty", requirements.HelpArgs)
+	}
+	for _, removed := range []string{"--no-extensions", "--offline", "--session-dir"} {
+		if slices.Contains(requirements.RequiredFlags, removed) {
+			t.Fatalf("native Pi runtime requirements retain removed flag %q", removed)
+		}
+	}
+}
+
+func TestLegacyRuntimeRequirementsPreserveSnapshotFlagOrder(t *testing.T) {
+	requirements := legacyRuntimeRequirements()
+	want := []string{
+		"--mode", "--tools", "--model", "--thinking", "--session", "--session-dir", "--no-extensions", "--offline",
+	}
+	if !slices.Equal(requirements.HelpArgs, []string{"--no-extensions", "--offline"}) || !slices.Equal(requirements.RequiredFlags, want) {
+		t.Fatalf("legacy runtime requirements=%+v", requirements)
 	}
 }

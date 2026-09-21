@@ -26,15 +26,15 @@ class ToolEvidenceTests(unittest.TestCase):
         workspace = Path('/workspace')
         nonce_file = workspace / 'nonce.txt'
         baseline = [json.loads(line) for line in fresh_stream(nonce_file, workspace).splitlines()]
-        for mutation in ('read_aux', 'glob_aux', 'grep_aux', 'result_first', 'assistant_result', 'user_use', 'duplicate_use'):
+        for mutation in ('nonce_aux', 'result_first', 'assistant_result', 'user_use', 'duplicate_use'):
             values = json.loads(json.dumps(baseline))
             if mutation.endswith('_aux'):
-                name = mutation.split('_')[0].capitalize()
+                name = "Bash"
                 use = next(v for v in values if v.get('type') == 'assistant' and
                            v['message']['content'][0]['name'] == name)
                 inputs = use['message']['content'][0]['input']
-                key = 'file_path' if name == 'Read' else 'path'
-                inputs['auxiliary'] = inputs[key]
+                key = 'command'
+                inputs['auxiliary'] = '/elsewhere'
                 inputs[key] = '/elsewhere'
             elif mutation == 'result_first':
                 values[1], values[2] = values[2], values[1]

@@ -11,36 +11,33 @@ import (
 
 var ErrUnsupportedProfile = errors.New("unsupported-effective-config")
 
+const (
+	nativeReadOnlyAgent       = "plan"
+	nativeWorkspaceWriteAgent = "build"
+)
+
 // runArguments constructs the direct non-interactive OpenCode command. The
 // brief is delivered through the runner-owned stdin, so it is never copied
 // into argv or into a persisted launch record. OpenCode accepts stdin when no
 // positional message is supplied.
 func runArguments(request task.TaskRecord) ([]string, error) {
+	return runArgumentsForProfile(request, true)
+}
+
+func legacyRunArguments(request task.TaskRecord) ([]string, error) {
+	return runArgumentsForProfile(request, false)
+}
+
+func runArgumentsForProfile(request task.TaskRecord, native bool) ([]string, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, err
 	}
 	arguments := []string{"run", "--format", "json", "--dir", request.CanonicalCwd}
-	switch request.Mode {
-	case ModeReadOnly:
-		// Bind the run to an adapter-owned agent whose explicit deny rules are
-		// applied after any project agent configuration. Pure mode also keeps
-		// external plugins from installing tools or hooks for this run.
-		arguments = append(arguments, "--agent", readOnlyAgentName, "--pure")
-	case ModeWorkspaceWrite:
-		// Keep the explicit file-edit and external-directory rules from the
-		// adapter-owned workspace-write agent. OpenCode's --auto approves
-		// eligible actions but does not override an explicit deny.
-		arguments = append(arguments, "--agent", workspaceWriteAgentName, "--pure")
-	}
-	if request.RequestedConfig.Model != "" {
-		arguments = append(arguments, "--model", request.RequestedConfig.Model)
-	}
-	if effort := request.RequestedConfig.Effort; effort != "" && effort != "default" {
-		arguments = append(arguments, "--variant", effort)
-	}
+	arguments = append(arguments, agentArguments(request.Mode, native)...)
+	arguments = append(arguments, modelArguments(request)...)
 	if request.Mode == ModeWorkspaceWrite {
-		// This is the native OpenCode switch selected by the caller. The
-		// adapter-owned agent retains its explicit external-directory boundary.
+		// OpenCode's native --auto approves actions not denied by the selected
+		// build agent. It is part of the workspace-write request only.
 		arguments = append(arguments, "--auto")
 	}
 	if prior := request.PriorSession; prior != nil {
@@ -50,6 +47,34 @@ func runArguments(request task.TaskRecord) ([]string, error) {
 		arguments = append(arguments, "--session", prior.ConversationID)
 	}
 	return arguments, nil
+}
+
+func agentArguments(mode string, native bool) []string {
+	switch mode {
+	case ModeReadOnly:
+		if native {
+			return []string{"--agent", nativeReadOnlyAgent}
+		}
+		return []string{"--agent", readOnlyAgentName, "--pure"}
+	case ModeWorkspaceWrite:
+		if native {
+			return []string{"--agent", nativeWorkspaceWriteAgent}
+		}
+		return []string{"--agent", workspaceWriteAgentName, "--pure"}
+	default:
+		return nil
+	}
+}
+
+func modelArguments(request task.TaskRecord) []string {
+	var arguments []string
+	if request.RequestedConfig.Model != "" {
+		arguments = append(arguments, "--model", request.RequestedConfig.Model)
+	}
+	if effort := request.RequestedConfig.Effort; effort != "" && effort != "default" {
+		arguments = append(arguments, "--variant", effort)
+	}
+	return arguments
 }
 
 func validateRequest(request task.TaskRecord) error {

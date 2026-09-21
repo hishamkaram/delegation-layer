@@ -146,6 +146,8 @@ func TestUnknownTelemetryIsToleratedButUnknownLifecycleRejects(t *testing.T) {
 		`{"type":"telemetry.snapshot","payload":{"attempt":1}}`,
 		`{"type":"item.future","payload":"ignored"}`,
 		`{"type":"turn.started"}`,
+		`{"type":"item.started","item":{"id":"mcp","type":"mcp_tool_call"}}`,
+		`{"type":"item.completed","item":{"id":"mcp","type":"mcp_tool_call"}}`,
 		itemCompleted("answer", itemAgentMessage, "accepted"),
 		turnCompleted(`{}`),
 	)

@@ -23,8 +23,9 @@ func Description() commonprovider.Description {
 // selects the current interpreter and requests a supervised runtime probe.
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
-		Description:  Description(),
-		Prepare:      PrepareCandidate,
-		Interpreters: []predicate.Interpreter{NewPrintInterpreter(), NewCurrentPrintInterpreter()},
+		Description:     Description(),
+		Prepare:         PrepareCandidate,
+		PrepareExisting: PrepareExistingCandidate,
+		Interpreters:    []predicate.Interpreter{NewPrintInterpreter(), NewCurrentPrintInterpreter()},
 	}
 }

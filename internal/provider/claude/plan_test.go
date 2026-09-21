@@ -21,7 +21,7 @@ func profileRequest() task.TaskRecord {
 	}
 }
 
-func TestFinalizePreparedProfileUsesPortableRuntimeFacts(t *testing.T) {
+func TestFinalizeNativePreparedProfileUsesRuntimeFacts(t *testing.T) {
 	request := profileRequest()
 	arguments, inputs, err := printArguments(request)
 	if err != nil {
@@ -40,12 +40,12 @@ func TestFinalizePreparedProfileUsesPortableRuntimeFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := finalizePreparedProfile(request, arguments, inputs, cli, environment, nil, strings.Repeat("b", 64), json.RawMessage(facts), time.Unix(2_000_000_000, 0))
+	prepared, err := finalizeNativePreparedProfile(request, arguments, inputs, cli, environment, strings.Repeat("b", 64), json.RawMessage(facts), time.Unix(2_000_000_000, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.ObservedVersion != "Claude Code 99.7.3" || prepared.Effective.Policy == nil {
-		t.Fatalf("portable runtime facts were not finalized: %+v", prepared)
+	if prepared.ObservedVersion != "Claude Code 99.7.3" || prepared.Effective.Policy == nil || prepared.Effective.Policy.ProfileRevision != commonprovider.NativeProfileRevision || len(prepared.Effective.Policy.Sources) != 0 || len(prepared.Plan.InputFiles) != 0 {
+		t.Fatalf("native runtime facts were not finalized: %+v", prepared)
 	}
 }
 
@@ -62,7 +62,7 @@ func TestLegacyNativePolicyMarkerIsRecognizedForExistingTasks(t *testing.T) {
 
 func TestFinalizeLegacyPreparedProfilePreservesStoredPredicate(t *testing.T) {
 	request := profileRequest()
-	arguments, inputs, err := printArguments(request)
+	arguments, inputs, err := legacyPrintArguments(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,12 +92,7 @@ func TestPrintArgumentsPreserveContainmentAndTaskOwnedFilesOnResume(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose",
-		"--safe-mode", "--restricted", "--tools", "Read,Glob,Grep", "--disallowedTools", "mcp__*",
-		"--strict-mcp-config", "--mcp-config", "", "--settings", "", "--permission-mode", "dontAsk",
-		"--permission-prompts", "none", "--disable-slash-commands", "--no-chrome",
-	}
+	want := []string{"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose", "--permission-mode", "dontAsk", "--permission-prompts", "none"}
 	fresh, err := FreshSessionID(request.RootID, request.TaskID)
 	if err != nil {
 		t.Fatal(err)
@@ -105,22 +100,32 @@ func TestPrintArgumentsPreserveContainmentAndTaskOwnedFilesOnResume(t *testing.T
 	if !slices.Equal(args, append(slices.Clone(want), "--session-id", fresh)) {
 		t.Fatalf("fresh argv=%q", args)
 	}
-	normalized, err := task.NormalizeInputFiles(inputs)
-	if err != nil || len(normalized) != 2 {
-		t.Fatalf("config declarations=%+v err=%v", inputs, err)
-	}
-	for _, input := range inputs {
-		if args[input.ArgumentIndex] != "" {
-			t.Fatal("configuration path is not a reserved task-owned slot")
-		}
+	if len(inputs) != 0 {
+		t.Fatalf("native configuration declarations=%+v", inputs)
 	}
 	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: fresh, PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
 	resumed, resumeInputs, err := printArguments(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(resumed, append(slices.Clone(want), "--resume", fresh)) || !slices.Equal(inputs, resumeInputs) {
-		t.Fatalf("resume changed restriction flags or input declarations: %q %+v", resumed, resumeInputs)
+	if !slices.Equal(resumed, append(slices.Clone(want), "--resume", fresh)) || len(resumeInputs) != 0 {
+		t.Fatalf("resume changed native argv or input declarations: %q %+v", resumed, resumeInputs)
+	}
+}
+
+func TestLegacyPrintArgumentsPreserveHistoricalRestrictionsAndInputs(t *testing.T) {
+	request := profileRequest()
+	args, inputs, err := legacyPrintArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, flag := range []string{"--safe-mode", "--restricted", "--tools", "--disallowedTools", "--strict-mcp-config", "--mcp-config", "--settings", "--disable-slash-commands", "--no-chrome"} {
+		if !slices.Contains(args, flag) {
+			t.Fatalf("legacy argv omitted %s: %q", flag, args)
+		}
+	}
+	if len(inputs) != 2 || inputs[0].Name != "claude-profile.json" || inputs[1].Name != "empty-mcp.json" {
+		t.Fatalf("legacy input declarations=%+v", inputs)
 	}
 }
 
@@ -132,10 +137,10 @@ func TestPrintArgumentsUseNativeWorkspaceWritePermission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(args, "acceptEdits") || !slices.Contains(args, "Read,Edit,Write,Glob,Grep") {
+	if !slices.Contains(args, "acceptEdits") || slices.Contains(args, "--safe-mode") || slices.Contains(args, "--restricted") {
 		t.Fatalf("workspace-write argv=%q", args)
 	}
-	if len(inputs) != 2 || inputs[0].Content != workspaceWriteProfileSettings {
+	if len(inputs) != 0 {
 		t.Fatalf("workspace-write profile inputs=%+v", inputs)
 	}
 	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "123e4567-e89b-12d3-a456-426614174000", PredecessorTaskID: "abcdef0123456789abcdef0123456789"}

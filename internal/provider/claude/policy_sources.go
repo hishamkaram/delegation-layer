@@ -303,7 +303,7 @@ func validatePolicySourceInputs(request task.TaskRecord, environment profileEnvi
 // enables the native file-edit tools. A future profile change must update this
 // gate before ordinary user/project MCP can be treated as bypassed.
 func validateMCPArguments(request task.TaskRecord) error {
-	arguments, inputs, err := printArguments(request)
+	arguments, inputs, err := legacyPrintArguments(request)
 	if err != nil {
 		return err
 	}

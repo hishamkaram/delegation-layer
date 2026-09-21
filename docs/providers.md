@@ -22,11 +22,12 @@ Agents can request one provider's provider-neutral contract with
 side-effect-free and reports `status: "unknown"` until dispatch performs the
 supervised runtime probe. It does not claim authentication or live acceptance.
 
-The released binaries target Darwin and Linux. Provider authentication and
-native policy are evaluated through the provider's own CLI and portable policy
-inputs; Codex and Claude do not require a Darwin-only admission helper. A
-provider can still be rejected when its executable, required flags, policy
-inputs, or output contract are unavailable on the current host.
+The released binaries target Darwin and Linux. Provider CLIs own authentication,
+configuration, MCP servers, hooks, plugins, skills, and native permissions.
+Delegation Layer passes the requested native permission mode without inspecting
+or rejecting personal configuration. It does not provide an independent sandbox.
+Missing executables or required flags, unsupported request options, and invalid
+provider results still prevent successful delegation.
 
 ## Shared compatibility behavior
 
@@ -56,8 +57,9 @@ class, such as a missing required flag or executable identity drift, and never
 provider output or process diagnostics.
 
 The probe does not replace provider behavior validation. Each adapter still
-requires its expected output shape, task and session identity, containment,
-effective policy, authentication result, and output artifact integrity.
+requires its expected output shape, task and session identity, authentication
+result, and output artifact integrity. The recorded effective configuration binds
+the selected native mode and executable, not the contents of provider settings.
 
 When dispatch returns a capability projection, `status: "ready"` means the
 shared probe observed the required behavior and executable identity for that
@@ -68,8 +70,8 @@ proof is `passed`, and unavailable authentication is `blocked` and neutral.
 
 The Pi and OpenCode live gates use the shipped dispatcher and runner with a
 private Pueue instance. They perform a fresh turn, an exact continuation, and
-collection replay, then verify provider evidence, session identity, and the
-read-only workspace boundary:
+collection replay, then verify provider evidence, session identity, and that
+the read-only test leaves the workspace unchanged:
 
 ```sh
 make acceptance-pi
@@ -91,72 +93,47 @@ provider turn, or reports an authentication refusal as a pass.
 
 ## Antigravity
 
-`antigravity:print` runs `agy` with the `workspace-write` policy. The adapter
-declares the workspace and provider runtime directories it may write, validates
-the provider's configured workspace trust and sparse default project, and
-passes the brief through standard input. `--native-timeout` sets agy's own print
-timeout inside the task's wall-clock `--budget`.
-
-The CLI uses its native signed-in account and home. A missing or expired login
-is reported as the provider's authentication result and does not cause
-Delegation Layer to copy credentials into task state.
+`antigravity:print` runs `agy` with `--sandbox --mode accept-edits` and the
+selected workspace. It passes the brief through standard input.
+`--native-timeout` sets agy's own print timeout inside the wall-clock `--budget`.
+Native workspace trust, MCP configuration, and account settings remain agy's
+responsibility. Missing or expired login is reported by the provider.
 
 ## Codex
 
-`codex:exec` invokes the `exec` subcommand with strict native launch settings.
-The caller chooses `read-only` or `workspace-write`, which is passed to Codex's
-native sandbox flag. Continuation uses the exact predecessor task ID.
-
-The adapter deliberately rejects unsupported model, effort, policy, and native
-timeout combinations. Codex's own authentication remains in the native Codex
-home; the fixed personal profile checks its nonsecret eligibility before
-admission and the provider CLI still validates the active account at launch.
+`codex:exec` invokes `exec` with the requested `read-only` or `workspace-write`
+native sandbox and noninteractive approval policy. It preserves native user
+configuration without injecting feature overrides. Continuation uses the exact
+recorded provider session. Model, effort, and native timeout overrides are not
+currently advertised by this adapter.
 
 ## Claude
 
-`claude:print` launches Claude in print mode with the adapter's declared tool
-and policy settings. The caller chooses `read-only` or `workspace-write`; that
-choice is passed through Claude's native permission mode. It sends the brief via
-the recorded input binding, and validates the structured stream, identity, and
-result artifact. Continuation names an exact predecessor task.
-
-The adapter accepts any valid version reported by the current Claude CLI after
-the shared capability probe. It still rejects changed output shape, missing
-required flags, policy drift, identity mismatch, or an invalid result. Native
-authentication remains a live provider concern and is never copied into task
-state.
+`claude:print` uses print mode and structured streaming output. `read-only` maps
+to native `plan` permission mode; `workspace-write` maps to `acceptEdits`.
+Claude loads its own settings, tools, MCP servers, and login. The adapter checks
+stream structure, session identity, and result integrity. Continuation selects
+the exact recorded provider session.
 
 ## Pi
 
-`pi:json` runs Pi's JSON event mode directly in read-only mode. Its native
-allowlist is limited to `read`, `grep`, `find`, and `ls`; `--no-extensions` and
-`--offline` also prevent extension execution and startup package or network
-work. Continuation uses the exact Pi session identifier. The public `model`
-option is passed through, and public `effort` maps to Pi's native
-`--thinking` flag. Pi's built-in `write` and `edit`
-tools accept arbitrary absolute paths and do not expose a native workspace
-boundary, so `workspace-write` is not advertised until Pi provides one.
+`pi:json` uses JSON event mode with the native `read,grep,find,ls` tool selection
+for `read-only`. Native extensions and configuration remain enabled; the tool
+selection is not an independent sandbox for extensions. Continuation uses the
+exact recorded Pi session. `model` is passed through, and `effort` maps to
+`--thinking`. This adapter does not advertise `workspace-write`.
 
 ## OpenCode
 
-`opencode:run` runs OpenCode's JSON event mode directly in the requested
-workspace. The caller chooses the permission mode. Read-only binds the run to
-an adapter-owned agent, uses OpenCode's pure mode, and supplies an inline native
-permission configuration with deny rules at both global and agent scope for
-mutation, shell, subagents, network, and unknown tools while allowing inspection
-tools, and disables automatic compaction. Workspace-write binds a separate
-adapter-owned agent that allows file inspection and edits while denying shell,
-subagents, network, and unknown tools; it disables project configuration and
-automatic compaction, keeps OpenCode's native
-`external_directory: deny` boundary, and uses the caller-selected `--auto`
-approval. The launch also disables system and global Git configuration so an
-ambient `core.worktree` setting cannot change the native checkout boundary.
-OpenCode's native patch-move handling checks the source path but treats
-destinations anywhere in the enclosing Git checkout as internal, so
-workspace-write is admitted only when the selected workspace is that checkout's
-root. Symlinked workspace trees and permission glob metacharacters are refused.
-Continuation and model are passed through as native options. Public `effort`
-maps to OpenCode's native `--variant` option.
+`opencode:run` uses JSON event mode in the requested workspace. `read-only`
+selects the native `plan` agent; `workspace-write` selects `build` with native
+`--auto`. OpenCode loads its own configuration, plugins, permissions, and Git
+settings. The adapter does not require a Git checkout root or inspect workspace
+symlinks. Continuation and model use native options; `effort` maps to `--variant`.
+
+Previously admitted tasks retain their original preparation and output
+interpretation contracts. Dispatch a new task to use the simplified native
+profiles; upgrading does not silently change a queued task's launch settings.
 
 ## Adding a provider
 

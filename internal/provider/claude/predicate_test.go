@@ -20,7 +20,7 @@ const (
 
 func TestReferenceBindsImmutableContract(t *testing.T) {
 	ref := Reference()
-	if ref.Adapter != Provider || ref.Mode != Mode || ref.Version != Version || ref.SHA256 != ContractDigest() {
+	if ref.Adapter != Provider || ref.Mode != Mode || ref.Version != predicateVersion || ref.SHA256 != ContractDigest() {
 		t.Fatalf("reference=%+v", ref)
 	}
 	if !strings.HasSuffix(Contract(), "\n") || task.ComputeSHA256([]byte(Contract())) != ref.SHA256 {
@@ -138,9 +138,6 @@ func TestInitPolicyAndExactFieldNamesAreRequired(t *testing.T) {
 		init string
 		want string
 	}{
-		{name: "mutating tool", init: strings.Replace(initLine(claudeTestUUID), `"Grep"]`, `"Grep","Write"]`, 1), want: refusalMalformed},
-		{name: "missing tool", init: strings.Replace(initLine(claudeTestUUID), `"Grep"]`, `"Read","Glob"]`, 1), want: refusalMalformed},
-		{name: "mcp server", init: strings.Replace(initLine(claudeTestUUID), `"mcp_servers":[]`, `"mcp_servers":[{"name":"x","status":"connected"}]`, 1), want: refusalMalformed},
 		{name: "permission mode", init: strings.Replace(initLine(claudeTestUUID), `"permissionMode":"dontAsk"`, `"permissionMode":"default"`, 1), want: refusalMalformed},
 		{name: "wrong case type", init: strings.Replace(initLine(claudeTestUUID), `"type"`, `"Type"`, 1), want: refusalMalformed},
 		{name: "wrong case session", init: strings.Replace(initLine(claudeTestUUID), `"session_id"`, `"Session_ID"`, 1), want: refusalMalformed},
@@ -159,6 +156,19 @@ func TestInitPolicyAndExactFieldNamesAreRequired(t *testing.T) {
 				t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 			}
 		})
+	}
+}
+
+func TestNativeInterpreterAcceptsProviderOwnedPolicyFields(t *testing.T) {
+	init := strings.Replace(initLine(claudeTestUUID), `"apiKeySource":"none"`, `"apiKeySource":"oauth"`, 1)
+	init = strings.Replace(init, `"tools":["Read","Glob","Grep"]`, `"tools":["Read","Glob","Grep","Write","Bash"]`, 1)
+	init = strings.Replace(init, `"mcp_servers":[]`, `"mcp_servers":[{"name":"native-server","status":"connected"}]`, 1)
+	toolUse := fmt.Sprintf(`{"type":"assistant","session_id":%q,"message":{"content":[{"type":"tool_use","id":"native-tool","name":"Bash","input":{"command":"true"}}]}}`, claudeTestUUID)
+	stdout := jsonl(init, toolUse, resultLine(claudeTestUUID, "answer"))
+	var answer bytes.Buffer
+	interp, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "answer" {
+		t.Fatalf("native provider-owned fields were rejected: interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 	}
 }
 
@@ -351,7 +361,7 @@ func TestSubstantiveUserEventAfterResultCannotPublish(t *testing.T) {
 	}
 }
 
-func TestOutOfProfileToolUseCannotPublish(t *testing.T) {
+func TestNativeToolUseNamesAreProviderOwned(t *testing.T) {
 	stdout := jsonl(
 		initLine(claudeTestUUID),
 		fmt.Sprintf(`{"type":"assistant","session_id":%q,"message":{"content":[{"type":"tool_use","id":"blocked","name":"Bash","input":{"command":"true"}}]}}`, claudeTestUUID),
@@ -359,8 +369,22 @@ func TestOutOfProfileToolUseCannotPublish(t *testing.T) {
 	)
 	var answer bytes.Buffer
 	interp, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "answer" {
+		t.Fatalf("native tool interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestLegacyPortableInterpreterRetainsToolRestriction(t *testing.T) {
+	stdout := jsonl(
+		initLine(claudeTestUUID),
+		fmt.Sprintf(`{"type":"assistant","session_id":%q,"message":{"content":[{"type":"tool_use","id":"blocked","name":"Bash","input":{"command":"true"}}]}}`, claudeTestUUID),
+		resultLine(claudeTestUUID, "answer"),
+	)
+	var answer bytes.Buffer
+	seal := claudeTestSealForPredicate(stdout, legacyPortableReferenceForMode(Mode))
+	interp, err := newLegacyPortableInterpreter(Mode).Evaluate(predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}, &claudeTestEvidence{stdout: stdout}, &answer)
 	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalMalformed || answer.Len() != 0 {
-		t.Fatalf("out-of-profile tool interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+		t.Fatalf("legacy tool restriction changed: interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 	}
 }
 

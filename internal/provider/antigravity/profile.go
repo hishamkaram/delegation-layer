@@ -24,25 +24,44 @@ const ProfileRevision = "agy-workspace-write-v1"
 // supervised runtime capability probe. The core owns every provider process;
 // the finalizer receives only the resulting nonsecret runtime facts.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	return prepareCandidate(request, true)
+}
+
+// PrepareExistingCandidate retains the preparation contract of admitted tasks.
+func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+	return prepareCandidate(request, meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision)
+}
+
+func prepareCandidate(request task.TaskRecord, native bool) (commonprovider.ProfileCandidate, error) {
 	arguments, err := printArguments(request)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	environment, err := prepareEnvironment(os.Environ())
+	environment, err := prepareProfileEnvironment(os.Environ(), native)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
+	}
+	if native {
+		arguments = slices.DeleteFunc(arguments, func(argument string) bool { return argument == "--disable-slash-commands" })
 	}
 	located, err := commonprovider.LocateCLI("agy")
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}
-	definition, err := commonprovider.NewRuntimeInspectionDefinition(located, request.CanonicalCwd, environment.Values, RuntimeRequirements())
+	requirements := RuntimeRequirements()
+	if !native {
+		requirements.RequiredFlags = slices.Insert(requirements.RequiredFlags, 5, "--disable-slash-commands")
+	}
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(located, request.CanonicalCwd, environment.Values, requirements)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
 	}
-	inventory, err := InventorySources(InventoryRequest{Home: environment.Home, Workspace: request.CanonicalCwd})
-	if err != nil {
-		return commonprovider.ProfileCandidate{}, err
+	var inventory PolicyInventory
+	if !native {
+		inventory, err = InventorySources(InventoryRequest{Home: environment.Home, Workspace: request.CanonicalCwd})
+		if err != nil {
+			return commonprovider.ProfileCandidate{}, err
+		}
 	}
 	return commonprovider.ProfileCandidate{
 		Directory:     request.CanonicalCwd,
@@ -57,7 +76,7 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 			if finalErr != nil {
 				return commonprovider.PreparedProfile{}, finalErr
 			}
-			effective, finalErr := resolveEffectivePolicy(identity, environment, inventory)
+			effective, finalErr := candidateEffectiveConfig(request, environment, identity, inventory, native)
 			if finalErr != nil {
 				return commonprovider.PreparedProfile{}, finalErr
 			}
@@ -211,4 +230,11 @@ func validateWorkspaceTrust(trusted []string, workspace string) error {
 		return nil
 	}
 	return projectPolicyError("workspace has no matching configured trust root")
+}
+
+func candidateEffectiveConfig(request task.TaskRecord, environment profileEnvironment, identity runtimeIdentity, inventory PolicyInventory, native bool) (task.EffectiveConfig, error) {
+	if native {
+		return commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, identity.SHA256, "accept-edits")
+	}
+	return resolveEffectivePolicy(identity, environment, inventory)
 }

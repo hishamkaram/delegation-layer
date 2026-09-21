@@ -73,22 +73,26 @@ MAX_INT64 = (1 << 63) - 1
 MAX_ITEMS = 1024
 MAX_ITEM_ID_BYTES = 256
 MAX_ITEM_TYPE_BYTES = 128
-OUTPUT_ARGUMENT_INDEX = 30
+OUTPUT_ARGUMENT_INDEX = 11
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
 DEFAULT_WORKSPACE_PARENT = Path.home() / "Active-Projects" / "delegation-layer-acceptance"
-PUEUE_PARENT = Path("/Users/Shared")
+PUEUE_PARENT = Path("/Users/Shared") if sys.platform == "darwin" else Path.home() / ".dl-acceptance"
 RUNTIME_INSPECTION_REVISION = "runtime-capability-v1"
 RUNTIME_HELP_ARGS = ["exec"]
 RUNTIME_REQUIRED_FLAGS = [
-    "-c", "--strict-config", "--sandbox", "--cd", "--ignore-user-config", "--ignore-rules",
+    "-c", "--sandbox", "--cd",
     "--output-last-message", "--json", "--color",
 ]
 CODEX_ENVIRONMENT_KEYS = (
     "HOME", "CODEX_HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
-    "TZ", "TMPDIR", "TMP", "TEMP", "__CF_USER_TEXT_ENCODING",
+    "TZ", "TMPDIR", "TMP", "TEMP", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_HOME",
+    "XDG_DATA_DIRS", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS", "GOCACHE", "GOMODCACHE", "CARGO_HOME", "RUSTUP_HOME",
+    "GRADLE_USER_HOME", "NPM_CONFIG_CACHE", "GOPATH", "__CF_USER_TEXT_ENCODING",
 )
+NATIVE_PROFILE_REVISION = "native-permissions-v1"
 UUID_PATTERN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 TASK_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
@@ -142,7 +146,8 @@ def provider_runtime_roots(environment: dict[str, str]) -> list[Path]:
         ".m2", ".local", "Library/Caches", "Library/Logs",
     ))
     for name in ("TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
-                 "GOCACHE", "GOMODCACHE", "CARGO_HOME", "RUSTUP_HOME"):
+                 "GOCACHE", "GOMODCACHE", "CARGO_HOME", "RUSTUP_HOME",
+                 "GRADLE_USER_HOME", "NPM_CONFIG_CACHE"):
         value = environment.get(name)
         if value and not (name in {"GOCACHE", "GOMODCACHE"} and value == "off"):
             roots.append(Path(value))
@@ -459,10 +464,10 @@ REJECTED_SHELL_SYNTAX = frozenset({"\x00", "\n", "\r", "$", "`", ";", "&", "|", 
 
 
 def unwrap_shell_command(command: str) -> list[str] | None:
-    """Unwrap one finite, recognized absolute-shell ``-c`` invocation.
+    """Unwrap one finite, recognized absolute-shell ``-c`` or ``-lc`` invocation.
 
     Codex may ask its inherited shell to run a command.  Only an exact
-    ``/bin/<shell> -c <one string>`` shape is unwrapped; shell operators,
+    ``/bin/<shell> (-c|-lc) <one string>`` shape is unwrapped; shell operators,
     additional arguments, and nested wrappers remain visible to the caller.
     """
     if any(character in command for character in REJECTED_SHELL_SYNTAX):
@@ -472,7 +477,7 @@ def unwrap_shell_command(command: str) -> list[str] | None:
         return None
     if len(tokens) == 2:
         return tokens
-    if len(tokens) != 3 or tokens[0] not in RECOGNIZED_SHELL_WRAPPERS or tokens[1] != "-c":
+    if len(tokens) != 3 or tokens[0] not in RECOGNIZED_SHELL_WRAPPERS or tokens[1] not in {"-c", "-lc"}:
         return tokens
     return shell_tokens(tokens[2])
 
@@ -719,7 +724,7 @@ class CodexAcceptance:
         self.runner = resolve_executable(args.runner, self.tools / "delegate-run", "delegate-run")
         self.pueue = resolve_executable(args.pueue, Path("/opt/homebrew/bin/pueue"), "pueue")
         self.pueued = resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued")
-        self.codex = resolve_executable(args.codex, Path("/opt/homebrew/bin/codex"), "codex")
+        self.codex = resolve_executable(args.codex, Path(shutil.which("codex") or "/opt/homebrew/bin/codex"), "codex")
         self.provider_version: str | None = None
         self.provider_sha256 = digest(self.codex)
         self.profile_revision: str | None = None
@@ -832,6 +837,9 @@ class CodexAcceptance:
 
     def setup(self) -> None:
         self.require_probe_unchanged("before setup")
+        PUEUE_PARENT.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if sys.platform != "darwin":
+            ensure_private_directory(PUEUE_PARENT, "private supervisor parent")
         pueue_base = PUEUE_PARENT / ("delegation-layer-codex-" + secrets.token_hex(8))
         self.pueue_base = ensure_private_directory(pueue_base, "private pueue base", create=True)
         ensure_private_directory(self.pueue_base / "state", "private pueue state", create=True)
@@ -1013,11 +1021,12 @@ class CodexAcceptance:
                 policy.get("runtime_sha256") == self.provider_sha256,
                 f"{name} persisted Codex runtime policy is incomplete")
         profile_revision = policy.get("profile_revision")
-        require(isinstance(profile_revision, str) and profile_revision,
-                f"{name} effective policy revision is absent")
+        require(profile_revision == NATIVE_PROFILE_REVISION,
+                f"{name} native effective policy revision is absent or stale")
         if self.profile_revision is None:
             self.profile_revision = profile_revision
         require(profile_revision == self.profile_revision, f"{name} effective policy revision drifted")
+        require(not policy.get("sources"), f"{name} native policy unexpectedly inventories config sources")
         roots = policy.get("writable_roots")
         require(isinstance(roots, list) and all(isinstance(root, str) for root in roots),
                 f"{name} writable runtime roots are absent")
@@ -1276,7 +1285,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pueue", required=True)
     parser.add_argument("--pueued", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--codex", default=None, help="installed Codex executable (defaults to /opt/homebrew/bin/codex)")
+    parser.add_argument("--codex", default=None, help="installed Codex executable (defaults to PATH discovery)")
     parser.add_argument("--delegate", default=None, help="delegate executable override for acceptance composition")
     parser.add_argument("--runner", default=None, help="delegate-run executable override for acceptance composition")
     return parser

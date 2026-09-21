@@ -83,9 +83,12 @@ then retry the continuation with the exact predecessor ID.
 
 A rejected outcome is a terminal result with exit code 4. Inspect the outcome
 and sealed raw descriptors from `collect` and `logs`. Common causes are changed
-provider output shape, session identity mismatch, policy drift, an invalid
+provider output shape, session identity mismatch, an invalid
 declared artifact, or a provider-reported failure. The task is not retried
-automatically.
+automatically. A native configuration error does not by itself prove that the
+user's settings are wrong: an obsolete adapter-supplied command override can
+also cause it. Preserve the evidence and check the installed delegate version;
+do not delete provider settings or MCP configuration as a generic repair.
 
 ## Collection fails after a successful run
 

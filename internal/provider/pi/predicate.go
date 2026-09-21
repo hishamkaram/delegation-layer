@@ -19,7 +19,10 @@ const (
 	refusalProviderFailed = "provider-failed"
 )
 
-type interpreter struct{ mode string }
+type interpreter struct {
+	mode   string
+	legacy bool
+}
 
 // NewInterpreter returns the immutable Pi JSON interpreter for mode. With no
 // argument it returns the read-only interpreter for package compatibility.
@@ -31,13 +34,22 @@ func NewInterpreter(mode ...string) predicate.Interpreter {
 	return interpreter{mode: selected}
 }
 
-func (i interpreter) Reference() task.PredicateRef { return ReferenceForMode(i.mode) }
+func newLegacyInterpreter() predicate.Interpreter {
+	return interpreter{mode: ModeReadOnly, legacy: true}
+}
+
+func (i interpreter) Reference() task.PredicateRef {
+	if i.legacy {
+		return LegacyReference()
+	}
+	return ReferenceForMode(i.mode)
+}
 
 func (i interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
 	if !validMode(i.mode) {
 		return task.Interpretation{}, fmt.Errorf("%w: invalid Pi interpreter mode", task.ErrIdentityMismatch)
 	}
-	if err := validateEvaluationInput(input, raw, out, i.mode); err != nil {
+	if err := validateEvaluationInput(input, raw, out, i.Reference()); err != nil {
 		return task.Interpretation{}, err
 	}
 	stdout, err := readEvidence(raw)
@@ -59,8 +71,8 @@ func (i interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out
 	}, nil
 }
 
-func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out io.Writer, mode string) error {
-	if !input.Seal.Predicate.Equal(ReferenceForMode(mode)) {
+func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out io.Writer, reference task.PredicateRef) error {
+	if !input.Seal.Predicate.Equal(reference) {
 		return fmt.Errorf("%w: Pi predicate reference mismatch", task.ErrIdentityMismatch)
 	}
 	if err := task.ValidateProviderExitRecord(&input.Seal); err != nil {

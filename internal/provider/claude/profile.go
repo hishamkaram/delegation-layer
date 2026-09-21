@@ -13,14 +13,19 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// PrepareCandidate resolves static inputs and describes the portable runtime
-// probe. Authentication remains owned by the Claude CLI.
+// PrepareCandidate resolves the native launch plan and describes the shared
+// runtime capability probe. Claude owns configuration, authentication, and
+// permission policy; the adapter retains only request and runtime checks.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	return prepareNativeCandidate(request)
+}
+
+func prepareNativeCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 	arguments, inputs, err := printArguments(request)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	environment, err := prepareEnvironment(os.Environ())
+	environment, err := prepareNativeEnvironment(os.Environ())
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -29,10 +34,6 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 		return commonprovider.ProfileCandidate{}, err
 	}
 	environment.RuntimeSHA256 = cli.SHA256
-	sources, err := resolvePolicySources(request, environment)
-	if err != nil {
-		return commonprovider.ProfileCandidate{}, err
-	}
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, RuntimeRequirements())
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -47,18 +48,20 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
 		Finalize: func(data json.RawMessage, now time.Time) (commonprovider.PreparedProfile, error) {
-			return finalizePreparedProfile(request, arguments, inputs, cli, environment, sources, definitionDigest, data, now)
+			return finalizeNativePreparedProfile(request, arguments, inputs, cli, environment, definitionDigest, data, now)
 		},
 	}, nil
 }
 
-// PrepareExistingCandidate retains the native OAuth inspection contract for
-// tasks admitted before Claude moved to the portable runtime probe. New tasks
-// never use this path; the source marker is part of the immutable old policy
-// record and cannot be introduced by the current portable finalizer.
+// PrepareExistingCandidate selects the launch and policy contract recorded by
+// an already admitted task. Native tasks use the current provider-owned plan;
+// older portable and OAuth records retain their historical branches.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+	if meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision {
+		return prepareNativeCandidate(request)
+	}
 	if !hasLegacyNativePolicy(meta) {
-		return PrepareCandidate(request)
+		return preparePortableCandidate(request, meta.Predicate)
 	}
 	return prepareLegacyCandidate(request, meta.Predicate)
 }
@@ -75,8 +78,48 @@ func hasLegacyNativePolicy(meta task.MetaRecord) bool {
 	return false
 }
 
+func preparePortableCandidate(request task.TaskRecord, predicateReference task.PredicateRef) (commonprovider.ProfileCandidate, error) {
+	arguments, inputs, err := legacyPrintArguments(request)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	environment, err := prepareEnvironment(os.Environ())
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	cli, err := resolveExecutable()
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	environment.RuntimeSHA256 = cli.SHA256
+	sources, err := resolvePolicySources(request, environment)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	if predicateReference.Adapter == "" {
+		predicateReference = legacyPortableReferenceForMode(request.Mode)
+	}
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, legacyRuntimeRequirements())
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	var definitionDigest string
+	definition, definitionDigest, err = definition.Snapshot()
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	return commonprovider.ProfileCandidate{
+		Directory:     request.CanonicalCwd,
+		WritableRoots: slices.Clone(environment.WritableRoots),
+		Inspection:    &definition,
+		Finalize: func(data json.RawMessage, now time.Time) (commonprovider.PreparedProfile, error) {
+			return finalizePreparedProfile(request, arguments, inputs, cli, environment, sources, definitionDigest, data, now, predicateReference)
+		},
+	}, nil
+}
+
 func prepareLegacyCandidate(request task.TaskRecord, predicateReference task.PredicateRef) (commonprovider.ProfileCandidate, error) {
-	arguments, inputs, err := printArguments(request)
+	arguments, inputs, err := legacyPrintArguments(request)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -100,7 +143,7 @@ func prepareLegacyCandidate(request task.TaskRecord, predicateReference task.Pre
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	requirements := RuntimeRequirements()
+	requirements := legacyRuntimeRequirements()
 	definition.Runtime = &commonprovider.RuntimeProbeDefinition{
 		Executable:       cli.Path,
 		ExecutableSHA256: cli.SHA256,
@@ -134,6 +177,7 @@ func finalizePreparedProfile(
 	definitionDigest string,
 	data json.RawMessage,
 	now time.Time,
+	predicateReferences ...task.PredicateRef,
 ) (commonprovider.PreparedProfile, error) {
 	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
 	if decodeErr != nil || task.ValidateSHA256(definitionDigest) != nil || facts.Runtime == nil || facts.Native != nil || facts.Runtime.Executable != cli.Path || facts.Runtime.SHA256 != cli.SHA256 {
@@ -144,11 +188,53 @@ func finalizePreparedProfile(
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
-	predicateReference := ReferenceForMode(request.Mode)
+	predicateReference := legacyPortableReferenceForMode(request.Mode)
+	if len(predicateReferences) > 0 && predicateReferences[0].Adapter != "" {
+		predicateReference = predicateReferences[0]
+	}
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
 			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(environment.Values), Predicate: predicateReference, InputFiles: slices.Clone(inputs),
+		},
+		ObservedVersion: runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
+		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
+			return NewIdentityObserver(request.RootID, request.TaskID, expected, record)
+		},
+	}
+	if err = prepared.Validate(request); err != nil {
+		return commonprovider.PreparedProfile{}, err
+	}
+	return prepared, nil
+}
+
+func finalizeNativePreparedProfile(
+	request task.TaskRecord,
+	arguments []string,
+	inputs []task.InputFile,
+	cli commonprovider.CLIInfo,
+	environment profileEnvironment,
+	definitionDigest string,
+	data json.RawMessage,
+	_ time.Time,
+) (commonprovider.PreparedProfile, error) {
+	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
+	if decodeErr != nil || task.ValidateSHA256(definitionDigest) != nil || facts.Runtime == nil || facts.Native != nil || facts.Runtime.Executable != cli.Path || facts.Runtime.SHA256 != cli.SHA256 {
+		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
+	}
+	runtime := *facts.Runtime
+	approval := "dontAsk"
+	if request.Mode == WorkspaceWriteMode {
+		approval = "acceptEdits"
+	}
+	effective, err := commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, runtime.SHA256, approval)
+	if err != nil {
+		return commonprovider.PreparedProfile{}, err
+	}
+	prepared := commonprovider.PreparedProfile{
+		Plan: execution.Plan{
+			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
+			Environment: slices.Clone(environment.Values), Predicate: ReferenceForMode(request.Mode), InputFiles: slices.Clone(inputs),
 		},
 		ObservedVersion: runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
 		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
