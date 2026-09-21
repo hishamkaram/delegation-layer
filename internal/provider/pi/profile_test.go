@@ -65,6 +65,10 @@ func profileReconstructionFixture(t *testing.T) (task.TaskRecord, time.Time) {
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	workspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cliDir := t.TempDir()
 	cliPath := filepath.Join(cliDir, "pi")
 	if err := os.WriteFile(cliPath, []byte("pi fixture"), 0o700); err != nil {

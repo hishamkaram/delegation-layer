@@ -38,7 +38,10 @@ func TestEnvironmentPreservesNativeLoginAndDropsUnrelatedValues(t *testing.T) {
 }
 
 func TestNativeEnvironmentKeepsDiscoverySessionPathsWithoutSecrets(t *testing.T) {
-	home := t.TempDir()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	configHome := filepath.Join(home, "config")
 	dataHome := filepath.Join(home, "data")
 	runtimeDir := filepath.Join(home, "runtime")
