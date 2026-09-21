@@ -24,7 +24,7 @@ Dispatch flags:
 
 - `--brief FILE`: bounded task instructions;
 - `--cwd ABS`: workspace for the delegated turn;
-- `--permission read-only|workspace-write`: requested native permission mode (not independent containment);
+- `--permission read-only|workspace-write`: read-only investigation or authorized unattended write execution, including commands (not independent containment);
 - `--budget DURATION`: finite turn budget;
 - `--auto`: let the CLI select a ready provider;
 - `--provider ID`: use only when the caller explicitly selected an ID;

@@ -29,6 +29,7 @@ INSPECTION_GROUP_PREFIX = "delegation-inspection-"
 INSPECTION_FAILURE_RESULTS = {"Killed", "Errored", "DependencyFailed", "Failed", "FailedToSpawn"}
 PUEUE_VERSION = "4.0.4"
 STATIC_REFUSAL_ERROR = "unsupported-effective-config"
+AUTHENTICATION_REFUSAL_ERROR = "provider authentication unavailable"
 _STATIC_REFUSAL_RESPONSE_KEYS = {
     "schema_version", "command", "root_id", "task_id", "admission",
     "liveness", "publication", "error",
@@ -806,7 +807,8 @@ class NativeTaskOps:
 
     def __init__(self, processes: object, delegate: Path, runner: Path,
                  pueue: Path, state_parent: Path, state: Path, output: Path,
-                 watch_seconds: float = 150) -> None:
+                 watch_seconds: float = 150,
+                 expected_inspection_binding_required: bool = True) -> None:
         self.processes = processes
         self.delegate = Path(delegate)
         self.runner = Path(runner)
@@ -815,6 +817,9 @@ class NativeTaskOps:
         self.state = Path(state)
         self.output = Path(output)
         self.watch_seconds = watch_seconds
+        require(type(expected_inspection_binding_required) is bool,
+                "expected inspection binding mode is invalid")
+        self.expected_inspection_binding_required = expected_inspection_binding_required
         self.pueue_config: Path | None = None
         self.daemon: object | None = None
         self.root_id: str | None = None
@@ -1193,12 +1198,16 @@ class NativeTaskOps:
                 "worker_observation": observation}
 
     def validate_inspection_journals(self, allow_failure: bool = False,
-                                     expected_binding_required: bool = True) -> dict[str, dict[str, object]]:
+                                     expected_binding_required: bool | None = None) -> dict[str, dict[str, object]]:
         """Validate every inspection journal and require exact expected coverage."""
+        if expected_binding_required is None:
+            expected_binding_required = self.expected_inspection_binding_required
         return self._inspection_journals(allow_failure, expected_binding_required)
 
     def _inspection_journals(self, allow_failure: bool,
-                             expected_binding_required: bool = True) -> dict[str, dict[str, object]]:
+                             expected_binding_required: bool | None = None) -> dict[str, dict[str, object]]:
+        if expected_binding_required is None:
+            expected_binding_required = self.expected_inspection_binding_required
         journals = {}
         for task, directory in self._inspection_journal_paths().items():
             journals[task] = self._validate_inspection_journal(
@@ -1255,7 +1264,8 @@ class NativeTaskOps:
         tasks = status.get("tasks")
         require(isinstance(tasks, dict), "private queue tasks object is absent")
         require(self.dispatch_attempts, "no supervisor dispatch attempt was recorded")
-        journals = self._inspection_journals(allow_failure)
+        journals = self._inspection_journals(
+            allow_failure, self.expected_inspection_binding_required)
         ordinary_task_ids = set(self.tasks.values())
         require(ordinary_task_ids <= self.dispatch_attempts,
                 "ordinary task response has no matching dispatch attempt")
@@ -1340,7 +1350,7 @@ class NativeTaskOps:
                 type(default.get("parallel_tasks")) is int and
                 default.get("parallel_tasks") == 1)
 
-    def _static_refusal_state_is_clean(self) -> bool:
+    def _static_refusal_state_is_clean(self, initialized: bool = True) -> bool:
         """Reject every durable task, inspection, and group authorization record."""
         try:
             if not self.state.is_dir() or self.state.is_symlink():
@@ -1349,7 +1359,7 @@ class NativeTaskOps:
         except OSError:
             return False
         names = {entry.name for entry in entries}
-        if not {"root.json", ".maintenance.lock"} <= names:
+        if initialized and not {"root.json", ".maintenance.lock"} <= names:
             return False
         if not names <= {"root.json", ".maintenance.lock", ".probe"}:
             return False
@@ -1359,6 +1369,22 @@ class NativeTaskOps:
                     return False
             elif entry.is_symlink() or not entry.is_dir():
                 return False
+        return True
+
+    def _unattempted_queue_finished(self, status: dict[str, object]) -> bool:
+        """Allow setup cleanup only with no attempted or durable task work."""
+        if (self.tasks or self.labels or self.numbers or self.dispatch_attempts or
+                self.dispatch_observations or self.inspection_attempts or self.inspection_bindings):
+            return False
+        if not self._empty_private_queue(status) or not self._static_refusal_state_is_clean(False):
+            return False
+        try:
+            if (self.state / "root.json").exists():
+                self._known_root_id()
+            elif self.root_id is not None or self.root_created_at is not None:
+                return False
+        except (AcceptanceFailure, OSError, TypeError, ValueError, RecursionError):
+            return False
         return True
 
     @staticmethod
@@ -1373,15 +1399,22 @@ class NativeTaskOps:
         if not isinstance(response, dict):
             return False
         error = response.get("error")
-        return (set(response) == _STATIC_REFUSAL_RESPONSE_KEYS and
+        if not isinstance(error, str) or not error:
+            return False
+        static_refusal = (set(response) == _STATIC_REFUSAL_RESPONSE_KEYS and
+                          (error == STATIC_REFUSAL_ERROR or
+                           error.startswith(STATIC_REFUSAL_ERROR + ":")))
+        auth_refusal = (set(response) == _STATIC_REFUSAL_RESPONSE_KEYS | {"status"} and
+                        response.get("status") == "blocked" and
+                        error.startswith(AUTHENTICATION_REFUSAL_ERROR + ": " +
+                                         STATIC_REFUSAL_ERROR + ":"))
+        return ((static_refusal or auth_refusal) and
                 type(response.get("schema_version")) is int and
                 response.get("schema_version") == 1 and response.get("command") == "dispatch" and
                 response.get("root_id") == root and response.get("task_id") == task and
                 response.get("admission") == "unknown" and
                 response.get("liveness") == "undetermined" and
-                response.get("publication") == "unknown" and
-                isinstance(error, str) and error and
-                (error == STATIC_REFUSAL_ERROR or error.startswith(STATIC_REFUSAL_ERROR + ":")))
+                response.get("publication") == "unknown")
 
     def _static_refusal_queue_finished(self, status: dict[str, object]) -> bool:
         """Allow cleanup for an exact pre-admission static refusal only."""
@@ -1450,6 +1483,8 @@ class NativeTaskOps:
         })
 
     def failure_queue_finished(self, status: dict[str, object]) -> bool:
+        if not self.dispatch_attempts:
+            return self._unattempted_queue_finished(status)
         if self._static_refusal_queue_finished(status):
             return True
         if not self._inspection_control_started():

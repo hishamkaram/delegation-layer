@@ -62,6 +62,24 @@ func TestIdentityObserverReportsExpectedInitDuringChunkedCapture(t *testing.T) {
 	}
 }
 
+func TestIdentityObserverAcceptsWorkspaceWriteInit(t *testing.T) {
+	var got []task.SessionIdentity
+	observer, err := NewIdentityObserver(claudeTestRootID, claudeTestTaskID, task.SessionExpectation{Required: true, ID: claudeTestUUID}, func(identity task.SessionIdentity) error {
+		got = append(got, identity)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer.Observe([]byte(writeInitLine(claudeTestUUID)))
+	if err := observer.Complete(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != (task.SessionIdentity{Provider: Provider, ConversationID: claudeTestUUID}) {
+		t.Fatalf("workspace-write identity was not recorded: %+v", got)
+	}
+}
+
 func TestIdentityObserverDoesNotRecordMalformedOrWrongIdentity(t *testing.T) {
 	cases := []struct {
 		name string
@@ -159,7 +177,11 @@ func legacyInitLine(sessionID string) string {
 }
 
 func writeInitLine(sessionID string) string {
-	return fmt.Sprintf(`{"type":"system","subtype":"init","session_id":%q,"claude_code_version":%q,"apiKeySource":"none","cwd":"/workspace","tools":["Read","Edit","Write","Glob","Grep"],"mcp_servers":[],"model":"claude-test","permissionMode":"acceptEdits"}`, sessionID, Version)
+	return fmt.Sprintf(`{"type":"system","subtype":"init","session_id":%q,"claude_code_version":%q,"apiKeySource":"none","cwd":"/workspace","tools":["Read","Edit","Write","Glob","Grep"],"mcp_servers":[],"model":"claude-test","permissionMode":"bypassPermissions"}`, sessionID, Version)
+}
+
+func legacyWriteInitLine(sessionID string) string {
+	return strings.Replace(writeInitLine(sessionID), `"permissionMode":"bypassPermissions"`, `"permissionMode":"acceptEdits"`, 1)
 }
 
 func jsonl(lines ...string) []byte { return []byte(strings.Join(lines, "\n")) }

@@ -8,10 +8,10 @@ This document defines the normative requirements for provider adapters
 
 | Adapter | Capability Profile | Approval Policy | Command Shape & Flags | Deferred Capabilities |
 |---|---|---|---|---|
-| `antigravity:print` | `workspace-write` | Accept workspace file edits; deny other unapproved requests; pre-approved sandboxed commands may run | `agy --sandbox --mode accept-edits --add-dir <canonical-workspace> --output-format json --input-format text --print-timeout <duration>` | `read-only`, unrestricted auto-approval, extra writable roots |
+| `antigravity:print` | `workspace-write` | Native automatic tool approval (`always-proceed`) | `agy --sandbox --mode accept-edits --dangerously-skip-permissions --add-dir <canonical-workspace> --output-format json --input-format text --print-timeout <duration>` | `read-only`, extra writable roots |
 | `codex:exec` | `read-only`, `workspace-write` | native sandbox | `codex exec ... --sandbox <mode> ...` | unrestricted execution, ephemeral sessions |
-| `claude:print` | `read-only`, `workspace-write` | native `plan` or `acceptEdits` permission mode | `claude --print ... --permission-mode <mode> ...` | unrestricted execution |
-| `pi:json` | `read-only` | native read,grep,find,ls tool selection; native extensions remain enabled | `pi --mode json --tools read,grep,find,ls ...` | workspace-write |
+| `claude:print` | `read-only`, `workspace-write` | native `plan` for read-only; `bypassPermissions` for unattended writes | `claude --print ... --permission-mode <mode> ...` | independent containment |
+| `pi:json` | `read-only`, `workspace-write` | read-only uses read,grep,find,ls; write uses provider-native tools and approval | `pi --mode json ...`; read-only adds `--tools read,grep,find,ls` | independent containment |
 | `opencode:run` | `read-only`, `workspace-write` | native plan/build agent; native `--auto` for workspace-write | `opencode run --format json --dir <workspace> ...` | unrestricted execution |
 
 Each native adapter locates its executable during static preparation and records
@@ -28,6 +28,9 @@ profile revision, or digest is compared with a checked-in value.
   MCP servers, hooks, plugins, skills, and native policy. New admission does not
   inventory these sources or inject settings to disable them. Permission modes
   select native behavior; they do not establish independent containment.
+  Workspace-write requests unattended execution, including native automatic
+  approval where available. Native access may extend beyond the workspace;
+  remaining provider restrictions are reported, not repaired by the adapter.
 - **Input Delivery**: Brief text is delivered exclusively via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv. Brief size limit is 8 MiB.
 - **Argv Construction**: Built strictly as Go string slices (`[]string`), executed directly via `exec.Command` without shell wrapper or reparsing.
 - **Working Directory**: Set strictly to the validated canonical workspace directory (`Cmd.Dir = workdir`).

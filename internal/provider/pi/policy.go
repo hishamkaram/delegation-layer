@@ -17,7 +17,7 @@ import (
 // and nonsecret native source observations. It intentionally contains no
 // release claim or credential material.
 func effectivePolicy(request task.TaskRecord, environment profileEnvironment, runtimeSHA256 string, sources []task.PolicySourceDigest) (task.EffectiveConfig, error) {
-	if !validMode(request.Mode) || request.CanonicalCwd == "" || task.ValidateSHA256(runtimeSHA256) != nil {
+	if request.Mode != ModeReadOnly || request.CanonicalCwd == "" || task.ValidateSHA256(runtimeSHA256) != nil {
 		return task.EffectiveConfig{}, fmt.Errorf("%w: invalid Pi policy inputs", ErrUnsupportedProfile)
 	}
 	sources = slices.Clone(sources)

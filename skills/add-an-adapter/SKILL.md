@@ -78,11 +78,12 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
    finite stdin followed by EOF, existing authentication, and the exact plan
    budgets. Inspect sealed raw evidence and filesystem effects directly; do not
    use direct signals, shell wrappers, or global configuration changes.
-6. For the existing agy profile, accept the containment-denial case when the
-   positive filesystem control is verified and the attempted write is explicitly
-   denied. Do not require a successful published first turn or an empty payload
-   for a rejected task. Missing prerequisites and inconclusive controls are
-   `BLOCKED`, never pass.
+6. Match filesystem controls to the advertised native mode. Unattended write
+   modes must prove creation, editing, and shell execution from filesystem and
+   sealed evidence; they do not promise outside-workspace denial. Preserve
+   applicable native read-only and sandbox controls. A rejected task may have a
+   payload. Missing prerequisites and inconclusive controls are `BLOCKED`,
+   never pass.
 7. Record sanitized platform/version/profile/predicate/configuration, task and
    session identities, timings, commands, observations, and digests. Treat the
    provider version and executable digest as observations bound to that task;

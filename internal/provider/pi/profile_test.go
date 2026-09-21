@@ -12,15 +12,19 @@ import (
 )
 
 func TestProfileReconstructionRetainsNativeAndLegacyBindings(t *testing.T) {
-	t.Run("native", testNativeProfileReconstruction)
+	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+		t.Run("native/"+mode, func(t *testing.T) {
+			testNativeProfileReconstruction(t, mode)
+		})
+	}
 	t.Run("legacy", testLegacyProfileReconstruction)
 }
 
-func testNativeProfileReconstruction(t *testing.T) {
+func testNativeProfileReconstruction(t *testing.T, mode string) {
 	t.Helper()
-	request, now := profileReconstructionFixture(t)
+	request, now := profileReconstructionFixture(t, mode)
 	nativeProfile := finalizeProfile(t, mustPrepareCandidate(t, request), now)
-	requireNativeProfile(t, nativeProfile)
+	requireNativeProfile(t, nativeProfile, mode)
 
 	nativeReplayCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: nativeProfile.Effective})
 	if err != nil {
@@ -30,11 +34,27 @@ func testNativeProfileReconstruction(t *testing.T) {
 	if !task.CompareEffectiveConfigs(nativeProfile.Effective, nativeReplay.Effective) {
 		t.Fatalf("native reconstruction changed effective config: replay=%+v", nativeReplay.Effective)
 	}
+	if !slices.Equal(nativeProfile.Plan.Arguments, nativeReplay.Plan.Arguments) || !nativeProfile.Plan.Predicate.Equal(nativeReplay.Plan.Predicate) {
+		t.Fatalf("native reconstruction changed launch binding: args=%q/%q predicate=%+v/%+v", nativeProfile.Plan.Arguments, nativeReplay.Plan.Arguments, nativeProfile.Plan.Predicate, nativeReplay.Plan.Predicate)
+	}
+	if mode == ModeReadOnly {
+		historicalCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{
+			EffectiveConfig: nativeProfile.Effective,
+			Predicate:       readOnlyV2Reference(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		historicalProfile := finalizeProfile(t, historicalCandidate, now)
+		if !historicalProfile.Plan.Predicate.Equal(readOnlyV2Reference()) {
+			t.Fatalf("native read-only v2 reconstruction changed predicate=%+v", historicalProfile.Plan.Predicate)
+		}
+	}
 }
 
 func testLegacyProfileReconstruction(t *testing.T) {
 	t.Helper()
-	request, now := profileReconstructionFixture(t)
+	request, now := profileReconstructionFixture(t, ModeReadOnly)
 	legacyCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: task.EffectiveConfig{
 		Policy: &task.PolicyDetails{ProfileRevision: ProfileRevision},
 	}})
@@ -58,7 +78,7 @@ func testLegacyProfileReconstruction(t *testing.T) {
 	}
 }
 
-func profileReconstructionFixture(t *testing.T) (task.TaskRecord, time.Time) {
+func profileReconstructionFixture(t *testing.T, mode string) (task.TaskRecord, time.Time) {
 	t.Helper()
 	home := t.TempDir()
 	workspace := filepath.Join(t.TempDir(), "workspace")
@@ -76,7 +96,7 @@ func profileReconstructionFixture(t *testing.T) (task.TaskRecord, time.Time) {
 	}
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", cliDir)
-	request := planRequest(ModeReadOnly)
+	request := planRequest(mode)
 	request.CanonicalCwd = workspace
 	return request, time.Now()
 }
@@ -110,13 +130,23 @@ func finalizeProfile(t *testing.T, candidate commonprovider.ProfileCandidate, no
 	return profile
 }
 
-func requireNativeProfile(t *testing.T, profile commonprovider.PreparedProfile) {
+func requireNativeProfile(t *testing.T, profile commonprovider.PreparedProfile, mode string) {
 	t.Helper()
 	policy := profile.Effective.Policy
 	if policy == nil || policy.ProfileRevision != commonprovider.NativeProfileRevision || len(policy.Sources) != 0 {
 		t.Fatalf("native effective policy=%+v", policy)
 	}
-	if !profile.Plan.Predicate.Equal(Reference()) {
+	if profile.Effective.Containment != mode {
+		t.Fatalf("native containment=%q want=%q", profile.Effective.Containment, mode)
+	}
+	wantApproval := "read-only"
+	if mode == ModeWorkspaceWrite {
+		wantApproval = "provider-native"
+	}
+	if profile.Effective.Approval != wantApproval {
+		t.Fatalf("native approval=%q want=%q", profile.Effective.Approval, wantApproval)
+	}
+	if !profile.Plan.Predicate.Equal(ReferenceForMode(mode)) {
 		t.Fatalf("native predicate=%+v", profile.Plan.Predicate)
 	}
 }

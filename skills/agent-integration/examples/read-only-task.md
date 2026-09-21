@@ -1,7 +1,7 @@
 # Read-only task
 
 ```sh
-STATE_ROOT="${DELEGATE_ROOT:-$HOME/.local/state/delegation-layer}"
+STATE_ROOT="${DELEGATE_ROOT:-$HOME/delegation-state}"
 BRIEF="$(mktemp)"
 printf '%s\n' 'Inspect the workspace and summarize the current test failures. Do not edit files.' >"$BRIEF"
 delegate --root "$STATE_ROOT" dispatch --auto \

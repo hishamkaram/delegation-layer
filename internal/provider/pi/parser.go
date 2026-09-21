@@ -14,29 +14,41 @@ import (
 )
 
 const (
-	eventSession       = "session"
-	eventAgentStart    = "agent_start"
-	eventAgentEnd      = "agent_end"
-	eventTurnStart     = "turn_start"
-	eventTurnEnd       = "turn_end"
-	eventMessageStart  = "message_start"
-	eventMessageUpdate = "message_update"
-	eventMessageEnd    = "message_end"
-	eventAgentSettled  = "agent_settled"
-	eventError         = "error"
+	eventSession        = "session"
+	eventAgentStart     = "agent_start"
+	eventAgentEnd       = "agent_end"
+	eventTurnStart      = "turn_start"
+	eventTurnEnd        = "turn_end"
+	eventMessageStart   = "message_start"
+	eventMessageUpdate  = "message_update"
+	eventMessageEnd     = "message_end"
+	eventAutoRetryStart = "auto_retry_start"
+	eventAutoRetryEnd   = "auto_retry_end"
+	eventAgentSettled   = "agent_settled"
+	eventError          = "error"
 )
 
+type parserOptions struct {
+	allowNativeRetry bool
+	settledTerminal  bool
+}
+
 type eventState struct {
-	sessionID      string
-	sessionSeen    bool
-	agentStarted   bool
-	agentEnded     bool
-	turnStarted    bool
-	turnEnded      bool
-	turnStopReason string
-	messageOpen    bool
-	providerFail   bool
-	semanticErr    error
+	sessionID          string
+	sessionSeen        bool
+	agentStarted       bool
+	agentEnded         bool
+	turnStarted        bool
+	turnEnded          bool
+	turnStopReason     string
+	messageOpen        bool
+	providerFail       bool
+	stickyProviderFail bool
+	semanticErr        error
+
+	allowNativeRetry bool
+	settledTerminal  bool
+	retryPending     bool
 
 	lastMessageText       []byte
 	lastMessageSeen       bool
@@ -64,8 +76,15 @@ func (s eventState) semanticFault() bool { return s.semanticErr != nil }
 // parseStdout drains the complete bounded stream. A semantic fault freezes
 // parser state but never stops reads, allowing the execution core to close
 // pipes and seal the invocation deterministically.
-func parseStdout(reader io.Reader) (eventState, error) {
-	state := eventState{}
+func parseStdout(reader io.Reader, options ...parserOptions) (eventState, error) {
+	parserOptionsValue := parserOptions{}
+	if len(options) > 0 {
+		parserOptionsValue = options[0]
+	}
+	state := eventState{
+		allowNativeRetry: parserOptionsValue.allowNativeRetry,
+		settledTerminal:  parserOptionsValue.settledTerminal,
+	}
 	semanticErr, readErr := commonprovider.ReadJSONL(reader, maxEventLineBytes, func(line []byte) error {
 		return processEventLine(&state, line)
 	})
@@ -121,10 +140,23 @@ func applyEvent(state *eventState, event parsedEvent) {
 	if state.semanticErr != nil {
 		return
 	}
-	if state.agentEnded {
-		applyAfterAgentEnd(state, event.typeName)
+	if state.agentSettled && state.settledTerminal {
+		state.markSemantic("event appears after agent_settled")
 		return
 	}
+	if state.agentEnded {
+		if state.allowNativeRetry && event.typeName == eventAgentStart {
+			beginAgentCycle(state)
+			applyAgentStart(state)
+			return
+		}
+		applyAfterAgentEnd(state, event)
+		return
+	}
+	applyActiveEvent(state, event)
+}
+
+func applyActiveEvent(state *eventState, event parsedEvent) {
 	switch event.typeName {
 	case eventSession:
 		applySessionEvent(state, event.fields)
@@ -142,15 +174,24 @@ func applyEvent(state *eventState, event parsedEvent) {
 		applyTurnEnd(state, event.fields)
 	case eventAgentEnd:
 		applyAgentEnd(state, event.fields)
+	case eventAutoRetryStart:
+		if state.allowNativeRetry {
+			applyNativeRetryStart(state)
+		} else {
+			applyUnknownEvent(state, event.typeName)
+		}
+	case eventAutoRetryEnd:
+		applyUnknownEvent(state, event.typeName)
 	case eventError:
 		state.providerFail = true
+		state.stickyProviderFail = true
 	default:
 		applyUnknownEvent(state, event.typeName)
 	}
 }
 
-func applyAfterAgentEnd(state *eventState, eventType string) {
-	switch eventType {
+func applyAfterAgentEnd(state *eventState, event parsedEvent) {
+	switch event.typeName {
 	case eventAgentEnd:
 		state.markSemantic("duplicate agent_end event")
 	case eventAgentSettled:
@@ -159,12 +200,21 @@ func applyAfterAgentEnd(state *eventState, eventType string) {
 			return
 		}
 		state.agentSettled = true
+	case eventAutoRetryStart:
+		if state.allowNativeRetry {
+			applyNativeRetryStart(state)
+		} else {
+			applyUnknownEvent(state, event.typeName)
+		}
+	case eventAutoRetryEnd:
+		applyUnknownEvent(state, event.typeName)
 	case eventSession, eventAgentStart, eventTurnStart, eventTurnEnd, eventMessageStart, eventMessageUpdate, eventMessageEnd:
-		state.markSemantic("event appears after agent_end: " + eventType)
+		state.markSemantic("event appears after agent_end: " + event.typeName)
 	case eventError:
 		state.providerFail = true
+		state.stickyProviderFail = true
 	default:
-		applyUnknownEvent(state, eventType)
+		applyUnknownEvent(state, event.typeName)
 	}
 }
 
@@ -185,6 +235,31 @@ func applyAgentStart(state *eventState) {
 		return
 	}
 	state.agentStarted = true
+}
+
+func applyNativeRetryStart(state *eventState) {
+	if !state.allowNativeRetry || !state.agentEnded || state.retryPending {
+		state.markSemantic("invalid auto_retry_start lifecycle")
+		return
+	}
+	state.retryPending = true
+}
+
+func beginAgentCycle(state *eventState) {
+	state.agentStarted = false
+	state.agentEnded = false
+	state.turnStarted = false
+	state.turnEnded = false
+	state.turnStopReason = ""
+	state.messageOpen = false
+	state.messageUsage = nil
+	state.lastMessageText = state.lastMessageText[:0]
+	state.lastMessageSeen = false
+	state.lastMessageStopReason = ""
+	state.turnText = state.turnText[:0]
+	state.agentText = state.agentText[:0]
+	state.retryPending = false
+	state.providerFail = state.stickyProviderFail
 }
 
 func applyTurnStart(state *eventState) {
@@ -339,6 +414,35 @@ func applyAgentEnd(state *eventState, fields map[string]json.RawMessage) {
 		state.markSemantic("agent_end messages: " + err.Error())
 		return
 	}
+	if !state.allowNativeRetry {
+		applyLegacyAgentEnd(state, message)
+		return
+	}
+	if message.errorMessage != "" {
+		state.providerFail = true
+	}
+	if state.turnStopReason != message.stopReason {
+		state.markSemantic("agent_end assistant stop reason conflicts with turn_end")
+		return
+	}
+	if !bytes.Equal(state.turnText, message.text) {
+		state.markSemantic("agent_end assistant text conflicts with turn_end")
+		return
+	}
+	if message.stopReason != "stop" {
+		if failedAssistantStopReason(message.stopReason) {
+			state.providerFail = true
+			state.agentEnded = true
+			return
+		}
+		state.markSemantic("agent_end final assistant stop reason is not stop")
+		return
+	}
+	state.agentText = append(state.agentText[:0], message.text...)
+	state.agentEnded = true
+}
+
+func applyLegacyAgentEnd(state *eventState, message messageValue) {
 	if message.errorMessage != "" {
 		state.providerFail = true
 	}

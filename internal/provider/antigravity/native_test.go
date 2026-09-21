@@ -45,6 +45,7 @@ func TestNativePreparationLeavesProviderConfigurationAlone(t *testing.T) {
 	if slices.Contains(profile.Plan.Arguments, "--disable-slash-commands") {
 		t.Fatal("native customization disabled")
 	}
+	assertUnattendedNativeApproval(t, profile, candidate.Inspection.Runtime.RequiredFlags)
 	if !slices.Contains(profile.Plan.Environment, "XDG_DATA_DIRS=/usr/local/share:/usr/share") || slices.Contains(profile.Plan.Environment, "GEMINI_API_KEY=fixture-secret") {
 		t.Fatal("incorrect discovery or credential environment")
 	}
@@ -55,6 +56,15 @@ func TestNativePreparationLeavesProviderConfigurationAlone(t *testing.T) {
 	assertNativeReconstruction(t, request, profile, facts)
 }
 
+func assertUnattendedNativeApproval(t *testing.T, profile commonprovider.PreparedProfile, requiredFlags []string) {
+	t.Helper()
+	if !slices.Contains(profile.Plan.Arguments, "--dangerously-skip-permissions") ||
+		!slices.Contains(profile.Plan.Arguments, "--sandbox") || profile.Effective.Approval != unattendedApproval ||
+		!slices.Contains(requiredFlags, "--dangerously-skip-permissions") {
+		t.Fatal("unattended native execution was not requested and recorded")
+	}
+}
+
 func assertNativeReconstruction(t *testing.T, request task.TaskRecord, profile commonprovider.PreparedProfile, facts []byte) {
 	t.Helper()
 	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: profile.Effective})
@@ -62,8 +72,26 @@ func assertNativeReconstruction(t *testing.T, request task.TaskRecord, profile c
 		t.Fatal(err)
 	}
 	replay, err := reconstructed.Finalize(facts, time.Now())
-	if err != nil || !task.CompareEffectiveConfigs(profile.Effective, replay.Effective) {
+	if err != nil || !task.CompareEffectiveConfigs(profile.Effective, replay.Effective) || !slices.Equal(profile.Plan.Arguments, replay.Plan.Arguments) {
 		t.Fatal("native profile reconstruction changed")
+	}
+	historical, err := commonprovider.NativeEffectiveConfig(request, profile.WritableRoots, profile.Effective.Policy.RuntimeSHA256, "accept-edits")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: historical, Environment: profile.Plan.Environment})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldProfile, err := oldCandidate.Finalize(facts, time.Now())
+	if err != nil || !task.CompareEffectiveConfigs(historical, oldProfile.Effective) ||
+		slices.Contains(oldProfile.Plan.Arguments, "--dangerously-skip-permissions") ||
+		slices.Contains(oldCandidate.Inspection.Runtime.RequiredFlags, "--dangerously-skip-permissions") {
+		t.Fatal("historical native task approval was escalated")
+	}
+	wantOldArguments := slices.DeleteFunc(slices.Clone(profile.Plan.Arguments), func(argument string) bool { return argument == "--dangerously-skip-permissions" })
+	if !slices.Equal(oldProfile.Plan.Arguments, wantOldArguments) {
+		t.Fatal("historical native launch arguments changed")
 	}
 	if _, err = PrepareExistingCandidate(request, task.MetaRecord{}); err == nil {
 		t.Fatal("historical configuration restrictions silently relaxed")
@@ -141,7 +169,7 @@ func TestNativeReconstructionRetainsRecordedWritableRoots(t *testing.T) {
 	request.CanonicalCwd = workspace
 	candidate, err := PrepareExistingCandidate(request, task.MetaRecord{
 		Environment: values,
-		EffectiveConfig: task.EffectiveConfig{Policy: &task.PolicyDetails{
+		EffectiveConfig: task.EffectiveConfig{Approval: "accept-edits", Policy: &task.PolicyDetails{
 			ProfileRevision: commonprovider.NativeProfileRevision,
 			WritableRoots:   []string{"/tmp", filepath.Join(home, ".gemini")},
 		}},

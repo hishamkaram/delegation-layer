@@ -327,7 +327,10 @@ func decodeInitPolicyForModeWithOptions(fields map[string]json.RawMessage, mode 
 			wantPermission = "dontAsk"
 		}
 	case WorkspaceWriteMode:
-		wantPermission = "acceptEdits"
+		wantPermission = "bypassPermissions"
+		if strict || nativeHistorical {
+			wantPermission = "acceptEdits"
+		}
 	default:
 		return "", "", fmt.Errorf("unsupported Claude permission mode %q", mode)
 	}

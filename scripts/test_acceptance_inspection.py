@@ -303,6 +303,105 @@ class InspectionHarnessTests(unittest.TestCase):
             "tasks": {}, "groups": {"default": {"status": "Running", "parallel_tasks": 1}},
         }))
 
+    def preadmission_cleanup(self, status, pending=(), ops=None):
+        # Mock only the OS/client boundary: retain_failure_ownership,
+        # safe_failure_shutdown, status decoding, and queue/state checks are real.
+        if ops is None:
+            ops = NativeTaskOps(SimpleNamespace(), self.base / "delegate", self.runner,
+                                self.pueue, self.state_parent, self.state, self.output)
+        ops.bind_supervisor(self.config, SimpleNamespace(poll=Mock(return_value=None), wait=Mock()))
+        status_directory = Path(tempfile.mkdtemp(dir=self.base))
+        write_json(status_directory / "stdout", status)
+        process = SimpleNamespace(directory=status_directory,
+                                  result={"exit_code": 0, "natural_wait": True})
+        ops.client = Mock(return_value=process)
+        ops.processes = SimpleNamespace(drain=Mock(return_value=list(pending)))
+        return ops
+
+    def test_preadmission_retained_cleanup_accepts_only_empty_or_implicit_default(self):
+        (self.state / "root.json").unlink()
+        for initialized in (False, True):
+            if initialized:
+                write_json(self.state / "root.json", {
+                    "schema_version": 1, "root_id": ROOT, "created_at": "2026-09-15T00:00:00Z",
+                })
+                (self.state / ".maintenance.lock").write_bytes(b"")
+            for groups in ({}, {"default": {"status": "Running", "parallel_tasks": 1}}):
+                with self.subTest(initialized=initialized, groups=groups):
+                    ops = self.preadmission_cleanup({"tasks": {}, "groups": groups})
+                    with patch("acceptance_provider_common.time.sleep",
+                               side_effect=AssertionError("empty owned queue must close")):
+                        self.assertTrue(ops.retain_failure_ownership())
+                    self.assertTrue(ops.closed)
+                    self.assertEqual([call.args[:2] for call in ops.client.call_args_list], [
+                        ("failure-queue", ["status", "--json"]),
+                        ("failure-shutdown", ["shutdown"]),
+                    ])
+                    ops.daemon.wait.assert_called_once_with(timeout=30, expected=0)
+                    for call in ops.processes.drain.call_args_list:
+                        self.assertEqual(call.kwargs, {"timeout": 0, "exclude": (ops.daemon,)})
+
+    def test_preadmission_cleanup_refuses_unknown_rows_groups_and_pending_clients(self):
+        default = {"default": {"status": "Running", "parallel_tasks": 1}}
+        unknown_row = {
+            "id": 99, "created_at": "2026-09-15T00:00:00Z", "label": "unknown",
+            "original_command": "unknown", "command": "unknown", "path": str(self.state),
+            "envs": {}, "group": "default", "dependencies": [], "priority": 0,
+            "status": {"Queued": {"enqueued_at": "2026-09-15T00:00:00Z"}},
+        }
+        cases = (
+            ({"tasks": {"99": unknown_row}, "groups": default}, ()),
+            ({"tasks": {}, "groups": {**default, "unknown": default["default"]}}, ()),
+            ({"tasks": {}, "groups": {"default": {"status": "Paused", "parallel_tasks": 1}}}, ()),
+            ({"tasks": {}, "groups": {"default": {"status": "Running", "parallel_tasks": 2}}}, ()),
+            ({"tasks": {}, "groups": default}, ({"pid": 17},)),
+        )
+        for status, pending in cases:
+            with self.subTest(status=status, pending=pending):
+                provider_common._validate_pueue_status(status)
+                ops = self.preadmission_cleanup(status, pending)
+                self.assertFalse(ops.safe_failure_shutdown())
+                self.assertFalse(ops.closed)
+                ops.daemon.wait.assert_not_called()
+                self.assertNotIn(["shutdown"], [call.args[1] for call in ops.client.call_args_list])
+
+    def test_preadmission_cleanup_refuses_unproven_durable_or_attempted_work(self):
+        status = {"tasks": {}, "groups": {"default": {"status": "Running", "parallel_tasks": 1}}}
+        for name in ("tasks", "inspections", "inspection-group", "unexpected"):
+            with self.subTest(durable=name):
+                (self.state / name).mkdir()
+                ops = self.preadmission_cleanup(status)
+                self.assertFalse(ops.safe_failure_shutdown())
+                ops.daemon.wait.assert_not_called()
+                (self.state / name).rmdir()
+        for field, value in (("dispatch_attempts", {TASK}), ("inspection_attempts", {TASK}),
+                             ("tasks", {"fresh": TASK}), ("root_id", "c" * 32)):
+            with self.subTest(field=field):
+                ops = self.preadmission_cleanup(status)
+                setattr(ops, field, value)
+                self.assertFalse(ops.safe_failure_shutdown())
+                ops.daemon.wait.assert_not_called()
+
+    def test_static_authentication_refusal_uses_exact_completed_cleanup(self):
+        self.static_refusal()
+        response = self.ops.dispatch_observations[0]["response"]
+        response["status"] = "blocked"
+        response["error"] = ("provider authentication unavailable: unsupported-effective-config: "
+                             "persistent ChatGPT authentication is required")
+        ops = self.preadmission_cleanup({
+            "tasks": {}, "groups": {"default": {"status": "Running", "parallel_tasks": 1}},
+        }, ops=self.ops)
+        with patch("acceptance_provider_common.time.sleep",
+                   side_effect=AssertionError("verified static refusal must close")):
+            self.assertTrue(ops.retain_failure_ownership())
+        ops.daemon.wait.assert_called_once_with(timeout=30, expected=0)
+        ops.closed = False
+        response["status"] = "unknown"
+        self.assertFalse(ops.safe_failure_shutdown())
+        response["status"] = "blocked"
+        response["error"] = "unrecognized failure: credentials unavailable"
+        self.assertFalse(ops.safe_failure_shutdown())
+
     def test_static_refusal_rejects_durable_guards_and_unknown_rows(self):
         self.static_refusal()
         (self.state / "inspections").mkdir()
@@ -500,6 +599,42 @@ class InspectionHarnessTests(unittest.TestCase):
         self.refresh_request_links(directory)
         with self.assertRaisesRegex(AcceptanceFailure, "binding"):
             self.ops._validate_queue_membership(self.status(self.inspection_row()), False)
+
+    def test_native_binding_mode_reaches_failure_cleanup_and_replay(self):
+        self.inspection_records()
+        self.ops.inspection_bindings.clear()
+        status = self.status(self.inspection_row())
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
+        self.ops = NativeTaskOps(
+            SimpleNamespace(), self.base / "delegate", self.runner, self.pueue,
+            self.state_parent, self.state, self.output,
+            expected_inspection_binding_required=False)
+        self.ops.bind_supervisor(self.config)
+        self.ops.root_id = ROOT
+        self.ops.tasks = {"fresh": TASK}
+        self.ops.labels = {"fresh": f"delegate:{ROOT}:{TASK}"}
+        self.ops.numbers = {"fresh": 7}
+        self.ops.dispatch_attempts = {TASK}
+        self.ops.inspection_attempts = {TASK}
+        self.assertTrue(self.ops.failure_queue_finished(status))
+
+        ordinary = self.state / "tasks" / TASK
+        result = b"replay proof\n"
+        payload = {"basename": "result.txt", "length": len(result),
+                   "sha256": provider_common.sha(result)}
+        outcome = {"verdict": "committed", "payload": payload,
+                   "evidence_sha256": "a" * 64}
+        (ordinary / "result.txt").write_bytes(result)
+        write_json(ordinary / "outcome.json", outcome)
+        response = {"task_id": TASK, "outcome": outcome, "payload": payload,
+                    "evidence_sha256": outcome["evidence_sha256"]}
+        self.ops.queue_status = lambda _name: status
+        self.ops.collect = lambda _name, task: dict(response, task_id=task)
+
+        self.ops.replay({
+            "fresh": {"directory": ordinary, "outcome": outcome, "payload": payload},
+        }, names=("fresh",))
 
     def test_fixture_binding_uses_static_definition_and_supervisor_sources(self):
         helper = self.base / "inspection-helper"

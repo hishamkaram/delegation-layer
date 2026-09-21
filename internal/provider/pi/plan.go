@@ -27,9 +27,12 @@ func jsonArgumentsForProfile(request task.TaskRecord, native bool) ([]string, er
 	if err := validateRequest(request); err != nil {
 		return nil, err
 	}
-	arguments := []string{
-		"--mode", "json",
-		"--tools", readOnlyTools,
+	if !native && request.Mode != ModeReadOnly {
+		return nil, fmt.Errorf("%w: Pi legacy profile supports read-only only", ErrUnsupportedProfile)
+	}
+	arguments := []string{"--mode", "json"}
+	if request.Mode == ModeReadOnly {
+		arguments = append(arguments, "--tools", readOnlyTools)
 	}
 	if !native {
 		// Extensions can replace built-in tools and run lifecycle hooks. A

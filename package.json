@@ -1,6 +1,6 @@
 {
   "name": "delegation-layer",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Multi-provider AI agent delegation CLI and Agent Skill for running bounded coding tasks across provider CLIs.",
   "keywords": [
     "ai-agents",

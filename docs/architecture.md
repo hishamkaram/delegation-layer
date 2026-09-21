@@ -49,7 +49,10 @@ reused for another task. The version is an observation; advertised behavior
 and the executable identity decide compatibility. New profiles record native
 permission selections without inventorying provider configuration. MCP servers,
 hooks, plugins, skills, and authentication are owned by the provider CLI.
-Historical tasks retain their recorded preparation contract.
+Workspace-write asks for unattended native tool execution; it does not add a
+provider-independent sandbox. Historical tasks retain their recorded preparation
+contract. New continuation tasks inherit the requested permission mode and use
+the current native mapping without modifying predecessor evidence.
 
 Pueue owns queueing and process supervision. A normal release carries the
 `pueue` and `pueued` executables and creates a private state-rooted

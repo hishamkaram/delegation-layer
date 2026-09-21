@@ -20,8 +20,9 @@ const (
 )
 
 type interpreter struct {
-	mode   string
-	legacy bool
+	mode    string
+	version string
+	legacy  bool
 }
 
 // NewInterpreter returns the immutable Pi JSON interpreter for mode. With no
@@ -31,18 +32,19 @@ func NewInterpreter(mode ...string) predicate.Interpreter {
 	if len(mode) > 0 && mode[0] != "" {
 		selected = mode[0]
 	}
-	return interpreter{mode: selected}
+	return interpreter{mode: selected, version: predicateVersion}
 }
 
 func newLegacyInterpreter() predicate.Interpreter {
-	return interpreter{mode: ModeReadOnly, legacy: true}
+	return interpreter{mode: ModeReadOnly, version: legacyPredicateVersion, legacy: true}
+}
+
+func newReadOnlyV2Interpreter() predicate.Interpreter {
+	return interpreter{mode: ModeReadOnly, version: historicalPredicateV2}
 }
 
 func (i interpreter) Reference() task.PredicateRef {
-	if i.legacy {
-		return LegacyReference()
-	}
-	return ReferenceForMode(i.mode)
+	return referenceForVersion(i.mode, i.version)
 }
 
 func (i interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
@@ -52,7 +54,10 @@ func (i interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out
 	if err := validateEvaluationInput(input, raw, out, i.Reference()); err != nil {
 		return task.Interpretation{}, err
 	}
-	stdout, err := readEvidence(raw)
+	stdout, err := readEvidenceWithOptions(raw, parserOptions{
+		allowNativeRetry: i.version == predicateVersion,
+		settledTerminal:  i.version == predicateVersion,
+	})
 	if err != nil {
 		return task.Interpretation{}, err
 	}
@@ -88,10 +93,14 @@ func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out 
 }
 
 func readEvidence(raw predicate.Evidence) (eventState, error) {
+	return readEvidenceWithOptions(raw, parserOptions{})
+}
+
+func readEvidenceWithOptions(raw predicate.Evidence, options parserOptions) (eventState, error) {
 	var stdout eventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {
 		var err error
-		stdout, err = parseStdout(reader)
+		stdout, err = parseStdout(reader, options)
 		return err
 	})
 	stderrErr := raw.Read(predicate.Stderr, commonprovider.DrainReader)
@@ -114,7 +123,7 @@ func refusalFor(input predicate.Input, state eventState) string {
 	if !identityMatches(input, state.sessionID) {
 		return refusalIdentity
 	}
-	if !state.turnEnded || !state.agentEnded {
+	if state.retryPending || !state.turnEnded || !state.agentEnded {
 		return refusalIncomplete
 	}
 	if len(bytes.TrimSpace(state.turnText)) == 0 || len(bytes.TrimSpace(state.agentText)) == 0 {
