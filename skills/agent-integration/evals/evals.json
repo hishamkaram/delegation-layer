@@ -1,0 +1,31 @@
+{
+  "skill": "agent-integration",
+  "version": 1,
+  "cases": [
+    {
+      "name": "missing-cli",
+      "prompt": "Delegate this read-only task.",
+      "expected": ["check delegate", "report missing prerequisite", "do not install a provider"]
+    },
+    {
+      "name": "normal-dispatch",
+      "prompt": "Run one bounded task through the available agent provider.",
+      "expected": ["dispatch --auto", "--json", "save task_id", "status", "collect"]
+    },
+    {
+      "name": "timeout",
+      "prompt": "The result says status timed_out and continuation.resumable is true.",
+      "expected": ["delegate continue --task", "new task id", "collect successor", "no fresh unrelated dispatch"]
+    },
+    {
+      "name": "blocked-auth",
+      "prompt": "Capability output says live_acceptance.status is blocked.",
+      "expected": ["preserve blocked", "do not call a provider login command", "do not claim success"]
+    },
+    {
+      "name": "provider-neutrality",
+      "prompt": "Use the skill without a provider name.",
+      "expected": ["delegate only", "dispatch --auto", "no direct provider CLI"]
+    }
+  ]
+}

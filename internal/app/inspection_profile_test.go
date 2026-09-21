@@ -458,17 +458,29 @@ func TestBadInspectionProofRefusesBeforeNativeOrFinalize(t *testing.T) {
 func TestOrdinarySubmissionRemainsBoundToInspectedRunner(t *testing.T) {
 	fixture := newAppInspectionProofFixture(t, true)
 	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
-	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, fixture.workerPath); err != nil {
+	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, &fixture.meta, fixture.workerPath); err != nil {
 		t.Fatalf("admitted worker was rejected: %v", err)
 	}
-	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, fixture.candidate.Inspection.Executable); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, &fixture.meta, fixture.candidate.Inspection.Executable); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("different runner crossed binding: %v", err)
 	}
 	if err := os.WriteFile(fixture.workerPath, []byte("changed worker bytes"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, fixture.workerPath); !errors.Is(err, task.ErrEvidenceFault) {
+	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, &fixture.meta, fixture.workerPath); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("changed inspected runner was accepted: %v", err)
+	}
+}
+
+func TestOrdinarySubmissionRemainsBoundWithoutInspectionJournal(t *testing.T) {
+	store, td, req := newAppTestTask(t, false)
+	defer closeAppTestTask(t, store, td)
+	meta := &task.MetaRecord{RunnerExecutable: "/tmp/recorded-runner"}
+	if err := validateSubmissionRunner(Dependencies{}, td, req, meta, meta.RunnerExecutable); err != nil {
+		t.Fatalf("recorded worker was rejected without inspection evidence: %v", err)
+	}
+	if err := validateSubmissionRunner(Dependencies{}, td, req, meta, "/tmp/other-runner"); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("different worker crossed recorded binding without inspection evidence: %v", err)
 	}
 }
 

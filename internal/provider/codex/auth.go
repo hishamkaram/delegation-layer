@@ -42,7 +42,7 @@ func personalAuthSource(home string, now time.Time, budget time.Duration) (task.
 	path := filepath.Join(home, "auth.json")
 	source, err := commonprovider.ReadPolicySource(path)
 	if err != nil || !source.Present {
-		return task.PolicySourceDigest{}, fmt.Errorf("%w: readable native file authentication is required", ErrUnsupportedProfile)
+		return task.PolicySourceDigest{}, fmt.Errorf("%w: %w: readable native file authentication is required", commonprovider.ErrAuthenticationBlocked, ErrUnsupportedProfile)
 	}
 	eligibility, err := inspectPersonalAuth(source.Data, now, budget)
 	if err != nil {
@@ -58,19 +58,19 @@ func personalAuthSource(home string, now time.Time, budget time.Duration) (task.
 func inspectPersonalAuth(data []byte, now time.Time, budget time.Duration) (authEligibility, error) {
 	var auth nativeFileAuth
 	if !utf8.Valid(data) || task.ValidateJSONStructure(data) != nil {
-		return authEligibility{}, authProfileError("invalid native authentication document")
+		return authEligibility{}, authUnavailableError("invalid native authentication document")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&auth) != nil {
-		return authEligibility{}, authProfileError("unsupported native authentication schema")
+		return authEligibility{}, authUnavailableError("unsupported native authentication schema")
 	}
 	if (auth.Mode != "" && auth.Mode != "chatgpt") || auth.APIKey != nil || auth.Tokens.Access == "" || auth.Tokens.Refresh == "" {
-		return authEligibility{}, authProfileError("persistent ChatGPT authentication is required")
+		return authEligibility{}, authUnavailableError("persistent ChatGPT authentication is required")
 	}
 	for _, alternate := range []json.RawMessage{auth.Agent, auth.PersonalToken, auth.BedrockKey, auth.BedrockKeys} {
 		if len(alternate) != 0 && !bytes.Equal(bytes.TrimSpace(alternate), []byte("null")) {
-			return authEligibility{}, authProfileError("alternate authentication is unsupported")
+			return authEligibility{}, authUnavailableError("alternate authentication is unsupported")
 		}
 	}
 	return personalTokenEligibility(auth, now, budget)
@@ -86,7 +86,7 @@ func personalTokenEligibility(auth nativeFileAuth, now time.Time, budget time.Du
 		Expires int64 `json:"exp"`
 	}
 	if decodeTokenClaims(auth.Tokens.ID, &identity) != nil || decodeTokenClaims(auth.Tokens.Access, &access) != nil {
-		return authEligibility{}, authProfileError("unsupported native token claims")
+		return authEligibility{}, authUnavailableError("unsupported native token claims")
 	}
 	switch identity.Auth.Plan {
 	case "free", "go", "plus", "pro", "prolite":
@@ -99,7 +99,7 @@ func personalTokenEligibility(auth nativeFileAuth, now time.Time, budget time.Du
 	windowEnd := now.Add(budget).Add(time.Minute)
 	if budget <= 0 || !time.Unix(access.Expires, 0).After(windowEnd.Add(5*time.Minute)) ||
 		auth.LastRefresh.IsZero() || auth.LastRefresh.After(now) || !auth.LastRefresh.After(windowEnd.Add(-8*24*time.Hour)) {
-		return authEligibility{}, authProfileError("native authentication can refresh during the startup window; refresh it interactively first")
+		return authEligibility{}, authUnavailableError("native authentication can refresh during the startup window; refresh it interactively first")
 	}
 	return authEligibility{Plan: identity.Auth.Plan, AccessExpires: access.Expires, LastRefresh: auth.LastRefresh}, nil
 }
@@ -107,18 +107,22 @@ func personalTokenEligibility(auth nativeFileAuth, now time.Time, budget time.Du
 func decodeTokenClaims(token string, target any) error {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
-		return authProfileError("unsupported token envelope")
+		return authUnavailableError("unsupported token envelope")
 	}
 	data, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil || !utf8.Valid(data) || task.ValidateJSONStructure(data) != nil {
-		return authProfileError("unsupported token payload")
+		return authUnavailableError("unsupported token payload")
 	}
 	if json.Unmarshal(data, target) != nil {
-		return authProfileError("unsupported token claims")
+		return authUnavailableError("unsupported token claims")
 	}
 	return nil
 }
 
 func authProfileError(message string) error {
 	return fmt.Errorf("%w: %s", ErrUnsupportedProfile, message)
+}
+
+func authUnavailableError(message string) error {
+	return fmt.Errorf("%w: %w: %s", commonprovider.ErrAuthenticationBlocked, ErrUnsupportedProfile, message)
 }

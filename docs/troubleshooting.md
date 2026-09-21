@@ -55,7 +55,8 @@ admission.
 Normal dispatch starts the bundled Pueue client and daemon with a private Unix
 socket below the state root. `dispatch`, `status`, `cancel`, and continuation
 checks restart that private daemon after a restart when the saved binding still
-matches; `collect` remains observational and does not start it. For an advanced
+matches. `collect` may recover that daemon only to observe an already-requested
+budget stop; it never starts a provider or submits work. For an advanced
 integration, pass an existing absolute `--pueue-config` path or set
 `DELEGATE_PUEUE_CONFIG` to that path and keep its configuration and credentials
 outside the task state root and workspace. The runtime accepts a nonempty
@@ -66,16 +67,17 @@ resolved supervisor settings can invalidate a saved task binding.
 ## A task remains pending
 
 `status` reports what is known and may recover the private supervisor. `collect
---watch 5s` waits for one bounded observation interval without starting a
-supervisor; repeat it if the supervisor is still running. Queue time does not
-consume the provider budget. Do not delete the task directory or reuse its ID
-while the state is uncertain.
+--watch 5s` waits for one bounded observation interval and may recover the
+private supervisor to record termination for a requested budget stop. Queue time
+does not consume the provider budget. Do not delete the task directory or reuse
+its ID while the state is uncertain.
 
 ## A continuation is busy
 
 The predecessor still owns its conversation reservation, or its runner has not
-released it after a completed outcome. Collect the predecessor until terminal,
-then retry the continuation with a new task ID and the exact predecessor ID.
+released it after a completed outcome or durable budget-stop termination. Use
+`status` or `collect` until the response exposes `continuation.resumable: true`,
+then retry the continuation with the exact predecessor ID.
 
 ## A result is rejected
 

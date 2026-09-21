@@ -8,11 +8,12 @@ This document establishes the normative operational invariants for the delegatio
 - **Payload & Outcome EEXIST**:
   - On payload EEXIST: candidate bytes, length, and digest must match the existing file exactly; mismatch is an invariant fault.
   - On outcome EEXIST: candidate decision must match the existing outcome. A valid existing winner is never overwritten and is preserved.
-- **Replay & Idempotence**: Collection is purely observational and recovers existing sealed evidence; collection never launches, retries, or resumes paid provider work.
+- **Replay & Idempotence**: Collection is purely observational and recovers existing sealed evidence; it may reconcile the saved supervisor binding to record termination for an already-requested budget stop, but it never launches, retries, or resumes paid provider work.
 
 ## 2. Task Identity and Turns
 - **One Task = One Turn**: A task represents exactly one provider turn.
-- **Continuation by Reference**: Resuming or continuing a conversation creates a new task with a new deterministic task ID bound to an explicit layer-recorded session handle.
+- **Continuation by Reference**: Resuming or continuing a conversation creates a new task with a new unique task ID bound to an explicit layer-recorded session handle.
+- **Session Handoff**: A continuation may transfer a session claim after either a validated terminal outcome or a durable supervisor-ended observation for a budget stop. The budget-stop observation proves only that the predecessor turn ended for handoff; it never establishes task completion or replaces `outcome.json`.
 - **No Shared Mutability**: Original task records, identities, and results remain immutable and sealed. Launch count and execution metadata are preserved per task.
 
 ## 3. Supervision, Deadlines, and Forbidden Signals

@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 import { accessSync, constants } from "node:fs";
-import { copyFile, lstat, mkdir, readFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readdir, readFile } from "node:fs/promises";
 import { emitKeypressEvents } from "node:readline";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const sourcePath = join(packageRoot, "skills", "agent-integration", "SKILL.md");
+const sourceDirectory = join(packageRoot, "skills", "agent-integration");
 const harnesses = [
   {
     name: "universal",
@@ -212,6 +212,93 @@ async function existingPath(path) {
       return null;
     }
     throw error;
+  }
+}
+
+async function assertNoSymlinkComponents(path) {
+  let current = resolve(path);
+  while (true) {
+    const stat = await existingPath(current);
+    if (stat?.isSymbolicLink()) {
+      throw new Error(`skill destination must not contain symlink components: ${current}`);
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      return;
+    }
+    current = parent;
+  }
+}
+
+async function skillFiles(directory, relative = "") {
+  const entries = await readdir(join(directory, relative), { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const child = join(relative, entry.name);
+    const path = join(directory, child);
+    const stat = await lstat(path);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`skill source or destination must not contain symlinks: ${path}`);
+    }
+    if (stat.isDirectory()) {
+      files.push(...(await skillFiles(directory, child)));
+      continue;
+    }
+    if (!stat.isFile()) {
+      throw new Error(`skill entry must be a regular file: ${path}`);
+    }
+    files.push(child);
+  }
+  return files.sort();
+}
+
+async function skillTreeMatches(target, files) {
+  for (const relative of files) {
+    const destination = join(target, relative);
+    await assertNoSymlinkComponents(destination);
+    const stat = await existingPath(destination);
+    if (!stat || !stat.isFile() || stat.isSymbolicLink()) {
+      return false;
+    }
+    const [source, existing] = await Promise.all([
+      readFile(join(sourceDirectory, relative)),
+      readFile(destination),
+    ]);
+    if (!source.equals(existing)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function skillTreeHasExistingFiles(target, files) {
+  for (const relative of files) {
+    const destination = join(target, relative);
+    await assertNoSymlinkComponents(destination);
+    if (await existingPath(destination)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function copySkillTree(target, files, force) {
+  for (const relative of files) {
+    const destination = join(target, relative);
+    const parent = dirname(destination);
+    await assertNoSymlinkComponents(destination);
+    await mkdir(parent, { recursive: true });
+    const stat = await existingPath(destination);
+    if (stat?.isSymbolicLink()) {
+      throw new Error(`existing skill file must not be a symlink: ${destination}`);
+    }
+    if (stat && !stat.isFile()) {
+      throw new Error(`existing skill entry is not a regular file: ${destination}`);
+    }
+    if (stat && !force) {
+      throw new Error(`skill files already exist; use --force to replace them: ${target}`);
+    }
+    await copyFile(join(sourceDirectory, relative), destination);
   }
 }
 
@@ -465,6 +552,7 @@ function targetFor(harness, scope, cwd, home) {
 }
 
 async function install({ force, target }) {
+  await assertNoSymlinkComponents(target);
   const targetStat = await existingPath(target);
   if (targetStat?.isSymbolicLink()) {
     throw new Error(`target directory must not be a symlink: ${target}`);
@@ -473,32 +561,30 @@ async function install({ force, target }) {
     throw new Error(`target must be a directory: ${target}`);
   }
 
+  const files = await skillFiles(sourceDirectory);
   await mkdir(target, { recursive: true });
 
-  const destination = join(target, "SKILL.md");
-  const destinationStat = await existingPath(destination);
-  if (destinationStat?.isSymbolicLink()) {
-    throw new Error(`existing SKILL.md must not be a symlink: ${destination}`);
+  if (!force && (await skillTreeMatches(target, files))) {
+    console.log(`Skill already installed: ${join(target, "SKILL.md")}`);
+    return;
   }
-  if (destinationStat && !destinationStat.isFile()) {
-    throw new Error(`existing SKILL.md is not a regular file: ${destination}`);
-  }
-
-  if (destinationStat && !force) {
-    const [source, existing] = await Promise.all([
-      readFile(sourcePath),
-      readFile(destination),
-    ]);
-    if (source.equals(existing)) {
-      console.log(`Skill already installed: ${destination}`);
-      return;
-    }
-    throw new Error(`SKILL.md already exists; use --force to replace it: ${destination}`);
+  if (!force && (await skillTreeHasExistingFiles(target, files))) {
+    throw new Error(`skill files already exist; use --force to replace them: ${target}`);
   }
 
-  await copyFile(sourcePath, destination);
-  console.log(`Installed agent integration skill: ${destination}`);
+  await copySkillTree(target, files, force);
+  console.log(`Installed agent integration skill: ${join(target, "SKILL.md")}`);
 }
+
+async function validateSourceTree() {
+  const files = await skillFiles(sourceDirectory);
+  if (!files.includes("SKILL.md")) {
+    throw new Error(`skill package is missing SKILL.md: ${sourceDirectory}`);
+  }
+  return files;
+}
+
+await validateSourceTree();
 
 const argumentsList = process.argv.slice(2);
 if (argumentsList[0] === "install-cli") {

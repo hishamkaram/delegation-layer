@@ -31,6 +31,9 @@ var (
 	// ErrUnsupportedOption identifies a request option not supported by the
 	// selected provider.
 	ErrUnsupportedOption = errors.New("unsupported provider option")
+	// ErrAuthenticationBlocked identifies an unavailable native login. It is a
+	// neutral prerequisite result, separate from provider incompatibility.
+	ErrAuthenticationBlocked = errors.New("provider authentication unavailable")
 )
 
 const (
@@ -38,6 +41,17 @@ const (
 	OptionEffort        = "effort"
 	OptionModel         = "model"
 	OptionNativeTimeout = "native-timeout"
+)
+
+// ContinuationMode describes how a provider resumes a predecessor session.
+// The value is discovery metadata; the adapter still proves the exact
+// session identity at launch and publication time.
+type ContinuationMode string
+
+const (
+	ContinuationNative      ContinuationMode = "native"
+	ContinuationCheckpoint  ContinuationMode = "checkpoint"
+	ContinuationUnsupported ContinuationMode = "unsupported"
 )
 
 // PreparedProfile is the immutable, provider-produced execution input. It
@@ -197,6 +211,7 @@ type Description struct {
 	ID               string            `json:"id"`
 	SupportedModes   []string          `json:"supported_modes"`
 	SupportedOptions []string          `json:"supported_options"`
+	Continuation     ContinuationMode  `json:"continuation"`
 	Runtime          RuntimeCapability `json:"runtime"`
 	Discoverable     bool              `json:"-"`
 }

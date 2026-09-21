@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -135,6 +136,53 @@ func TestCollectReleasesRecoveredContinuation(t *testing.T) {
 	}
 	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatalf("successor could not claim collected session: %v", err)
+	}
+}
+
+func TestPredecessorTerminatedReleasesTerminalContinuation(t *testing.T) {
+	store, td, req := newAppTestTaskWithPrior(t, true, testPriorSession())
+	defer closeAppTestTask(t, store, td)
+	successor, _ := newAppTaskInStore(t, store, strings.Repeat("8", 32), false, testPriorSession())
+	defer func() {
+		if closeErr := successor.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	if _, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef()); cleanupErr != nil || collectErr != nil {
+		t.Fatalf("preparing terminal winner cleanup=%v collect=%v", cleanupErr, collectErr)
+	}
+	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := predecessorTerminated(store.Root, td, req, pueue.Options{}); err != nil {
+		t.Fatalf("terminal predecessor was not released: %v", err)
+	}
+	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
+		t.Fatalf("successor could not claim released predecessor session: %v", err)
+	}
+}
+
+func TestPredecessorTerminatedWaitsForFirstRunnerLease(t *testing.T) {
+	store, td, req := newAppTestTask(t, false)
+	defer closeAppTestTask(t, store, td)
+	start, err := td.PrepareStart(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = start.Consume(); err != nil {
+		t.Fatal(err)
+	}
+	if err = td.RecordStarted(0); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if releaseErr := start.Release(); releaseErr != nil {
+			t.Error(releaseErr)
+		}
+	}()
+	prepareAppPublishedTimeoutEvidence(t, td)
+	if err = predecessorTerminated(store.Root, td, req, pueue.Options{}); !errors.Is(err, task.ErrSessionBusy) {
+		t.Fatalf("active first-turn runner was eligible for continuation: %v", err)
 	}
 }
 

@@ -310,6 +310,9 @@ func validateMetaRuntime(r *MetaRecord) error {
 	if !filepath.IsAbs(r.ProviderExecutable) || filepath.Clean(r.ProviderExecutable) != r.ProviderExecutable {
 		return errors.New("provider executable must be a resolved absolute path")
 	}
+	if r.RunnerExecutable != "" && (!filepath.IsAbs(r.RunnerExecutable) || filepath.Clean(r.RunnerExecutable) != r.RunnerExecutable) {
+		return errors.New("runner executable must be a resolved absolute path")
+	}
 	if !nonblank(r.ProviderVersion) || !nonblank(r.PublisherBuild) || !nonblank(r.PublisherVersion) {
 		return errors.New("missing provider version or publisher build/version")
 	}

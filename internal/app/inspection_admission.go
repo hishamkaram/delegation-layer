@@ -93,6 +93,13 @@ func supervisorOptionsWithEnvironment(base pueue.Options, providerEnvironment []
 		if !ok || key == "" {
 			continue
 		}
+		// Provider profiles may isolate their own configuration with
+		// XDG_CONFIG_HOME. Supervisor commands must retain the caller's
+		// control configuration so their saved endpoint and identity remain
+		// resolvable.
+		if key == "XDG_CONFIG_HOME" {
+			continue
+		}
 		if index, exists := positions[key]; exists {
 			merged[index] = entry
 			continue
@@ -136,7 +143,11 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 		}
 		prepared.InspectionDeadline = deadline
 	}
-	prepared.Capability, err = runtimeCapability(req.Provider, candidate, prepared.Profile)
+	registration, lookupErr := deps.normalized().Catalog.Lookup(req.Provider)
+	if lookupErr != nil {
+		return admissionPreparation{}, lookupErr
+	}
+	prepared.Capability, err = runtimeCapability(req.Provider, candidate, prepared.Profile, registration.Description)
 	if err != nil {
 		return admissionPreparation{}, err
 	}

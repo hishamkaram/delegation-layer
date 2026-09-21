@@ -1000,6 +1000,11 @@ func environmentForMode(values []string, mode, workspace string) ([]string, erro
 		// Project config can contain legacy mode entries that are merged after
 		// inline config. Disable that source and verify the resulting effective
 		// policy with `debug config` before the provider is admitted or launched.
+		var err error
+		result, err = withDelegationConfigHome(result)
+		if err != nil {
+			return nil, err
+		}
 		result = append(result,
 			"OPENCODE_CONFIG_CONTENT="+readOnlyConfigContent,
 			"OPENCODE_DISABLE_PROJECT_CONFIG=1",
@@ -1015,6 +1020,10 @@ func environmentForMode(values []string, mode, workspace string) ([]string, erro
 		if err != nil {
 			return nil, err
 		}
+		result, err = withDelegationConfigHome(result)
+		if err != nil {
+			return nil, err
+		}
 		result = append(result,
 			"OPENCODE_CONFIG_CONTENT="+content,
 			"OPENCODE_DISABLE_PROJECT_CONFIG=1",
@@ -1024,4 +1033,38 @@ func environmentForMode(values []string, mode, workspace string) ([]string, erro
 	}
 	slices.Sort(result)
 	return result, nil
+}
+
+func withDelegationConfigHome(values []string) ([]string, error) {
+	home := environmentValue(values, "HOME")
+	if home == "" {
+		return nil, fmt.Errorf("%w: invalid HOME", ErrUnsupportedProfile)
+	}
+	configHome, err := delegationConfigHome(home, environmentValue(values, "XDG_CONFIG_HOME"))
+	if err != nil {
+		return nil, err
+	}
+	return replaceEnvironmentValue(values, "XDG_CONFIG_HOME", configHome), nil
+}
+
+func environmentValue(values []string, key string) string {
+	prefix := key + "="
+	for _, value := range values {
+		if strings.HasPrefix(value, prefix) {
+			return strings.TrimPrefix(value, prefix)
+		}
+	}
+	return ""
+}
+
+func replaceEnvironmentValue(values []string, key, value string) []string {
+	prefix := key + "="
+	result := make([]string, 0, len(values)+1)
+	for _, entry := range values {
+		if strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result, prefix+value)
 }

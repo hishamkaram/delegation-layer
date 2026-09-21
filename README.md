@@ -20,6 +20,8 @@ already use instead of replacing them.
   and time budget.
 - **Recoverable results** — a later `collect` call can read a finished task
   without launching the provider again.
+- **Resumable turns** — a durable timeout can continue the exact provider
+  session through a linked successor task.
 - **Runtime compatibility** — the selected provider's executable and advertised
   capabilities are checked when the task is prepared.
 - **Native authentication** — provider login stays with the provider CLI; task
@@ -124,7 +126,7 @@ mkdir -p "$HOME/delegation-workspace"
 printf '%s\n' 'Inspect the repository and summarize the current build status.' > brief.txt
 
 delegate --root "$HOME/delegation-state" dispatch \
-  --provider codex:exec \
+  --auto \
   --brief "$PWD/brief.txt" \
   --cwd "$HOME/delegation-workspace" \
   --permission read-only \
@@ -142,8 +144,21 @@ delegate collect TASK_ID --watch 5s --json
 
 Use `delegate providers --json` for the compiled provider catalog and
 `delegate capabilities --provider PROFILE --json` for a provider-neutral
-capability response. Dispatch still performs the host-specific runtime probe;
-catalog discovery alone does not prove authentication or supervisor readiness.
+capability response. `delegate preflight --provider PROFILE --cwd ABS --json`
+checks static admission without creating a task. Dispatch still performs the
+host-specific runtime probe; catalog discovery alone does not prove
+authentication or supervisor readiness.
+
+If a task reports `status: "timed_out"` and
+`continuation.resumable: true`, continue the exact session:
+
+```sh
+delegate --root "$HOME/delegation-state" continue \
+  --task TASK_ID --brief "$HOME/follow-up.txt" --budget 30m --json
+```
+
+The successor receives a new task ID and is observed with the same `status` and
+`collect` commands.
 
 ## Documentation
 

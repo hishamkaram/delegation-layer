@@ -6,7 +6,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/hishamkaram/delegation-layer",
-      "revision": "f2fcc07bcc6fd4c4e4700665f3616ef97050feb3",
+      "revision": "e78e470aaf090dd94ed5973adcdb523f7523e9f2",
       "provider": "github"
     },
     "viewBox": [
@@ -26,7 +26,7 @@
           "pueue",
           "acceptance"
         ],
-        "note": "The CLI discovers capabilities, probes the provider, persists task records, bootstraps a private supervisor, and submits one supervised job."
+        "note": "The CLI can preflight a named provider or automatically select one, then persists the request and submits one supervised job."
       },
       {
         "id": "execution",
@@ -51,7 +51,7 @@
           "pueue",
           "runner"
         ],
-        "note": "Observation and recovery use durable records and supervisor ownership; the default supervisor is private to the state root."
+        "note": "Observation is read-only; a timed-out native session can create a linked successor through the public continuation command."
       }
     ]
   },
@@ -80,8 +80,8 @@
     {
       "id": "delegate",
       "type": "backend",
-      "label": "delegate",
-      "sublabel": "capabilities and orchestration",
+      "label": "delegate CLI",
+      "sublabel": "preflight · auto · observe · continue",
       "sources": [
         {
           "path": "internal/app/commands.go"
@@ -106,11 +106,8 @@
       "id": "catalog",
       "type": "backend",
       "label": "Provider catalog",
-      "sublabel": "profiles, modes, options, predicates",
+      "sublabel": "profiles, capabilities, options, continuation",
       "sources": [
-        {
-          "path": "internal/app/catalog.go"
-        },
         {
           "path": "internal/provider/catalog.go"
         }
@@ -128,7 +125,7 @@
       "id": "inspection",
       "type": "security",
       "label": "Runtime inspection",
-      "sublabel": "version, flags, behavior, identity",
+      "sublabel": "static + runtime capability checks",
       "tag": "no release allowlist",
       "sources": [
         {
@@ -151,7 +148,7 @@
       "id": "store",
       "type": "database",
       "label": "Task store",
-      "sublabel": "immutable records and sealed evidence",
+      "sublabel": "task records, successor links, sealed evidence",
       "tag": "outcome.json is terminal authority",
       "sources": [
         {
@@ -346,7 +343,7 @@
       "id": "caller-to-delegate",
       "from": "caller",
       "to": "delegate",
-      "label": "capabilities · dispatch · status · collect · cancel",
+      "label": "preflight · auto · observe · continue",
       "variant": "emphasis",
       "fromSide": "right",
       "toSide": "left",
@@ -356,7 +353,7 @@
       "id": "delegate-to-catalog",
       "from": "delegate",
       "to": "catalog",
-      "label": "resolve profile, mode, options",
+      "label": "resolve profile and selection",
       "fromSide": "right",
       "toSide": "left",
       "labelAt": [550, 50]
@@ -365,7 +362,7 @@
       "id": "catalog-to-inspection",
       "from": "catalog",
       "to": "inspection",
-      "label": "run capability probe",
+      "label": "preflight / runtime capability probe",
       "fromSide": "right",
       "toSide": "left",
       "labelAt": [865, 50]
@@ -385,7 +382,7 @@
       "id": "delegate-to-store",
       "from": "delegate",
       "to": "store",
-      "label": "persist immutable task records",
+      "label": "persist request and predecessor link",
       "variant": "emphasis",
       "fromSide": "bottom",
       "toSide": "top",
@@ -455,7 +452,7 @@
       "id": "acceptance-to-delegate",
       "from": "acceptance",
       "to": "delegate",
-      "label": "fresh turn · continuation · replay",
+      "label": "authentication evidence · replay · continuation",
       "variant": "dashed",
       "fromSide": "top",
       "toSide": "top",
@@ -480,7 +477,7 @@
       "id": "delegate-to-caller",
       "from": "delegate",
       "to": "caller",
-      "label": "task id and observations",
+      "label": "task id · admission · status · continuation",
       "variant": "dashed",
       "fromSide": "left",
       "toSide": "right",
@@ -492,28 +489,28 @@
       "dot": "cyan",
       "title": "Ownership",
       "items": [
-        "The core owns admission, scheduling, execution, capture, sealing, collection, and publication",
-        "Adapters own native arguments, policy, identity, and evidence interpretation",
-        "The bundled supervisor is private to the state root; Pueue owns process lifetime and stopping"
+        "Core owns preflight through publication",
+        "Adapters own provider arguments and evidence",
+        "Private supervisor owns process lifetime"
       ]
     },
     {
       "dot": "emerald",
       "title": "Evidence",
       "items": [
-        "provider.exit seals the raw provider evidence before publication",
-        "outcome.json is the sole terminal authority",
-        "result.txt and publish.reject are payload evidence, not completion signals"
+        "provider.exit seals raw evidence",
+        "outcome.json is terminal authority",
+        "result.txt and publish.reject are payload evidence"
       ]
     },
     {
       "dot": "violet",
       "title": "Provider surface",
       "items": [
-        "Runtime checks observe provider versions and required behavior",
-        "Executable identity and queue schema establish compatibility",
-        "Live acceptance is authentication-gated; blocked stays neutral",
-        "Unsupported modes and options fail before supervisor admission"
+        "Behavior and identity establish compatibility",
+        "Live acceptance is auth-gated; BLOCKED is neutral",
+        "Unsupported modes fail before admission",
+        "Native continuation links a timed-out successor"
       ]
     }
   ]

@@ -60,6 +60,9 @@ func assertNativeProviderMetadata(t *testing.T, response ProviderResponse) {
 		if len(description.Runtime.RequiredFlags) == 0 {
 			t.Fatalf("runtime capability metadata missing: %+v", description)
 		}
+		if description.Continuation != commonprovider.ContinuationNative {
+			t.Fatalf("continuation metadata missing: %+v", description)
+		}
 	}
 }
 

@@ -1,185 +1,200 @@
 ---
 name: agent-integration
-description: Use Delegation Layer from a provider-agnostic agent workflow, including capability discovery, bounded dispatch, terminal collection, and live authentication handling.
+description: Use the installed Delegation Layer CLI to select a ready provider, run one bounded agent turn, collect durable JSON evidence, and continue a timed out session safely.
 ---
 
-# Agent integration
+# Delegation Layer
 
-This skill is self-contained as an operating guide. It gives an agent enough
-information to prepare a safe run, choose a provider from observed
-capabilities, and collect a terminal result when the host exposes the
-Delegation Layer CLI. It applies to every provider profile and does not encode
-provider names, release versions, or native CLI syntax.
+Use this skill when a task should be performed by another coding agent through
+the local `delegate` CLI. The CLI is the only integration surface. Do not call,
+inspect, authenticate, or install a provider CLI directly.
 
-## Preconditions
+## Rules
 
-The host is responsible for installing the CLI. This skill must not install,
-build, upgrade, or repair it. It may check whether `delegate` is available and
-create separate task and state directories that it is authorized to use. A
-released CLI carries the compatible `pueue` and `pueued` supervisor binaries
-and starts or recovers a private instance automatically; an explicit supervisor
-config is only needed for an advanced integration.
-Authentication is a separate live gate; do not invent a provider-specific
-login check or classify a missing login as static incompatibility.
+1. Check whether `delegate` is already installed. If it is missing, report the
+   missing prerequisite and stop. This skill never installs or repairs the CLI.
+2. Use `dispatch --auto` unless the user explicitly selected a provider ID.
+   Provider selection, executable checks, compatibility checks, authentication
+   gates, and supervisor admission belong inside Delegation Layer.
+3. Give every turn an absolute workspace, a separate state root, a finite
+   permission mode, and a finite budget.
+4. Use `--json` and save the returned `task_id`. Read `admission`, `liveness`,
+   `publication`, `status`, `outcome`, `continuation`, and `error` as separate
+   fields.
+5. Observe with `status` and collect with `collect`. Collection may recover the
+   saved supervisor only to observe an already-requested budget stop; it never
+   launches a provider or retries a task.
+6. If a task is timed out and its JSON says `continuation.resumable: true`, use
+   `continue --task TASK_ID`, optionally with a new `--brief`. Do not create a
+   fresh unrelated dispatch to replace a resumable task.
+7. Treat `blocked` authentication as unresolved. Do not call it compatible,
+   successful, or failed provider behavior, and do not invent login commands.
+8. Never put credentials, tokens, or unrestricted provider output in a brief,
+   option, receipt, or agent message.
 
-Keep the supervisor configuration, Delegation Layer state root, and task
-workspace as separate canonical paths. Do not put credentials in a brief, task
-option, environment value recorded by the task, or agent-visible output.
+## Operating procedure
 
-## Start safely
+### 1. Verify the control CLI
 
-First check that the already-installed CLI is available, then discover compiled
-profiles:
+Run a quick local check:
 
 ```sh
-command -v delegate
-delegate help
+command -v delegate && delegate --version
+```
+
+If this fails, tell the caller that Delegation Layer is not installed and
+stop. Do not substitute a provider command.
+
+### 2. Discover only when useful
+
+For the normal path, use automatic selection directly. If you need to explain
+what the installed build knows, run:
+
+```sh
 delegate providers --json
 ```
 
-If `command -v delegate` fails, stop and report that the host prerequisite is
-missing. Do not install or build the CLI from this skill.
-
-`providers --json` is static discovery. It lists provider IDs, supported
-permission modes and options, and the help arguments and flags required by the
-compiled adapters. It does not inspect the host, authenticate a provider, or
-prove that a provider is launchable.
-
-Choose a listed `PROFILE`, then inspect its provider-neutral contract:
+This is a catalog, not proof that a provider is installed, authenticated, or
+ready. If the caller named one provider ID and wants a side-effect-free check,
+run:
 
 ```sh
-delegate capabilities --provider PROFILE --json
+delegate preflight --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
 ```
 
-This command is side-effect-free. It does not create state, contact Pueue, or
-launch a provider. A successful catalog response has
-`status: "unknown"`, `verification: "catalog"`, and
-`live_acceptance.status: "not_run"`. Unknown here means that dispatch has not
-run the host probe yet; it is neither a compatibility failure nor live proof.
+Preflight reports static admission only. It does not create a task, start the
+supervisor, or launch a provider. Do not keep retrying preflight when it says
+`blocked` or `unsupported`; report the bounded reason.
 
-Choose a listed `PROFILE`, ensure its provider executable is available to the
-dispatch environment, and prepare a finite brief and two separate absolute
-directories. Then dispatch one bounded task:
+### 3. Prepare separate paths and a finite brief
+
+Use an existing task brief when one is supplied. Otherwise create a bounded
+brief file that contains the requested work and its acceptance criteria. Keep
+the state root outside the workspace:
 
 ```sh
-mkdir -p "${HOME}/delegation-workspace" "${HOME}/delegation-state"
-printf '%s\n' 'Inspect the workspace and return a short summary.' > "${HOME}/delegation-brief.txt"
+STATE_ROOT="${DELEGATE_ROOT:-$HOME/.local/state/delegation-layer}"
+WORKSPACE="$PWD"
+BRIEF="$(mktemp)"
+cat >"$BRIEF" <<'EOF'
+Describe the delegated task, the files or behavior to change, and the checks
+that must pass. Keep the response concise and report validation evidence.
+EOF
+```
 
-delegate --root "${HOME}/delegation-state" \
-  dispatch \
-  --provider PROFILE \
-  --brief "${HOME}/delegation-brief.txt" \
-  --cwd "${HOME}/delegation-workspace" \
+Replace the example brief with the actual user request. Do not place the state
+root inside the workspace or place secrets in either path’s task data.
+
+### 4. Dispatch one bounded turn
+
+Use automatic selection unless the user explicitly supplied `PROVIDER_ID`:
+
+```sh
+delegate --root "$STATE_ROOT" dispatch --auto \
+  --brief "$BRIEF" \
+  --cwd "$WORKSPACE" \
   --permission read-only \
   --budget 30m \
   --json
 ```
 
-The default release owns the private supervisor lifecycle under the state root
-and recovers its bundled daemon when control commands find it stopped. Collection
-stays observational and does not start a supervisor. If an existing compatible
-supervisor must be used, pass its absolute
-`--pueue-config` path or set `DELEGATE_PUEUE_CONFIG`. If the CLI or provider
-executable is unavailable, stop on the CLI's structured error. For live
-acceptance, an unavailable authentication prerequisite is `blocked`; preserve
-that evidence and never relabel it as
-incompatible or passed.
+For an authorized code change, use `--permission workspace-write`. Keep the
+budget finite. A successful dispatch means the request was durably admitted;
+it does not mean the delegated work finished.
 
-Save the returned `task_id`. Admission records one immutable request and at
-most one provider launch attempt; the command does not wait for completion.
-Observe and collect with that exact ID:
+Save the exact `task_id` from the JSON response. If dispatch returns an error,
+use its `status`, `capability`, and `error` fields to report whether the request
+was invalid, unsupported, blocked by authentication, or operationally
+uncertain. Do not silently try another provider after a task has been
+admitted.
+
+### 5. Observe and collect
+
+Use the same state root and task ID:
 
 ```sh
-delegate --root "${HOME}/delegation-state" status TASK_ID --json
-delegate --root "${HOME}/delegation-state" collect TASK_ID --watch 5s --json
+delegate --root "$STATE_ROOT" status TASK_ID --json
+delegate --root "$STATE_ROOT" collect TASK_ID --watch 5s --json
 ```
 
-Repeat `collect` while the task is pending. Collection is observational: it
-may wait for the bounded watch interval and clean up a validated reservation,
-but it never launches, retries, or resumes provider work. A continuation is a
-new task with an exact predecessor ID when the selected profile advertises
-continuation support.
+If `collect` exits with code `3` because publication is still pending, wait a
+short interval and run `collect` again. Do not dispatch again. Continue until
+the response has a terminal `outcome` or a bounded operational error that
+requires the caller’s attention.
 
-## Read the JSON contract
+Accept a result only when the terminal outcome is present and its publication
+is committed. A rejected outcome is terminal evidence and must be reported as
+rejected. Payload and raw output are returned as validated descriptors; do not
+copy unrestricted provider output into the control response.
 
-The capability response has this stable shape. The two arrays are
-profile-specific and can be non-empty; empty arrays below only keep the example
-provider-agnostic:
+### 6. Continue a timed out turn
+
+When `status` or `collect` returns `status: "timed_out"`, inspect the nested
+continuation object:
 
 ```json
 {
-  "schema_version": 1,
-  "command": "capabilities",
-  "capability": {
-    "contract": "runtime-capability-v1",
-    "provider": "PROFILE",
-    "status": "unknown",
-    "verification": "catalog",
-    "help_args": [],
-    "required_flags": [],
-    "reason_code": "runtime_probe_not_run",
-    "live_acceptance": {
-      "status": "not_run",
-      "authentication": "unknown",
-      "reason_code": "runtime_probe_not_run"
-    }
+  "status": "timed_out",
+  "continuation": {
+    "resumable": true,
+    "mode": "native",
+    "predecessor_task_id": "TASK_ID",
+    "continue_command": "delegate continue --task TASK_ID --json"
   }
 }
 ```
 
-Interpret the fields as follows:
+If `resumable` is true, create the linked successor through the public
+continuation command. Supply a new follow-up brief when the next turn needs a
+new instruction:
 
-- `status=unknown` with `verification=catalog` is a declaration from the
-  compiled catalog.
-- `status=ready` with `verification=runtime` appears in a dispatch response
-  only after the supervised probe observed the required behavior and exact
-  executable identity for that admission boundary.
-- `status=unsupported` is a machine-readable refusal. Use `reason_code` and
-  the bounded error to explain it; do not try another profile without a new
-  explicit selection.
-- `version` is diagnostic observation. Accept any valid nonempty trimmed UTF-8
-  version text. Never use a release allowlist, semantic-version comparison, or
-  web lookup as a compatibility decision. Required flags, executable identity,
-  and provider behavior decide compatibility. An unusually large version may
-  be omitted from the bounded projection.
-- `live_acceptance` is separate from compatibility. `not_run` does not claim a
-  live test; `passed` requires authenticated provider evidence; `blocked` means
-  authentication or another prerequisite was unavailable and is neutral. A
-  blocked result must never be reported as a pass or as incompatible behavior.
+```sh
+delegate --root "$STATE_ROOT" continue \
+  --task TASK_ID \
+  --brief "$FOLLOW_UP_BRIEF" \
+  --budget 30m \
+  --json
+```
 
-Dispatch JSON contains the same `capability` projection plus separate task
-`admission`, `liveness`, and `publication` fields. Read those fields
-independently. Trust a terminal `outcome` only after it has been returned by
-the validated collection path and its payload and sealed evidence descriptors
-match the task records.
+The command preserves the exact provider session and creates a new task ID.
+Observe and collect the successor by repeating step 5. If `resumable` is
+false, report the reason and stop; a fresh dispatch would lose the original
+conversation and is not an equivalent recovery.
 
-## Integration acceptance contract
+## JSON decisions
 
-Apply these criteria to every provider and every agent integration:
+The capability projection uses the stable `runtime-capability-v1` contract.
+Catalog responses have `verification: "catalog"` and `status: "unknown"`.
+Preflight responses have `verification: "preflight"` and describe static
+readiness. A dispatch response can report `verification: "runtime"` only after
+the supervised runtime probe has observed the required behavior and executable
+identity.
 
-- required behavior is verified at the runtime boundary;
-- arbitrary valid provider version text remains acceptable;
-- missing flags, executable identity drift, malformed facts, and timeouts fail
-  closed;
-- authentication is represented separately from compatibility;
-- missing authentication is `blocked`, never a passing skip;
-- admission is at most once and collection is observational;
-- terminal results come from durable validated evidence; and
-- JSON output is bounded, deterministic for observational commands, versioned,
-  and free of credentials.
+Versions and help text are observations. Accept any valid nonempty version
+reported by the CLI; never apply a semantic-version allowlist or web lookup.
+The adapter’s required flags and runtime behavior decide compatibility.
 
-Do not expose credentials, tokens, private raw provider output, or unrestricted
-diagnostics in prompts, tool results, receipts, or task metadata. After an
-uncertain admission or lost response, inspect the original task with
-`status`/`collect`; do not relaunch it. Stop and report the durable state when
-the task cannot be resolved from validated evidence.
+Authentication is a separate live gate. `live_acceptance.status` values are
+`not_run`, `passed`, or `blocked`; a blocked authentication prerequisite is
+neutral evidence and must not be relabeled.
 
-## Completion record
+The task response separates:
 
-An integration is complete when it can provide:
+- `admission`: whether the request was accepted by the durable boundary;
+- `liveness`: the observed supervisor state;
+- `publication`: whether validated evidence was committed or rejected;
+- `outcome`: the terminal authority, when available;
+- `continuation`: whether the exact session can make a linked successor; and
+- `error`: bounded operational diagnostics.
 
-- the selected profile and original task ID;
-- the bounded capability and dispatch JSON responses;
-- the terminal committed or rejected outcome and validated evidence
-  descriptors; and
-- a sanitized live-acceptance receipt marked `passed`, `failed`, or `blocked`.
+See [references/command-reference.md](references/command-reference.md) for
+the command matrix, [references/result-handling.md](references/result-handling.md)
+for decision rules, and [references/continuation.md](references/continuation.md)
+for timeout recovery. The examples and machine-readable checks in `examples/`
+and `evals/` are part of this skill package.
+
+## Completion report
+
+Report the original task ID, selected provider ID when the CLI returns one,
+the final admission/liveness/publication fields, the terminal outcome and
+evidence descriptors, and any continuation or blocked-authentication state.

@@ -7,23 +7,25 @@ result.
 
 ```mermaid
 flowchart TD
-    A[delegate dispatch] --> B[Validate request and canonical paths]
-    B --> C[Prepare provider candidate]
-    C --> D[Supervised runtime capability probe]
-    D --> E[Capability evidence and diagnostics]
-    E --> F[Finalize profile and effective policy]
-    F --> G[Persist immutable task records]
-    G --> H{Supervisor selection}
-    H -->|default| I[Create or reuse private bundled Pueue]
-    H -->|explicit config| I2[Bind compatible external Pueue]
-    I --> J[Submit one job to Pueue]
-    I2 --> J
-    J --> K[delegate-run reconstructs and rechecks]
-    K --> L[Start provider and observe identity]
-    L --> M[Bounded stdout/stderr capture]
-    M --> N[Seal artifacts and validate behavior]
-    N --> O[Publish outcome.json]
-    O --> P[status / collect / logs]
+    A[delegate dispatch --auto] --> B[Validate request and canonical paths]
+    B --> C[Static provider selection]
+    C --> D[Prepare provider candidate]
+    D --> E[Supervised runtime capability probe]
+    E --> F[Capability evidence and diagnostics]
+    F --> G[Finalize profile and effective policy]
+    G --> H[Persist immutable task records]
+    H --> I{Supervisor selection}
+    I -->|default| J[Create or reuse private bundled Pueue]
+    I -->|explicit config| J2[Bind compatible external Pueue]
+    J --> K[Submit one job to Pueue]
+    J2 --> K
+    K --> L[delegate-run reconstructs and rechecks]
+    L --> M[Start provider and observe identity]
+    M --> N[Bounded stdout/stderr capture]
+    N --> O[Seal artifacts and validate behavior]
+    O --> P[Publish outcome.json]
+    P --> Q[status / collect / logs]
+    P --> R[continue exact session]
 ```
 
 The maintained Archify views are [system components](../diagrams/components.html)
@@ -68,8 +70,16 @@ available.
 Each task has one immutable request and at most one provider launch attempt. A
 continuation is a separate task that points to one exact predecessor. The
 provider conversation reservation remains held until the predecessor has a
-validated terminal outcome and its runner releases ownership. This makes
-retries and recovery explicit rather than implicit replays.
+validated terminal outcome or a durable supervisor-ended budget-stop
+observation, then the layer releases ownership for the successor. A budget-stop
+observation permits session handoff only; it does not publish task completion.
+This makes retries and recovery explicit rather than implicit replays.
+
+The public `continue` command is a thin path over that existing continuation
+boundary. It reuses the validated predecessor brief unless a follow-up brief is
+supplied, preserves the provider session identity, and creates a new task
+record. A timeout response advertises this path only after durable budget-stop
+termination evidence is present.
 
 ## Runtime discovery
 

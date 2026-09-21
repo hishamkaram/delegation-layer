@@ -10,7 +10,7 @@ A client creates a task with `dispatch`:
 
 ```sh
 delegate --root /absolute/path/to/state dispatch \
-  --provider codex:exec \
+  --auto \
   --brief /absolute/path/to/brief.txt \
   --cwd /absolute/path/to/workspace \
   --permission read-only \
@@ -48,8 +48,9 @@ bounded admission, liveness, and publication fields:
 }
 ```
 
-The exact response can also contain `capability`, `supervisor`, `raw`,
-`pending`, `stops`, `stop`, `error`, and `error_truncated` fields depending on
+The exact response can also contain `status`, `parent_task_id`, `capability`,
+`continuation`, `supervisor`, `raw`, `pending`, `stops`, `stop`, `error`, and
+`error_truncated` fields depending on
 the command and observation. Payload and sealed raw output are descriptors, so a client reads
 the named file only after validating that its rooted path, length, and digest
 match the response.
@@ -87,6 +88,7 @@ shows one catalog entry):
       "id": "codex:exec",
       "supported_modes": ["read-only", "workspace-write"],
       "supported_options": ["continuation"],
+      "continuation": "native",
       "runtime": {
         "help_args": ["exec"],
         "required_flags": [
@@ -130,6 +132,7 @@ not host readiness or live acceptance.
     "provider": "PROFILE",
     "status": "unknown",
     "verification": "catalog",
+    "continuation": "native",
     "required_flags": ["…"],
     "reason_code": "runtime_probe_not_run",
     "live_acceptance": {
@@ -155,13 +158,34 @@ evidence, while missing authentication is `blocked` and neutral.
 A task ID identifies one immutable request and at most one provider launch
 attempt. Reusing the same ID with different request bytes is rejected; reusing
 it with the same request cannot launch a second turn. A continuation is a new
-task with `--resume-task PREDECESSOR_ID` and an exact predecessor relationship.
+task with `continue --task PREDECESSOR_ID` and an exact predecessor
+relationship. The older `dispatch --resume-task` form remains available for
+compatibility.
+
+After durable budget termination, task responses add:
+
+```json
+{
+  "status": "timed_out",
+  "continuation": {
+    "resumable": true,
+    "mode": "native",
+    "predecessor_task_id": "…",
+    "continue_command": "delegate --root '/absolute/state' continue --task … --json"
+  }
+}
+```
+
+Only a response with `resumable: true` may be passed to `continue`. The
+continuation creates a new task and preserves the exact provider session.
 
 ## Collection contract
 
 `collect` and `logs` are observational. They may read existing durable records,
-wait for one bounded `--watch` interval, and retry validated reservation
-cleanup, but they never launch, retry, or resume provider work. A client can
+wait for one bounded `--watch` interval, and reconcile the saved supervisor
+binding to record termination for an already-requested budget stop. They may
+retry validated reservation cleanup, but they never launch, retry, or resume
+provider work. A client can
 therefore poll safely until publication is terminal and then replay the same
 outcome later.
 

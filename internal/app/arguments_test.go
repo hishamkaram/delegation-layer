@@ -45,6 +45,28 @@ func TestDispatchDefaultsAndLiteralValues(t *testing.T) {
 	}
 }
 
+func TestAutoPreflightAndContinueArguments(t *testing.T) {
+	auto, err := ParseArguments([]string{
+		"dispatch", "--auto", "--brief", "/brief", "--cwd", "/workspace", "--json",
+	})
+	if err != nil || !auto.Auto || auto.Provider != "" {
+		t.Fatalf("automatic dispatch arguments: %+v %v", auto, err)
+	}
+	preflight, err := ParseArguments([]string{
+		"preflight", "--provider", "example:run", "--cwd", "/workspace", "--budget", "2m", "--json",
+	})
+	if err != nil || preflight.Provider != "example:run" || preflight.Config.Budget != "2m" {
+		t.Fatalf("preflight arguments: %+v %v", preflight, err)
+	}
+	id := strings.Repeat("c", 32)
+	continuation, err := ParseArguments([]string{
+		"continue", "--task", id, "--brief", "/follow-up", "--budget", "5m", "--json",
+	})
+	if err != nil || continuation.TaskID != id || continuation.Brief != "/follow-up" || continuation.Config.Budget != "5m" {
+		t.Fatalf("continuation arguments: %+v %v", continuation, err)
+	}
+}
+
 func TestRejectedArguments(t *testing.T) {
 	id := strings.Repeat("b", 32)
 	base := []string{"dispatch", "--provider", "codex:exec", "--brief", "brief", "--cwd", "/workspace"}
@@ -78,6 +100,7 @@ func TestRejectedArguments(t *testing.T) {
 		{"--id", id, "--resume-task", id},
 		{"--brief", "second"},
 		{"--runner", "relative"},
+		{"--auto", "--provider", "codex:exec"},
 	} {
 		tests = append(tests, struct {
 			name string

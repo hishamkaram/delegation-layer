@@ -98,8 +98,7 @@ mkdir -p "$HOME/delegation-workspace" "$HOME/delegation-state"
 printf '%s\n' 'List the top-level files and summarize the project.' > "$HOME/delegation-brief.txt"
 
 delegate --root "$HOME/delegation-state" \
-  dispatch \
-  --provider codex:exec \
+  dispatch --auto \
   --brief "$HOME/delegation-brief.txt" \
   --cwd "$HOME/delegation-workspace" \
   --permission read-only \
@@ -140,24 +139,26 @@ delegate capabilities --provider codex:exec --json
 Capability discovery is side-effect-free and reports the catalog projection. It
 does not prove that the executable, supervisor, or authentication is available
 on the current host. Dispatch performs those runtime checks before admission.
+When a provider ID is explicitly required, `preflight --provider ID --cwd ABS
+--json` checks static admission without creating a task.
 
 ## Continue a conversation
 
-When a provider supports continuation, create a new task and name its exact
-predecessor:
+When a task times out, inspect its `continuation` object. If it says
+`resumable: true`, create a linked successor with the exact predecessor:
 
 ```sh
 delegate --root "$HOME/delegation-state" \
-  dispatch \
-  --provider codex:exec \
+  continue --task PREDECESSOR_TASK_ID \
   --brief "$HOME/follow-up.txt" \
-  --cwd "$HOME/delegation-workspace" \
-  --resume-task PREDECESSOR_TASK_ID \
+  --budget 30m \
   --json
 ```
 
-The predecessor must have a validated terminal outcome and released its
-conversation reservation. The continuation receives a new immutable task ID.
+The predecessor must have a committed outcome or durable budget-stop
+termination evidence and a released conversation reservation. A budget stop
+authorizes session handoff but does not establish task completion. The
+continuation receives a new immutable task ID.
 
 See the [provider guide](providers.md) for modes, options, and runtime
 compatibility behavior, or the [CLI reference](cli-reference.md) for every

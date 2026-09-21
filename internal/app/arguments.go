@@ -21,13 +21,20 @@ type Arguments struct {
 	PueueConfig string
 	Runner      string
 	TaskID      string
+	Auto        bool
 	Provider    string
 	Brief       string
+	BriefBytes  []byte
 	Cwd         string
 	Config      task.TaskConfig
 	ResumeTask  string
 	JSON        bool
 	Watch       time.Duration
+
+	// savedSupervisor is populated only by the continuation command after the
+	// predecessor binding has been loaded and validated. It never comes from
+	// public argv; continuation admission must reuse that exact authority.
+	savedSupervisor *task.SupervisorRef
 }
 
 func ParseArguments(args []string) (Arguments, error) {
@@ -75,7 +82,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "providers", "capabilities", "status", "collect", "cancel", "logs":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "status", "collect", "cancel", "logs":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -101,10 +108,29 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		fs.StringVar(&a.Provider, "provider", "", "provider profile")
 		return
 	}
+	if a.Command == "preflight" {
+		fs.StringVar(&a.Provider, "provider", "", "provider profile")
+		fs.StringVar(&a.Cwd, "cwd", "", "absolute working directory")
+		fs.StringVar(&a.Config.Permission, "permission", config.DefaultMode, "permission intent")
+		fs.StringVar(&a.Config.Budget, "budget", "", "finite execution budget")
+		fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "optional provider-native timeout")
+		fs.StringVar(&a.Config.Model, "model", "", "requested model")
+		fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
+		return
+	}
+	if a.Command == "continue" {
+		fs.StringVar(&a.TaskID, "task", "", "predecessor task ID")
+		fs.StringVar(&a.Brief, "brief", "", "optional follow-up brief file")
+		fs.StringVar(&a.Config.Budget, "budget", "", "finite continuation budget")
+		fs.StringVar(&a.Config.Model, "model", "", "continuation model override")
+		fs.StringVar(&a.Config.Effort, "effort", "", "continuation effort override")
+		return
+	}
 	if a.Command != "dispatch" {
 		return
 	}
 	fs.StringVar(&a.TaskID, "id", "", "task ID")
+	fs.BoolVar(&a.Auto, "auto", false, "select the first ready provider")
 	fs.StringVar(&a.Provider, "provider", "", "provider profile")
 	fs.StringVar(&a.Brief, "brief", "", "brief file")
 	fs.StringVar(&a.Cwd, "cwd", "", "absolute working directory")
@@ -163,32 +189,82 @@ func (a *Arguments) validate(positional []string, watch string) error {
 	}
 	switch a.Command {
 	case "help", "version", "providers":
-		if len(positional) != 0 {
-			return fmt.Errorf("unexpected extra argument %q for %s", positional[0], a.Command)
-		}
+		return validateNoPositional(a.Command, positional)
 	case "capabilities":
-		if len(positional) != 0 {
-			return fmt.Errorf("unexpected extra argument %q for capabilities", positional[0])
-		}
-		if err := config.ValidateProvider(a.Provider); err != nil {
-			return err
-		}
+		return validateCapabilities(positional, a.Provider)
+	case "preflight":
+		return a.validatePreflight(positional)
+	case "continue":
+		return a.validateContinue(positional)
 	case "dispatch":
 		return a.validateDispatch(positional)
 	case "status", "collect", "cancel", "logs":
-		if len(positional) != 1 {
-			return errors.New("exactly one task ID is required")
-		}
-		a.TaskID = positional[0]
-		if err := task.ValidateTaskID(a.TaskID); err != nil {
-			return err
-		}
-		parsed, err := time.ParseDuration(watch)
-		if err != nil || parsed < 0 {
-			return errors.New("watch must be a finite nonnegative duration")
-		}
-		a.Watch = parsed
+		return a.validateTaskCommand(positional, watch)
 	}
+	return nil
+}
+
+func validateNoPositional(command string, positional []string) error {
+	if len(positional) != 0 {
+		return fmt.Errorf("unexpected extra argument %q for %s", positional[0], command)
+	}
+	return nil
+}
+
+func validateCapabilities(positional []string, provider string) error {
+	if err := validateNoPositional("capabilities", positional); err != nil {
+		return err
+	}
+	return config.ValidateProvider(provider)
+}
+
+func (a *Arguments) validatePreflight(positional []string) error {
+	if err := validateNoPositional("preflight", positional); err != nil {
+		return err
+	}
+	if err := config.ValidateProvider(a.Provider); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(a.Cwd) {
+		return errors.New("preflight requires --cwd ABS")
+	}
+	if err := config.ValidateMode(a.Config.Permission); err != nil {
+		return err
+	}
+	_, err := config.ParseBudget(a.Config.Budget)
+	return err
+}
+
+func (a *Arguments) validateContinue(positional []string) error {
+	if err := validateNoPositional("continue", positional); err != nil {
+		return err
+	}
+	if a.TaskID == "" {
+		return errors.New("continue requires --task TASK_ID")
+	}
+	if err := task.ValidateTaskID(a.TaskID); err != nil {
+		return err
+	}
+	if a.Brief != "" && !filepath.IsAbs(a.Brief) {
+		return errors.New("continue --brief must be an absolute path")
+	}
+	_, err := config.ParseBudget(a.Config.Budget)
+	return err
+}
+
+func (a *Arguments) validateTaskCommand(positional []string, watch string) error {
+	if len(positional) != 1 {
+		return errors.New("exactly one task ID is required")
+	}
+	a.TaskID = positional[0]
+	if err := task.ValidateTaskID(a.TaskID); err != nil {
+		return err
+	}
+	parsed, err := time.ParseDuration(watch)
+	if err != nil || parsed < 0 {
+		return errors.New("watch must be a finite nonnegative duration")
+	}
+	a.Watch = parsed
 	return nil
 }
 
@@ -196,7 +272,7 @@ func (a *Arguments) validateDispatch(positional []string) error {
 	if len(positional) != 0 {
 		return errors.New("dispatch does not accept positional arguments or raw argv")
 	}
-	if err := config.ValidateProvider(a.Provider); err != nil {
+	if err := a.validateDispatchProvider(); err != nil {
 		return err
 	}
 	if a.Brief == "" || !filepath.IsAbs(a.Cwd) {
@@ -208,6 +284,20 @@ func (a *Arguments) validateDispatch(positional []string) error {
 	if _, err := config.ParseBudget(a.Config.Budget); err != nil {
 		return err
 	}
+	return a.validateDispatchIDs()
+}
+
+func (a *Arguments) validateDispatchProvider() error {
+	if a.Auto {
+		if a.Provider != "" {
+			return errors.New("--auto and --provider cannot be used together")
+		}
+		return nil
+	}
+	return config.ValidateProvider(a.Provider)
+}
+
+func (a *Arguments) validateDispatchIDs() error {
 	for _, id := range []string{a.TaskID, a.ResumeTask} {
 		if id != "" {
 			if err := task.ValidateTaskID(id); err != nil {
@@ -217,6 +307,9 @@ func (a *Arguments) validateDispatch(positional []string) error {
 	}
 	if a.TaskID != "" && a.TaskID == a.ResumeTask {
 		return errors.New("continuation requires a different task ID")
+	}
+	if a.Auto && a.ResumeTask != "" {
+		return errors.New("automatic dispatch cannot resume a predecessor")
 	}
 	return nil
 }

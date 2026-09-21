@@ -31,6 +31,9 @@ func TestReadOnlyEnvironmentInstallsNativePermissionOverrides(t *testing.T) {
 	if !slices.Contains(values, "OPENCODE_DISABLE_PROJECT_CONFIG=1") {
 		t.Fatal("read-only environment did not disable project configuration")
 	}
+	if !slices.Contains(values, "XDG_CONFIG_HOME=/tmp/home/.config/delegation-layer-opencode") {
+		t.Fatalf("read-only environment did not isolate OpenCode config: %q", values)
+	}
 	config := inlineConfig(t, values)
 	if !jsonFalse(config.LSP) || !jsonFalse(config.Formatter) {
 		t.Fatal("read-only config unexpectedly enabled native services")
@@ -123,6 +126,9 @@ func TestWorkspaceEnvironmentInstallsNativeContainmentPolicy(t *testing.T) {
 	}
 	if !slices.Contains(values, "OPENCODE_DISABLE_PROJECT_CONFIG=1") {
 		t.Fatal("workspace-write environment did not disable project configuration")
+	}
+	if !slices.Contains(values, "XDG_CONFIG_HOME=/tmp/home/.config/delegation-layer-opencode") {
+		t.Fatalf("workspace-write environment did not isolate OpenCode config: %q", values)
 	}
 	config := inlineConfig(t, values)
 	permissions, err := workspaceWritePermission(workspace)

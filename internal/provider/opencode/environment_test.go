@@ -21,7 +21,7 @@ func TestPrepareEnvironmentScopesXDGRootsToOpenCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, root := range []string{"/tmp/xdg-config", "/tmp/xdg-data", "/tmp/xdg-state", "/tmp/xdg-cache"} {
+	for _, root := range []string{"/tmp/xdg-data", "/tmp/xdg-state", "/tmp/xdg-cache"} {
 		canonicalRoot, canonicalErr := config.CanonicalizePath(root)
 		if canonicalErr != nil {
 			t.Fatal(canonicalErr)
@@ -36,6 +36,20 @@ func TestPrepareEnvironmentScopesXDGRootsToOpenCode(t *testing.T) {
 		if !slices.Contains(environment.WritableRoots, canonicalChild) {
 			t.Fatalf("OpenCode XDG child was not classified as writable: %q", canonicalChild)
 		}
+	}
+	configChild, configChildErr := config.CanonicalizePath(filepath.Join("/tmp/xdg-config", "opencode"))
+	if configChildErr != nil {
+		t.Fatal(configChildErr)
+	}
+	if slices.Contains(environment.WritableRoots, configChild) {
+		t.Fatalf("original XDG config child was classified as writable: %q", configChild)
+	}
+	delegationConfig, delegationErr := config.CanonicalizePath(filepath.Join("/tmp/xdg-config", "delegation-layer-opencode"))
+	if delegationErr != nil {
+		t.Fatal(delegationErr)
+	}
+	if !slices.Contains(environment.WritableRoots, delegationConfig) {
+		t.Fatalf("delegation-owned OpenCode config root was not classified as writable: %q", delegationConfig)
 	}
 	if !slices.Contains(environment.Values, "XDG_CACHE_HOME=/tmp/xdg-cache") {
 		t.Fatalf("XDG_CACHE_HOME was not preserved: %q", environment.Values)
@@ -52,5 +66,19 @@ func TestPrepareEnvironmentScopesXDGRootsToOpenCode(t *testing.T) {
 func TestPrepareEnvironmentRejectsMalformedXDGHome(t *testing.T) {
 	if _, err := prepareEnvironment([]string{"HOME=/tmp/opencode-home", "XDG_CONFIG_HOME=relative"}); err == nil {
 		t.Fatal("relative XDG_CONFIG_HOME was accepted")
+	}
+}
+
+func TestDelegationConfigHomeIsIdempotent(t *testing.T) {
+	got, err := delegationConfigHome("/tmp/opencode-home", "/tmp/xdg-config/delegation-layer-opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := config.CanonicalizePath("/tmp/xdg-config/delegation-layer-opencode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("isolated config home=%q, want %q", got, want)
 	}
 }

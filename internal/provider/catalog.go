@@ -65,6 +65,16 @@ func NewCatalog(registrations ...Registration) (Catalog, error) {
 
 func normalizeRegistration(supplied Registration) (Registration, error) {
 	registration := supplied
+	if registration.Description.Continuation == "" {
+		// Empty is the historical zero value for registrations created before
+		// continuation metadata was added. Preserve the legacy capability when
+		// the registration already advertised continuation support.
+		if slices.Contains(registration.Description.SupportedOptions, OptionContinuation) {
+			registration.Description.Continuation = ContinuationNative
+		} else {
+			registration.Description.Continuation = ContinuationUnsupported
+		}
+	}
 	if err := validateDescription(registration.Description); err != nil {
 		return Registration{}, err
 	}
@@ -98,6 +108,16 @@ func validateDescription(description Description) error {
 	if err := validateModes(description.SupportedModes); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
 	}
+	if !validContinuationMode(description.Continuation) {
+		return fmt.Errorf("%w: provider %s has invalid continuation mode %q", ErrInvalidDescriptor, description.ID, description.Continuation)
+	}
+	if description.Continuation == ContinuationCheckpoint {
+		return fmt.Errorf("%w: provider %s advertises unsupported checkpoint continuation", ErrInvalidDescriptor, description.ID)
+	}
+	continuationOption := slices.Contains(description.SupportedOptions, OptionContinuation)
+	if continuationOption != (description.Continuation == ContinuationNative) {
+		return fmt.Errorf("%w: provider %s has inconsistent continuation metadata", ErrInvalidDescriptor, description.ID)
+	}
 	if err := validateRuntimeCapability(description.Runtime); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
 	}
@@ -108,6 +128,15 @@ func validateDescription(description Description) error {
 		return fmt.Errorf("%w: discoverable provider %s has no runtime flag requirements", ErrInvalidDescriptor, description.ID)
 	}
 	return nil
+}
+
+func validContinuationMode(mode ContinuationMode) bool {
+	switch mode {
+	case ContinuationNative, ContinuationCheckpoint, ContinuationUnsupported:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateInterpreters(registration Registration, seenRefs map[string]struct{}) ([]predicate.Interpreter, error) {

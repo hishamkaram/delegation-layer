@@ -8,13 +8,16 @@ or integrating a custom supervisor.
 
 ```text
 delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
-  --provider PROFILE --brief FILE --cwd ABS [--id TASK_ID] \
+  (--auto | --provider PROFILE) --brief FILE --cwd ABS [--id TASK_ID] \
   [--permission MODE] [--budget DURATION] [--model MODEL] \
   [--effort EFFORT] [--native-timeout DURATION] \
   [--resume-task PREDECESSOR_ID] [--json]
 
 delegate [--root ABS] providers [--json]
 delegate [--root ABS] capabilities --provider PROFILE [--json]
+delegate [--root ABS] preflight --provider PROFILE --cwd ABS [--json]
+delegate [--root ABS] continue --task PREDECESSOR_ID [--brief FILE] \
+  [--budget DURATION] [--model MODEL] [--effort EFFORT] [--json]
 delegate [--root ABS] status TASK_ID [--json]
 delegate [--root ABS] collect TASK_ID [--watch DURATION] [--json]
 delegate [--root ABS] logs TASK_ID [--json]
@@ -31,8 +34,15 @@ supervisor for advanced integrations.
 
 ## Dispatch
 
-`dispatch` validates and persists the request before it contacts Pueue. The
-brief must be a regular file no larger than 8 MiB. It is supplied to the
+`dispatch` validates and persists the request before it contacts Pueue. Use
+`--auto` to let the catalog try static provider admission in deterministic
+provider-ID order. The first statically ready candidate is selected; the
+normal runtime probe remains the final admission boundary. If the selected
+provider fails after dispatch starts, the CLI returns that result and does not
+silently fall back to another provider. `--provider` and `--auto` are
+mutually exclusive.
+
+The brief must be a regular file no larger than 8 MiB. It is supplied to the
 provider through standard input and is never appended to provider arguments.
 `--cwd` must name an existing absolute workspace directory. State and workspace
 paths must remain disjoint.
@@ -58,14 +68,39 @@ Every task ID is single-use for the requested turn. Repeating a dispatch with
 the same ID requires the same immutable request and cannot grant another
 provider launch. A continuation is a separate task that names an exact
 predecessor and reserves the provider conversation until the predecessor has a
-validated terminal outcome and its runner has released ownership.
+validated terminal outcome or durable supervisor-ended budget-stop evidence.
+
+## Preflight and continuation
+
+`preflight --provider PROFILE --cwd ABS [--permission MODE] [--budget DURATION]
+[--model MODEL] [--effort EFFORT] [--native-timeout DURATION] --json` runs the selected adapter's
+static preparation and state-placement checks without creating a task,
+contacting Pueue, or launching a provider. It reports `verification:
+"preflight"`; a ready result still does not prove live authentication.
+
+`continue --task PREDECESSOR_ID` reads the predecessor's validated brief and
+exact provider session, then creates a new linked task through the normal
+admission path. `--brief FILE` replaces the predecessor brief with a new
+follow-up instruction. `--budget`, `--model`, and `--effort` can override the
+corresponding requested values when the provider advertises them. The command
+refuses a missing, still-running, mismatched, or unsupported predecessor. A
+committed outcome or durable supervisor-ended budget stop makes the
+predecessor eligible for handoff; the budget stop does not establish task
+completion. The
+resolved `delegate-run` executable is saved with each new task, so generated
+continuation commands preserve an explicit custom `--runner` integration.
+
+When a budget stop has durable termination evidence, `status` and `collect`
+include `status: "timed_out"` and a `continuation` object. `resumable: true`
+means the exact session can be continued; `mode` is `native`, `checkpoint`, or
+`unsupported`. A timeout never authorizes relaunching the original task.
 
 ## Providers and runtime compatibility
 
 `providers --json` returns a bounded object with `schema_version: 1` and a
 sorted `providers` array. Each entry contains its ID, supported permission
-modes, supported request options, and runtime metadata: optional help-command
-arguments plus the flags required by the adapter.
+modes, supported request options, continuation mode, and runtime metadata:
+optional help-command arguments plus the flags required by the adapter.
 
 Discovery is metadata only. It does not inspect the host, authenticate a
 provider, contact Pueue, create state, or launch a process. During dispatch,
@@ -108,10 +143,12 @@ unavailable authentication prerequisite is `blocked` and neutral.
 `status` reports the saved admission, current liveness, and publication state.
 `collect` reads a committed outcome or waits for one observation interval when
 `--watch` is positive; `--watch` defaults to `0s` and never changes the task
-budget. Collection never launches, retries, or resumes provider work. `logs`
-returns validated descriptors for the raw stdout and stderr streams. `cancel`
-records one explicit stop request and observes its effect; it does not turn an
-uncertain process result into a successful outcome.
+budget. For an existing budget stop, collection may reconnect to the saved
+supervisor binding to record a durable termination observation. It never
+launches, retries, or resumes provider work. `logs` returns validated
+descriptors for the raw stdout and stderr streams. `cancel` records one
+explicit stop request and observes its effect; it does not turn an uncertain
+process result into a successful outcome.
 
 When a task has a committed outcome, that outcome is the terminal authority.
 Payload and sealed raw streams are returned as descriptors with rooted paths,
@@ -121,7 +158,10 @@ byte sizes, and SHA-256 digests rather than copied into the control response.
 
 With `--json`, task-command responses contain `schema_version: 1`, the command
 name, task identity when applicable, and separate `admission`, `liveness`, and
-`publication` fields. The `providers` response is a separate catalog schema.
+`publication` fields. A `status` value is present for timeout or blocked
+states; `parent_task_id` identifies a continuation successor and
+`continuation` carries resumability metadata. The `providers` response is a
+separate catalog schema.
 An `outcome` is present only after it has passed the recorded provider
 predicate. Operational diagnostics appear in `error` and do not erase an
 independently valid published outcome.
@@ -152,8 +192,8 @@ bounded depth, aliases, nodes, and document size.
 
 When a saved binding points to the private state-rooted supervisor, `dispatch`,
 `status`, `cancel`, and continuation checks restart its bundled daemon when it
-is unavailable. `collect` remains observational and never starts or restarts a
-supervisor.
+is unavailable. `collect` may recover that bundled daemon only to observe an
+already-requested budget stop; it never starts a provider or submits work.
 
 For setup failures, see [Troubleshooting](troubleshooting.md). For provider
 specific behavior, see [Providers](providers.md).

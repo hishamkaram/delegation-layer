@@ -52,6 +52,8 @@ Commands:
   collect       Recover or read the immutable publication
   cancel        Request one explicit supervisor stop
   logs          Return validated output descriptors
+  preflight     Check one provider without creating a task
+  continue      Continue one terminal task through its exact session
   help          Show this help message
   version       Print version information
 
@@ -60,7 +62,7 @@ Global flags:
   --pueue-config ABS      Initial supervisor configuration
   --runner ABS            Runner executable for dispatch
 
-Use --json on task, providers, and capabilities commands for the versioned response.
+Use --json on task, providers, capabilities, preflight, and continue commands for the versioned response.
 `
 
 // Dependencies is the explicit composition boundary for production and the
@@ -86,6 +88,9 @@ type Dependencies struct {
 // options remain outside this boundary.
 type storeDependencies struct {
 	predicateRegistry func() predicate.Registry
+	catalog           commonprovider.Catalog
+	supervisorOptions pueue.Options
+	observeSupervisor bool
 }
 
 func (d Dependencies) storeDependencies() storeDependencies {
@@ -93,7 +98,12 @@ func (d Dependencies) storeDependencies() storeDependencies {
 	if registry == nil && !d.Catalog.IsZero() {
 		registry = d.Catalog.Registry
 	}
-	return storeDependencies{predicateRegistry: registry}
+	return storeDependencies{
+		predicateRegistry: registry,
+		catalog:           d.Catalog,
+		supervisorOptions: d.SupervisorOptions,
+		observeSupervisor: true,
+	}
 }
 
 func (d Dependencies) normalized() Dependencies {
@@ -126,6 +136,8 @@ type Response struct {
 	Command        string                  `json:"command"`
 	RootID         string                  `json:"root_id,omitempty"`
 	TaskID         string                  `json:"task_id,omitempty"`
+	ParentTaskID   string                  `json:"parent_task_id,omitempty"`
+	Status         string                  `json:"status,omitempty"`
 	Admission      string                  `json:"admission"`
 	Liveness       string                  `json:"liveness"`
 	Publication    string                  `json:"publication"`
@@ -138,8 +150,20 @@ type Response struct {
 	Stop           *StopResponse           `json:"stop,omitempty"`
 	Pending        *PendingResponse        `json:"pending,omitempty"`
 	Capability     *CapabilityReport       `json:"capability,omitempty"`
+	Continuation   *ContinuationResponse   `json:"continuation,omitempty"`
 	Error          string                  `json:"error,omitempty"`
 	ErrorTruncated bool                    `json:"error_truncated,omitempty"`
+}
+
+// ContinuationResponse is emitted when a task can be continued or when a
+// continuation command creates a linked successor. Task records and sealed
+// evidence remain authoritative for the detailed lifecycle.
+type ContinuationResponse struct {
+	Resumable       bool   `json:"resumable"`
+	Mode            string `json:"mode"`
+	PredecessorID   string `json:"predecessor_task_id,omitempty"`
+	ContinueCommand string `json:"continue_command,omitempty"`
+	Reason          string `json:"reason,omitempty"`
 }
 
 type SupervisorResponse struct {
@@ -234,6 +258,10 @@ func runCommand(a Arguments, deps Dependencies) commandResult {
 	switch a.Command {
 	case "dispatch":
 		return dispatch(a, deps)
+	case "preflight":
+		return preflight(a, deps)
+	case "continue":
+		return continueTask(a, deps)
 	case "status":
 		return status(a, deps)
 	case "collect":
@@ -260,7 +288,21 @@ func writeCLIError(w io.Writer, err error, code int) int {
 
 func writeHumanResponse(w io.Writer, response Response) error {
 	var output strings.Builder
-	fmt.Fprintf(&output, "command=%s root_id=%s task_id=%s admission=%s liveness=%s publication=%s\n", response.Command, response.RootID, response.TaskID, response.Admission, response.Liveness, response.Publication)
+	fmt.Fprintf(&output, "command=%s root_id=%s task_id=%s admission=%s liveness=%s publication=%s", response.Command, response.RootID, response.TaskID, response.Admission, response.Liveness, response.Publication)
+	if response.Status != "" {
+		fmt.Fprintf(&output, " status=%s", response.Status)
+	}
+	output.WriteByte('\n')
+	if response.Continuation != nil {
+		fmt.Fprintf(&output, "continuation resumable=%t mode=%s", response.Continuation.Resumable, response.Continuation.Mode)
+		if response.Continuation.PredecessorID != "" {
+			fmt.Fprintf(&output, " predecessor_task_id=%s", response.Continuation.PredecessorID)
+		}
+		if response.Continuation.ContinueCommand != "" {
+			fmt.Fprintf(&output, " command=%s", response.Continuation.ContinueCommand)
+		}
+		output.WriteByte('\n')
+	}
 	if response.Payload != nil {
 		fmt.Fprintf(&output, "payload=%s length=%d sha256=%s\n", response.Payload.Basename, response.Payload.Length, response.Payload.SHA256)
 	}
@@ -404,6 +446,13 @@ func (d storeDependencies) registry() predicate.Registry {
 		return d.predicateRegistry()
 	}
 	return NativePredicates()
+}
+
+func (d storeDependencies) providerCatalog() commonprovider.Catalog {
+	if d.catalog.IsZero() {
+		return NativeCatalog()
+	}
+	return d.catalog
 }
 
 func openStore(root string, deps storeDependencies, create bool) (*taskdir.Store, error) {
@@ -650,6 +699,13 @@ func resolveRunner(raw string, deps Dependencies) (string, error) {
 	return raw, nil
 }
 
+func resolveTaskRunner(raw string, deps Dependencies, meta *task.MetaRecord) (string, error) {
+	if raw == "" && meta != nil && meta.RunnerExecutable != "" {
+		raw = meta.RunnerExecutable
+	}
+	return resolveRunner(raw, deps)
+}
+
 func bindInitial(a Arguments, deps Dependencies) (*pueue.Client, error) {
 	return bindInitialWithOptions(a, deps, "", deps.SupervisorOptions)
 }
@@ -669,6 +725,9 @@ func newSupervisorClient(ctx context.Context, root string, saved task.Supervisor
 }
 
 func bindInitialWithOptions(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options) (*pueue.Client, error) {
+	if a.savedSupervisor != nil {
+		return newSupervisorClient(context.Background(), root, *a.savedSupervisor, supervisorOptions, true)
+	}
 	configPath, err := resolveInitialConfig(a)
 	if err != nil {
 		return nil, err
@@ -693,9 +752,9 @@ func bindInitialWithOptions(a Arguments, deps Dependencies, root string, supervi
 	return pueue.Bind(context.Background(), executable, configPath, supervisorOptions)
 }
 
-func newMeta(req task.TaskRecord, profile PreparedProfile, supervisor task.SupervisorRef, publisher string) task.MetaRecord {
+func newMeta(req task.TaskRecord, profile PreparedProfile, supervisor task.SupervisorRef, runner, publisher string) task.MetaRecord {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, PublisherBuild: publisher, PublisherVersion: publisher, Environment: append([]string(nil), profile.Plan.Environment...), Predicate: profile.Plan.Predicate, InputFiles: profile.Plan.InputFiles, OutputArtifacts: profile.Plan.OutputArtifacts, OutputWriterContract: profile.Plan.OutputWriterContract, SupervisorConfig: supervisor, CreatedAt: now}
+	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, RunnerExecutable: runner, PublisherBuild: publisher, PublisherVersion: publisher, Environment: append([]string(nil), profile.Plan.Environment...), Predicate: profile.Plan.Predicate, InputFiles: profile.Plan.InputFiles, OutputArtifacts: profile.Plan.OutputArtifacts, OutputWriterContract: profile.Plan.OutputWriterContract, SupervisorConfig: supervisor, CreatedAt: now}
 }
 
 func taskIdentity(req *task.TaskRecord, meta *task.MetaRecord, specHash, metaHash string, receipt *task.SupervisorReceipt) pueue.Identity {

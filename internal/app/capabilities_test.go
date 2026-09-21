@@ -56,6 +56,9 @@ func assertDeclaredCapability(t *testing.T, response CapabilityResponse) {
 	if capability.Contract != commonprovider.RuntimeInspectionRevision || len(capability.RequiredFlags) == 0 {
 		t.Fatalf("capability contract is incomplete: %+v", capability)
 	}
+	if capability.Continuation != string(commonprovider.ContinuationNative) {
+		t.Fatalf("continuation contract is incomplete: %+v", capability)
+	}
 	if capability.LiveAcceptance.Status != acceptanceStatusNotRun || capability.LiveAcceptance.Authentication != authenticationStatusUnknown {
 		t.Fatalf("static command claimed live proof: %+v", capability.LiveAcceptance)
 	}
@@ -93,6 +96,9 @@ func TestCapabilitiesUnknownProviderReturnsMachineReadableRejection(t *testing.T
 	if response.Capability.LiveAcceptance.Status != acceptanceStatusNotRun {
 		t.Fatalf("unknown provider claimed live acceptance: %+v", response.Capability.LiveAcceptance)
 	}
+	if response.Capability.Continuation != string(commonprovider.ContinuationUnsupported) {
+		t.Fatalf("unknown provider omitted unsupported continuation mode: %+v", response.Capability)
+	}
 	if response.Error == "" || stderr.Len() != 0 {
 		t.Fatalf("unexpected unknown-provider streams: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
@@ -113,6 +119,9 @@ func TestCapabilitiesRejectsHistoricalOnlyProvider(t *testing.T) {
 	}
 	if response.Capability.RequiredFlags == nil {
 		t.Fatalf("historical provider omitted empty required_flags array: %+v", response.Capability)
+	}
+	if response.Capability.Continuation != string(commonprovider.ContinuationUnsupported) {
+		t.Fatalf("historical provider omitted unsupported continuation mode: %+v", response.Capability)
 	}
 }
 
