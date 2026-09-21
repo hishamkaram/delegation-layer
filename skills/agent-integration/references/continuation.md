@@ -24,6 +24,10 @@ delegate --root "$STATE_ROOT" continue \
   --json
 ```
 
+A timed-out turn can have `publication: "unknown"` and no `outcome` while
+`continuation.resumable` is true. Use that continuation decision; do not wait
+indefinitely for a publication that the interrupted turn cannot complete.
+
 The follow-up brief is optional. If it is omitted, Delegation Layer reuses the
 validated predecessor brief. A successful continuation returns a new task ID
 and links it to the predecessor. Observe and collect the new ID separately.

@@ -23,22 +23,66 @@ func printArguments(request task.TaskRecord) ([]string, []task.InputFile, error)
 }
 
 func historicalNativePrintArguments(request task.TaskRecord) ([]string, []task.InputFile, error) {
-	return printArgumentsWithReadOnlyPermission(request, "dontAsk")
+	permissionMode := "dontAsk"
+	if request.Mode == WorkspaceWriteMode {
+		permissionMode = "acceptEdits"
+	}
+	return printArgumentsWithPermission(request, permissionMode)
 }
 
 func printArgumentsWithReadOnlyPermission(request task.TaskRecord, readOnlyPermission string) ([]string, []task.InputFile, error) {
+	permissionMode := readOnlyPermission
+	if request.Mode == WorkspaceWriteMode {
+		permissionMode = "bypassPermissions"
+	}
+	return printArgumentsWithPermission(request, permissionMode)
+}
+
+func printArgumentsWithPermission(request task.TaskRecord, permissionMode string) ([]string, []task.InputFile, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, nil, err
 	}
-	permissionMode := readOnlyPermission
-	if request.Mode == WorkspaceWriteMode {
-		permissionMode = "acceptEdits"
+	if !nativePermissionAllowed(request.Mode, permissionMode) {
+		return nil, nil, fmt.Errorf("%w: unsupported Claude native permission mode %q", ErrUnsupportedProfile, permissionMode)
 	}
 	arguments := []string{
 		"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", permissionMode, "--permission-prompts", "none",
 	}
 	return appendSessionArguments(request, arguments, nil)
+}
+
+func nativePermissionAllowed(mode, permissionMode string) bool {
+	switch mode {
+	case Mode:
+		return permissionMode == "plan" || permissionMode == "dontAsk"
+	case WorkspaceWriteMode:
+		return permissionMode == "bypassPermissions" || permissionMode == "acceptEdits"
+	default:
+		return false
+	}
+}
+
+func nativeDefaultPermission(mode string) string {
+	switch mode {
+	case Mode:
+		return "plan"
+	case WorkspaceWriteMode:
+		return "bypassPermissions"
+	default:
+		return ""
+	}
+}
+
+func nativeHistoricalPermission(mode string) string {
+	switch mode {
+	case Mode:
+		return "dontAsk"
+	case WorkspaceWriteMode:
+		return "acceptEdits"
+	default:
+		return ""
+	}
 }
 
 // legacyPrintArguments preserves the adapter-owned restrictions recorded by

@@ -26,6 +26,26 @@
       "name": "provider-neutrality",
       "prompt": "Use the skill without a provider name.",
       "expected": ["delegate only", "dispatch --auto", "no direct provider CLI"]
+    },
+    {
+      "name": "pi-write",
+      "prompt": "Use pi:json through delegate to update a file and run its tests. Edits are authorized.",
+      "expected": ["--provider pi:json", "--permission workspace-write", "delegate only", "save task_id", "collect validated evidence"]
+    },
+    {
+      "name": "write-permission-denial",
+      "prompt": "An admitted workspace-write task reports a native tool permission denial.",
+      "expected": ["report task evidence", "do not edit provider configuration", "do not call provider CLI", "no automatic redispatch"]
+    },
+    {
+      "name": "unavailable-provider",
+      "prompt": "The selected provider is unavailable before admission.",
+      "expected": ["report bounded reason", "do not install or authenticate provider", "do not claim success"]
+    },
+    {
+      "name": "write-timeout",
+      "prompt": "An authorized write task has status timed_out, publication unknown, no outcome, and continuation.resumable true.",
+      "expected": ["delegate continue --task", "same state root", "new task id", "do not wait indefinitely for an outcome", "no fresh unrelated dispatch"]
     }
   ]
 }

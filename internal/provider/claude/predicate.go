@@ -45,12 +45,16 @@ func newLegacyNativeInterpreter() predicate.Interpreter {
 	return interpreter{mode: Mode, nativeHistorical: true}
 }
 
+func newLegacyNativeWorkspaceWriteInterpreter() predicate.Interpreter {
+	return interpreter{mode: WorkspaceWriteMode, nativeHistorical: true}
+}
+
 func newLegacyPortableInterpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, legacyPortable: true}
 }
 
 // NewWorkspaceWriteInterpreter returns the Claude interpreter bound to the
-// native acceptEdits profile.
+// native bypassPermissions profile.
 func NewWorkspaceWriteInterpreter() predicate.Interpreter {
 	return NewInterpreter(WorkspaceWriteMode)
 }

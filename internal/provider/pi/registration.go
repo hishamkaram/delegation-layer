@@ -10,7 +10,7 @@ import (
 func Description() commonprovider.Description {
 	return commonprovider.Description{
 		ID:             Provider,
-		SupportedModes: []string{ModeReadOnly},
+		SupportedModes: []string{ModeReadOnly, ModeWorkspaceWrite},
 		SupportedOptions: []string{
 			commonprovider.OptionContinuation,
 			commonprovider.OptionEffort,
@@ -22,9 +22,8 @@ func Description() commonprovider.Description {
 	}
 }
 
-// Registration returns Pi's read-only interpreter. Pi's built-in write and
-// edit tools do not provide a native workspace boundary, so workspace-write
-// is intentionally unavailable until the CLI exposes one.
+// Registration returns Pi's native interpreters. The workspace-write
+// interpreter preserves Pi's configured tools and permission behavior.
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
 		Description:     Description(),
@@ -32,6 +31,8 @@ func Registration() commonprovider.Registration {
 		PrepareExisting: PrepareExistingCandidate,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(ModeReadOnly),
+			NewInterpreter(ModeWorkspaceWrite),
+			newReadOnlyV2Interpreter(),
 			newLegacyInterpreter(),
 		},
 	}

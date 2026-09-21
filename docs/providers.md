@@ -9,7 +9,7 @@ identity observer, input transport, output interpreter, and supported options.
 | `antigravity:print` | `workspace-write` | `continuation`, `native-timeout` | `agy` |
 | `codex:exec` | `read-only`, `workspace-write` | `continuation` | `codex exec` |
 | `claude:print` | `read-only`, `workspace-write` | `continuation` | `claude` print mode |
-| `pi:json` | `read-only` | `continuation`, `model`, `effort` | `pi --mode json` |
+| `pi:json` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `pi --mode json` |
 | `opencode:run` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `opencode run --format json` |
 
 The catalog is available locally with `delegate providers --json`. Its runtime
@@ -25,7 +25,9 @@ supervised runtime probe. It does not claim authentication or live acceptance.
 The released binaries target Darwin and Linux. Provider CLIs own authentication,
 configuration, MCP servers, hooks, plugins, skills, and native permissions.
 Delegation Layer passes the requested native permission mode without inspecting
-or rejecting personal configuration. It does not provide an independent sandbox.
+or rejecting personal configuration. `workspace-write` requests unattended native
+execution, including command execution; native approval bypass may permit access
+beyond the workspace. It does not provide an independent sandbox.
 Missing executables or required flags, unsupported request options, and invalid
 provider results still prevent successful delegation.
 
@@ -68,33 +70,47 @@ proof is `passed`, and unavailable authentication is `blocked` and neutral.
 
 ## Live acceptance
 
-The Pi and OpenCode live gates use the shipped dispatcher and runner with a
-private Pueue instance. They perform a fresh turn, an exact continuation, and
-collection replay, then verify provider evidence, session identity, and that
-the read-only test leaves the workspace unchanged:
+The shared live gate covers all five providers through the shipped dispatcher
+and runner with a private Pueue instance. Each supported mode performs a fresh
+turn, an exact continuation, and collection replay. Read-only scenarios verify
+that the workspace is unchanged. Write scenarios verify file creation, editing,
+and shell-generated output using unpredictable test values:
 
 ```sh
+make acceptance-agy
+make acceptance-codex
+make acceptance-claude
 make acceptance-pi
 make acceptance-opencode
 make acceptance-native
+
+# One selected provider/mode:
+./scripts/acceptance_native.sh pi:json --mode workspace-write
 ```
 
 These commands require the selected CLI, a usable native provider login, and
 the test supervisor supplied by the development workflow. Released users do
-not install a separate supervisor. Exit `0` means the gate passed. Exit `2`
+not install a separate supervisor. For an individual gate, exit `0` means it
+passed. Exit `2`
 means `BLOCKED`: a required executable, supervisor, or authentication
 prerequisite was unavailable and a sanitized `failure.json` receipt was
 written. Textual login refusals and
 structured provider authorization responses such as HTTP 401 or 403 are both
 classified as authentication prerequisites. The aggregate
-`acceptance-native` target treats blocked profiles as neutral and still fails
-on a real acceptance failure. The gate never copies credentials, retries a
+`acceptance-native` target reports passed, blocked, and failed counts. It
+keeps authentication blocks neutral for development and still fails on a real
+acceptance failure. When no scenario passes, its reported status is `BLOCKED`,
+even though the neutral aggregate exit code is zero. Check the reported status
+before claiming authenticated live proof. The gate never copies credentials, retries a
 provider turn, or reports an authentication refusal as a pass.
 
 ## Antigravity
 
-`antigravity:print` runs `agy` with `--sandbox --mode accept-edits` and the
-selected workspace. It passes the brief through standard input.
+`antigravity:print` runs `agy` with `--sandbox --mode accept-edits`,
+`--dangerously-skip-permissions`, and the selected workspace. It passes the
+brief through standard input and records effective approval as `always-proceed`.
+Automatic approval covers native tool requests; keeping `--sandbox` does not
+establish a delegate-owned boundary for every tool or sandbox escape.
 `--native-timeout` sets agy's own print timeout inside the wall-clock `--budget`.
 Native workspace trust, MCP configuration, and account settings remain agy's
 responsibility. Missing or expired login is reported by the provider.
@@ -110,7 +126,8 @@ currently advertised by this adapter.
 ## Claude
 
 `claude:print` uses print mode and structured streaming output. `read-only` maps
-to native `plan` permission mode; `workspace-write` maps to `acceptEdits`.
+to native `plan` permission mode; `workspace-write` maps to `bypassPermissions`
+so authorized edits and commands do not require interactive approval.
 Claude loads its own settings, tools, MCP servers, and login. The adapter checks
 stream structure, session identity, and result integrity. Continuation selects
 the exact recorded provider session.
@@ -120,8 +137,17 @@ the exact recorded provider session.
 `pi:json` uses JSON event mode with the native `read,grep,find,ls` tool selection
 for `read-only`. Native extensions and configuration remain enabled; the tool
 selection is not an independent sandbox for extensions. Continuation uses the
-exact recorded Pi session. `model` is passed through, and `effort` maps to
-`--thinking`. This adapter does not advertise `workspace-write`.
+exact recorded Pi session in the same workspace. `workspace-write` leaves the
+native tool selection to Pi, including its default shell, edit, and write tools;
+custom configuration can change that selection. It records `provider-native`
+approval and does not add a filesystem sandbox. `model` is passed through, and
+`effort` maps to `--thinking` in both modes.
+
+Pi may perform additional internal agent cycles for retries, compaction, or
+follow-up work inside the same CLI invocation. New tasks validate their order
+and require a successful final result; an unfinished or failed final cycle
+cannot publish success. Delegate does not relaunch the provider for these
+internal cycles.
 
 ## OpenCode
 
@@ -134,6 +160,9 @@ symlinks. Continuation and model use native options; `effort` maps to `--variant
 Previously admitted tasks retain their original preparation and output
 interpretation contracts. Dispatch a new task to use the simplified native
 profiles; upgrading does not silently change a queued task's launch settings.
+An explicit continuation creates a new task using the current mapping for its
+inherited permission mode, while retaining the exact provider session and
+leaving its predecessor immutable.
 
 ## Adding a provider
 

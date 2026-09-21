@@ -35,12 +35,23 @@ func TestJSONArgumentsMapCallerPermissionAndContinuation(t *testing.T) {
 		t.Fatalf("read-only argv=%q want=%q", args, want)
 	}
 
-	unsupportedWrite := planRequest(config.ModeWorkspaceWrite)
-	unsupportedWrite.RequestedConfig.Model = "openai/gpt-5"
-	unsupportedWrite.RequestedConfig.Effort = "high"
-	unsupportedWrite.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: testUUID, PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
-	if _, err = printArguments(unsupportedWrite); !errors.Is(err, ErrUnsupportedProfile) {
-		t.Fatalf("workspace-write error=%v want unsupported profile", err)
+	write := planRequest(config.ModeWorkspaceWrite)
+	write.RequestedConfig.Model = "openai/gpt-5"
+	write.RequestedConfig.Effort = "high"
+	write.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: testUUID, PredecessorTaskID: "abcdef0123456789abcdef0123456789"}
+	args, err = printArguments(write)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"--mode", "json", "--model", "openai/gpt-5", "--thinking", "high", "--session", testUUID}
+	if !slices.Equal(args, want) {
+		t.Fatalf("workspace-write argv=%q want=%q", args, want)
+	}
+	if slices.Contains(args, "--tools") {
+		t.Fatalf("workspace-write argv restored a read-only tool allowlist: %q", args)
+	}
+	if _, err = legacyJSONArguments(write); !errors.Is(err, ErrUnsupportedProfile) {
+		t.Fatalf("legacy workspace-write error=%v want unsupported profile", err)
 	}
 }
 

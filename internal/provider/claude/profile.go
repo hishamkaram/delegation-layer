@@ -20,8 +20,13 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 	return prepareNativeCandidate(request)
 }
 
+type nativePreparationOptions struct {
+	permissionMode     string
+	predicateReference task.PredicateRef
+}
+
 func prepareNativeCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareNativeCandidateWithContract(request, nil, nil, false)
+	return prepareNativeCandidateWithContract(request, nil, nil, nativePreparationOptions{})
 }
 
 func prepareExistingNativeCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
@@ -29,15 +34,62 @@ func prepareExistingNativeCandidate(request task.TaskRecord, meta task.MetaRecor
 	if meta.EffectiveConfig.Policy != nil {
 		recordedRoots = meta.EffectiveConfig.Policy.WritableRoots
 	}
-	historicalReadOnly := request.Mode == Mode && meta.EffectiveConfig.Approval == "dontAsk"
-	return prepareNativeCandidateWithContract(request, meta.Environment, recordedRoots, historicalReadOnly)
+	options, err := existingNativePreparationOptions(request, meta)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	return prepareNativeCandidateWithContract(request, meta.Environment, recordedRoots, options)
 }
 
-func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnvironment, recordedRoots []string, historicalReadOnly bool) (commonprovider.ProfileCandidate, error) {
-	arguments, inputs, err := printArguments(request)
-	if historicalReadOnly {
-		arguments, inputs, err = historicalNativePrintArguments(request)
+func existingNativePreparationOptions(request task.TaskRecord, meta task.MetaRecord) (nativePreparationOptions, error) {
+	approval := meta.EffectiveConfig.Approval
+	if approval == "" {
+		approval = meta.Approval
 	}
+	if approval == "" && !meta.Predicate.Equal(task.PredicateRef{}) {
+		approval = nativePermissionForReference(request.Mode, meta.Predicate)
+		if approval == "" {
+			return nativePreparationOptions{}, fmt.Errorf("%w: unknown stored Claude native predicate", ErrUnsupportedProfile)
+		}
+	}
+	return nativePreparationOptions{permissionMode: approval, predicateReference: meta.Predicate}, nil
+}
+
+func nativePermissionForReference(mode string, reference task.PredicateRef) string {
+	if reference.Equal(ReferenceForMode(mode)) {
+		return nativeDefaultPermission(mode)
+	}
+	if reference.Equal(legacyNativeReferenceForMode(mode)) {
+		return nativeHistoricalPermission(mode)
+	}
+	return ""
+}
+
+func normalizeNativePreparationOptions(request task.TaskRecord, options nativePreparationOptions) (nativePreparationOptions, error) {
+	if options.permissionMode == "" {
+		options.permissionMode = nativeDefaultPermission(request.Mode)
+	}
+	if !nativePermissionAllowed(request.Mode, options.permissionMode) {
+		return nativePreparationOptions{}, fmt.Errorf("%w: unsupported stored Claude native permission mode %q", ErrUnsupportedProfile, options.permissionMode)
+	}
+	expected := ReferenceForMode(request.Mode)
+	if options.permissionMode == nativeHistoricalPermission(request.Mode) {
+		expected = legacyNativeReferenceForMode(request.Mode)
+	}
+	if options.predicateReference.Equal(task.PredicateRef{}) {
+		options.predicateReference = expected
+	} else if !options.predicateReference.Equal(expected) {
+		return nativePreparationOptions{}, fmt.Errorf("%w: stored Claude native predicate does not match permission mode", ErrUnsupportedProfile)
+	}
+	return options, nil
+}
+
+func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnvironment, recordedRoots []string, options nativePreparationOptions) (commonprovider.ProfileCandidate, error) {
+	options, err := normalizeNativePreparationOptions(request, options)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	arguments, inputs, err := printArgumentsWithPermission(request, options.permissionMode)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -46,7 +98,7 @@ func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnviron
 		environmentValues = recordedEnvironment
 	}
 	prepareEnvironmentFn := prepareNativeEnvironment
-	if historicalReadOnly || recordedEnvironment != nil {
+	if options.permissionMode == nativeHistoricalPermission(request.Mode) || recordedEnvironment != nil {
 		prepareEnvironmentFn = prepareHistoricalNativeEnvironment
 	}
 	environment, err := prepareEnvironmentFn(environmentValues)
@@ -75,7 +127,7 @@ func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnviron
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
 		Finalize: func(data json.RawMessage, now time.Time) (commonprovider.PreparedProfile, error) {
-			return finalizeNativePreparedProfileWithContract(request, arguments, inputs, cli, environment, definitionDigest, data, now, historicalReadOnly)
+			return finalizeNativePreparedProfileWithContract(request, arguments, inputs, cli, environment, definitionDigest, data, now, options)
 		},
 	}, nil
 }
@@ -245,7 +297,7 @@ func finalizeNativePreparedProfile(
 	data json.RawMessage,
 	now time.Time,
 ) (commonprovider.PreparedProfile, error) {
-	return finalizeNativePreparedProfileWithContract(request, arguments, inputs, cli, environment, definitionDigest, data, now, false)
+	return finalizeNativePreparedProfileWithContract(request, arguments, inputs, cli, environment, definitionDigest, data, now, nativePreparationOptions{})
 }
 
 func finalizeNativePreparedProfileWithContract(
@@ -257,31 +309,25 @@ func finalizeNativePreparedProfileWithContract(
 	definitionDigest string,
 	data json.RawMessage,
 	_ time.Time,
-	historicalReadOnly bool,
+	options nativePreparationOptions,
 ) (commonprovider.PreparedProfile, error) {
 	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
 	if decodeErr != nil || task.ValidateSHA256(definitionDigest) != nil || facts.Runtime == nil || facts.Native != nil || facts.Runtime.Executable != cli.Path || facts.Runtime.SHA256 != cli.SHA256 {
 		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
 	}
+	options, err := normalizeNativePreparationOptions(request, options)
+	if err != nil {
+		return commonprovider.PreparedProfile{}, err
+	}
 	runtime := *facts.Runtime
-	approval := "plan"
-	predicateReference := ReferenceForMode(request.Mode)
-	if historicalReadOnly {
-		approval = "dontAsk"
-		predicateReference = legacyNativeReferenceForMode(request.Mode)
-	}
-	if request.Mode == WorkspaceWriteMode {
-		approval = "acceptEdits"
-		predicateReference = WorkspaceWriteReference()
-	}
-	effective, err := commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, runtime.SHA256, approval)
+	effective, err := commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, runtime.SHA256, options.permissionMode)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
 			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
-			Environment: slices.Clone(environment.Values), Predicate: predicateReference, InputFiles: slices.Clone(inputs),
+			Environment: slices.Clone(environment.Values), Predicate: options.predicateReference, InputFiles: slices.Clone(inputs),
 		},
 		ObservedVersion: runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
 		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {

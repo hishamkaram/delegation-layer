@@ -20,6 +20,8 @@ import (
 
 const ProfileRevision = "agy-workspace-write-v1"
 
+const unattendedApproval = "always-proceed"
+
 // PrepareCandidate resolves only static task inputs and describes the
 // supervised runtime capability probe. The core owns every provider process;
 // the finalizer receives only the resulting nonsecret runtime facts.
@@ -33,19 +35,23 @@ func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (co
 	if !native {
 		return prepareCandidate(request, false)
 	}
+	approval := meta.EffectiveConfig.Approval
+	if approval != "accept-edits" && approval != unattendedApproval {
+		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: unknown recorded native approval", ErrUnsupportedProfile)
+	}
 	var recordedRoots []string
 	if meta.EffectiveConfig.Policy != nil {
 		recordedRoots = meta.EffectiveConfig.Policy.WritableRoots
 	}
-	return prepareCandidateWithEnvironment(request, true, meta.Environment, recordedRoots)
+	return prepareCandidateWithEnvironment(request, true, approval, meta.Environment, recordedRoots)
 }
 
 func prepareCandidate(request task.TaskRecord, native bool) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidateWithEnvironment(request, native, nil, nil)
+	return prepareCandidateWithEnvironment(request, native, unattendedApproval, nil, nil)
 }
 
-func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, recordedEnvironment, recordedRoots []string) (commonprovider.ProfileCandidate, error) {
-	arguments, err := candidateArguments(request, native)
+func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, approval string, recordedEnvironment, recordedRoots []string) (commonprovider.ProfileCandidate, error) {
+	arguments, err := candidateArguments(request, native, approval)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -62,7 +68,7 @@ func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, recor
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}
-	requirements := candidateRuntimeRequirements(native)
+	requirements := candidateRuntimeRequirements(native, approval)
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(located, request.CanonicalCwd, environment.Values, requirements)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
@@ -84,7 +90,7 @@ func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, recor
 			if finalErr != nil {
 				return commonprovider.PreparedProfile{}, finalErr
 			}
-			effective, finalErr := candidateEffectiveConfig(request, environment, identity, inventory, native)
+			effective, finalErr := candidateEffectiveConfig(request, environment, identity, inventory, native, approval)
 			if finalErr != nil {
 				return commonprovider.PreparedProfile{}, finalErr
 			}
@@ -103,13 +109,16 @@ func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, recor
 	}, nil
 }
 
-func candidateArguments(request task.TaskRecord, native bool) ([]string, error) {
+func candidateArguments(request task.TaskRecord, native bool, approval string) ([]string, error) {
 	arguments, err := printArguments(request)
 	if err != nil {
 		return nil, err
 	}
 	if native {
 		arguments = slices.DeleteFunc(arguments, func(argument string) bool { return argument == "--disable-slash-commands" })
+		if approval == unattendedApproval {
+			arguments = append(arguments, "--dangerously-skip-permissions")
+		}
 	}
 	return arguments, nil
 }
@@ -128,8 +137,11 @@ func recordedWritableRoots(current, recorded []string) []string {
 	return current
 }
 
-func candidateRuntimeRequirements(native bool) commonprovider.RuntimeCapability {
+func candidateRuntimeRequirements(native bool, approval string) commonprovider.RuntimeCapability {
 	requirements := RuntimeRequirements()
+	if !native || approval != unattendedApproval {
+		requirements.RequiredFlags = slices.DeleteFunc(requirements.RequiredFlags, func(flag string) bool { return flag == "--dangerously-skip-permissions" })
+	}
 	if !native {
 		requirements.RequiredFlags = slices.Insert(requirements.RequiredFlags, 5, "--disable-slash-commands")
 	}
@@ -280,9 +292,9 @@ func validateWorkspaceTrust(trusted []string, workspace string) error {
 	return projectPolicyError("workspace has no matching configured trust root")
 }
 
-func candidateEffectiveConfig(request task.TaskRecord, environment profileEnvironment, identity runtimeIdentity, inventory PolicyInventory, native bool) (task.EffectiveConfig, error) {
+func candidateEffectiveConfig(request task.TaskRecord, environment profileEnvironment, identity runtimeIdentity, inventory PolicyInventory, native bool, approval string) (task.EffectiveConfig, error) {
 	if native {
-		return commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, identity.SHA256, "accept-edits")
+		return commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, identity.SHA256, approval)
 	}
 	return resolveEffectivePolicy(identity, environment, inventory)
 }

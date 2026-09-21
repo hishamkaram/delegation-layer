@@ -53,7 +53,7 @@ paths must remain disjoint.
 | `--brief FILE` | Finite task brief, no larger than 8 MiB. |
 | `--cwd ABS` | Canonical workspace directory. |
 | `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID. Omit to allocate one. |
-| `--permission MODE` | `read-only` (default) or `workspace-write`. |
+| `--permission MODE` | `read-only` (default) or authorized unattended `workspace-write`, including commands and edits. Native access can extend beyond the workspace. |
 | `--budget DURATION` | Positive Go duration; default `30m`. Queue time is excluded. |
 | `--model MODEL` | Model selector when the chosen profile advertises `model` (currently Pi and OpenCode). |
 | `--effort EFFORT` | Provider effort/variant selector when the chosen profile advertises it (Pi maps this to `--thinking`; OpenCode maps it to `--variant`). `default` keeps the provider default. |

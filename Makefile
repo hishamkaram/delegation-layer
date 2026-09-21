@@ -101,27 +101,24 @@ supervisor-fixtures: tool-versions
 acceptance-supervisor: supervisor-fixtures
 	./scripts/acceptance-supervisor.sh
 
-acceptance-agy: build supervisor-fixtures test-native-harness
-	go test -race -count=1 ./internal/provider/antigravity ./internal/task ./internal/taskdir
-	./scripts/acceptance_agy.sh
+acceptance-agy: build test-native-harness
+	./scripts/acceptance_native.sh antigravity:print
 
 codex-acceptance-tools: tool-versions
 	@mkdir -p bin/codex-acceptance
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/codex-acceptance/delegate ./internal/testutil/codexacceptance/cmd/delegate
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/codex-acceptance/delegate-run ./internal/testutil/codexacceptance/cmd/delegate-run
 
-acceptance-codex: build test-native-harness codex-acceptance-tools
-	go test -race -count=1 ./internal/provider/codex
-	./scripts/acceptance_codex.sh
+acceptance-codex: build test-native-harness
+	./scripts/acceptance_native.sh codex:exec
 
 claude-acceptance-tools: tool-versions
 	@mkdir -p bin/claude-acceptance
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/claude-acceptance/delegate ./internal/testutil/claudeacceptance/cmd/delegate
 	CGO_ENABLED=0 go build -buildvcs=false -o bin/claude-acceptance/delegate-run ./internal/testutil/claudeacceptance/cmd/delegate-run
 
-acceptance-claude: build test-native-harness claude-acceptance-tools
-	go test -race -count=1 ./internal/provider/claude
-	./scripts/acceptance_claude.sh
+acceptance-claude: build test-native-harness
+	./scripts/acceptance_native.sh claude:print
 
 acceptance-pi: build test-native-harness
 	./scripts/acceptance_native.sh pi:json

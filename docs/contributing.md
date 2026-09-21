@@ -75,12 +75,16 @@ claims. The package version must stay aligned with the release tag used by the
 release workflow.
 
 When native provider credentials are available, run the relevant live gate with
-a disposable workspace. Pi and OpenCode are covered by `make acceptance-pi`,
-`make acceptance-opencode`, or the aggregate `make acceptance-native`. A live
+a disposable workspace. `make acceptance-native` covers each supported mode
+across all five providers, including positive unattended writes, continuation,
+and replay. `make acceptance-agy`, `make acceptance-codex`,
+`make acceptance-claude`, `make acceptance-pi`, and `make acceptance-opencode`
+select individual profiles. A live
 gate returns `0` for a pass, `1` for a real behavior or evidence failure, and
 `2` for a sanitized `BLOCKED` prerequisite receipt. The aggregate target keeps
 blocked profiles neutral so an unavailable login does not block unrelated
-development.
+development. Report its status and counts alongside the exit code; an aggregate
+`BLOCKED` result is not authenticated live proof.
 
 ## Documentation changes
 

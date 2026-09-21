@@ -117,7 +117,9 @@ advanced integrations. Node.js 18 or newer is needed only for the npm-based
 installers; it is not a runtime requirement for the released Go CLI. Provider
 authentication remains native to each provider. Your provider settings, MCP
 servers, plugins, and skills stay with that provider. Permission modes select
-native behavior; Delegation Layer is not an independent sandbox.
+native behavior; Delegation Layer is not an independent sandbox. Authorized
+`workspace-write` tasks run unattended using native approval behavior, including
+Pi file edits and shell commands. Native access can extend beyond the workspace.
 
 ## Try one bounded task
 
@@ -140,8 +142,8 @@ The response contains a task ID and separate admission, liveness, and
 publication fields. Observe and collect it with:
 
 ```sh
-delegate status TASK_ID --json
-delegate collect TASK_ID --watch 5s --json
+delegate --root "$HOME/delegation-state" status TASK_ID --json
+delegate --root "$HOME/delegation-state" collect TASK_ID --watch 5s --json
 ```
 
 Use `delegate providers --json` for the compiled provider catalog and

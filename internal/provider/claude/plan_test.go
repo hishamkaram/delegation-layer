@@ -70,7 +70,10 @@ func TestFinalizeHistoricalNativePreparedProfilePreservesRecordedContract(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := finalizeNativePreparedProfileWithContract(request, arguments, inputs, cli, environment, strings.Repeat("b", 64), json.RawMessage(facts), time.Unix(2_000_000_000, 0), true)
+	prepared, err := finalizeNativePreparedProfileWithContract(request, arguments, inputs, cli, environment, strings.Repeat("b", 64), json.RawMessage(facts), time.Unix(2_000_000_000, 0), nativePreparationOptions{
+		permissionMode:     "dontAsk",
+		predicateReference: legacyNativeReferenceForMode(Mode),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +134,97 @@ func TestExistingNativeReadOnlyReconstructsRecordedLaunchContract(t *testing.T) 
 	}
 	if profile.Effective.Approval != "dontAsk" || !profile.Plan.Predicate.Equal(legacyNativeReferenceForMode(Mode)) {
 		t.Fatalf("recorded native contract changed: %+v", profile)
+	}
+}
+
+func TestFinalizeNativeWorkspaceWriteUsesBypassPermissions(t *testing.T) {
+	request := profileRequest()
+	request.Mode = WorkspaceWriteMode
+	request.RequestedConfig.Permission = WorkspaceWriteMode
+	arguments, inputs, err := printArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(arguments, "bypassPermissions") || slices.Contains(arguments, "acceptEdits") {
+		t.Fatalf("workspace-write native argv=%q", arguments)
+	}
+	cli := commonprovider.CLIInfo{Path: "/usr/local/bin/claude", SHA256: strings.Repeat("a", 64)}
+	environment := profileEnvironment{RuntimeSHA256: cli.SHA256, WritableRoots: []string{"/home/test/.claude"}}
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
+		Executable: cli.Path, Version: "Claude Code 99.7.3", SHA256: cli.SHA256,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := finalizeNativePreparedProfile(request, arguments, inputs, cli, environment, strings.Repeat("b", 64), json.RawMessage(facts), time.Unix(2_000_000_000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Effective.Approval != "bypassPermissions" || !prepared.Plan.Predicate.Equal(WorkspaceWriteReference()) {
+		t.Fatalf("workspace-write native contract=%+v", prepared)
+	}
+}
+
+func TestExistingNativeWorkspaceWriteReconstructsAcceptEditsContract(t *testing.T) {
+	home := t.TempDir()
+	binDir := t.TempDir()
+	claude := filepath.Join(binDir, "claude")
+	if err := os.WriteFile(claude, []byte("fixture executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cli, err := commonprovider.LocateCLIPath(claude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", binDir)
+	request := profileRequest()
+	request.Mode = WorkspaceWriteMode
+	request.CanonicalCwd = filepath.Join(home, "workspace")
+	request.RequestedConfig.Permission = WorkspaceWriteMode
+	wantPredicate := legacyNativeReferenceForMode(WorkspaceWriteMode)
+	meta := task.MetaRecord{
+		Environment: []string{"HOME=" + home, "PATH=" + binDir, "XDG_CONFIG_HOME=relative"},
+		Approval:    "acceptEdits",
+		Predicate:   wantPredicate,
+		EffectiveConfig: task.EffectiveConfig{
+			Approval: "acceptEdits",
+			Policy: &task.PolicyDetails{
+				ProfileRevision: commonprovider.NativeProfileRevision,
+				WritableRoots:   []string{"/tmp", filepath.Join(home, ".claude")},
+			},
+		},
+	}
+	candidate, err := PrepareExistingCandidate(request, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(candidate.Inspection.Environment, "XDG_CONFIG_HOME=relative") {
+		t.Fatalf("historical environment was not retained: %q", candidate.Inspection.Environment)
+	}
+	if !slices.Equal(candidate.WritableRoots, meta.EffectiveConfig.Policy.WritableRoots) {
+		t.Fatalf("recorded roots changed: got=%q want=%q", candidate.WritableRoots, meta.EffectiveConfig.Policy.WritableRoots)
+	}
+	if !slices.Contains(candidate.Inspection.Environment, "HOME="+home) {
+		t.Fatalf("recorded HOME was not used: %q", candidate.Inspection.Environment)
+	}
+	args := candidate.Inspection.Runtime
+	if args == nil || !slices.Contains(args.RequiredFlags, "--permission-mode") {
+		t.Fatalf("runtime inspection omitted permission flag: %+v", candidate.Inspection)
+	}
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: cli.Path, SHA256: cli.SHA256, Version: "Claude Code 2.1.270"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := candidate.Finalize(facts, time.Unix(2_000_000_000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Effective.Approval != "acceptEdits" || !profile.Plan.Predicate.Equal(wantPredicate) {
+		t.Fatalf("recorded workspace-write contract changed: %+v", profile)
+	}
+	if !slices.Contains(profile.Plan.Arguments, "acceptEdits") || slices.Contains(profile.Plan.Arguments, "bypassPermissions") {
+		t.Fatalf("historical workspace-write argv changed: %q", profile.Plan.Arguments)
 	}
 }
 
@@ -222,7 +316,7 @@ func TestPrintArgumentsUseNativeWorkspaceWritePermission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(args, "acceptEdits") || slices.Contains(args, "--safe-mode") || slices.Contains(args, "--restricted") {
+	if !slices.Contains(args, "bypassPermissions") || slices.Contains(args, "acceptEdits") || slices.Contains(args, "--safe-mode") || slices.Contains(args, "--restricted") {
 		t.Fatalf("workspace-write argv=%q", args)
 	}
 	if len(inputs) != 0 {

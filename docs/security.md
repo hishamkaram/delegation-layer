@@ -37,7 +37,12 @@ Provider CLIs load and enforce their own settings, MCP servers, hooks, plugins,
 and skills. New tasks do not inventory these sources or disable them. Permission
 flags request native behavior; custom tools and extensions remain governed by
 the provider. Delegation Layer does not independently contain their effects.
-Previously admitted tasks retain their recorded preparation contract.
+Workspace-write requests unattended native execution. Antigravity uses native
+automatic approval, Claude uses permission bypass, Pi uses native configured
+tools, and OpenCode uses its automatic build mode. These modes can permit
+access beyond the selected workspace; configured native restrictions still
+belong to each provider. Previously admitted tasks retain their recorded
+preparation contract.
 
 ## Process and output safety
 

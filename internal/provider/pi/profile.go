@@ -16,7 +16,7 @@ import (
 // shared supervised runtime capability probe. The finalizer consumes only the
 // nonsecret facts produced by that probe.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, true)
+	return prepareCandidate(request, true, task.PredicateRef{})
 }
 
 // PrepareExistingCandidate retains the launch and policy contract recorded by
@@ -24,10 +24,10 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 // records continue through the legacy isolated preparation path.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
 	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
-	return prepareCandidate(request, native)
+	return prepareCandidate(request, native, meta.Predicate)
 }
 
-func prepareCandidate(request task.TaskRecord, native bool) (commonprovider.ProfileCandidate, error) {
+func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task.PredicateRef) (commonprovider.ProfileCandidate, error) {
 	arguments, err := profileArguments(request, native)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -58,7 +58,7 @@ func prepareCandidate(request task.TaskRecord, native bool) (commonprovider.Prof
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
 		Finalize: func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
-			return finalizePreparedCandidate(request, native, arguments, environment, cli, legacyEffective, data)
+			return finalizePreparedCandidate(request, native, arguments, environment, cli, legacyEffective, profilePredicateReference(native, request.Mode, storedPredicate), data)
 		},
 	}, nil
 }
@@ -98,7 +98,7 @@ func profileRuntimeRequirements(native bool) commonprovider.RuntimeCapability {
 	return legacyRuntimeRequirements()
 }
 
-func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments []string, environment profileEnvironment, cli commonprovider.CLIInfo, legacyEffective task.EffectiveConfig, data json.RawMessage) (commonprovider.PreparedProfile, error) {
+func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments []string, environment profileEnvironment, cli commonprovider.CLIInfo, legacyEffective task.EffectiveConfig, predicateReference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
 	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
 	if decodeErr != nil || facts.Runtime == nil || facts.Native != nil {
 		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
@@ -114,7 +114,7 @@ func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments [
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
 			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
-			Environment: slices.Clone(environment.Values), Predicate: profilePredicateReference(native, request.Mode),
+			Environment: slices.Clone(environment.Values), Predicate: predicateReference,
 		},
 		ObservedVersion: runtime.Version,
 		Effective:       task.CloneEffectiveConfig(effective),
@@ -131,14 +131,32 @@ func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments [
 
 func finalizedEffectiveConfig(request task.TaskRecord, native bool, environment profileEnvironment, legacyEffective task.EffectiveConfig, runtimeSHA256 string) (task.EffectiveConfig, error) {
 	if native {
-		return commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, runtimeSHA256, "read-only")
+		approval, err := nativeApproval(request.Mode)
+		if err != nil {
+			return task.EffectiveConfig{}, err
+		}
+		return commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, runtimeSHA256, approval)
 	}
 	return legacyEffective, nil
 }
 
-func profilePredicateReference(native bool, mode string) task.PredicateRef {
-	if native {
-		return ReferenceForMode(mode)
+func nativeApproval(mode string) (string, error) {
+	switch mode {
+	case ModeReadOnly:
+		return "read-only", nil
+	case ModeWorkspaceWrite:
+		return "provider-native", nil
+	default:
+		return "", fmt.Errorf("%w: unsupported Pi native permission mode", ErrUnsupportedProfile)
 	}
-	return LegacyReference()
+}
+
+func profilePredicateReference(native bool, mode string, stored task.PredicateRef) task.PredicateRef {
+	if !native {
+		return LegacyReference()
+	}
+	if mode == ModeReadOnly && stored.Equal(readOnlyV2Reference()) {
+		return stored
+	}
+	return ReferenceForMode(mode)
 }

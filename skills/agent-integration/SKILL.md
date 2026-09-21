@@ -16,7 +16,7 @@ inspect, authenticate, or install a provider CLI directly.
 2. Use `dispatch --auto` unless the user explicitly selected a provider ID.
    Provider selection, executable checks, compatibility checks, authentication
    gates, and supervisor admission belong inside Delegation Layer.
-3. Give every turn an absolute workspace, a separate state root, a finite
+3. Give every turn an absolute workspace, a separate state root, an explicit
    permission mode, and a finite budget.
 4. Use `--json` and save the returned `task_id`. Read `admission`, `liveness`,
    `publication`, `status`, `outcome`, `continuation`, and `error` as separate
@@ -46,8 +46,9 @@ Run a quick local check:
 command -v delegate && delegate --version
 ```
 
-If this fails, tell the caller that Delegation Layer is not installed and
-stop. Do not substitute a provider command.
+If discovery fails, report that Delegation Layer is missing. If the version
+command fails, report that the installed CLI is unusable. Stop in either case.
+Do not substitute a provider command.
 
 ### 2. Discover only when useful
 
@@ -63,11 +64,14 @@ ready. If the caller named one provider ID and wants a side-effect-free check,
 run:
 
 ```sh
-delegate preflight --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
+delegate preflight --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE \
+  --permission REQUESTED_MODE --json
 ```
 
-Preflight reports static admission only. It does not create a task, start the
-supervisor, or launch a provider. Do not keep retrying preflight when it says
+Replace `REQUESTED_MODE` with `read-only` for investigation or
+`workspace-write` for authorized edits. Preflight reports static admission only.
+It does not create a task, start the supervisor, or launch a provider. Do not keep
+retrying preflight when it says
 `blocked` or `unsupported`; report the bounded reason.
 
 ### 3. Prepare separate paths and a finite brief
@@ -77,7 +81,7 @@ brief file that contains the requested work and its acceptance criteria. Keep
 the state root outside the workspace:
 
 ```sh
-STATE_ROOT="${DELEGATE_ROOT:-$HOME/.local/state/delegation-layer}"
+STATE_ROOT="${DELEGATE_ROOT:-$HOME/delegation-state}"
 WORKSPACE="$PWD"
 BRIEF="$(mktemp)"
 cat >"$BRIEF" <<'EOF'
@@ -87,11 +91,17 @@ EOF
 ```
 
 Replace the example brief with the actual user request. Do not place the state
-root inside the workspace or place secrets in either path’s task data.
+root inside the workspace or place secrets in either path’s task data. Keep it
+outside provider configuration and runtime directories as well. If delegate
+rejects placement before admission, choose a separate state directory; do not
+change provider settings. Once admitted, retain that state root for every
+observation and continuation.
 
 ### 4. Dispatch one bounded turn
 
-Use automatic selection unless the user explicitly supplied `PROVIDER_ID`:
+Use automatic selection unless the user explicitly supplied `PROVIDER_ID`.
+For a named provider, replace `--auto` with `--provider PROVIDER_ID`; never
+combine the two:
 
 ```sh
 delegate --root "$STATE_ROOT" dispatch --auto \
@@ -102,8 +112,11 @@ delegate --root "$STATE_ROOT" dispatch --auto \
   --json
 ```
 
-For an authorized code change, use `--permission workspace-write`. Keep the
-budget finite. A successful dispatch means the request was durably admitted;
+For an authorized code change, use `--permission workspace-write`; this requests
+unattended native tool execution, including shell commands and file edits.
+The provider may allow access beyond the selected workspace. Delegate supplies
+the native approval options; do not add provider flags or call its CLI yourself.
+Keep the budget finite. A successful dispatch means the request was durably admitted;
 it does not mean the delegated work finished.
 
 Save the exact `task_id` from the JSON response. If dispatch returns an error,
@@ -121,8 +134,10 @@ delegate --root "$STATE_ROOT" status TASK_ID --json
 delegate --root "$STATE_ROOT" collect TASK_ID --watch 5s --json
 ```
 
-If `collect` exits with code `3` because publication is still pending, wait a
-short interval and run `collect` again. Do not dispatch again. Continue until
+Check `status` first: if it is `timed_out`, follow step 6 even when publication
+is pending and no outcome is present. Otherwise, if `collect` exits with code
+`3` because publication is still pending, wait a short interval and run
+`collect` again. Do not dispatch again. Continue until
 the response has a terminal `outcome` or a bounded operational error that
 requires the caller’s attention.
 
@@ -160,8 +175,10 @@ delegate --root "$STATE_ROOT" continue \
   --json
 ```
 
-The command preserves the exact provider session and creates a new task ID.
-Observe and collect the successor by repeating step 5. If `resumable` is
+The command preserves the exact provider session and permission mode and
+creates a new task ID. Do not add `--permission` to `continue`. Always include
+the original `--root`, even if a returned command hint omits it. Observe and
+collect the successor by repeating step 5. If `resumable` is
 false, report the reason and stop; a fresh dispatch would lose the original
 conversation and is not an equivalent recovery.
 
@@ -180,7 +197,8 @@ The adapter’s required flags and runtime behavior decide compatibility.
 
 Authentication is a separate live gate. `live_acceptance.status` values are
 `not_run`, `passed`, or `blocked`; a blocked authentication prerequisite is
-neutral evidence and must not be relabeled.
+neutral evidence and must not be relabeled. Report the missing authentication
+prerequisite and stop that attempt; do not retry or authenticate the provider.
 
 The task response separates:
 

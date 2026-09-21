@@ -43,9 +43,8 @@ failure.
 
 Compare the request with the catalog entry. `antigravity:print` supports
 `workspace-write`, `continuation`, and `native-timeout`; `codex:exec`,
-`claude:print` and `opencode:run` support both permission modes; `pi:json`
-supports read-only mode. Every provider supports continuation; Pi and OpenCode
-also expose their documented model and effort options. Pi maps effort to its
+`claude:print`, `pi:json`, and `opencode:run` support both permission modes.
+Every provider supports continuation; Pi and OpenCode also expose their documented model and effort options. Pi maps effort to its
 native `--thinking` flag, while OpenCode maps it to `--variant`. Unsupported
 model, effort, policy, or timeout combinations are rejected before supervisor
 admission.
@@ -96,3 +95,22 @@ If the response contains a valid outcome alongside an operational error, keep
 the outcome: it is independently committed. Re-run `collect` or `logs` to
 retry descriptor validation and reservation cleanup. Preserve the state root
 for inspection when the error remains unresolved.
+
+## A provider denied a command in a write task
+
+Current workspace-write tasks request unattended native approval. Check the
+installed delegate version and the task's recorded effective approval before
+attributing a denial to provider settings. Tasks admitted before an upgrade
+retain their original launch contract. Native managed policy, tool settings,
+and provider failures can still prevent execution; report the sealed evidence
+without deleting settings or switching to a direct provider command.
+
+If the provider reports that its selected model has no tool-capable endpoint,
+that is a model/backend failure, not a delegate permission denial. For adapters
+that advertise `model`, an authorized model selection can be passed through
+the `dispatch --model` option on a new request without editing global provider
+settings.
+
+A runner that reports that its supervisor task ended before provider start is
+a separate lifecycle failure. Preserve that task's evidence and supervisor
+binding; an admitted task must not be silently dispatched again.

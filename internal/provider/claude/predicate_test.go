@@ -38,6 +38,20 @@ func TestReferenceBindsImmutableContract(t *testing.T) {
 	}
 }
 
+func TestWorkspaceWriteReferenceRevisionsPreserveAcceptEditsContract(t *testing.T) {
+	current := WorkspaceWriteReference()
+	historical := legacyNativeReferenceForMode(WorkspaceWriteMode)
+	if current.Equal(historical) || current.Version != workspaceWritePredicateVersion || historical.Version != predicateVersion {
+		t.Fatalf("workspace-write references were not versioned: current=%+v historical=%+v", current, historical)
+	}
+	if !strings.Contains(WorkspaceWriteContract(), "permissionMode=bypassPermissions") || !strings.Contains(nativeWorkspaceWriteContractV1, "permissionMode=acceptEdits") {
+		t.Fatal("workspace-write predicate revisions do not retain their native permission modes")
+	}
+	if historical.SHA256 != task.ComputeSHA256([]byte(nativeWorkspaceWriteContractV1)) {
+		t.Fatal("historical acceptEdits reference changed its contract bytes")
+	}
+}
+
 func TestSuccessSelectsOnlyTopLevelResultAndPreservesAnswerBytes(t *testing.T) {
 	sessionID, err := FreshSessionID(claudeTestRootID, claudeTestTaskID)
 	if err != nil {
@@ -200,6 +214,68 @@ func TestWorkspaceWriteInterpreterAcceptsNativeWriteProfile(t *testing.T) {
 	interp, err := NewWorkspaceWriteInterpreter().Evaluate(input, &claudeTestEvidence{stdout: stdout}, &answer)
 	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "edited" {
 		t.Fatalf("workspace-write interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestHistoricalNativeWorkspaceWriteInterpreterAcceptsRecordedAcceptEdits(t *testing.T) {
+	stdout := jsonl(legacyWriteInitLine(claudeTestUUID), resultLine(claudeTestUUID, "edited"))
+	var answer bytes.Buffer
+	seal := claudeTestSealForPredicate(stdout, legacyNativeReferenceForMode(WorkspaceWriteMode))
+	input := predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}
+	interp, err := newLegacyNativeWorkspaceWriteInterpreter().Evaluate(input, &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "edited" {
+		t.Fatalf("historical workspace-write interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestLegacyPortableWorkspaceWriteInterpreterAcceptsRecordedAcceptEdits(t *testing.T) {
+	stdout := jsonl(legacyWriteInitLine(claudeTestUUID), resultLine(claudeTestUUID, "edited"))
+	var answer bytes.Buffer
+	seal := claudeTestSealForPredicate(stdout, legacyPortableReferenceForMode(WorkspaceWriteMode))
+	input := predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}
+	interp, err := newLegacyPortableInterpreter(WorkspaceWriteMode).Evaluate(input, &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "edited" {
+		t.Fatalf("historical portable workspace-write interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestLegacyPortableWorkspaceWriteInterpreterRejectsNewBypassPermissions(t *testing.T) {
+	stdout := jsonl(writeInitLine(claudeTestUUID), resultLine(claudeTestUUID, "edited"))
+	seal := claudeTestSealForPredicate(stdout, legacyPortableReferenceForMode(WorkspaceWriteMode))
+	interp, err := newLegacyPortableInterpreter(WorkspaceWriteMode).Evaluate(predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}, &claudeTestEvidence{stdout: stdout}, &bytes.Buffer{})
+	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalMalformed {
+		t.Fatalf("new native workspace-write permission was accepted by legacy portable interpreter=%+v err=%v", interp, err)
+	}
+}
+
+func TestWorkspaceWriteInterpretersRejectMismatchedNativePermissionModes(t *testing.T) {
+	tests := []struct {
+		name        string
+		interpreter predicate.Interpreter
+		reference   task.PredicateRef
+		stdout      []byte
+	}{
+		{
+			name:        "current interpreter accepts only bypassPermissions",
+			interpreter: NewWorkspaceWriteInterpreter(),
+			reference:   WorkspaceWriteReference(),
+			stdout:      jsonl(legacyWriteInitLine(claudeTestUUID), resultLine(claudeTestUUID, "edited")),
+		},
+		{
+			name:        "historical interpreter accepts only acceptEdits",
+			interpreter: newLegacyNativeWorkspaceWriteInterpreter(),
+			reference:   legacyNativeReferenceForMode(WorkspaceWriteMode),
+			stdout:      jsonl(writeInitLine(claudeTestUUID), resultLine(claudeTestUUID, "edited")),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			seal := claudeTestSealForPredicate(test.stdout, test.reference)
+			interp, err := test.interpreter.Evaluate(predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}, &claudeTestEvidence{stdout: test.stdout}, &bytes.Buffer{})
+			if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalMalformed {
+				t.Fatalf("mismatched permission interpretation=%+v err=%v", interp, err)
+			}
+		})
 	}
 }
 

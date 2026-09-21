@@ -41,7 +41,7 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
    directly, pass the brief in argv, mutate global config, or use direct
    signals.
 3. Inspect filesystem and sealed evidence directly. Exercise the profile's
-   positive behavior and out-of-bounds denial, then exact session continuation
+   positive behavior and any advertised native access boundary, then exact session continuation
    and observational replay. Preserve predecessor records byte-for-byte.
 4. Apply the plan's result predicates. A missing prerequisite or inconclusive
    control is `BLOCKED`, never pass. A rejected task is evaluated from its
@@ -50,10 +50,11 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 5. Save only sanitized receipts and report the exact command, status, identities,
    observations, and artifact digests. Do not retry paid work automatically.
 
-For the existing agy native gate, use `make acceptance-agy` and retain its
-three-turn cases. Its containment-denial case is valid when the positive
-filesystem control is verified and the write is explicitly denied; it does not
-require a successful published first turn.
+Use `make acceptance-native` for the shared native mode matrix. Unattended write
+scenarios must prove file creation, editing, shell execution, exact continuation,
+and observational replay. Do not require outside-workspace denial from a mode
+that delegates its access policy to the provider. Keep historical denial
+fixtures as tests of their original contracts.
 
 ## Deliverables
 
