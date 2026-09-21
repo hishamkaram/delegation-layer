@@ -269,6 +269,52 @@ func TestPiInterpreterAcceptsNativeRetryAtSealedEOF(t *testing.T) {
 	}
 }
 
+func TestPiInterpreterAcceptsRetryEndAfterCompleteCycle(t *testing.T) {
+	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+		t.Run(mode, func(t *testing.T) {
+			stdout := append(piNativeRetryStream(testUUID, "completed retry", false), []byte("\n{\"type\":\"auto_retry_end\",\"success\":true}")...)
+			var out bytes.Buffer
+			result, err := NewInterpreter(mode).Evaluate(
+				predicate.Input{Seal: validSeal(ReferenceForMode(mode), stdout, nil)}, evidence{stdout: stdout}, &out,
+			)
+			if err != nil || result.Verdict != task.VerdictCommitted || out.String() != "completed retry" {
+				t.Fatalf("result=%+v err=%v output=%q", result, err, out.String())
+			}
+		})
+	}
+}
+
+func TestPiInterpreterRejectsConflictingFailedCycleBeforeRetry(t *testing.T) {
+	for _, reason := range []string{"error", "length", "aborted"} {
+		for _, field := range []string{"text", "stop reason"} {
+			t.Run(reason+"/"+field, func(t *testing.T) {
+				first := strings.ReplaceAll(string(piStream(testUUID, "partial", true)), `"stopReason":"stop"`, fmt.Sprintf(`"stopReason":%q`, reason))
+				lines := strings.Split(first, "\n")
+				last := len(lines) - 1
+				if field == "text" {
+					lines[last] = strings.Replace(lines[last], `"text":"partial"`, `"text":"conflicting"`, 1)
+				} else {
+					other := "error"
+					if reason == other {
+						other = "length"
+					}
+					lines[last] = strings.Replace(lines[last], fmt.Sprintf(`"stopReason":%q`, reason), fmt.Sprintf(`"stopReason":%q`, other), 1)
+				}
+				lines = append(lines, `{"type":"auto_retry_start"}`)
+				lines = append(lines, strings.Split(string(piStream(testUUID, "recovered", true)), "\n")[1:]...)
+				stdout := []byte(strings.Join(lines, "\n"))
+				var out bytes.Buffer
+				result, err := NewInterpreter(ModeWorkspaceWrite).Evaluate(
+					predicate.Input{Seal: validSeal(ReferenceForMode(ModeWorkspaceWrite), stdout, nil)}, evidence{stdout: stdout}, &out,
+				)
+				if err != nil || result.Verdict != task.VerdictRejected || result.Refusal != refusalMalformed || out.Len() != 0 {
+					t.Fatalf("result=%+v err=%v output=%q", result, err, out.String())
+				}
+			})
+		}
+	}
+}
+
 func TestPiInterpreterRequiresAgentSettledToBeTerminal(t *testing.T) {
 	stdout := append(piNativeRetryStream(testUUID, "settled final", true), []byte("\n{\"type\":\"telemetry\"}")...)
 	result, err := NewInterpreter(ModeReadOnly).Evaluate(
@@ -294,7 +340,8 @@ func TestPiInterpreterRejectsInvalidNativeCycleLifecycle(t *testing.T) {
 	}{
 		{name: "overlapping retry start", stdout: overlappingStart, refusal: refusalMalformed},
 		{name: "truncated final cycle", stdout: truncated, refusal: refusalIncomplete},
-		{name: "trailing retry marker", stdout: trailingRetry, refusal: refusalIncomplete},
+		{name: "trailing retry start", stdout: trailingRetry, refusal: refusalIncomplete},
+		{name: "retry end without a subsequent cycle", stdout: append(append([]byte{}, trailingRetry...), []byte("\n{\"type\":\"auto_retry_end\",\"success\":false}")...), refusal: refusalIncomplete},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

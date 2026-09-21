@@ -64,7 +64,7 @@ func TestReadOnlyPredicateReferencesRemainStable(t *testing.T) {
 	if got := LegacyReference().SHA256; got != "e314d5c39aba88f76d104ccc8a91d1265893167866eba1f206d347d67d7d0e45" {
 		t.Fatalf("read-only v1 digest changed: %s", got)
 	}
-	if got := ContractDigest(ModeReadOnly); got != "e4199890ec9de6111af7411a025cbaf1dbbbae96d6ca66f870dc3e89f06ffc44" {
+	if got := ContractDigest(ModeReadOnly); got != "d99fb715e2c90b413712e860e2a4666bd6687f22a687823ebb236950bbc6b639" {
 		t.Fatalf("read-only v3 digest changed: %s", got)
 	}
 	if strings.Contains(Contract(ModeReadOnly), "Pi workspace-write is not advertised") {

@@ -421,6 +421,14 @@ func applyAgentEnd(state *eventState, fields map[string]json.RawMessage) {
 	if message.errorMessage != "" {
 		state.providerFail = true
 	}
+	if state.turnStopReason != message.stopReason {
+		state.markSemantic("agent_end assistant stop reason conflicts with turn_end")
+		return
+	}
+	if !bytes.Equal(state.turnText, message.text) {
+		state.markSemantic("agent_end assistant text conflicts with turn_end")
+		return
+	}
 	if message.stopReason != "stop" {
 		if failedAssistantStopReason(message.stopReason) {
 			state.providerFail = true
@@ -428,14 +436,6 @@ func applyAgentEnd(state *eventState, fields map[string]json.RawMessage) {
 			return
 		}
 		state.markSemantic("agent_end final assistant stop reason is not stop")
-		return
-	}
-	if state.turnStopReason != "stop" {
-		state.markSemantic("agent_end follows a nonterminal final turn")
-		return
-	}
-	if !bytes.Equal(state.turnText, message.text) {
-		state.markSemantic("agent_end assistant text conflicts with turn_end")
 		return
 	}
 	state.agentText = append(state.agentText[:0], message.text...)
