@@ -1054,10 +1054,10 @@ class NativeTaskOps:
         binding = request.get("binding")
         _validate_inspection_binding(binding, f"inspection request binding for {task}")
         standalone = binding.get("definition_revision") == "model-discovery-v1"
-        timeout_seconds = 60 if standalone else 20
-        require(deadline[0] - created[0] == timedelta(seconds=timeout_seconds) and
+        timeout_seconds = (300, 60) if standalone else (20,)
+        require(deadline[0] - created[0] in {timedelta(seconds=value) for value in timeout_seconds} and
                 deadline[1] == created[1],
-                f"inspection request deadline is not exactly {timeout_seconds} seconds for {task}")
+                f"inspection request deadline is not exactly {timeout_seconds[0]} seconds for {task}")
 
         ordinary_directory = self.state / "tasks" / task
         ordinary_present = ordinary_directory.exists() or ordinary_directory.is_symlink()

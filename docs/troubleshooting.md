@@ -59,7 +59,8 @@ If an explicit choice is needed, run:
 
 The command is implemented for all five profiles and
 returns advisory model facts through the state-rooted supervisor with a
-`model-discovery-v1` 60-second inspection bound. `complete` describes model
+`model-discovery-v1` five-minute inspection bound. The longer bound covers
+first-run provider model/cache initialization. `complete` describes model
 enumeration; null
 efforts mean unknown metadata and `[]` means no choices were explicitly
 reported. Do not use discovery as an admission allowlist or infer per-model

@@ -89,7 +89,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--provider") + 1], operation.provider)
         self.assertEqual(argv[argv.index("--cwd") + 1], operation.workspace)
         self.assertNotIn("pueued", [str(value) for value in argv])
-        self.assertEqual(gate.MODEL_DISCOVERY_TIMEOUT_SECONDS, 90)
+        self.assertEqual(gate.MODEL_DISCOVERY_TIMEOUT_SECONDS, 330)
 
     def test_model_discovery_success_propagates_zero_exit(self):
         with tempfile.TemporaryDirectory(prefix="native-model-run-") as directory:

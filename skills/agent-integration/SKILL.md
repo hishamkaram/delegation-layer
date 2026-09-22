@@ -83,8 +83,9 @@ delegate models --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
 
 Omit `--cwd` to use the current directory. Run discovery only when the caller
 needs a non-default choice; provider defaults are valid. The command uses the
-state-rooted supervisor and a bounded `model-discovery-v1` 60-second native
-inspection, creates inspection evidence without admitting a provider task, and may contact the
+state-rooted supervisor and a bounded `model-discovery-v1` five-minute native
+inspection to allow first-run provider model/cache initialization. It creates
+inspection evidence without admitting a provider task, and may contact the
 provider CLI. It is advisory and never an admission allowlist. Do not reject a
 requested value merely because discovery did not list it, and do not infer
 per-model effort support from the harness-wide list. If a selected model has

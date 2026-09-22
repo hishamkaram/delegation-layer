@@ -230,14 +230,32 @@ func newModelExchange(factory func() provider.ModelExchange) (exchange provider.
 	return exchange, nil
 }
 
+const (
+	// ModelDiscoveryTimeout is the finite window for native model metadata
+	// initialization. Provider CLIs may populate a remote model/cache catalog on
+	// their first run, so this is longer than the ordinary capability probe while
+	// remaining bounded and supervisor-owned.
+	ModelDiscoveryTimeout = 5 * time.Minute
+	// legacyModelDiscoveryTimeout remains valid when recovering a v1 journal
+	// written before the cold-start allowance was widened.
+	legacyModelDiscoveryTimeout = time.Minute
+)
+
 // Model metadata initialization loads the harness's configured integrations;
 // measured cold starts can exceed the ordinary capability probe's deadline.
 // The revision keeps historical admission deadlines unchanged.
 func inspectionTimeout(binding Binding) time.Duration {
 	if binding.DefinitionRevision == provider.ModelsRevision {
-		return time.Minute
+		return ModelDiscoveryTimeout
 	}
 	return AdmissionTimeout
+}
+
+func inspectionDeadlineMatches(binding Binding, duration time.Duration) bool {
+	if duration == inspectionTimeout(binding) {
+		return true
+	}
+	return binding.DefinitionRevision == provider.ModelsRevision && duration == legacyModelDiscoveryTimeout
 }
 
 // TimeoutForRevision is the finite inspection budget selected by a persisted

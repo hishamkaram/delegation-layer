@@ -129,7 +129,8 @@ rejected task outcome if it violates those contracts.
 `models` performs advisory native model discovery for one provider. This
 command is currently implemented. It uses the state-rooted supervisor and the
 shared bounded inspection path, whose `model-discovery-v1` native inspection
-window is 60 seconds. Existing admission probes retain their historical
+window is five minutes to allow first-run provider model/cache initialization.
+Existing admission probes retain their historical
 20-second bounds.
 It creates inspection evidence but does not admit a provider task or launch a
 delegated turn. It may contact the selected provider CLI, so use it when an

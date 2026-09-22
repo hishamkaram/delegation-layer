@@ -78,9 +78,11 @@ TASK_BUDGET = "120s"
 CANONICAL_TASK_BUDGET = "2m0s"
 TASK_BUDGET_NANOS = 120_000_000_000
 WATCH_SECONDS = 180
-# model-discovery-v1 bounds the native inspection at 60s; this outer wait also
-# allows the existing supervisor to bootstrap.
-MODEL_DISCOVERY_TIMEOUT_SECONDS = 90
+# model-discovery-v1 allows provider CLIs to populate a remote model/cache
+# catalog on their first run; this outer wait adds supervisor bootstrap time.
+MODEL_DISCOVERY_TASK_BUDGET = "5m0s"
+MODEL_DISCOVERY_TASK_BUDGET_NANOS = 300_000_000_000
+MODEL_DISCOVERY_TIMEOUT_SECONDS = 330
 MAX_RAW_BYTES = 8 * 1024 * 1024
 AUTHENTICATION_MARKERS = (
     "authentication required", "not authenticated", "please log in", "sign in",
@@ -736,8 +738,8 @@ class NativeAcceptance:
         require(task.get("provider") == self.provider and
                 task.get("mode") == discovery_mode and
                 task.get("canonical_cwd") == str(self.workspace) and
-                task.get("requested_config") == {"permission": discovery_mode, "budget": "1m0s"} and
-                task.get("budget_nanos") == 60_000_000_000 and
+                task.get("requested_config") == {"permission": discovery_mode, "budget": MODEL_DISCOVERY_TASK_BUDGET} and
+                task.get("budget_nanos") == MODEL_DISCOVERY_TASK_BUDGET_NANOS and
                 task.get("brief_length") == len(b"model discovery") and
                 task.get("brief_sha256") == hashlib.sha256(b"model discovery").hexdigest(),
                 "model discovery request is not the bounded metadata operation")

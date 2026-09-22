@@ -117,8 +117,8 @@ semver allowlist.
 `delegate models --provider PROFILE [--cwd ABS] --json` is the runtime
 discovery command for native model IDs and effort facts. `--cwd` defaults to
 the current directory and must be absolute when supplied. The command uses the
-state-rooted supervisor and the shared `model-discovery-v1` 60-second
-inspection bound. It creates
+state-rooted supervisor and the shared `model-discovery-v1` five-minute
+inspection bound, which allows first-run provider model/cache initialization. It creates
 inspection evidence without admitting a provider task or launching a delegated
 turn.
 

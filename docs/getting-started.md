@@ -150,7 +150,8 @@ delegate models --provider codex:exec --cwd "$HOME/delegation-workspace" --json
 ```
 
 Omit `--cwd` to use the current directory. Discovery uses the state-rooted
-supervisor with a bounded `model-discovery-v1` 60-second inspection and records
+supervisor with a bounded `model-discovery-v1` five-minute inspection to allow
+first-run provider model/cache initialization and records
 inspection evidence
 without admitting a provider task. It is advisory and never an admission
 allowlist. A null effort list means unknown metadata, while `[]` means the
