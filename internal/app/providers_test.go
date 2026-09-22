@@ -96,6 +96,18 @@ func TestProvidersDoesNotRequireCurrentProviderEnvironment(t *testing.T) {
 }
 
 func TestDispatchUnsupportedOptionRefusesBeforeSupervisorBinding(t *testing.T) {
+	registration, lookupErr := NativeCatalog().Lookup("antigravity:print")
+	if lookupErr != nil {
+		t.Fatal(lookupErr)
+	}
+	// Use a deliberately limited catalog so this admission regression remains
+	// independent of the native adapter gaining additional options.
+	registration.Description.SupportedOptions = []string{commonprovider.OptionContinuation}
+	catalog, catalogErr := commonprovider.NewCatalog(registration)
+	if catalogErr != nil {
+		t.Fatal(catalogErr)
+	}
+
 	root := filepath.Join(t.TempDir(), "state")
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	if err := os.Mkdir(workspace, 0o700); err != nil {
@@ -109,7 +121,7 @@ func TestDispatchUnsupportedOptionRefusesBeforeSupervisorBinding(t *testing.T) {
 	code := Run([]string{
 		"dispatch", "--json", "--root", root, "--provider", "antigravity:print", "--brief", brief,
 		"--cwd", workspace, "--permission", "workspace-write", "--model", "explicit-model", "--pueue-config", filepath.Join(t.TempDir(), "missing.yml"),
-	}, &stdout, &stderr, Dependencies{InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
+	}, &stdout, &stderr, Dependencies{Catalog: catalog, InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue")})
 	if code != 2 {
 		t.Fatalf("unsupported option exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}

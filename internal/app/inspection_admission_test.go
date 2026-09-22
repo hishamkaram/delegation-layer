@@ -63,7 +63,7 @@ func TestEnsureInspectionGroupReconcilesUncertainCreate(t *testing.T) {
 	store := newBareInspectionStore(t)
 	client, logPath, donePath := newUncertainGroupSupervisor(t, store.RootID)
 
-	if err := ensureInspectionGroup(store, client); err != nil {
+	if err := ensureInspectionGroup(store, client, inspection.AdmissionTimeout); err != nil {
 		t.Fatalf("uncertain group creation was not reconciled: %v", err)
 	}
 	logData, err := os.ReadFile(logPath)
@@ -89,8 +89,8 @@ func TestAwaitInspectionJoinsInFlightSupervisorObservation(t *testing.T) {
 	digest := strings.Repeat("a", 64)
 	operation, err := inspection.OpenOperation(store, request, inspection.Binding{
 		DefinitionRevision: "inspection-v1", DefinitionSHA256: digest,
-		HelperExecutable: "/bin/true", HelperSHA256: digest,
-		WorkerExecutable: "/bin/true", WorkerSHA256: digest,
+		HelperExecutable: "/usr/bin/true", HelperSHA256: digest,
+		WorkerExecutable: "/usr/bin/true", WorkerSHA256: digest,
 		Supervisor: client.Binding(),
 	}, time.Unix(100, 0).UTC())
 	if err != nil {

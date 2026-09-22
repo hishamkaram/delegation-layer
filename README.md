@@ -24,6 +24,8 @@ already use instead of replacing them.
   session through a linked successor task.
 - **Runtime compatibility** — the selected provider's executable and advertised
   capabilities are checked when the task is prepared.
+- **Model choice when needed** — native model and effort discovery is available
+  without turning discovery into an admission allowlist.
 - **Native authentication** — provider login stays with the provider CLI; task
   state does not contain copied credentials.
 
@@ -152,6 +154,24 @@ capability response. `delegate preflight --provider PROFILE --cwd ABS --json`
 checks static admission without creating a task. Dispatch still performs the
 host-specific runtime probe; catalog discovery alone does not prove
 authentication or supervisor readiness.
+
+When an explicit model or effort choice is needed, query the implemented native
+discovery command:
+
+```sh
+delegate models --provider codex:exec --cwd "$HOME/delegation-workspace" --json
+```
+
+`--cwd` defaults to the current directory. Model discovery uses the
+state-rooted supervisor and a bounded `model-discovery-v1` 60-second inspection,
+creates inspection evidence without admitting a provider task, and may contact
+the provider CLI.
+It is advisory: a discovered model is not an admission guarantee or an
+allowlist. `complete` describes model enumeration. A null effort list means
+unknown metadata; an empty list means the provider explicitly reported no
+choices. Per-model effort metadata is independent of the harness-wide list.
+Discovery exits `0` for `available` or `partial`, `2` for `blocked` or
+`unavailable`, and `1` for `failed`.
 
 If a task reports `status: "timed_out"` and
 `continuation.resumable: true`, continue the exact session:

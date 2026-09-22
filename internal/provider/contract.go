@@ -220,6 +220,8 @@ type Description struct {
 // valid for historical-only predicate registrations and never grants launch
 // authority.
 type Registration struct {
+	// Models describes optional advisory discovery. It grants no task admission.
+	Models          func() ModelDiscoveryDefinition
 	Description     Description
 	Prepare         PrepareCandidate
 	PrepareExisting PrepareExistingCandidate

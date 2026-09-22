@@ -164,7 +164,13 @@ func runInspectionCallback(scope execution.PreflightScope, operation *inspection
 	// Candidate preparation may perform the compiled attributes-only native
 	// lookup. Keep it inside the armed lifetime so expiry owns its stop
 	// boundary before any such work can block the worker.
-	candidate, err := prepareInspectionWorkerCandidate(deps, root, record.Task, meta)
+	var candidate commonprovider.ProfileCandidate
+	var err error
+	if record.Binding.DefinitionRevision == commonprovider.ModelsRevision {
+		candidate, err = prepareModelsCandidate(deps, root, record.Task)
+	} else {
+		candidate, err = prepareInspectionWorkerCandidate(deps, root, record.Task, meta)
+	}
 	if err != nil {
 		return err
 	}
@@ -176,6 +182,9 @@ func runInspectionCallback(scope execution.PreflightScope, operation *inspection
 		return err
 	}
 	*facts = append((*facts)[:0], inspected...)
+	if record.Binding.DefinitionRevision == commonprovider.ModelsRevision {
+		return nil
+	}
 	_, err = finalizeCandidate(candidate, record.Task, *facts)
 	return err
 }

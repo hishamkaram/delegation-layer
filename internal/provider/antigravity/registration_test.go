@@ -4,14 +4,17 @@ import "testing"
 
 func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 	description := Description()
-	if description.ID != Provider || !description.Discoverable || len(description.SupportedModes) != 1 || description.SupportedModes[0] != Mode {
+	if description.ID != Provider || !description.Discoverable || len(description.SupportedModes) != 2 || description.SupportedModes[0] != ModeReadOnly || description.SupportedModes[1] != ModeWorkspaceWrite {
 		t.Fatalf("unexpected description: %+v", description)
 	}
 	if len(description.Runtime.RequiredFlags) == 0 {
 		t.Fatalf("runtime flag requirements are missing: %+v", description)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 2 {
+	if registration.Prepare == nil || len(registration.Interpreters) != 3 {
 		t.Fatalf("registration did not expose preparation and interpreters: %+v", registration)
+	}
+	if registration.Interpreters[2].Reference().Mode != ModeReadOnly {
+		t.Fatalf("read-only predicate was not registered: %+v", registration.Interpreters[2].Reference())
 	}
 }

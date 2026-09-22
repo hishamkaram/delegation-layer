@@ -167,7 +167,7 @@ func (m *Main) prepareProfile(request task.TaskRecord) (app.PreparedProfile, err
 	}
 	predicateRef := fakeprovider.Predicate().Reference()
 	plan := execution.Plan{
-		Executable:  providerExecutable,
+		Executable: providerExecutable, ExecutableSHA256: providerDigest,
 		Arguments:   append([]string{providerConfig}, providerConfigValue.Argv...),
 		Directory:   request.CanonicalCwd,
 		Environment: cloneStrings(loaded.Config.Environment),

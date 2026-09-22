@@ -41,13 +41,16 @@ func fixtureTaskWithPlan(t *testing.T, mode string, configure func(*task.MetaRec
 	require(t, err)
 	exe, err = filepath.EvalSymlinks(exe)
 	require(t, err)
+	exeBytes, err := os.ReadFile(exe)
+	require(t, err)
+	exeDigest := task.ComputeSHA256(exeBytes)
 	id, err := task.NewTaskID()
 	require(t, err)
 	brief := []byte("  literal '$HOME' $(inert) \"Ω\"\nsecond line\n\n")
 	config := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}
 	req := &task.TaskRecord{SchemaVersion: 1, RootID: s.RootID, TaskID: id, Provider: "fixture:test", Mode: "read-only", CanonicalCwd: cwd, RequestedConfig: config, BudgetNanos: int64(time.Minute), BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
 	meta := &task.MetaRecord{SchemaVersion: 1, RootID: s.RootID, TaskID: id, RequestedConfig: config, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("execution-test"))}, Containment: "fixture-only", Approval: "never", ProviderExecutable: exe, ProviderVersion: "fixture-v1", PublisherBuild: "test-build", PublisherVersion: "test", Predicate: task.FixturePredicateRef(), SupervisorConfig: task.SupervisorRef{ConfigPath: "/fake/pueue.yml", ConfigDigest: task.ComputeSHA256([]byte("pueue")), Endpoint: "/fake/socket", ObservedVersion: "fixture-v1"}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	plan := Plan{Executable: exe, Arguments: []string{"-test.run=^TestExecutionHelper$"}, Directory: cwd, Environment: append(os.Environ(), "DELEGATE_EXECUTION_HELPER="+mode), Predicate: task.FixturePredicateRef()}
+	plan := Plan{Executable: exe, ExecutableSHA256: exeDigest, Arguments: []string{"-test.run=^TestExecutionHelper$"}, Directory: cwd, Environment: append(os.Environ(), "DELEGATE_EXECUTION_HELPER="+mode), Predicate: task.FixturePredicateRef()}
 	if configure != nil {
 		configure(meta, &plan)
 	}
@@ -177,6 +180,39 @@ func TestOwnedInvocationExactStdinAndNoRelaunch(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("Start entries=%d", count)
+	}
+}
+
+func TestInvocationUsesVerifiedExecutableAfterPathReplacement(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(root, "provider")
+	replacement := filepath.Join(root, "replacement")
+	for path, output := range map[string]string{original: "original", replacement: "replacement"} {
+		if writeErr := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '"+output+"'\n"), 0o700); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	originalBytes, err := os.ReadFile(original)
+	require(t, err)
+	originalDigest := task.ComputeSHA256(originalBytes)
+	td, permit, plan, _ := fixtureTaskWithPlan(t, "echo", func(meta *task.MetaRecord, plan *Plan) {
+		meta.ProviderExecutable = original
+		plan.Executable = original
+		plan.ExecutableSHA256 = originalDigest
+		plan.Arguments = nil
+	})
+	r := Run(td, permit, plan, Options{Hooks: Hooks{Start: func(cmd *exec.Cmd) error {
+		if err := os.Rename(replacement, original); err != nil {
+			return err
+		}
+		return cmd.Start()
+	}}})
+	assertSuccess(t, r)
+	if got := string(payload(t, td, r.Outcome)); got != "original\n" {
+		t.Fatalf("replacement executable ran: %q", got)
 	}
 }
 
@@ -394,20 +430,36 @@ func TestDeadlineObservedWhileStartOperationIsBlocked(t *testing.T) {
 	clock := newManualClock()
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	waitEntered := make(chan struct{})
+	waitRelease := make(chan struct{})
 	stopped := make(chan struct{}, 1)
+	deadlineObserved := make(chan struct{})
+	var observed sync.Once
 	events := &eventLog{}
-	opts := Options{Clock: clock, Stopper: stopperFunc(func(context.Context, time.Time) error { stopped <- struct{}{}; return nil }), Hooks: Hooks{Event: events.add, Start: func(cmd *exec.Cmd) error { close(entered); <-release; return cmd.Start() }}}
+	opts := Options{Clock: clock, Stopper: stopperFunc(func(context.Context, time.Time) error { stopped <- struct{}{}; return nil }), Hooks: Hooks{Event: func(name string) {
+		events.add(name)
+		if name == "deadline-observed" {
+			observed.Do(func() { close(deadlineObserved) })
+		}
+	}, Start: func(cmd *exec.Cmd) error { close(entered); <-release; return cmd.Start() }, Wait: func(cmd *exec.Cmd) error { close(waitEntered); <-waitRelease; return cmd.Wait() }}}
 	result := make(chan Result, 1)
 	go func() { result <- Run(td, permit, plan, opts) }()
 	<-entered
+	clock.now = clock.now.Add(time.Minute)
 	clock.timer.ch <- clock.now.Add(time.Minute)
+	select {
+	case <-deadlineObserved:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked Start disabled deadline observation")
+	}
 	select {
 	case <-stopped:
 	case <-time.After(5 * time.Second):
-		close(release)
 		t.Fatal("blocked Start disabled deadline observation")
 	}
 	close(release)
+	<-waitEntered
+	close(waitRelease)
 	r := <-result
 	assertSuccess(t, r)
 	assertOrder(t, events.snapshot(), "deadline-observed", "started")
@@ -416,17 +468,14 @@ func TestDeadlineObservedWhileStartOperationIsBlocked(t *testing.T) {
 func TestPublicationDoesNotWaitForDelayedStopReply(t *testing.T) {
 	td, permit, plan, _ := fixtureTask(t, "echo")
 	clock := newManualClock()
-	stopStarted := make(chan struct{})
 	published := make(chan struct{})
 	late := errors.New("stop observation ended with reply unknown")
 	opts := Options{Clock: clock, Stopper: stopperFunc(func(ctx context.Context, _ time.Time) error {
-		close(stopStarted)
 		<-ctx.Done()
 		<-published
 		return late
 	}), Hooks: Hooks{Start: func(cmd *exec.Cmd) error {
 		clock.timer.ch <- clock.now.Add(time.Minute)
-		<-stopStarted
 		return cmd.Start()
 	}, Event: func(name string) {
 		if name == "published" {

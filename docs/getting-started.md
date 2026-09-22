@@ -142,6 +142,23 @@ on the current host. Dispatch performs those runtime checks before admission.
 When a provider ID is explicitly required, `preflight --provider ID --cwd ABS
 --json` checks static admission without creating a task.
 
+If the task needs an explicit model or effort, use the implemented native
+discovery command first:
+
+```sh
+delegate models --provider codex:exec --cwd "$HOME/delegation-workspace" --json
+```
+
+Omit `--cwd` to use the current directory. Discovery uses the state-rooted
+supervisor with a bounded `model-discovery-v1` 60-second inspection and records
+inspection evidence
+without admitting a provider task. It is advisory and never an admission
+allowlist. A null effort list means unknown metadata, while `[]` means the
+provider explicitly reported no choices; per-model choices may still differ.
+Defaults are valid when discovery is unnecessary. Its exits are `0` for
+`available` or `partial`, `2` for `blocked` or `unavailable`, and `1` for
+`failed`.
+
 ## Continue a conversation
 
 When a task times out, inspect its `continuation` object. If it says

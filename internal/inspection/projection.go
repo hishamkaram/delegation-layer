@@ -343,7 +343,11 @@ func invokeRemoteProject(project func([]byte, int, []byte) (json.RawMessage, err
 }
 
 func canonicalProjectionFacts(raw json.RawMessage) (json.RawMessage, error) {
-	if len(raw) == 0 || len(raw) > maxProjectedFacts || !utf8.Valid(raw) {
+	return canonicalFactsWithin(raw, maxProjectedFacts)
+}
+
+func canonicalFactsWithin(raw json.RawMessage, limit int) (json.RawMessage, error) {
+	if len(raw) == 0 || len(raw) > limit || !utf8.Valid(raw) {
 		return nil, ErrProjectionFacts
 	}
 	if err := task.ValidateJSONStructure(raw); err != nil {
@@ -354,7 +358,7 @@ func canonicalProjectionFacts(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, ErrProjectionFacts
 	}
 	canonical, err := task.MarshalCanonical(object)
-	if err != nil || len(canonical) > maxProjectedFacts {
+	if err != nil || len(canonical) > limit {
 		return nil, ErrProjectionFacts
 	}
 	return json.RawMessage(canonical), nil

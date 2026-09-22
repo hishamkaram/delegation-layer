@@ -170,7 +170,7 @@ func prepareWithDependencies(request task.TaskRecord, dependencies prepareDepend
 	}
 	return commonprovider.PreparedProfile{
 		Plan: execution.Plan{
-			Executable: dependencies.Identity.Executable, Arguments: arguments, Directory: request.CanonicalCwd,
+			Executable: dependencies.Identity.Executable, ExecutableSHA256: dependencies.Identity.SHA256, Arguments: arguments, Directory: request.CanonicalCwd,
 			Environment: []string{}, Predicate: Reference(), InputFiles: inputs,
 			OutputArtifacts: []task.OutputArtifact{{Name: OutputName, ArgumentIndex: 5}}, OutputWriterContract: OutputWriterContract,
 		},

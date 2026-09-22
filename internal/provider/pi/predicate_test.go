@@ -269,7 +269,21 @@ func TestPiInterpreterAcceptsNativeRetryAtSealedEOF(t *testing.T) {
 	}
 }
 
-func TestPiInterpreterAcceptsRetryEndAfterCompleteCycle(t *testing.T) {
+func TestPiInterpreterAcceptsHistoricalRetryEndAfterCompleteCycle(t *testing.T) {
+	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+		t.Run(mode, func(t *testing.T) {
+			stdout := append(piNativeRetryStream(testUUID, "completed retry", false), []byte("\n{\"type\":\"auto_retry_end\",\"success\":true}")...)
+			var out bytes.Buffer
+			interpreter := newHistoricalV3Interpreter(mode)
+			result, err := interpreter.Evaluate(predicate.Input{Seal: validSeal(interpreter.Reference(), stdout, nil)}, evidence{stdout: stdout}, &out)
+			if err != nil || result.Verdict != task.VerdictCommitted || out.String() != "completed retry" {
+				t.Fatalf("result=%+v err=%v output=%q", result, err, out.String())
+			}
+		})
+	}
+}
+
+func TestPiInterpreterRejectsCurrentRetryEndAfterCompleteCycle(t *testing.T) {
 	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
 		t.Run(mode, func(t *testing.T) {
 			stdout := append(piNativeRetryStream(testUUID, "completed retry", false), []byte("\n{\"type\":\"auto_retry_end\",\"success\":true}")...)
@@ -277,10 +291,47 @@ func TestPiInterpreterAcceptsRetryEndAfterCompleteCycle(t *testing.T) {
 			result, err := NewInterpreter(mode).Evaluate(
 				predicate.Input{Seal: validSeal(ReferenceForMode(mode), stdout, nil)}, evidence{stdout: stdout}, &out,
 			)
-			if err != nil || result.Verdict != task.VerdictCommitted || out.String() != "completed retry" {
+			if err != nil || result.Verdict != task.VerdictRejected || result.Refusal != refusalMalformed || out.Len() != 0 {
 				t.Fatalf("result=%+v err=%v output=%q", result, err, out.String())
 			}
 		})
+	}
+}
+
+func TestPiInterpreterRejectsConflictingFailedCycleErrorMessageBeforeRetry(t *testing.T) {
+	lines := strings.Split(string(piNativeRetryStream(testUUID, "recovered", false)), "\n")
+	for index, line := range lines {
+		if strings.Contains(line, `"type":"agent_end","willRetry":true`) {
+			lines[index] = strings.Replace(line, `"errorMessage":"retryable provider error"`, `"errorMessage":"different provider error"`, 1)
+			break
+		}
+	}
+	stdout := []byte(strings.Join(lines, "\n"))
+	var out bytes.Buffer
+	result, err := NewInterpreter(ModeWorkspaceWrite).Evaluate(
+		predicate.Input{Seal: validSeal(ReferenceForMode(ModeWorkspaceWrite), stdout, nil)}, evidence{stdout: stdout}, &out,
+	)
+	if err != nil || result.Verdict != task.VerdictRejected || result.Refusal != refusalMalformed || out.Len() != 0 {
+		t.Fatalf("result=%+v err=%v output=%q", result, err, out.String())
+	}
+}
+
+func TestPiHistoricalV3AcceptsConflictingFailedCycleErrorMessage(t *testing.T) {
+	lines := strings.Split(string(piNativeRetryStream(testUUID, "recovered", false)), "\n")
+	for index, line := range lines {
+		if strings.Contains(line, `"type":"turn_end"`) && strings.Contains(line, `"errorMessage":"retryable provider error"`) {
+			lines[index] = strings.Replace(line, `"errorMessage":"retryable provider error"`, `"errorMessage":"different provider error"`, 1)
+			break
+		}
+	}
+	stdout := []byte(strings.Join(lines, "\n"))
+	interpreter := newHistoricalV3Interpreter(ModeReadOnly)
+	var out bytes.Buffer
+	result, err := interpreter.Evaluate(
+		predicate.Input{Seal: validSeal(interpreter.Reference(), stdout, nil)}, evidence{stdout: stdout}, &out,
+	)
+	if err != nil || result.Verdict != task.VerdictCommitted || out.String() != "recovered" {
+		t.Fatalf("result=%+v err=%v output=%q", result, err, out.String())
 	}
 }
 

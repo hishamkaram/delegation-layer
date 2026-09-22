@@ -44,7 +44,7 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	requirements := profileRuntimeRequirements(native)
+	requirements := profileRuntimeRequirements(request, native)
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, requirements)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
@@ -74,11 +74,11 @@ func historicalEffectiveConfig(request task.TaskRecord, environment profileEnvir
 	return effectivePolicy(request, environment, time.Now(), managedSources, runtimeSHA256)
 }
 
-func profileRuntimeRequirements(native bool) commonprovider.RuntimeCapability {
+func profileRuntimeRequirements(request task.TaskRecord, native bool) commonprovider.RuntimeCapability {
 	if native {
-		return RuntimeRequirements()
+		return runtimeRequirementsForRequest(request, RuntimeRequirements())
 	}
-	return legacyRuntimeRequirements()
+	return runtimeRequirementsForRequest(request, legacyRuntimeRequirements())
 }
 
 func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments []string, output int, environment profileEnvironment, cli commonprovider.CLIInfo, legacyEffective task.EffectiveConfig, predicateReference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
@@ -96,7 +96,7 @@ func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments [
 	}
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
-			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
+			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(environment.Values), Predicate: predicateReference,
 			OutputArtifacts:      []task.OutputArtifact{{Name: OutputName, ArgumentIndex: output}},
 			OutputWriterContract: OutputWriterContract,

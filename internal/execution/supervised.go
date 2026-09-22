@@ -13,6 +13,7 @@ import (
 type PreflightScope struct {
 	ctx       context.Context
 	authorize func() error
+	start     func(func() error) error
 }
 
 // Context carries the existing owner's absolute deadline, without another timer.
@@ -27,6 +28,17 @@ func (s PreflightScope) Authorize() error {
 	return s.authorize()
 }
 
+// Start performs the final deadline arbitration and reserves exactly one owned
+// native command start. The start callback runs without the budget mutex so a
+// blocked platform start cannot suppress deadline observation or supervisor
+// stopping.
+func (s PreflightScope) Start(start func() error) error {
+	if s.ctx == nil || s.start == nil || start == nil || s.ctx.Err() != nil {
+		return errBudgetExpiredBeforeStart
+	}
+	return s.start(start)
+}
+
 // deadlineContext exposes the timer owner's deadline. Done comes from a derived
 // cancel context driven by that owner's single expiry observer.
 type deadlineContext struct {
@@ -39,7 +51,11 @@ func (c deadlineContext) Deadline() (time.Time, bool) { return c.deadline, true 
 func (b *budgetOwner) runScoped(opts Options, work func(PreflightScope) error) error {
 	ctx, cancel := context.WithCancel(b.workContext)
 	defer cancel()
-	scope := PreflightScope{ctx: ctx, authorize: func() error { return b.authorize(opts, "preflight-authorized") }}
+	scope := PreflightScope{
+		ctx:       ctx,
+		authorize: func() error { return b.authorize(opts, "preflight-authorized") },
+		start:     func(start func() error) error { return b.authorizeAndStart(opts, start) },
+	}
 	if err := scope.Authorize(); err != nil {
 		return err
 	}

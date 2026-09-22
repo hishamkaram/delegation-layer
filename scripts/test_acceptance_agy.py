@@ -150,7 +150,7 @@ class NativeHarnessTests(unittest.TestCase):
             self.assertEqual(process.wait(10)['exit_code'], 0)
             self.assertEqual(book.pending(), [])
 
-    def test_l1_oracle_cleanup_removes_both_nonce_copies(self):
+    def test_l1_oracle_records_native_outside_write_and_cleans_workspace(self):
         # Unit input for the harness only; this does not claim live readiness.
         with tempfile.TemporaryDirectory(prefix='agy-oracle-unit-') as directory:
             root = Path(directory)
@@ -167,11 +167,14 @@ class NativeHarnessTests(unittest.TestCase):
                                            ids={'L1': 'a' * 32})
             run.task_results = {}
             run.copy_brief = lambda name: root / 'brief'
-            run.dispatch = lambda *args: inside.write_bytes(b'unit-nonce\n')
+            def dispatch(*args):
+                inside.write_bytes(b'unit-nonce\n')
+                outside.write_bytes(b'OUTSIDE-WRITE-PROBE')
+            run.dispatch = dispatch
             run.wait_task = lambda *args: None
             run.collect = lambda *args: (None, {})
             run.validate_evidence = lambda *args: {
-                'payload': b'unit-nonce; outside file denied', 'events': {}, 'provider_exit': {}}
+                'payload': b'unit-nonce; outside file successfully created', 'events': {}, 'provider_exit': {}}
             run.immutable_snapshot = lambda *args: {'immutable': {'sha256': 'unit'}}
             run.replay = lambda *args: None
             run.read_record = lambda task, name: ({'verdict': 'committed'} if name == 'outcome.json' else
@@ -179,10 +182,11 @@ class NativeHarnessTests(unittest.TestCase):
             run.run_l1()
             self.assertEqual(list(workspace.iterdir()), [])
             self.assertTrue((root / 'L1-filesystem.json').is_file())
+            self.assertEqual(outside.read_bytes(), b'OUTSIDE-WRITE-PROBE')
             self.assertEqual(run.l1_nonce, 'unit-nonce')
 
-    def test_rejected_l1_requires_positive_filesystem_control(self):
-        for case in ['valid', 'missing-inside', 'wrong-inside', 'outside-written']:
+    def test_committed_l1_requires_positive_native_write(self):
+        for case in ['valid', 'missing-inside', 'wrong-inside', 'missing-outside', 'wrong-outside']:
             with self.subTest(case=case), tempfile.TemporaryDirectory(prefix='agy-denial-unit-') as directory:
                 root = Path(directory)
                 workspace = root / 'workspace'
@@ -193,11 +197,10 @@ class NativeHarnessTests(unittest.TestCase):
                 state, task = root / 'state', 'a' * 32
                 raw = state / 'tasks' / task / 'raw'
                 raw.mkdir(parents=True)
-                envelope = {'conversation_id': 'unit-session', 'status': 'SUCCESS', 'response': '',
-                            'denied_actions': [{'action': 'write_file', 'display_name': 'WriteToFile'}]}
+                envelope = {'conversation_id': 'unit-session', 'status': 'SUCCESS',
+                            'response': 'unit-nonce; outside file successfully created'}
                 (raw / 'stdout').write_text(json.dumps(envelope))
-                (raw / 'stderr').write_bytes(b'a tool required the "write_file" permission; auto-denied')
-                outcome = {'verdict': 'rejected', 'payload': {'basename': 'publish.reject'}}
+                (raw / 'stderr').write_bytes(b'')
                 run = gate.NativeRun.__new__(gate.NativeRun)
                 run.output = root
                 run.prepared = SimpleNamespace(workspace=workspace, nonce_file=nonce, inside=inside,
@@ -207,20 +210,20 @@ class NativeHarnessTests(unittest.TestCase):
                 def dispatch(*args):
                     if case != 'missing-inside':
                         inside.write_bytes(b'wrong' if case == 'wrong-inside' else b'unit-nonce\n')
-                    if case == 'outside-written':
-                        outside.write_bytes(b'OUTSIDE')
+                    if case != 'missing-outside':
+                        outside.write_bytes(b'WRONG' if case == 'wrong-outside' else b'OUTSIDE-WRITE-PROBE')
                 run.dispatch = dispatch
                 run.wait_task = lambda *args: None
                 run.collect = lambda *args: (None, {})
-                run.validate_evidence = lambda *args: {'payload': b'invalid-output', 'events': {},
-                    'provider_exit': {'exit_code': 0, 'error': ''}, 'outcome': outcome}
+                run.validate_evidence = lambda *args: {'payload': b'unit-nonce; outside file successfully created', 'events': {},
+                    'provider_exit': {'exit_code': 0, 'error': ''}}
                 run.immutable_snapshot = lambda *args: {'immutable': {'sha256': 'unit'}}
                 run.replay = lambda *args: None
-                run.read_record = lambda task, name: (outcome if name == 'outcome.json' else
+                run.read_record = lambda task, name: ({'verdict': 'committed'} if name == 'outcome.json' else
                     {'provider': gate.PROVIDER, 'conversation_id': 'unit-session'})
                 if case == 'valid':
                     run.run_l1()
-                    self.assertEqual(json.loads((root / 'L1-control-outcome.json').read_text())['verdict'], 'rejected')
+                    self.assertEqual(json.loads((root / 'L1-control-outcome.json').read_text())['verdict'], 'committed')
                     self.assertFalse(nonce.exists())
                     self.assertFalse(inside.exists())
                 else:

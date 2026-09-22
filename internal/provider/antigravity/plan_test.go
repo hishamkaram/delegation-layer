@@ -3,6 +3,7 @@ package antigravity
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,18 +26,54 @@ func TestPrintArgumentsFreshAndExactResume(t *testing.T) {
 	}
 }
 
+func TestPrintArgumentsReadOnlyUsesNativePlanMode(t *testing.T) {
+	request := argumentRequest()
+	request.Mode = ModeReadOnly
+	request.RequestedConfig.Permission = ModeReadOnly
+	want := []string{"--sandbox", "--mode", "plan", "--add-dir", request.CanonicalCwd, "--output-format", "json", "--input-format", "text", "--disable-slash-commands", "--print-timeout", "2m0s"}
+	got, err := printArguments(request)
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("read-only arguments = %q, %v", got, err)
+	}
+}
+
+func TestPrintArgumentsPassModelAndEffort(t *testing.T) {
+	request := argumentRequest()
+	request.RequestedConfig.Model = "gemini-3-pro"
+	request.RequestedConfig.Effort = "high"
+	want := []string{"--sandbox", "--mode", "accept-edits", "--add-dir", request.CanonicalCwd, "--output-format", "json", "--input-format", "text", "--disable-slash-commands", "--print-timeout", "2m0s", "--model", "gemini-3-pro", "--effort", "high"}
+	got, err := printArguments(request)
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("model and effort arguments = %q, %v", got, err)
+	}
+}
+
+func TestRuntimeRequirementsAddOptionalFlagsOnlyWhenRequested(t *testing.T) {
+	base := runtimeRequirementsForRequest(argumentRequest())
+	if slices.Contains(base.RequiredFlags, "--model") || slices.Contains(base.RequiredFlags, "--effort") {
+		t.Fatalf("default runtime requirements contain optional flags: %q", base.RequiredFlags)
+	}
+	request := argumentRequest()
+	request.RequestedConfig.Model = "gemini-3-pro"
+	request.RequestedConfig.Effort = "high"
+	got := runtimeRequirementsForRequest(request)
+	if !slices.Contains(got.RequiredFlags, "--model") || !slices.Contains(got.RequiredFlags, "--effort") {
+		t.Fatalf("requested runtime requirements omitted optional flags: %q", got.RequiredFlags)
+	}
+}
+
 func TestPrintArgumentsRejectUnsupportedRequests(t *testing.T) {
 	cases := map[string]func(*task.TaskRecord){
 		"missing workspace":   func(r *task.TaskRecord) { r.CanonicalCwd = "" },
 		"relative workspace":  func(r *task.TaskRecord) { r.CanonicalCwd = "relative" },
 		"unclean workspace":   func(r *task.TaskRecord) { r.CanonicalCwd = "/work/../other" },
-		"read-only":           func(r *task.TaskRecord) { r.Mode = "read-only" },
 		"permission mismatch": func(r *task.TaskRecord) { r.RequestedConfig.Permission = "read-only" },
 		"provider mismatch":   func(r *task.TaskRecord) { r.Provider = "codex:exec" },
 		"zero budget":         func(r *task.TaskRecord) { r.BudgetNanos = 0 },
 		"negative budget":     func(r *task.TaskRecord) { r.BudgetNanos = -1 },
-		"unsupported model":   func(r *task.TaskRecord) { r.RequestedConfig.Model = "some-model" },
-		"unsupported effort":  func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max" },
+		"model newline":       func(r *task.TaskRecord) { r.RequestedConfig.Model = "some\nmodel" },
+		"effort tab":          func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max\t" },
+		"oversized model":     func(r *task.TaskRecord) { r.RequestedConfig.Model = strings.Repeat("m", task.MaxControlRecordSize+1) },
 		"resume selector": func(r *task.TaskRecord) {
 			r.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: "--last"}
 		},

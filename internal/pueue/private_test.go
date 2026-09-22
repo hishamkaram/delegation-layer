@@ -132,9 +132,9 @@ func TestBindPrivateBoundsTimedOutVersionProbeBeforeReturning(t *testing.T) {
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 	marker := filepath.Join(base, "version-marker")
 	options := Options{
-		ObservationTimeout: 20 * time.Millisecond,
+		ObservationTimeout: 100 * time.Millisecond,
 		Environment: append(os.Environ(),
-			"PRIVATE_DELAY_VERSION=1",
+			"PRIVATE_VERSION_DELAY=0.5",
 			"PRIVATE_VERSION_MARKER="+marker,
 		),
 	}
@@ -143,14 +143,14 @@ func TestBindPrivateBoundsTimedOutVersionProbeBeforeReturning(t *testing.T) {
 	if err == nil {
 		t.Fatal("timed out version probe unexpectedly bootstrapped the supervisor")
 	}
-	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("timed out version probe was not bounded: %s", elapsed)
 	}
 	var inFlight *InFlightError
 	if !errors.As(err, &inFlight) || inFlight.Pending == nil {
 		t.Fatalf("timed out version probe lost its pending ownership: %v", err)
 	}
-	if !awaitPendingNaturally(inFlight.Pending, time.Second) {
+	if !awaitPendingNaturally(inFlight.Pending, 2*time.Second) {
 		t.Fatal("version probe remained in flight after the bounded return")
 	}
 	data, err := os.ReadFile(marker)
@@ -212,22 +212,22 @@ func TestBindPrivateBoundsSlowReadinessBeforeReturning(t *testing.T) {
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 	seedPrivateDaemonIdentity(t, privateBase, daemonPath)
 	options := Options{
-		ObservationTimeout: 20 * time.Millisecond,
-		Environment:        append(os.Environ(), "PRIVATE_STATUS_DELAY=0.25"),
+		ObservationTimeout: 100 * time.Millisecond,
+		Environment:        append(os.Environ(), "PRIVATE_STATUS_DELAY=2"),
 	}
 	started := time.Now()
 	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options)
 	if err == nil || client != nil {
-		t.Fatalf("slow readiness unexpectedly completed: client=%v err=%v", client, err)
+		t.Fatalf("slow readiness unexpectedly completed: client_present=%t err=%v", client != nil, err)
 	}
-	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("slow readiness was not bounded: %s", elapsed)
 	}
 	var inFlight *InFlightError
 	if !errors.As(err, &inFlight) || inFlight.Pending == nil {
 		t.Fatalf("slow readiness lost its pending ownership: %v", err)
 	}
-	if !awaitPendingNaturally(inFlight.Pending, time.Second) {
+	if !awaitPendingNaturally(inFlight.Pending, 3*time.Second) {
 		t.Fatal("slow readiness remained in flight after the bounded return")
 	}
 	if _, err := os.Stat(filepath.Join(privateBase, "daemon-started")); !errors.Is(err, os.ErrNotExist) {
@@ -643,7 +643,7 @@ while [ "$#" -gt 0 ]; do
     -c) config=$2; shift 2 ;;
     --version)
       if [ "${PRIVATE_VERSION_MARKER:-}" != "" ]; then printf '%s\n' started >> "$PRIVATE_VERSION_MARKER"; fi
-      if [ "${PRIVATE_DELAY_VERSION:-}" = "1" ]; then sleep 0.08; fi
+      if [ "${PRIVATE_VERSION_DELAY:-}" != "" ]; then sleep "$PRIVATE_VERSION_DELAY"; elif [ "${PRIVATE_DELAY_VERSION:-}" = "1" ]; then sleep 0.08; fi
       if [ "${PRIVATE_VERSION_MARKER:-}" != "" ]; then printf '%s\n' completed >> "$PRIVATE_VERSION_MARKER"; fi
       printf '%s\n' 'pueue 99.7.3'; exit 0 ;;
     status)

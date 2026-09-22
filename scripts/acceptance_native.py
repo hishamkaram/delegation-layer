@@ -27,6 +27,8 @@ from acceptance_provider_common import (
     AcceptanceFailure,
     INSPECTION_GROUP_PREFIX,
     NativeTaskOps,
+    _hex_digest,
+    _task_identity,
     clean_absolute,
     done_result,
     parse_json_output,
@@ -51,7 +53,7 @@ from acceptance_supervisor_common import (
 
 PROFILES = {
     "antigravity:print": {
-        "executable": "agy", "modes": ("workspace-write",),
+        "executable": "agy", "modes": ("read-only", "workspace-write"),
         "default_mode": "workspace-write",
     },
     "claude:print": {
@@ -76,6 +78,9 @@ TASK_BUDGET = "120s"
 CANONICAL_TASK_BUDGET = "2m0s"
 TASK_BUDGET_NANOS = 120_000_000_000
 WATCH_SECONDS = 180
+# model-discovery-v1 bounds the native inspection at 60s; this outer wait also
+# allows the existing supervisor to bootstrap.
+MODEL_DISCOVERY_TIMEOUT_SECONDS = 90
 MAX_RAW_BYTES = 8 * 1024 * 1024
 AUTHENTICATION_MARKERS = (
     "authentication required", "not authenticated", "please log in", "sign in",
@@ -83,6 +88,20 @@ AUTHENTICATION_MARKERS = (
     "provider authentication unavailable", "persistent chatgpt authentication is required",
 )
 AUTHENTICATION_STATUS_CODES = frozenset({401, 403})
+MODEL_DISCOVERY_EXIT_CODES = {
+    "available": 0,
+    "partial": 0,
+    "blocked": 2,
+    "unavailable": 2,
+    "failed": 1,
+}
+MODEL_DISCOVERY_REQUIRED_KEYS = {
+    "schema_version", "command", "provider", "observed_at", "status",
+    "reason_code", "complete", "source", "models", "efforts",
+}
+MODEL_DISCOVERY_OPTIONAL_KEYS = frozenset()
+MODEL_INFO_REQUIRED_KEYS = {"id", "efforts"}
+MODEL_INFO_OPTIONAL_KEYS = {"name", "default_effort"}
 # Native configuration/session locations, never inline credentials or config.
 # Keep the shared fixture environment isolated; only this live gate opts in.
 NATIVE_DISCOVERY_ENVIRONMENT = frozenset({
@@ -206,6 +225,106 @@ def authentication_blocked(response: object, diagnostic: str) -> bool:
             any(marker in diagnostic.lower() for marker in AUTHENTICATION_MARKERS))
 
 
+def model_discovery_exit_code(status: str) -> int:
+    try:
+        return MODEL_DISCOVERY_EXIT_CODES[status]
+    except KeyError as error:
+        raise AcceptanceFailure(f"unknown model discovery status: {status!r}") from error
+
+
+def validate_model_discovery_response(response: object, provider: str) -> dict[str, object]:
+    """Validate the public model observation without turning it into a policy."""
+    require(isinstance(response, dict), "model discovery response is not an object")
+    keys = set(response)
+    require(MODEL_DISCOVERY_REQUIRED_KEYS <= keys <=
+            MODEL_DISCOVERY_REQUIRED_KEYS | MODEL_DISCOVERY_OPTIONAL_KEYS,
+            "model discovery response has unknown or missing fields")
+    require(type(response.get("schema_version")) is int and response["schema_version"] == 1,
+            "model discovery schema version is invalid")
+    require(response.get("command") == "models", "model discovery command is invalid")
+    require(response.get("provider") == provider, "model discovery provider is invalid")
+    observed_at = response.get("observed_at")
+    require(isinstance(observed_at, str) and observed_at, "model discovery timestamp is invalid")
+    try:
+        parsed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise AcceptanceFailure("model discovery timestamp is invalid") from error
+    require(parsed.tzinfo is not None, "model discovery timestamp has no timezone")
+    status = response.get("status")
+    require(isinstance(status, str) and status in MODEL_DISCOVERY_EXIT_CODES,
+            "model discovery status is invalid")
+    reason_code = response.get("reason_code")
+    require(isinstance(reason_code, str) and reason_code and
+            not any(character.isspace() for character in reason_code),
+            "model discovery reason code is invalid")
+    require(type(response.get("complete")) is bool, "model discovery complete flag is invalid")
+    source = response.get("source")
+    require(isinstance(source, str), "model discovery source is invalid")
+    efforts = response.get("efforts")
+    _validate_model_choices(efforts, "model discovery efforts")
+    models = response.get("models")
+    require(isinstance(models, list), "model discovery models is not an array")
+    if status == "available":
+        require(response["complete"] is True and models,
+                "available model discovery must enumerate a complete nonempty list")
+    elif status == "partial":
+        require(response["complete"] is False and models,
+                "partial model discovery must enumerate an incomplete nonempty list")
+    elif status in {"blocked", "unavailable"}:
+        require(response["complete"] is False and not models,
+                f"{status} model discovery must not enumerate models")
+    else:
+        require(response["complete"] is False and not models,
+                "failed model discovery must not enumerate models")
+    seen: set[str] = set()
+    for index, model in enumerate(models):
+        require(isinstance(model, dict), f"model discovery model {index} is not an object")
+        model_keys = set(model)
+        require(MODEL_INFO_REQUIRED_KEYS <= model_keys <=
+                MODEL_INFO_REQUIRED_KEYS | MODEL_INFO_OPTIONAL_KEYS,
+                f"model discovery model {index} has unknown or missing fields")
+        model_id = model.get("id")
+        require(isinstance(model_id, str) and model_id and
+                not any(ord(character) < 32 for character in model_id),
+                f"model discovery model {index} id is invalid")
+        require(model_id not in seen, f"model discovery has duplicate model id {model_id!r}")
+        seen.add(model_id)
+        for key in ("name", "default_effort"):
+            if key in model:
+                require(model[key] is None or
+                        (isinstance(model[key], str) and bool(model[key]) and
+                         not any(ord(character) < 32 for character in model[key])),
+                        f"model discovery model {index} {key} is invalid")
+        _validate_model_choices(model.get("efforts"),
+                                f"model discovery model {index} efforts")
+        default_effort = model.get("default_effort")
+        model_efforts = model.get("efforts")
+        if default_effort is not None and model_efforts is not None:
+            require(default_effort in model_efforts,
+                    f"model discovery model {index} default effort is not listed")
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "complete": response["complete"],
+        "source": source,
+        "model_count": len(models),
+        "effort_count": None if efforts is None else len(efforts),
+    }
+
+
+def _validate_model_choices(value: object, label: str) -> None:
+    require(value is None or isinstance(value, list), f"{label} is not null or an array")
+    if value is None:
+        return
+    seen: set[str] = set()
+    for choice in value:
+        require(isinstance(choice, str) and choice and
+                not any(ord(character) < 32 for character in choice),
+                f"{label} contains an invalid choice")
+        require(choice not in seen, f"{label} contains a duplicate choice")
+        seen.add(choice)
+
+
 def task_digest_snapshot(directory: Path) -> dict[str, dict[str, object]]:
     return snapshot(directory, ignored_prefixes=(".ack",))
 
@@ -317,6 +436,20 @@ def dispatch_binding(response: dict[str, object], task_id: str, label: str) -> t
     return root_id, numeric_id
 
 
+class ModelDiscoveryCleanupOps(NativeTaskOps):
+    """Use the model discovery state root for failure cleanup."""
+
+    def __init__(self, owner: "NativeAcceptance") -> None:
+        super().__init__(owner.processes, owner.delegate, owner.runner, owner.pueue,
+                         owner.models_state.parent, owner.models_state, owner.output,
+                         expected_inspection_binding_required=False)
+        self.owner = owner
+
+    def failure_queue_finished(self, status: dict[str, object]) -> bool:
+        self.owner._sync_model_cleanup(self)
+        return super().failure_queue_finished(status)
+
+
 class NativeAcceptance:
     def __init__(self, args: argparse.Namespace):
         if args.provider not in PROFILES:
@@ -335,11 +468,13 @@ class NativeAcceptance:
             raise AcceptanceFailure("read-only scenario requires --permission read-only")
         if scenario == "write" and requested_mode != "workspace-write":
             raise AcceptanceFailure("write scenario requires --permission workspace-write")
+        discover_models = bool(getattr(args, "discover_models", False))
         self.args = args
         self.provider = args.provider
         self.profile = profile
         self.mode = requested_mode
         self.scenario = scenario
+        self.discover_models_only = discover_models
         self.environment = native_environment()
         self.output = clean_absolute(args.output, "live acceptance output")
         require(self.output.is_dir() and not self.output.is_symlink(),
@@ -369,8 +504,10 @@ class NativeAcceptance:
         self.workspace = self.base / "workspace"
         self.briefs = self.base / "briefs"
         self.pueue_base = self.base / "pueue"
+        self.models_state = self.base / "models-state"
         for path in (self.state, self.workspace, self.briefs, self.pueue_base,
-                     self.pueue_base / "state", self.pueue_base / "run"):
+                     self.pueue_base / "state", self.pueue_base / "run",
+                     self.models_state,):
             path.mkdir(mode=0o700, parents=False)
         self.config = self.pueue_base / "pueue.yml"
         write_json(self.config, config_for(self.pueue_base))
@@ -381,6 +518,11 @@ class NativeAcceptance:
                                  expected_inspection_binding_required=False)
         self.daemon = None
         self.closed = False
+        self.model_discovery: dict[str, object] | None = None
+        self.model_discovery_summary: dict[str, object] | None = None
+        self.model_discovery_exit_code: int | None = None
+        self.models_root_id: str | None = None
+        self.model_discovery_task_id: str | None = None
         self.root_id: str | None = None
         self.provider_version: str | None = None
         self.provider_sha256: str | None = None
@@ -436,16 +578,51 @@ class NativeAcceptance:
             self.tasks[name] = task_id
             self.numeric_ids[task_id] = numeric_id
 
+    def _sync_model_cleanup(self, ops: ModelDiscoveryCleanupOps) -> None:
+        """Bind cleanup to the model inspection only after its identity exists."""
+        root_path = self.models_state / "root.json"
+        if not root_path.is_file() or root_path.is_symlink():
+            return
+        root = read_json(root_path)
+        root_id = root.get("root_id")
+        require(_task_identity(root_id), "model discovery root identity is invalid")
+        self.models_root_id = root_id
+        ops.root_id = root_id
+
+        inspections = self.models_state / "inspections"
+        if not inspections.is_dir() or inspections.is_symlink():
+            return
+        entries = list(inspections.iterdir())
+        if not entries:
+            return
+        require(len(entries) == 1 and entries[0].is_dir() and not entries[0].is_symlink() and
+                _task_identity(entries[0].name),
+                "model discovery inspection journal coverage is not exact")
+        task_id = entries[0].name
+        if self.model_discovery_task_id is None:
+            self.model_discovery_task_id = task_id
+        require(self.model_discovery_task_id == task_id,
+                "model discovery task identity changed")
+        ops.dispatch_attempts = {task_id}
+        ops.inspection_attempts = {task_id}
+
     def write_binding(self) -> None:
         binding = self.output / "binding.json"
         require(not binding.exists() and not binding.is_symlink(),
                 "runtime binding was already persisted")
         require(isinstance(self.provider_version, str) and bool(self.provider_version),
                 "runtime provider version is unavailable")
+        args = getattr(self, "args", None)
         write_json(binding, {
             "provider": self.provider,
             "mode": self.mode,
             "scenario": self.scenario,
+            "task_budget": TASK_BUDGET,
+            "canonical_task_budget": CANONICAL_TASK_BUDGET,
+            "requested_model": getattr(args, "model", None),
+            "requested_effort": getattr(args, "effort", None),
+            "model_discovery": getattr(self, "model_discovery_summary", None),
+            "native_mode": self.native_mode_receipt(),
             "provider_executable": str(self.provider_executable),
             "provider_sha256": self.provider_sha256,
             "provider_version": self.provider_version,
@@ -456,6 +633,13 @@ class NativeAcceptance:
             "pueue_version": PUEUE_VERSION,
             "credentials_in_receipt": False,
         })
+
+    def native_mode_receipt(self) -> dict[str, object] | None:
+        if self.provider != "antigravity:print":
+            return None
+        if self.mode == "read-only":
+            return {"sandbox": "--sandbox", "mode": "plan", "bypass": False}
+        return {"sandbox": "--sandbox", "mode": "accept-edits", "bypass": True}
 
     def _prepare_codex_workspace(self) -> None:
         if self.provider != "codex:exec":
@@ -470,6 +654,108 @@ class NativeAcceptance:
         require((self.workspace / ".git").is_dir() and not (self.workspace / ".git").is_symlink() and
                 process.result.get("exit_code") == 0,
                 "Codex disposable workspace is not a git repository")
+
+    def discover_models(self) -> None:
+        """Record advisory model facts through the already-running supervisor."""
+        before = workspace_snapshot(self.workspace)
+        argv = self.model_discovery_argv()
+        process = self.processes.run(
+            "model-discovery", argv, self.base,
+            expected={0, 1, 2}, timeout=MODEL_DISCOVERY_TIMEOUT_SECONDS)
+        response = parse_json_output(process, "model discovery")
+        summary = validate_model_discovery_response(response, self.provider)
+        expected_exit = model_discovery_exit_code(str(response["status"]))
+        require(process.result.get("exit_code") == expected_exit,
+                "model discovery exit status does not match its status")
+        self.model_discovery = response
+        self.model_discovery_summary = summary
+        self.model_discovery_exit_code = expected_exit
+        root_path = self.models_state / "root.json"
+        if root_path.is_file() and not root_path.is_symlink():
+            root = read_json(root_path)
+            root_id = root.get("root_id") if isinstance(root, dict) else None
+            require(isinstance(root_id, str) and len(root_id) == 32 and
+                    all(character in "0123456789abcdef" for character in root_id),
+                    "model discovery root identity is invalid")
+            self.models_root_id = root_id
+        write_json(self.output / "models.json", response)
+        require(workspace_snapshot(self.workspace) == before,
+                "model discovery changed the acceptance workspace")
+
+    def model_discovery_argv(self) -> list[object]:
+        return [
+            self.delegate, "--root", self.models_state,
+            "--pueue-config", self.config, "--runner", self.runner,
+            "models", "--provider", self.provider, "--cwd", self.workspace, "--json",
+        ]
+
+    def _validate_model_discovery_evidence(self, status: dict[str, object],
+                                           model_group: str) -> None:
+        """Validate the standalone inspection before excluding its queue row."""
+        require(self.models_root_id is not None, "model discovery root identity is unavailable")
+        require(self.root_id is None and not self.tasks and not self.numeric_ids and
+                not self.ops.dispatch_attempts and not self.ops.inspection_attempts,
+                "model discovery admitted an ordinary provider task")
+        require(not (self.state / "tasks").exists() and
+                not (self.state / "inspections").exists(),
+                "model discovery created ordinary provider state")
+        model_tasks = self.models_state / "tasks"
+        require(not model_tasks.exists() and not model_tasks.is_symlink(),
+                "model discovery created an ordinary task record")
+
+        inspections = self.models_state / "inspections"
+        require(inspections.is_dir() and not inspections.is_symlink(),
+                "model discovery inspection journal is absent")
+        entries = list(inspections.iterdir())
+        require(len(entries) == 1 and entries[0].is_dir() and not entries[0].is_symlink() and
+                _task_identity(entries[0].name),
+                "model discovery inspection journal coverage is not exact")
+        task_id = entries[0].name
+        if self.model_discovery_task_id is None:
+            self.model_discovery_task_id = task_id
+        require(self.model_discovery_task_id == task_id,
+                "model discovery task identity changed")
+        validator = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
+                                  self.models_state.parent, self.models_state, self.output)
+        validator.bind_supervisor(self.config, self.daemon)
+        validator.root_id = self.models_root_id
+        validator.dispatch_attempts = {task_id}
+        validator.inspection_attempts = {task_id}
+        journals = validator.validate_inspection_journals(
+            allow_failure=True, expected_binding_required=False)
+        require(set(journals) == {task_id}, "model discovery journal coverage changed")
+        journal = journals[task_id]
+        request = journal["request"]
+        binding = request["binding"]
+        require(binding.get("definition_revision") == "model-discovery-v1" and
+                binding.get("helper_executable") == str(self.provider_executable) and
+                binding.get("helper_sha256") == self.provider_sha256,
+                "model discovery provider binding changed")
+        task = request["task"]
+        discovery_mode = PROFILES[self.provider]["modes"][0]
+        require(task.get("provider") == self.provider and
+                task.get("mode") == discovery_mode and
+                task.get("canonical_cwd") == str(self.workspace) and
+                task.get("requested_config") == {"permission": discovery_mode, "budget": "1m0s"} and
+                task.get("budget_nanos") == 60_000_000_000 and
+                task.get("brief_length") == len(b"model discovery") and
+                task.get("brief_sha256") == hashlib.sha256(b"model discovery").hexdigest(),
+                "model discovery request is not the bounded metadata operation")
+        result = journal["result"]
+        require(isinstance(result, dict), "model discovery has no completed result")
+        if result.get("reason") == "eligible":
+            require(isinstance(self.model_discovery, dict), "model discovery response is absent")
+            expected = {key: self.model_discovery.get(key)
+                        for key in ("status", "reason_code", "complete", "source", "models", "efforts")}
+            require(result.get("facts") == expected, "model discovery facts changed")
+        groups, rows = status.get("groups"), status.get("tasks")
+        validator._validate_group_snapshot(groups, {"default", model_group})
+        require(isinstance(rows, dict) and len(rows) == 1,
+                "model discovery queue membership is not exact")
+        row_key, row = next(iter(rows.items()))
+        require(isinstance(row, dict) and row_key == str(journal["numeric_task_id"]),
+                "model discovery queue row is malformed")
+        validator._validate_inspection_queue_row(row, journal, allow_failure=True)
 
     def setup(self) -> None:
         self.provider_sha256 = digest(self.provider_executable)
@@ -541,18 +827,25 @@ class NativeAcceptance:
         write_bytes(path, text.encode())
         return path
 
-    def dispatch(self, name: str, brief: Path, predecessor: str | None = None) -> str:
-        task_id = secrets.token_hex(16)
+    def dispatch_argv(self, task_id: str, brief: Path,
+                      predecessor: str | None = None) -> list[object]:
         argv: list[object] = [self.delegate, "--root", self.state, "--pueue-config", self.config,
                               "--runner", self.runner, "dispatch", "--provider", self.provider,
                               "--brief", brief, "--cwd", self.workspace, "--id", task_id,
                               "--permission", self.mode, "--budget", TASK_BUDGET, "--json"]
-        if self.args.model:
-            argv.extend(["--model", self.args.model])
-        if self.args.effort:
-            argv.extend(["--effort", self.args.effort])
+        model = getattr(self.args, "model", None)
+        effort = getattr(self.args, "effort", None)
+        if model:
+            argv.extend(["--model", model])
+        if effort:
+            argv.extend(["--effort", effort])
         if predecessor:
             argv.extend(["--resume-task", predecessor])
+        return argv
+
+    def dispatch(self, name: str, brief: Path, predecessor: str | None = None) -> str:
+        task_id = secrets.token_hex(16)
+        argv = self.dispatch_argv(task_id, brief, predecessor)
         self.ops.root_id = self.root_id
         try:
             response = self.ops.dispatch(name, task_id, argv)
@@ -589,12 +882,42 @@ class NativeAcceptance:
 
     def terminal_private_queue(self, status: dict[str, object]) -> bool:
         try:
+            status = self._without_model_discovery_queue(status)
             if self.root_id is None:
                 return self._empty_private_queue(status)
             return self._terminal_private_queue(status)
         except (AcceptanceFailure, KeyError, OSError, RuntimeError, TypeError,
                 UnicodeError, ValueError, RecursionError):
             return False
+
+    def _without_model_discovery_queue(self, status: dict[str, object]) -> dict[str, object]:
+        """Exclude only the distinct model-inspection group from task shutdown."""
+        root_id = getattr(self, "models_root_id", None)
+        if not isinstance(root_id, str):
+            return status
+        rows = status.get("tasks")
+        groups = status.get("groups")
+        require(isinstance(rows, dict) and isinstance(groups, dict),
+                "private queue status is malformed")
+        model_group = INSPECTION_GROUP_PREFIX + root_id
+        if model_group not in groups:
+            return status
+        retained_rows: dict[object, object] = {}
+        for numeric_id, row in rows.items():
+            require(isinstance(row, dict), "private queue contains a malformed row")
+            if row.get("group") == model_group:
+                label = row.get("label")
+                require(isinstance(label, str) and label.startswith(model_group + "-"),
+                        "model discovery queue label is invalid")
+                require(done_result(row) is not None,
+                        "model discovery queue row is not terminal")
+                continue
+            retained_rows[numeric_id] = row
+        if getattr(self, "discover_models_only", False):
+            self._validate_model_discovery_evidence(status, model_group)
+        retained_groups = {name: group for name, group in groups.items()
+                           if name != model_group}
+        return {"tasks": retained_rows, "groups": retained_groups}
 
     @staticmethod
     def _empty_private_queue(status: dict[str, object]) -> bool:
@@ -806,6 +1129,16 @@ class NativeAcceptance:
     def task_binding(self, task_id: str, predecessor: str | None = None,
                      predecessor_session: str | None = None) -> None:
         directory, record, meta, meta_digest, spec_digest, _ = self._request_binding(task_id)
+        requested = record.get("requested_config")
+        args = getattr(self, "args", None)
+        requested_model = getattr(args, "model", None)
+        requested_effort = getattr(args, "effort", None)
+        require(isinstance(requested, dict) and
+                ((requested_model and requested.get("model") == requested_model) or
+                 (not requested_model and requested.get("model") in (None, ""))) and
+                ((requested_effort and requested.get("effort") == requested_effort) or
+                 (not requested_effort and requested.get("effort") in (None, ""))),
+                f"task {task_id} model or effort selection changed")
         require(meta.get("root_id") == self.root_id and meta.get("task_id") == task_id and
                 meta.get("provider_executable") == str(self.provider_executable) and
                 meta.get("provider_version") == self.provider_version and
@@ -820,6 +1153,10 @@ class NativeAcceptance:
                 isinstance(policy, dict) and policy.get("workspace") == str(self.workspace) and
                 policy.get("runtime_sha256") == self.provider_sha256,
                 f"task {task_id} effective policy binding is invalid")
+        if self.provider == "antigravity:print":
+            expected_approval = "plan" if self.mode == "read-only" else "always-proceed"
+            require(effective.get("approval") == expected_approval,
+                    f"task {task_id} AGY native approval mode is invalid")
         predicate = meta.get("predicate")
         require(isinstance(predicate, dict) and predicate.get("adapter") == self.provider and
                 predicate.get("mode") == self.mode and isinstance(predicate.get("version"), str) and
@@ -917,6 +1254,9 @@ class NativeAcceptance:
     def safe_shutdown(self) -> bool:
         if self.closed:
             return True
+        if self.daemon is None:
+            self.closed = True
+            return True
         try:
             if self.root_id is not None and self.ops.root_id is not None:
                 require(self.root_id == self.ops.root_id,
@@ -924,16 +1264,40 @@ class NativeAcceptance:
             elif self.root_id is not None:
                 self.ops.root_id = self.root_id
             self._sync_ops_owned_tasks()
-            self.ops.bind_supervisor(self.config, self.daemon)
-            retained = self.ops.retain_failure_ownership()
+            cleanup_ops: NativeTaskOps = self.ops
+            if getattr(self, "discover_models_only", False):
+                cleanup_ops = ModelDiscoveryCleanupOps(self)
+            cleanup_ops.bind_supervisor(self.config, self.daemon)
+            retained = cleanup_ops.retain_failure_ownership()
         except BaseException:
             return False
         if retained:
             self.closed = True
         return retained
 
-    def run(self) -> None:
+    def run(self) -> int:
         self.setup()
+        if self.discover_models_only:
+            self.discover_models()
+            self.shutdown()
+            write_json(self.output / "success.json", {
+                "gate": "acceptance-native", "status":
+                "passed" if self.model_discovery_exit_code == 0 else
+                "BLOCKED" if self.model_discovery_exit_code == 2 else "failed",
+                "provider": self.provider, "mode": self.mode,
+                "task_budget": TASK_BUDGET,
+                "canonical_task_budget": CANONICAL_TASK_BUDGET,
+                "requested_model": getattr(self.args, "model", None),
+                "requested_effort": getattr(self.args, "effort", None),
+                "model_discovery": self.model_discovery_summary,
+                "discovery_exit_code": self.model_discovery_exit_code,
+                "native_mode": self.native_mode_receipt(),
+                "credentials_in_receipt": False,
+                "natural_daemon_shutdown": self.closed,
+            })
+            require(isinstance(self.model_discovery_exit_code, int),
+                    "model discovery exit code is unavailable")
+            return self.model_discovery_exit_code
         before = workspace_snapshot(self.workspace)
         first = self.dispatch("fresh", self.brief("fresh"))
         self.wait_done("fresh", first)
@@ -971,7 +1335,13 @@ class NativeAcceptance:
         self.shutdown()
         write_json(self.output / "success.json", {
             "gate": "acceptance-native", "status": "passed", "provider": self.provider,
-            "mode": self.mode, "tasks": {
+            "mode": self.mode, "task_budget": TASK_BUDGET,
+            "canonical_task_budget": CANONICAL_TASK_BUDGET,
+            "requested_model": getattr(self.args, "model", None),
+            "requested_effort": getattr(self.args, "effort", None),
+            "model_discovery": self.model_discovery_summary,
+            "native_mode": self.native_mode_receipt(),
+            "tasks": {
                 "fresh": self.tasks["fresh"],
                 "resume": self.tasks["resume"],
             },
@@ -979,6 +1349,7 @@ class NativeAcceptance:
             "credentials_in_receipt": False,
             "natural_daemon_shutdown": self.closed,
         })
+        return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -995,6 +1366,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider-executable")
     parser.add_argument("--model")
     parser.add_argument("--effort")
+    parser.add_argument("--discover-models", action="store_true",
+                        help="run advisory model discovery and stop without admitting a task")
     return parser
 
 
@@ -1005,14 +1378,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         output = choose_output(args.provider, args.output)
         run = NativeAcceptance(argparse.Namespace(**{**vars(args), "output": str(output)}))
-        run.run()
-        print(json.dumps({"gate": "acceptance-native", "status": "passed", "provider": args.provider,
+        code = run.run()
+        status = "passed" if code == 0 else "BLOCKED" if code == 2 else "failed"
+        print(json.dumps({"gate": "acceptance-native", "status": status, "provider": args.provider,
                           "evidence": str(output)}, sort_keys=True))
-        return 0
+        return code
     except BlockedFailure as error:
         if output is not None:
             write_json(output / "failure.json", {"gate": "acceptance-native", "status": "BLOCKED",
-                                                  "provider": args.provider, "error": str(error),
+                                                  "provider": args.provider, "mode": args.mode,
+                                                  "scenario": args.scenario, "task_budget": TASK_BUDGET,
+                                                  "requested_model": args.model,
+                                                  "requested_effort": args.effort,
+                                                  "discover_models": args.discover_models,
+                                                  "error": str(error),
                                                   "no_retry": True, "credentials_in_receipt": False})
         if run is not None:
             run.safe_shutdown()
@@ -1021,7 +1400,12 @@ def main(argv: list[str] | None = None) -> int:
     except (AcceptanceFailure, OSError, ValueError, json.JSONDecodeError) as error:
         if output is not None:
             write_json(output / "failure.json", {"gate": "acceptance-native", "status": "failed",
-                                                  "provider": args.provider, "error": str(error),
+                                                  "provider": args.provider, "mode": args.mode,
+                                                  "scenario": args.scenario, "task_budget": TASK_BUDGET,
+                                                  "requested_model": args.model,
+                                                  "requested_effort": args.effort,
+                                                  "discover_models": args.discover_models,
+                                                  "error": str(error),
                                                   "no_retry": True, "credentials_in_receipt": False})
         if run is not None:
             run.safe_shutdown()
@@ -1030,7 +1414,12 @@ def main(argv: list[str] | None = None) -> int:
     except BaseException as error:
         if output is not None:
             write_json(output / "failure.json", {"gate": "acceptance-native", "status": "failed",
-                                                  "provider": args.provider, "error": str(error),
+                                                  "provider": args.provider, "mode": args.mode,
+                                                  "scenario": args.scenario, "task_budget": TASK_BUDGET,
+                                                  "requested_model": args.model,
+                                                  "requested_effort": args.effort,
+                                                  "discover_models": args.discover_models,
+                                                  "error": str(error),
                                                   "traceback": traceback.format_exc(), "no_retry": True,
                                                   "credentials_in_receipt": False})
         if run is not None:

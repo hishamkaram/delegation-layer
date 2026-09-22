@@ -637,7 +637,11 @@ func TestRunProviderReturnsFailureForReceiptErrorWithOutcome(t *testing.T) {
 	if err = json.Unmarshal(metaData, &meta); err != nil {
 		t.Fatal(err)
 	}
-	meta.ProviderExecutable = "/bin/true"
+	providerExecutable, err := filepath.EvalSymlinks("/usr/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.ProviderExecutable = providerExecutable
 	metaData, err = task.MarshalCanonical(&meta)
 	if err != nil {
 		t.Fatal(err)
@@ -645,8 +649,12 @@ func TestRunProviderReturnsFailureForReceiptErrorWithOutcome(t *testing.T) {
 	if err = os.WriteFile(metaPath, metaData, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	providerBytes, err := os.ReadFile(providerExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
 	profile := PreparedProfile{
-		Plan:            execution.Plan{Executable: "/bin/true", Directory: req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
+		Plan:            execution.Plan{Executable: providerExecutable, ExecutableSHA256: task.ComputeSHA256(providerBytes), Directory: req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
 		ObservedVersion: "fixture-v2",
 		Effective:       task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("app-test"))},
 		Identity: func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.IdentityObserver, error) {

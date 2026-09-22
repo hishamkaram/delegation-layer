@@ -292,6 +292,50 @@ func TestPrintArgumentsPreserveContainmentAndTaskOwnedFilesOnResume(t *testing.T
 	}
 }
 
+func TestPrintArgumentsPassModelAndEffortAndOmitDefault(t *testing.T) {
+	request := profileRequest()
+	request.RequestedConfig.Model = "claude-sonnet-4"
+	request.RequestedConfig.Effort = "max"
+	args, inputs, err := printArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := FreshSessionID(request.RootID, request.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose",
+		"--permission-mode", "plan", "--permission-prompts", "none",
+		"--model", "claude-sonnet-4", "--effort", "max", "--session-id", fresh,
+	}
+	if !slices.Equal(args, want) || len(inputs) != 0 {
+		t.Fatalf("argv=%q inputs=%+v", args, inputs)
+	}
+	request.RequestedConfig.Effort = "default"
+	args, _, err = printArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(args, "--effort") || slices.Contains(args, "--model") == false {
+		t.Fatalf("default effort was not omitted: %q", args)
+	}
+}
+
+func TestRuntimeRequirementsAddRequestedModelAndEffort(t *testing.T) {
+	base := runtimeRequirementsForRequest(profileRequest())
+	if slices.Contains(base.RequiredFlags, "--model") || slices.Contains(base.RequiredFlags, "--effort") {
+		t.Fatalf("default runtime requirements contain optional flags: %q", base.RequiredFlags)
+	}
+	request := profileRequest()
+	request.RequestedConfig.Model = "claude-sonnet-4"
+	request.RequestedConfig.Effort = "max"
+	got := runtimeRequirementsForRequest(request)
+	if !slices.Contains(got.RequiredFlags, "--model") || !slices.Contains(got.RequiredFlags, "--effort") {
+		t.Fatalf("requested runtime requirements omitted optional flags: %q", got.RequiredFlags)
+	}
+}
+
 func TestLegacyPrintArgumentsPreserveHistoricalRestrictionsAndInputs(t *testing.T) {
 	request := profileRequest()
 	args, inputs, err := legacyPrintArguments(request)
@@ -333,8 +377,9 @@ func TestPrintArgumentsRejectUnsupportedRequests(t *testing.T) {
 	cases := map[string]func(*task.TaskRecord){
 		"provider":          func(r *task.TaskRecord) { r.Provider = "codex:exec" },
 		"mode":              func(r *task.TaskRecord) { r.Mode = "workspace-write" },
-		"model":             func(r *task.TaskRecord) { r.RequestedConfig.Model = "other" },
-		"effort":            func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max" },
+		"model newline":     func(r *task.TaskRecord) { r.RequestedConfig.Model = "other\nmodel" },
+		"effort tab":        func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max\t" },
+		"oversized model":   func(r *task.TaskRecord) { r.RequestedConfig.Model = strings.Repeat("m", task.MaxControlRecordSize+1) },
 		"timeout":           func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "3s" },
 		"budget":            func(r *task.TaskRecord) { r.BudgetNanos = 0 },
 		"brief":             func(r *task.TaskRecord) { r.BriefLength = 0 },

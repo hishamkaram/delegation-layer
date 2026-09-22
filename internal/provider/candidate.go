@@ -35,6 +35,7 @@ type ProfileCandidate struct {
 // Project must return canonical nonsecret JSON, never native credential bytes.
 // Core discards error/panic values and publishes only fixed failure codes.
 type InspectionDefinition struct {
+	Models           *ModelDiscoveryDefinition                    `json:"models,omitempty"`
 	Revision         string                                       `json:"revision"`
 	Executable       string                                       `json:"executable"`
 	ExecutableSHA256 string                                       `json:"executable_sha256"`

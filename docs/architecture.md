@@ -95,6 +95,15 @@ help, and verifies the flags it will use. This accommodates provider releases
 that change their version number while preserving the command capabilities the
 adapter depends on.
 
+The implemented `delegate models` command is a separate advisory path. It
+reuses the state-rooted supervisor and runs one bounded native model inspection
+with the `model-discovery-v1` 60-second window, recording sanitized model facts
+without admitting a
+provider task. Its `complete` flag describes model enumeration; null effort
+metadata remains distinguishable from an explicitly empty list. Discovery is
+never used as an admission allowlist, and model facts are not treated as proof
+that an account can execute a listed model.
+
 ## Failure and recovery
 
 Admission, liveness, and publication are recorded separately. A queue result,

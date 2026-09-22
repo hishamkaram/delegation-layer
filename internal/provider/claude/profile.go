@@ -113,7 +113,7 @@ func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnviron
 		return commonprovider.ProfileCandidate{}, err
 	}
 	environment.RuntimeSHA256 = cli.SHA256
-	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, RuntimeRequirements())
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, runtimeRequirementsForRequest(request))
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -178,7 +178,7 @@ func preparePortableCandidate(request task.TaskRecord, predicateReference task.P
 	if predicateReference.Adapter == "" {
 		predicateReference = legacyPortableReferenceForMode(request.Mode)
 	}
-	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, legacyRuntimeRequirements())
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, legacyRuntimeRequirementsForRequest(request))
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -222,7 +222,7 @@ func prepareLegacyCandidate(request task.TaskRecord, predicateReference task.Pre
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	requirements := legacyRuntimeRequirements()
+	requirements := legacyRuntimeRequirementsForRequest(request)
 	definition.Runtime = &commonprovider.RuntimeProbeDefinition{
 		Executable:       cli.Path,
 		ExecutableSHA256: cli.SHA256,
@@ -273,7 +273,7 @@ func finalizePreparedProfile(
 	}
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
-			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
+			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(environment.Values), Predicate: predicateReference, InputFiles: slices.Clone(inputs),
 		},
 		ObservedVersion: runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
@@ -326,7 +326,7 @@ func finalizeNativePreparedProfileWithContract(
 	}
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
-			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
+			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(environment.Values), Predicate: options.predicateReference, InputFiles: slices.Clone(inputs),
 		},
 		ObservedVersion: runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
@@ -362,7 +362,7 @@ func finalizeLegacyPreparedProfile(
 	}
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
-			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
+			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(environment.Values), Predicate: predicateReference, InputFiles: slices.Clone(inputs),
 		},
 		ObservedVersion: facts.Runtime.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),

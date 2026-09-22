@@ -56,6 +56,103 @@ func TestNativePreparationLeavesProviderConfigurationAlone(t *testing.T) {
 	assertNativeReconstruction(t, request, profile, facts)
 }
 
+func TestNativeReadOnlyUsesPlanWithoutBypass(t *testing.T) {
+	request, candidate := prepareReadOnlyNativeCandidate(t)
+	facts := readOnlyRuntimeFacts(t, candidate)
+	assertReadOnlyProbe(t, candidate)
+	profile := finalizeReadOnlyProfile(t, candidate, facts)
+	assertReadOnlyProfile(t, profile)
+	assertReadOnlyReconstruction(t, request, profile, facts)
+}
+
+func prepareReadOnlyNativeCandidate(t *testing.T) (task.TaskRecord, commonprovider.ProfileCandidate) {
+	t.Helper()
+	home, workspace := profileFixture(t)
+	executable := filepath.Join(t.TempDir(), "agy")
+	if err := os.WriteFile(executable, []byte("fixture executable"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", filepath.Dir(executable))
+	request := argumentRequest()
+	request.Mode = ModeReadOnly
+	request.RequestedConfig.Permission = ModeReadOnly
+	request.CanonicalCwd = workspace
+	candidate, err := PrepareCandidate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request, candidate
+}
+
+func readOnlyRuntimeFacts(t *testing.T, candidate commonprovider.ProfileCandidate) []byte {
+	t.Helper()
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256, Version: "fixture"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return facts
+}
+
+func assertReadOnlyProbe(t *testing.T, candidate commonprovider.ProfileCandidate) {
+	t.Helper()
+	if slices.Contains(candidate.Inspection.Runtime.RequiredFlags, "--dangerously-skip-permissions") {
+		t.Fatal("read-only runtime probe retained bypass capability")
+	}
+}
+
+func finalizeReadOnlyProfile(t *testing.T, candidate commonprovider.ProfileCandidate, facts []byte) commonprovider.PreparedProfile {
+	t.Helper()
+	profile, err := candidate.Finalize(facts, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile
+}
+
+func assertReadOnlyProfile(t *testing.T, profile commonprovider.PreparedProfile) {
+	t.Helper()
+	if !slices.Contains(profile.Plan.Arguments, "--sandbox") {
+		t.Fatal("read-only native argv omitted sandbox")
+	}
+	if !slices.Contains(profile.Plan.Arguments, "plan") {
+		t.Fatal("read-only native argv omitted plan mode")
+	}
+	if slices.Contains(profile.Plan.Arguments, "--dangerously-skip-permissions") {
+		t.Fatalf("read-only native argv=%q", profile.Plan.Arguments)
+	}
+	if profile.Effective.Containment != ModeReadOnly {
+		t.Fatalf("read-only containment=%q", profile.Effective.Containment)
+	}
+	if profile.Effective.Approval != "plan" {
+		t.Fatalf("read-only approval=%q", profile.Effective.Approval)
+	}
+	if !profile.Plan.Predicate.Equal(NewCurrentPrintInterpreterForMode(ModeReadOnly).Reference()) {
+		t.Fatalf("read-only predicate=%+v", profile.Plan.Predicate)
+	}
+}
+
+func assertReadOnlyReconstruction(t *testing.T, request task.TaskRecord, profile commonprovider.PreparedProfile, facts []byte) {
+	t.Helper()
+	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: profile.Effective})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := reconstructed.Finalize(facts, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.CompareEffectiveConfigs(profile.Effective, replay.Effective) {
+		t.Fatal("read-only effective configuration changed during reconstruction")
+	}
+	if !slices.Equal(profile.Plan.Arguments, replay.Plan.Arguments) {
+		t.Fatal("read-only arguments changed during reconstruction")
+	}
+	if !profile.Plan.Predicate.Equal(replay.Plan.Predicate) {
+		t.Fatal("read-only predicate changed during reconstruction")
+	}
+}
+
 func assertUnattendedNativeApproval(t *testing.T, profile commonprovider.PreparedProfile, requiredFlags []string) {
 	t.Helper()
 	if !slices.Contains(profile.Plan.Arguments, "--dangerously-skip-permissions") ||

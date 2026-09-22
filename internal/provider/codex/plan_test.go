@@ -3,6 +3,7 @@ package codex
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,21 @@ func TestExecArgumentsUseNativePermissionsBeforeResume(t *testing.T) {
 	args, output, err = execArguments(request)
 	if err != nil || !slices.Equal(args, want) || output != 11 {
 		t.Fatalf("resume argv=%q output=%d err=%v", args, output, err)
+	}
+}
+
+func TestExecArgumentsPassModelAndEffortWithNativeEncoding(t *testing.T) {
+	request := profileRequest()
+	request.RequestedConfig.Model = "gpt-5.6"
+	request.RequestedConfig.Effort = `high "mode"`
+	want := []string{
+		"exec", "--json", "--color", "never", "--sandbox", "read-only", "-c", `approval_policy="never"`,
+		"--model", "gpt-5.6", "-c", `model_reasoning_effort="high \"mode\""`,
+		"--cd", request.CanonicalCwd, "--output-last-message", "", "-",
+	}
+	args, output, err := execArguments(request)
+	if err != nil || !slices.Equal(args, want) || output != 15 {
+		t.Fatalf("argv=%q output=%d err=%v", args, output, err)
 	}
 }
 
@@ -94,6 +110,20 @@ func TestRuntimeRequirementsOmitRemovedCodexControls(t *testing.T) {
 	}
 }
 
+func TestRuntimeRequirementsAddRequestedModelOnly(t *testing.T) {
+	base := runtimeRequirementsForRequest(profileRequest(), RuntimeRequirements())
+	if slices.Contains(base.RequiredFlags, "--model") {
+		t.Fatalf("default runtime requirements contain model flag: %q", base.RequiredFlags)
+	}
+	request := profileRequest()
+	request.RequestedConfig.Model = "gpt-5.6"
+	request.RequestedConfig.Effort = "high"
+	got := runtimeRequirementsForRequest(request, RuntimeRequirements())
+	if !slices.Contains(got.RequiredFlags, "--model") || slices.Contains(got.RequiredFlags, "--effort") {
+		t.Fatalf("requested Codex runtime requirements=%q", got.RequiredFlags)
+	}
+}
+
 func TestLegacyRuntimeRequirementsPreserveSnapshotFlagOrder(t *testing.T) {
 	requirements := legacyRuntimeRequirements()
 	want := []string{
@@ -107,9 +137,10 @@ func TestLegacyRuntimeRequirementsPreserveSnapshotFlagOrder(t *testing.T) {
 
 func TestExecArgumentsRejectUnsupportedRequests(t *testing.T) {
 	cases := map[string]func(*task.TaskRecord){
-		"model":              func(r *task.TaskRecord) { r.RequestedConfig.Model = "arbitrary" },
-		"effort":             func(r *task.TaskRecord) { r.RequestedConfig.Effort = "max" },
 		"native timeout":     func(r *task.TaskRecord) { r.RequestedConfig.NativeTimeout = "3s" },
+		"model newline":      func(r *task.TaskRecord) { r.RequestedConfig.Model = "model\nname" },
+		"effort tab":         func(r *task.TaskRecord) { r.RequestedConfig.Effort = "high\t" },
+		"oversized model":    func(r *task.TaskRecord) { r.RequestedConfig.Model = strings.Repeat("m", task.MaxControlRecordSize+1) },
 		"unbounded":          func(r *task.TaskRecord) { r.BudgetNanos = 0 },
 		"oversized":          func(r *task.TaskRecord) { r.BriefLength = task.MaxBriefSize + 1 },
 		"empty brief":        func(r *task.TaskRecord) { r.BriefLength = 0 },

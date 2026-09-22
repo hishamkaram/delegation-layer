@@ -33,6 +33,8 @@ An adapter is responsible for:
 
 - registering a stable profile ID, supported modes, options, help arguments,
   and required runtime flags;
+- declaring native model discovery when the profile can report model IDs or
+  effort metadata, while preserving unknown effort data as null;
 - preparing a command, bounded environment, canonical writable roots, policy,
   and input/output declarations;
 - observing the provider session identity; and
@@ -57,15 +59,23 @@ When an output format changes, add a versioned predicate interpreter only when
 the old format must remain collectible. Preserve strict task/session identity,
 containment, policy, and result-artifact checks. Update the catalog description,
 provider guide, troubleshooting notes, and meaningful unit tests together.
+Model discovery is an advisory projection, not a model allowlist. Its projector
+must distinguish model-enumeration completeness from effort metadata, preserve
+null versus an explicitly empty effort list, and avoid inferring per-model
+compatibility from names or harness-wide choices. The shared core owns the
+inspection process, `model-discovery-v1` 60-second bound, state root, and supervisor evidence; the
+adapter only projects bounded nonsecret facts.
 
 ## Validation expectations
 
 Use fake executable fixtures to prove that a newer arbitrary version is accepted
 when required flags exist, and that missing flags, missing executables, and
 non-executable files are rejected. Test malformed or conflicting output at the
-predicate boundary. Run the provider's live acceptance command only with a
-real signed-in account and a disposable workspace; it must not modify account
-credentials or global settings.
+predicate boundary, including model discovery status, null effort metadata,
+empty effort lists, duplicate model IDs, and exit-code mapping. Run the
+provider's live acceptance command only with a real signed-in account and a
+disposable workspace; it must not modify account credentials or global
+settings.
 
 Before opening a change, run `gofmt` (or the repository's `make fmt`), the full
 unit and race suites, script tests, `make check`, and
@@ -76,8 +86,8 @@ release workflow.
 
 When native provider credentials are available, run the relevant live gate with
 a disposable workspace. `make acceptance-native` covers each supported mode
-across all five providers, including positive unattended writes, continuation,
-and replay. `make acceptance-agy`, `make acceptance-codex`,
+across all five providers, including AGY read-only, positive unattended writes,
+continuation, and replay. `make acceptance-agy`, `make acceptance-codex`,
 `make acceptance-claude`, `make acceptance-pi`, and `make acceptance-opencode`
 select individual profiles. A live
 gate returns `0` for a pass, `1` for a real behavior or evidence failure, and
@@ -85,6 +95,20 @@ gate returns `0` for a pass, `1` for a real behavior or evidence failure, and
 blocked profiles neutral so an unavailable login does not block unrelated
 development. Report its status and counts alongside the exit code; an aggregate
 `BLOCKED` result is not authenticated live proof.
+
+Model discovery is a separate acceptance entry so the task matrix does not
+repeat native discovery for every mode. Run it once per provider when validating
+the discovery command:
+
+```sh
+python3 scripts/acceptance_native.py --provider antigravity:print \
+  --permission read-only --scenario read-only --discover-models
+```
+
+The harness records the JSON observation and applies the command's `0`, `1`,
+and `2` status mapping. A run must produce its own receipt before it is treated
+as live evidence; documentation and tests do not imply that a live run has
+already passed.
 
 ## Documentation changes
 

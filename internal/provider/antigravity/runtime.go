@@ -2,8 +2,10 @@ package antigravity
 
 import (
 	"fmt"
+	"slices"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 type runtimeIdentity struct {
@@ -22,6 +24,18 @@ func RuntimeRequirements() commonprovider.RuntimeCapability {
 			"--print-timeout", "--conversation", "--dangerously-skip-permissions",
 		},
 	}
+}
+
+func runtimeRequirementsForRequest(request task.TaskRecord) commonprovider.RuntimeCapability {
+	requirements := RuntimeRequirements()
+	requirements.RequiredFlags = slices.Clone(requirements.RequiredFlags)
+	if request.RequestedConfig.Model != "" {
+		requirements.RequiredFlags = append(requirements.RequiredFlags, "--model")
+	}
+	if effort := request.RequestedConfig.Effort; effort != "" && effort != "default" {
+		requirements.RequiredFlags = append(requirements.RequiredFlags, "--effort")
+	}
+	return requirements
 }
 
 func decodeRuntimeIdentity(facts commonprovider.InspectionFacts, located commonprovider.CLIInfo) (runtimeIdentity, error) {

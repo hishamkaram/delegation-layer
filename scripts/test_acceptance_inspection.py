@@ -58,7 +58,8 @@ class InspectionHarnessTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def inspection_records(self, result: str | None = "eligible",
-                           include_ordinary: bool = True) -> Path:
+                           include_ordinary: bool = True,
+                           revision: str = "inspection-v1") -> Path:
         # Declare the expectation before restoring the seeded dispatch
         # attempt, matching the production pre-dispatch ordering.
         self.ops.dispatch_attempts.discard(TASK)
@@ -83,7 +84,7 @@ class InspectionHarnessTests(unittest.TestCase):
             "task": task_record,
             "task_sha256": provider_common.sha(provider_common._canonical_task_bytes(task_record)),
             "binding": {
-                "definition_revision": "inspection-v1",
+                "definition_revision": revision,
                 "definition_sha256": "d" * 64,
                 "helper_executable": str(self.base / "helper"),
                 "helper_sha256": "e" * 64,
@@ -102,7 +103,8 @@ class InspectionHarnessTests(unittest.TestCase):
             "group": _inspection_group(ROOT),
             "label": f"{_inspection_group(ROOT)}-{TASK}",
             "created_at": "2026-09-15T00:00:00Z",
-            "deadline": "2026-09-15T00:00:20Z",
+            "deadline": ("2026-09-15T00:01:00Z" if revision == "model-discovery-v1"
+                         else "2026-09-15T00:00:20Z"),
         }
         write_json(directory / "request.json", request)
         self.ops.expect_inspection(TASK, request["binding"])
@@ -526,6 +528,31 @@ class InspectionHarnessTests(unittest.TestCase):
         self.ops.tasks = {}
         status = self.status(self.inspection_row({"Failed": 17}), include_ordinary=False)
         self.assertFalse(self.ops.failure_queue_finished(status))
+
+    def test_model_discovery_journal_requires_complete_standalone_proof(self):
+        directory = self.inspection_records(include_ordinary=False,
+                                            revision="model-discovery-v1")
+        records = self.ops.validate_inspection_journals()
+        self.assertEqual(set(records), {TASK})
+        self.assertFalse((self.state / "tasks").exists())
+        (directory / "worker-observation.json").unlink()
+        with self.assertRaisesRegex(AcceptanceFailure, "proof"):
+            self.ops.validate_inspection_journals()
+
+    def test_model_discovery_rejects_an_ordinary_task(self):
+        self.inspection_records(revision="model-discovery-v1")
+        with self.assertRaisesRegex(AcceptanceFailure, "ordinary task"):
+            self.ops.validate_inspection_journals()
+
+    def test_model_discovery_requires_its_exact_deadline(self):
+        directory = self.inspection_records(include_ordinary=False,
+                                            revision="model-discovery-v1")
+        request = read_json(directory / "request.json")
+        request["deadline"] = "2026-09-15T00:00:20Z"
+        write_json(directory / "request.json", request, replace=True)
+        self.refresh_request_links(directory)
+        with self.assertRaisesRegex(AcceptanceFailure, "60 seconds"):
+            self.ops.validate_inspection_journals()
 
     def test_inspection_request_requires_exact_deadline_window(self):
         directory = self.inspection_records(result=None, include_ordinary=False)

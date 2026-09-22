@@ -87,13 +87,13 @@ func (o *Operation) ReadProofContext(ctx context.Context) (json.RawMessage, erro
 	if observation.SchemaVersion != task.SchemaVersion || observation.RequestSHA256 != o.digest || observation.CompletionSHA256 != task.ComputeSHA256(data) || observation.NumericTaskID != *receipt.NumericTaskID || observation.State != "succeeded" {
 		return nil, task.ErrEvidenceFault
 	}
-	return canonicalResultFacts(result)
+	return canonicalResultFacts(result, o.factsLimit())
 }
 
-func canonicalResultFacts(result ResultRecord) (json.RawMessage, error) {
+func canonicalResultFacts(result ResultRecord, limits ...int) (json.RawMessage, error) {
 	data, err := task.MarshalCanonical(result.Facts)
 	if err != nil {
 		return nil, task.ErrEvidenceFault
 	}
-	return canonicalProjectionFacts(data)
+	return canonicalFactsWithin(data, inspectionFactsLimit(limits))
 }

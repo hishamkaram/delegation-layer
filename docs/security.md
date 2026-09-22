@@ -37,12 +37,20 @@ Provider CLIs load and enforce their own settings, MCP servers, hooks, plugins,
 and skills. New tasks do not inventory these sources or disable them. Permission
 flags request native behavior; custom tools and extensions remain governed by
 the provider. Delegation Layer does not independently contain their effects.
-Workspace-write requests unattended native execution. Antigravity uses native
-automatic approval, Claude uses permission bypass, Pi uses native configured
-tools, and OpenCode uses its automatic build mode. These modes can permit
-access beyond the selected workspace; configured native restrictions still
-belong to each provider. Previously admitted tasks retain their recorded
-preparation contract.
+Workspace-write requests unattended native execution. Antigravity read-only
+uses exactly `--sandbox --mode plan` without a bypass; its authorized
+workspace-write path retains `--sandbox --mode accept-edits` with the existing
+native bypass. Claude uses permission bypass, Pi uses native configured tools,
+and OpenCode uses its automatic build mode. These modes can permit access
+beyond the selected workspace; configured native restrictions still belong to
+each provider. Previously admitted tasks retain their recorded preparation
+contract.
+
+Model discovery reports bounded, nonsecret model facts through the same
+state-rooted inspection boundary. Its output is advisory and never an
+admission allowlist. A null effort list is unknown metadata; an empty list is
+an explicit report of no choices, and harness-wide choices are not assumed to
+apply to every model.
 
 ## Process and output safety
 

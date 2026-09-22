@@ -60,6 +60,26 @@ func TestSupervisedQueuedExpiryDoesNotEnterWork(t *testing.T) {
 	}
 }
 
+func TestSupervisedStartGateRefusesClockExpiredStart(t *testing.T) {
+	clock := newAdvancingClock()
+	starts := 0
+	workErr, stopErr := RunSupervised(clock.Now().Add(time.Minute), SupervisedOptions{
+		Clock: clock,
+		Stopper: budgetPreparerFunc(func(time.Time) (BudgetRequest, error) {
+			return func(context.Context) error { return nil }, nil
+		}),
+	}, func(scope PreflightScope) error {
+		clock.advance(time.Minute)
+		return scope.Start(func() error {
+			starts++
+			return nil
+		})
+	})
+	if !errors.Is(workErr, errBudgetExpiredBeforeStart) || stopErr != nil || starts != 0 {
+		t.Fatalf("expired start gate launched native work: work=%v stop=%v starts=%d", workErr, stopErr, starts)
+	}
+}
+
 func TestSupervisedLateSuccessCannotBecomeEligible(t *testing.T) {
 	clock := newAdvancingClock()
 	preparations := 0

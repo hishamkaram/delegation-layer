@@ -12,7 +12,7 @@ func Description() commonprovider.Description {
 	return commonprovider.Description{
 		ID:               Provider,
 		SupportedModes:   []string{Mode, WorkspaceWriteMode},
-		SupportedOptions: []string{commonprovider.OptionContinuation},
+		SupportedOptions: []string{commonprovider.OptionContinuation, commonprovider.OptionEffort, commonprovider.OptionModel},
 		Continuation:     commonprovider.ContinuationNative,
 		Runtime:          RuntimeRequirements(),
 		Discoverable:     true,

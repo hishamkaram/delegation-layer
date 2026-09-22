@@ -113,7 +113,7 @@ func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments [
 	}
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
-			Executable: cli.Path, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
+			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(environment.Values), Predicate: predicateReference,
 		},
 		ObservedVersion: runtime.Version,
@@ -155,7 +155,10 @@ func profilePredicateReference(native bool, mode string, stored task.PredicateRe
 	if !native {
 		return LegacyReference()
 	}
-	if mode == ModeReadOnly && stored.Equal(readOnlyV2Reference()) {
+	switch {
+	case mode == ModeReadOnly && (stored.Equal(readOnlyV2Reference()) || stored.Equal(readOnlyV3Reference())):
+		return stored
+	case mode == ModeWorkspaceWrite && stored.Equal(workspaceWriteV3Reference()):
 		return stored
 	}
 	return ReferenceForMode(mode)

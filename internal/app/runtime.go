@@ -48,6 +48,7 @@ Commands:
   dispatch      Persist and submit one bounded provider turn
   providers     Describe compiled provider capabilities
   capabilities  Report one provider capability contract
+  models        Discover native model IDs and effort choices
   status        Observe admission, liveness, and publication
   collect       Recover or read the immutable publication
   cancel        Request one explicit supervisor stop
@@ -62,7 +63,7 @@ Global flags:
   --pueue-config ABS      Initial supervisor configuration
   --runner ABS            Runner executable for dispatch
 
-Use --json on task, providers, capabilities, preflight, and continue commands for the versioned response.
+Use --json on task, providers, capabilities, models, preflight, and continue commands for the versioned response.
 `
 
 // Dependencies is the explicit composition boundary for production and the
@@ -236,6 +237,9 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	}
 	if parsed.Command == "capabilities" {
 		return runCapabilities(parsed.JSON, stdout, stderr, normalized.Catalog, parsed.Provider)
+	}
+	if parsed.Command == "models" {
+		return runModels(parsed, stdout, normalized)
 	}
 	result := runCommand(parsed, normalized)
 	if parsed.JSON {

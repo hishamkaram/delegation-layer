@@ -1,20 +1,15 @@
 package provider
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/hishamkaram/delegation-layer/internal/config"
-	"golang.org/x/sys/unix"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 // CLIInfo describes the executable selected for one task. The version and
@@ -41,19 +36,11 @@ func LocateCLI(name string) (CLIInfo, error) {
 // capability probe. It rejects aliases, special files, and non-executable
 // paths while never invoking the provider.
 func LocateCLIPath(path string) (CLIInfo, error) {
-	absolute, err := filepath.Abs(path)
+	info, err := verifiedexec.LocatePath(path)
 	if err != nil {
-		return CLIInfo{}, fmt.Errorf("resolve provider executable: %w", err)
+		return CLIInfo{}, err
 	}
-	canonical, err := config.CanonicalizePath(absolute)
-	if err != nil {
-		return CLIInfo{}, fmt.Errorf("resolve provider executable: %w", err)
-	}
-	digest, err := FingerprintExecutable(canonical)
-	if err != nil {
-		return CLIInfo{}, fmt.Errorf("inspect provider executable: %w", err)
-	}
-	return CLIInfo{Path: canonical, SHA256: digest}, nil
+	return CLIInfo{Path: info.Path, SHA256: info.SHA256}, nil
 }
 
 // ParseCLIVersion accepts any nonempty, valid UTF-8 text emitted on stdout by
@@ -109,51 +96,14 @@ func isCLIFlagRune(value byte) bool {
 // it. The digest is an admission identity observation, not a release
 // constraint.
 func FingerprintExecutable(path string) (digest string, resultErr error) {
-	canonical, err := config.CanonicalizePath(path)
-	if err != nil || canonical != path || !filepath.IsAbs(path) {
-		return "", errors.New("executable path is not canonical")
-	}
-	before, err := os.Lstat(path)
-	if err != nil {
-		return "", err
-	}
-	if !before.Mode().IsRegular() || before.Mode().Perm()&0o111 == 0 {
-		return "", errors.New("runtime is not a regular executable")
-	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
-	if err != nil {
-		return "", err
-	}
-	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		return "", errors.Join(errors.New("invalid executable descriptor"), unix.Close(fd))
-	}
-	defer func() { resultErr = errors.Join(resultErr, file.Close()) }()
-	return fingerprintOpened(path, file, before)
+	return verifiedexec.Fingerprint(path)
 }
 
-func fingerprintOpened(path string, file *os.File, before os.FileInfo) (string, error) {
-	opened, err := file.Stat()
-	if err != nil {
-		return "", err
-	}
-	if !opened.Mode().IsRegular() || opened.Mode().Perm()&0o111 == 0 || !os.SameFile(before, opened) {
-		return "", errors.New("runtime changed before inspection")
-	}
-	hash := sha256.New()
-	length, err := io.Copy(hash, file)
-	if err != nil {
-		return "", err
-	}
-	final, statErr := file.Stat()
-	named, nameErr := os.Lstat(path)
-	if err = errors.Join(statErr, nameErr); err != nil {
-		return "", err
-	}
-	if !named.Mode().IsRegular() || named.Mode().Perm()&0o111 == 0 || !os.SameFile(named, opened) ||
-		!os.SameFile(final, opened) || final.Size() != opened.Size() || length != opened.Size() ||
-		!final.ModTime().Equal(opened.ModTime()) || !named.ModTime().Equal(opened.ModTime()) {
-		return "", errors.New("runtime changed during inspection")
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+// OpenVerifiedExecutable opens the exact regular executable represented by
+// expectedSHA256 and leaves the descriptor positioned at its beginning. The
+// descriptor can be used by platform-specific launch code that supports
+// descriptor-backed execution; portable callers should use the verified
+// command builder, which preserves the same admitted bytes on every platform.
+func OpenVerifiedExecutable(path, expectedSHA256 string) (*os.File, error) {
+	return verifiedexec.Open(path, expectedSHA256)
 }

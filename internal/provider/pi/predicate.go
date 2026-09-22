@@ -43,6 +43,10 @@ func newReadOnlyV2Interpreter() predicate.Interpreter {
 	return interpreter{mode: ModeReadOnly, version: historicalPredicateV2}
 }
 
+func newHistoricalV3Interpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, version: historicalPredicateV3}
+}
+
 func (i interpreter) Reference() task.PredicateRef {
 	return referenceForVersion(i.mode, i.version)
 }
@@ -54,9 +58,12 @@ func (i interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out
 	if err := validateEvaluationInput(input, raw, out, i.Reference()); err != nil {
 		return task.Interpretation{}, err
 	}
+	nativeRetryContract := i.version == predicateVersion || i.version == historicalPredicateV3
 	stdout, err := readEvidenceWithOptions(raw, parserOptions{
-		allowNativeRetry: i.version == predicateVersion,
-		settledTerminal:  i.version == predicateVersion,
+		allowNativeRetry:          nativeRetryContract,
+		settledTerminal:           nativeRetryContract,
+		rejectTrailingRetryEnd:    i.version == predicateVersion,
+		requireAgentEndErrorMatch: i.version == predicateVersion,
 	})
 	if err != nil {
 		return task.Interpretation{}, err

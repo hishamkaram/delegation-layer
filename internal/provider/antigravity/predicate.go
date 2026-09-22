@@ -17,22 +17,36 @@ const (
 	refusalProviderFailed   = "provider-failed"
 )
 
-type printInterpreter struct{ classifyErrorBeforeIdentity bool }
+type printInterpreter struct {
+	mode                        string
+	classifyErrorBeforeIdentity bool
+}
 
 // NewPrintInterpreter returns the immutable agy print-envelope interpreter.
-func NewPrintInterpreter() predicate.Interpreter { return printInterpreter{} }
+func NewPrintInterpreter() predicate.Interpreter { return printInterpreter{mode: Mode} }
 
 // NewCurrentPrintInterpreter classifies known ERROR envelopes before requiring
 // a conversation UUID. The legacy constructor remains available for replay.
 func NewCurrentPrintInterpreter() predicate.Interpreter {
-	return printInterpreter{classifyErrorBeforeIdentity: true}
+	return NewCurrentPrintInterpreterForMode(Mode)
+}
+
+// NewCurrentPrintInterpreterForMode binds the current envelope rules to the
+// requested containment mode so a read-only result cannot satisfy a write
+// profile and vice versa.
+func NewCurrentPrintInterpreterForMode(mode string) predicate.Interpreter {
+	return printInterpreter{mode: mode, classifyErrorBeforeIdentity: true}
 }
 
 func (v printInterpreter) Reference() task.PredicateRef {
-	if v.classifyErrorBeforeIdentity {
-		return task.PredicateRef{Adapter: Provider, Mode: Mode, Version: "1.2.2-auth2", SHA256: task.ComputeSHA256([]byte(currentPrintContract))}
+	mode := v.mode
+	if mode == "" {
+		mode = Mode
 	}
-	return task.PredicateRef{Adapter: Provider, Mode: Mode, Version: Version, SHA256: ContractDigest()}
+	if v.classifyErrorBeforeIdentity {
+		return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "1.2.2-auth2", SHA256: task.ComputeSHA256([]byte(currentPrintContract))}
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: Version, SHA256: ContractDigest()}
 }
 
 func (v printInterpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
