@@ -58,7 +58,10 @@ func TestPortableCommandPreservesRelativeNodeImports(t *testing.T) {
 	if err != nil {
 		t.Skip("node is unavailable")
 	}
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err = os.WriteFile(filepath.Join(root, "helper.mjs"), []byte("console.log('relative import resolved')\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -103,17 +106,20 @@ func TestPortableCommandPreservesRelativeNodeImports(t *testing.T) {
 }
 
 func TestNewCommandInDirectoryResolvesRelativePathFromLaunchDirectory(t *testing.T) {
-	root := t.TempDir()
-	bin := filepath.Join(root, "bin")
-	if err := os.Mkdir(bin, 0o700); err != nil {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/bin/sh", filepath.Join(bin, "sh")); err != nil {
-		t.Fatal(err)
+	bin := filepath.Join(root, "bin")
+	if mkdirErr := os.Mkdir(bin, 0o700); mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
+	if symlinkErr := os.Symlink("/bin/sh", filepath.Join(bin, "sh")); symlinkErr != nil {
+		t.Fatal(symlinkErr)
 	}
 	providerPath := filepath.Join(root, "provider-cli")
-	if err := os.WriteFile(providerPath, []byte("#!/usr/bin/env sh\nprintf 'relative path resolved\\n'\n"), 0o700); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(providerPath, []byte("#!/usr/bin/env sh\nprintf 'relative path resolved\\n'\n"), 0o700); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	provider, err := LocatePath(providerPath)
 	if err != nil {

@@ -184,12 +184,15 @@ func TestOwnedInvocationExactStdinAndNoRelaunch(t *testing.T) {
 }
 
 func TestInvocationUsesVerifiedExecutableAfterPathReplacement(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	original := filepath.Join(root, "provider")
 	replacement := filepath.Join(root, "replacement")
 	for path, output := range map[string]string{original: "original", replacement: "replacement"} {
-		if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '"+output+"'\n"), 0o700); err != nil {
-			t.Fatal(err)
+		if writeErr := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' '"+output+"'\n"), 0o700); writeErr != nil {
+			t.Fatal(writeErr)
 		}
 	}
 	originalBytes, err := os.ReadFile(original)
