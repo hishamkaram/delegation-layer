@@ -31,7 +31,7 @@ run_case() {
 for provider in antigravity:print claude:print codex:exec pi:json opencode:run; do
     run_case "$provider" workspace-write write
 done
-for provider in claude:print codex:exec pi:json opencode:run; do
+for provider in antigravity:print claude:print codex:exec pi:json opencode:run; do
     run_case "$provider" read-only read-only
 done
 if [ "$failed" -ne 0 ]; then

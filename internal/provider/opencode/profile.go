@@ -156,7 +156,7 @@ func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []s
 	}
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
-			Executable: cli.Path, Arguments: cloneArguments(arguments), Directory: request.CanonicalCwd,
+			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: cloneArguments(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(launchEnvironment), Predicate: ReferenceForMode(request.Mode),
 		},
 		ObservedVersion: runtime.Version,
@@ -191,7 +191,7 @@ func finalizeLegacyCandidate(request task.TaskRecord, arguments, launchEnvironme
 	}
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
-			Executable: cli.Path, Arguments: cloneArguments(arguments), Directory: request.CanonicalCwd,
+			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: cloneArguments(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(launchEnvironment), Predicate: predicateReference,
 		},
 		ObservedVersion: runtime.Version,

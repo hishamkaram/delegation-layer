@@ -19,6 +19,9 @@ func Inspect(scope execution.PreflightScope, definition provider.InspectionDefin
 	if scope.Authorize() != nil {
 		return nil, errNativeInspection
 	}
+	if definition.Models != nil {
+		return inspectModels(scope, definition)
+	}
 	var runtimeFacts *provider.RuntimeFacts
 	if definition.Runtime != nil {
 		facts, runtimeErr := InspectRuntime(scope, *definition.Runtime, definition.OutputLimit)
@@ -34,7 +37,7 @@ func Inspect(scope execution.PreflightScope, definition provider.InspectionDefin
 		if digestErr != nil || digest != definition.ExecutableSHA256 {
 			return nil, errNativeInspection
 		}
-		native, nativeErr := runNative(scope.Context(), definition, scope.Authorize, nativeHooks{})
+		native, nativeErr := runNative(scope, definition, nativeHooks{})
 		if nativeErr != nil {
 			return nil, nativeErr
 		}

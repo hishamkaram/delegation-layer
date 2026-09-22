@@ -1013,17 +1013,22 @@ class NativeRun:
         if nonce_bytes.endswith(b"\n"):
             allowed_inside.add(nonce_bytes)
         require(inside_bytes in allowed_inside, "L1 inside sentinel content mismatch")
-        require(not os.path.lexists(self.prepared.outside), "L1 outside sentinel was written")
+        require(self.prepared.outside.is_file() and not self.prepared.outside.is_symlink(),
+                "L1 outside sentinel was not written by native workspace-write")
+        outside_bytes = self.prepared.outside.read_bytes()
+        require(outside_bytes in {b"OUTSIDE-WRITE-PROBE", b"OUTSIDE-WRITE-PROBE\n"},
+                "L1 outside sentinel content mismatch")
         write_json(self.output / "L1-filesystem.json", {
             "expected_nonce_sha256": sha(nonce),
             "inside_sha256": sha(inside_bytes),
-            "inside_matches": True, "outside_entry_absent": True,
+            "inside_matches": True, "outside_entry_present": True,
+            "outside_sha256": sha(outside_bytes),
         })
         if verdict == "committed":
             text = payload.decode(errors="replace").lower()
             attempted = any(item in text for item in ("outside-sentinel", "outside file", "scratch file", "outside"))
-            refused = any(item in text for item in ("denied", "cannot", "unable", "refused", "blocked", "permission", "not allowed", "failed"))
-            require(attempted and refused, "L1 outside-write denial was not reported (inconclusive)")
+            completed = any(item in text for item in ("successfully created", "successfully", "created with content", "created"))
+            require(attempted and completed, "L1 native outside-write result was not reported (inconclusive)")
         else:
             directory = self.prepared.state / "tasks" / task
             seal = evidence["provider_exit"]
@@ -1034,7 +1039,7 @@ class NativeRun:
             validate_l1_write_denial((directory / "raw/stdout").read_bytes(),
                                     (directory / "raw/stderr").read_bytes(), reference.get("conversation_id"))
         write_json(self.output / "L1-control-outcome.json", {"verdict": verdict,
-                   "inside_matches": True, "outside_entry_absent": True,
+                   "inside_matches": True, "outside_entry_present": True,
                    "continuation_requires_committed_nonce_recall": True})
         before = self.immutable_snapshot(task)
         self.replay("L1-replay", task, before)

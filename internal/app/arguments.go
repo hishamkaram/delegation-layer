@@ -82,7 +82,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "status", "collect", "cancel", "logs":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "cancel", "logs":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -103,6 +103,11 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
 	if a.Command == "collect" {
 		fs.StringVar(watch, "watch", "0s", "finite observation bound")
+	}
+	if a.Command == "models" {
+		fs.StringVar(&a.Provider, "provider", "", "provider profile")
+		fs.StringVar(&a.Cwd, "cwd", "", "working directory (default: current directory)")
+		return
 	}
 	if a.Command == "capabilities" {
 		fs.StringVar(&a.Provider, "provider", "", "provider profile")
@@ -190,6 +195,11 @@ func (a *Arguments) validate(positional []string, watch string) error {
 	switch a.Command {
 	case "help", "version", "providers":
 		return validateNoPositional(a.Command, positional)
+	case "models":
+		if a.Cwd != "" && !filepath.IsAbs(a.Cwd) {
+			return errors.New("models --cwd must be absolute")
+		}
+		return validateCapabilities(positional, a.Provider)
 	case "capabilities":
 		return validateCapabilities(positional, a.Provider)
 	case "preflight":

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -49,6 +51,7 @@ func printArgumentsWithPermission(request task.TaskRecord, permissionMode string
 		"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose",
 		"--permission-mode", permissionMode, "--permission-prompts", "none",
 	}
+	arguments = appendModelArguments(arguments, request)
 	return appendSessionArguments(request, arguments, nil)
 }
 
@@ -110,6 +113,7 @@ func legacyPrintArguments(request task.TaskRecord) ([]string, []task.InputFile, 
 		{Name: "claude-profile.json", ArgumentIndex: 16, Content: settings},
 		{Name: "empty-mcp.json", ArgumentIndex: 14, Content: emptyMCPSettings},
 	}
+	arguments = appendModelArguments(arguments, request)
 	return appendSessionArguments(request, arguments, inputs)
 }
 
@@ -151,10 +155,38 @@ func validateRequestIdentity(request task.TaskRecord) error {
 }
 
 func validateRequestOptions(request task.TaskRecord) error {
-	if request.RequestedConfig.Model != "" || (request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default") || request.RequestedConfig.NativeTimeout != "" {
-		return fmt.Errorf("%w: only provider-default model and effort are supported", ErrUnsupportedProfile)
+	if request.RequestedConfig.NativeTimeout != "" {
+		return fmt.Errorf("%w: Claude has no native timeout option", ErrUnsupportedProfile)
+	}
+	if model := request.RequestedConfig.Model; model != "" && !validNativeOptionText(model) {
+		return fmt.Errorf("%w: model contains invalid bounded text", ErrUnsupportedProfile)
+	}
+	if effort := request.RequestedConfig.Effort; effort != "" && effort != "default" && !validNativeOptionText(effort) {
+		return fmt.Errorf("%w: effort contains invalid bounded text", ErrUnsupportedProfile)
 	}
 	return nil
+}
+
+func appendModelArguments(arguments []string, request task.TaskRecord) []string {
+	if model := request.RequestedConfig.Model; model != "" {
+		arguments = append(arguments, "--model", model)
+	}
+	if effort := request.RequestedConfig.Effort; effort != "" && effort != "default" {
+		arguments = append(arguments, "--effort", effort)
+	}
+	return arguments
+}
+
+func validNativeOptionText(value string) bool {
+	if value == "" || len(value) > task.MaxControlRecordSize || strings.TrimSpace(value) != value || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f || character >= 0x80 && character <= 0x9f {
+			return false
+		}
+	}
+	return true
 }
 
 func validateRequestBounds(request task.TaskRecord) error {

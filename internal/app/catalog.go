@@ -22,11 +22,11 @@ func NativeCatalog() commonprovider.Catalog {
 		panic(err) // the immutable built-in fixture contract is a build invariant
 	}
 	catalog, err := commonprovider.NewCatalog(
-		antigravity.Registration(),
-		codex.Registration(),
-		claude.Registration(),
-		pi.Registration(),
-		opencode.Registration(),
+		withModels(antigravity.Registration(), antigravity.ModelDiscovery),
+		withModels(codex.Registration(), codex.ModelDiscovery),
+		withModels(claude.Registration(), claude.ModelDiscovery),
+		withModels(pi.Registration(), pi.ModelDiscovery),
+		withModels(opencode.Registration(), opencode.ModelDiscovery),
 		commonprovider.Registration{
 			Description: commonprovider.Description{
 				ID:           config.ProviderFixture,
@@ -39,4 +39,9 @@ func NativeCatalog() commonprovider.Catalog {
 		panic(err) // compiled registrations are validated before command use
 	}
 	return catalog
+}
+
+func withModels(registration commonprovider.Registration, models func() commonprovider.ModelDiscoveryDefinition) commonprovider.Registration {
+	registration.Models = models
+	return registration
 }

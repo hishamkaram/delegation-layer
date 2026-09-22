@@ -23,6 +23,15 @@ the same as a successful provider result.
    with `status` and `collect` before considering any action. Never relaunch an
    uncertain task by guessing.
 
+For `delegate models`, validate the complete JSON envelope before using any
+fact. Treat `available` and `partial` with exit `0` as observations, preserve
+`blocked` and `unavailable` with exit `2` as unresolved prerequisites, and
+preserve `failed` with exit `1` as a discovery failure. `complete` refers to
+model enumeration. Keep `efforts: null` distinct from `efforts: []`, and do not
+apply harness-wide effort choices to every model. Discovery is advisory and
+never an admission allowlist; a provider default remains valid and a listed
+model is not an execution guarantee.
+
 Exit codes are bounded control signals: `0` is a completed command, `1` is an
 operational error, `2` is an invalid or unsupported request, `3` is a pending
 collection watch, and `4` is a validated rejected outcome.

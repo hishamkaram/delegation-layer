@@ -171,7 +171,11 @@ func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 	requested := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}
 	req := &task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, Provider: "fixture:test", Mode: "read-only", CanonicalCwd: cwd, RequestedConfig: requested, BudgetNanos: int64(time.Minute), BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
 	digest := task.ComputeSHA256([]byte("runner-profile"))
-	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: "/bin/true", ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: supervisor.Binding(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	providerExecutable, err := filepath.EvalSymlinks("/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: providerExecutable, ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: supervisor.Binding(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	td, err := store.CreateTask(id, req, brief, meta)
 	if err != nil {
 		t.Fatal(err)
@@ -188,8 +192,16 @@ func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 }
 
 func (f *runnerRefreshFixture) profile() PreparedProfile {
+	providerExecutable, err := filepath.EvalSymlinks("/bin/true")
+	if err != nil {
+		providerExecutable = "/bin/true"
+	}
+	providerBytes, err := os.ReadFile(providerExecutable)
+	if err != nil {
+		providerBytes = nil
+	}
 	return PreparedProfile{
-		Plan:            execution.Plan{Executable: "/bin/true", Directory: f.req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
+		Plan:            execution.Plan{Executable: providerExecutable, ExecutableSHA256: task.ComputeSHA256(providerBytes), Directory: f.req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
 		ObservedVersion: "fixture-v2",
 		Effective:       task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("runner-profile"))},
 	}

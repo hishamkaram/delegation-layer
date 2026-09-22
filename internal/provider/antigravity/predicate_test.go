@@ -35,6 +35,14 @@ func TestPrintReferenceAndContractDigest(t *testing.T) {
 	}
 }
 
+func TestCurrentPrintReferenceBindsContainmentMode(t *testing.T) {
+	write := NewCurrentPrintInterpreter().Reference()
+	readOnly := NewCurrentPrintInterpreterForMode(ModeReadOnly).Reference()
+	if write.Mode != ModeWorkspaceWrite || readOnly.Mode != ModeReadOnly || write.Version != readOnly.Version || write.SHA256 != readOnly.SHA256 {
+		t.Fatalf("mode-bound references changed contract identity unexpectedly: write=%+v read-only=%+v", write, readOnly)
+	}
+}
+
 func TestSuccessPayloadDecodesExactlyAndCopiesUsage(t *testing.T) {
 	stdout := []byte(`{"conversation_id":"123e4567-e89b-12d3-a456-426614174000","status":"SUCCESS","response":"  lead\nline\r\t☃ \"quoted\" \/ \\backslash \u0000 \ud83d\ude00  " ,"duration_seconds":1.250e+0,"num_turns":3,"usage":{"input_tokens":0,"output_tokens":25,"thinking_tokens":7,"cache_read_tokens":null,"total_tokens":32}}`)
 	wantAnswer := "  lead\nline\r\t☃ \"quoted\" / \\backslash \x00 😀  "

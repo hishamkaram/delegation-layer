@@ -378,6 +378,10 @@ func testPriorSession() *task.PriorSession {
 
 func rewriteAppProviderExecutable(t *testing.T, td *taskdir.TaskDir, executable string) {
 	t.Helper()
+	canonical, err := filepath.EvalSymlinks(executable)
+	if err == nil {
+		executable = canonical
+	}
 	path := filepath.Join(td.Dir, "meta.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -398,8 +402,16 @@ func rewriteAppProviderExecutable(t *testing.T, td *taskdir.TaskDir, executable 
 }
 
 func appTestExecutionProfile(req *task.TaskRecord, executable string, arguments []string) PreparedProfile {
+	canonical, err := filepath.EvalSymlinks(executable)
+	if err == nil {
+		executable = canonical
+	}
+	providerBytes, err := os.ReadFile(executable)
+	if err != nil {
+		providerBytes = nil
+	}
 	return PreparedProfile{
-		Plan:            execution.Plan{Executable: executable, Arguments: arguments, Directory: req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
+		Plan:            execution.Plan{Executable: executable, ExecutableSHA256: task.ComputeSHA256(providerBytes), Arguments: arguments, Directory: req.CanonicalCwd, Predicate: task.FixturePredicateRef()},
 		ObservedVersion: "fixture-v2",
 		Effective:       task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("app-test"))},
 	}

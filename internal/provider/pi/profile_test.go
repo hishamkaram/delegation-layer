@@ -38,17 +38,32 @@ func testNativeProfileReconstruction(t *testing.T, mode string) {
 		t.Fatalf("native reconstruction changed launch binding: args=%q/%q predicate=%+v/%+v", nativeProfile.Plan.Arguments, nativeReplay.Plan.Arguments, nativeProfile.Plan.Predicate, nativeReplay.Plan.Predicate)
 	}
 	if mode == ModeReadOnly {
-		historicalCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{
+		historicalCandidate, historicalErr := PrepareExistingCandidate(request, task.MetaRecord{
 			EffectiveConfig: nativeProfile.Effective,
 			Predicate:       readOnlyV2Reference(),
 		})
-		if err != nil {
-			t.Fatal(err)
+		if historicalErr != nil {
+			t.Fatal(historicalErr)
 		}
 		historicalProfile := finalizeProfile(t, historicalCandidate, now)
 		if !historicalProfile.Plan.Predicate.Equal(readOnlyV2Reference()) {
 			t.Fatalf("native read-only v2 reconstruction changed predicate=%+v", historicalProfile.Plan.Predicate)
 		}
+	}
+	historical := readOnlyV3Reference()
+	if mode == ModeWorkspaceWrite {
+		historical = workspaceWriteV3Reference()
+	}
+	historicalCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{
+		EffectiveConfig: nativeProfile.Effective,
+		Predicate:       historical,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	historicalProfile := finalizeProfile(t, historicalCandidate, now)
+	if !historicalProfile.Plan.Predicate.Equal(historical) {
+		t.Fatalf("native %s v3 reconstruction changed predicate=%+v", mode, historicalProfile.Plan.Predicate)
 	}
 }
 

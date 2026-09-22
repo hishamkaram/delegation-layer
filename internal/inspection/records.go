@@ -174,7 +174,7 @@ func validateRequestTiming(record RequestRecord) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	if deadline.Sub(created) != AdmissionTimeout {
+	if deadline.Sub(created) != inspectionTimeout(record.Binding) {
 		return time.Time{}, errors.New("inspection request deadline must equal created_at plus admission timeout")
 	}
 	return deadline, nil

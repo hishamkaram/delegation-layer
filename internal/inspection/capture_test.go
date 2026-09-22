@@ -14,9 +14,31 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
-func captureDefinition() provider.InspectionDefinition {
+type nativeTestScope struct {
+	ctx       context.Context
+	authorize func() error
+}
+
+func (s nativeTestScope) Context() context.Context { return s.ctx }
+
+func (s nativeTestScope) Start(start func() error) error {
+	if s.ctx == nil || s.ctx.Err() != nil || s.authorize == nil {
+		return errNativeInspection
+	}
+	if err := s.authorize(); err != nil {
+		return err
+	}
+	return start()
+}
+
+func captureDefinition(t *testing.T) provider.InspectionDefinition {
+	t.Helper()
+	info, err := provider.LocateCLI("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
 	return provider.InspectionDefinition{
-		Revision: "native-test-v1", Executable: "/native/helper", ExecutableSHA256: strings.Repeat("a", 64),
+		Revision: "native-test-v1", Executable: info.Path, ExecutableSHA256: info.SHA256,
 		Directory: "/workspace", Arguments: []string{"fixed"}, Environment: []string{"PATH=/usr/bin"}, OutputLimit: 64,
 		Project: func([]byte) (json.RawMessage, error) { return json.RawMessage(`{"eligible":true}`), nil },
 	}
@@ -26,10 +48,11 @@ func TestNativeCaptureOwnsCommandAndMasksDiagnostics(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	starts, waits, gates := 0, 0, 0
-	data, err := runNative(ctx, captureDefinition(), func() error { gates++; return nil }, nativeHooks{
+	definition := captureDefinition(t)
+	data, err := runNative(nativeTestScope{ctx: ctx, authorize: func() error { gates++; return nil }}, definition, nativeHooks{
 		start: func(cmd *exec.Cmd) error {
 			starts++
-			if cmd.Path != "/native/helper" || cmd.Dir != "/workspace" || strings.Join(cmd.Env, ",") != "PATH=/usr/bin" || strings.Join(cmd.Args, ",") != "/native/helper,fixed" || cmd.Stdin != nil {
+			if cmd.Path != "/dev/fd/3" || cmd.Dir != "/workspace" || strings.Join(cmd.Env, ",") != "PATH=/usr/bin" || strings.Join(cmd.Args, ",") != definition.Executable+",fixed" || cmd.Stdin != nil {
 				t.Fatal("command did not preserve the compiled description and finite stdin")
 			}
 			_, stdoutErr := io.WriteString(cmd.Stdout, "private-native-value")
@@ -50,7 +73,7 @@ func TestNativeCaptureRejectsAndDrainsOverflow(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 			waits := 0
-			data, err := runNative(ctx, captureDefinition(), func() error { return nil }, nativeHooks{
+			data, err := runNative(nativeTestScope{ctx: ctx, authorize: func() error { return nil }}, captureDefinition(t), nativeHooks{
 				start: func(cmd *exec.Cmd) error {
 					writer := cmd.Stdout
 					if stream == "stderr" {
@@ -81,7 +104,7 @@ func TestNativeCaptureFailureDoesNotExposeErrors(t *testing.T) {
 				}
 				return nil
 			}
-			data, err := runNative(ctx, captureDefinition(), func() error { return fail("gate") }, nativeHooks{
+			data, err := runNative(nativeTestScope{ctx: ctx, authorize: func() error { return fail("gate") }}, captureDefinition(t), nativeHooks{
 				start: func(*exec.Cmd) error { starts++; return fail("start") },
 				wait:  func(*exec.Cmd) error { waits++; return fail("wait") },
 			})
@@ -99,7 +122,7 @@ func TestNativeCaptureCancellationAfterStartStillWaits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	waited := false
-	data, err := runNative(ctx, captureDefinition(), func() error { return nil }, nativeHooks{
+	data, err := runNative(nativeTestScope{ctx: ctx, authorize: func() error { return nil }}, captureDefinition(t), nativeHooks{
 		start: func(cmd *exec.Cmd) error {
 			cancel()
 			_, writeErr := io.WriteString(cmd.Stdout, "secret")
@@ -124,7 +147,7 @@ func TestNativeCaptureRequiresDeadlineAndGate(t *testing.T) {
 		{"missing-gate", ctx, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			data, err := runNative(test.ctx, captureDefinition(), test.gate, nativeHooks{
+			data, err := runNative(nativeTestScope{ctx: test.ctx, authorize: test.gate}, captureDefinition(t), nativeHooks{
 				start: func(*exec.Cmd) error { t.Fatal("unauthorized start"); return nil },
 			})
 			if data != nil || !errors.Is(err, errNativeInspection) {

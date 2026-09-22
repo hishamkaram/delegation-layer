@@ -110,7 +110,7 @@ func (o *Operation) Complete(reason ResultReason, facts json.RawMessage, now tim
 	if o == nil || o.control == nil || now.IsZero() {
 		return task.ErrEvidenceFault
 	}
-	result, err := newResultRecord(reason, facts, o.digest)
+	result, err := newResultRecord(reason, facts, o.digest, o.factsLimit())
 	if err != nil {
 		return err
 	}
@@ -161,14 +161,14 @@ func rejectStoppedEligibility(tx *taskdir.ControlTransaction, reason ResultReaso
 	return ErrAdmissionExpired
 }
 
-func newResultRecord(reason ResultReason, facts json.RawMessage, digest string) (ResultRecord, error) {
+func newResultRecord(reason ResultReason, facts json.RawMessage, digest string, limits ...int) (ResultRecord, error) {
 	result := ResultRecord{SchemaVersion: task.SchemaVersion, RequestSHA256: digest, Reason: reason, Facts: map[string]json.RawMessage{}}
 	if reason == ResultEligible || len(facts) != 0 {
 		if task.ValidateJSONStructure(facts) != nil || json.Unmarshal(facts, &result.Facts) != nil || result.Facts == nil {
 			return ResultRecord{}, task.ErrEvidenceFault
 		}
 	}
-	if _, err := validateInspectionResult(result, digest); err != nil {
+	if _, err := validateInspectionResult(result, digest, limits...); err != nil {
 		return ResultRecord{}, err
 	}
 	return result, nil
@@ -189,7 +189,7 @@ func (o *Operation) validateStarted(tx *taskdir.ControlTransaction, completed ti
 	return nil
 }
 
-func validateInspectionResult(record ResultRecord, digest string) (json.RawMessage, error) {
+func validateInspectionResult(record ResultRecord, digest string, limits ...int) (json.RawMessage, error) {
 	if record.SchemaVersion != task.SchemaVersion || record.RequestSHA256 != digest {
 		return nil, task.ErrEvidenceFault
 	}
@@ -199,7 +199,7 @@ func validateInspectionResult(record ResultRecord, digest string) (json.RawMessa
 		if err != nil {
 			return nil, task.ErrEvidenceFault
 		}
-		facts, err := canonicalProjectionFacts(data)
+		facts, err := canonicalFactsWithin(data, inspectionFactsLimit(limits))
 		if err != nil {
 			return nil, task.ErrEvidenceFault
 		}
@@ -262,7 +262,7 @@ func (o *Operation) ReadCompletedContext(ctx context.Context) (ResultRecord, Com
 		if readErr := tx.Read(resultRecordName, &result); readErr != nil {
 			return readErr
 		}
-		if _, validationErr := validateInspectionResult(result, o.digest); validationErr != nil {
+		if _, validationErr := validateInspectionResult(result, o.digest, o.factsLimit()); validationErr != nil {
 			return validationErr
 		}
 		if stopErr := rejectStoppedEligibility(tx, result.Reason); stopErr != nil {

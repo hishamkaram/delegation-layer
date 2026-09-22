@@ -10,16 +10,18 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 )
 
 type invocation struct {
-	cmd     *exec.Cmd
-	stdin   *os.File
-	stdout  *capture
-	stderr  *capture
-	budget  *budgetOwner
-	started time.Time
-	wait    chan error
+	cmd      *exec.Cmd
+	stdin    *os.File
+	stdout   *capture
+	stderr   *capture
+	verified *verifiedexec.Command
+	budget   *budgetOwner
+	started  time.Time
+	wait     chan error
 }
 
 // Run consumes one real permit, owns all capture/Wait/deadline workers, and
@@ -88,7 +90,11 @@ func validatePlan(td *taskdir.TaskDir, permit *taskdir.StartPermit, p Plan) erro
 	if guard.RootID != meta.RootID || guard.TaskID != td.TaskID || guard.SpecSHA256 != meta.SpecSHA256 || guard.BudgetNanos != req.BudgetNanos {
 		return task.ErrInvalidPermit
 	}
-	return matchLaunchPlan(p, req, meta)
+	if matchErr := matchLaunchPlan(p, req, meta); matchErr != nil {
+		return matchErr
+	}
+	_, err = executableDigest(p, *meta)
+	return err
 }
 
 func matchLaunchPlan(p Plan, req *task.TaskRecord, meta *task.MetaRecord) error {
@@ -101,7 +107,42 @@ func matchLaunchPlan(p Plan, req *task.TaskRecord, meta *task.MetaRecord) error 
 	return nil
 }
 
+// executableDigest selects the identity captured by admission. New profiles
+// carry it on the launch plan; older records may carry it in persisted native
+// policy details. A pathname without an admitted digest is never launched.
+func executableDigest(plan Plan, meta task.MetaRecord) (string, error) {
+	planDigest := plan.ExecutableSHA256
+	if planDigest != "" && task.ValidateSHA256(planDigest) != nil {
+		return "", task.ErrIdentityMismatch
+	}
+	policyDigest := ""
+	if meta.EffectiveConfig.Policy != nil {
+		policyDigest = meta.EffectiveConfig.Policy.RuntimeSHA256
+		if task.ValidateSHA256(policyDigest) != nil {
+			return "", task.ErrIdentityMismatch
+		}
+	}
+	if planDigest != "" && policyDigest != "" && planDigest != policyDigest {
+		return "", task.ErrIdentityMismatch
+	}
+	if planDigest != "" {
+		return planDigest, nil
+	}
+	if policyDigest != "" {
+		return policyDigest, nil
+	}
+	return "", task.ErrIdentityMismatch
+}
+
 func prepareInvocation(td *taskdir.TaskDir, plan Plan) (*invocation, error) {
+	_, meta, err := td.PreparedRecords()
+	if err != nil {
+		return nil, err
+	}
+	digest, err := executableDigest(plan, *meta)
+	if err != nil {
+		return nil, err
+	}
 	arguments, err := td.PrepareLaunchFiles(plan.Arguments)
 	if err != nil {
 		return nil, err
@@ -118,26 +159,27 @@ func prepareInvocation(td *taskdir.TaskDir, plan Plan) (*invocation, error) {
 	if err != nil {
 		return nil, errors.Join(err, stdin.Close(), stdout.discard())
 	}
-	cmd := exec.Command(plan.Executable, arguments...)
+	verified, err := verifiedexec.NewCommandInDirectory(plan.Executable, digest, plan.Directory, plan.Environment, arguments...)
+	if err != nil {
+		return nil, errors.Join(err, stdin.Close(), stdout.discard(), stderr.discard())
+	}
+	cmd := verified.Cmd
 	cmd.Dir, cmd.Stdin, cmd.Stdout, cmd.Stderr = plan.Directory, stdin, stdout.writer, stderr.writer
 	if plan.Environment != nil {
 		cmd.Env = append([]string{}, plan.Environment...)
 	}
-	return &invocation{cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, wait: make(chan error, 1)}, nil
+	return &invocation{cmd: cmd, stdin: stdin, stdout: stdout, stderr: stderr, verified: verified, wait: make(chan error, 1)}, nil
 }
 
 func (i *invocation) discard() error {
-	return errors.Join(i.stdin.Close(), i.stdout.discard(), i.stderr.discard())
+	return errors.Join(i.stdin.Close(), i.stdout.discard(), i.stderr.discard(), i.verified.Close())
 }
 
 func (i *invocation) start(opts Options) error {
 	opts.emit("start-entry")
 	err := opts.preflight(i.budget)
 	if err == nil {
-		err = i.budget.authorizeStart(opts)
-	}
-	if err == nil {
-		err = opts.start(i.cmd)
+		err = i.budget.authorizeAndStart(opts, func() error { return opts.start(i.cmd) })
 	}
 	if err == nil {
 		opts.emit("started")
@@ -166,7 +208,7 @@ func (i *invocation) closeParents(startErr error, opts Options) error {
 	if startErr != nil {
 		_, diagnosticErr = fmt.Fprintln(i.stderr.writer, startErr.Error())
 	}
-	parentErr := errors.Join(i.stdin.Close(), i.stdout.writer.Close(), i.stderr.writer.Close())
+	parentErr := errors.Join(i.stdin.Close(), i.stdout.writer.Close(), i.stderr.writer.Close(), i.verified.Close())
 	opts.emit("parent-fds-closed")
 	return errors.Join(diagnosticErr, parentErr)
 }

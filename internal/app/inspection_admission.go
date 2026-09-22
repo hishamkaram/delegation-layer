@@ -157,13 +157,13 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	return prepared, nil
 }
 
-func ensureInspectionGroup(store *taskdir.Store, supervisor *pueue.Client) (resultErr error) {
+func ensureInspectionGroup(store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) (resultErr error) {
 	group, err := inspection.OpenGroup(store, supervisor.Binding())
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, group.Close()) }()
-	ctx, cancel := context.WithTimeout(context.Background(), inspection.AdmissionTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	snapshot, err := supervisor.Snapshot(ctx)
 	if err != nil {
@@ -219,7 +219,7 @@ func admissionInspectionFacts(a Arguments, deps Dependencies, store *taskdir.Sto
 	if err != nil {
 		return nil, time.Time{}, annotateMissingInspectionStage("snapshotting definition", err)
 	}
-	if err = ensureInspectionGroup(store, supervisor); err != nil {
+	if err = ensureInspectionGroup(store, supervisor, inspection.TimeoutForRevision(definition.Revision)); err != nil {
 		return nil, time.Time{}, annotateMissingInspectionStage("ensuring inspection group", err)
 	}
 	operation, err := inspection.OpenOperation(store, req, inspection.Binding{

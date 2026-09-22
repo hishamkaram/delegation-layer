@@ -6,9 +6,9 @@ identity observer, input transport, output interpreter, and supported options.
 
 | Profile | Permission mode | Request options | Native command |
 | --- | --- | --- | --- |
-| `antigravity:print` | `workspace-write` | `continuation`, `native-timeout` | `agy` |
-| `codex:exec` | `read-only`, `workspace-write` | `continuation` | `codex exec` |
-| `claude:print` | `read-only`, `workspace-write` | `continuation` | `claude` print mode |
+| `antigravity:print` | `read-only`, `workspace-write` | `continuation`, `model`, `effort`, `native-timeout` | `agy` |
+| `codex:exec` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `codex exec` |
+| `claude:print` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `claude` print mode |
 | `pi:json` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `pi --mode json` |
 | `opencode:run` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `opencode run --format json` |
 
@@ -21,6 +21,21 @@ Agents can request one provider's provider-neutral contract with
 `delegate capabilities --provider PROFILE --json`. This command is
 side-effect-free and reports `status: "unknown"` until dispatch performs the
 supervised runtime probe. It does not claim authentication or live acceptance.
+
+Use `delegate models --provider PROFILE [--cwd ABS] --json` when an explicit
+model or effort choice is needed. Model discovery is implemented for all five
+profiles. It uses the state-rooted supervisor and the `model-discovery-v1`
+60-second native inspection; it creates inspection evidence without admitting
+a provider task.
+The current directory is used when `--cwd` is omitted. Discovery is advisory,
+never an admission allowlist, and provider defaults remain valid.
+
+The response distinguishes unknown effort metadata (`null`) from an explicit
+empty choice list (`[]`). `complete` refers to model enumeration; it can be
+true while harness-wide or per-model effort metadata is null. Harness-wide
+effort choices are not assumed to apply to every model, and listing a model
+does not prove the account can execute it. `available` and `partial` exit 0,
+`blocked` and `unavailable` exit 2, and `failed` exits 1.
 
 The released binaries target Darwin and Linux. Provider CLIs own authentication,
 configuration, MCP servers, hooks, plugins, skills, and native permissions.
@@ -85,7 +100,11 @@ make acceptance-opencode
 make acceptance-native
 
 # One selected provider/mode:
-./scripts/acceptance_native.sh pi:json --mode workspace-write
+python3 scripts/acceptance_native.py --provider pi:json --mode workspace-write --scenario write
+
+# AGY read-only mode:
+python3 scripts/acceptance_native.py --provider antigravity:print \
+  --permission read-only --scenario read-only
 ```
 
 These commands require the selected CLI, a usable native provider login, and
@@ -106,11 +125,15 @@ provider turn, or reports an authentication refusal as a pass.
 
 ## Antigravity
 
-`antigravity:print` runs `agy` with `--sandbox --mode accept-edits`,
-`--dangerously-skip-permissions`, and the selected workspace. It passes the
-brief through standard input and records effective approval as `always-proceed`.
-Automatic approval covers native tool requests; keeping `--sandbox` does not
-establish a delegate-owned boundary for every tool or sandbox escape.
+`antigravity:print` supports both permission modes. Read-only uses exactly
+`agy --sandbox --mode plan` and does not include a bypass flag. Authorized
+workspace-write uses `--sandbox --mode accept-edits` with the existing
+`--dangerously-skip-permissions` bypass and records effective approval as
+`always-proceed`. It passes the brief through standard input; keeping
+`--sandbox` does not establish a delegate-owned boundary for every tool or
+sandbox escape.
+`--model` maps to agy's native model flag and `--effort` to its native effort
+flag. An omitted effort leaves agy's default untouched.
 `--native-timeout` sets agy's own print timeout inside the wall-clock `--budget`.
 Native workspace trust, MCP configuration, and account settings remain agy's
 responsibility. Missing or expired login is reported by the provider.
@@ -119,9 +142,10 @@ responsibility. Missing or expired login is reported by the provider.
 
 `codex:exec` invokes `exec` with the requested `read-only` or `workspace-write`
 native sandbox and noninteractive approval policy. It preserves native user
-configuration without injecting feature overrides. Continuation uses the exact
-recorded provider session. Model, effort, and native timeout overrides are not
-currently advertised by this adapter.
+configuration without injecting feature overrides. `--model` maps to Codex's
+native model option. `--effort` is encoded as the TOML setting
+`-c model_reasoning_effort="VALUE"`; an omitted or `default` effort is not
+added to native argv. Continuation uses the exact recorded provider session.
 
 ## Claude
 
@@ -131,6 +155,8 @@ so authorized edits and commands do not require interactive approval.
 Claude loads its own settings, tools, MCP servers, and login. The adapter checks
 stream structure, session identity, and result integrity. Continuation selects
 the exact recorded provider session.
+`--model` and `--effort` pass through to Claude's native flags; an omitted or
+`default` effort leaves the provider default untouched.
 
 ## Pi
 

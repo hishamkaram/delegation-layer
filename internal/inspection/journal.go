@@ -169,7 +169,7 @@ func createRequest(tx *taskdir.ControlTransaction, rootID string, expected Reque
 	created := now.UTC()
 	candidate := expected
 	candidate.CreatedAt = created.Format(time.RFC3339Nano)
-	candidate.Deadline = created.Add(AdmissionTimeout).Format(time.RFC3339Nano)
+	candidate.Deadline = created.Add(inspectionTimeout(candidate.Binding)).Format(time.RFC3339Nano)
 	createdRecord, putErr := tx.Put(requestRecordName, candidate)
 	if putErr != nil {
 		return putErr
@@ -189,7 +189,7 @@ func createRequest(tx *taskdir.ControlTransaction, rootID string, expected Reque
 	if _, candidateValidateErr := validateRequestRecord(candidate, rootID); candidateValidateErr != nil {
 		return fmt.Errorf("%w: constructed inspection request invalid: %w", task.ErrInvariantFault, candidateValidateErr)
 	}
-	*record, *digest, *deadline = candidate, requestDigest(candidate), created.Add(AdmissionTimeout)
+	*record, *digest, *deadline = candidate, requestDigest(candidate), created.Add(inspectionTimeout(candidate.Binding))
 	return nil
 }
 

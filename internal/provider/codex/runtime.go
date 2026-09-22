@@ -2,8 +2,10 @@ package codex
 
 import (
 	"fmt"
+	"slices"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 // RuntimeRequirements returns the command and flags used by the Codex launch
@@ -16,6 +18,14 @@ func RuntimeRequirements() commonprovider.RuntimeCapability {
 			"--output-last-message", "--json", "--color",
 		},
 	}
+}
+
+func runtimeRequirementsForRequest(request task.TaskRecord, requirements commonprovider.RuntimeCapability) commonprovider.RuntimeCapability {
+	requirements.RequiredFlags = slices.Clone(requirements.RequiredFlags)
+	if request.RequestedConfig.Model != "" {
+		requirements.RequiredFlags = append(requirements.RequiredFlags, "--model")
+	}
+	return requirements
 }
 
 func legacyRuntimeRequirements() commonprovider.RuntimeCapability {

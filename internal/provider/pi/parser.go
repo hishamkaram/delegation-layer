@@ -29,8 +29,10 @@ const (
 )
 
 type parserOptions struct {
-	allowNativeRetry bool
-	settledTerminal  bool
+	allowNativeRetry          bool
+	settledTerminal           bool
+	rejectTrailingRetryEnd    bool
+	requireAgentEndErrorMatch bool
 }
 
 type eventState struct {
@@ -41,14 +43,17 @@ type eventState struct {
 	turnStarted        bool
 	turnEnded          bool
 	turnStopReason     string
+	turnErrorMessage   string
 	messageOpen        bool
 	providerFail       bool
 	stickyProviderFail bool
 	semanticErr        error
 
-	allowNativeRetry bool
-	settledTerminal  bool
-	retryPending     bool
+	allowNativeRetry          bool
+	settledTerminal           bool
+	rejectTrailingRetryEnd    bool
+	requireAgentEndErrorMatch bool
+	retryPending              bool
 
 	lastMessageText       []byte
 	lastMessageSeen       bool
@@ -82,8 +87,10 @@ func parseStdout(reader io.Reader, options ...parserOptions) (eventState, error)
 		parserOptionsValue = options[0]
 	}
 	state := eventState{
-		allowNativeRetry: parserOptionsValue.allowNativeRetry,
-		settledTerminal:  parserOptionsValue.settledTerminal,
+		allowNativeRetry:          parserOptionsValue.allowNativeRetry,
+		settledTerminal:           parserOptionsValue.settledTerminal,
+		rejectTrailingRetryEnd:    parserOptionsValue.rejectTrailingRetryEnd,
+		requireAgentEndErrorMatch: parserOptionsValue.requireAgentEndErrorMatch,
 	}
 	semanticErr, readErr := commonprovider.ReadJSONL(reader, maxEventLineBytes, func(line []byte) error {
 		return processEventLine(&state, line)
@@ -207,7 +214,11 @@ func applyAfterAgentEnd(state *eventState, event parsedEvent) {
 			applyUnknownEvent(state, event.typeName)
 		}
 	case eventAutoRetryEnd:
-		applyUnknownEvent(state, event.typeName)
+		if state.rejectTrailingRetryEnd && state.allowNativeRetry && !state.providerFail && !state.retryPending {
+			state.markSemantic("auto_retry_end appears after agent_end")
+		} else {
+			applyUnknownEvent(state, event.typeName)
+		}
 	case eventSession, eventAgentStart, eventTurnStart, eventTurnEnd, eventMessageStart, eventMessageUpdate, eventMessageEnd:
 		state.markSemantic("event appears after agent_end: " + event.typeName)
 	case eventError:
@@ -251,6 +262,7 @@ func beginAgentCycle(state *eventState) {
 	state.turnStarted = false
 	state.turnEnded = false
 	state.turnStopReason = ""
+	state.turnErrorMessage = ""
 	state.messageOpen = false
 	state.messageUsage = nil
 	state.lastMessageText = state.lastMessageText[:0]
@@ -273,6 +285,7 @@ func applyTurnStart(state *eventState) {
 	if state.turnEnded {
 		state.turnEnded = false
 		state.turnStopReason = ""
+		state.turnErrorMessage = ""
 		state.lastMessageText = state.lastMessageText[:0]
 		state.lastMessageSeen = false
 		state.lastMessageStopReason = ""
@@ -396,6 +409,7 @@ func applyTurnEnd(state *eventState, fields map[string]json.RawMessage) {
 	}
 	state.turnText = append(state.turnText[:0], message.text...)
 	state.turnStopReason = message.stopReason
+	state.turnErrorMessage = message.errorMessage
 	state.turnEnded = true
 }
 
@@ -427,6 +441,10 @@ func applyAgentEnd(state *eventState, fields map[string]json.RawMessage) {
 	}
 	if !bytes.Equal(state.turnText, message.text) {
 		state.markSemantic("agent_end assistant text conflicts with turn_end")
+		return
+	}
+	if state.requireAgentEndErrorMatch && state.turnErrorMessage != message.errorMessage {
+		state.markSemantic("agent_end assistant error message conflicts with turn_end")
 		return
 	}
 	if message.stopReason != "stop" {

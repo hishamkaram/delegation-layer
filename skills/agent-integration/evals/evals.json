@@ -13,6 +13,16 @@
       "expected": ["dispatch --auto", "--json", "save task_id", "status", "collect"]
     },
     {
+      "name": "model-discovery-when-needed",
+      "prompt": "The caller needs an explicit model and effort for codex:exec.",
+      "expected": ["delegate models --provider codex:exec", "--json", "preserve null versus empty efforts", "advisory", "pass --model and --effort"]
+    },
+    {
+      "name": "model-default-without-discovery",
+      "prompt": "Run a task without an explicit model or effort.",
+      "expected": ["provider defaults are valid", "do not run models unnecessarily", "dispatch --auto"]
+    },
+    {
       "name": "timeout",
       "prompt": "The result says status timed_out and continuation.resumable is true.",
       "expected": ["delegate continue --task", "new task id", "collect successor", "no fresh unrelated dispatch"]

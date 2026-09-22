@@ -63,7 +63,7 @@ func TestEnsureInspectionGroupReconcilesUncertainCreate(t *testing.T) {
 	store := newBareInspectionStore(t)
 	client, logPath, donePath := newUncertainGroupSupervisor(t, store.RootID)
 
-	if err := ensureInspectionGroup(store, client); err != nil {
+	if err := ensureInspectionGroup(store, client, inspection.AdmissionTimeout); err != nil {
 		t.Fatalf("uncertain group creation was not reconciled: %v", err)
 	}
 	logData, err := os.ReadFile(logPath)

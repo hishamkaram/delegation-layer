@@ -8,7 +8,7 @@ This document defines the normative requirements for provider adapters
 
 | Adapter | Capability Profile | Approval Policy | Command Shape & Flags | Deferred Capabilities |
 |---|---|---|---|---|
-| `antigravity:print` | `workspace-write` | Native automatic tool approval (`always-proceed`) | `agy --sandbox --mode accept-edits --dangerously-skip-permissions --add-dir <canonical-workspace> --output-format json --input-format text --print-timeout <duration>` | `read-only`, extra writable roots |
+| `antigravity:print` | `read-only`, `workspace-write` | native `plan` for read-only; native automatic approval (`always-proceed`) for writes | read-only: `agy --sandbox --mode plan --add-dir <canonical-workspace> ...`; write: `agy --sandbox --mode accept-edits --dangerously-skip-permissions --add-dir <canonical-workspace> ...` | extra writable roots |
 | `codex:exec` | `read-only`, `workspace-write` | native sandbox | `codex exec ... --sandbox <mode> ...` | unrestricted execution, ephemeral sessions |
 | `claude:print` | `read-only`, `workspace-write` | native `plan` for read-only; `bypassPermissions` for unattended writes | `claude --print ... --permission-mode <mode> ...` | independent containment |
 | `pi:json` | `read-only`, `workspace-write` | read-only uses read,grep,find,ls; write uses provider-native tools and approval | `pi --mode json ...`; read-only adds `--tools read,grep,find,ls` | independent containment |
@@ -33,6 +33,13 @@ profile revision, or digest is compared with a checked-in value.
   remaining provider restrictions are reported, not repaired by the adapter.
 - **Input Delivery**: Brief text is delivered exclusively via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv. Brief size limit is 8 MiB.
 - **Argv Construction**: Built strictly as Go string slices (`[]string`), executed directly via `exec.Command` without shell wrapper or reparsing.
+- **Model and Effort Selection**: `--model` and `--effort` are explicit bounded
+  request fields for Codex, Claude, and AGY, in addition to profiles that
+  already advertise them. They pass only through the selected adapter. Codex
+  encodes effort as the TOML setting `model_reasoning_effort`; Claude and AGY
+  use their native effort flags. An omitted or `default` effort is omitted from
+  native argv. No provider default is inferred or recorded as an explicit
+  selection.
 - **Working Directory**: Set strictly to the validated canonical workspace directory (`Cmd.Dir = workdir`).
 - **Launch Verification**:
   - Records the requested native permission mode, runtime identity, and workspace.
@@ -41,7 +48,36 @@ profile revision, or digest is compared with a checked-in value.
   - Previously admitted tasks retain their original preparation contract.
 - **Credential Safety**: Credentials, tokens, and unrelated user environment variables are never included in command arguments, logs, metadata, or committed fixtures.
 
-## 3. Evidence Capture and Publication Predicates
+## 3. Model Discovery Contract
+
+The implemented public command is:
+
+```text
+delegate models --provider PROFILE [--cwd ABS] --json
+```
+
+`--cwd` defaults to the current directory and must be absolute when supplied.
+Discovery uses the state-rooted supervisor and the `model-discovery-v1` native
+inspection bound, which is 60 seconds. It may contact the provider CLI and creates
+inspection evidence, but it does not admit a provider task or launch a
+delegated turn.
+This revision applies the 60-second bound only to model discovery; historical
+admission probes retain their 20-second bounds.
+
+The JSON response contains `schema_version`, `command`, `provider`,
+`observed_at`, `status`, `reason_code`, `complete`, `source`, `efforts`, and
+`models`. Each model contains an exact `id`, nullable `efforts`, and optional
+`name` and `default_effort` fields. `complete` means model enumeration
+completed; it does not assert that effort metadata is known. A null effort list
+means unknown metadata, while `[]` means the provider explicitly reported no
+choices. Harness-wide efforts are not assumed to apply to every model.
+
+The status exit mapping is `available`/`partial` → `0`,
+`blocked`/`unavailable` → `2`, and `failed` → `1`. Discovery is advisory and
+never an admission allowlist. Listing a model does not prove that the account
+can execute it; dispatch remains the admission boundary.
+
+## 4. Evidence Capture and Publication Predicates
 - **Raw Evidence**: Standard streams are piped to task-owned files (`raw/stdout`, `raw/stderr`). Child output writers must complete and flush before the seal (`provider.exit`) is committed.
 - **Success Criteria**:
   - Valid envelope structure (JSON/JSONL) with positive status and non-whitespace final response string.
@@ -54,7 +90,7 @@ profile revision, or digest is compared with a checked-in value.
   - Active sessions are protected by durable session claims under `.session.lock`.
   - Continuation invokes the provider using explicit session resumption flags (e.g. `--conversation <id>`, `resume <uuid> -`, `--resume <uuid>`).
 
-## 4. Usage Accounting
+## 5. Usage Accounting
 - Usage metrics are recorded with explicit scope: `task`, `conversation-cumulative`, `main-agent`, `whole-tree`, or `unknown`.
 - Missing or unreported fields remain null; they are never assumed to be zero.
 - Cumulative counters from successive turns are never conflated with single-turn usage unless explicitly calculated from verified endpoints.

@@ -1051,9 +1051,13 @@ class NativeTaskOps:
         require(self.root_created_at is not None and
                 _timestamp_at_or_after(created, self.root_created_at),
                 f"inspection request precedes root creation for {task}")
-        require(deadline[0] - created[0] == timedelta(seconds=20) and
+        binding = request.get("binding")
+        _validate_inspection_binding(binding, f"inspection request binding for {task}")
+        standalone = binding.get("definition_revision") == "model-discovery-v1"
+        timeout_seconds = 60 if standalone else 20
+        require(deadline[0] - created[0] == timedelta(seconds=timeout_seconds) and
                 deadline[1] == created[1],
-                f"inspection request deadline is not exactly 20 seconds for {task}")
+                f"inspection request deadline is not exactly {timeout_seconds} seconds for {task}")
 
         ordinary_directory = self.state / "tasks" / task
         ordinary_present = ordinary_directory.exists() or ordinary_directory.is_symlink()
@@ -1068,8 +1072,8 @@ class NativeTaskOps:
             require(embedded_task == ordinary_task and task_digest == ordinary_digest and
                     task_digest == digest(ordinary_task_path),
                     f"inspection task record is not bound to ordinary task {task}")
-        binding = request.get("binding")
-        _validate_inspection_binding(binding, f"inspection request binding for {task}")
+        require(not ordinary_present or not standalone,
+                f"standalone discovery admitted an ordinary task for {task}")
         expected_binding = self.inspection_bindings.get(task)
         if expected_binding_required:
             require(expected_binding is not None,
@@ -1179,7 +1183,7 @@ class NativeTaskOps:
                 require(not ordinary_present and observation is None,
                         f"failed inspection has an ordinary task or observation for {task}")
             elif result.get("reason") == "eligible":
-                require(ordinary_present and completion is not None and
+                require((standalone or ordinary_present) and completion is not None and
                         completion.get("native_exit") == "successful-exit" and observation is not None,
                         f"eligible inspection lacks independent success proof for {task}")
             else:
@@ -1188,7 +1192,7 @@ class NativeTaskOps:
                         f"failed inspection has conflicting success proof for {task}")
         else:
             require(result is not None and result.get("reason") == "eligible" and
-                    ordinary_present and completion is not None and
+                    (standalone or ordinary_present) and completion is not None and
                     completion.get("native_exit") == "successful-exit" and observation is not None,
                     f"successful inspection proof is incomplete for {task}")
         return {"task_id": task, "root_id": root, "group": group, "label": label,

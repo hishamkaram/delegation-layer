@@ -6,9 +6,11 @@ import (
 )
 
 const (
-	Provider = config.ProviderAntigravityPrint
-	Mode     = config.ModeWorkspaceWrite
-	Version  = "1.2.2"
+	Provider           = config.ProviderAntigravityPrint
+	ModeReadOnly       = config.ModeReadOnly
+	ModeWorkspaceWrite = config.ModeWorkspaceWrite
+	Mode               = ModeWorkspaceWrite
+	Version            = "1.2.2"
 
 	StatusSuccess = "SUCCESS"
 	StatusError   = "ERROR"

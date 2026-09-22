@@ -74,6 +74,33 @@ It does not create a task, start the supervisor, or launch a provider. Do not ke
 retrying preflight when it says
 `blocked` or `unsupported`; report the bounded reason.
 
+If the caller needs an explicit model or effort, use the implemented native
+discovery command for that provider:
+
+```sh
+delegate models --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
+```
+
+Omit `--cwd` to use the current directory. Run discovery only when the caller
+needs a non-default choice; provider defaults are valid. The command uses the
+state-rooted supervisor and a bounded `model-discovery-v1` 60-second native
+inspection, creates inspection evidence without admitting a provider task, and may contact the
+provider CLI. It is advisory and never an admission allowlist. Do not reject a
+requested value merely because discovery did not list it, and do not infer
+per-model effort support from the harness-wide list. If a selected model has
+`efforts: null` or `efforts: []`, omit `--effort` unless the caller explicitly
+requested it; do not invent model aliases or combine options by guessing.
+
+The response includes `schema_version`, `command: "models"`, `provider`,
+`observed_at`, `status`, `reason_code`, `complete`, `source`, nullable
+`efforts`, and model rows with exact `id` values plus optional `name`, nullable
+`efforts`, and optional `default_effort`. `complete` describes model
+enumeration, not effort metadata. `null` means effort metadata is unknown;
+`[]` means the provider explicitly reported no choices. Discovery exits `0`
+for `available` or `partial`, `2` for `blocked` or `unavailable`, and `1` for
+`failed`. Preserve a blocked or unavailable discovery result as unresolved;
+defaults remain allowed.
+
 ### 3. Prepare separate paths and a finite brief
 
 Use an existing task brief when one is supplied. Otherwise create a bounded
@@ -118,6 +145,15 @@ The provider may allow access beyond the selected workspace. Delegate supplies
 the native approval options; do not add provider flags or call its CLI yourself.
 Keep the budget finite. A successful dispatch means the request was durably admitted;
 it does not mean the delegated work finished.
+
+When an explicit selection is supplied, pass it through the public fields:
+`--model MODEL` and `--effort VALUE`. Codex encodes effort as its native TOML
+`model_reasoning_effort` setting; Claude and AGY use their native effort flags;
+Pi maps effort to `--thinking`; and OpenCode maps effort to `--variant`. An
+omitted or `default` effort is omitted from native argv. For AGY read-only,
+`--permission read-only` selects the exact native `--sandbox --mode plan` path
+without a bypass. Authorized AGY workspace-write retains its existing native
+bypass. Do not add these native flags yourself.
 
 Save the exact `task_id` from the JSON response. If dispatch returns an error,
 use its `status`, `capability`, and `error` fields to report whether the request

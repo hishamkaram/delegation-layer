@@ -42,12 +42,28 @@ failure.
 ## Mode or option is unsupported
 
 Compare the request with the catalog entry. `antigravity:print` supports
-`workspace-write`, `continuation`, and `native-timeout`; `codex:exec`,
-`claude:print`, `pi:json`, and `opencode:run` support both permission modes.
-Every provider supports continuation; Pi and OpenCode also expose their documented model and effort options. Pi maps effort to its
-native `--thinking` flag, while OpenCode maps it to `--variant`. Unsupported
-model, effort, policy, or timeout combinations are rejected before supervisor
+both permission modes, `continuation`, `model`, `effort`, and `native-timeout`;
+Codex and Claude support both modes plus `model` and `effort`; Pi and OpenCode
+support both modes plus their documented model and effort options. AGY
+read-only uses native `--sandbox --mode plan` without a bypass; authorized
+workspace-write retains the native accept-edits mode and bypass. Codex maps
+effort to TOML `model_reasoning_effort`, Claude and AGY pass native effort
+flags, Pi maps effort to `--thinking`, and OpenCode maps it to `--variant`.
+An omitted or `default` effort is left out of native argv. Unsupported model,
+effort, policy, or timeout combinations are rejected before supervisor
 admission.
+
+If an explicit choice is needed, run:
+
+`delegate models --provider PROFILE [--cwd ABS] --json`
+
+The command is implemented for all five profiles and
+returns advisory model facts through the state-rooted supervisor with a
+`model-discovery-v1` 60-second inspection bound. `complete` describes model
+enumeration; null
+efforts mean unknown metadata and `[]` means no choices were explicitly
+reported. Do not use discovery as an admission allowlist or infer per-model
+compatibility from harness-wide effort values. Provider defaults remain valid.
 
 ## Supervisor configuration fails
 

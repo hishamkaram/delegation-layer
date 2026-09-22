@@ -112,6 +112,46 @@ version. The version is descriptive evidence; flags, executable identity, and
 behavior predicates establish compatibility without a web release lookup or
 semver allowlist.
 
+## Model discovery contract
+
+`delegate models --provider PROFILE [--cwd ABS] --json` is the runtime
+discovery command for native model IDs and effort facts. `--cwd` defaults to
+the current directory and must be absolute when supplied. The command uses the
+state-rooted supervisor and the shared `model-discovery-v1` 60-second
+inspection bound. It creates
+inspection evidence without admitting a provider task or launching a delegated
+turn.
+
+```json
+{
+  "schema_version": 1,
+  "command": "models",
+  "provider": "claude:print",
+  "observed_at": "2026-09-21T10:20:30.123Z",
+  "status": "partial",
+  "reason_code": "native_metadata_incomplete",
+  "complete": false,
+  "source": "claude stream-json initialize",
+  "efforts": ["low", "high"],
+  "models": [
+    {"id": "claude-sonnet", "name": "Claude Sonnet", "efforts": null}
+  ]
+}
+```
+
+The top-level `efforts` list is harness-wide metadata. `null` means unknown;
+`[]` means the provider explicitly reported no choices. Per-model `efforts`
+has the same meaning. `name` and `default_effort` are optional. `complete`
+describes model enumeration, so it can be true while effort metadata is null.
+Do not infer per-model compatibility from the harness-wide list or from a model
+name. A listed model does not prove that the account can execute it.
+
+Discovery is advisory and never an admission allowlist. Dispatch validates the
+requested model and effort through the selected adapter and its runtime probe.
+The result status maps to process exit codes as follows: `available` and
+`partial` use `0`; `blocked` and `unavailable` use `2`; `failed` uses `1`.
+JSON remains parseable for each status.
+
 ## Capability contract
 
 `delegate capabilities --provider PROFILE --json` returns the selected

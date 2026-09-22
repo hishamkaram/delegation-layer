@@ -21,6 +21,13 @@ const MaxInspectionOutput int64 = 1 << 20
 func (d InspectionDefinition) Snapshot() (InspectionDefinition, string, error) {
 	d.Arguments = slices.Clone(d.Arguments)
 	d.Environment = slices.Clone(d.Environment)
+	if d.Models != nil {
+		models := *d.Models
+		models.Arguments = slices.Clone(models.Arguments)
+		models.Capability.HelpArgs = slices.Clone(models.Capability.HelpArgs)
+		models.Capability.RequiredFlags = slices.Clone(models.Capability.RequiredFlags)
+		d.Models = &models
+	}
 	if d.Runtime != nil {
 		runtime := *d.Runtime
 		runtime.Environment = slices.Clone(runtime.Environment)
@@ -84,6 +91,9 @@ func validateInspectionArguments(arguments []string) error {
 }
 
 func validateInspectionProjector(d InspectionDefinition) error {
+	if d.Models != nil {
+		return validateModelInspection(d)
+	}
 	native := len(d.Arguments) > 0 || d.Project != nil || d.Remote != nil
 	if !native {
 		if d.Runtime == nil {
@@ -186,4 +196,14 @@ func inspectionHeaderName(name string) bool {
 		return false
 	}
 	return true
+}
+
+func validateModelInspection(d InspectionDefinition) error {
+	if d.Revision != ModelsRevision || d.Runtime != nil || d.Project != nil || d.Remote != nil || len(d.Arguments) != 0 || d.Models.Project == nil || d.Models.Source == "" {
+		return fmt.Errorf("%w: invalid model discovery definition", ErrProfileUnavailable)
+	}
+	if err := validateInspectionArguments(d.Models.Arguments); err != nil {
+		return err
+	}
+	return validateRuntimeCapability(d.Models.Capability)
 }

@@ -14,7 +14,11 @@ import (
 
 // Plan is constructed by a trusted compiled adapter, never from public raw argv.
 type Plan struct {
-	Executable           string
+	Executable string
+	// ExecutableSHA256 binds the final launch to the executable admitted by the
+	// provider inspection. Historical records may carry the same identity in
+	// effective policy details when this field is empty.
+	ExecutableSHA256     string
 	Arguments            []string
 	Directory            string
 	Environment          []string

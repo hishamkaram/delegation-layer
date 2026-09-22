@@ -15,6 +15,7 @@ delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
 
 delegate [--root ABS] providers [--json]
 delegate [--root ABS] capabilities --provider PROFILE [--json]
+delegate [--root ABS] models --provider PROFILE [--cwd ABS] [--json]
 delegate [--root ABS] preflight --provider PROFILE --cwd ABS [--json]
 delegate [--root ABS] continue --task PREDECESSOR_ID [--brief FILE] \
   [--budget DURATION] [--model MODEL] [--effort EFFORT] [--json]
@@ -55,8 +56,8 @@ paths must remain disjoint.
 | `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID. Omit to allocate one. |
 | `--permission MODE` | `read-only` (default) or authorized unattended `workspace-write`, including commands and edits. Native access can extend beyond the workspace. |
 | `--budget DURATION` | Positive Go duration; default `30m`. Queue time is excluded. |
-| `--model MODEL` | Model selector when the chosen profile advertises `model` (currently Pi and OpenCode). |
-| `--effort EFFORT` | Provider effort/variant selector when the chosen profile advertises it (Pi maps this to `--thinking`; OpenCode maps it to `--variant`). `default` keeps the provider default. |
+| `--model MODEL` | Model selector when the chosen profile advertises `model` (Codex, Claude, AGY, Pi, or OpenCode). |
+| `--effort EFFORT` | Provider effort selector when the chosen profile advertises it. Codex writes TOML `model_reasoning_effort`; Claude and AGY pass their native effort flag; Pi maps it to `--thinking`; OpenCode maps it to `--variant`. `default` keeps the provider default and is omitted from native argv. |
 | `--native-timeout DURATION` | Antigravity's native print timeout, no greater than `--budget`. |
 | `--resume-task TASK_ID` | Exact predecessor for a continuation; creates a new task. |
 | `--json` | Emit the versioned control response. |
@@ -122,6 +123,61 @@ The compatibility probe is only a startup check. Provider output shape,
 identity, containment, policy, authentication, and result integrity remain
 strict runtime contracts; a CLI that starts successfully can still produce a
 rejected task outcome if it violates those contracts.
+
+## Models (implemented)
+
+`models` performs advisory native model discovery for one provider. This
+command is currently implemented. It uses the state-rooted supervisor and the
+shared bounded inspection path, whose `model-discovery-v1` native inspection
+window is 60 seconds. Existing admission probes retain their historical
+20-second bounds.
+It creates inspection evidence but does not admit a provider task or launch a
+delegated turn. It may contact the selected provider CLI, so use it when an
+explicit model or effort choice is needed; provider defaults remain valid.
+
+```sh
+delegate models --provider codex:exec --cwd /absolute/workspace --json
+```
+
+`--cwd` is optional and defaults to the current directory. When supplied it
+must be absolute. A JSON response has this shape:
+
+```json
+{
+  "schema_version": 1,
+  "command": "models",
+  "provider": "codex:exec",
+  "observed_at": "2026-09-21T10:20:30.123Z",
+  "status": "available",
+  "reason_code": "ok",
+  "complete": true,
+  "source": "codex app-server",
+  "efforts": null,
+  "models": [
+    {"id": "gpt-5.6", "name": "GPT-5.6", "efforts": null}
+  ]
+}
+```
+
+`complete` describes whether model enumeration completed. It does not mean
+that effort metadata is known. A null `efforts` value means the provider did
+not report harness-wide effort choices; an empty array means it explicitly
+reported no choices. The per-model `efforts` value has the same distinction.
+`name` and `default_effort` are optional. Harness-wide choices are not assumed
+to apply to every model, and a listed model does not prove that the account can
+execute it.
+
+The status and process exit mapping is:
+
+| Status | Exit | Meaning |
+| --- | ---: | --- |
+| `available` or `partial` | `0` | Model facts were returned; `partial` means enumeration is incomplete. |
+| `blocked` or `unavailable` | `2` | Discovery could not establish usable model facts. |
+| `failed` | `1` | Discovery or response processing failed. |
+
+Discovery is never an admission allowlist. Dispatch still performs the
+provider's runtime checks and the provider remains authoritative for whether a
+requested model or effort can run.
 
 ## Capabilities
 

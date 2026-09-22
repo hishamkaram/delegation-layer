@@ -103,10 +103,31 @@ func (b *budgetOwner) prepareExpiry(deadline time.Time, opts Options) (BudgetReq
 
 // authorizeStart is the final arbitration point after policy preflight and
 // immediately before Cmd.Start. The mutex defines the winner between a timer
-// observation and a start authorization. It is released before the caller
-// enters Cmd.Start, so a blocking start hook cannot delay budget preparation.
+// observation and a start authorization. Once authorization wins, the caller
+// owns the one permitted start even if expiry is observed while that start is
+// in progress; the supervisor stop path remains responsible for the process.
 func (b *budgetOwner) authorizeStart(opts Options) error {
 	return b.authorize(opts, "start-authorized")
+}
+
+// authorizeAndStart reserves the one native start while holding the budget
+// mutex, then invokes the callback without the mutex. This lets the timer
+// observer prepare supervisor stopping while a platform start call is blocked.
+// If authorization wins first, a later expiry does not grant a second start or
+// cancel the already-authorized callback; it only routes through supervision.
+func (b *budgetOwner) authorizeAndStart(opts Options, start func() error) error {
+	if start == nil {
+		return errBudgetExpiredBeforeStart
+	}
+	b.mu.Lock()
+	if b.completed || b.expired || b.prepared || !b.clock.Now().Before(b.deadline) {
+		b.mu.Unlock()
+		return b.authorize(opts, "start-authorized")
+	}
+	opts.emit("start-authorized")
+	b.mu.Unlock()
+	startErr := start()
+	return startErr
 }
 
 func (b *budgetOwner) authorize(opts Options, event string) error {

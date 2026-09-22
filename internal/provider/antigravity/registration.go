@@ -10,8 +10,8 @@ import (
 func Description() commonprovider.Description {
 	return commonprovider.Description{
 		ID:               Provider,
-		SupportedModes:   []string{Mode},
-		SupportedOptions: []string{commonprovider.OptionContinuation, commonprovider.OptionNativeTimeout},
+		SupportedModes:   []string{ModeReadOnly, ModeWorkspaceWrite},
+		SupportedOptions: []string{commonprovider.OptionContinuation, commonprovider.OptionEffort, commonprovider.OptionModel, commonprovider.OptionNativeTimeout},
 		Continuation:     commonprovider.ContinuationNative,
 		Runtime:          RuntimeRequirements(),
 		Discoverable:     true,
@@ -26,6 +26,6 @@ func Registration() commonprovider.Registration {
 		Description:     Description(),
 		Prepare:         PrepareCandidate,
 		PrepareExisting: PrepareExistingCandidate,
-		Interpreters:    []predicate.Interpreter{NewPrintInterpreter(), NewCurrentPrintInterpreter()},
+		Interpreters:    []predicate.Interpreter{NewPrintInterpreter(), NewCurrentPrintInterpreter(), NewCurrentPrintInterpreterForMode(ModeReadOnly)},
 	}
 }

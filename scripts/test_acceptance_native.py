@@ -16,6 +16,99 @@ import acceptance_native as gate
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):
+    def test_model_discovery_contract_preserves_unknown_efforts_and_exit_semantics(self):
+        available = {
+            "schema_version": 1, "command": "models", "provider": "codex:exec",
+            "observed_at": "2026-09-21T10:20:30.123Z", "status": "available",
+            "reason_code": "ok", "complete": True, "source": "codex models",
+            "efforts": None,
+            "models": [
+                {"id": "account/model", "name": "Account model", "efforts": None},
+                {"id": "fixed/model", "efforts": [], "default_effort": None},
+            ],
+        }
+        summary = gate.validate_model_discovery_response(available, "codex:exec")
+        self.assertEqual(summary["model_count"], 2)
+        self.assertIsNone(summary["effort_count"])
+        self.assertEqual(gate.model_discovery_exit_code("available"), 0)
+        self.assertEqual(gate.model_discovery_exit_code("partial"), 0)
+        self.assertEqual(gate.model_discovery_exit_code("blocked"), 2)
+        self.assertEqual(gate.model_discovery_exit_code("unavailable"), 2)
+        self.assertEqual(gate.model_discovery_exit_code("failed"), 1)
+
+        partial = dict(available, status="partial", complete=False,
+                       efforts=["low", "high"], models=[{"id": "partial/model", "efforts": ["high"]}])
+        self.assertEqual(
+            gate.validate_model_discovery_response(partial, "codex:exec")["status"], "partial")
+
+        blocked = dict(available, status="blocked", complete=False, reason_code="authentication_unavailable",
+                       models=[])
+        self.assertEqual(
+            gate.validate_model_discovery_response(blocked, "codex:exec")["status"], "blocked")
+
+        with self.assertRaises(gate.AcceptanceFailure):
+            gate.validate_model_discovery_response(dict(available, models=[{"id": "fixed/model", "efforts": []},
+                                                                          {"id": "fixed/model", "efforts": []}]),
+                                                   "codex:exec")
+
+    def test_dispatch_passes_explicit_model_and_effort_with_the_canonical_budget(self):
+        operation = object.__new__(gate.NativeAcceptance)
+        operation.delegate = Path("/delegate")
+        operation.state = Path("/state")
+        operation.config = Path("/pueue.yml")
+        operation.runner = Path("/runner")
+        operation.workspace = Path("/workspace")
+        operation.provider = "antigravity:print"
+        operation.mode = "read-only"
+        operation.args = SimpleNamespace(model="gemini-3-pro", effort="high")
+        argv = operation.dispatch_argv("a" * 32, Path("/brief"))
+        self.assertEqual(argv[argv.index("--budget") + 1], gate.TASK_BUDGET)
+        self.assertEqual(argv[argv.index("--pueue-config") + 1], operation.config)
+        self.assertEqual(argv[argv.index("--model") + 1], "gemini-3-pro")
+        self.assertEqual(argv[argv.index("--effort") + 1], "high")
+        self.assertEqual(operation.native_mode_receipt(),
+                         {"sandbox": "--sandbox", "mode": "plan", "bypass": False})
+
+        operation.args = SimpleNamespace(model=None, effort=None)
+        default_argv = operation.dispatch_argv("b" * 32, Path("/brief"))
+        self.assertNotIn("--model", default_argv)
+        self.assertNotIn("--effort", default_argv)
+
+    def test_model_discovery_uses_shared_config_and_separate_state_root(self):
+        operation = object.__new__(gate.NativeAcceptance)
+        operation.delegate = Path("/delegate")
+        operation.models_state = Path("/models-state")
+        operation.config = Path("/pueue.yml")
+        operation.runner = Path("/runner")
+        operation.provider = "claude:print"
+        operation.workspace = Path("/workspace")
+        argv = operation.model_discovery_argv()
+        self.assertEqual(argv[argv.index("--pueue-config") + 1], operation.config)
+        self.assertEqual(argv[argv.index("--root") + 1], operation.models_state)
+        self.assertEqual(argv[argv.index("--runner") + 1], operation.runner)
+        self.assertEqual(argv[argv.index("--provider") + 1], operation.provider)
+        self.assertEqual(argv[argv.index("--cwd") + 1], operation.workspace)
+        self.assertNotIn("pueued", [str(value) for value in argv])
+        self.assertEqual(gate.MODEL_DISCOVERY_TIMEOUT_SECONDS, 90)
+
+    def test_model_discovery_success_propagates_zero_exit(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-run-") as directory:
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.output = Path(directory)
+            operation.provider = "codex:exec"
+            operation.mode = "read-only"
+            operation.args = SimpleNamespace(model=None, effort=None)
+            operation.discover_models_only = True
+            operation.model_discovery_exit_code = None
+            operation.model_discovery_summary = {"status": "available"}
+            operation.closed = False
+            operation.setup = lambda: None
+            operation.discover_models = lambda: setattr(operation, "model_discovery_exit_code", 0)
+            operation.shutdown = lambda: setattr(operation, "closed", True)
+            operation.native_mode_receipt = lambda: None
+            self.assertEqual(operation.run(), 0)
+            self.assertEqual(gate.read_json(Path(directory) / "success.json")["discovery_exit_code"], 0)
+
     def test_native_discovery_environment_reaches_process_without_credentials(self):
         selectors = {name: "/native/" + name.lower() for name in (
             "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR",
@@ -179,6 +272,41 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             status["tasks"]["9"] = dict(status["tasks"]["8"])
             status["tasks"]["9"]["id"] = 9
             self.assertFalse(operation.terminal_private_queue(status))
+
+    def test_model_discovery_group_is_filtered_by_its_distinct_root(self):
+        with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
+            operation, status = self._queue_oracle(Path(directory), with_inspection=False)
+            operation.models_root_id = "c" * 32
+            group = gate.INSPECTION_GROUP_PREFIX + operation.models_root_id
+            status["groups"][group] = {"status": "Running", "parallel_tasks": 1}
+            status["tasks"]["8"] = {
+                "id": 8, "label": group + "-" + "d" * 32, "group": group,
+                "status": {"Done": {"result": "Success"}},
+            }
+            filtered = operation._without_model_discovery_queue(status)
+            self.assertEqual(set(filtered["tasks"]), {"7"})
+            self.assertEqual(set(filtered["groups"]), {"default"})
+
+    def test_standalone_model_shutdown_rejects_terminal_row_without_journal(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-queue-unit-") as directory:
+            root = Path(directory)
+            operation, status = self._queue_oracle(root, with_inspection=False)
+            operation.root_id = None
+            operation.tasks = {}
+            operation.numeric_ids = {}
+            operation.ops = SimpleNamespace(dispatch_attempts=set(), inspection_attempts=set())
+            operation.discover_models_only = True
+            operation.models_state = root / "models-state"
+            operation.models_state.mkdir()
+            operation.models_root_id = "c" * 32
+            group = gate.INSPECTION_GROUP_PREFIX + operation.models_root_id
+            status["groups"][group] = {"status": "Running", "parallel_tasks": 1}
+            status["tasks"]["8"] = {
+                "id": 8, "label": group + "-" + "d" * 32, "group": group,
+                "status": {"Done": {"result": "Success"}},
+            }
+            with self.assertRaises(gate.AcceptanceFailure):
+                operation._without_model_discovery_queue(status)
 
     def test_terminal_queue_rejects_malformed_inspection_record(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
@@ -433,6 +561,62 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         self.assertEqual(retained, [True])
         self.assertFalse(operation.closed)
 
+    def test_model_discovery_failure_cleanup_tracks_its_inspection_root(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-cleanup-unit-") as directory:
+            root = Path(directory)
+            models_state = root / "models-state"
+            models_state.mkdir()
+            gate.write_json(models_state / "root.json", {"root_id": "c" * 32})
+            task_id = "d" * 32
+            (models_state / "inspections" / task_id).mkdir(parents=True)
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.processes = SimpleNamespace()
+            operation.delegate = root / "delegate"
+            operation.runner = root / "runner"
+            operation.pueue = root / "pueue"
+            operation.models_state = models_state
+            operation.output = root / "output"
+            operation.model_discovery_task_id = None
+            operation.models_root_id = None
+            cleanup = gate.ModelDiscoveryCleanupOps(operation)
+            status = {"tasks": {}, "groups": {}}
+            with patch.object(gate.NativeTaskOps, "failure_queue_finished", return_value=True):
+                self.assertTrue(cleanup.failure_queue_finished(status))
+            self.assertEqual(cleanup.root_id, "c" * 32)
+            self.assertEqual(cleanup.dispatch_attempts, {task_id})
+            self.assertEqual(cleanup.inspection_attempts, {task_id})
+
+    def test_model_discovery_failure_cleanup_uses_model_owner(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-owner-unit-") as directory:
+            root = Path(directory)
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.closed = False
+            operation.discover_models_only = True
+            operation.root_id = None
+            operation.config = root / "pueue.yml"
+            operation.daemon = object()
+            operation.models_state = root / "models-state"
+            operation.output = root / "output"
+            operation.delegate = root / "delegate"
+            operation.runner = root / "runner"
+            operation.pueue = root / "pueue"
+            operation.processes = SimpleNamespace()
+            operation.tasks = {}
+            operation.numeric_ids = {}
+
+            def unexpected_owner(*_args):
+                raise AssertionError("ordinary cleanup owner was selected")
+
+            operation.ops = SimpleNamespace(
+                root_id=None, tasks={}, labels={}, numbers={}, dispatch_attempts=set(),
+                bind_supervisor=unexpected_owner, retain_failure_ownership=unexpected_owner,
+            )
+            with patch.object(gate.ModelDiscoveryCleanupOps, "retain_failure_ownership",
+                              return_value=True) as retain:
+                self.assertTrue(operation.safe_shutdown())
+            retain.assert_called_once()
+            self.assertTrue(operation.closed)
+
     def test_runtime_binding_receipt_is_create_once(self):
         with tempfile.TemporaryDirectory(prefix="native-binding-unit-") as directory:
             root = Path(directory)
@@ -457,6 +641,13 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.pueue = files["pueue"]
             operation.pueued = files["pueued"]
             operation.write_binding()
+            receipt = gate.read_json(output / "binding.json")
+            self.assertEqual(receipt["task_budget"], gate.TASK_BUDGET)
+            self.assertEqual(receipt["canonical_task_budget"], gate.CANONICAL_TASK_BUDGET)
+            self.assertIsNone(receipt["requested_model"])
+            self.assertIsNone(receipt["requested_effort"])
+            self.assertIsNone(receipt["model_discovery"])
+            self.assertIsNone(receipt["native_mode"])
             original = (output / "binding.json").read_bytes()
 
             operation.provider_version = "pi-runtime-v2"
@@ -624,6 +815,11 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         ])
         self.assertEqual(legacy_args.mode, "workspace-write")
         self.assertIsNone(legacy_args.scenario)
+        discovery_args = gate.build_parser().parse_args([
+            "--provider", "antigravity:print", "--permission", "read-only",
+            "--scenario", "read-only", "--discover-models",
+        ])
+        self.assertTrue(discovery_args.discover_models)
         with self.assertRaises(SystemExit):
             gate.build_parser().parse_args([
                 "--provider", "pi:json", "--permission", "workspace-write", "--scenario", "timeout",
@@ -637,6 +833,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         self.assertIn('--scenario "$case_scenario"', wrapper)
         self.assertIn('run_case "$provider" workspace-write write', wrapper)
         self.assertIn('run_case "$provider" read-only read-only', wrapper)
+        self.assertIn('for provider in antigravity:print claude:print codex:exec pi:json opencode:run; do', wrapper)
         self.assertIn("2) # User-authorized authentication/prerequisite blocks remain neutral.", wrapper)
         self.assertIn("passed=%s blocked=%s failed=%s", wrapper)
         self.assertIn("aggregate_status=BLOCKED", wrapper)
@@ -653,7 +850,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
                 capture_output=True, text=True, check=False, timeout=10)
             self.assertEqual(blocked.returncode, 0)
-            self.assertIn("status=BLOCKED passed=0 blocked=9 failed=0", blocked.stdout)
+            self.assertIn("status=BLOCKED passed=0 blocked=10 failed=0", blocked.stdout)
             self.assertIn("auth_blocks_neutral=true", blocked.stdout)
 
             fake_python.write_text(
@@ -668,7 +865,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
                 capture_output=True, text=True, check=False, timeout=10)
             self.assertEqual(mixed.returncode, 1)
-            self.assertIn("status=failed passed=2 blocked=5 failed=2", mixed.stdout)
+            self.assertIn("status=failed passed=2 blocked=6 failed=2", mixed.stdout)
 
     def test_normal_setup_does_not_probe_provider_version_directly(self):
         source = Path(__file__).with_name("acceptance_native.py").read_text()
