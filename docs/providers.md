@@ -25,7 +25,8 @@ supervised runtime probe. It does not claim authentication or live acceptance.
 Use `delegate models --provider PROFILE [--cwd ABS] --json` when an explicit
 model or effort choice is needed. Model discovery is implemented for all five
 profiles. It uses the state-rooted supervisor and the `model-discovery-v1`
-60-second native inspection; it creates inspection evidence without admitting
+five-minute native inspection to allow first-run provider model/cache
+initialization; it creates inspection evidence without admitting
 a provider task.
 The current directory is used when `--cwd` is omitted. Discovery is advisory,
 never an admission allowlist, and provider defaults remain valid.

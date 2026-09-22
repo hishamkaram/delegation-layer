@@ -112,7 +112,7 @@ func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store,
 	}
 	// Inspection records reuse the normalized request identity, but no task is
 	// admitted and this marker is never sent to a provider.
-	req, err := buildRequest(store.RootID, id, a.Provider, cwd, task.TaskConfig{Permission: mode, Budget: "1m"}, []byte("model discovery"), nil)
+	req, err := buildRequest(store.RootID, id, a.Provider, cwd, task.TaskConfig{Permission: mode, Budget: inspection.ModelDiscoveryTimeout.String()}, []byte("model discovery"), nil)
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
 	}

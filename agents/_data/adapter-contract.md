@@ -58,11 +58,13 @@ delegate models --provider PROFILE [--cwd ABS] --json
 
 `--cwd` defaults to the current directory and must be absolute when supplied.
 Discovery uses the state-rooted supervisor and the `model-discovery-v1` native
-inspection bound, which is 60 seconds. It may contact the provider CLI and creates
+inspection bound, which is five minutes to allow first-run provider model/cache
+initialization. It may contact the provider CLI and creates
 inspection evidence, but it does not admit a provider task or launch a
 delegated turn.
-This revision applies the 60-second bound only to model discovery; historical
-admission probes retain their 20-second bounds.
+This revision applies the five-minute bound only to model discovery; historical
+admission probes retain their 20-second bounds. Existing model-discovery-v1
+journals with the former one-minute deadline remain recoverable.
 
 The JSON response contains `schema_version`, `command`, `provider`,
 `observed_at`, `status`, `reason_code`, `complete`, `source`, `efforts`, and

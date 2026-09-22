@@ -63,7 +63,8 @@ Model discovery is an advisory projection, not a model allowlist. Its projector
 must distinguish model-enumeration completeness from effort metadata, preserve
 null versus an explicitly empty effort list, and avoid inferring per-model
 compatibility from names or harness-wide choices. The shared core owns the
-inspection process, `model-discovery-v1` 60-second bound, state root, and supervisor evidence; the
+inspection process, `model-discovery-v1` five-minute bound for first-run provider
+model/cache initialization, state root, and supervisor evidence; the
 adapter only projects bounded nonsecret facts.
 
 ## Validation expectations

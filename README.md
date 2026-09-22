@@ -163,7 +163,8 @@ delegate models --provider codex:exec --cwd "$HOME/delegation-workspace" --json
 ```
 
 `--cwd` defaults to the current directory. Model discovery uses the
-state-rooted supervisor and a bounded `model-discovery-v1` 60-second inspection,
+state-rooted supervisor and a bounded `model-discovery-v1` five-minute
+inspection to allow a provider's first-run model/cache initialization. It
 creates inspection evidence without admitting a provider task, and may contact
 the provider CLI.
 It is advisory: a discovered model is not an admission guarantee or an

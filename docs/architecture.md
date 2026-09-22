@@ -97,7 +97,8 @@ adapter depends on.
 
 The implemented `delegate models` command is a separate advisory path. It
 reuses the state-rooted supervisor and runs one bounded native model inspection
-with the `model-discovery-v1` 60-second window, recording sanitized model facts
+with the `model-discovery-v1` five-minute window, allowing first-run provider
+model/cache initialization and recording sanitized model facts
 without admitting a
 provider task. Its `complete` flag describes model enumeration; null effort
 metadata remains distinguishable from an explicitly empty list. Discovery is

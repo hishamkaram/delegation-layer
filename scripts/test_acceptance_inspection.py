@@ -59,18 +59,22 @@ class InspectionHarnessTests(unittest.TestCase):
 
     def inspection_records(self, result: str | None = "eligible",
                            include_ordinary: bool = True,
-                           revision: str = "inspection-v1") -> Path:
+                           revision: str = "inspection-v1",
+                           legacy_model_discovery: bool = False) -> Path:
         # Declare the expectation before restoring the seeded dispatch
         # attempt, matching the production pre-dispatch ordering.
         self.ops.dispatch_attempts.discard(TASK)
         directory = self.state / "inspections" / TASK
         directory.mkdir(mode=0o700, parents=True)
+        standalone = revision == "model-discovery-v1"
+        legacy = standalone and legacy_model_discovery
         task_record = {
             "schema_version": 1, "root_id": ROOT, "task_id": TASK,
             "provider": "fixture:test", "mode": "read-only",
             "canonical_cwd": str(self.base),
-            "requested_config": {"permission": "read-only", "budget": "1m0s"},
-            "budget_nanos": 60_000_000_000,
+            "requested_config": {"permission": "read-only",
+                                  "budget": "1m0s" if legacy else ("5m0s" if standalone else "1m0s")},
+            "budget_nanos": 60_000_000_000 if legacy else (300_000_000_000 if standalone else 60_000_000_000),
             "brief_sha256": "c" * 64, "brief_length": 31,
         }
         if include_ordinary:
@@ -103,7 +107,7 @@ class InspectionHarnessTests(unittest.TestCase):
             "group": _inspection_group(ROOT),
             "label": f"{_inspection_group(ROOT)}-{TASK}",
             "created_at": "2026-09-15T00:00:00Z",
-            "deadline": ("2026-09-15T00:01:00Z" if revision == "model-discovery-v1"
+            "deadline": (("2026-09-15T00:01:00Z" if legacy else "2026-09-15T00:05:00Z") if standalone
                          else "2026-09-15T00:00:20Z"),
         }
         write_json(directory / "request.json", request)
@@ -551,8 +555,14 @@ class InspectionHarnessTests(unittest.TestCase):
         request["deadline"] = "2026-09-15T00:00:20Z"
         write_json(directory / "request.json", request, replace=True)
         self.refresh_request_links(directory)
-        with self.assertRaisesRegex(AcceptanceFailure, "60 seconds"):
+        with self.assertRaisesRegex(AcceptanceFailure, "300 seconds"):
             self.ops.validate_inspection_journals()
+
+    def test_model_discovery_accepts_legacy_one_minute_journal(self):
+        self.inspection_records(include_ordinary=False, revision="model-discovery-v1",
+                                legacy_model_discovery=True)
+        records = self.ops.validate_inspection_journals()
+        self.assertEqual(set(records), {TASK})
 
     def test_inspection_request_requires_exact_deadline_window(self):
         directory = self.inspection_records(result=None, include_ordinary=False)
