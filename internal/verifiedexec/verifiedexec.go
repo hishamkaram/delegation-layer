@@ -527,6 +527,10 @@ func locateInterpreter(shebang, environment []string, directory string) (Info, [
 	if err != nil {
 		return Info{}, nil, 0, err
 	}
+	interpreterPath, err = config.CanonicalizePath(interpreterPath)
+	if err != nil {
+		return Info{}, nil, 0, err
+	}
 	info, err := LocatePath(interpreterPath)
 	if err != nil {
 		return Info{}, nil, 0, err

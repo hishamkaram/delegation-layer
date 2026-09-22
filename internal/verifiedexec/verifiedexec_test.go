@@ -59,17 +59,6 @@ func TestPortableCommandPreservesRelativeNodeImports(t *testing.T) {
 		t.Skip("node is unavailable")
 	}
 	root := t.TempDir()
-	bin := filepath.Join(root, "bin#runtime")
-	if err = os.Mkdir(bin, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	nodeBytes, err := os.ReadFile(node)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(bin, "node"), nodeBytes, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	if err = os.WriteFile(filepath.Join(root, "helper.mjs"), []byte("console.log('relative import resolved')\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +75,7 @@ func TestPortableCommandPreservesRelativeNodeImports(t *testing.T) {
 		t.Fatal(err)
 	}
 	temporaryDir := t.TempDir()
-	command, temporaryFiles, err := buildPortableCommand(provider.Path, provider.SHA256, root, []string{"PATH=" + bin}, nil, source, temporaryDir)
+	command, temporaryFiles, err := buildPortableCommand(provider.Path, provider.SHA256, root, []string{"PATH=" + filepath.Dir(node)}, nil, source, temporaryDir)
 	if err != nil {
 		if closeErr := source.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -102,7 +91,7 @@ func TestPortableCommandPreservesRelativeNodeImports(t *testing.T) {
 		}
 	})
 	command.Dir = root
-	command.Env = []string{"PATH=" + bin}
+	command.Env = []string{"PATH=" + filepath.Dir(node)}
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, &output
 	if err = command.Run(); err != nil {
