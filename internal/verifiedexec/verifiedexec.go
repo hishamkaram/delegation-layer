@@ -9,9 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
@@ -30,25 +34,50 @@ type Info struct {
 	SHA256 string
 }
 
-// Command owns the descriptors inherited by a verified command. The first
-// descriptor is the admitted entrypoint; the second is an interpreter used by
-// a supported script entrypoint.
+// Command owns the descriptors and temporary materializations used by a
+// verified command. On Linux the first descriptor is the admitted entrypoint;
+// the second is an interpreter used by a supported script entrypoint.
 type Command struct {
-	Cmd   *exec.Cmd
-	files []*os.File
+	Cmd            *exec.Cmd
+	files          []*os.File
+	temporaryDir   string
+	temporaryFiles []string
 }
 
-// Close releases descriptors owned by a command. A started child has already
-// inherited its descriptors, so closing them does not interrupt that child.
-func (c *Command) Close() error {
+// ReleaseDescriptors closes parent-owned descriptors after a child has started.
+// Portable commands have no inherited descriptors; their private materializations
+// remain owned by Close until the child has exited.
+func (c *Command) ReleaseDescriptors() error {
 	if c == nil {
 		return nil
 	}
 	var closeErr error
-	for _, file := range c.files {
+	files := c.files
+	c.files = nil
+	for _, file := range files {
 		if file != nil {
 			closeErr = errors.Join(closeErr, file.Close())
 		}
+	}
+	return closeErr
+}
+
+// Close releases resources owned by a command. A started child has already
+// inherited descriptors and opened temporary materializations, so closing and
+// removing them does not interrupt that child.
+func (c *Command) Close() error {
+	if c == nil {
+		return nil
+	}
+	closeErr := c.ReleaseDescriptors()
+	closeErr = errors.Join(closeErr, unsealTemporaryDirectory(c.temporaryDir))
+	for _, path := range c.temporaryFiles {
+		if path != "" {
+			closeErr = errors.Join(closeErr, os.RemoveAll(path))
+		}
+	}
+	if c.temporaryDir != "" {
+		closeErr = errors.Join(closeErr, os.RemoveAll(c.temporaryDir))
 	}
 	return closeErr
 }
@@ -102,12 +131,11 @@ func Open(path, expectedSHA256 string) (*os.File, error) {
 	return file, nil
 }
 
-// NewCommand keeps the inspected executable open through native start. A
-// compiled executable runs directly from its descriptor. A supported
-// interpreter script runs from that descriptor through a verified interpreter,
-// while retaining the original entrypoint path in the script's argument view.
-// Replacing the named path after this function returns cannot change the file
-// that executes.
+// NewCommand keeps the inspected executable bound through native start. Linux
+// runs it from an inherited descriptor; other supported platforms use private
+// materializations of the admitted bytes. A supported interpreter script keeps
+// the original entrypoint path in its argument view. Replacing the named path
+// after this function returns cannot change the admitted entrypoint bytes.
 func NewCommand(executable, digest string, environment []string, args ...string) (*Command, error) {
 	return NewCommandInDirectory(executable, digest, "", environment, args...)
 }
@@ -120,6 +148,9 @@ func NewCommandInDirectory(executable, digest, directory string, environment []s
 	file, err := Open(executable, digest)
 	if err != nil {
 		return nil, err
+	}
+	if runtime.GOOS != "linux" {
+		return newPortableCommand(executable, digest, directory, environment, args, file)
 	}
 
 	shebang, err := readShebang(file)
@@ -156,6 +187,280 @@ func NewCommandInDirectory(executable, digest, directory string, environment []s
 	cmd.Args[0] = interpreter.Path
 	cmd.ExtraFiles = []*os.File{file, interpreterFile}
 	return &Command{Cmd: cmd, files: []*os.File{file, interpreterFile}}, nil
+}
+
+// newPortableCommand materializes the inspected bytes in a private directory
+// on systems where executing an inherited descriptor is not supported. Script
+// module lookups and compiled loader-relative dependencies are backed by a
+// private shadow path whose non-entrypoint entries reference the original
+// provider installation. The materialized tree is sealed read-only before the
+// command is returned, binding its path to the admitted bytes through Start.
+// The private directory is unsealed and removed when the caller closes the
+// command after Start/Wait.
+func newPortableCommand(executable, digest, directory string, environment []string, args []string, file *os.File) (command *Command, resultErr error) {
+	temporaryDir, err := os.MkdirTemp("", "delegation-layer-verified-")
+	if err != nil {
+		return nil, errors.Join(err, file.Close())
+	}
+	temporaryFiles := []string(nil)
+	sourceClosed := false
+	closeSource := func() error {
+		if sourceClosed {
+			return nil
+		}
+		sourceClosed = true
+		return file.Close()
+	}
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, closeSource(), unsealTemporaryDirectory(temporaryDir), removeTemporaryFiles(temporaryFiles), os.RemoveAll(temporaryDir))
+		}
+	}()
+
+	cmd, temporaryFiles, err := buildPortableCommand(executable, digest, directory, environment, args, file, temporaryDir)
+	if err != nil {
+		return nil, err
+	}
+	if err = sealTemporaryDirectory(temporaryDir); err != nil {
+		return nil, err
+	}
+	if err = closeSource(); err != nil {
+		return nil, err
+	}
+	return &Command{Cmd: cmd, temporaryDir: temporaryDir, temporaryFiles: temporaryFiles}, nil
+}
+
+func buildPortableCommand(executable, digest, directory string, environment []string, args []string, file *os.File, temporaryDir string) (*exec.Cmd, []string, error) {
+	shebang, err := readShebang(file)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(shebang) == 0 {
+		shadowRoot, err := newPortableShadowRoot(temporaryDir, "executable")
+		if err != nil {
+			return nil, nil, err
+		}
+		moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable))
+		if err != nil {
+			return nil, nil, err
+		}
+		path := filepath.Join(moduleDirectory, filepath.Base(executable))
+		materializeErr := materializeVerifiedFile(file, path, digest)
+		if materializeErr != nil {
+			return nil, nil, materializeErr
+		}
+		cmd := exec.Command(path, args...)
+		cmd.Args[0] = executable
+		return cmd, nil, nil
+	}
+	return buildPortableScriptCommand(executable, digest, directory, environment, args, file, temporaryDir, shebang)
+}
+
+func buildPortableScriptCommand(executable, digest, directory string, environment []string, args []string, file *os.File, temporaryDir string, shebang []string) (*exec.Cmd, []string, error) {
+	scriptPath, err := materializePortableScript(file, executable, temporaryDir, digest)
+	if err != nil {
+		return nil, nil, err
+	}
+	temporaryFiles := []string{scriptPath}
+	interpreter, interpreterArgs, kind, err := locateInterpreter(shebang, environment, directory)
+	if err != nil {
+		return nil, temporaryFiles, err
+	}
+	interpreterFile, err := Open(interpreter.Path, interpreter.SHA256)
+	if err != nil {
+		return nil, temporaryFiles, err
+	}
+	interpreterPath, interpreterFiles, materializeErr := materializePortableInterpreter(interpreterFile, interpreter, temporaryDir)
+	closeErr := interpreterFile.Close()
+	if err = errors.Join(materializeErr, closeErr); err != nil {
+		return nil, append(temporaryFiles, interpreterFiles...), err
+	}
+	temporaryFiles = append(temporaryFiles, interpreterFiles...)
+	commandArgs, err := portableScriptArgs(kind, interpreterArgs, scriptPath, executable, args)
+	if err != nil {
+		return nil, temporaryFiles, err
+	}
+	cmd := exec.Command(interpreterPath, commandArgs...)
+	cmd.Args[0] = interpreter.Path
+	return cmd, temporaryFiles, nil
+}
+
+func portableScriptArgs(kind scriptKind, interpreterArgs []string, scriptPath, executable string, args []string) ([]string, error) {
+	commandArgs := append([]string(nil), interpreterArgs...)
+	switch kind {
+	case nodeScript:
+		scriptURL := (&url.URL{Scheme: "file", Path: scriptPath}).String()
+		commandArgs = append(commandArgs, "--input-type=module", "-e", "import("+strconv.Quote(scriptURL)+")", executable)
+	case shellScript:
+		commandArgs = append(commandArgs, "-c", `script=$1; shift; . "$script"`, executable, scriptPath)
+	default:
+		return nil, errors.New("unsupported verified script interpreter")
+	}
+	return append(commandArgs, args...), nil
+}
+
+func materializePortableScript(source *os.File, executable, temporaryDir, expectedSHA256 string) (string, error) {
+	shadowRoot, err := newPortableShadowRoot(temporaryDir, "script")
+	if err != nil {
+		return "", err
+	}
+	moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable))
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(moduleDirectory, filepath.Base(executable))
+	if err := materializeVerifiedFile(source, path, expectedSHA256); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// shadowDirectory creates a private path matching sourceDirectory. Entries
+// outside the executable path are symlinked to the original installation so
+// relative imports and package lookups retain their provider-owned semantics.
+// The admitted entrypoint itself is materialized separately in this private
+// path and is never symlinked.
+func shadowDirectory(sourceDirectory, temporaryDir, excludedEntry string) (string, error) {
+	relative, err := filepath.Rel(string(filepath.Separator), sourceDirectory)
+	if err != nil {
+		return "", err
+	}
+	mirror := temporaryDir
+	source := string(filepath.Separator)
+	components := []string(nil)
+	if relative != "." {
+		components = strings.Split(relative, string(filepath.Separator))
+	}
+	for _, component := range components {
+		if component == "" || component == "." || component == ".." {
+			return "", errors.New("invalid portable executable path")
+		}
+		if err := shadowEntries(source, mirror, component); err != nil {
+			return "", err
+		}
+		source = filepath.Join(source, component)
+		mirror = filepath.Join(mirror, component)
+		if err := os.Mkdir(mirror, 0o700); err != nil {
+			return "", err
+		}
+	}
+	if err := shadowEntries(source, mirror, excludedEntry); err != nil {
+		return "", err
+	}
+	return mirror, nil
+}
+
+func newPortableShadowRoot(temporaryDir, name string) (string, error) {
+	root := filepath.Join(temporaryDir, name)
+	if err := os.Mkdir(root, 0o700); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
+func shadowEntries(sourceDirectory, mirrorDirectory, excludedEntry string) error {
+	entries, err := os.ReadDir(sourceDirectory)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == excludedEntry {
+			continue
+		}
+		if err := os.Symlink(filepath.Join(sourceDirectory, entry.Name()), filepath.Join(mirrorDirectory, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func materializeVerifiedFile(source *os.File, destination, expectedSHA256 string) (resultErr error) {
+	if source == nil {
+		return errors.New("nil verified executable")
+	}
+	target, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, os.Remove(destination))
+		}
+	}()
+	return copyVerifiedFile(target, source, expectedSHA256)
+}
+
+func materializePortableInterpreter(source *os.File, interpreter Info, temporaryDir string) (path string, temporaryFiles []string, resultErr error) {
+	shadowRoot, err := newPortableShadowRoot(temporaryDir, "interpreter")
+	if err != nil {
+		return "", nil, err
+	}
+	moduleDirectory, err := shadowDirectory(filepath.Dir(interpreter.Path), shadowRoot, filepath.Base(interpreter.Path))
+	if err != nil {
+		return "", nil, err
+	}
+	path = filepath.Join(moduleDirectory, filepath.Base(interpreter.Path))
+	if err := materializeVerifiedFile(source, path, interpreter.SHA256); err != nil {
+		return "", nil, err
+	}
+	return path, nil, nil
+}
+
+func sealTemporaryDirectory(path string) error {
+	return filepath.WalkDir(path, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		return os.Chmod(currentPath, 0o500)
+	})
+}
+
+func unsealTemporaryDirectory(path string) error {
+	if path == "" {
+		return nil
+	}
+	err := filepath.WalkDir(path, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			return nil
+		}
+		return os.Chmod(currentPath, 0o700)
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+func copyVerifiedFile(target, source *os.File, expectedSHA256 string) (resultErr error) {
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	digest := sha256.New()
+	_, copyErr := io.Copy(io.MultiWriter(target, digest), source)
+	closeErr := target.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(digest.Sum(nil)); got != expectedSHA256 {
+		return errors.New("verified executable snapshot does not match admission")
+	}
+	return nil
+}
+
+func removeTemporaryFiles(paths []string) error {
+	var resultErr error
+	for _, path := range paths {
+		if path != "" {
+			resultErr = errors.Join(resultErr, os.RemoveAll(path))
+		}
+	}
+	return resultErr
 }
 
 type scriptKind uint8

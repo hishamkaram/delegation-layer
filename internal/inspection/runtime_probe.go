@@ -115,7 +115,9 @@ func runCapabilityCommand(scope execution.PreflightScope, definition provider.Ru
 	go stderr.drain()
 	startErr := scope.Start(cmd.Start)
 	closeErr := errors.Join(stdout.writer.Close(), stderr.writer.Close())
-	closeErr = errors.Join(closeErr, verified.Close())
+	if startErr == nil {
+		closeErr = errors.Join(closeErr, verified.ReleaseDescriptors())
+	}
 	var waitErr error
 	if startErr == nil {
 		waitErr = cmd.Wait()
@@ -124,6 +126,7 @@ func runCapabilityCommand(scope execution.PreflightScope, definition provider.Ru
 		}
 	}
 	stdoutErr, stderrErr := <-stdout.done, <-stderr.done
+	closeErr = errors.Join(closeErr, verified.Close())
 	if joined := errors.Join(startErr, closeErr, waitErr, stdoutErr, stderrErr, ctx.Err()); joined != nil {
 		clear(stdout.buffer.bytes)
 		clear(stderr.buffer.bytes)

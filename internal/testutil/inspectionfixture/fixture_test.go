@@ -96,7 +96,7 @@ func fixtureRequest(dir string) task.TaskRecord {
 
 func fixtureProfile(request task.TaskRecord) provider.PreparedProfile {
 	return provider.PreparedProfile{
-		Plan:            execution.Plan{Executable: "/bin/true", Directory: request.CanonicalCwd, Predicate: task.FixturePredicateRef()},
+		Plan:            execution.Plan{Executable: "/usr/bin/true", Directory: request.CanonicalCwd, Predicate: task.FixturePredicateRef()},
 		ObservedVersion: "fixture-v2",
 		Effective:       task.EffectiveConfig{Containment: "finite-fixture-process", Approval: "fixture-no-tools", Digest: task.ComputeSHA256([]byte("base"))},
 	}

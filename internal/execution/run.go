@@ -208,7 +208,12 @@ func (i *invocation) closeParents(startErr error, opts Options) error {
 	if startErr != nil {
 		_, diagnosticErr = fmt.Fprintln(i.stderr.writer, startErr.Error())
 	}
-	parentErr := errors.Join(i.stdin.Close(), i.stdout.writer.Close(), i.stderr.writer.Close(), i.verified.Close())
+	parentErr := errors.Join(i.stdin.Close(), i.stdout.writer.Close(), i.stderr.writer.Close())
+	if startErr != nil {
+		parentErr = errors.Join(parentErr, i.verified.Close())
+	} else {
+		parentErr = errors.Join(parentErr, i.verified.ReleaseDescriptors())
+	}
 	opts.emit("parent-fds-closed")
 	return errors.Join(diagnosticErr, parentErr)
 }
@@ -219,7 +224,11 @@ func (i *invocation) finishCaptures(startErr error) error {
 		waitErr = <-i.wait
 	}
 	stdoutErr, stderrErr := <-i.stdout.done, <-i.stderr.done
-	return errors.Join(observedWaitError(waitErr), stdoutErr, stderrErr)
+	var verifiedErr error
+	if startErr == nil {
+		verifiedErr = i.verified.Close()
+	}
+	return errors.Join(observedWaitError(waitErr), stdoutErr, stderrErr, verifiedErr)
 }
 
 func observedWaitError(err error) error {

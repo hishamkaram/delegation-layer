@@ -65,12 +65,16 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 	go stdout.drain()
 	go stderr.drain()
 	startErr := scope.Start(func() error { return hooks.startCommand(cmd) })
-	closeErr := errors.Join(stdout.writer.Close(), stderr.writer.Close(), verified.Close())
+	closeErr := errors.Join(stdout.writer.Close(), stderr.writer.Close())
+	if startErr == nil {
+		closeErr = errors.Join(closeErr, verified.ReleaseDescriptors())
+	}
 	var waitErr error
 	if startErr == nil {
 		waitErr = hooks.waitCommand(cmd)
 	}
 	stdoutErr, stderrErr := <-stdout.done, <-stderr.done
+	closeErr = errors.Join(closeErr, verified.Close())
 	if errors.Join(startErr, closeErr, waitErr, stdoutErr, stderrErr, ctx.Err()) != nil {
 		clear(stdout.buffer.bytes)
 		return nil, errNativeInspection

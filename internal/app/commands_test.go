@@ -637,7 +637,7 @@ func TestRunProviderReturnsFailureForReceiptErrorWithOutcome(t *testing.T) {
 	if err = json.Unmarshal(metaData, &meta); err != nil {
 		t.Fatal(err)
 	}
-	providerExecutable, err := filepath.EvalSymlinks("/bin/true")
+	providerExecutable, err := filepath.EvalSymlinks("/usr/bin/true")
 	if err != nil {
 		t.Fatal(err)
 	}

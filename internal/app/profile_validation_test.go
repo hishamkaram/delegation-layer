@@ -171,7 +171,7 @@ func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 	requested := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}
 	req := &task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, Provider: "fixture:test", Mode: "read-only", CanonicalCwd: cwd, RequestedConfig: requested, BudgetNanos: int64(time.Minute), BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
 	digest := task.ComputeSHA256([]byte("runner-profile"))
-	providerExecutable, err := filepath.EvalSymlinks("/bin/true")
+	providerExecutable, err := filepath.EvalSymlinks("/usr/bin/true")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,9 +192,9 @@ func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 }
 
 func (f *runnerRefreshFixture) profile() PreparedProfile {
-	providerExecutable, err := filepath.EvalSymlinks("/bin/true")
+	providerExecutable, err := filepath.EvalSymlinks("/usr/bin/true")
 	if err != nil {
-		providerExecutable = "/bin/true"
+		providerExecutable = "/usr/bin/true"
 	}
 	providerBytes, err := os.ReadFile(providerExecutable)
 	if err != nil {

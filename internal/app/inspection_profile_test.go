@@ -44,7 +44,7 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 	profileCandidate := func(version string) commonprovider.ProfileCandidate {
 		profile := PreparedProfile{
 			Plan: execution.Plan{
-				Executable: "/bin/true",
+				Executable: "/usr/bin/true",
 				Directory:  workspace,
 				Predicate:  ref,
 			},
@@ -286,7 +286,7 @@ func writeAppInspectionExecutable(t *testing.T, path string, data []byte) {
 func appInspectionPreparedProfile(req task.TaskRecord, directory string, writableRoots []string) commonprovider.PreparedProfile {
 	return commonprovider.PreparedProfile{
 		Plan: execution.Plan{
-			Executable: "/bin/true",
+			Executable: "/usr/bin/true",
 			Directory:  directory,
 			Predicate:  task.FixturePredicateRef(),
 		},

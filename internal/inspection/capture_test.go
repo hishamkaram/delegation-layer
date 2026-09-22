@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -52,8 +53,14 @@ func TestNativeCaptureOwnsCommandAndMasksDiagnostics(t *testing.T) {
 	data, err := runNative(nativeTestScope{ctx: ctx, authorize: func() error { gates++; return nil }}, definition, nativeHooks{
 		start: func(cmd *exec.Cmd) error {
 			starts++
-			if cmd.Path != "/dev/fd/3" || cmd.Dir != "/workspace" || strings.Join(cmd.Env, ",") != "PATH=/usr/bin" || strings.Join(cmd.Args, ",") != definition.Executable+",fixed" || cmd.Stdin != nil {
+			if cmd.Dir != "/workspace" || strings.Join(cmd.Env, ",") != "PATH=/usr/bin" || strings.Join(cmd.Args, ",") != definition.Executable+",fixed" || cmd.Stdin != nil {
 				t.Fatal("command did not preserve the compiled description and finite stdin")
+			}
+			if runtime.GOOS == "linux" && cmd.Path != "/dev/fd/3" {
+				t.Fatalf("Linux verified command path = %q, want /dev/fd/3", cmd.Path)
+			}
+			if runtime.GOOS != "linux" && cmd.Path == definition.Executable {
+				t.Fatalf("portable verified command resolved the mutable executable path: %q", cmd.Path)
 			}
 			_, stdoutErr := io.WriteString(cmd.Stdout, "private-native-value")
 			_, stderrErr := io.WriteString(cmd.Stderr, "discarded-private-diagnostic")

@@ -100,10 +100,10 @@ func FingerprintExecutable(path string) (digest string, resultErr error) {
 }
 
 // OpenVerifiedExecutable opens the exact regular executable represented by
-// expectedSHA256 and leaves the descriptor positioned at its beginning. A
-// caller can pass the descriptor to a child through exec.Cmd.ExtraFiles and
-// launch /dev/fd/3, binding execution to the inspected inode instead of
-// resolving the mutable pathname again.
+// expectedSHA256 and leaves the descriptor positioned at its beginning. The
+// descriptor can be used by platform-specific launch code that supports
+// descriptor-backed execution; portable callers should use the verified
+// command builder, which preserves the same admitted bytes on every platform.
 func OpenVerifiedExecutable(path, expectedSHA256 string) (*os.File, error) {
 	return verifiedexec.Open(path, expectedSHA256)
 }

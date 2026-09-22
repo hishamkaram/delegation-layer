@@ -110,12 +110,15 @@ func runModelCommand(scope execution.PreflightScope, definition provider.Inspect
 	if input != nil {
 		closeErr = errors.Join(closeErr, input.Close())
 	}
-	closeErr = errors.Join(closeErr, verified.Close())
+	if startErr == nil {
+		closeErr = errors.Join(closeErr, verified.ReleaseDescriptors())
+	}
 	var waitErr error
 	if startErr == nil {
 		waitErr = hooks.waitCommand(cmd)
 	}
 	stdoutErr, stderrErr := <-stdout.done, <-stderr.done
+	closeErr = errors.Join(closeErr, verified.Close())
 	if errors.Join(startErr, closeErr, stdoutErr, stderrErr, ctx.Err()) != nil {
 		clear(stdout.buffer.bytes)
 		clear(stderr.buffer.bytes)
