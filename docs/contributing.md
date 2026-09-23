@@ -111,6 +111,20 @@ and `2` status mapping. A run must produce its own receipt before it is treated
 as live evidence; documentation and tests do not imply that a live run has
 already passed.
 
+## Release promotion
+
+The tag workflow creates and verifies a draft release. Promotion is a separate
+manual workflow dispatch from protected `main` so npm, GitHub Releases, and the Homebrew tap are
+published only after the archive smoke checks pass. Keep `publish_homebrew`
+enabled for normal releases and configure the `HOMEBREW_TAP_TOKEN` repository
+secret with write access to `hishamkaram/homebrew-tap`. The promotion script
+revalidates every platform archive, checksum, and GitHub attestation before it
+updates the tap idempotently; the formula remains pinned to the exact promoted
+tag for reproducible Homebrew installs. If a tap update fails after the
+release becomes public, rerun the same promotion for the current latest release
+after fixing the token or transient failure; the npm and Homebrew steps are
+idempotent.
+
 ## Documentation changes
 
 Product documentation belongs in the README or focused files under `docs/`.
