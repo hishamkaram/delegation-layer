@@ -10,8 +10,14 @@ on:
         description: 'Draft release tag to promote, for example v1.2.3'
         required: true
         type: string
+      publish_homebrew:
+        description: 'Update the Homebrew tap after release promotion'
+        required: true
+        default: true
+        type: boolean
 
 permissions:
+  actions: read
   contents: write
   attestations: write
   id-token: write
@@ -156,14 +162,18 @@ jobs:
           fi
 
   promote:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    concurrency:
+      group: release-promotion
+      cancel-in-progress: false
     steps:
       - name: Checkout draft tag
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ inputs.tag }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node.js
@@ -171,12 +181,20 @@ jobs:
         with:
           node-version: '22.x'
 
-      - name: Validate draft and npm credentials
+      - name: Validate release and npm credentials
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          PUBLISH_HOMEBREW: ${{ inputs.publish_homebrew }}
           TAG: ${{ inputs.tag }}
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo 'Promotion must be dispatched from protected main.' >&2
+            exit 1
+          fi
           if [[ ! "${TAG}" =~ ^v[0-9]+(\.[0-9]+){2}$ ]]; then
             echo 'Only stable semantic version tags such as v1.2.3 can be promoted.' >&2
             exit 1
@@ -190,10 +208,71 @@ jobs:
             echo 'NPM_TOKEN is required to promote the public npm package.' >&2
             exit 1
           fi
-          draft="$(gh release view "${TAG}" --json isDraft --jq .isDraft)"
-          if [[ "${draft}" != "true" ]]; then
-            echo "Release ${TAG} is not a draft; refusing promotion." >&2
+          if [[ "${PUBLISH_HOMEBREW}" == "true" && -z "${HOMEBREW_TAP_TOKEN}" ]]; then
+            echo 'HOMEBREW_TAP_TOKEN is required when publish_homebrew is true.' >&2
             exit 1
+          fi
+          release_state="$(gh release view "${TAG}" --json isDraft,isPrerelease --jq '[.isDraft, .isPrerelease] | @tsv')"
+          IFS=$'\t' read -r draft prerelease <<<"${release_state}"
+          if [[ "${prerelease}" == "true" ]]; then
+            echo "Release ${TAG} is a prerelease; refusing promotion." >&2
+            exit 1
+          fi
+          if ! latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '[.[] | select(.draft == false and .prerelease == false)] | if length == 0 then "" else max_by(.published_at).tag_name end')"; then
+            echo 'Unable to determine the current latest stable release; refusing promotion.' >&2
+            exit 1
+          fi
+          if [[ "${draft}" == "true" ]]; then
+            if [[ -n "${latest_tag}" && "${latest_tag}" != "${TAG}" ]] && ! node - "${TAG}" "${latest_tag}" <<'NODE'
+          const [, currentMajor, currentMinor, currentPatch] = process.argv[2].match(/^v(\d+)\.(\d+)\.(\d+)$/) || [];
+          const [, latestMajor, latestMinor, latestPatch] = process.argv[3].match(/^v(\d+)\.(\d+)\.(\d+)$/) || [];
+          if (currentMajor === undefined || latestMajor === undefined) process.exit(1);
+          const current = [currentMajor, currentMinor, currentPatch].map(Number);
+          const latest = [latestMajor, latestMinor, latestPatch].map(Number);
+          let newer = false;
+          for (let index = 0; index < current.length; index += 1) {
+            if (current[index] === latest[index]) continue;
+            newer = current[index] > latest[index];
+            break;
+          }
+          process.exit(newer ? 0 : 1);
+          NODE
+            then
+              echo "Draft release ${TAG} is not newer than current latest release ${latest_tag}; refusing promotion." >&2
+              exit 1
+            fi
+          fi
+          release_commit="$(git rev-list -n 1 "${TAG}^{commit}")"
+          git fetch "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "main:refs/remotes/origin/main" \
+            "${WORKFLOW_SHA}:refs/remotes/origin/workflow" --no-tags
+          if ! git merge-base --is-ancestor "${release_commit}" origin/main; then
+            echo 'Promotion tags must reference a commit reachable from origin/main.' >&2
+            exit 1
+          fi
+          push_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?event=push&head_sha=${release_commit}&per_page=20" \
+            --jq 'if (.workflow_runs | length) == 0 then "" else [.workflow_runs[0].status, .workflow_runs[0].conclusion, .workflow_runs[0].head_sha] | @tsv end')"
+          if [[ -z "${push_run}" ]]; then
+            echo "No tag-triggered release workflow run found for ${TAG}." >&2
+            exit 1
+          fi
+          IFS=$'\t' read -r push_status push_conclusion push_head_sha <<<"${push_run}"
+          if [[ "${push_status}" != "completed" || "${push_conclusion}" != "success" || "${push_head_sha}" != "${release_commit}" ]]; then
+            echo "Tag-triggered release and archive smoke checks are not complete and successful for ${TAG}." >&2
+            exit 1
+          fi
+          if [[ "${PUBLISH_HOMEBREW}" == "true" ]]; then
+            publisher="${RUNNER_TEMP}/publish-homebrew-formula.sh"
+            git show refs/remotes/origin/workflow:scripts/publish-homebrew-formula.sh >"${publisher}"
+            chmod 0700 "${publisher}"
+          fi
+          if [[ "${draft}" != "true" ]]; then
+            if [[ "${latest_tag}" != "${TAG}" ]]; then
+              echo "Release ${TAG} is public but not the current latest release; refusing promotion." >&2
+              exit 1
+            fi
+            echo "Release ${TAG} is already public and current; continuing an idempotent promotion retry."
           fi
           if ! gh release view "${TAG}" --json assets --jq '.assets[].name' | grep -Fx checksums.txt >/dev/null; then
             echo "Release ${TAG} is missing checksums.txt." >&2
@@ -239,3 +318,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: gh release edit "${TAG}" --draft=false --latest
+
+      - name: Publish Homebrew formula
+        if: ${{ inputs.publish_homebrew }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          "${RUNNER_TEMP}/publish-homebrew-formula.sh" "${TAG}"
