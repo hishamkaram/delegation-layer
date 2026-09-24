@@ -54,10 +54,13 @@ provider-independent sandbox. Historical tasks retain their recorded preparation
 contract. New continuation tasks inherit the requested permission mode and use
 the current native mapping without modifying predecessor evidence.
 
-Pueue owns queueing and process supervision. A normal release carries the
-`pueue` and `pueued` executables and creates a private state-rooted
-configuration on demand. Commands that need supervisor control recover that
-private daemon from the saved binding after a restart. An explicit
+Pueue owns queueing and process supervision. Every normal install carries the
+matching `pueue` and `pueued` executables and creates a private state-rooted
+configuration on demand. Release archives keep the pair beside the CLI;
+Homebrew installs it in the formula’s private `libexec` directory so it cannot
+conflict with another Pueue installation. The CLI resolves either layout
+without requiring separately managed Pueue. Commands that need supervisor
+control recover that private daemon from the saved binding after a restart. An explicit
 `--pueue-config` can bind an existing compatible supervisor. `delegate-run`
 receives only the saved root and task ID,
 reconstructs the recorded profile, and refuses to start
@@ -118,3 +121,18 @@ provider executable, supervisor, and native authentication to be available. A
 terminal authentication refusal produces a sanitized `BLOCKED` receipt with
 exit status `2`; it is neutral in the aggregate live gate, while behavior or
 evidence failures remain failures.
+
+For JSON dispatch and continuation failures, `failure.stage` identifies the
+delegate lifecycle stage and `task_record` says whether the successor task
+record exists. Stable `failure.code` values distinguish invalid requests,
+unsupported options, continuation failures, provider and supervisor preparation
+failures, task identity conflicts, task-submission preparation failures, and
+uncertain submission after the supervisor add boundary. Failures saving
+submission evidence after admission are reported as task-operation failures.
+With a caller-supplied task ID, a point-in-time missing-record check remains
+`unknown` because another dispatch may create that ID concurrently. A generated
+ID can be reported as `not_created` before its record is written. `failure.next_action`
+is `correct_request` only for known correctable request errors when no record
+was created; it is `check_status` whenever a record exists, and otherwise
+`stop_and_report`. The JSON response does not expose supervisor process
+diagnostics or private configuration paths.

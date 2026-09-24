@@ -114,45 +114,45 @@ func supervisorOptionsWithEnvironment(base pueue.Options, providerEnvironment []
 func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord) (admissionPreparation, error) {
 	candidate, err := prepareCandidate(deps, store.Root, req)
 	if err != nil {
-		return admissionPreparation{}, err
+		return admissionPreparation{}, withDispatchStage("prepare-provider", err)
 	}
 	var profile PreparedProfile
 	if candidate.Inspection == nil {
 		profile, err = finalizeCandidate(candidate, req, nil)
 		if err != nil {
-			return admissionPreparation{}, err
+			return admissionPreparation{}, withDispatchStage("finalize-provider", err)
 		}
 	}
 	supervisorOptions, err := supervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
 	if err != nil {
-		return admissionPreparation{}, err
+		return admissionPreparation{}, withDispatchStage("prepare-supervisor-options", err)
 	}
 	supervisor, err := bindInitialWithOptions(a, deps, store.Root, supervisorOptions)
 	if err != nil {
-		return admissionPreparation{}, err
+		return admissionPreparation{}, withDispatchStage("start-supervisor", err)
 	}
 	prepared := admissionPreparation{Profile: profile, Supervisor: supervisor}
 	if candidate.Inspection != nil {
 		facts, deadline, inspectionErr := admissionInspectionFacts(a, deps, store, req, candidate, supervisor)
 		if inspectionErr != nil {
-			return admissionPreparation{}, inspectionErr
+			return admissionPreparation{}, withDispatchStage("inspect-provider", inspectionErr)
 		}
 		prepared.Profile, err = finalizeCandidate(candidate, req, facts)
 		if err != nil {
-			return admissionPreparation{}, err
+			return admissionPreparation{}, withDispatchStage("finalize-provider", err)
 		}
 		prepared.InspectionDeadline = deadline
 	}
 	registration, lookupErr := deps.normalized().Catalog.Lookup(req.Provider)
 	if lookupErr != nil {
-		return admissionPreparation{}, lookupErr
+		return admissionPreparation{}, withDispatchStage("select-provider", lookupErr)
 	}
 	prepared.Capability, err = runtimeCapability(req.Provider, candidate, prepared.Profile, registration.Description)
 	if err != nil {
-		return admissionPreparation{}, err
+		return admissionPreparation{}, withDispatchStage("record-runtime-capability", err)
 	}
 	if err = prepared.Profile.ValidateStatePlacement(store.Root); err != nil {
-		return admissionPreparation{}, err
+		return admissionPreparation{}, withDispatchStage("validate-state-placement", err)
 	}
 	return prepared, nil
 }

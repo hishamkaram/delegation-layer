@@ -44,8 +44,13 @@ func TestRunNativeProfileRefusesBeforeBinding(t *testing.T) {
 	if response.SchemaVersion != OutputSchemaVersion || response.Command != "dispatch" {
 		t.Fatalf("unexpected response identity: %+v", response)
 	}
-	if !strings.Contains(response.Error, ErrProfileUnavailable.Error()) {
-		t.Fatalf("profile refusal missing from response: %+v", response)
+	if response.Failure == nil || response.Failure.Code != "provider_unavailable" ||
+		response.Failure.Stage != "prepare-provider" || response.TaskRecord != "unknown" ||
+		response.Failure.NextAction != "stop_and_report" {
+		t.Fatalf("profile refusal was not expressed through the dispatch contract: %+v", response)
+	}
+	if strings.Contains(response.Error, ErrProfileUnavailable.Error()) {
+		t.Fatalf("JSON response exposed internal provider diagnostics: %+v", response)
 	}
 	tasks, err := os.ReadDir(filepath.Join(root, "tasks"))
 	if err == nil && len(tasks) != 0 {
@@ -585,6 +590,36 @@ func TestPrivateSupervisorPairDoesNotMixExecutables(t *testing.T) {
 	}
 }
 
+func TestBundledSupervisorPairResolvesFromHomebrewLibexec(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "Cellar", "delegation-layer", "1.0", "bin")
+	libexec := filepath.Join(root, "Cellar", "delegation-layer", "1.0", "libexec")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(libexec, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"pueue", "pueued"} {
+		if err := os.WriteFile(filepath.Join(libexec, name), []byte("fixture"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expectedClient, err := filepath.EvalSymlinks(filepath.Join(libexec, "pueue"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedDaemon, err := filepath.EvalSymlinks(filepath.Join(libexec, "pueued"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	client, daemon, found, err := resolveBundledLibexecPair(bin)
+	if err != nil || !found || client != expectedClient || daemon != expectedDaemon {
+		t.Fatalf("Homebrew libexec pair was not resolved: client=%q daemon=%q found=%t err=%v", client, daemon, found, err)
+	}
+}
+
 func TestReadBriefUsesNoFollowNonblockingOpen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "brief.md")
@@ -716,11 +751,74 @@ func TestDispatchExistingIDConflictStopsBeforeAdmission(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(response.Error, task.ErrRequestConflict.Error()) {
-		t.Fatalf("existing identity conflict missing: %+v", response)
+	if response.TaskRecord != "created" || response.Failure == nil ||
+		response.Failure.Code != "task_request_conflict" ||
+		response.Failure.Stage != "existing-task" ||
+		response.Failure.NextAction != "check_status" {
+		t.Fatalf("existing identity conflict was not classified safely: %+v", response)
 	}
 	if _, err := td.ReadSubmission(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("conflicting dispatch admitted existing task: %v", err)
+	}
+}
+
+func TestDispatchValidationFailureKeepsExplicitTaskPresenceUnknown(t *testing.T) {
+	store, td, req := newAppTestTask(t, false)
+	defer closeAppTestTask(t, store, td)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"dispatch", "--json", "--root", store.Root, "--id", req.TaskID,
+		"--provider", req.Provider, "--brief", filepath.Join(t.TempDir(), "missing.md"),
+		"--cwd", req.CanonicalCwd,
+	}, &stdout, &stderr, Dependencies{})
+	if code != 2 {
+		t.Fatalf("invalid dispatch exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var response Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.TaskID != req.TaskID || response.TaskRecord != "unknown" || response.Failure == nil ||
+		response.Failure.Code != "invalid_request" ||
+		response.Failure.Stage != "validate-request" ||
+		response.Failure.NextAction != "stop_and_report" {
+		var failure DispatchFailureResponse
+		if response.Failure != nil {
+			failure = *response.Failure
+		}
+		t.Fatalf("validation failure misreported an explicit task ID: task_id=%q task_record=%q failure=%+v",
+			response.TaskID, response.TaskRecord, failure)
+	}
+}
+
+func TestDispatchGeneratedIDValidationFailureRemainsCorrectable(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	cwd := t.TempDir()
+	brief := filepath.Join(t.TempDir(), "brief.md")
+	writeAppTestFile(t, brief, []byte("dispatch brief"))
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{
+		"dispatch", "--json", "--root", root, "--provider", "antigravity:print",
+		"--brief", brief, "--cwd", cwd, "--budget", "2m", "--native-timeout", "5m",
+	}, &stdout, &stderr, Dependencies{})
+	if code != 2 {
+		t.Fatalf("invalid generated-ID dispatch exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var response Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.TaskID == "" || response.TaskRecord != "not_created" || response.Failure == nil ||
+		response.Failure.Code != "invalid_request" ||
+		response.Failure.Stage != "validate-request" ||
+		response.Failure.NextAction != "correct_request" {
+		var failure DispatchFailureResponse
+		if response.Failure != nil {
+			failure = *response.Failure
+		}
+		t.Fatalf("generated task ID validation failure was not safely correctable: task_id=%q task_record=%q failure=%+v",
+			response.TaskID, response.TaskRecord, failure)
 	}
 }
 

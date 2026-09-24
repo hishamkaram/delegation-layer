@@ -133,27 +133,37 @@ func (d Dependencies) normalized() Dependencies {
 // rooted paths and availability. Answer bytes are streamed by a future typed
 // result API rather than copied into an unbounded control object.
 type Response struct {
-	SchemaVersion  int                     `json:"schema_version"`
-	Command        string                  `json:"command"`
-	RootID         string                  `json:"root_id,omitempty"`
-	TaskID         string                  `json:"task_id,omitempty"`
-	ParentTaskID   string                  `json:"parent_task_id,omitempty"`
-	Status         string                  `json:"status,omitempty"`
-	Admission      string                  `json:"admission"`
-	Liveness       string                  `json:"liveness"`
-	Publication    string                  `json:"publication"`
-	Outcome        *task.OutcomeRecord     `json:"outcome,omitempty"`
-	Payload        *task.PayloadDescriptor `json:"payload,omitempty"`
-	Raw            []taskdir.LogDescriptor `json:"raw,omitempty"`
-	EvidenceSHA256 string                  `json:"evidence_sha256,omitempty"`
-	Supervisor     *SupervisorResponse     `json:"supervisor,omitempty"`
-	Stops          []StopResponse          `json:"stops,omitempty"`
-	Stop           *StopResponse           `json:"stop,omitempty"`
-	Pending        *PendingResponse        `json:"pending,omitempty"`
-	Capability     *CapabilityReport       `json:"capability,omitempty"`
-	Continuation   *ContinuationResponse   `json:"continuation,omitempty"`
-	Error          string                  `json:"error,omitempty"`
-	ErrorTruncated bool                    `json:"error_truncated,omitempty"`
+	SchemaVersion  int                      `json:"schema_version"`
+	Command        string                   `json:"command"`
+	RootID         string                   `json:"root_id,omitempty"`
+	TaskID         string                   `json:"task_id,omitempty"`
+	TaskRecord     string                   `json:"task_record,omitempty"`
+	ParentTaskID   string                   `json:"parent_task_id,omitempty"`
+	Status         string                   `json:"status,omitempty"`
+	Admission      string                   `json:"admission"`
+	Liveness       string                   `json:"liveness"`
+	Publication    string                   `json:"publication"`
+	Outcome        *task.OutcomeRecord      `json:"outcome,omitempty"`
+	Payload        *task.PayloadDescriptor  `json:"payload,omitempty"`
+	Raw            []taskdir.LogDescriptor  `json:"raw,omitempty"`
+	EvidenceSHA256 string                   `json:"evidence_sha256,omitempty"`
+	Supervisor     *SupervisorResponse      `json:"supervisor,omitempty"`
+	Stops          []StopResponse           `json:"stops,omitempty"`
+	Stop           *StopResponse            `json:"stop,omitempty"`
+	Pending        *PendingResponse         `json:"pending,omitempty"`
+	Capability     *CapabilityReport        `json:"capability,omitempty"`
+	Continuation   *ContinuationResponse    `json:"continuation,omitempty"`
+	Failure        *DispatchFailureResponse `json:"failure,omitempty"`
+	Error          string                   `json:"error,omitempty"`
+	ErrorTruncated bool                     `json:"error_truncated,omitempty"`
+}
+
+// DispatchFailureResponse gives an agent a stable recovery decision without
+// exposing supervisor paths or raw process diagnostics.
+type DispatchFailureResponse struct {
+	Code       string `json:"code"`
+	Stage      string `json:"stage"`
+	NextAction string `json:"next_action"`
 }
 
 // ContinuationResponse is emitted when a task can be continued or when a
@@ -243,8 +253,7 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 	}
 	result := runCommand(parsed, normalized)
 	if parsed.JSON {
-		result.response.setError(result.err)
-		if err = writeJSON(stdout, result.response); err != nil {
+		if err = writeJSONResponse(stdout, parsed.Command, &result.response, result.err); err != nil {
 			return 1
 		}
 	} else {
@@ -256,6 +265,16 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 		}
 	}
 	return result.code
+}
+
+func writeJSONResponse(stdout io.Writer, command string, response *Response, resultErr error) error {
+	response.setError(resultErr)
+	if (command == "dispatch" || command == "continue") && resultErr != nil {
+		failure := dispatchFailure(resultErr, response.TaskRecord)
+		response.Failure = &failure
+		response.Error = dispatchFailureMessage(failure.Code)
+	}
+	return writeJSON(stdout, *response)
 }
 
 func runCommand(a Arguments, deps Dependencies) commandResult {
@@ -609,6 +628,10 @@ func resolveBundledExecutables(deps Dependencies) (client, daemon string, result
 	if deps.InitialSupervisorExecutable != "" || bundledSupervisorPairHasEntry(directory) {
 		return "", "", clientErr
 	}
+	client, daemon, found, libexecErr := resolveBundledLibexecPair(directory)
+	if found {
+		return client, daemon, libexecErr
+	}
 
 	pathClient, pathErr := exec.LookPath("pueue")
 	if pathErr != nil {
@@ -646,6 +669,18 @@ func bundledSupervisorPairHasEntry(directory string) bool {
 	return false
 }
 
+func resolveBundledLibexecPair(binaryDirectory string) (client, daemon string, found bool, resultErr error) {
+	directory := filepath.Clean(filepath.Join(binaryDirectory, "..", "libexec"))
+	client, daemon, err := resolveSupervisorPair(directory)
+	if err == nil {
+		return client, daemon, true, nil
+	}
+	if bundledSupervisorPairHasEntry(directory) {
+		return "", "", true, err
+	}
+	return "", "", false, nil
+}
+
 func bundledSupervisorDirectory(deps Dependencies) (string, error) {
 	if deps.InitialSupervisorExecutable != "" {
 		return filepath.Dir(deps.InitialSupervisorExecutable), nil
@@ -653,6 +688,9 @@ func bundledSupervisorDirectory(deps Dependencies) (string, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return "", err
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(self); resolveErr == nil {
+		self = resolved
 	}
 	return filepath.Dir(self), nil
 }

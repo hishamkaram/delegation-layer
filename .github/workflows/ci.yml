@@ -60,6 +60,12 @@ jobs:
       - name: Install pinned supervisor test binaries
         run: ./scripts/install-test-supervisor.sh
 
+      - name: Prove private supervisor bootstrap through delegate CLI
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-private-cli
+
       - name: Run supervisor acceptance
         id: supervisor
         env:
@@ -113,6 +119,12 @@ jobs:
 
       - name: Install pinned supervisor test binaries
         run: ./scripts/install-test-supervisor.sh
+
+      - name: Prove private supervisor bootstrap through delegate CLI
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-private-cli
 
       - name: Run supervisor acceptance
         id: supervisor

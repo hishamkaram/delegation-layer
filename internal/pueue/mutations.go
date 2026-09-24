@@ -67,14 +67,24 @@ func (c *Client) Submit(ctx context.Context, permit *taskdir.SubmissionPermit, l
 	result, err := c.command(ctx, permit.Consume, "add", "--escape", "--label", record.Label, "--print-task-id", "--", launch.RunnerExecutable, "--root", launch.RootPath, record.TaskID)
 	if err != nil {
 		unknown.Pending = pendingFrom(err)
-		return unknown, errors.Join(ErrUnknown, err)
+		if !result.Started && !errors.Is(err, ErrInFlight) {
+			return unknown, err
+		}
+		return unknown, errors.Join(ErrUnknown, ErrSubmissionUncertain, err)
 	}
 	id, err := parseID(strings.TrimSpace(string(result.Stdout)))
 	if err != nil {
-		return unknown, err
+		return unknown, errors.Join(ErrUnknown, ErrSubmissionUncertain, err)
 	}
 	identity.NumericTaskID = &id
-	return c.Reconcile(ctx, identity)
+	observation, err := c.Reconcile(ctx, identity)
+	if err != nil && !observation.Matched {
+		return observation, errors.Join(ErrUnknown, ErrSubmissionUncertain, err)
+	}
+	if !observation.Matched {
+		return observation, errors.Join(ErrUnknown, ErrSubmissionUncertain)
+	}
+	return observation, err
 }
 
 func validateLaunch(launch Launch, rootID string) error {

@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills skill-package-check test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-agy codex-acceptance-tools acceptance-codex claude-acceptance-tools acceptance-claude acceptance-pi acceptance-opencode acceptance-native
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills skill-package-check test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-agy codex-acceptance-tools acceptance-codex claude-acceptance-tools acceptance-claude acceptance-pi acceptance-opencode acceptance-native
 
 tools:
 	./scripts/install-tools.sh
@@ -100,6 +100,14 @@ supervisor-fixtures: tool-versions
 
 acceptance-supervisor: supervisor-fixtures
 	./scripts/acceptance-supervisor.sh
+
+acceptance-private-cli: build
+	python3 scripts/acceptance_private_cli.py \
+		--delegate "$(BIN_DIR)/delegate" \
+		--runner "$(BIN_DIR)/delegate-run" \
+		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+		--output "$(BIN_DIR)/private-cli-acceptance/receipt.json"
 
 acceptance-agy: build test-native-harness
 	./scripts/acceptance_native.sh antigravity:print

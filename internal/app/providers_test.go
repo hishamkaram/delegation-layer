@@ -129,8 +129,11 @@ func TestDispatchUnsupportedOptionRefusesBeforeSupervisorBinding(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(response.Error, commonprovider.ErrUnsupportedOption.Error()) {
-		t.Fatalf("unsupported option missing from response: %+v", response)
+	if response.TaskRecord != "not_created" || response.Failure == nil ||
+		response.Failure.Code != "unsupported_option" ||
+		response.Failure.Stage != "prepare-provider" ||
+		response.Failure.NextAction != "correct_request" {
+		t.Fatalf("unsupported option was not classified safely: %+v", response)
 	}
 	entries, err := os.ReadDir(filepath.Join(root, "tasks"))
 	if err == nil {

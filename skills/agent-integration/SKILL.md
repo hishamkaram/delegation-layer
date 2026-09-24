@@ -19,8 +19,11 @@ inspect, authenticate, or install a provider CLI directly.
 3. Give every turn an absolute workspace, a separate state root, an explicit
    permission mode, and a finite budget.
 4. Use `--json` and save the returned `task_id`. Read `admission`, `liveness`,
-   `publication`, `status`, `outcome`, `continuation`, and `error` as separate
-   fields.
+   `publication`, `status`, `outcome`, `continuation`, `task_record`, `failure`,
+   and `error` as separate fields.
+   Delegate owns the supervisor lifecycle. Never install, configure, start,
+   inspect, or repair Pueue, and never poll a task unless the response says its
+   `task_record` is `created`.
 5. Observe with `status` and collect with `collect`. Collection may recover the
    saved supervisor only to observe an already-requested budget stop; it never
    launches a provider or retries a task.
@@ -156,11 +159,19 @@ omitted or `default` effort is omitted from native argv. For AGY read-only,
 without a bypass. Authorized AGY workspace-write retains its existing native
 bypass. Do not add these native flags yourself.
 
-Save the exact `task_id` from the JSON response. If dispatch returns an error,
-use its `status`, `capability`, and `error` fields to report whether the request
-was invalid, unsupported, blocked by authentication, or operationally
-uncertain. Do not silently try another provider after a task has been
-admitted.
+Save the exact `task_id` from the JSON response. The recovery steps below apply
+to parsed dispatch responses. If the CLI rejects the command syntax before
+dispatch (nonzero exit with a usage error and no JSON response), correct the
+reported syntax and invoke it again; argument parsing fails before admission and
+does not create a task record. For a parsed dispatch error, read its `failure`
+and `task_record` fields. If `task_record` is
+`not_created`, do not run `status`, `collect`, or `continue`; correct the request
+only when `failure.next_action` is `correct_request`, otherwise report the
+delegate failure and stop. If it is `created`, use `status` before taking any
+other action. If it is `unknown`, stop and report the failure: with an
+explicit task ID, absence can race another dispatch that is creating the same
+ID. Never retry that ID, run Pueue commands, or silently try another provider
+after a task may have been admitted.
 
 ### 5. Observe and collect
 
@@ -218,6 +229,13 @@ the original `--root`, even if a returned command hint omits it. Observe and
 collect the successor by repeating step 5. If `resumable` is
 false, report the reason and stop; a fresh dispatch would lose the original
 conversation and is not an equivalent recovery.
+
+If `continue` returns an error, use its `failure` and `task_record` fields just
+as for dispatch: when the record is `created`, check the returned successor
+`task_id` with `status`; when it is `not_created`, correct the request only if
+`failure.next_action` is `correct_request`; and when it is `unknown`, stop and
+report the failure. Do not repeat `continue` while successor creation is
+unknown.
 
 ## JSON decisions
 
