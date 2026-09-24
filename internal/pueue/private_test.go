@@ -81,17 +81,56 @@ func TestPrivateClientReadyAcceptsLateVersionBeforeStatus(t *testing.T) {
 	}
 }
 
-func TestWaitReadyRejectsParentCancellationAfterReaping(t *testing.T) {
-	fake := newFakeSupervisor(t, "delay-status")
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
-
-	if err := waitReady(ctx, fake.client, time.Second); !errors.Is(err, context.Canceled) {
-		t.Fatalf("waitReady accepted readiness after caller cancellation: %v", err)
+func TestWaitReadyRejectsParentCancellationAndRetainsPendingOwner(t *testing.T) {
+	fake := newFakeSupervisorPaths(t, "delay-status", "pueue "+FixtureVersion)
+	fake.environment = append(fake.environment, "FAKE_STATUS_DELAY=1")
+	client, err := Bind(context.Background(), fake.executable, fake.configPath, Options{
+		ObservationTimeout: DefaultObservationTimeout,
+		Environment:        fake.environment,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	fake.client = client
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan error, 1)
+	go func() { ready <- waitReady(ctx, fake.client, 2*time.Second) }()
+	waitForFakeInvocation(t, fake.logPath, "arg=status\n")
+	cancel()
+
+	readinessErr := <-ready
+	var inFlight *InFlightError
+	hasPending := errors.As(readinessErr, &inFlight) && inFlight.Pending != nil
+	if hasPending {
+		fake.cleanupPending = inFlight.Pending
+		if !awaitPendingNaturally(inFlight.Pending, 3*time.Second) {
+			t.Fatal("cancelled readiness command did not finish within its bound")
+		}
+		fake.cleanupPending = nil
+	}
+	if !errors.Is(readinessErr, context.Canceled) {
+		t.Fatalf("waitReady accepted readiness after caller cancellation: %v", readinessErr)
+	}
+	if !hasPending {
+		t.Fatalf("waitReady did not retain ownership of the active command: %v", readinessErr)
+	}
+}
+
+func waitForFakeInvocation(t *testing.T, path, invocation string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		log, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(log), invocation) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("fake supervisor did not record invocation %q", invocation)
 }
 
 func TestWaitReadyRetriesReapedUnavailableStatus(t *testing.T) {
@@ -428,22 +467,35 @@ func TestRecoverPrivateBoundsHungBootstrapAndRetainsLock(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	startedMarker := filepath.Join(base, "status-started")
+	releaseMarker := filepath.Join(base, "status-release")
 	options := Options{
-		ObservationTimeout: 20 * time.Millisecond,
-		Environment:        append(os.Environ(), "PRIVATE_STATUS_DELAY=0.5"),
+		// Leave enough time for RecoverPrivate's version preflight to finish
+		// before the deliberately blocked status command consumes the budget.
+		ObservationTimeout: 250 * time.Millisecond,
+		Environment: append(os.Environ(),
+			"PRIVATE_STATUS_STARTED="+startedMarker,
+			"PRIVATE_STATUS_RELEASE="+releaseMarker,
+		),
 	}
+	defer releasePrivateStatusOnCleanup(t, releaseMarker)
 	started := time.Now()
 	_, err = RecoverPrivate(context.Background(), stateRoot, first.Binding(), options)
 	if err == nil {
 		t.Fatal("hung private bootstrap unexpectedly recovered")
 	}
-	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
-		t.Fatalf("private recovery was not bounded: %s", elapsed)
+	maxBootstrapDuration := time.Duration(privateBootstrapObservationPhases)*options.ObservationTimeout + 500*time.Millisecond
+	if elapsed := time.Since(started); elapsed > maxBootstrapDuration {
+		t.Fatalf("private recovery exceeded its bounded budget: elapsed=%s limit=%s", elapsed, maxBootstrapDuration)
 	}
 	var inFlight *InFlightError
 	if !errors.As(err, &inFlight) || inFlight.Pending == nil {
 		t.Fatalf("private recovery lost its pending ownership: %v", err)
 	}
+	if !strings.Contains("\x00"+strings.Join(inFlight.Pending.args, "\x00")+"\x00", "\x00status\x00") {
+		t.Fatalf("private recovery timed out before the blocked status probe: %q", inFlight.Pending.args)
+	}
+	waitForPrivateStatusStart(t, startedMarker)
 
 	lockContext, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	deferredLock, lockErr := acquireBootstrapLock(lockContext, filepath.Join(stateRoot, privateSupervisorDirectory, "bootstrap.lock"))
@@ -456,7 +508,8 @@ func TestRecoverPrivateBoundsHungBootstrapAndRetainsLock(t *testing.T) {
 	if !errors.Is(lockErr, context.DeadlineExceeded) {
 		t.Fatalf("bootstrap lock was released while readiness was still running: %v", lockErr)
 	}
-	if !awaitPendingNaturally(inFlight.Pending, time.Second) {
+	releasePrivateStatus(t, releaseMarker)
+	if !awaitPendingNaturally(inFlight.Pending, 3*time.Second) {
 		t.Fatal("hung readiness process remained in flight")
 	}
 	lock, lockErr := acquireBootstrapLock(context.Background(), filepath.Join(stateRoot, privateSupervisorDirectory, "bootstrap.lock"))
@@ -648,6 +701,10 @@ while [ "$#" -gt 0 ]; do
       printf '%s\n' 'pueue 99.7.3'; exit 0 ;;
     status)
       if [ "${PRIVATE_STATUS_DELAY:-}" != "" ]; then sleep "$PRIVATE_STATUS_DELAY"; fi
+      if [ "${PRIVATE_STATUS_STARTED:-}" != "" ]; then
+        : > "$PRIVATE_STATUS_STARTED"
+        while [ ! -f "$PRIVATE_STATUS_RELEASE" ]; do sleep 0.01; done
+      fi
       marker="$(dirname "$config")/ready"
       [ -f "$marker" ] || exit 1
       if [ "${PRIVATE_INVALID_STATUS:-}" = "1" ]; then
@@ -662,6 +719,34 @@ while [ "$#" -gt 0 ]; do
 done
 exit 64
 `
+
+func waitForPrivateStatusStart(t *testing.T, marker string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("inspect private status start marker: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("private status fixture did not reach its blocking point")
+}
+
+func releasePrivateStatus(t *testing.T, marker string) {
+	t.Helper()
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func releasePrivateStatusOnCleanup(t *testing.T, marker string) {
+	t.Helper()
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Errorf("release private status fixture: %v", err)
+	}
+}
 
 const privateDaemonFixture = `#!/bin/sh
 set -eu

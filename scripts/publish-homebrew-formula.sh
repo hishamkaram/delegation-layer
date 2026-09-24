@@ -104,8 +104,6 @@ class DelegationLayer < Formula
   version "${version}"
   license "MIT"
 
-  depends_on "pueue"
-
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/${owner_repo}/releases/download/${tag}/${darwin_arm64}"
@@ -129,11 +127,14 @@ class DelegationLayer < Formula
   def install
     bin.install "delegate"
     bin.install "delegate-run"
+    libexec.install "pueue", "pueued"
   end
 
   test do
     assert_match "delegate #{version}", shell_output("#{bin}/delegate version")
     system bin/"delegate", "providers", "--json"
+    assert_match "pueue ", shell_output("#{libexec}/pueue --version")
+    assert_match "pueued ", shell_output("#{libexec}/pueued --version")
   end
 end
 EOF

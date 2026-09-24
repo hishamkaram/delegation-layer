@@ -28,6 +28,46 @@ type fakeSupervisor struct {
 	cleanupPending *Pending
 }
 
+type submitStartFailure struct {
+	executable string
+	hidden     string
+	moved      bool
+	failed     bool
+	err        error
+}
+
+func (failure *submitStartFailure) observe(event CommandEvent) {
+	if !slices.Contains(event.Argv, "add") {
+		return
+	}
+	switch event.Stage {
+	case "entry":
+		failure.err = os.Rename(failure.executable, failure.hidden)
+		failure.moved = failure.err == nil
+	case "completed":
+		if event.PID != 0 {
+			return
+		}
+		failure.failed = true
+		if failure.moved {
+			restoreErr := os.Rename(failure.hidden, failure.executable)
+			failure.err = errors.Join(failure.err, restoreErr)
+			failure.moved = restoreErr != nil
+		}
+	}
+}
+
+func (failure *submitStartFailure) restore() error {
+	if !failure.moved {
+		return nil
+	}
+	err := os.Rename(failure.hidden, failure.executable)
+	if err == nil {
+		failure.moved = false
+	}
+	return err
+}
+
 func validBindingForTest() task.SupervisorRef {
 	digest := task.ComputeSHA256([]byte("binding"))
 	return task.SupervisorRef{
@@ -408,7 +448,7 @@ func TestSubmitNeverRetriesAfterUncertainAdmission(t *testing.T) {
 	}
 	writeStatusFor(t, fake, record.RootID, record.TaskID, 8, StateQueued)
 	observation, err := fake.client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root})
-	if !errors.Is(err, ErrUnknown) || observation.Matched {
+	if !errors.Is(err, ErrUnknown) || !errors.Is(err, ErrSubmissionUncertain) || observation.Matched {
 		t.Fatalf("lost admission was treated as success: %+v %v", observation, err)
 	}
 	if _, err := fake.client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root}); !errors.Is(err, task.ErrPermitAlreadyUsed) {
@@ -419,6 +459,58 @@ func TestSubmitNeverRetriesAfterUncertainAdmission(t *testing.T) {
 	}
 	if countCommand(readInvocations(t, fake.logPath), "add") != 1 {
 		t.Fatal("uncertain admission retried add")
+	}
+}
+
+func TestSubmitPreflightFailureIsNotSubmissionUncertain(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	fixture := newTaskFixture(t, fake.client.Binding())
+	prepared, err := fixture.taskDir.PrepareSubmission(fake.client.Binding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := fake.client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: "relative"})
+	if err == nil || errors.Is(err, ErrSubmissionUncertain) || observation.Matched {
+		t.Fatalf("preflight failure was reported as a possible submission: %+v %v", observation, err)
+	}
+	if countCommand(readInvocations(t, fake.logPath), "add") != 0 {
+		t.Fatal("invalid launch reached the pueue add command")
+	}
+	if err := prepared.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSubmitStartFailureIsNotSubmissionUncertain(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	fixture := newTaskFixture(t, fake.client.Binding())
+	prepared, err := fixture.taskDir.PrepareSubmission(fake.client.Binding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	injectedFailure := &submitStartFailure{
+		executable: fake.executable,
+		hidden:     filepath.Join(filepath.Dir(fake.executable), "pueue-unavailable"),
+	}
+	fake.client.options.Observer = injectedFailure.observe
+	t.Cleanup(func() {
+		if cleanupErr := injectedFailure.restore(); cleanupErr != nil {
+			t.Errorf("restore fake supervisor after start failure: %v", cleanupErr)
+		}
+	})
+
+	observation, err := fake.client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root})
+	if injectedFailure.err != nil {
+		t.Fatalf("inject or restore supervisor start failure: %v", injectedFailure.err)
+	}
+	if !injectedFailure.failed || err == nil || errors.Is(err, ErrUnknown) || errors.Is(err, ErrSubmissionUncertain) || observation.Matched {
+		t.Fatalf("definite process start failure was reported as uncertain: observation=%+v err=%v", observation, err)
+	}
+	if countCommand(readInvocations(t, fake.logPath), "add") != 0 {
+		t.Fatal("pueue add ran despite the supervisor process failing to start")
+	}
+	if err := prepared.Release(); err != nil {
+		t.Fatal(err)
 	}
 }
 

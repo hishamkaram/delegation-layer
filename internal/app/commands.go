@@ -18,13 +18,15 @@ import (
 
 func dispatch(a Arguments, deps Dependencies) (result commandResult) {
 	response := newResponse("dispatch")
+	response.TaskRecord = initialDispatchTaskRecord(a.TaskID)
+	response.TaskID = a.TaskID
 	root, cwd, brief, err := dispatchInputs(a)
 	if err != nil {
-		return failed(response, err, classifyCode(err, 2))
+		return failed(response, withDispatchStage("validate-request", err), classifyCode(err, 2))
 	}
 	store, err := openStore(root, deps.storeDependencies(), true)
 	if err != nil {
-		return failed(response, err, classifyCode(err, 1))
+		return failed(response, withDispatchStage("open-state", err), classifyCode(err, 1))
 	}
 	defer func() { mergeCommandClose(&result, store.Close) }()
 	response.RootID = store.RootID
@@ -32,32 +34,34 @@ func dispatch(a Arguments, deps Dependencies) (result commandResult) {
 	if id == "" {
 		id, err = task.NewTaskID()
 		if err != nil {
-			return failed(response, err, 1)
+			return failed(response, withDispatchStage("generate-task-id", err), 1)
 		}
 	}
+	response.TaskID = id
 	if a.Auto {
 		persistedProvider, exists, providerErr := persistedProviderForTask(store, id)
+		response.TaskRecord = dispatchTaskRecordLookup(a.TaskID, exists, providerErr)
 		if providerErr != nil {
-			return failed(response, providerErr, classifyCode(providerErr, 1))
+			return failed(response, withDispatchStage("select-provider", providerErr), classifyCode(providerErr, 1))
 		}
 		if exists {
 			a.Provider = persistedProvider
 		} else {
 			a.Provider, err = selectAutoProvider(deps, store.Root, store.RootID, id, cwd, a.Config, brief)
 			if err != nil {
-				return failed(response, err, classifyCode(err, 2))
+				return failed(response, withDispatchStage("select-provider", err), classifyCode(err, 2))
 			}
 		}
 	}
 	prior := (*task.PriorSession)(nil)
 	base, err := buildRequest(store.RootID, id, a.Provider, cwd, a.Config, brief, nil)
 	if err != nil {
-		return failed(response, err, classifyCode(err, 2))
+		return failed(response, withDispatchStage("validate-request", err), classifyCode(err, 2))
 	}
 	if a.ResumeTask != "" {
 		prior, err = resolvePredecessor(store, base, a.ResumeTask, deps.SupervisorOptions)
 		if err != nil {
-			return failed(response, err, classifyCode(err, 1))
+			return failed(response, withDispatchStage("resolve-predecessor", err), classifyCode(err, 1))
 		}
 		base.PriorSession = prior
 	}
@@ -66,12 +70,32 @@ func dispatch(a Arguments, deps Dependencies) (result commandResult) {
 
 	td, openErr := store.OpenTask(id)
 	if openErr == nil {
+		response.TaskRecord = "created"
 		return dispatchExisting(a, deps, store, td, req, response)
 	}
 	if !errors.Is(openErr, os.ErrNotExist) {
-		return failed(response, openErr, classifyCode(openErr, 1))
+		response.TaskRecord = "unknown"
+		return failed(response, withDispatchStage("open-task-record", openErr), classifyCode(openErr, 1))
 	}
+	response.TaskRecord = dispatchTaskRecordLookup(a.TaskID, false, nil)
 	return dispatchNew(a, deps, store, req, brief, response)
+}
+
+func initialDispatchTaskRecord(taskID string) string {
+	if taskID == "" {
+		return "not_created"
+	}
+	return "unknown"
+}
+
+func dispatchTaskRecordLookup(requestedTaskID string, exists bool, lookupErr error) string {
+	if exists {
+		return "created"
+	}
+	if lookupErr != nil || requestedTaskID != "" {
+		return "unknown"
+	}
+	return "not_created"
 }
 
 func persistedProviderForTask(store *taskdir.Store, taskID string) (provider string, exists bool, resultErr error) {
@@ -122,29 +146,30 @@ func dispatchInputs(a Arguments) (root, cwd string, brief []byte, err error) {
 
 func continueTask(a Arguments, deps Dependencies) (result commandResult) {
 	response := newResponse("continue")
+	response.TaskRecord = "not_created"
 	root, err := resolveRoot(a.Root)
 	if err != nil {
-		return failed(response, err, 1)
+		return failed(response, withDispatchStage("resolve-state-root", err), 1)
 	}
 	predecessor, predecessorMeta, brief, err := loadContinuationInput(root, a, deps)
 	if err != nil {
-		return failed(response, err, 1)
+		return failed(response, withDispatchStage("load-predecessor", err), 1)
 	}
 	registration, lookupErr := deps.normalized().Catalog.Lookup(predecessor.Provider)
 	if lookupErr != nil {
-		return failed(response, lookupErr, 2)
+		return failed(response, withDispatchStage("resolve-continuation-provider", lookupErr), 2)
 	}
 	if registration.Description.Continuation != commonprovider.ContinuationNative {
-		return failed(response, fmt.Errorf("native continuation unsupported for %s", predecessor.Provider), 2)
+		return failed(response, withDispatchStage("check-continuation-capability", fmt.Errorf("native continuation unsupported for %s", predecessor.Provider)), 2)
 	}
 	if err = validateContinuationMetadata(root, a, predecessorMeta); err != nil {
-		return failed(response, err, 2)
+		return failed(response, withDispatchStage("validate-continuation", err), 2)
 	}
 	continuationArgs := buildContinuationArguments(a, root, predecessor, predecessorMeta, brief)
 	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
 	restoreEnvironment, restoreErr := applyContinuationEnvironment(root, predecessorMeta)
 	if restoreErr != nil {
-		return failed(response, restoreErr, 1)
+		return failed(response, withDispatchStage("restore-continuation-environment", restoreErr), 1)
 	}
 	defer restoreRunnerEnvironment(&result, restoreEnvironment)
 	deps.SupervisorOptions = supervisorOptions
@@ -271,6 +296,12 @@ func decorateContinuationResult(result commandResult, root, predecessorID string
 }
 
 func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *taskdir.TaskDir, req task.TaskRecord, response Response) (result commandResult) {
+	defer func() {
+		if result.err != nil {
+			result.err = withDispatchStage("existing-task", result.err)
+			result.response.setError(result.err)
+		}
+	}()
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	oldReq, oldMeta, err := td.PreparedRecords()
 	if err != nil {
@@ -315,44 +346,60 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 	if profileErr != nil {
 		return failed(response, profileErr, classifyCode(profileErr, 2))
 	}
-	return submitPreparedWithOptions(a, deps, td, oldReq, oldMeta, oldMeta.SupervisorConfig,
-		supervisorOptionsForProfile(supervisorOptions, profile), store.Root, response)
+	return markDispatchSubmissionFailure(submitPreparedWithOptions(a, deps, td, oldReq, oldMeta, oldMeta.SupervisorConfig,
+		supervisorOptionsForProfile(supervisorOptions, profile), store.Root, response))
 }
 
 func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, brief []byte, response Response) commandResult {
 	prepared, err := prepareAdmission(a, deps, store, req)
 	if err != nil {
-		err = annotateMissingDispatchStage("preparing inspection admission", err)
+		err = withDispatchStage("prepare-admission", annotateMissingDispatchStage("preparing inspection admission", err))
 		return failed(response, err, classifyCode(err, 2))
 	}
 	response.Capability = &prepared.Capability
 	profile, supervisor := prepared.Profile, prepared.Supervisor
 	if err = profile.Validate(req); err != nil {
-		return failed(response, err, classifyCode(err, 2))
+		return failed(response, withDispatchStage("validate-profile", err), classifyCode(err, 2))
 	}
 	runner, err := resolveRunner(a.Runner, deps)
 	if err != nil {
-		return failed(response, err, classifyCode(err, 2))
+		return failed(response, withDispatchStage("resolve-runner", err), classifyCode(err, 2))
 	}
 	meta := newMeta(req, profile, supervisor.Binding(), runner, deps.PublisherVersion)
 	if brief == nil {
 		brief, err = readBriefFileForRequest(a.Brief, req)
 		if err != nil {
 			err = annotateMissingDispatchStage("reading brief", err)
-			return failed(response, err, classifyCode(err, 1))
+			return failed(response, withDispatchStage("read-brief", err), classifyCode(err, 1))
 		}
 	}
 	if !prepared.InspectionDeadline.IsZero() && !time.Now().Before(prepared.InspectionDeadline) {
-		return failed(response, inspection.ErrAdmissionExpired, 1)
+		return failed(response, withDispatchStage("admission-deadline", inspection.ErrAdmissionExpired), 1)
 	}
 	td, err := store.CreateTask(req.TaskID, &req, brief, &meta)
 	if err != nil {
+		response.TaskRecord = "unknown"
 		err = annotateMissingDispatchStage("creating ordinary task", err)
-		return failed(response, err, classifyCode(err, 1))
+		return failed(response, withDispatchStage("create-task-record", err), classifyCode(err, 1))
 	}
+	response.TaskRecord = "created"
 	result := submitPreparedWithProfile(a, deps, td, &req, &meta, supervisor, profile, response)
 	if result.err != nil {
 		result.err = annotateMissingDispatchStage("submitting ordinary task", result.err)
+	}
+	return markDispatchSubmissionFailure(result)
+}
+
+func markDispatchSubmissionFailure(result commandResult) commandResult {
+	if result.err != nil {
+		stage := "prepare-task-submission"
+		switch {
+		case errors.Is(result.err, pueue.ErrSubmissionUncertain):
+			stage = "submit-task"
+		case result.response.Admission == task.AdmissionAdmitted.String():
+			stage = "record-submission-evidence"
+		}
+		result.err = withDispatchStage(stage, result.err)
 		result.response.setError(result.err)
 	}
 	return result
