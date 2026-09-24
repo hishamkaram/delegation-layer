@@ -605,9 +605,17 @@ func TestBundledSupervisorPairResolvesFromHomebrewLibexec(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	expectedClient, err := filepath.EvalSymlinks(filepath.Join(libexec, "pueue"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedDaemon, err := filepath.EvalSymlinks(filepath.Join(libexec, "pueued"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	client, daemon, found, err := resolveBundledLibexecPair(bin)
-	if err != nil || !found || client != filepath.Join(libexec, "pueue") || daemon != filepath.Join(libexec, "pueued") {
+	if err != nil || !found || client != expectedClient || daemon != expectedDaemon {
 		t.Fatalf("Homebrew libexec pair was not resolved: client=%q daemon=%q found=%t err=%v", client, daemon, found, err)
 	}
 }
