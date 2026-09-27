@@ -220,10 +220,7 @@ func createQueuedCancelTask(t *testing.T, stateRoot, statusPath string, supervis
 	if err != nil {
 		t.Fatal(err)
 	}
-	runnerSource, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
+	runnerSource := canonicalAppTestExecutable(t)
 	runner := installStateRunnerFixture(t, stateRoot, runnerSource)
 	workspace, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

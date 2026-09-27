@@ -55,31 +55,25 @@ func TestValidateInspectionWorkerExecutableRejectsWrongExecutable(t *testing.T) 
 func TestValidateInspectionWorkerExecutableRequiresStateRunnerForUpgrade(t *testing.T) {
 	t.Run("authorized content-addressed state runner", func(t *testing.T) {
 		store, operation := newInspectionWorkerOperationWithRunnerOwnership(t, time.Unix(100, 0).UTC(), task.RunnerOwnershipManaged)
-		source, err := os.Executable()
-		if err != nil {
-			t.Fatal(err)
-		}
+		source := canonicalAppTestExecutable(t)
 		runner := installStateRunnerFixture(t, store.Root, source)
-		if err = operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
+		if err := operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		binding := operation.Request().Binding
-		if err = validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner); err != nil {
+		if err := validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner); err != nil {
 			t.Fatalf("verified state-root worker upgrade was rejected: %v", err)
 		}
 	})
 
 	t.Run("authorized install runner", func(t *testing.T) {
 		store, operation := newInspectionWorkerOperationWithRunnerOwnership(t, time.Unix(100, 0).UTC(), task.RunnerOwnershipManaged)
-		runner, err := os.Executable()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
+		runner := canonicalAppTestExecutable(t)
+		if err := operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		binding := operation.Request().Binding
-		if err = validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner); !errors.Is(err, task.ErrEvidenceFault) {
+		if err := validateInspectionWorkerExecutable(context.Background(), store.Root, operation, binding, runner); !errors.Is(err, task.ErrEvidenceFault) {
 			t.Fatalf("authorized install runner was accepted for task upgrade: %v", err)
 		}
 	})
@@ -90,10 +84,7 @@ func TestValidateInspectionWorkerExecutableRejectsUnmanagedUpgradeMarker(t *test
 		name := map[string]string{"": "unknown", task.RunnerOwnershipCustom: "custom"}[ownership]
 		t.Run(name, func(t *testing.T) {
 			store, operation := newInspectionWorkerOperationWithRunnerOwnership(t, time.Unix(100, 0).UTC(), ownership)
-			source, err := os.Executable()
-			if err != nil {
-				t.Fatal(err)
-			}
+			source := canonicalAppTestExecutable(t)
 			runner := installStateRunnerFixture(t, store.Root, source)
 			control, err := store.OpenInspection(operation.Request().TaskID, false)
 			if err != nil {
