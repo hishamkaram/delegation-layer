@@ -236,11 +236,14 @@ while authority fields and descriptors are retained.
 
 ## Supervisor binding
 
-The initial dispatch binds the resolved Pueue executable, its absolute path,
-the observed version, and the exact configuration and resolved settings used
-for that task. Later operations use that saved binding and reject a mismatched
-fresh authority. Runtime admission uses the command and status behavior plus
-the queue schema, rather than an exact supervisor release number. The
+For the private state-rooted supervisor, the initial dispatch records the
+canonical config path, config digests, endpoint, observed version, and the
+resolved client/daemon executable details as provenance. Its verified
+content-addressed client/daemon pair is stored below the state root. Later
+operations bind to the same private config and endpoint, then verify a live
+daemon by running the resolved Pueue client's readiness command and parsing its
+queue status. Changing install paths, executable hashes, or observed version
+does not by itself invalidate a compatible private supervisor. The
 configuration parser accepts YAML and JSON-form YAML with strict fields and
 bounded depth, aliases, nodes, and document size.
 
@@ -248,9 +251,15 @@ bounded depth, aliases, nodes, and document size.
 `--runner` option for a source-build layout or a custom integration.
 
 When a saved binding points to the private state-rooted supervisor, `dispatch`,
-`status`, `cancel`, and continuation checks restart its bundled daemon when it
-is unavailable. `collect` may recover that bundled daemon only to observe an
-already-requested budget stop; it never starts a provider or submits work.
+`status`, `cancel`, and continuation checks reuse it when a compatible daemon
+is already serving its endpoint. If that endpoint is unavailable, they restart
+the saved private executable pair when it is still available. Otherwise they
+use the verified state-root pair before falling back to the pair bundled with
+the current installation. Legacy bindings without daemon identity require a
+resolved executable pair and the normal config and endpoint checks; see
+[Troubleshooting](troubleshooting.md#supervisor-configuration-fails).
+`collect` may recover that private daemon only to observe an already-requested
+budget stop; it never starts a provider or submits work.
 
 For setup failures, see [Troubleshooting](troubleshooting.md). For provider
 specific behavior, see [Providers](providers.md).

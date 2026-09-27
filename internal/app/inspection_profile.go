@@ -3,11 +3,14 @@ package app
 import (
 	"bytes"
 	"context"
+	"debug/buildinfo"
 	"encoding/json"
 	"errors"
+	"os"
 	"slices"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -71,10 +74,9 @@ func validateInspectionCandidate(operation *inspection.Operation, req task.TaskR
 	if record.TaskSHA256 != task.ComputeSHA256(requestBytes) || record.Binding.DefinitionRevision != definition.Revision || record.Binding.DefinitionSHA256 != digest || record.Binding.HelperExecutable != definition.Executable || record.Binding.HelperSHA256 != definition.ExecutableSHA256 {
 		return task.ErrEvidenceFault
 	}
-	workerDigest, err := commonprovider.FingerprintExecutable(record.Binding.WorkerExecutable)
-	if err != nil || workerDigest != record.Binding.WorkerSHA256 {
-		return task.ErrEvidenceFault
-	}
+	// The inspection worker identity was checked before its one allowed start.
+	// This is now historical evidence: a CLI upgrade may replace or remove the
+	// package path while a queued task still depends on the completed proof.
 	return nil
 }
 
@@ -96,10 +98,100 @@ func storedInspectionFactsContext(ctx context.Context, deps Dependencies, root s
 	if err = validateInspectionCandidate(operation, req, candidate); err != nil {
 		return nil, err
 	}
-	if operation.Request().Binding.Supervisor != meta.SupervisorConfig {
+	if !task.SameSupervisorIdentity(operation.Request().Binding.Supervisor, meta.SupervisorConfig) {
 		return nil, task.ErrEvidenceFault
 	}
 	return operation.ReadProofContext(ctx)
+}
+
+// prepareMatchedProfileForRunner adds the final executable identity check that
+// is possible only inside the queued runner process, immediately before the
+// provider turn. Managed state-root runners must still match their content
+// address; inspection workers retain their separately pinned identity.
+func prepareMatchedProfileForRunner(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord, store *taskdir.Store, currentExecutable, runnerOwnership string) (profile PreparedProfile, resultErr error) {
+	candidate, facts, err := prepareExistingCandidate(deps, root, req, meta)
+	if err != nil {
+		return PreparedProfile{}, err
+	}
+	if err = validateRunnerExecutableBeforeProvider(root, candidate, req, meta, store, currentExecutable, runnerOwnership); err != nil {
+		return PreparedProfile{}, err
+	}
+	return finalizeMatchedProfile(candidate, facts, root, req, meta)
+}
+
+func validateRunnerExecutableBeforeProvider(root string, candidate commonprovider.ProfileCandidate, req task.TaskRecord, meta task.MetaRecord, store *taskdir.Store, currentExecutable, runnerOwnership string) error {
+	if candidate.Inspection == nil {
+		return validateManagedOrdinaryRunnerExecutable(root, meta.RunnerExecutable, currentExecutable, runnerOwnership)
+	}
+	return validateInspectionRunnerExecutable(root, req, meta, store, currentExecutable)
+}
+
+func validateManagedOrdinaryRunnerExecutable(root, recorded, current, ownership string) error {
+	if ownership != task.RunnerOwnershipManaged {
+		return nil
+	}
+	if current == "" {
+		var err error
+		current, err = os.Executable()
+		if err != nil {
+			return task.ErrEvidenceFault
+		}
+	}
+	return validateManagedTaskRunnerExecutable(root, recorded, current)
+}
+
+func validateInspectionRunnerExecutable(root string, req task.TaskRecord, meta task.MetaRecord, store *taskdir.Store, currentExecutable string) (resultErr error) {
+	if store == nil {
+		return task.ErrEvidenceFault
+	}
+	operation, err := inspection.LoadOperation(store, req.TaskID)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
+	if currentExecutable == "" {
+		currentExecutable, err = os.Executable()
+		if err != nil {
+			return task.ErrEvidenceFault
+		}
+	}
+	return validateProviderRunnerExecutable(root, operation.Request().Binding, meta.RunnerOwnership, currentExecutable)
+}
+
+func validateManagedTaskRunnerExecutable(root, recorded, current string) error {
+	canonical, err := config.CanonicalizePath(current)
+	if err != nil {
+		return task.ErrEvidenceFault
+	}
+	if isStateRunnerPath(root, canonical) {
+		if currentManagedRunnerExecutable(root, canonical) {
+			return nil
+		}
+		return task.ErrEvidenceFault
+	}
+	recordedPath, err := config.CanonicalizePath(recorded)
+	if err != nil || canonical != recordedPath {
+		return task.ErrEvidenceFault
+	}
+	info, err := buildinfo.ReadFile(canonical)
+	if err != nil || !managedRunnerBuildInfo(info) {
+		return task.ErrEvidenceFault
+	}
+	return nil
+}
+
+func finalizeMatchedProfile(candidate commonprovider.ProfileCandidate, facts json.RawMessage, root string, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {
+	profile, err := finalizeCandidate(candidate, req, facts)
+	if err != nil {
+		return PreparedProfile{}, err
+	}
+	if err = profile.Matches(req, meta); err != nil {
+		return PreparedProfile{}, err
+	}
+	if err = profile.ValidateStatePlacement(root); err != nil {
+		return PreparedProfile{}, err
+	}
+	return profile, nil
 }
 
 func prepareExistingCandidate(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, json.RawMessage, error) {

@@ -15,6 +15,10 @@ func applyTimeoutContinuation(response *Response, root string, req *task.TaskRec
 }
 
 func applyTimeoutContinuationWithRunnerState(response *Response, root string, req *task.TaskRecord, records []taskdir.StopRecord, catalog commonprovider.Catalog, session *task.ProviderRefRecord, runner string, supervisor *task.SupervisorRef, runnerReleased, launchStateRecorded bool) {
+	applyTimeoutContinuationWithRunnerStateAndCommandRunner(response, root, req, records, catalog, session, runner, runner, supervisor, runnerReleased, launchStateRecorded)
+}
+
+func applyTimeoutContinuationWithRunnerStateAndCommandRunner(response *Response, root string, req *task.TaskRecord, records []taskdir.StopRecord, catalog commonprovider.Catalog, session *task.ProviderRefRecord, runner, commandRunner string, supervisor *task.SupervisorRef, runnerReleased, launchStateRecorded bool) {
 	if response == nil || req == nil {
 		return
 	}
@@ -33,7 +37,7 @@ func applyTimeoutContinuationWithRunnerState(response *Response, root string, re
 		response.Status = "timed_out"
 		response.Continuation = &ContinuationResponse{Resumable: resumable, Mode: string(mode), PredecessorID: req.TaskID}
 		if resumable {
-			response.Continuation.ContinueCommand = continuationCommand(root, req.TaskID, runner, supervisor)
+			response.Continuation.ContinueCommand = continuationCommand(root, req.TaskID, commandRunner, supervisor)
 		}
 		response.Continuation.Reason = timeoutContinuationReason(mode, session, runnerReleased, runner, launchStateRecorded)
 		return

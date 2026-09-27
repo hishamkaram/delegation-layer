@@ -63,18 +63,9 @@ func bindPrivate(ctx context.Context, clientExecutable, daemonExecutable, stateR
 		return nil, err
 	}
 	if ready {
-		if err = ensurePrivateDaemonIdentity(base, client.Binding(), expected); err != nil {
-			return nil, err
-		}
 		return client, nil
 	}
 	if err = verifyExpectedPrivateBinding(bootstrapContext, clientPath, daemonPath, configPath, options, expected); err != nil {
-		return nil, err
-	}
-	if identityErr := checkPrivateDaemonIdentity(base, client.Binding()); identityErr != nil && !errors.Is(identityErr, os.ErrNotExist) {
-		return nil, identityErr
-	}
-	if err = publishPrivateDaemonIdentity(base, client.Binding()); err != nil {
 		return nil, err
 	}
 	if err = startDaemon(daemonPath, client.Binding().DaemonSHA256, configPath, base, options); err != nil {
@@ -82,6 +73,9 @@ func bindPrivate(ctx context.Context, clientExecutable, daemonExecutable, stateR
 	}
 	if err = waitReady(bootstrapContext, client, options.ObservationTimeout); err != nil {
 		return nil, fmt.Errorf("%w: private pueued did not become ready: %w", ErrBinding, err)
+	}
+	if err = publishPrivateDaemonIdentity(base, client.Binding()); err != nil {
+		return nil, err
 	}
 	return client, nil
 }
@@ -215,18 +209,17 @@ func matchExpectedPrivateBinding(client *Client, expected *task.SupervisorRef) e
 }
 
 func privateBindingsMatch(actual, expected task.SupervisorRef) bool {
-	// ResolutionCwd was persisted by an older format. It is deliberately not
-	// part of private supervisor identity because recovery must survive its
-	// removal and must not consult the ambient caller directory.
-	actual.ResolutionCwd = ""
-	expected.ResolutionCwd = ""
-	return actual == expected
+	// Executable and resolver fields describe the client and daemon selected by
+	// a particular installation. Durable private ownership is instead bound to
+	// the state-rooted config and endpoint; live compatibility is checked by
+	// the Pueue readiness/status handshake.
+	return task.SameSupervisorIdentity(actual, expected)
 }
 
 // RecoverPrivate verifies the saved private binding and restarts its daemon
-// when the private endpoint is unavailable. It returns a client retaining the
-// saved binding so subsequent operations continue to verify fresh authority.
-func RecoverPrivate(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options) (*Client, error) {
+// when the private endpoint is unavailable. The current executable pair lets
+// recovery survive package upgrades that remove the saved install directory.
+func RecoverPrivate(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, error) {
 	if !IsPrivateConfig(stateRoot, saved.ConfigPath) {
 		return nil, fmt.Errorf("%w: supervisor config is not private to the state root", ErrConfiguration)
 	}
@@ -237,14 +230,19 @@ func RecoverPrivate(ctx context.Context, stateRoot string, saved task.Supervisor
 	if err != nil {
 		return nil, err
 	}
-	bound, err := bindPrivate(ctx, saved.ClientExecutable, saved.DaemonExecutable, stateRoot, options, &saved)
+	bound, err := bindPrivate(ctx, clientExecutable, daemonExecutable, stateRoot, options, &saved)
 	if err != nil {
 		return nil, err
 	}
 	if !privateBindingsMatch(bound.Binding(), saved) {
 		return nil, ErrBinding
 	}
-	return NewClient(saved, options)
+	recovered, err := NewClient(saved, options)
+	if err != nil {
+		return nil, err
+	}
+	recovered.runtimeBinding = bound.runtimeBinding
+	return recovered, nil
 }
 
 func optionsForSavedBinding(saved task.SupervisorRef, options Options) (Options, error) {
@@ -285,8 +283,11 @@ func validatePrivateSupervisorRef(ref task.SupervisorRef) error {
 	if err := task.ValidateFreshSupervisorRef(ref); err != nil {
 		return err
 	}
+	if (ref.DaemonExecutable == "") != (ref.DaemonSHA256 == "") {
+		return errors.New("incomplete saved private supervisor daemon identity")
+	}
 	if ref.DaemonExecutable == "" {
-		return errors.New("missing saved private supervisor daemon executable")
+		return nil
 	}
 	if err := task.ValidateSHA256(ref.DaemonSHA256); err != nil {
 		return err
@@ -308,6 +309,8 @@ func attachPrivateDaemon(client *Client, daemonPath string) error {
 	}
 	client.binding.DaemonExecutable = resolved
 	client.binding.DaemonSHA256 = digest
+	client.runtimeBinding.DaemonExecutable = resolved
+	client.runtimeBinding.DaemonSHA256 = digest
 	return nil
 }
 
@@ -320,41 +323,46 @@ func privateDaemonIdentityPath(base string) string {
 	return filepath.Join(base, "daemon.identity.json")
 }
 
-func checkPrivateDaemonIdentity(base string, binding task.SupervisorRef) error {
-	data, err := readRegular(privateDaemonIdentityPath(base), MaxControlBytes)
-	if err != nil {
-		return err
-	}
-	var identity privateDaemonIdentity
-	if err = task.DecodeStrict(data, &identity); err != nil {
-		return errors.Join(ErrBinding, err)
-	}
-	if identity.Executable != binding.DaemonExecutable || identity.SHA256 != binding.DaemonSHA256 {
-		return ErrBinding
-	}
-	return nil
-}
-
-func ensurePrivateDaemonIdentity(base string, binding task.SupervisorRef, expected *task.SupervisorRef) error {
-	err := checkPrivateDaemonIdentity(base, binding)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if expected == nil || expected.DaemonExecutable != binding.DaemonExecutable || expected.DaemonSHA256 != binding.DaemonSHA256 {
-		return fmt.Errorf("%w: private daemon identity is not persisted", ErrBinding)
-	}
-	return publishPrivateDaemonIdentity(base, binding)
-}
-
 func publishPrivateDaemonIdentity(base string, binding task.SupervisorRef) error {
 	data, err := task.MarshalCanonical(privateDaemonIdentity{Executable: binding.DaemonExecutable, SHA256: binding.DaemonSHA256})
 	if err != nil {
 		return fmt.Errorf("%w: marshal private daemon identity: %w", ErrConfiguration, err)
 	}
-	return publishPrivateRecord(base, privateDaemonIdentityPath(base), data)
+	return replacePrivateDaemonIdentityRecord(base, data)
+}
+
+// replacePrivateDaemonIdentityRecord atomically replaces launch provenance
+// after the supervisor it describes has passed readiness. The create-once
+// publisher below remains strict for all other private records.
+func replacePrivateDaemonIdentityRecord(base string, data []byte) (resultErr error) {
+	destination := privateDaemonIdentityPath(base)
+	file, stagePath, err := createPrivateStage(base, ".private-record-")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if stagePath != "" {
+			resultErr = errors.Join(resultErr, os.Remove(stagePath))
+		}
+	}()
+	written, writeErr := file.Write(data)
+	if writeErr != nil || written != len(data) {
+		if writeErr == nil {
+			writeErr = io.ErrShortWrite
+		}
+		return errors.Join(fmt.Errorf("%w: write replacement private record: %w", ErrConfiguration, writeErr), file.Close())
+	}
+	if err = privateBarrierFile(file); err != nil {
+		return errors.Join(fmt.Errorf("%w: sync replacement private record: %w", ErrConfiguration, err), file.Close())
+	}
+	if err = file.Close(); err != nil {
+		return fmt.Errorf("%w: close replacement private record: %w", ErrConfiguration, err)
+	}
+	if err = os.Rename(stagePath, destination); err != nil {
+		return fmt.Errorf("%w: atomically replace private record: %w", ErrConfiguration, err)
+	}
+	stagePath = ""
+	return syncPrivateDirectory(base)
 }
 
 func publishPrivateRecord(base, destination string, data []byte) (resultErr error) {

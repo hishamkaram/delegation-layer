@@ -161,7 +161,7 @@ func ValidatePredicateRef(ref PredicateRef) error {
 	return ValidateSHA256(ref.SHA256)
 }
 
-// ValidateSupervisorRef checks the complete pinned supervisor coordinates.
+// ValidateSupervisorRef checks persisted supervisor coordinates and provenance.
 func ValidateSupervisorRef(ref SupervisorRef) error {
 	for _, executable := range []struct {
 		name  string
@@ -312,6 +312,9 @@ func validateMetaRuntime(r *MetaRecord) error {
 	}
 	if r.RunnerExecutable != "" && (!filepath.IsAbs(r.RunnerExecutable) || filepath.Clean(r.RunnerExecutable) != r.RunnerExecutable) {
 		return errors.New("runner executable must be a resolved absolute path")
+	}
+	if r.RunnerOwnership != "" && r.RunnerOwnership != RunnerOwnershipManaged && r.RunnerOwnership != RunnerOwnershipCustom {
+		return errors.New("invalid runner ownership")
 	}
 	if !nonblank(r.ProviderVersion) || !nonblank(r.PublisherBuild) || !nonblank(r.PublisherVersion) {
 		return errors.New("missing provider version or publisher build/version")

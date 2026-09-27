@@ -12,8 +12,13 @@ import (
 )
 
 func evidenceOperation(t *testing.T) *Operation {
+	return evidenceOperationWithRunnerOwnership(t, "")
+}
+
+func evidenceOperationWithRunnerOwnership(t *testing.T, ownership string) *Operation {
 	t.Helper()
 	store, request, binding := inspectionFixture(t)
+	binding.RunnerOwnership = ownership
 	op, err := OpenOperation(store, request, binding, time.Unix(100, 0))
 	mustInspection(t, err)
 	t.Cleanup(func() { mustInspection(t, op.Close()) })
@@ -103,6 +108,53 @@ func TestInspectionReceiptDoesNotDefaultMissingTargetToZero(t *testing.T) {
 	}
 	if err = op.RecordReceipt(1); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatal("receipt target changed")
+	}
+}
+
+func TestManagedWorkerUpgradeAuthorizationIsCreateOnceAndBoundToRequest(t *testing.T) {
+	op := evidenceOperationWithRunnerOwnership(t, task.RunnerOwnershipManaged)
+	if authorized, err := op.ManagedWorkerUpgradeAuthorizedContext(context.Background()); err != nil || authorized {
+		t.Fatalf("initial managed-worker authorization = %v, err=%v", authorized, err)
+	}
+	if err := op.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := op.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
+		t.Fatalf("identical managed-worker authorization replay failed: %v", err)
+	}
+	if authorized, err := op.ManagedWorkerUpgradeAuthorizedContext(context.Background()); err != nil || !authorized {
+		t.Fatalf("saved managed-worker authorization = %v, err=%v", authorized, err)
+	}
+	conflicting := ManagedWorkerUpgradeRecord{SchemaVersion: task.SchemaVersion, RequestSHA256: "different-request"}
+	if _, err := op.control.Put(workerUpgradeName, conflicting); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("conflicting managed-worker authorization replaced winner: %v", err)
+	}
+
+	other := evidenceOperationWithRunnerOwnership(t, task.RunnerOwnershipManaged)
+	if _, err := other.control.Put(workerUpgradeName, conflicting); err != nil {
+		t.Fatal(err)
+	}
+	if authorized, err := other.ManagedWorkerUpgradeAuthorizedContext(context.Background()); authorized || !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("authorization for a different request accepted: %v, err=%v", authorized, err)
+	}
+}
+
+func TestManagedWorkerUpgradeAuthorizationRequiresManagedOwnership(t *testing.T) {
+	for _, ownership := range []string{"", task.RunnerOwnershipCustom} {
+		t.Run(map[string]string{"": "unknown", task.RunnerOwnershipCustom: "custom"}[ownership], func(t *testing.T) {
+			op := evidenceOperationWithRunnerOwnership(t, ownership)
+			if err := op.AuthorizeManagedWorkerUpgradeContext(context.Background()); !errors.Is(err, task.ErrEvidenceFault) {
+				t.Fatalf("upgrade authorization accepted runner ownership %q: %v", ownership, err)
+			}
+			_, err := op.control.Put(workerUpgradeName, ManagedWorkerUpgradeRecord{
+				SchemaVersion: task.SchemaVersion,
+				RequestSHA256: op.Digest(),
+			})
+			mustInspection(t, err)
+			if authorized, readErr := op.ManagedWorkerUpgradeAuthorizedContext(context.Background()); authorized || !errors.Is(readErr, task.ErrEvidenceFault) {
+				t.Fatalf("forged upgrade marker accepted runner ownership %q: authorized=%v err=%v", ownership, authorized, readErr)
+			}
+		})
 	}
 }
 

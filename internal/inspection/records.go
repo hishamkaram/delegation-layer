@@ -14,6 +14,7 @@ const (
 	requestRecordName    = "request.json"
 	submissionRecordName = "submission.json"
 	startRecordName      = "start.json"
+	workerUpgradeName    = "worker-upgrade.json"
 	groupPrefix          = "delegation-inspection-"
 
 	// AdmissionTimeout includes queue time before the worker starts.
@@ -34,6 +35,7 @@ type Binding struct {
 	HelperSHA256       string             `json:"helper_sha256"`
 	WorkerExecutable   string             `json:"worker_executable"`
 	WorkerSHA256       string             `json:"worker_sha256"`
+	RunnerOwnership    string             `json:"runner_ownership,omitempty"`
 	Environment        []string           `json:"environment,omitempty"`
 	Supervisor         task.SupervisorRef `json:"supervisor"`
 }
@@ -67,6 +69,13 @@ type StartRecord struct {
 	CreatedAt     string `json:"created_at"`
 }
 
+// ManagedWorkerUpgradeRecord authorizes later content-addressed managed
+// workers for the same immutable inspection request after queue migration.
+type ManagedWorkerUpgradeRecord struct {
+	SchemaVersion int    `json:"schema_version"`
+	RequestSHA256 string `json:"request_sha256"`
+}
+
 func validText(value string) bool {
 	return value != "" && strings.TrimSpace(value) == value && !strings.ContainsRune(value, '\x00')
 }
@@ -82,6 +91,11 @@ func validateAbsoluteCleanPath(name, value string) error {
 // admission. The shared supervisor validator permits historical optional
 // fields, so this boundary explicitly requires every fresh binding field.
 func ValidateBinding(binding Binding) error {
+	switch binding.RunnerOwnership {
+	case "", task.RunnerOwnershipManaged, task.RunnerOwnershipCustom:
+	default:
+		return errors.New("invalid inspection runner ownership")
+	}
 	if err := task.ValidateEnvironment(binding.Environment); err != nil {
 		return fmt.Errorf("inspection environment: %w", err)
 	}

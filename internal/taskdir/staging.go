@@ -14,6 +14,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// BarrierFile flushes an open file to stable storage using this platform's
+// required durability barrier.
+func BarrierFile(file *os.File) error {
+	return platformBarrierFile(file)
+}
+
 func closeFileQuietly(f *os.File) {
 	if err := f.Close(); err != nil {
 		return

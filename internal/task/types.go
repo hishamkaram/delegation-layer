@@ -203,7 +203,8 @@ type PriorSession struct {
 	PredecessorTaskID string `json:"predecessor_task_id"`
 }
 
-// SupervisorRef binds task execution to an explicit supervisor instance.
+// SupervisorRef records the private supervisor config and endpoint plus the
+// executable and resolver provenance selected by the dispatching CLI.
 type SupervisorRef struct {
 	ClientExecutable     string `json:"client_executable,omitempty"`
 	ClientSHA256         string `json:"client_sha256,omitempty"`
@@ -221,6 +222,15 @@ type SupervisorRef struct {
 	ConfigPath           string `json:"config_path"`
 	ConfigDigest         string `json:"config_digest"`
 	ObservedVersion      string `json:"observed_version"`
+}
+
+// SameSupervisorIdentity reports whether two refs point to the same
+// supervisor configuration and endpoint, independent of installation details.
+func SameSupervisorIdentity(left, right SupervisorRef) bool {
+	return left.ConfigPath == right.ConfigPath &&
+		left.ConfigDigest == right.ConfigDigest &&
+		left.ResolvedConfigSHA256 == right.ResolvedConfigSHA256 &&
+		left.Endpoint == right.Endpoint
 }
 
 // RootRecord is stored in root.json.
@@ -246,6 +256,11 @@ type TaskRecord struct {
 }
 
 // MetaRecord is stored in meta.json (the immutable prepared execution plan).
+const (
+	RunnerOwnershipManaged = "managed"
+	RunnerOwnershipCustom  = "custom"
+)
+
 type MetaRecord struct {
 	SchemaVersion      int             `json:"schema_version"`
 	RootID             string          `json:"root_id"`
@@ -258,6 +273,7 @@ type MetaRecord struct {
 	ProviderExecutable string          `json:"provider_executable"`
 	ProviderVersion    string          `json:"provider_version"`
 	RunnerExecutable   string          `json:"runner_executable,omitempty"`
+	RunnerOwnership    string          `json:"runner_ownership,omitempty"`
 	PublisherBuild     string          `json:"publisher_build"`
 	PublisherVersion   string          `json:"publisher_version"`
 	// Environment is the adapter's bounded, nonsecret launch environment.

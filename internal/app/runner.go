@@ -157,12 +157,12 @@ func releaseContinuationSession(td *taskdir.TaskDir, req *task.TaskRecord, outco
 	return td.ReleaseSession(req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
 }
 
-func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options) (*pueue.Client, pueue.Observation, error) {
+func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string) (*pueue.Client, pueue.Observation, error) {
 	submit, err := td.ReadSubmission()
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
-	client, err := newSupervisorClient(ctx, root, submit.Supervisor, supervisorOptions, true)
+	client, err := newSupervisorClient(ctx, root, submit.Supervisor, supervisorOptions, true, initialSupervisorExecutable)
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
@@ -283,14 +283,14 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 	taskSupervisorOptions := supervisorOptionsForMeta(supervisorOptions, *meta)
 	supervisorContext, cancelSupervisor := supervisorContextForRunner(req, taskSupervisorOptions)
 	defer cancelSupervisor()
-	client, observation, reconcileErr := reconcileRunner(supervisorContext, root, &response, td, req, meta, taskSupervisorOptions)
+	client, observation, reconcileErr := reconcileRunner(supervisorContext, root, &response, td, req, meta, taskSupervisorOptions, deps.InitialSupervisorExecutable)
 	if reconcileErr != nil {
 		return failed(response, reconcileErr, 1)
 	}
 	if stateErr := runnerStartStateError(observation.State); stateErr != nil {
 		return failed(response, stateErr, 1)
 	}
-	profile, err := prepareMatchedProfile(deps, root, *req, *meta)
+	profile, err := prepareRunnerProfile(deps, root, td, store, *req, *meta)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
@@ -354,17 +354,15 @@ func prepareMatchedProfile(deps Dependencies, root string, req task.TaskRecord, 
 	if err != nil {
 		return PreparedProfile{}, err
 	}
-	profile, err := finalizeCandidate(candidate, req, facts)
+	return finalizeMatchedProfile(candidate, facts, root, req, meta)
+}
+
+func prepareRunnerProfile(deps Dependencies, root string, td *taskdir.TaskDir, store *taskdir.Store, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {
+	runnerOwnership, err := runnerOwnershipForTask(root, td, &meta)
 	if err != nil {
 		return PreparedProfile{}, err
 	}
-	if err = profile.Matches(req, meta); err != nil {
-		return PreparedProfile{}, err
-	}
-	if err = profile.ValidateStatePlacement(root); err != nil {
-		return PreparedProfile{}, err
-	}
-	return profile, nil
+	return prepareMatchedProfileForRunner(deps, root, req, meta, store, "", runnerOwnership)
 }
 
 func runnerStartStateError(state pueue.State) error {

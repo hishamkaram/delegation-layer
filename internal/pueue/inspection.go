@@ -85,7 +85,7 @@ func (c *Client) snapshotAfterVerify(ctx context.Context) (QueueSnapshot, error)
 	if err != nil {
 		return QueueSnapshot{}, errors.Join(ErrUnknown, err)
 	}
-	return ParseQueueSnapshot(result.Stdout, c.binding.ObservedVersion)
+	return ParseQueueSnapshot(result.Stdout, c.runtimeBinding.ObservedVersion)
 }
 
 // CreateInspectionGroup creates exactly one derived group after static root
@@ -270,7 +270,7 @@ func (c *Client) StopInspection(ctx context.Context, permit InspectionStopPermit
 
 func (c *Client) stopInspectionMatched(ctx context.Context, permit InspectionStopPermit, result StopResult, id int64, action string) (StopResult, error) {
 	current, err := c.readBinding()
-	if err != nil || current != c.binding {
+	if err != nil || current != c.runtimeBinding {
 		return result, errors.Join(ErrBinding, err)
 	}
 	consume := func() error {
@@ -301,7 +301,7 @@ func validateInspectionPermitSupervisor(candidate, expected task.SupervisorRef) 
 	if err := task.ValidateFreshSupervisorRef(candidate); err != nil {
 		return errors.Join(ErrBinding, err)
 	}
-	if candidate != expected {
+	if !task.SameSupervisorIdentity(candidate, expected) {
 		return ErrBinding
 	}
 	return nil

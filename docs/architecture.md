@@ -60,13 +60,41 @@ configuration on demand. Release archives keep the pair beside the CLI;
 Homebrew installs it in the formula’s private `libexec` directory so it cannot
 conflict with another Pueue installation. The CLI resolves either layout
 without requiring separately managed Pueue. Commands that need supervisor
-control recover that private daemon from the saved binding after a restart. An explicit
+control recover that private daemon from the saved binding after a restart. For
+the private supervisor, the state-rooted config path, config digests, and
+endpoint define durable identity. Executable paths, hashes, resolver details,
+and observed versions remain provenance; a live daemon is adopted only after
+the resolved Pueue client successfully reads and parses its status through that
+private config. New private bindings use a verified content-addressed
+client/daemon pair under the state root. Recovery reuses the saved executable
+pair when it is available; otherwise it uses the verified state-root pair before
+falling back to the pair resolved from the current installation. A legacy
+binding without daemon identity is recovered only through a resolved pair and
+the normal private config and endpoint checks. Launch provenance is atomically
+recorded after readiness.
+This lets an install upgrade reuse a compatible live daemon without stopping
+or transferring its queued work. An explicit
 `--pueue-config` can bind an existing compatible supervisor. `delegate-run`
 receives only the saved root and task ID,
 reconstructs the recorded profile, and refuses to start
 if the fresh profile no longer matches admission. The runner observes provider
 identity, captures bounded streams, verifies declared artifacts, and seals the
 evidence.
+
+Queued inspection workers keep their original immutable worker binding during
+an upgrade. New inspection requests persist whether the runner is managed or
+custom. Before replacing a queued managed worker command, the CLI records a
+create-once authorization tied to that inspection request. The worker accepts
+a successor only when its executable is a content-addressed runner in the same
+state root and its bytes match that path. Custom workers remain pinned to their
+recorded identity; older requests without ownership metadata are treated as
+ambiguous and are never automatically rewritten.
+
+Queued ordinary tasks with legacy metadata get a create-once runner-migration
+receipt, bound to the immutable task hashes and original runner digest, before
+their Pueue command is updated. Continuation and retry use that receipt to keep
+the runner classified as managed after its former installation is removed;
+the prepared task metadata remains unchanged.
 
 The task store and predicate registry own publication. A committed
 `outcome.json` is the terminal authority; `result.txt` and sealed raw streams

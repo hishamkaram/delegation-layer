@@ -19,7 +19,7 @@ func TestParseActualQueuedStatusFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(jobs) != 1 || jobs[0].ID != 0 || jobs[0].State != StateQueued || jobs[0].Label == nil || *jobs[0].Label != "fixture:queued" {
+	if len(jobs) != 1 || jobs[0].ID != 0 || jobs[0].State != StateQueued || jobs[0].Label == nil || *jobs[0].Label != "fixture:queued" || jobs[0].originalCommand != "finite-fixture literal-argument" {
 		t.Fatalf("actual serialized response was misread: %+v", jobs)
 	}
 }

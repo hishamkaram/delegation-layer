@@ -54,6 +54,69 @@ func ParseConfig(data []byte) (*Config, error) {
 	return &Config{Client: clientDefaults(raw.Client), Daemon: daemonDefaults(raw.Daemon), Shared: sharedDefaults(raw.Shared)}, nil
 }
 
+func configWithFileEditMode(data []byte) ([]byte, error) {
+	if _, err := ParseConfig(data); err != nil {
+		return nil, err
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, fmt.Errorf("%w: decode edit config: %w", ErrConfiguration, err)
+	}
+	// Detach aliases before editing so shared anchors in profiles remain unchanged.
+	document = *cloneYAMLNodeWithoutAnchors(&document)
+	if len(document.Content) != 1 {
+		return nil, fmt.Errorf("%w: edit config document is incomplete", ErrConfiguration)
+	}
+	root := document.Content[0]
+	var client *yaml.Node
+	for index := 0; index < len(root.Content); index += 2 {
+		if root.Content[index].Value == "client" {
+			client = root.Content[index+1]
+			break
+		}
+	}
+	if client == nil {
+		client = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "client"}, client)
+	}
+	for index := 0; index < len(client.Content); index += 2 {
+		if client.Content[index].Value == "edit_mode" {
+			client.Content[index+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "files"}
+			return marshalFileEditConfig(&document)
+		}
+	}
+	client.Content = append(client.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "edit_mode"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "files"},
+	)
+	return marshalFileEditConfig(&document)
+}
+
+func cloneYAMLNodeWithoutAnchors(node *yaml.Node) *yaml.Node {
+	if node.Kind == yaml.AliasNode {
+		return cloneYAMLNodeWithoutAnchors(node.Alias)
+	}
+	clone := *node
+	clone.Anchor = ""
+	clone.Alias = nil
+	clone.Content = make([]*yaml.Node, len(node.Content))
+	for index, child := range node.Content {
+		clone.Content[index] = cloneYAMLNodeWithoutAnchors(child)
+	}
+	return &clone
+}
+
+func marshalFileEditConfig(document *yaml.Node) ([]byte, error) {
+	data, err := yaml.Marshal(document)
+	if err != nil {
+		return nil, fmt.Errorf("%w: encode edit config: %w", ErrConfiguration, err)
+	}
+	if _, err = ParseConfig(data); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
 func yamlError(n *yaml.Node, path, reason string) error {
 	return fmt.Errorf("%w: %s at line %d: %s", ErrConfiguration, path, n.Line, reason)
 }

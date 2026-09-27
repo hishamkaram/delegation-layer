@@ -54,17 +54,30 @@ func LoadOperationContext(ctx context.Context, store *taskdir.Store, taskID stri
 		}
 	}()
 	var request RequestRecord
-	if err = control.Read(requestRecordName, &request); err != nil {
+	var digest string
+	var deadline time.Time
+	err = withControlTransactionContext(ctx, control, func(tx *taskdir.ControlTransaction) error {
+		if readErr := tx.Read(requestRecordName, &request); readErr != nil {
+			return readErr
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		validatedDeadline, validationErr := validateRequestRecord(request, store.RootID)
+		if validationErr != nil || request.TaskID != taskID {
+			return task.ErrEvidenceFault
+		}
+		if canonicalErr := verifyCanonicalRequest(tx, request); canonicalErr != nil {
+			return canonicalErr
+		}
+		digest = requestDigest(request)
+		deadline = validatedDeadline
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	if err = ctx.Err(); err != nil {
-		return nil, err
-	}
-	deadline, err := validateRequestRecord(request, store.RootID)
-	if err != nil || request.TaskID != taskID {
-		return nil, task.ErrEvidenceFault
-	}
-	return &Operation{control: control, request: cloneRequestRecord(request), digest: requestDigest(request), deadline: deadline}, nil
+	return &Operation{control: control, request: cloneRequestRecord(request), digest: digest, deadline: deadline}, nil
 }
 
 // OpenOperation opens or creates the inspection journal for request. Static
@@ -152,14 +165,21 @@ func acceptExistingRequest(tx *taskdir.ControlTransaction, existing RequestRecor
 	canonical := expected
 	canonical.CreatedAt = existing.CreatedAt
 	canonical.Deadline = existing.Deadline
-	created, putErr := tx.Put(requestRecordName, canonical)
-	if putErr != nil {
-		return RequestRecord{}, "", time.Time{}, putErr
-	}
-	if created {
-		return RequestRecord{}, "", time.Time{}, fmt.Errorf("%w: inspection request changed during replay", task.ErrEvidenceFault)
+	if err := verifyCanonicalRequest(tx, canonical); err != nil {
+		return RequestRecord{}, "", time.Time{}, err
 	}
 	return existing, requestDigest(existing), deadline, nil
+}
+
+func verifyCanonicalRequest(tx *taskdir.ControlTransaction, request RequestRecord) error {
+	created, err := tx.Put(requestRecordName, request)
+	if err != nil {
+		return err
+	}
+	if created {
+		return fmt.Errorf("%w: inspection request changed during replay", task.ErrEvidenceFault)
+	}
+	return nil
 }
 
 func createRequest(tx *taskdir.ControlTransaction, rootID string, expected RequestRecord, now time.Time, record *RequestRecord, digest *string, deadline *time.Time) error {

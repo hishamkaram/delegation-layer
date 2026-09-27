@@ -133,6 +133,7 @@ func TestCompleteMetaRecord(t *testing.T) {
 		{"approval", func(r *MetaRecord) { r.Approval = "" }},
 		{"executable", func(r *MetaRecord) { r.ProviderExecutable = "relative" }},
 		{"runner-executable", func(r *MetaRecord) { r.RunnerExecutable = "relative" }},
+		{"runner-ownership", func(r *MetaRecord) { r.RunnerOwnership = "unknown" }},
 		{"provider-version", func(r *MetaRecord) { r.ProviderVersion = "" }},
 		{"publisher-build", func(r *MetaRecord) { r.PublisherBuild = "" }},
 		{"publisher-version", func(r *MetaRecord) { r.PublisherVersion = "" }},

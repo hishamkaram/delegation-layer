@@ -22,8 +22,11 @@ import (
 // Client has no mutable observation state; concurrent reads synchronize only
 // through their own command completion handles.
 type Client struct {
-	binding task.SupervisorRef
-	options Options
+	// binding is the durable supervisor reference used by task records and
+	// permits. runtimeBinding is the executable pair currently used to reach it.
+	binding        task.SupervisorRef
+	runtimeBinding task.SupervisorRef
+	options        Options
 }
 
 // Bind validates an explicit config and executable before recording a binding.
@@ -40,6 +43,7 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 		return nil, ErrConfiguration
 	}
 	c := &Client{options: options, binding: task.SupervisorRef{ClientExecutable: path, ConfigPath: configPath}}
+	c.runtimeBinding = c.binding
 	current, err := c.readBinding()
 	if err != nil {
 		return nil, err
@@ -50,6 +54,7 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 	}
 	current.ObservedVersion = version
 	c.binding = current
+	c.runtimeBinding = current
 	return c, nil
 }
 
@@ -75,7 +80,7 @@ func NewClient(saved task.SupervisorRef, options Options) (*Client, error) {
 			options.Environment = environmentForResolution(options.Environment, resolution)
 		}
 	}
-	return &Client{binding: saved, options: options}, nil
+	return &Client{binding: saved, runtimeBinding: saved, options: options}, nil
 }
 
 func normalizeOptions(options Options) (Options, error) {
@@ -227,10 +232,11 @@ func sameEnvironmentResolution(resolution, current ResolutionContext) bool {
 }
 
 func (c *Client) readBinding() (task.SupervisorRef, error) {
-	if err := rejectSymlinkComponents(c.binding.ConfigPath); err != nil {
+	runtimeBinding := c.runtimeBinding
+	if err := rejectSymlinkComponents(runtimeBinding.ConfigPath); err != nil {
 		return task.SupervisorRef{}, err
 	}
-	data, err := readRegular(c.binding.ConfigPath, MaxControlBytes)
+	data, err := readRegular(runtimeBinding.ConfigPath, MaxControlBytes)
 	if err != nil {
 		return task.SupervisorRef{}, fmt.Errorf("%w: read explicit config: %w", ErrConfiguration, err)
 	}
@@ -250,16 +256,16 @@ func (c *Client) readBinding() (task.SupervisorRef, error) {
 	if err != nil {
 		return task.SupervisorRef{}, err
 	}
-	executable, err := canonicalExecutable(c.binding.ClientExecutable)
-	if err != nil || executable != c.binding.ClientExecutable {
+	executable, err := canonicalExecutable(runtimeBinding.ClientExecutable)
+	if err != nil || executable != runtimeBinding.ClientExecutable {
 		return task.SupervisorRef{}, errors.Join(ErrBinding, err)
 	}
 	digest, err := hashExecutable(executable)
 	if err != nil {
 		return task.SupervisorRef{}, err
 	}
-	binding := task.SupervisorRef{ClientExecutable: executable, ClientSHA256: digest, DaemonExecutable: c.binding.DaemonExecutable, DaemonSHA256: c.binding.DaemonSHA256, ResolutionCwd: c.binding.ResolutionCwd, ConfigPath: c.binding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: c.binding.ObservedVersion}
-	if c.binding.Endpoint == "" || c.binding.ResolutionOS != "" {
+	binding := task.SupervisorRef{ClientExecutable: executable, ClientSHA256: digest, DaemonExecutable: runtimeBinding.DaemonExecutable, DaemonSHA256: runtimeBinding.DaemonSHA256, ResolutionCwd: runtimeBinding.ResolutionCwd, ConfigPath: runtimeBinding.ConfigPath, ConfigDigest: task.ComputeSHA256(data), Endpoint: resolved.Endpoint(), ResolvedConfigSHA256: fingerprint, ObservedVersion: runtimeBinding.ObservedVersion}
+	if runtimeBinding.Endpoint == "" || runtimeBinding.ResolutionOS != "" {
 		setBindingResolution(&binding, resolution)
 	}
 	return binding, nil
@@ -322,8 +328,8 @@ func (c *Client) verifyBinding() error {
 	if err != nil {
 		return errors.Join(ErrBinding, err)
 	}
-	current.ObservedVersion = c.binding.ObservedVersion
-	if current != c.binding {
+	current.ObservedVersion = c.runtimeBinding.ObservedVersion
+	if current != c.runtimeBinding {
 		return ErrBinding
 	}
 	return nil
@@ -411,7 +417,7 @@ func (c *Client) validateReadyResult(result CommandResult) error {
 	if status == "" {
 		return fmt.Errorf("%w: supervisor returned an empty status response", ErrBinding)
 	}
-	if _, err := ParseQueueSnapshot([]byte(status), strings.TrimSpace(c.binding.ObservedVersion)); err != nil {
+	if _, err := ParseQueueSnapshot([]byte(status), strings.TrimSpace(c.runtimeBinding.ObservedVersion)); err != nil {
 		return errors.Join(ErrBinding, err)
 	}
 	return nil
@@ -451,15 +457,15 @@ func (c *Client) prepareCommand(args ...string) (*exec.Cmd, error) {
 		return nil, err
 	}
 	commandArgs := make([]string, 0, len(args)+2)
-	commandArgs = append(commandArgs, "-c", c.binding.ConfigPath)
+	commandArgs = append(commandArgs, "-c", c.runtimeBinding.ConfigPath)
 	commandArgs = append(commandArgs, args...)
-	cmd := exec.Command(c.binding.ClientExecutable, commandArgs...)
+	cmd := exec.Command(c.runtimeBinding.ClientExecutable, commandArgs...)
 	cmd.Dir = resolution.Cwd
 	if cmd.Dir == "" {
 		// Saved bindings intentionally omit the caller's working directory. Use
 		// the existing config directory for recovery so a removed ambient cwd
 		// cannot prevent a bound supervisor command from starting.
-		cmd.Dir = filepath.Dir(c.binding.ConfigPath)
+		cmd.Dir = filepath.Dir(c.runtimeBinding.ConfigPath)
 	}
 	cmd.Env = environment
 	return cmd, nil
@@ -494,7 +500,7 @@ func (c *Client) Reconcile(ctx context.Context, identity Identity) (Observation,
 		unknown.Pending = pendingFrom(err)
 		return unknown, errors.Join(ErrUnknown, err)
 	}
-	jobs, err := ParseStatus(result.Stdout, c.binding.ObservedVersion)
+	jobs, err := ParseStatus(result.Stdout, c.runtimeBinding.ObservedVersion)
 	if err != nil {
 		return unknown, err
 	}

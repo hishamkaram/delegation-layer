@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -120,6 +122,10 @@ func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store,
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
 	}
+	a, queueRepairRunner, err := prepareModelDiscoveryExecutables(a, deps, store.Root)
+	if err != nil {
+		return commonprovider.ModelCatalog{}, err
+	}
 	options, err := supervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
@@ -127,6 +133,14 @@ func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store,
 	supervisor, err := bindInitialWithOptions(a, deps, store.Root, options)
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
+	}
+	if queueRepairRunner != "" {
+		repairContext, cancelRepair := context.WithTimeout(context.Background(), pueue.RunnerCommandUpgradeTimeout)
+		repairErr := repairQueuedRunnerCommands(repairContext, store, supervisor, queueRepairRunner)
+		cancelRepair()
+		if repairErr != nil {
+			return commonprovider.ModelCatalog{}, fmt.Errorf("repair queued task runner paths before model discovery: %w", repairErr)
+		}
 	}
 	facts, _, err := admissionInspectionFacts(a, deps, store, req, candidate, supervisor)
 	if err != nil {
@@ -137,6 +151,21 @@ func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store,
 		return result, err
 	}
 	return result, commonprovider.ValidateModelCatalog(result)
+}
+
+func prepareModelDiscoveryExecutables(a Arguments, deps Dependencies, root string) (Arguments, string, error) {
+	runnerOwnership := requestedRunnerOwnership(a)
+	runner, err := prepareAdmissionExecutables(a, deps, root)
+	if err != nil {
+		return Arguments{}, "", err
+	}
+	queueRepairRunner, err := admissionQueueRepairRunner(a, deps, runner)
+	if err != nil {
+		return Arguments{}, "", err
+	}
+	a.runnerOwnership = runnerOwnership
+	a.Runner = runner
+	return a, queueRepairRunner, nil
 }
 
 func prepareModelsCandidate(deps Dependencies, root string, req task.TaskRecord) (commonprovider.ProfileCandidate, error) {
