@@ -203,7 +203,7 @@ func newAppInspectionProofFixture(t *testing.T, workerSuccess bool) *appInspecti
 
 func newAppInspectionProofFixtureWithOwnership(t *testing.T, workerSuccess bool, runnerOwnership string) *appInspectionProofFixture {
 	t.Helper()
-	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
+	store, err := taskdir.InitStore(filepath.Join(canonicalAppTestTempDir(t), "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func newAppInspectionProofFixtureWithOwnership(t *testing.T, workerSuccess bool,
 		BriefSHA256: task.ComputeSHA256([]byte("inspection brief")),
 		BriefLength: int64(len("inspection brief")),
 	}
-	rawBase := t.TempDir()
+	rawBase := canonicalAppTestTempDir(t)
 	base, err := filepath.EvalSymlinks(rawBase)
 	if err != nil {
 		closeAppInspectionStore(t, store)
@@ -615,9 +615,9 @@ func TestManagedRetryAcceptsCurrentRunnerAfterInspectionWorkerUpgrade(t *testing
 	fixture := newAppInspectionProofFixture(t, true)
 	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
 	meta := fixture.meta
-	meta.RunnerExecutable = filepath.Join(t.TempDir(), stateRunnerName)
+	meta.RunnerExecutable = filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	meta.RunnerOwnership = task.RunnerOwnershipManaged
-	source := filepath.Join(t.TempDir(), stateRunnerName)
+	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, source, "current managed runner")
 	currentRunner, err := installStateRunner(fixture.store.Root, source)
 	if err != nil {
@@ -629,7 +629,7 @@ func TestManagedRetryAcceptsCurrentRunnerAfterInspectionWorkerUpgrade(t *testing
 	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("strict submission accepted a runner that differs from the immutable historical binding: %v", err)
 	}
-	custom := filepath.Join(t.TempDir(), "custom-runner")
+	custom := filepath.Join(canonicalAppTestTempDir(t), "custom-runner")
 	writeRunnerFixture(t, custom, "custom runner")
 	if err = validateManagedRetryRunner(td, &meta, custom); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("managed retry accepted an unverified custom executable: %v", err)
@@ -653,7 +653,7 @@ func TestManagedRetryRejectsChangedInspectedWorkerEvenWithProof(t *testing.T) {
 func TestManagedRetryProofAcceptsVerifiedStateRootSuccessor(t *testing.T) {
 	fixture := newAppInspectionProofFixtureWithOwnership(t, true, task.RunnerOwnershipManaged)
 	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
-	source := filepath.Join(t.TempDir(), stateRunnerName)
+	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, source, "current managed inspection worker")
 	runner, err := installStateRunner(fixture.store.Root, source)
 	if err != nil {
@@ -669,13 +669,13 @@ func TestManagedRetryProofAcceptsVerifiedStateRootSuccessor(t *testing.T) {
 
 func TestManagedRetrySubmissionRequiresInspectionUpgradeAuthority(t *testing.T) {
 	fixture := newAppInspectionProofFixtureWithOwnership(t, false, task.RunnerOwnershipManaged)
-	oldSource := filepath.Join(t.TempDir(), stateRunnerName)
+	oldSource := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, oldSource, "old managed runner")
 	oldRunner, err := installStateRunner(fixture.store.Root, oldSource)
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentSource := filepath.Join(t.TempDir(), stateRunnerName)
+	currentSource := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, currentSource, "current managed runner")
 	currentRunner, err := installStateRunner(fixture.store.Root, currentSource)
 	if err != nil {
@@ -711,7 +711,7 @@ func TestSubmissionAcceptsAuthorizedManagedInspectionWorkerSuccessor(t *testing.
 	fixture := newAppInspectionProofFixtureWithOwnership(t, false, task.RunnerOwnershipManaged)
 	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
 	meta := fixture.meta
-	source := filepath.Join(t.TempDir(), stateRunnerName)
+	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, source, "current managed inspection worker")
 	currentRunner, err := installStateRunner(fixture.store.Root, source)
 	if err != nil {

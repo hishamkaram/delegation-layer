@@ -315,15 +315,7 @@ func writeQueuedCancelStatus(t *testing.T, path, label, workspace string) {
 }
 
 func TestCancelStopsTaskWithoutRunningOptionalQueueRepair(t *testing.T) {
-	stateRoot, err := os.MkdirTemp("/tmp", "dlc-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if removeErr := os.RemoveAll(stateRoot); removeErr != nil {
-			t.Error(removeErr)
-		}
-	})
+	stateRoot := canonicalAppTestTempDir(t)
 	store, err := taskdir.InitStore(stateRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -702,8 +694,8 @@ func TestPartialPrivateDaemonIdentityIsRejected(t *testing.T) {
 }
 
 func TestPrivateRecoveryResolvesPairBesideActiveExecutable(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "state")
-	bin := filepath.Join(t.TempDir(), "bin")
+	root := filepath.Join(canonicalAppTestTempDir(t), "state")
+	bin := filepath.Join(canonicalAppTestTempDir(t), "bin")
 	if err := os.MkdirAll(bin, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -714,7 +706,7 @@ func TestPrivateRecoveryResolvesPairBesideActiveExecutable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	oldInstall := filepath.Join(t.TempDir(), "removed-install")
+	oldInstall := filepath.Join(canonicalAppTestTempDir(t), "removed-install")
 	saved := task.SupervisorRef{
 		ClientExecutable:     filepath.Join(oldInstall, "pueue"),
 		ClientSHA256:         digest,
@@ -726,7 +718,7 @@ func TestPrivateRecoveryResolvesPairBesideActiveExecutable(t *testing.T) {
 		ConfigDigest:         digest,
 		ObservedVersion:      "pueue 4.0.4",
 	}
-	emptyPath := t.TempDir()
+	emptyPath := canonicalAppTestTempDir(t)
 	t.Setenv("PATH", emptyPath)
 	_, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, activeExecutable)
 	if err == nil || !strings.Contains(err.Error(), "saved private supervisor config is unavailable") {

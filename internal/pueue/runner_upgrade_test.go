@@ -33,7 +33,7 @@ func TestEscapePueueArgumentRoundTripsShellValues(t *testing.T) {
 }
 
 func TestPrivateEditConfigPublishesFilesModeCreateOnce(t *testing.T) {
-	base := t.TempDir()
+	base := canonicalTemp(t)
 	if err := os.Chmod(base, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestPrivateEditConfigPublishesFilesModeCreateOnce(t *testing.T) {
 }
 
 func TestPrivateEditConfigPreservesBoundPrivateSettings(t *testing.T) {
-	base := t.TempDir()
+	base := canonicalTemp(t)
 	if err := os.Chmod(base, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestPrivateEditConfigPreservesBoundPrivateSettings(t *testing.T) {
 }
 
 func TestPrivateEditConfigDereferencesClientAlias(t *testing.T) {
-	base := t.TempDir()
+	base := canonicalTemp(t)
 	if err := os.Chmod(base, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestPrivateEditConfigDereferencesClientAlias(t *testing.T) {
 }
 
 func TestPrivateEditConfigDetachesAnchoredTopLevelClient(t *testing.T) {
-	base := t.TempDir()
+	base := canonicalTemp(t)
 	source := strings.Replace(privateConfigYAML(base), "client:\n  show_confirmation_questions: false\n", "client: &base\n  show_confirmation_questions: false\n  edit_mode: toml\nprofiles:\n  base:\n    client: *base\n", 1)
 	sourcePath := filepath.Join(base, "pueue.yml")
 	if err := os.WriteFile(sourcePath, []byte(source), 0o600); err != nil {
@@ -171,7 +171,7 @@ func TestPrivateEditConfigDetachesAnchoredTopLevelClient(t *testing.T) {
 }
 
 func TestPrivateEditConfigRewritesEditModeScalarAlias(t *testing.T) {
-	base := t.TempDir()
+	base := canonicalTemp(t)
 	source := strings.Replace(privateConfigYAML(base), "client:\n  show_confirmation_questions: false\n", "profiles:\n  base:\n    client:\n      edit_mode: &mode toml\nclient:\n  show_confirmation_questions: false\n  edit_mode: *mode\n", 1)
 
 	before, err := ParseConfig([]byte(source))
@@ -199,14 +199,14 @@ func TestPrivateEditConfigRewritesEditModeScalarAlias(t *testing.T) {
 }
 
 func TestPlanQueuedRunnerCommandsAcceptsRepeatedManagedUpgrade(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalTemp(t)
 	rootID, taskID := strings.Repeat("a", 32), strings.Repeat("b", 32)
 	label := "delegate:" + rootID + ":" + taskID
 	prior := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("1", 64))
 	next := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("2", 64))
 	replacement := RunnerCommandReplacement{
 		NumericID: 9, RootID: rootID, TaskID: taskID, Label: label, RootPath: root,
-		OldRunner: filepath.Join(t.TempDir(), "delegate-run"), PreviousManagedRunners: []string{prior}, NewRunner: next,
+		OldRunner: filepath.Join(canonicalTemp(t), "delegate-run"), PreviousManagedRunners: []string{prior}, NewRunner: next,
 	}
 	job := Job{
 		ID: 9, Label: &label, Group: "default", State: StateQueued,
@@ -227,21 +227,21 @@ func TestPlanQueuedRunnerCommandsAcceptsRepeatedManagedUpgrade(t *testing.T) {
 		t.Fatalf("already-upgraded command was not idempotent: plans=%v err=%v", plans, err)
 	}
 
-	job.originalCommand = runnerCommand(filepath.Join(t.TempDir(), "custom-runner"), replacement)
+	job.originalCommand = runnerCommand(filepath.Join(canonicalTemp(t), "custom-runner"), replacement)
 	if _, err = planQueuedRunnerCommands(QueueSnapshot{Jobs: []Job{job}}, map[int64]RunnerCommandReplacement{job.ID: replacement}); err == nil {
 		t.Fatal("unknown queued runner command was accepted for migration")
 	}
 }
 
 func TestRunnerCommandPlanCompleteReconcilesConcurrentQueueChanges(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalTemp(t)
 	rootID, taskID := strings.Repeat("e", 32), strings.Repeat("f", 32)
 	label := "delegate:" + rootID + ":" + taskID
 	oldRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("1", 64))
 	newRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("2", 64))
 	replacement := RunnerCommandReplacement{
 		NumericID: 12, RootID: rootID, TaskID: taskID, Label: label, RootPath: root,
-		OldRunner: filepath.Join(t.TempDir(), "delegate-run"), PreviousManagedRunners: []string{oldRunner}, NewRunner: newRunner,
+		OldRunner: filepath.Join(canonicalTemp(t), "delegate-run"), PreviousManagedRunners: []string{oldRunner}, NewRunner: newRunner,
 	}
 	queued := Job{ID: replacement.NumericID, Label: &label, Group: "default", State: StateQueued, originalCommand: runnerCommand(oldRunner, replacement)}
 	plans, err := planQueuedRunnerCommands(QueueSnapshot{Jobs: []Job{queued}}, map[int64]RunnerCommandReplacement{queued.ID: replacement})
@@ -268,12 +268,12 @@ func TestRunnerCommandPlanCompleteReconcilesConcurrentQueueChanges(t *testing.T)
 }
 
 func TestReplaceQueuedRunnerCommandsSerializesOnBootstrapLock(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalTemp(t)
 	base := filepath.Join(root, ".supervisor")
 	if err := os.Mkdir(base, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runner := filepath.Join(t.TempDir(), "delegate-run")
+	runner := filepath.Join(canonicalTemp(t), "delegate-run")
 	if err := os.WriteFile(runner, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestReplaceQueuedRunnerCommandsSerializesOnBootstrapLock(t *testing.T) {
 }
 
 func TestPlanQueuedRunnerCommandsRejectsUnexpectedOrdinaryGroup(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalTemp(t)
 	rootID, taskID := strings.Repeat("a", 32), strings.Repeat("b", 32)
 	label := "delegate:" + rootID + ":" + taskID
 	oldRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("1", 64))
@@ -328,14 +328,14 @@ func TestPlanQueuedRunnerCommandsRejectsUnexpectedOrdinaryGroup(t *testing.T) {
 }
 
 func TestPlanQueuedInspectionRunnerCommandPreservesWorkerArguments(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalTemp(t)
 	identity := InspectionIdentity{RootID: strings.Repeat("c", 32), TaskID: strings.Repeat("d", 32)}
 	label := identity.Label()
 	prior := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("3", 64))
 	next := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("4", 64))
 	replacement := RunnerCommandReplacement{
 		NumericID: 11, RootID: identity.RootID, TaskID: identity.TaskID, Label: label,
-		RootPath: root, OldRunner: filepath.Join(t.TempDir(), "delegate-run"),
+		RootPath: root, OldRunner: filepath.Join(canonicalTemp(t), "delegate-run"),
 		PreviousManagedRunners: []string{prior}, NewRunner: next, Inspection: true,
 	}
 	job := Job{ID: 11, Label: &label, Group: identity.Group(), State: StateQueued, originalCommand: runnerCommand(prior, replacement)}
@@ -350,13 +350,13 @@ func TestPlanQueuedInspectionRunnerCommandPreservesWorkerArguments(t *testing.T)
 }
 
 func TestPlanQueuedInspectionRunnerCommandRejectsUnexpectedGroup(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalTemp(t)
 	identity := InspectionIdentity{RootID: strings.Repeat("c", 32), TaskID: strings.Repeat("d", 32)}
 	label := identity.Label()
 	prior := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("3", 64))
 	replacement := RunnerCommandReplacement{
 		NumericID: 11, RootID: identity.RootID, TaskID: identity.TaskID, Label: label,
-		RootPath: root, OldRunner: filepath.Join(t.TempDir(), "delegate-run"),
+		RootPath: root, OldRunner: filepath.Join(canonicalTemp(t), "delegate-run"),
 		NewRunner: filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("4", 64)), Inspection: true,
 	}
 	job := Job{ID: 11, Label: &label, Group: "default", State: StateQueued, originalCommand: runnerCommand(prior, replacement)}

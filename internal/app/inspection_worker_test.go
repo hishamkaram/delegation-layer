@@ -19,7 +19,7 @@ import (
 
 func TestRunInspectionWorkerRejectsInvalidTaskBeforeOpeningState(t *testing.T) {
 	called := false
-	got := runInspectionWorker(filepath.Join(t.TempDir(), "missing"), "invalid", Dependencies{
+	got := runInspectionWorker(filepath.Join(canonicalAppTestTempDir(t), "missing"), "invalid", Dependencies{
 		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 			called = true
 			return commonprovider.ProfileCandidate{}, nil
@@ -34,7 +34,7 @@ func TestRunInspectionWorkerRejectsInvalidTaskBeforeOpeningState(t *testing.T) {
 }
 
 func TestRunInspectionWorkerNeverCreatesMissingStore(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "missing-state")
+	root := filepath.Join(canonicalAppTestTempDir(t), "missing-state")
 	got := runInspectionWorker(root, strings.Repeat("a", 32), Dependencies{})
 	if !errors.Is(got, errInspectionWorkerUnavailable) {
 		t.Fatalf("error=%v, want fixed worker error", got)
@@ -47,7 +47,7 @@ func TestRunInspectionWorkerNeverCreatesMissingStore(t *testing.T) {
 func TestValidateInspectionWorkerExecutableRejectsWrongExecutable(t *testing.T) {
 	_, operation := newInspectionWorkerOperation(t, time.Unix(100, 0).UTC())
 	binding := operation.Request().Binding
-	if err := validateInspectionWorkerExecutable(context.Background(), t.TempDir(), operation, binding, filepath.Join(t.TempDir(), "current-worker")); !errors.Is(err, task.ErrEvidenceFault) {
+	if err := validateInspectionWorkerExecutable(context.Background(), canonicalAppTestTempDir(t), operation, binding, filepath.Join(canonicalAppTestTempDir(t), "current-worker")); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("wrong worker executable was accepted: %v", err)
 	}
 }
@@ -197,7 +197,7 @@ func newInspectionWorkerOperation(t *testing.T, created time.Time) (*taskdir.Sto
 
 func newInspectionWorkerOperationWithRunnerOwnership(t *testing.T, created time.Time, runnerOwnership string) (*taskdir.Store, *inspection.Operation) {
 	t.Helper()
-	stateRoot := filepath.Join(t.TempDir(), "state")
+	stateRoot := filepath.Join(canonicalAppTestTempDir(t), "state")
 	store, err := taskdir.InitStore(stateRoot)
 	if err != nil {
 		t.Fatal(err)

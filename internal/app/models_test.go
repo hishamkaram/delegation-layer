@@ -49,8 +49,8 @@ func TestModelsUnavailableProviderHasJSON(t *testing.T) {
 }
 
 func TestModelsInvalidDirectoriesUseInvalidRequestExitCode(t *testing.T) {
-	root := t.TempDir()
-	workspaceFile := filepath.Join(t.TempDir(), "workspace-file")
+	root := canonicalAppTestTempDir(t)
+	workspaceFile := filepath.Join(canonicalAppTestTempDir(t), "workspace-file")
 	if err := os.WriteFile(workspaceFile, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +117,8 @@ func TestDiscoveryCandidateDoesNotRequireDispatchFlagsOrFinalize(t *testing.T) {
 }
 
 func TestModelDiscoveryUsesStateRootManagedExecutables(t *testing.T) {
-	root := t.TempDir()
-	bundle := t.TempDir()
+	root := canonicalAppTestTempDir(t)
+	bundle := canonicalAppTestTempDir(t)
 	delegate := filepath.Join(bundle, "delegate")
 	runner := filepath.Join(bundle, "delegate-run")
 	client := filepath.Join(bundle, "pueue")

@@ -20,8 +20,8 @@ import (
 )
 
 func TestInstallStateRunnerKeepsExecutableVersionsImmutable(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(t.TempDir(), "delegate-run")
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
 	writeRunnerFixture(t, source, "old runner")
 
 	oldRunner := installStateRunnerFixture(t, root, source)
@@ -60,8 +60,8 @@ func TestInstallStateRunnerKeepsExecutableVersionsImmutable(t *testing.T) {
 }
 
 func TestUnprotectedStateRunnerIsRejectedByInstallationAndScanners(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(t.TempDir(), "delegate-run")
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
 	writeRunnerFixture(t, source, "runner")
 	runner := installStateRunnerFixture(t, root, source)
 	digest, err := stateExecutableSourceDigest(runner)
@@ -106,7 +106,7 @@ func requireRunnerFixture(t *testing.T, runner, contents string) {
 }
 
 func TestRemoveStateExecutableStageSyncsAfterUnlink(t *testing.T) {
-	base := t.TempDir()
+	base := canonicalAppTestTempDir(t)
 	stagePath := filepath.Join(base, ".delegate-run-stage")
 	if err := os.WriteFile(stagePath, []byte("stage"), 0o600); err != nil {
 		t.Fatal(err)
@@ -129,12 +129,12 @@ func TestRemoveStateExecutableStageSyncsAfterUnlink(t *testing.T) {
 }
 
 func TestInstallStateRunnerRejectsSupervisorSymlink(t *testing.T) {
-	root := t.TempDir()
-	target := t.TempDir()
+	root := canonicalAppTestTempDir(t)
+	target := canonicalAppTestTempDir(t)
 	if err := os.Symlink(target, filepath.Join(root, ".supervisor")); err != nil {
 		t.Fatal(err)
 	}
-	source := filepath.Join(t.TempDir(), "delegate-run")
+	source := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
 	writeRunnerFixture(t, source, "runner")
 	if _, err := installStateRunner(root, source); err == nil {
 		t.Fatal("state runner accepted a symlinked supervisor directory")
@@ -142,12 +142,12 @@ func TestInstallStateRunnerRejectsSupervisorSymlink(t *testing.T) {
 }
 
 func TestPrepareAdmissionExecutablesKeepsExplicitRunner(t *testing.T) {
-	root := t.TempDir()
-	custom := filepath.Join(t.TempDir(), "custom-delegate-run")
+	root := canonicalAppTestTempDir(t)
+	custom := filepath.Join(canonicalAppTestTempDir(t), "custom-delegate-run")
 	writeRunnerFixture(t, custom, "custom runner")
 	got, err := prepareAdmissionExecutables(Arguments{
 		Runner:      custom,
-		PueueConfig: filepath.Join(t.TempDir(), "external-pueue.yml"),
+		PueueConfig: filepath.Join(canonicalAppTestTempDir(t), "external-pueue.yml"),
 	}, Dependencies{}, root)
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +161,7 @@ func TestPrepareAdmissionExecutablesKeepsExplicitRunner(t *testing.T) {
 }
 
 func TestPrepareAdmissionExecutablesRejectsPrivateConfigBeforeInstallingState(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	_, err := prepareAdmissionExecutables(Arguments{PueueConfig: pueue.PrivateConfigPath(root)}, Dependencies{}, root)
 	if !errors.Is(err, pueue.ErrConfiguration) {
 		t.Fatalf("private config collision error = %v, want configuration error", err)
@@ -172,10 +172,10 @@ func TestPrepareAdmissionExecutablesRejectsPrivateConfigBeforeInstallingState(t 
 }
 
 func TestPrepareAdmissionExecutablesUsesSavedPrivateSupervisorPair(t *testing.T) {
-	root := t.TempDir()
-	runnerSource := filepath.Join(t.TempDir(), "delegate-run")
+	root := canonicalAppTestTempDir(t)
+	runnerSource := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
 	writeRunnerFixture(t, runnerSource, "managed runner")
-	delegate := filepath.Join(t.TempDir(), "bin", "delegate")
+	delegate := filepath.Join(canonicalAppTestTempDir(t), "bin", "delegate")
 	writeRunnerFixture(t, delegate, "delegate")
 	client, daemon := writeSavedSupervisorPair(t)
 	saved := savedSupervisorPairRef(t, client, daemon)
@@ -195,7 +195,7 @@ func TestPrepareAdmissionExecutablesUsesSavedPrivateSupervisorPair(t *testing.T)
 }
 
 func TestPrepareAdmissionExecutablesUsesStateRootPairWhenInstallPairsAreUnavailable(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	client, daemon := writeSavedSupervisorPair(t)
 	saved := savedSupervisorPairRef(t, client, daemon)
 	saved.ConfigPath = pueue.PrivateConfigPath(root)
@@ -208,11 +208,11 @@ func TestPrepareAdmissionExecutablesUsesStateRootPairWhenInstallPairsAreUnavaila
 	if err := os.Remove(daemon); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", t.TempDir())
+	t.Setenv("PATH", canonicalAppTestTempDir(t))
 
-	runner := filepath.Join(t.TempDir(), stateRunnerName)
+	runner := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, runner, "managed runner")
-	missingDelegate := filepath.Join(t.TempDir(), "missing", "delegate")
+	missingDelegate := filepath.Join(canonicalAppTestTempDir(t), "missing", "delegate")
 	got, err := prepareAdmissionExecutables(Arguments{savedSupervisor: &saved}, Dependencies{
 		InitialSupervisorExecutable: missingDelegate,
 		RunnerExecutable:            runner,
@@ -227,13 +227,13 @@ func TestPrepareAdmissionExecutablesUsesStateRootPairWhenInstallPairsAreUnavaila
 }
 
 func TestResolvePrivateSupervisorExecutablesPrefersStateRootPairToPATH(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	client, daemon := writeSavedSupervisorPair(t)
 	if err := installStateSupervisorPair(context.Background(), root, client, daemon); err != nil {
 		t.Fatal(err)
 	}
 
-	pathDir := t.TempDir()
+	pathDir := canonicalAppTestTempDir(t)
 	pathClient := filepath.Join(pathDir, "pueue")
 	pathDaemon := filepath.Join(pathDir, "pueued")
 	writeRunnerFixture(t, pathClient, "unrelated PATH client")
@@ -257,8 +257,8 @@ func TestResolvePrivateSupervisorExecutablesPrefersStateRootPairToPATH(t *testin
 }
 
 func TestBindInitialUsesStateRootPairWhenBundleIsUnavailable(t *testing.T) {
-	root := t.TempDir()
-	sourceDirectory := t.TempDir()
+	root := canonicalAppTestTempDir(t)
+	sourceDirectory := canonicalAppTestTempDir(t)
 	clientSource := filepath.Join(sourceDirectory, "pueue")
 	daemonSource := filepath.Join(sourceDirectory, "pueued")
 	writeRunnerFixture(t, clientSource, `#!/bin/sh
@@ -303,8 +303,8 @@ base=${config%/*}
 	if err = os.Remove(daemonSource); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", t.TempDir())
-	missingDelegate := filepath.Join(t.TempDir(), "missing", "delegate")
+	t.Setenv("PATH", canonicalAppTestTempDir(t))
+	missingDelegate := filepath.Join(canonicalAppTestTempDir(t), "missing", "delegate")
 	client, err := bindInitialWithOptions(Arguments{}, Dependencies{InitialSupervisorExecutable: missingDelegate}, root, pueue.Options{ObservationTimeout: time.Second})
 	if err != nil {
 		t.Fatalf("private supervisor did not bind from its verified state-root pair: %v", err)
@@ -315,8 +315,8 @@ base=${config%/*}
 }
 
 func TestInstallStateRunnerRejectsContentAddressCollision(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(t.TempDir(), "delegate-run")
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
 	writeRunnerFixture(t, source, "trusted runner")
 	digest, err := stateExecutableSourceDigest(source)
 	if err != nil {
@@ -337,8 +337,8 @@ func TestInstallStateRunnerRejectsContentAddressCollision(t *testing.T) {
 }
 
 func TestManagedRunnerExecutableSkipsExternalCustomRunner(t *testing.T) {
-	root := t.TempDir()
-	custom := filepath.Join(t.TempDir(), "custom-delegate-run")
+	root := canonicalAppTestTempDir(t)
+	custom := filepath.Join(canonicalAppTestTempDir(t), "custom-delegate-run")
 	writeRunnerFixture(t, custom, "custom runner")
 	if managedRunnerExecutable(root, custom, task.RunnerOwnershipCustom) {
 		t.Fatal("external custom runner was classified as a managed Delegation Layer runner")
@@ -346,15 +346,15 @@ func TestManagedRunnerExecutableSkipsExternalCustomRunner(t *testing.T) {
 }
 
 func TestManagedRunnerExecutablePreservesAmbiguousRemovedLegacyRunner(t *testing.T) {
-	root := t.TempDir()
-	removed := filepath.Join(t.TempDir(), stateRunnerName)
+	root := canonicalAppTestTempDir(t)
+	removed := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	if managedRunnerExecutable(root, removed, "") {
 		t.Fatal("ambiguous removed legacy runner was guessed to be managed")
 	}
 	if managedRunnerExecutable(root, removed, task.RunnerOwnershipCustom) {
 		t.Fatal("explicitly custom runner was reclassified as managed")
 	}
-	custom := filepath.Join(t.TempDir(), "custom-runner")
+	custom := filepath.Join(canonicalAppTestTempDir(t), "custom-runner")
 	if managedRunnerExecutable(root, custom, "") {
 		t.Fatal("missing custom runner was classified as managed")
 	}
@@ -365,8 +365,8 @@ func TestManagedRunnerExecutablePreservesAmbiguousRemovedLegacyRunner(t *testing
 }
 
 func TestManagedInspectionWorkerRequiresMatchingContentAddress(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(t.TempDir(), stateRunnerName)
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, source, "managed runner bytes")
 	managed := installStateRunnerFixture(t, root, source)
 	digest, err := stateExecutableSourceDigest(managed)
@@ -407,7 +407,7 @@ func TestExplicitInspectionWorkerCannotBeAuthorizedForMigration(t *testing.T) {
 	store := newBareInspectionStore(t)
 	request := newBareInspectionRequest(t, store)
 	supervisor, _ := newBlockingInspectionSupervisor(t, store.RootID)
-	source := filepath.Join(t.TempDir(), stateRunnerName)
+	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, source, "explicit custom runner")
 	worker := installStateRunnerFixture(t, store.Root, source)
 	digest, err := stateExecutableSourceDigest(worker)
@@ -463,8 +463,8 @@ func TestExplicitInspectionWorkerCannotBeAuthorizedForMigration(t *testing.T) {
 }
 
 func TestManagedStateRunnerPathsOnlyReturnsVerifiedContentAddresses(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(t.TempDir(), stateRunnerName)
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, source, "runner v1")
 	first, err := installStateRunner(root, source)
 	if err != nil {
@@ -601,7 +601,7 @@ func newCompletedManagedInspectionReplayFixture(t *testing.T) completedManagedIn
 	request := newBareInspectionRequest(t, store)
 	supervisor, logPath := newBlockingInspectionSupervisor(t, store.RootID)
 
-	oldSource := filepath.Join(t.TempDir(), stateRunnerName)
+	oldSource := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, oldSource, "old inspection worker")
 	oldRunner := installStateRunnerFixture(t, store.Root, oldSource)
 	oldDigest, err := stateExecutableSourceDigest(oldRunner)
@@ -650,7 +650,7 @@ func newCompletedManagedInspectionReplayFixture(t *testing.T) completedManagedIn
 		t.Fatal(err)
 	}
 
-	newSource := filepath.Join(t.TempDir(), stateRunnerName)
+	newSource := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, newSource, "new inspection worker")
 	newRunner := installStateRunnerFixture(t, store.Root, newSource)
 	newDigest, err := stateExecutableSourceDigest(newRunner)
@@ -726,7 +726,7 @@ func newQueuedInspectionUpgradeFixture(t *testing.T) queuedInspectionUpgradeFixt
 	store := newBareInspectionStore(t)
 	request := newBareInspectionRequest(t, store)
 	supervisor, _ := newBlockingInspectionSupervisor(t, store.RootID)
-	oldSource := filepath.Join(t.TempDir(), stateRunnerName)
+	oldSource := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, oldSource, "old inspection worker")
 	oldRunner := installStateRunnerFixture(t, store.Root, oldSource)
 	digest, err := stateExecutableSourceDigest(oldRunner)
@@ -756,14 +756,14 @@ func newQueuedInspectionUpgradeFixture(t *testing.T) queuedInspectionUpgradeFixt
 	if !eligible {
 		t.Fatal("managed inspection worker was not eligible for queue migration")
 	}
-	newSource := filepath.Join(t.TempDir(), stateRunnerName)
+	newSource := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, newSource, "new inspection worker")
 	replacement.NewRunner = installStateRunnerFixture(t, store.Root, newSource)
 	return queuedInspectionUpgradeFixture{store: store, supervisor: supervisor, request: request, replacement: replacement, oldRunner: oldRunner}
 }
 
 func TestTimeoutContinuationDoesNotPinManagedRunner(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	meta := &task.MetaRecord{
 		RunnerExecutable: filepath.Join(root, ".supervisor", stateRunnerName+"-"+strings.Repeat("c", 64)),
 		RunnerOwnership:  task.RunnerOwnershipManaged,
@@ -782,8 +782,8 @@ func TestTimeoutContinuationDoesNotPinManagedRunner(t *testing.T) {
 }
 
 func TestLegacyManagedRunnerMigrationSurvivesRemovedInstallation(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "state")
-	oldRunner := filepath.Join(t.TempDir(), "old-install", stateRunnerName)
+	root := filepath.Join(canonicalAppTestTempDir(t), "state")
+	oldRunner := filepath.Join(canonicalAppTestTempDir(t), "old-install", stateRunnerName)
 	writeRunnerFixture(t, oldRunner, "old managed runner")
 	store, err := taskdir.InitStore(root)
 	if err != nil {
@@ -840,7 +840,7 @@ func requireLegacyRunnerTimeoutContinuation(t *testing.T, root string, req *task
 
 func requireLegacyRunnerRetry(t *testing.T, root string, store *taskdir.Store, td *taskdir.TaskDir, meta *task.MetaRecord) {
 	t.Helper()
-	currentRunner := filepath.Join(t.TempDir(), stateRunnerName)
+	currentRunner := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, currentRunner, "current managed runner")
 	refreshed, allowUpgrade, err := refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: currentRunner}, root, store, td, meta)
 	if err != nil || !allowUpgrade || refreshed.runnerOwnership != task.RunnerOwnershipManaged || !isStateRunnerPath(root, refreshed.Runner) {
@@ -849,7 +849,7 @@ func requireLegacyRunnerRetry(t *testing.T, root string, store *taskdir.Store, t
 }
 
 func TestLegacyManagedRetryRecordsOwnershipForContinuation(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "state")
+	root := filepath.Join(canonicalAppTestTempDir(t), "state")
 	store, err := taskdir.InitStore(root)
 	if err != nil {
 		t.Fatal(err)
@@ -859,7 +859,7 @@ func TestLegacyManagedRetryRecordsOwnershipForContinuation(t *testing.T) {
 	td, req, meta := newLegacyRunnerTask(t, store, oldRunner)
 	defer closeAppTestTask(t, store, td)
 
-	currentRunner := filepath.Join(t.TempDir(), stateRunnerName)
+	currentRunner := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, currentRunner, "current managed runner")
 	refreshed, allowUpgrade, err := refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: currentRunner}, root, store, td, meta)
 	if err != nil || !allowUpgrade || refreshed.runnerOwnership != task.RunnerOwnershipManaged || !currentManagedRunnerExecutable(root, refreshed.Runner) {
@@ -893,7 +893,7 @@ func TestLegacyInspectionRetryKeepsOriginalRunner(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	currentRunner := filepath.Join(t.TempDir(), stateRunnerName)
+	currentRunner := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, currentRunner, "current managed inspection runner")
 
 	refreshed, allowUpgrade, err := refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: currentRunner}, fixture.store.Root, fixture.store, td, &meta)
@@ -906,7 +906,7 @@ func TestLegacyInspectionRetryKeepsOriginalRunner(t *testing.T) {
 }
 
 func TestQueuedRunnerMigrationRecordsLegacyOwnership(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "state")
+	root := filepath.Join(canonicalAppTestTempDir(t), "state")
 	store, err := taskdir.InitStore(root)
 	if err != nil {
 		t.Fatal(err)
@@ -949,7 +949,7 @@ func newLegacyRunnerTask(t *testing.T, store *taskdir.Store, runner string) (*ta
 		SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: req.TaskID,
 		RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest},
 		Containment: "fixture-only", Approval: "never", ProviderExecutable: "/tmp/fixture-provider", ProviderVersion: "fixture-v1",
-		RunnerExecutable: runner, Environment: []string{"HOME=" + t.TempDir()},
+		RunnerExecutable: runner, Environment: []string{"HOME=" + canonicalAppTestTempDir(t)},
 		PublisherBuild: "runner-migration-test", PublisherVersion: "runner-migration-test", Predicate: task.FixturePredicateRef(),
 		SupervisorConfig: task.SupervisorRef{
 			ClientExecutable: "/tmp/pueue", ClientSHA256: digest, ResolvedConfigSHA256: digest,
@@ -966,8 +966,8 @@ func newLegacyRunnerTask(t *testing.T, store *taskdir.Store, runner string) (*ta
 }
 
 func TestAdmissionQueueRepairUsesManagedRunnerForCustomTask(t *testing.T) {
-	custom := filepath.Join(t.TempDir(), "custom-delegate-run")
-	managed := filepath.Join(t.TempDir(), stateRunnerName)
+	custom := filepath.Join(canonicalAppTestTempDir(t), "custom-delegate-run")
+	managed := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, custom, "custom runner")
 	writeRunnerFixture(t, managed, "managed runner")
 
@@ -979,7 +979,7 @@ func TestAdmissionQueueRepairUsesManagedRunnerForCustomTask(t *testing.T) {
 		t.Fatalf("queue repair runner = %q, want managed runner %q", got, managed)
 	}
 
-	got, err = admissionQueueRepairRunner(Arguments{Runner: custom}, Dependencies{RunnerExecutable: filepath.Join(t.TempDir(), stateRunnerName)}, custom)
+	got, err = admissionQueueRepairRunner(Arguments{Runner: custom}, Dependencies{RunnerExecutable: filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)}, custom)
 	if err != nil || got != "" {
 		t.Fatalf("missing managed queue repair runner = %q, err=%v, want skipped", got, err)
 	}
@@ -991,11 +991,11 @@ func TestAdmissionQueueRepairUsesManagedRunnerForCustomTask(t *testing.T) {
 }
 
 func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(t.TempDir(), stateRunnerName)
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
 	writeRunnerFixture(t, source, "current managed runner")
 	meta := &task.MetaRecord{
-		RunnerExecutable: filepath.Join(t.TempDir(), stateRunnerName),
+		RunnerExecutable: filepath.Join(canonicalAppTestTempDir(t), stateRunnerName),
 		RunnerOwnership:  task.RunnerOwnershipManaged,
 		SupervisorConfig: task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath(root)},
 	}
@@ -1011,7 +1011,7 @@ func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
 		t.Fatalf("refreshed state runner %q did not verify as current managed executable", got.Runner)
 	}
 
-	meta.SupervisorConfig.ConfigPath = filepath.Join(t.TempDir(), "external-pueue.yml")
+	meta.SupervisorConfig.ConfigPath = filepath.Join(canonicalAppTestTempDir(t), "external-pueue.yml")
 	got, allowUpgrade, err = refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: source}, root, nil, nil, meta)
 	if err != nil {
 		t.Fatal(err)
@@ -1023,7 +1023,7 @@ func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
 		t.Fatalf("external-supervisor retry runner %q did not verify as current managed executable", got.Runner)
 	}
 
-	custom := filepath.Join(t.TempDir(), "custom-runner")
+	custom := filepath.Join(canonicalAppTestTempDir(t), "custom-runner")
 	writeRunnerFixture(t, custom, "custom runner")
 	meta.RunnerExecutable = custom
 	meta.RunnerOwnership = task.RunnerOwnershipCustom
@@ -1034,14 +1034,14 @@ func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
 }
 
 func TestManagedContinuationKeepsRunnerOwnership(t *testing.T) {
-	root := t.TempDir()
-	managedRunner := filepath.Join(t.TempDir(), "old-install", stateRunnerName)
+	root := canonicalAppTestTempDir(t)
+	managedRunner := filepath.Join(canonicalAppTestTempDir(t), "old-install", stateRunnerName)
 	writeRunnerFixture(t, managedRunner, "old managed runner")
 	meta := &task.MetaRecord{
 		Environment:      []string{"HOME=/task"},
 		RunnerExecutable: managedRunner,
 		RunnerOwnership:  task.RunnerOwnershipManaged,
-		SupervisorConfig: task.SupervisorRef{ConfigPath: filepath.Join(t.TempDir(), "pueue.yml")},
+		SupervisorConfig: task.SupervisorRef{ConfigPath: filepath.Join(canonicalAppTestTempDir(t), "pueue.yml")},
 	}
 	arguments := Arguments{Runner: managedRunner}
 	if err := validateContinuationMetadata(root, arguments, meta); err != nil {
@@ -1069,14 +1069,14 @@ func TestManagedRunnerBuildInfoUsesExecutablePath(t *testing.T) {
 }
 
 func TestInstallStateSupervisorPairPersistsCurrentExecutables(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	base := filepath.Join(root, ".supervisor")
 	if err := os.Mkdir(base, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	writeLegacySupervisorPairFixture(t, base)
-	client := filepath.Join(t.TempDir(), "pueue")
-	daemon := filepath.Join(t.TempDir(), "pueued")
+	client := filepath.Join(canonicalAppTestTempDir(t), "pueue")
+	daemon := filepath.Join(canonicalAppTestTempDir(t), "pueued")
 	writeRunnerFixture(t, client, "client v1")
 	writeRunnerFixture(t, daemon, "daemon v1")
 	firstClient, firstDaemon := installAndResolveSupervisorPairFixture(t, root, base, client, daemon, "client v1", "daemon v1")
@@ -1095,7 +1095,7 @@ func TestInstallStateSupervisorPairPersistsCurrentExecutables(t *testing.T) {
 }
 
 func TestInstallStateSupervisorPairDoesNotWaitForTaskMaintenanceLease(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	lock, err := taskdir.OpenLockFile(filepath.Join(root, ".maintenance.lock"), taskdir.LockLevelMaintenance)
 	if err != nil {
 		t.Fatal(err)
@@ -1109,8 +1109,8 @@ func TestInstallStateSupervisorPairDoesNotWaitForTaskMaintenanceLease(t *testing
 		t.Fatal(err)
 	}
 
-	client := filepath.Join(t.TempDir(), "pueue")
-	daemon := filepath.Join(t.TempDir(), "pueued")
+	client := filepath.Join(canonicalAppTestTempDir(t), "pueue")
+	daemon := filepath.Join(canonicalAppTestTempDir(t), "pueued")
 	writeRunnerFixture(t, client, "client while a task is active")
 	writeRunnerFixture(t, daemon, "daemon while a task is active")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1189,9 +1189,9 @@ func requireResolvedSupervisorPair(t *testing.T, base, wantClient, wantDaemon st
 }
 
 func TestInstallStateSupervisorPairPublishesCoherentGenerations(t *testing.T) {
-	root := t.TempDir()
-	clientA, daemonA := filepath.Join(t.TempDir(), "pueue-a"), filepath.Join(t.TempDir(), "pueued-a")
-	clientB, daemonB := filepath.Join(t.TempDir(), "pueue-b"), filepath.Join(t.TempDir(), "pueued-b")
+	root := canonicalAppTestTempDir(t)
+	clientA, daemonA := filepath.Join(canonicalAppTestTempDir(t), "pueue-a"), filepath.Join(canonicalAppTestTempDir(t), "pueued-a")
+	clientB, daemonB := filepath.Join(canonicalAppTestTempDir(t), "pueue-b"), filepath.Join(canonicalAppTestTempDir(t), "pueued-b")
 	writeRunnerFixture(t, clientA, strings.Repeat("client-a", 16*1024))
 	writeRunnerFixture(t, daemonA, strings.Repeat("daemon-a", 16*1024))
 	writeRunnerFixture(t, clientB, strings.Repeat("client-b", 16*1024))
@@ -1274,8 +1274,8 @@ func inspectSupervisorPairGeneration(base string) error {
 }
 
 func TestInstallStateSupervisorPairForRecoveryUsesCurrentBundle(t *testing.T) {
-	root := t.TempDir()
-	bundle := t.TempDir()
+	root := canonicalAppTestTempDir(t)
+	bundle := canonicalAppTestTempDir(t)
 	delegate := filepath.Join(bundle, "delegate")
 	client := filepath.Join(bundle, "pueue")
 	daemon := filepath.Join(bundle, "pueued")
@@ -1291,21 +1291,21 @@ func TestInstallStateSupervisorPairForRecoveryUsesCurrentBundle(t *testing.T) {
 
 func TestInstallStateSupervisorPairForRecoveryUsesOnlyVerifiedSavedFallback(t *testing.T) {
 	t.Run("saved pair matches", func(t *testing.T) {
-		root := t.TempDir()
+		root := canonicalAppTestTempDir(t)
 		client, daemon := writeSavedSupervisorPair(t)
 		binding := savedSupervisorPairRef(t, client, daemon)
-		missingDelegate := filepath.Join(t.TempDir(), "delegate")
+		missingDelegate := filepath.Join(canonicalAppTestTempDir(t), "delegate")
 		if err := installStateSupervisorPairForRecovery(context.Background(), root, missingDelegate, binding); err != nil {
 			t.Fatal(err)
 		}
 		requireResolvedSupervisorPair(t, filepath.Join(root, ".supervisor"), "saved client", "saved daemon")
 	})
 	t.Run("saved pair digest differs", func(t *testing.T) {
-		root := t.TempDir()
+		root := canonicalAppTestTempDir(t)
 		client, daemon := writeSavedSupervisorPair(t)
 		binding := savedSupervisorPairRef(t, client, daemon)
 		binding.DaemonSHA256 = strings.Repeat("a", 64)
-		missingDelegate := filepath.Join(t.TempDir(), "delegate")
+		missingDelegate := filepath.Join(canonicalAppTestTempDir(t), "delegate")
 		if err := installStateSupervisorPairForRecovery(context.Background(), root, missingDelegate, binding); !errors.Is(err, pueue.ErrBinding) {
 			t.Fatalf("mismatched saved pair error = %v, want binding error", err)
 		}
@@ -1316,7 +1316,7 @@ func TestInstallStateSupervisorPairForRecoveryUsesOnlyVerifiedSavedFallback(t *t
 }
 
 func TestPrivateRecoveryUsesStateRootPairWhenInstallPairsAreUnavailable(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "state")
+	root := filepath.Join(canonicalAppTestTempDir(t), "state")
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1336,9 +1336,9 @@ func TestPrivateRecoveryUsesStateRootPairWhenInstallPairsAreUnavailable(t *testi
 	if err := os.Remove(daemon); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", t.TempDir())
+	t.Setenv("PATH", canonicalAppTestTempDir(t))
 
-	missingDelegate := filepath.Join(t.TempDir(), "missing", "delegate")
+	missingDelegate := filepath.Join(canonicalAppTestTempDir(t), "missing", "delegate")
 	_, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, missingDelegate)
 	if err == nil || !strings.Contains(err.Error(), "saved private supervisor config is unavailable") {
 		t.Fatalf("recovery did not reach the saved private config check using the state-root pair: %v", err)
@@ -1373,7 +1373,7 @@ func TestPrivateRecoveryRejectsTamperedStateRootSupervisorPair(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := canonicalAppTestTempDir(t)
 			clientSource, daemonSource := writeSavedSupervisorPair(t)
 			if err := installStateSupervisorPair(context.Background(), root, clientSource, daemonSource); err != nil {
 				t.Fatal(err)
@@ -1387,7 +1387,7 @@ func TestPrivateRecoveryRejectsTamperedStateRootSupervisorPair(t *testing.T) {
 			saved.ConfigPath = pueue.PrivateConfigPath(root)
 			tc.tamper(t, client, clientSource)
 
-			if _, err = newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, filepath.Join(t.TempDir(), "delegate")); !errors.Is(err, pueue.ErrBinding) {
+			if _, err = newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, filepath.Join(canonicalAppTestTempDir(t), "delegate")); !errors.Is(err, pueue.ErrBinding) {
 				t.Fatalf("tampered state-root supervisor pair error = %v, want binding error", err)
 			}
 		})
@@ -1397,13 +1397,13 @@ func TestPrivateRecoveryRejectsTamperedStateRootSupervisorPair(t *testing.T) {
 func TestValidateSavedStateSupervisorPairKeepsExternalExecutablesUnchanged(t *testing.T) {
 	client, daemon := writeSavedSupervisorPair(t)
 	saved := savedSupervisorPairRef(t, client, daemon)
-	if err := validateSavedStateSupervisorPair(t.TempDir(), saved); err != nil {
+	if err := validateSavedStateSupervisorPair(canonicalAppTestTempDir(t), saved); err != nil {
 		t.Fatalf("external saved supervisor pair was subjected to state-root validation: %v", err)
 	}
 }
 
 func TestValidateSavedStateSupervisorPairAcceptsHistoricalGeneration(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	client, daemon := writeSavedSupervisorPair(t)
 	if err := installStateSupervisorPair(context.Background(), root, client, daemon); err != nil {
 		t.Fatal(err)
@@ -1414,8 +1414,8 @@ func TestValidateSavedStateSupervisorPairAcceptsHistoricalGeneration(t *testing.
 	}
 	saved := savedSupervisorPairRef(t, historicalClient, historicalDaemon)
 
-	currentClient := filepath.Join(t.TempDir(), "pueue")
-	currentDaemon := filepath.Join(t.TempDir(), "pueued")
+	currentClient := filepath.Join(canonicalAppTestTempDir(t), "pueue")
+	currentDaemon := filepath.Join(canonicalAppTestTempDir(t), "pueued")
 	writeRunnerFixture(t, currentClient, "current client")
 	writeRunnerFixture(t, currentDaemon, "current daemon")
 	if err = installStateSupervisorPair(context.Background(), root, currentClient, currentDaemon); err != nil {
@@ -1427,7 +1427,7 @@ func TestValidateSavedStateSupervisorPairAcceptsHistoricalGeneration(t *testing.
 }
 
 func TestInstallStateSupervisorPairForRecoveryUsesVerifiedStatePair(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	client, daemon := writeSavedSupervisorPair(t)
 	binding := savedSupervisorPairRef(t, client, daemon)
 	if err := installStateSupervisorPair(context.Background(), root, client, daemon); err != nil {
@@ -1449,8 +1449,8 @@ func TestInstallStateSupervisorPairForRecoveryUsesVerifiedStatePair(t *testing.T
 	if err = os.Remove(daemon); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", t.TempDir())
-	missingDelegate := filepath.Join(t.TempDir(), "missing", "delegate")
+	t.Setenv("PATH", canonicalAppTestTempDir(t))
+	missingDelegate := filepath.Join(canonicalAppTestTempDir(t), "missing", "delegate")
 	if err = installStateSupervisorPairForRecovery(context.Background(), root, missingDelegate, binding); err != nil {
 		t.Fatalf("recovery rejected the verified state-root pair: %v", err)
 	}
@@ -1469,8 +1469,8 @@ func TestInstallStateSupervisorPairForRecoveryUsesVerifiedStatePair(t *testing.T
 
 func writeSavedSupervisorPair(t *testing.T) (string, string) {
 	t.Helper()
-	client := filepath.Join(t.TempDir(), "pueue")
-	daemon := filepath.Join(t.TempDir(), "pueued")
+	client := filepath.Join(canonicalAppTestTempDir(t), "pueue")
+	daemon := filepath.Join(canonicalAppTestTempDir(t), "pueued")
 	writeRunnerFixture(t, client, "saved client")
 	writeRunnerFixture(t, daemon, "saved daemon")
 	return client, daemon
@@ -1493,7 +1493,7 @@ func savedSupervisorPairRef(t *testing.T, client, daemon string) task.Supervisor
 }
 
 func TestBuildContinuationArgumentsDoesNotGuessRemovedLegacyRunnerIsManaged(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	missing := filepath.Join(root, "removed-install", "delegate-run")
 	meta := &task.MetaRecord{RunnerExecutable: missing}
 	if _, err := buildContinuationArguments(Arguments{}, root, &task.TaskRecord{}, meta, nil); !errors.Is(err, os.ErrNotExist) {
@@ -1517,7 +1517,7 @@ func TestBuildContinuationArgumentsDoesNotGuessRemovedLegacyRunnerIsManaged(t *t
 }
 
 func TestBuildContinuationArgumentsFailsWhenCustomRunnerWasRemoved(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	missing := filepath.Join(root, "removed-custom-runner", "delegate-run")
 	meta := &task.MetaRecord{RunnerExecutable: missing, RunnerOwnership: task.RunnerOwnershipCustom}
 	if _, err := buildContinuationArguments(Arguments{}, root, &task.TaskRecord{}, meta, nil); !errors.Is(err, os.ErrNotExist) {
@@ -1538,7 +1538,7 @@ func TestBuildContinuationArgumentsFailsWhenCustomRunnerWasRemoved(t *testing.T)
 }
 
 func TestBuildContinuationArgumentsRefreshesStateRootRunner(t *testing.T) {
-	root := t.TempDir()
+	root := canonicalAppTestTempDir(t)
 	runner := filepath.Join(root, ".supervisor", stateRunnerName)
 	writeRunnerFixture(t, runner, "old state runner")
 	meta := &task.MetaRecord{RunnerExecutable: runner}
@@ -1555,8 +1555,8 @@ func TestBuildContinuationArgumentsRefreshesStateRootRunner(t *testing.T) {
 }
 
 func TestBuildContinuationArgumentsRefreshesContentAddressedRunner(t *testing.T) {
-	root := t.TempDir()
-	source := filepath.Join(t.TempDir(), "delegate-run")
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
 	writeRunnerFixture(t, source, "saved runner")
 	runner, err := installStateRunner(root, source)
 	if err != nil {
