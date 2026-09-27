@@ -67,6 +67,52 @@ func (o *Operation) RecordReceiptContext(ctx context.Context, id int64) error {
 	return err
 }
 
+// AuthorizeManagedWorkerUpgradeContext records that queue migration verified
+// the saved worker as a managed executable. The immutable request remains the
+// authority for the original worker identity.
+func (o *Operation) AuthorizeManagedWorkerUpgradeContext(ctx context.Context) error {
+	if o == nil || o.control == nil {
+		return task.ErrEvidenceFault
+	}
+	if ctx == nil {
+		return context.Canceled
+	}
+	if o.request.Binding.RunnerOwnership != task.RunnerOwnershipManaged {
+		return task.ErrEvidenceFault
+	}
+	record := ManagedWorkerUpgradeRecord{SchemaVersion: task.SchemaVersion, RequestSHA256: o.digest}
+	_, err := o.control.PutContext(ctx, workerUpgradeName, record)
+	return err
+}
+
+// ManagedWorkerUpgradeAuthorizedContext reports whether queue migration
+// durably authorized managed successors for this exact immutable request.
+func (o *Operation) ManagedWorkerUpgradeAuthorizedContext(ctx context.Context) (bool, error) {
+	if o == nil || o.control == nil {
+		return false, os.ErrClosed
+	}
+	if ctx == nil {
+		return false, context.Canceled
+	}
+	if o.request.Binding.RunnerOwnership != task.RunnerOwnershipManaged {
+		return false, task.ErrEvidenceFault
+	}
+	var record ManagedWorkerUpgradeRecord
+	err := withControlTransactionContext(ctx, o.control, func(tx *taskdir.ControlTransaction) error {
+		return tx.Read(workerUpgradeName, &record)
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false, err
+	}
+	if err != nil || record.SchemaVersion != task.SchemaVersion || record.RequestSHA256 != o.digest {
+		return false, task.ErrEvidenceFault
+	}
+	return true, nil
+}
+
 func (o *Operation) Receipt() (ReceiptRecord, error) {
 	return o.ReceiptContext(context.Background())
 }

@@ -23,7 +23,10 @@ func TestContinuationBudgetClampsInheritedNativeTimeout(t *testing.T) {
 		CanonicalCwd:    "/workspace",
 		RequestedConfig: task.TaskConfig{Budget: "10m", NativeTimeout: "10m"},
 	}
-	args := buildContinuationArguments(Arguments{Config: task.TaskConfig{Budget: "1m"}}, "/state", predecessor, nil, []byte("follow-up"))
+	args, err := buildContinuationArguments(Arguments{Config: task.TaskConfig{Budget: "1m"}}, "/state", predecessor, nil, []byte("follow-up"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if args.Config.NativeTimeout != "1m0s" {
 		t.Fatalf("inherited native timeout=%q, want clamped budget", args.Config.NativeTimeout)
 	}

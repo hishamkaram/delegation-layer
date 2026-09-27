@@ -102,12 +102,26 @@ acceptance-supervisor: supervisor-fixtures
 	./scripts/acceptance-supervisor.sh
 
 acceptance-private-cli: build
+	@mkdir -p "$(BIN_DIR)/private-cli-legacy"
+	@set -eu; \
+		source_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-legacy-src.XXXXXX"); \
+		trap 'rm -rf "$$source_dir"' EXIT; \
+		git archive HEAD^1 | tar -x -C "$$source_dir"; \
+		(cd "$$source_dir" && CGO_ENABLED=0 go build -buildvcs=false -o "$(BIN_DIR)/private-cli-legacy/delegate" ./cmd/delegate && CGO_ENABLED=0 go build -buildvcs=false -o "$(BIN_DIR)/private-cli-legacy/delegate-run" ./cmd/delegate-run)
+	python3 scripts/acceptance_private_cli.py \
+		--delegate "$(BIN_DIR)/private-cli-legacy/delegate" \
+		--runner "$(BIN_DIR)/private-cli-legacy/delegate-run" \
+		--upgraded-delegate "$(BIN_DIR)/delegate" \
+		--upgraded-runner "$(BIN_DIR)/delegate-run" \
+		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+		--output "$(BIN_DIR)/private-cli-acceptance/receipt.json"
 	python3 scripts/acceptance_private_cli.py \
 		--delegate "$(BIN_DIR)/delegate" \
 		--runner "$(BIN_DIR)/delegate-run" \
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
-		--output "$(BIN_DIR)/private-cli-acceptance/receipt.json"
+		--output "$(BIN_DIR)/private-cli-acceptance/fallback-receipt.json"
 
 acceptance-agy: build test-native-harness
 	./scripts/acceptance_native.sh antigravity:print

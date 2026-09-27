@@ -71,14 +71,42 @@ compatibility from harness-wide effort values. Provider defaults remain valid.
 Normal dispatch starts the bundled Pueue client and daemon with a private Unix
 socket below the state root. `dispatch`, `status`, `cancel`, and continuation
 checks restart that private daemon after a restart when the saved binding still
-matches. `collect` may recover that daemon only to observe an already-requested
-budget stop; it never starts a provider or submits work. For an advanced
-integration, pass an existing absolute `--pueue-config` path or set
-`DELEGATE_PUEUE_CONFIG` to that path and keep its configuration and credentials
-outside the task state root and workspace. The runtime accepts a nonempty
-observed supervisor version when its command, readiness, and queue behavior
-match the supported schema. A changed executable, configuration file, or
-resolved supervisor settings can invalidate a saved task binding.
+matches. For this private supervisor, the canonical config path, config
+digests, and endpoint define the durable binding. Executable paths, hashes,
+resolver details, and observed versions are provenance, so upgrading the CLI
+does not invalidate a compatible daemon that is already serving the private
+queue. Delegate verifies it by running the resolved Pueue client's readiness
+command and parsing the returned queue status. It leaves that daemon and its
+queued work running; if the endpoint is unavailable, it restarts the saved
+private executable pair when available. If those executables are unavailable,
+it uses the verified state-root pair, then falls back to the pair bundled with
+the current CLI. It updates launch provenance after readiness.
+
+If a reachable endpoint returns malformed or incompatible status, delegate
+fails closed and does not start a second daemon. Preserve the state root and
+report the bounded supervisor error. For an advanced integration, pass an
+existing absolute `--pueue-config` path or set `DELEGATE_PUEUE_CONFIG` to that
+path and keep its configuration and credentials outside the task state root
+and workspace. The runtime accepts a nonempty observed version when readiness
+and queue behavior match the supported schema.
+
+A legacy private supervisor binding without daemon identity can be recovered
+when delegate resolves a matching executable pair and verifies the saved
+private config and endpoint. If no pair can be resolved, delegate fails closed.
+Preserve the state root and report the setup failure; do not edit or remove its
+supervisor records.
+
+New queued model inspections record whether their worker is managed or custom.
+An older inspection request without that ownership field is ambiguous, so an
+upgrade leaves its queued command pinned to the original executable. Keep that
+runner available until the inspection finishes; then rerun model discovery if
+needed.
+
+Queued ordinary tasks with legacy metadata receive a task-bound ownership
+receipt before the CLI rewrites their managed runner command. That receipt lets
+continuation and retry use the current managed runner after the old installation
+is removed. If the receipt is absent and the recorded executable is unavailable,
+delegate cannot safely infer its ownership and leaves the task unchanged.
 
 ## A task remains pending
 

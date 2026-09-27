@@ -70,8 +70,9 @@ func TestCommandUsesBoundedEnvironmentForNilOptions(t *testing.T) {
 	t.Setenv("DLP_PUEUE_SECRET_SENTINEL", secret)
 
 	client := &Client{
-		binding: task.SupervisorRef{ClientExecutable: "/fixture/pueue", ConfigPath: "/fixture/pueue.yml"},
-		options: Options{ObservationTimeout: time.Second},
+		binding:        task.SupervisorRef{ClientExecutable: "/fixture/pueue", ConfigPath: "/fixture/pueue.yml"},
+		runtimeBinding: task.SupervisorRef{ClientExecutable: "/fixture/pueue", ConfigPath: "/fixture/pueue.yml"},
+		options:        Options{ObservationTimeout: time.Second},
 	}
 	cmd, err := client.prepareCommand("--version")
 	if err != nil {
@@ -105,8 +106,9 @@ func TestCommandUsesBoundedEnvironmentForNilOptions(t *testing.T) {
 
 func TestPrepareCommandPreservesExplicitEmptyEnvironment(t *testing.T) {
 	client := &Client{
-		binding: task.SupervisorRef{ClientExecutable: "/fixture/pueue", ConfigPath: "/fixture/pueue.yml"},
-		options: Options{Environment: []string{}},
+		binding:        task.SupervisorRef{ClientExecutable: "/fixture/pueue", ConfigPath: "/fixture/pueue.yml"},
+		runtimeBinding: task.SupervisorRef{ClientExecutable: "/fixture/pueue", ConfigPath: "/fixture/pueue.yml"},
+		options:        Options{Environment: []string{}},
 	}
 	cmd, err := client.prepareCommand("status", "--json")
 	if err != nil {
@@ -165,7 +167,8 @@ func TestResolutionContextCanonicalizesAbsolutePaths(t *testing.T) {
 	runtimeDir := base + "/runtime/../runtime"
 	environment := []string{"HOME=" + home}
 	if runtime.GOOS == "linux" {
-		environment = append(environment,
+		environment = append(
+			environment,
 			"XDG_DATA_HOME="+data,
 			"XDG_CONFIG_HOME="+config,
 			"XDG_RUNTIME_DIR="+runtimeDir,

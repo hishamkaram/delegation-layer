@@ -11,11 +11,12 @@ import (
 )
 
 type Job struct {
-	ID        int64
-	Label     *string
-	State     State
-	Group     string
-	Succeeded bool
+	ID              int64
+	Label           *string
+	State           State
+	Group           string
+	Succeeded       bool
+	originalCommand string
 }
 
 // Group records the bounded scheduling facts needed to verify an inspection
@@ -147,11 +148,15 @@ func parseJob(raw []byte, id int64) (Job, error) {
 	if err != nil {
 		return Job{}, err
 	}
+	originalCommand, err := decodeScalar[string](obj["original_command"])
+	if err != nil {
+		return Job{}, err
+	}
 	succeeded, err := jobSucceeded(obj["status"], state)
 	if err != nil {
 		return Job{}, err
 	}
-	return Job{ID: id, Label: label, State: state, Group: group, Succeeded: succeeded}, nil
+	return Job{ID: id, Label: label, State: state, Group: group, Succeeded: succeeded, originalCommand: originalCommand}, nil
 }
 
 func jobSucceeded(raw []byte, state State) (bool, error) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 type admissionPreparation struct {
 	Profile            PreparedProfile
 	Supervisor         *pueue.Client
+	RunnerExecutable   string
+	RunnerOwnership    string
 	InspectionDeadline time.Time
 	Capability         CapabilityReport
 }
@@ -116,13 +119,17 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	if err != nil {
 		return admissionPreparation{}, withDispatchStage("prepare-provider", err)
 	}
-	var profile PreparedProfile
-	if candidate.Inspection == nil {
-		profile, err = finalizeCandidate(candidate, req, nil)
-		if err != nil {
-			return admissionPreparation{}, withDispatchStage("finalize-provider", err)
-		}
+	profile, err := initialAdmissionProfile(candidate, req)
+	if err != nil {
+		return admissionPreparation{}, withDispatchStage("finalize-provider", err)
 	}
+	runnerOwnership := requestedRunnerOwnership(a)
+	a.runnerOwnership = runnerOwnership
+	runner, err := prepareAdmissionExecutables(a, deps, store.Root)
+	if err != nil {
+		return admissionPreparation{}, err
+	}
+	a.Runner = runner
 	supervisorOptions, err := supervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
 	if err != nil {
 		return admissionPreparation{}, withDispatchStage("prepare-supervisor-options", err)
@@ -131,30 +138,145 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	if err != nil {
 		return admissionPreparation{}, withDispatchStage("start-supervisor", err)
 	}
-	prepared := admissionPreparation{Profile: profile, Supervisor: supervisor}
+	if pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
+		queueRepairRunner, runnerErr := admissionQueueRepairRunner(a, deps, runner)
+		if runnerErr != nil {
+			return admissionPreparation{}, withDispatchStage("start-supervisor", runnerErr)
+		}
+		if queueRepairRunner != "" {
+			repairContext, cancelRepair := context.WithTimeout(context.Background(), pueue.RunnerCommandUpgradeTimeout)
+			repairErr := repairQueuedRunnerCommands(repairContext, store, supervisor, queueRepairRunner)
+			cancelRepair()
+			if repairErr != nil {
+				return admissionPreparation{}, withDispatchStage("start-supervisor", fmt.Errorf("repair queued task runner paths: %w", repairErr))
+			}
+		}
+	}
+	prepared := admissionPreparation{Profile: profile, Supervisor: supervisor, RunnerExecutable: runner, RunnerOwnership: runnerOwnership}
 	if candidate.Inspection != nil {
-		facts, deadline, inspectionErr := admissionInspectionFacts(a, deps, store, req, candidate, supervisor)
-		if inspectionErr != nil {
-			return admissionPreparation{}, withDispatchStage("inspect-provider", inspectionErr)
-		}
-		prepared.Profile, err = finalizeCandidate(candidate, req, facts)
+		prepared.Profile, prepared.InspectionDeadline, err = finalizeAdmissionInspection(a, deps, store, req, candidate, supervisor)
 		if err != nil {
-			return admissionPreparation{}, withDispatchStage("finalize-provider", err)
+			return admissionPreparation{}, err
 		}
-		prepared.InspectionDeadline = deadline
 	}
-	registration, lookupErr := deps.normalized().Catalog.Lookup(req.Provider)
-	if lookupErr != nil {
-		return admissionPreparation{}, withDispatchStage("select-provider", lookupErr)
-	}
-	prepared.Capability, err = runtimeCapability(req.Provider, candidate, prepared.Profile, registration.Description)
+	prepared.Capability, err = admissionRuntimeCapability(deps, req, candidate, prepared.Profile)
 	if err != nil {
-		return admissionPreparation{}, withDispatchStage("record-runtime-capability", err)
+		return admissionPreparation{}, err
 	}
 	if err = prepared.Profile.ValidateStatePlacement(store.Root); err != nil {
 		return admissionPreparation{}, withDispatchStage("validate-state-placement", err)
 	}
 	return prepared, nil
+}
+
+func initialAdmissionProfile(candidate commonprovider.ProfileCandidate, req task.TaskRecord) (PreparedProfile, error) {
+	if candidate.Inspection != nil {
+		return PreparedProfile{}, nil
+	}
+	return finalizeCandidate(candidate, req, nil)
+}
+
+func prepareAdmissionExecutables(a Arguments, deps Dependencies, root string) (string, error) {
+	runnerOwnership := requestedRunnerOwnership(a)
+	privateSupervisor, err := admissionUsesPrivateSupervisor(a, root)
+	if err != nil {
+		return "", withDispatchStage("prepare-supervisor-executables", err)
+	}
+	runnerArgument := a.Runner
+	if runnerOwnership == task.RunnerOwnershipManaged {
+		runnerArgument = ""
+	} else if runnerArgument == "" {
+		return "", withDispatchStage("resolve-runner", task.ErrEvidenceFault)
+	}
+	runner, err := resolveRunner(runnerArgument, deps)
+	if err != nil {
+		return "", withDispatchStage("resolve-runner", err)
+	}
+	if !privateSupervisor {
+		return runner, nil
+	}
+	if runnerOwnership == task.RunnerOwnershipManaged {
+		runner, err = installStateRunner(root, runner)
+		if err != nil {
+			return "", withDispatchStage("prepare-runner", err)
+		}
+	}
+	if a.savedSupervisor != nil && privateSupervisorExecutablesAvailable(a.savedSupervisor.ClientExecutable, a.savedSupervisor.DaemonExecutable) {
+		if err = installStateSupervisorPair(context.Background(), root, a.savedSupervisor.ClientExecutable, a.savedSupervisor.DaemonExecutable); err != nil {
+			return "", withDispatchStage("prepare-supervisor-executables", err)
+		}
+		return runner, nil
+	}
+	clientExecutable, daemonExecutable, err := resolvePrivateSupervisorExecutables(root, deps)
+	if err != nil {
+		return "", withDispatchStage("prepare-supervisor-executables", err)
+	}
+	if err = installStateSupervisorPair(context.Background(), root, clientExecutable, daemonExecutable); err != nil {
+		return "", withDispatchStage("prepare-supervisor-executables", err)
+	}
+	return runner, nil
+}
+
+func requestedRunnerOwnership(a Arguments) string {
+	if a.runnerOwnership != "" {
+		return a.runnerOwnership
+	}
+	if a.Runner != "" {
+		return task.RunnerOwnershipCustom
+	}
+	return task.RunnerOwnershipManaged
+}
+
+func admissionQueueRepairRunner(a Arguments, deps Dependencies, taskRunner string) (string, error) {
+	if requestedRunnerOwnership(a) == task.RunnerOwnershipManaged {
+		return taskRunner, nil
+	}
+	runner, err := resolveRunner("", deps)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return runner, nil
+}
+
+func admissionUsesPrivateSupervisor(a Arguments, root string) (bool, error) {
+	if a.savedSupervisor != nil {
+		return pueue.IsPrivateConfig(root, a.savedSupervisor.ConfigPath), nil
+	}
+	configPath, err := resolveInitialConfig(a)
+	if err != nil {
+		return false, err
+	}
+	if configPath != "" && pueue.IsPrivateConfig(root, configPath) {
+		return false, fmt.Errorf("%w: explicit supervisor config collides with the private state-rooted supervisor", pueue.ErrConfiguration)
+	}
+	return configPath == "", nil
+}
+
+func finalizeAdmissionInspection(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, candidate commonprovider.ProfileCandidate, supervisor *pueue.Client) (PreparedProfile, time.Time, error) {
+	facts, deadline, err := admissionInspectionFacts(a, deps, store, req, candidate, supervisor)
+	if err != nil {
+		return PreparedProfile{}, time.Time{}, withDispatchStage("inspect-provider", err)
+	}
+	profile, err := finalizeCandidate(candidate, req, facts)
+	if err != nil {
+		return PreparedProfile{}, time.Time{}, withDispatchStage("finalize-provider", err)
+	}
+	return profile, deadline, nil
+}
+
+func admissionRuntimeCapability(deps Dependencies, req task.TaskRecord, candidate commonprovider.ProfileCandidate, profile PreparedProfile) (CapabilityReport, error) {
+	registration, err := deps.normalized().Catalog.Lookup(req.Provider)
+	if err != nil {
+		return CapabilityReport{}, withDispatchStage("select-provider", err)
+	}
+	capability, err := runtimeCapability(req.Provider, candidate, profile, registration.Description)
+	if err != nil {
+		return CapabilityReport{}, withDispatchStage("record-runtime-capability", err)
+	}
+	return capability, nil
 }
 
 func ensureInspectionGroup(store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) (resultErr error) {
@@ -222,12 +344,14 @@ func admissionInspectionFacts(a Arguments, deps Dependencies, store *taskdir.Sto
 	if err = ensureInspectionGroup(store, supervisor, inspection.TimeoutForRevision(definition.Revision)); err != nil {
 		return nil, time.Time{}, annotateMissingInspectionStage("ensuring inspection group", err)
 	}
-	operation, err := inspection.OpenOperation(store, req, inspection.Binding{
+	binding := inspection.Binding{
 		DefinitionRevision: definition.Revision, DefinitionSHA256: definitionSHA,
 		HelperExecutable: definition.Executable, HelperSHA256: definition.ExecutableSHA256,
 		WorkerExecutable: runner, WorkerSHA256: workerSHA,
-		Environment: append([]string(nil), definition.Environment...), Supervisor: supervisor.Binding(),
-	}, time.Now())
+		RunnerOwnership: requestedRunnerOwnership(a),
+		Environment:     append([]string(nil), definition.Environment...), Supervisor: supervisor.Binding(),
+	}
+	operation, err := openAdmissionInspectionOperation(store, req, binding, time.Now())
 	if err != nil {
 		return nil, time.Time{}, annotateMissingInspectionStage("opening inspection operation", err)
 	}
@@ -248,6 +372,88 @@ func admissionInspectionFacts(a Arguments, deps Dependencies, store *taskdir.Sto
 		return nil, operation.Deadline(), inspection.ErrAdmissionExpired
 	}
 	return facts, operation.Deadline(), nil
+}
+
+func openAdmissionInspectionOperation(store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (operation *inspection.Operation, resultErr error) {
+	operation, err := inspection.LoadOperation(store, request.TaskID)
+	if errors.Is(err, os.ErrNotExist) {
+		return inspection.OpenOperation(store, request, binding, now)
+	}
+	if err != nil {
+		return nil, err
+	}
+	keepOperation := false
+	defer func() {
+		if !keepOperation {
+			resultErr = errors.Join(resultErr, operation.Close())
+		}
+	}()
+
+	record := operation.Request()
+	requestBytes, err := task.MarshalCanonical(request)
+	if err != nil {
+		return nil, task.ErrEvidenceFault
+	}
+	if record.RootID != store.RootID || record.TaskID != request.TaskID || record.TaskSHA256 != task.ComputeSHA256(requestBytes) {
+		return nil, task.ErrEvidenceFault
+	}
+	if sameInspectionBinding(record.Binding, binding) {
+		keepOperation = true
+		return operation, nil
+	}
+	if !sameInspectionBindingExceptManagedWorker(record.Binding, binding) {
+		return nil, task.ErrEvidenceFault
+	}
+	if record.Binding.WorkerExecutable != binding.WorkerExecutable || record.Binding.WorkerSHA256 != binding.WorkerSHA256 {
+		if err = validateManagedInspectionReplay(store.Root, operation, binding); err != nil {
+			return nil, err
+		}
+	}
+	keepOperation = true
+	return operation, nil
+}
+
+func validateManagedInspectionReplay(root string, operation *inspection.Operation, binding inspection.Binding) error {
+	if !managedInspectionWorkerExecutable(root, binding) {
+		return task.ErrEvidenceFault
+	}
+	authorized, err := operation.ManagedWorkerUpgradeAuthorizedContext(context.Background())
+	if err != nil {
+		return err
+	}
+	if authorized {
+		return nil
+	}
+	// A retry may reopen a completed operation after its queued worker is gone.
+	// The later supervisor reconciliation still verifies the matching
+	// successful job before these facts can admit the request.
+	result, _, err := operation.ReadCompletedContext(context.Background())
+	if err != nil || result.Reason != inspection.ResultEligible {
+		return task.ErrEvidenceFault
+	}
+	return nil
+}
+
+func sameInspectionBinding(left, right inspection.Binding) bool {
+	return sameInspectionBindingBase(left, right) &&
+		(left.RunnerOwnership == right.RunnerOwnership || left.RunnerOwnership == "") &&
+		left.WorkerExecutable == right.WorkerExecutable &&
+		left.WorkerSHA256 == right.WorkerSHA256
+}
+
+func sameInspectionBindingBase(left, right inspection.Binding) bool {
+	return left.DefinitionRevision == right.DefinitionRevision &&
+		left.DefinitionSHA256 == right.DefinitionSHA256 &&
+		left.HelperExecutable == right.HelperExecutable &&
+		left.HelperSHA256 == right.HelperSHA256 &&
+		slices.Equal(left.Environment, right.Environment) &&
+		task.SameSupervisorIdentity(left.Supervisor, right.Supervisor)
+}
+
+func sameInspectionBindingExceptManagedWorker(saved, current inspection.Binding) bool {
+	return saved.RunnerOwnership == task.RunnerOwnershipManaged &&
+		current.RunnerOwnership == task.RunnerOwnershipManaged &&
+		sameInspectionBindingBase(saved, current)
 }
 
 // annotateMissingInspectionStage gives a missing-file failure a fixed stage

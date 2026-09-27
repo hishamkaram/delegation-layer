@@ -12,16 +12,25 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (td *TaskDir) withCollection(fn func() (*task.OutcomeRecord, error, error)) (out *task.OutcomeRecord, cleanupErr, resultErr error) {
+func (td *TaskDir) withCollectionCheck(check func() error, fn func() (*task.OutcomeRecord, error, error)) (out *task.OutcomeRecord, cleanupErr, resultErr error) {
 	if err := td.store.maintLock.LockSHNonblocking(); err != nil {
 		return nil, nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
+	if check != nil {
+		if err := check(); err != nil {
+			return nil, nil, err
+		}
+	}
 	if err := td.runLock.LockEXNonblocking(); err != nil {
 		return nil, nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.runLock.Unlock()) }()
 	return fn()
+}
+
+func (td *TaskDir) withCollection(fn func() (*task.OutcomeRecord, error, error)) (*task.OutcomeRecord, error, error) {
+	return td.withCollectionCheck(nil, fn)
 }
 
 var errNoOutcome = errors.New("outcome absent")
@@ -93,7 +102,25 @@ func (td *TaskDir) acknowledgeRecord(name string) error {
 // Collect only publishes the registered pure predicate's decision after validating
 // the complete immutable evidence set. It can never acquire Start authority.
 func (td *TaskDir) Collect(predicate task.PredicateRef) (*task.OutcomeRecord, error, error) {
-	return td.withCollection(func() (*task.OutcomeRecord, error, error) { return td.collectOwned(predicate) })
+	return td.withCollectionCheck(func() error {
+		_, _, meta, _, _, err := td.loadAndValidatePreparedSet()
+		if err != nil {
+			return err
+		}
+		if !predicate.Equal(meta.Predicate) {
+			return task.ErrIncompatiblePredicate
+		}
+		for _, name := range []string{"outcome.json", "provider.exit", "provider.start"} {
+			exists, err := td.store.entryExists(filepath.Join(td.Dir, name))
+			if err != nil {
+				return err
+			}
+			if exists {
+				return nil
+			}
+		}
+		return task.ErrNoSeal
+	}, func() (*task.OutcomeRecord, error, error) { return td.collectOwned(predicate) })
 }
 
 // Finalize retains the consumed runner's maintenance/run lease through pure

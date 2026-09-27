@@ -170,7 +170,7 @@ func (c *Client) stopMatched(ctx context.Context, permit *taskdir.StopPermit, re
 	// Recheck immutable files after the external observation, without replacing it
 	// with an add, fallback endpoint or second mutation attempt.
 	current, err := c.readBinding()
-	if err != nil || current != c.binding {
+	if err != nil || current != c.runtimeBinding {
 		return result, errors.Join(ErrBinding, err)
 	}
 	consume := func() error {

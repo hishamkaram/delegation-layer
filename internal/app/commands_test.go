@@ -115,6 +115,255 @@ func TestCollectPendingDoesNotAcquireSupervisorAuthority(t *testing.T) {
 	}
 }
 
+func TestCollectWithoutBudgetStopDoesNotRecoverPrivateSupervisor(t *testing.T) {
+	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	td, req := newAppTaskInStoreWithSupervisorConfig(t, store, strings.Repeat("d", 32), false, nil, pueue.PrivateConfigPath(store.Root))
+	defer closeAppTestTask(t, store, td)
+
+	result := collect(Arguments{Root: store.Root, TaskID: req.TaskID}, storeDependencies{
+		observeSupervisor:           true,
+		initialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
+	})
+	if result.code != 3 || result.err != nil {
+		t.Fatalf("collect without budget-stop evidence tried supervisor recovery: %+v", result)
+	}
+	if _, err = os.Lstat(filepath.Join(store.Root, ".supervisor")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("collect without budget-stop evidence created private supervisor state: %v", err)
+	}
+}
+
+func TestCancelWithoutSubmissionDoesNotRecoverPrivateSupervisor(t *testing.T) {
+	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	td, req := newAppTaskInStoreWithSupervisorConfig(t, store, strings.Repeat("e", 32), false, nil, pueue.PrivateConfigPath(store.Root))
+	defer closeAppTestTask(t, store, td)
+
+	result := cancel(Arguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{
+		InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
+	})
+	if !errors.Is(result.err, os.ErrNotExist) {
+		t.Fatalf("cancel without submission error = %v, want missing submission", result.err)
+	}
+	if _, err = os.Lstat(filepath.Join(store.Root, ".supervisor")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancel without submission acquired supervisor authority: %v", err)
+	}
+}
+
+type cancelQueueRepairFixture struct {
+	initialExecutable string
+	commandLog        string
+	statusPath        string
+	options           pueue.Options
+	supervisor        *pueue.Client
+}
+
+func newCancelQueueRepairFixture(t *testing.T, stateRoot string) cancelQueueRepairFixture {
+	t.Helper()
+	supervisorDir := filepath.Join(stateRoot, ".supervisor")
+	if err := os.MkdirAll(supervisorDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bundleDir := t.TempDir()
+	clientPath := filepath.Join(bundleDir, "pueue")
+	daemonPath := filepath.Join(bundleDir, "pueued")
+	initialExecutable := filepath.Join(bundleDir, "delegate")
+	commandLog := filepath.Join(t.TempDir(), "pueue-commands.log")
+	statusPath := filepath.Join(t.TempDir(), "pueue-status.json")
+	writeRunnerFixture(t, clientPath, "#!/bin/sh\nset -eu\ncommand=\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --version|status|remove|kill) command=$arg ;;\n  esac\ndone\nprintf '%s\\n' \"$command\" >> \"$FAKE_COMMAND_LOG\"\ncase \"$command\" in\n  --version) printf '%s\\n' 'pueue 4.0.4' ;;\n  status) cat \"$FAKE_STATUS_PATH\" ;;\n  remove|kill) ;;\n  *) exit 64 ;;\nesac\n")
+	writeRunnerFixture(t, daemonPath, "#!/bin/sh\nexit 0\n")
+	writeRunnerFixture(t, initialExecutable, "#!/bin/sh\nexit 0\n")
+	configPath := pueue.PrivateConfigPath(stateRoot)
+	configData, err := json.Marshal(map[string]any{"shared": map[string]string{
+		"pueue_directory":    filepath.Join(supervisorDir, "data"),
+		"runtime_directory":  filepath.Join(supervisorDir, "runtime"),
+		"unix_socket_path":   filepath.Join(supervisorDir, "runtime", "pueue.sock"),
+		"alias_file":         filepath.Join(supervisorDir, "aliases"),
+		"pid_path":           filepath.Join(supervisorDir, "runtime", "pueue.pid"),
+		"shared_secret_path": filepath.Join(supervisorDir, "secret"),
+		"daemon_cert":        filepath.Join(supervisorDir, "cert"),
+		"daemon_key":         filepath.Join(supervisorDir, "key"),
+	}, "daemon": map[string]any{
+		"shell_command": []string{"/bin/sh", "-c", "{{ pueue_command_string }}"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(configPath, configData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	options := pueue.Options{
+		ObservationTimeout: time.Second,
+		Environment: append(pueue.DefaultEnvironment(),
+			"FAKE_COMMAND_LOG="+commandLog, "FAKE_STATUS_PATH="+statusPath),
+	}
+	supervisor, err := pueue.Bind(context.Background(), clientPath, configPath, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cancelQueueRepairFixture{
+		initialExecutable: initialExecutable,
+		commandLog:        commandLog,
+		statusPath:        statusPath,
+		options:           options,
+		supervisor:        supervisor,
+	}
+}
+
+func createQueuedCancelTask(t *testing.T, stateRoot, statusPath string, supervisor *pueue.Client) string {
+	t.Helper()
+	store, err := taskdir.InitStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runnerSource, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := installStateRunnerFixture(t, stateRoot, runnerSource)
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID := strings.Repeat("f", 32)
+	brief := []byte("cancel should reach the supervisor even if queue repair is not available")
+	digest := task.ComputeSHA256([]byte("cancel test"))
+	requested := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}
+	req := &task.TaskRecord{
+		SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: taskID,
+		Provider: "fixture:test", Mode: "read-only", CanonicalCwd: workspace,
+		RequestedConfig: requested, BudgetNanos: int64(time.Minute),
+		BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief)),
+	}
+	meta := &task.MetaRecord{
+		SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: taskID,
+		RequestedConfig: requested,
+		EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest},
+		Containment:     "fixture-only", Approval: "never", ProviderExecutable: "/tmp/app-provider",
+		ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test",
+		Predicate: task.FixturePredicateRef(), SupervisorConfig: supervisor.Binding(),
+		RunnerExecutable: runner, RunnerOwnership: task.RunnerOwnershipManaged,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	td, err := store.CreateTask(taskID, req, brief, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submissionPermit, err := td.PrepareSubmission(supervisor.Binding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = submissionPermit.Consume(); err != nil {
+		t.Fatal(err)
+	}
+	if err = submissionPermit.Release(); err != nil {
+		t.Fatal(err)
+	}
+	submission, err := td.ReadSubmission()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeQueuedCancelStatus(t, statusPath, submission.Label, workspace)
+	targetID := int64(7)
+	observation, err := supervisor.Reconcile(context.Background(), pueue.Identity{
+		RootID: submission.RootID, TaskID: submission.TaskID,
+		SpecSHA256: submission.SpecSHA256, MetaSHA256: submission.MetaSHA256,
+		NumericTaskID: &targetID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := observation.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = td.RecordSupervisorReceipt(*receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err = td.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return taskID
+}
+
+func writeQueuedCancelStatus(t *testing.T, path, label, workspace string) {
+	t.Helper()
+	const timestamp = "2026-09-13T20:00:00.123456789Z"
+	data, err := json.Marshal(map[string]any{
+		"tasks": map[string]any{"7": map[string]any{
+			"id": int64(7), "created_at": timestamp,
+			"original_command": "an unrelated queued command", "command": "an unrelated queued command",
+			"path": workspace, "envs": map[string]string{}, "group": "default",
+			"dependencies": []int64{}, "priority": int32(0), "label": label,
+			"status": map[string]any{"Queued": map[string]string{"enqueued_at": timestamp}},
+		}},
+		"groups": map[string]any{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCancelStopsTaskWithoutRunningOptionalQueueRepair(t *testing.T) {
+	stateRoot, err := os.MkdirTemp("/tmp", "dlc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if removeErr := os.RemoveAll(stateRoot); removeErr != nil {
+			t.Error(removeErr)
+		}
+	})
+	store, err := taskdir.InitStore(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixture := newCancelQueueRepairFixture(t, stateRoot)
+	taskID := createQueuedCancelTask(t, stateRoot, fixture.statusPath, fixture.supervisor)
+
+	maintenanceLease, err := taskdir.OpenLockFile(filepath.Join(stateRoot, ".maintenance.lock"), taskdir.LockLevelMaintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = maintenanceLease.LockSH(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := maintenanceLease.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	result := cancel(Arguments{Root: stateRoot, TaskID: taskID}, Dependencies{
+		SupervisorOptions: fixture.options, InitialSupervisorExecutable: fixture.initialExecutable,
+	})
+	if result.code != 0 || result.err != nil || result.response.Stop == nil || result.response.Stop.Action != "remove" {
+		t.Fatalf("cancel did not send the saved stop request while holding a shared task lease: %+v", result)
+	}
+	commands, err := os.ReadFile(fixture.commandLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(commands), "remove\n") {
+		t.Fatalf("supervisor did not receive remove request; commands=%q", commands)
+	}
+	if _, err = os.Lstat(filepath.Join(stateRoot, ".supervisor", stateSupervisorPairRecordName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancel performed optional supervisor-pair migration: %v", err)
+	}
+}
+
 func TestCollectPredicateFailuresRemainOperationalErrors(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -304,6 +553,24 @@ func TestDispatchExistingAcceptsMatchingExplicitSupervisorConfig(t *testing.T) {
 	}
 }
 
+func TestDispatchExistingRejectsChangedRunnerBeforePrivateQueueRepair(t *testing.T) {
+	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	td, req := newAppTaskInStoreWithSupervisorConfig(t, store, strings.Repeat("a", 32), false, nil, pueue.PrivateConfigPath(store.Root))
+	result := dispatchExisting(Arguments{Runner: filepath.Join(t.TempDir(), "other-runner")}, Dependencies{}, store, td, *req, newResponse("dispatch"))
+	if result.code != 2 || !errors.Is(result.err, task.ErrIdentityMismatch) {
+		t.Fatalf("changed runner was not refused before supervisor repair: %+v", result)
+	}
+	if _, err = os.Lstat(filepath.Join(store.Root, ".supervisor")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected runner override mutated private supervisor state: %v", err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSupervisorResponseDoesNotInventUnmatchedNumericID(t *testing.T) {
 	unknown := supervisorResponse(pueue.Observation{Matched: false, State: pueue.StateUnknown, NumericTaskID: 99})
 	if unknown.NumericTaskID != nil {
@@ -397,8 +664,14 @@ func TestExplicitSupervisorConfigCannotClaimPrivateStatePath(t *testing.T) {
 	}
 }
 
-func TestLegacyBindingAtPrivateConfigPathUsesSavedSupervisor(t *testing.T) {
+func TestLegacyPrivateBindingWithoutDaemonIdentityRequiresResolvedPair(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
+	bin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	initialExecutable := filepath.Join(bin, "delegate")
+	writeRunnerFixture(t, initialExecutable, "#!/bin/sh\nexit 0\n")
 	digest := task.ComputeSHA256([]byte("legacy supervisor"))
 	saved := task.SupervisorRef{
 		ClientExecutable:     "/tmp/pueue",
@@ -409,12 +682,8 @@ func TestLegacyBindingAtPrivateConfigPathUsesSavedSupervisor(t *testing.T) {
 		ConfigDigest:         digest,
 		ObservedVersion:      "legacy-pueue",
 	}
-	client, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if client.Binding() != saved {
-		t.Fatalf("legacy binding was routed to private recovery: got=%+v want=%+v", client.Binding(), saved)
+	if _, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, initialExecutable); !errors.Is(err, pueue.ErrBinding) {
+		t.Fatalf("legacy private binding without a resolvable executable pair was accepted: %v", err)
 	}
 }
 
@@ -427,8 +696,41 @@ func TestPartialPrivateDaemonIdentityIsRejected(t *testing.T) {
 		Endpoint: "unix:/tmp/pueue.sock", ConfigPath: pueue.PrivateConfigPath(root),
 		ConfigDigest: digest, ObservedVersion: "legacy-pueue",
 	}
-	if _, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true); !errors.Is(err, pueue.ErrBinding) {
+	if _, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, ""); !errors.Is(err, pueue.ErrBinding) {
 		t.Fatalf("partial private daemon identity was accepted: %v", err)
+	}
+}
+
+func TestPrivateRecoveryResolvesPairBesideActiveExecutable(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	bin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	activeExecutable := filepath.Join(bin, "delegate")
+	digest := task.ComputeSHA256([]byte("private supervisor"))
+	for _, path := range []string{activeExecutable, filepath.Join(bin, "pueue"), filepath.Join(bin, "pueued")} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldInstall := filepath.Join(t.TempDir(), "removed-install")
+	saved := task.SupervisorRef{
+		ClientExecutable:     filepath.Join(oldInstall, "pueue"),
+		ClientSHA256:         digest,
+		DaemonExecutable:     filepath.Join(oldInstall, "pueued"),
+		DaemonSHA256:         digest,
+		ResolvedConfigSHA256: digest,
+		Endpoint:             "unix:" + filepath.Join(root, ".supervisor", "runtime", "pueue.sock"),
+		ConfigPath:           pueue.PrivateConfigPath(root),
+		ConfigDigest:         digest,
+		ObservedVersion:      "pueue 4.0.4",
+	}
+	emptyPath := t.TempDir()
+	t.Setenv("PATH", emptyPath)
+	_, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, activeExecutable)
+	if err == nil || !strings.Contains(err.Error(), "saved private supervisor config is unavailable") {
+		t.Fatalf("recovery did not resolve the active executable pair before validating saved state: %v", err)
 	}
 }
 
@@ -507,8 +809,11 @@ func TestBuildContinuationArgumentsPinsResolvedRoot(t *testing.T) {
 			Budget:     "1m",
 		},
 	}
-	meta := &task.MetaRecord{Environment: []string{"HOME=/task"}, RunnerExecutable: "/task/runner", SupervisorConfig: savedSupervisor}
-	arguments := buildContinuationArguments(Arguments{}, root, predecessor, meta, []byte("brief"))
+	meta := &task.MetaRecord{Environment: []string{"HOME=/task"}, RunnerExecutable: "/task/runner", RunnerOwnership: task.RunnerOwnershipManaged, SupervisorConfig: savedSupervisor}
+	arguments, err := buildContinuationArguments(Arguments{}, root, predecessor, meta, []byte("brief"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if arguments.Root != root {
 		t.Fatalf("continuation root=%q, want resolved predecessor root %q", arguments.Root, root)
 	}
@@ -878,6 +1183,10 @@ func newAppTestTaskWithPrior(t *testing.T, sealed bool, prior *task.PriorSession
 }
 
 func newAppTaskInStore(t *testing.T, store *taskdir.Store, id string, sealed bool, prior *task.PriorSession) (*taskdir.TaskDir, *task.TaskRecord) {
+	return newAppTaskInStoreWithSupervisorConfig(t, store, id, sealed, prior, "/tmp/app-pueue.yml")
+}
+
+func newAppTaskInStoreWithSupervisorConfig(t *testing.T, store *taskdir.Store, id string, sealed bool, prior *task.PriorSession, supervisorConfig string) (*taskdir.TaskDir, *task.TaskRecord) {
 	t.Helper()
 	cwd, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -887,7 +1196,7 @@ func newAppTaskInStore(t *testing.T, store *taskdir.Store, id string, sealed boo
 	requested := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}
 	digest := task.ComputeSHA256([]byte("app-test"))
 	req := &task.TaskRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, Provider: "fixture:test", Mode: "read-only", CanonicalCwd: cwd, RequestedConfig: requested, BudgetNanos: int64(time.Minute), PriorSession: prior, BriefSHA256: task.ComputeSHA256(brief), BriefLength: int64(len(brief))}
-	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: "/tmp/app-provider", ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: task.SupervisorRef{ClientExecutable: "/tmp/app-pueue", ClientSHA256: digest, ResolvedConfigSHA256: digest, ConfigPath: "/tmp/app-pueue.yml", ConfigDigest: digest, Endpoint: "unix:/tmp/app-pueue.sock", ObservedVersion: pueue.FixtureVersion}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: "/tmp/app-provider", ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: task.SupervisorRef{ClientExecutable: "/tmp/app-pueue", ClientSHA256: digest, ResolvedConfigSHA256: digest, ConfigPath: supervisorConfig, ConfigDigest: digest, Endpoint: "unix:/tmp/app-pueue.sock", ObservedVersion: pueue.FixtureVersion}, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	td, err := store.CreateTask(id, req, brief, meta)
 	if err != nil {
 		t.Fatal(err)

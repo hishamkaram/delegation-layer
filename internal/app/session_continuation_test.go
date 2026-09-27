@@ -154,12 +154,108 @@ func TestPredecessorTerminatedReleasesTerminalContinuation(t *testing.T) {
 	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatal(err)
 	}
-	if err := predecessorTerminated(store.Root, td, req, pueue.Options{}); err != nil {
+	if err := predecessorTerminated(store.Root, td, req, pueue.Options{}, ""); err != nil {
 		t.Fatalf("terminal predecessor was not released: %v", err)
 	}
 	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatalf("successor could not claim released predecessor session: %v", err)
 	}
+}
+
+func TestResolvePredecessorReleasesTerminalContinuationBeforeMissingIdentityError(t *testing.T) {
+	store, td, req := newAppTestTaskWithPrior(t, true, testPriorSession())
+	defer closeAppTestTask(t, store, td)
+	successor, _ := newAppTaskInStore(t, store, strings.Repeat("9", 32), false, testPriorSession())
+	defer func() {
+		if closeErr := successor.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	if _, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef()); cleanupErr != nil || collectErr != nil {
+		t.Fatalf("preparing terminal predecessor cleanup=%v collect=%v", cleanupErr, collectErr)
+	}
+	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
+		t.Fatal(err)
+	}
+	request := task.TaskRecord{Provider: req.Provider, Mode: req.Mode, CanonicalCwd: req.CanonicalCwd}
+	if _, err := resolvePredecessor(store, request, req.TaskID, pueue.Options{}, "", ""); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing predecessor identity error = %v, want not-exist", err)
+	}
+	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
+		t.Fatalf("predecessor session was not released before identity failure: %v", err)
+	}
+}
+
+func TestResolvePredecessorReleasesBudgetHandoffBeforePrivateRecovery(t *testing.T) {
+	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorSession, td, req := newPrivateBudgetStoppedPredecessor(t, store)
+	defer closeAppTestTask(t, store, td)
+
+	request := task.TaskRecord{Provider: req.Provider, Mode: req.Mode, CanonicalCwd: req.CanonicalCwd}
+	resolved, err := resolvePredecessor(store, request, req.TaskID, pueue.Options{}, filepath.Join(t.TempDir(), "missing-pueue"), "")
+	if err != nil {
+		t.Fatalf("durable budget-stop handoff attempted private supervisor recovery: %v", err)
+	}
+	if resolved.Provider != priorSession.Provider || resolved.ConversationID != priorSession.ConversationID || resolved.PredecessorTaskID != req.TaskID {
+		t.Fatalf("resolved continuation = %+v", resolved)
+	}
+
+	successor, _ := newAppTaskInStore(t, store, strings.Repeat("d", 32), false, resolved)
+	defer func() {
+		if closeErr := successor.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	if err = successor.ClaimSession(req.Provider, resolved.ConversationID); err != nil {
+		t.Fatalf("successor could not claim budget-stopped session: %v", err)
+	}
+}
+
+func newPrivateBudgetStoppedPredecessor(t *testing.T, store *taskdir.Store) (*task.PriorSession, *taskdir.TaskDir, *task.TaskRecord) {
+	t.Helper()
+	priorSession := testPriorSession()
+	privateConfig := filepath.Join(store.Root, ".supervisor", "pueue.yml")
+	td, req := newAppTaskInStoreWithSupervisorConfig(t, store, strings.Repeat("c", 32), false, priorSession, privateConfig)
+	var err error
+	setupComplete := false
+	var runner *taskdir.StartPermit
+	runnerReleased := false
+	defer func() {
+		if runner != nil && !runnerReleased {
+			if releaseErr := runner.Release(); releaseErr != nil {
+				t.Error(releaseErr)
+			}
+		}
+		if !setupComplete {
+			closeAppTestTask(t, store, td)
+		}
+	}()
+	if err = td.ClaimSession(req.Provider, priorSession.ConversationID); err != nil {
+		t.Fatal(err)
+	}
+	runner, err = td.PrepareStart(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = runner.Consume(); err != nil {
+		t.Fatal(err)
+	}
+	if err = td.RecordStarted(0); err != nil {
+		t.Fatal(err)
+	}
+	if err = td.RecordProviderIdentity(task.SessionIdentity{Provider: req.Provider, ConversationID: priorSession.ConversationID}); err != nil {
+		t.Fatal(err)
+	}
+	if err = runner.Release(); err != nil {
+		t.Fatal(err)
+	}
+	runnerReleased = true
+	prepareAppPublishedTimeoutEvidence(t, td)
+	setupComplete = true
+	return priorSession, td, req
 }
 
 func TestPredecessorTerminatedWaitsForFirstRunnerLease(t *testing.T) {
@@ -181,7 +277,7 @@ func TestPredecessorTerminatedWaitsForFirstRunnerLease(t *testing.T) {
 		}
 	}()
 	prepareAppPublishedTimeoutEvidence(t, td)
-	if err = predecessorTerminated(store.Root, td, req, pueue.Options{}); !errors.Is(err, task.ErrSessionBusy) {
+	if err = predecessorTerminated(store.Root, td, req, pueue.Options{}, ""); !errors.Is(err, task.ErrSessionBusy) {
 		t.Fatalf("active first-turn runner was eligible for continuation: %v", err)
 	}
 }

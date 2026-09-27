@@ -163,6 +163,17 @@ func TestCreateInspectionGroupUsesDerivedLiteralAndOnePermit(t *testing.T) {
 	}
 }
 
+func TestInspectionPermitAcceptsSupervisorInstallProvenanceDrift(t *testing.T) {
+	fake := newInspectionSupervisor(t, "ok")
+	candidate := fake.client.Binding()
+	candidate.ClientExecutable = "/old/install/pueue"
+	candidate.ClientSHA256 = task.ComputeSHA256([]byte("old client"))
+	candidate.ObservedVersion = "pueue " + FixtureVersion
+	if err := validateInspectionPermitSupervisor(candidate, fake.client.Binding()); err != nil {
+		t.Fatalf("same private supervisor identity rejected after install provenance changed: %v", err)
+	}
+}
+
 func TestCreateInspectionGroupRejectsPermitIdentityAndBindingBeforeObservation(t *testing.T) {
 	rootID := strings.Repeat("a", 32)
 	for _, testCase := range []struct {

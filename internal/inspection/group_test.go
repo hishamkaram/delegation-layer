@@ -83,7 +83,13 @@ func TestOpenGroupBindsRootAndReplaysCanonicalRequest(t *testing.T) {
 		t.Fatalf("unexpected immutable request: %+v", first.Request())
 	}
 
-	second, err := OpenGroup(store, binding)
+	upgradedBinding := binding
+	upgradedBinding.ClientExecutable = "/new/install/bin/pueue"
+	upgradedBinding.ClientSHA256 = strings.Repeat("e", 64)
+	upgradedBinding.DaemonExecutable = "/new/install/libexec/pueued"
+	upgradedBinding.DaemonSHA256 = strings.Repeat("f", 64)
+	upgradedBinding.ObservedVersion = "pueue 4.1.0"
+	second, err := OpenGroup(store, upgradedBinding)
 	if err != nil {
 		t.Fatal(err)
 	}

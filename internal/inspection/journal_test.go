@@ -107,6 +107,29 @@ func TestOpenOperationRejectsSemanticallyEqualNonCanonicalRequest(t *testing.T) 
 	}
 }
 
+func TestLoadOperationRejectsSemanticallyEqualNonCanonicalRequest(t *testing.T) {
+	store, request, binding := inspectionFixture(t)
+	first, err := OpenOperation(store, request, binding, time.Unix(100, 0).UTC())
+	mustInspection(t, err)
+	mustInspection(t, first.Close())
+
+	path := filepath.Join(store.Root, "inspections", request.TaskID, requestRecordName)
+	canonical, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := append([]byte(" \n"), canonical...)
+	if err = os.WriteFile(path, tampered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if loaded, loadErr := LoadOperation(store, request.TaskID); loaded != nil || !errors.Is(loadErr, task.ErrEvidenceFault) {
+		t.Fatalf("noncanonical request was accepted by load: operation=%v err=%v", loaded, loadErr)
+	}
+	if after, readErr := os.ReadFile(path); readErr != nil || !reflect.DeepEqual(after, tampered) {
+		t.Fatalf("failed load modified the stored request: bytes=%q err=%v", after, readErr)
+	}
+}
+
 func TestOpenOperationExpiredReplayRefusesClaims(t *testing.T) {
 	store, request, binding := inspectionFixture(t)
 	createdAt := time.Unix(100, 0).UTC()
@@ -142,6 +165,14 @@ func TestOpenOperationRejectsChangedRequestAndBinding(t *testing.T) {
 	changedBinding.HelperSHA256 = strings.Repeat("b", 64)
 	if _, err = OpenOperation(store, request, changedBinding, time.Unix(200, 0).UTC()); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("changed binding was accepted: %v", err)
+	}
+}
+
+func TestOpenOperationRejectsInvalidRunnerOwnership(t *testing.T) {
+	store, request, binding := inspectionFixture(t)
+	binding.RunnerOwnership = "implicit-managed"
+	if operation, err := OpenOperation(store, request, binding, time.Unix(100, 0).UTC()); operation != nil || err == nil {
+		t.Fatalf("invalid runner ownership was accepted: operation=%v err=%v", operation, err)
 	}
 }
 

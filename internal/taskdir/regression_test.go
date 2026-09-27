@@ -174,6 +174,34 @@ func TestRunnerOwnershipAndWriterLifetime(t *testing.T) {
 	}
 }
 
+func TestCollectWithoutEvidenceDoesNotContendWithRunnerStart(t *testing.T) {
+	s := testStore(t)
+	td := preparedTask(t, s)
+	runner, err := s.OpenTask(td.TaskID)
+	must(t, err)
+	locked := false
+	t.Cleanup(func() {
+		if locked {
+			must(t, runner.runLock.Unlock())
+		}
+		closeTaskQuietly(runner)
+	})
+	must(t, runner.runLock.LockEXNonblocking())
+	locked = true
+
+	out, cleanupErr, err := td.Collect(task.FixturePredicateRef())
+	must(t, cleanupErr)
+	if out != nil || !errors.Is(err, task.ErrNoSeal) {
+		t.Fatalf("collection without terminal evidence returned outcome=%+v err=%v", out, err)
+	}
+
+	must(t, runner.runLock.Unlock())
+	locked = false
+	start, err := td.PrepareStart(0)
+	must(t, err)
+	must(t, start.Release())
+}
+
 func TestPermitCopiesAndRelease(t *testing.T) {
 	s := testStore(t)
 	td := preparedTask(t, s)

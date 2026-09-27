@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,5 +113,41 @@ func TestDiscoveryCandidateDoesNotRequireDispatchFlagsOrFinalize(t *testing.T) {
 	}
 	if candidate.Inspection.Runtime != nil || candidate.Inspection.Models == nil || original.Runtime == nil || original.Models != nil {
 		t.Fatal("discovery leaked dispatch checks or mutated its definition")
+	}
+}
+
+func TestModelDiscoveryUsesStateRootManagedExecutables(t *testing.T) {
+	root := t.TempDir()
+	bundle := t.TempDir()
+	delegate := filepath.Join(bundle, "delegate")
+	runner := filepath.Join(bundle, "delegate-run")
+	client := filepath.Join(bundle, "pueue")
+	daemon := filepath.Join(bundle, "pueued")
+	writeRunnerFixture(t, delegate, "delegate")
+	writeRunnerFixture(t, runner, "runner")
+	writeRunnerFixture(t, client, "client")
+	writeRunnerFixture(t, daemon, "daemon")
+	args, queueRepairRunner, err := prepareModelDiscoveryExecutables(Arguments{}, Dependencies{
+		InitialSupervisorExecutable: delegate,
+		RunnerExecutable:            runner,
+	}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isStateRunnerPath(root, args.Runner) || queueRepairRunner != args.Runner || !currentManagedRunnerExecutable(root, args.Runner) || args.runnerOwnership != task.RunnerOwnershipManaged {
+		t.Fatalf("model discovery executable paths or ownership are not durable and managed: runner=%q repair=%q ownership=%q", args.Runner, queueRepairRunner, args.runnerOwnership)
+	}
+	stateClient, stateDaemon, found, err := resolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
+	if err != nil || !found {
+		t.Fatalf("model discovery did not persist its supervisor pair: found=%t err=%v", found, err)
+	}
+	for _, executable := range []struct {
+		path string
+		want string
+	}{{path: stateClient, want: "client"}, {path: stateDaemon, want: "daemon"}} {
+		data, readErr := os.ReadFile(executable.path)
+		if readErr != nil || !strings.HasSuffix(string(data), executable.want) {
+			t.Fatalf("model discovery supervisor executable %q = %q err=%v", executable.path, data, readErr)
+		}
 	}
 }

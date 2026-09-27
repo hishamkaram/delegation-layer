@@ -98,8 +98,10 @@ func (p *GroupPermit) Consume() error {
 }
 
 // OpenGroup opens the root-scoped inspection group journal after validating
-// the complete fresh supervisor binding. Static validation happens before the
-// journal directory is opened or created.
+// the complete fresh supervisor binding. The journal retains the original
+// installation provenance while replay is bound to the logical supervisor
+// config and endpoint. Static validation happens before the journal directory
+// is opened or created.
 func OpenGroup(store *taskdir.Store, binding task.SupervisorRef) (journal *GroupJournal, resultErr error) {
 	if store == nil {
 		return nil, errors.New("nil inspection store")
@@ -117,11 +119,6 @@ func OpenGroup(store *taskdir.Store, binding task.SupervisorRef) (journal *Group
 		Name:          groupForRoot(store.RootID),
 		ParallelTasks: 1,
 	}
-	requestBytes, err := task.MarshalCanonical(expected)
-	if err != nil {
-		return nil, err
-	}
-	requestSHA := task.ComputeSHA256(requestBytes)
 	if requestErr := validateGroupRequest(expected, store.RootID, binding); requestErr != nil {
 		return nil, fmt.Errorf("%w: constructed group request: %w", task.ErrInvariantFault, requestErr)
 	}
@@ -141,6 +138,11 @@ func OpenGroup(store *taskdir.Store, binding task.SupervisorRef) (journal *Group
 	if establishErr != nil {
 		return nil, establishErr
 	}
+	requestBytes, err := task.MarshalCanonical(winner)
+	if err != nil {
+		return nil, err
+	}
+	requestSHA := task.ComputeSHA256(requestBytes)
 
 	journal = &GroupJournal{control: control, request: winner, requestSHA: requestSHA}
 	closeOnError = false
@@ -169,9 +171,9 @@ func acceptExistingGroupRequest(tx *taskdir.ControlTransaction, rootID string, b
 	if !sameGroupRequest(existing, expected) {
 		return fmt.Errorf("%w: group binding changed", task.ErrEvidenceFault)
 	}
-	// Put performs the rooted byte-for-byte winner check. This rejects
-	// semantically equivalent but noncanonical existing bytes.
-	created, putErr := tx.Put(groupRequestRecordName, expected)
+	// Put verifies the rooted byte-for-byte winner without replacing its
+	// original launch provenance with this installation's executable paths.
+	created, putErr := tx.Put(groupRequestRecordName, existing)
 	if putErr != nil {
 		return putErr
 	}
@@ -227,7 +229,7 @@ func validateGroupRequest(record GroupRequestRecord, rootID string, binding task
 	if record.ParallelTasks != 1 {
 		return task.ErrInvalidEnum
 	}
-	if record.Supervisor != binding {
+	if !task.SameSupervisorIdentity(record.Supervisor, binding) {
 		return task.ErrEvidenceFault
 	}
 	return nil
@@ -236,7 +238,7 @@ func validateGroupRequest(record GroupRequestRecord, rootID string, binding task
 func sameGroupRequest(left, right GroupRequestRecord) bool {
 	return left.SchemaVersion == right.SchemaVersion &&
 		left.RootID == right.RootID &&
-		left.Supervisor == right.Supervisor &&
+		task.SameSupervisorIdentity(left.Supervisor, right.Supervisor) &&
 		left.Name == right.Name &&
 		left.ParallelTasks == right.ParallelTasks
 }

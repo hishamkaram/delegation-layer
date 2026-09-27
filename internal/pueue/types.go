@@ -15,7 +15,9 @@ const (
 	// the validated command/schema contract.
 	FixtureVersion            = "4.0.4"
 	DefaultObservationTimeout = 5 * time.Second
-	MaxControlBytes           = 1 << 20
+	// RunnerCommandUpgradeTimeout bounds one complete queued-runner repair.
+	RunnerCommandUpgradeTimeout = 30 * time.Second
+	MaxControlBytes             = 1 << 20
 )
 
 var (

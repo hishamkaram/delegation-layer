@@ -35,6 +35,9 @@ type Arguments struct {
 	// predecessor binding has been loaded and validated. It never comes from
 	// public argv; continuation admission must reuse that exact authority.
 	savedSupervisor *task.SupervisorRef
+	// runnerOwnership is set only when continuation reuses recorded ownership.
+	// A public --runner value remains custom even when it matches a managed path.
+	runnerOwnership string
 }
 
 func ParseArguments(args []string) (Arguments, error) {

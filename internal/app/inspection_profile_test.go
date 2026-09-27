@@ -102,6 +102,90 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 	}
 }
 
+func TestPrepareMatchedProfileForRunnerRejectsChangedCustomInspectionWorker(t *testing.T) {
+	fixture := newAppInspectionProofFixture(t, true)
+	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		return fixture.candidate, nil
+	}}
+	if _, err := prepareMatchedProfileForRunner(deps, fixture.store.Root, fixture.req, fixture.meta, fixture.store, fixture.workerPath, ""); err != nil {
+		t.Fatalf("unchanged custom inspection worker was rejected: %v", err)
+	}
+
+	writeAppInspectionExecutable(t, fixture.workerPath, []byte("changed custom worker"))
+	if _, err := prepareMatchedProfileForRunner(deps, fixture.store.Root, fixture.req, fixture.meta, fixture.store, fixture.workerPath, ""); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("changed custom inspection worker crossed provider admission: %v", err)
+	}
+}
+
+func TestPrepareMatchedProfileForRunnerAcceptsStateRunnerAfterLegacyInspection(t *testing.T) {
+	fixture := newAppInspectionProofFixtureWithOwnership(t, true, "")
+	stateRunner, err := installStateRunner(fixture.store.Root, fixture.workerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		return fixture.candidate, nil
+	}}
+	if _, err = prepareMatchedProfileForRunner(deps, fixture.store.Root, fixture.req, fixture.meta, fixture.store, stateRunner, ""); err != nil {
+		t.Fatalf("verified state-root runner was rejected for a legacy inspection: %v", err)
+	}
+}
+
+func TestPrepareMatchedProfileForRunnerRejectsStateRunnerSuccessorForCustomInspection(t *testing.T) {
+	fixture := newAppInspectionProofFixture(t, true)
+	fixture.meta.RunnerExecutable = fixture.workerPath
+	fixture.meta.RunnerOwnership = task.RunnerOwnershipCustom
+	stateRunner, err := installStateRunner(fixture.store.Root, fixture.workerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		return fixture.candidate, nil
+	}}
+	if _, err = prepareMatchedProfileForRunner(deps, fixture.store.Root, fixture.req, fixture.meta, fixture.store, stateRunner, task.RunnerOwnershipCustom); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("state-root successor crossed custom inspection binding: %v", err)
+	}
+}
+
+func TestPrepareMatchedProfileForRunnerRechecksManagedOrdinaryRunnerDigest(t *testing.T) {
+	fixture := newAppInspectionProofFixture(t, true)
+	runner, err := installStateRunner(fixture.store.Root, fixture.workerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := appInspectionPreparedProfile(fixture.req, fixture.req.CanonicalCwd, nil)
+	var finalizeCalls int
+	candidate := commonprovider.ProfileCandidate{
+		Directory: fixture.req.CanonicalCwd,
+		Finalize: func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
+			finalizeCalls++
+			return profile, nil
+		},
+	}
+	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		return candidate, nil
+	}}
+	meta := fixture.meta
+	meta.RunnerExecutable = runner
+	meta.RunnerOwnership = task.RunnerOwnershipManaged
+	prepare := func() error {
+		_, prepareErr := prepareMatchedProfileForRunner(deps, fixture.store.Root, fixture.req, meta, fixture.store, runner, task.RunnerOwnershipManaged)
+		return prepareErr
+	}
+	if err = prepare(); err != nil {
+		t.Fatalf("unchanged managed runner was rejected: %v", err)
+	}
+	if err = os.WriteFile(runner, []byte("changed managed runner"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = prepare(); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("changed content-addressed managed runner crossed provider boundary: %v", err)
+	}
+	if finalizeCalls != 1 {
+		t.Fatalf("profile finalized after runner integrity failure: calls=%d, want 1", finalizeCalls)
+	}
+}
+
 type appInspectionProofFixture struct {
 	store         *taskdir.Store
 	operation     *inspection.Operation
@@ -114,6 +198,10 @@ type appInspectionProofFixture struct {
 }
 
 func newAppInspectionProofFixture(t *testing.T, workerSuccess bool) *appInspectionProofFixture {
+	return newAppInspectionProofFixtureWithOwnership(t, workerSuccess, task.RunnerOwnershipCustom)
+}
+
+func newAppInspectionProofFixtureWithOwnership(t *testing.T, workerSuccess bool, runnerOwnership string) *appInspectionProofFixture {
 	t.Helper()
 	store, err := taskdir.InitStore(filepath.Join(t.TempDir(), "state"))
 	if err != nil {
@@ -189,6 +277,7 @@ func newAppInspectionProofFixture(t *testing.T, workerSuccess bool) *appInspecti
 		HelperSHA256:       snapshot.ExecutableSHA256,
 		WorkerExecutable:   workerPath,
 		WorkerSHA256:       workerSHA,
+		RunnerOwnership:    runnerOwnership,
 		Supervisor:         supervisor,
 	}
 	operation, err := inspection.OpenOperation(store, request, binding, time.Unix(100, 0).UTC())
@@ -384,12 +473,6 @@ func TestStoredInspectionProofRejectsChangedBindingsBeforeFinalize(t *testing.T)
 			},
 		},
 		{
-			name: "worker hash",
-			mutate: func(fixture *appInspectionProofFixture, _ *task.TaskRecord, _ *task.MetaRecord, _ *commonprovider.ProfileCandidate) error {
-				return os.WriteFile(fixture.workerPath, []byte("changed worker bytes"), 0o700)
-			},
-		},
-		{
 			name: "supervisor binding",
 			mutate: func(_ *appInspectionProofFixture, _ *task.TaskRecord, meta *task.MetaRecord, _ *commonprovider.ProfileCandidate) error {
 				meta.SupervisorConfig.ConfigDigest = task.ComputeSHA256([]byte("changed-supervisor"))
@@ -418,6 +501,62 @@ func TestStoredInspectionProofRejectsChangedBindingsBeforeFinalize(t *testing.T)
 			}
 			assertAppInspectionNoOrdinaryTasks(t, fixture.store)
 		})
+	}
+}
+
+func TestStoredInspectionProofSurvivesWorkerUpgrade(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(string) error
+	}{
+		{
+			name: "worker replaced in place",
+			mutate: func(path string) error {
+				return os.WriteFile(path, []byte("upgraded worker bytes"), 0o700)
+			},
+		},
+		{
+			name:   "old package removed",
+			mutate: os.Remove,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAppInspectionProofFixture(t, true)
+			if err := test.mutate(fixture.workerPath); err != nil {
+				t.Fatal(err)
+			}
+			deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+				return fixture.candidate, nil
+			}}
+			profile, err := prepareMatchedProfile(deps, fixture.store.Root, fixture.req, fixture.meta)
+			if err != nil {
+				t.Fatalf("completed inspection proof did not survive worker upgrade: %v", err)
+			}
+			if profile.Plan.Directory != fixture.req.CanonicalCwd || fixture.finalizeCalls != 1 || fixture.projectCalls != 0 {
+				t.Fatalf("upgraded worker changed proof use: profile=%+v finalizers=%d projectors=%d", profile, fixture.finalizeCalls, fixture.projectCalls)
+			}
+			assertAppInspectionNoOrdinaryTasks(t, fixture.store)
+		})
+	}
+}
+
+func TestStoredInspectionProofAcceptsSupervisorInstallProvenanceUpgrade(t *testing.T) {
+	fixture := newAppInspectionProofFixture(t, true)
+	meta := fixture.meta
+	meta.SupervisorConfig.ClientExecutable = "/new/install/bin/pueue"
+	meta.SupervisorConfig.ClientSHA256 = task.ComputeSHA256([]byte("new pueue client"))
+	meta.SupervisorConfig.DaemonExecutable = "/new/install/libexec/pueued"
+	meta.SupervisorConfig.DaemonSHA256 = task.ComputeSHA256([]byte("new pueued daemon"))
+	meta.SupervisorConfig.ObservedVersion = "pueue 4.1.0"
+	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		return fixture.candidate, nil
+	}}
+	profile, err := prepareMatchedProfile(deps, fixture.store.Root, fixture.req, meta)
+	if err != nil {
+		t.Fatalf("compatible supervisor install upgrade rejected completed proof: %v", err)
+	}
+	if profile.Plan.Directory != fixture.req.CanonicalCwd || fixture.finalizeCalls != 1 || fixture.projectCalls != 0 {
+		t.Fatalf("compatible supervisor install changed proof use: profile=%+v finalizers=%d projectors=%d", profile, fixture.finalizeCalls, fixture.projectCalls)
 	}
 }
 
@@ -469,6 +608,131 @@ func TestOrdinarySubmissionRemainsBoundToInspectedRunner(t *testing.T) {
 	}
 	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, &fixture.meta, fixture.workerPath); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("changed inspected runner was accepted: %v", err)
+	}
+}
+
+func TestManagedRetryAcceptsCurrentRunnerAfterInspectionWorkerUpgrade(t *testing.T) {
+	fixture := newAppInspectionProofFixture(t, true)
+	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
+	meta := fixture.meta
+	meta.RunnerExecutable = filepath.Join(t.TempDir(), stateRunnerName)
+	meta.RunnerOwnership = task.RunnerOwnershipManaged
+	source := filepath.Join(t.TempDir(), stateRunnerName)
+	writeRunnerFixture(t, source, "current managed runner")
+	currentRunner, err := installStateRunner(fixture.store.Root, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = validateManagedRetryRunner(td, &meta, currentRunner); err != nil {
+		t.Fatalf("managed retry rejected the verified current runner: %v", err)
+	}
+	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("strict submission accepted a runner that differs from the immutable historical binding: %v", err)
+	}
+	custom := filepath.Join(t.TempDir(), "custom-runner")
+	writeRunnerFixture(t, custom, "custom runner")
+	if err = validateManagedRetryRunner(td, &meta, custom); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("managed retry accepted an unverified custom executable: %v", err)
+	}
+}
+
+func TestManagedRetryRejectsChangedInspectedWorkerEvenWithProof(t *testing.T) {
+	fixture := newAppInspectionProofFixtureWithOwnership(t, true, task.RunnerOwnershipManaged)
+	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
+	meta := fixture.meta
+	meta.RunnerExecutable = fixture.workerPath
+	meta.RunnerOwnership = task.RunnerOwnershipManaged
+	if err := os.WriteFile(fixture.workerPath, []byte("replaced managed worker"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateInspectionSubmissionRunner(fixture.operation, fixture.store, td, &fixture.req, &meta, fixture.workerPath); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("retry accepted changed bytes at the inspected worker path: %v", err)
+	}
+}
+
+func TestManagedRetryProofAcceptsVerifiedStateRootSuccessor(t *testing.T) {
+	fixture := newAppInspectionProofFixtureWithOwnership(t, true, task.RunnerOwnershipManaged)
+	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
+	source := filepath.Join(t.TempDir(), stateRunnerName)
+	writeRunnerFixture(t, source, "current managed inspection worker")
+	runner, err := installStateRunner(fixture.store.Root, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := fixture.meta
+	meta.RunnerExecutable = runner
+	meta.RunnerOwnership = task.RunnerOwnershipManaged
+	if err = validateManagedRetrySubmissionRunner(Dependencies{}, td, &fixture.req, &meta, runner); err != nil {
+		t.Fatalf("proof-only managed retry rejected a verified state-root successor: %v", err)
+	}
+}
+
+func TestManagedRetrySubmissionRequiresInspectionUpgradeAuthority(t *testing.T) {
+	fixture := newAppInspectionProofFixtureWithOwnership(t, false, task.RunnerOwnershipManaged)
+	oldSource := filepath.Join(t.TempDir(), stateRunnerName)
+	writeRunnerFixture(t, oldSource, "old managed runner")
+	oldRunner, err := installStateRunner(fixture.store.Root, oldSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentSource := filepath.Join(t.TempDir(), stateRunnerName)
+	writeRunnerFixture(t, currentSource, "current managed runner")
+	currentRunner, err := installStateRunner(fixture.store.Root, currentSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := fixture.meta
+	meta.RunnerExecutable = oldRunner
+	td, err := fixture.store.CreateTask(fixture.req.TaskID, &fixture.req, []byte("inspection brief"), &meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := td.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if err = validateManagedRetrySubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("legacy retry without ownership metadata crossed inspection binding: %v", err)
+	}
+	meta.RunnerOwnership = task.RunnerOwnershipManaged
+	if err = validateManagedRetrySubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("managed retry crossed inspection binding without authorization: %v", err)
+	}
+	if err = fixture.operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateManagedRetrySubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); err != nil {
+		t.Fatalf("authorized managed retry was rejected: %v", err)
+	}
+}
+
+func TestSubmissionAcceptsAuthorizedManagedInspectionWorkerSuccessor(t *testing.T) {
+	fixture := newAppInspectionProofFixtureWithOwnership(t, false, task.RunnerOwnershipManaged)
+	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
+	meta := fixture.meta
+	source := filepath.Join(t.TempDir(), stateRunnerName)
+	writeRunnerFixture(t, source, "current managed inspection worker")
+	currentRunner, err := installStateRunner(fixture.store.Root, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.RunnerExecutable = currentRunner
+	meta.RunnerOwnership = task.RunnerOwnershipManaged
+	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("unapproved inspection worker successor was accepted: %v", err)
+	}
+	if err = fixture.operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); err != nil {
+		t.Fatalf("authorized managed inspection worker successor was rejected: %v", err)
+	}
+
+	customMeta := meta
+	customMeta.RunnerOwnership = task.RunnerOwnershipCustom
+	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &customMeta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("inspection migration authority bypassed custom task ownership: %v", err)
 	}
 }
 
