@@ -14,6 +14,12 @@ import time
 import uuid
 
 
+# Leave time for the two-minute task budget and supervisor stop observation.
+TASK_BUDGET = "2m"
+COLLECT_WATCH = "150s"
+COLLECT_TIMEOUT_SECONDS = 165
+
+
 PI_FIXTURE = r'''#!/bin/sh
 set -eu
 case "${1:-}" in
@@ -266,7 +272,7 @@ def main():
         dispatch = run_json(old_install / "delegate", env, [
             "--root", str(state), "dispatch", "--provider", "pi:json",
             "--brief", str(brief), "--cwd", str(workspace),
-            "--id", task_id, "--permission", "read-only", "--budget", "2m",
+            "--id", task_id, "--permission", "read-only", "--budget", TASK_BUDGET,
             "--json",
         ])
         if dispatch.get("task_id") != task_id or (
@@ -286,8 +292,8 @@ def main():
             raise RuntimeError("status did not observe the dispatched task")
 
         collected = run_json(old_install / "delegate", env, [
-            "--root", str(state), "collect", task_id, "--watch", "30s", "--json",
-        ], timeout=45)
+            "--root", str(state), "collect", task_id, "--watch", COLLECT_WATCH, "--json",
+        ], timeout=COLLECT_TIMEOUT_SECONDS)
         if collected.get("outcome", {}).get("verdict") != "committed":
             raise RuntimeError("delegate did not publish the successful fixture result")
 
@@ -352,7 +358,7 @@ def main():
         queued_dispatch = run_json(old_install / "delegate", env, [
             "--root", str(state), "dispatch", "--provider", "pi:json",
             "--brief", str(brief), "--cwd", str(workspace),
-            "--id", queued_task_id, "--permission", "read-only", "--budget", "2m",
+            "--id", queued_task_id, "--permission", "read-only", "--budget", TASK_BUDGET,
             "--json",
         ])
         if queued_dispatch.get("task_id") != queued_task_id or queued_dispatch.get("admission") != "admitted":
@@ -486,8 +492,8 @@ def main():
 
         gate.touch(mode=0o600)
         queued_collected = run_json(upgraded_install / "delegate", env, [
-            "--root", str(state), "collect", queued_task_id, "--watch", "30s", "--json",
-        ], timeout=45)
+            "--root", str(state), "collect", queued_task_id, "--watch", COLLECT_WATCH, "--json",
+        ], timeout=COLLECT_TIMEOUT_SECONDS)
         if queued_collected.get("outcome", {}).get("verdict") != "committed":
             raise RuntimeError("upgraded CLI did not run and collect the migrated legacy queued task")
         upgraded_status = run_json(upgraded_install / "delegate", env, [
@@ -529,7 +535,7 @@ def main():
         upgraded_dispatch = run_json(upgraded_install / "delegate", env, [
             "--root", str(state), "dispatch", "--provider", "pi:json",
             "--brief", str(brief), "--cwd", str(workspace),
-            "--id", upgraded_task_id, "--permission", "read-only", "--budget", "2m",
+            "--id", upgraded_task_id, "--permission", "read-only", "--budget", TASK_BUDGET,
             "--json",
         ])
         if upgraded_dispatch.get("task_id") != upgraded_task_id or upgraded_dispatch.get("admission") != "admitted":
@@ -538,8 +544,8 @@ def main():
         if upgraded_meta.get("runner_executable") != state_runner_path:
             raise RuntimeError("upgraded task metadata did not retain the state-root runner")
         upgraded_collected = run_json(upgraded_install / "delegate", env, [
-            "--root", str(state), "collect", upgraded_task_id, "--watch", "30s", "--json",
-        ], timeout=45)
+            "--root", str(state), "collect", upgraded_task_id, "--watch", COLLECT_WATCH, "--json",
+        ], timeout=COLLECT_TIMEOUT_SECONDS)
         if upgraded_collected.get("outcome", {}).get("verdict") != "committed":
             raise RuntimeError("upgraded CLI did not collect the successful second task")
         if upgraded_daemon_marker.exists():
