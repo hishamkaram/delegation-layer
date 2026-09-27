@@ -164,7 +164,7 @@ jobs:
   promote:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     concurrency:
       group: release-promotion
       cancel-in-progress: false
@@ -302,13 +302,13 @@ jobs:
             exit 0
           fi
           npm publish "${package_dir}/${package_tarball}" --access public --provenance
-          for attempt in {1..12}; do
+          for attempt in {1..60}; do
             published_integrity="$(npm view "${package}" dist.integrity 2>/dev/null || true)"
             if [[ "${published_integrity}" == "${package_integrity}" ]]; then
               echo "npm package version ${package} is visible with matching contents."
               exit 0
             fi
-            sleep 10
+            sleep 20
           done
           echo "npm package version ${package} was published but did not become visible with matching contents after ${attempt} checks." >&2
           exit 1
