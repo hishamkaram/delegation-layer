@@ -914,6 +914,43 @@ func TestBundledSupervisorPairResolvesFromHomebrewLibexec(t *testing.T) {
 	}
 }
 
+func TestManagedRunnerResolvesFromSymlinkedHomebrewExecutable(t *testing.T) {
+	root := t.TempDir()
+	cellarBin := filepath.Join(root, "Cellar", "delegation-layer", "1.0", "bin")
+	bin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(cellarBin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	delegate := filepath.Join(cellarBin, "delegate")
+	runner := filepath.Join(cellarBin, "delegate-run")
+	writeRunnerFixture(t, delegate, "delegate")
+	writeRunnerFixture(t, runner, "delegate-run")
+	linkedDelegate := filepath.Join(bin, "delegate")
+	if err := os.Symlink(delegate, linkedDelegate); err != nil {
+		t.Fatal(err)
+	}
+
+	got := managedRunnerFromExecutable(linkedDelegate)
+	want, err := filepath.EvalSymlinks(runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("managed runner = %q, want canonical sibling %q", got, want)
+	}
+
+	linkedRunner := filepath.Join(bin, "delegate-run")
+	if err := os.Symlink(runner, linkedRunner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveRunner(linkedRunner, Dependencies{}); !errors.Is(err, pueue.ErrConfiguration) {
+		t.Fatalf("explicit symlinked runner error = %v, want configuration error", err)
+	}
+}
+
 func TestReadBriefUsesNoFollowNonblockingOpen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "brief.md")

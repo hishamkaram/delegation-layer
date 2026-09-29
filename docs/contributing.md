@@ -5,9 +5,12 @@ provider differences explicit at the adapter boundary.
 
 ## Development setup
 
-Install Go 1.27.1 and the repository's pinned verification tools. The unit and
-hermetic acceptance suites provide their own supervisor fixtures. Clone the
-repository and run the local checks before editing:
+Install Go 1.27.1, Node.js 22 or newer, and the repository's pinned verification
+tools. Node.js is required by `make acceptance-private-cli` because that gate
+executes the legacy release binary against a real Pi-shaped executable fixture
+on macOS and Linux. The unit and hermetic acceptance suites provide their own
+supervisor fixtures. Clone the repository and run the local checks before
+editing:
 
 ```sh
 go test ./...

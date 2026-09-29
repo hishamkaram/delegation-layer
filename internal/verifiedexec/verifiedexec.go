@@ -190,9 +190,11 @@ func NewCommandInDirectory(executable, digest, directory string, environment []s
 }
 
 // newPortableCommand materializes the inspected bytes in a private directory
-// on systems where executing an inherited descriptor is not supported. Script
-// module lookups and compiled loader-relative dependencies are backed by a
-// private shadow path whose non-entrypoint entries reference the original
+// on systems where executing an inherited descriptor is not supported. On
+// macOS, sealed system executables stay at their canonical path because the
+// kernel can reject a relocated platform binary even when its bytes match.
+// Script module lookups and compiled loader-relative dependencies are backed by
+// a private shadow path whose non-entrypoint entries reference the original
 // provider installation. The materialized tree is sealed read-only before the
 // command is returned, binding its path to the admitted bytes through Start.
 // The private directory is unsealed and removed when the caller closes the
@@ -236,6 +238,23 @@ func buildPortableCommand(executable, digest, directory string, environment []st
 		return nil, nil, err
 	}
 	if len(shebang) == 0 {
+		if useCanonicalDarwinSystemExecutable(executable) {
+			shadowRoot, err := newPortableShadowRoot(temporaryDir, "executable")
+			if err != nil {
+				return nil, nil, err
+			}
+			moduleDirectory, err := shadowDirectory(filepath.Dir(executable), shadowRoot, filepath.Base(executable))
+			if err != nil {
+				return nil, nil, err
+			}
+			path := filepath.Join(moduleDirectory, filepath.Base(executable))
+			if err := os.Symlink(executable, path); err != nil {
+				return nil, nil, err
+			}
+			cmd := exec.Command(path, args...)
+			cmd.Args[0] = executable
+			return cmd, []string{path}, nil
+		}
 		shadowRoot, err := newPortableShadowRoot(temporaryDir, "executable")
 		if err != nil {
 			return nil, nil, err
@@ -256,6 +275,26 @@ func buildPortableCommand(executable, digest, directory string, environment []st
 	return buildPortableScriptCommand(executable, digest, directory, environment, args, file, temporaryDir, shebang)
 }
 
+func useCanonicalDarwinSystemExecutable(path string) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	path = filepath.Clean(path)
+	// The writable Data volume is mounted below /System/Volumes/Data and can
+	// contain ordinary user-controlled executables. Only paths in the sealed
+	// system volume may use the canonical-path execution required by Darwin's
+	// platform code-signature policy.
+	if strings.HasPrefix(path, "/System/Volumes/") {
+		return false
+	}
+	for _, prefix := range []string{"/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/", "/System/"} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func buildPortableScriptCommand(executable, digest, directory string, environment []string, args []string, file *os.File, temporaryDir string, shebang []string) (*exec.Cmd, []string, error) {
 	scriptPath, err := materializePortableScript(file, executable, temporaryDir, digest)
 	if err != nil {
@@ -270,9 +309,17 @@ func buildPortableScriptCommand(executable, digest, directory string, environmen
 	if err != nil {
 		return nil, temporaryFiles, err
 	}
-	interpreterPath, interpreterFiles, materializeErr := materializePortableInterpreter(interpreterFile, interpreter, temporaryDir)
+	interpreterPath := interpreter.Path
+	interpreterFiles := []string(nil)
+	// macOS can terminate a copied system Mach-O interpreter because its
+	// platform code signature no longer matches the materialized path. Keep
+	// sealed system interpreters canonical; all other interpreters retain the
+	// private materialization and its verified digest.
+	if !useCanonicalDarwinSystemExecutable(interpreter.Path) {
+		interpreterPath, interpreterFiles, err = materializePortableInterpreter(interpreterFile, interpreter, temporaryDir)
+	}
 	closeErr := interpreterFile.Close()
-	if err = errors.Join(materializeErr, closeErr); err != nil {
+	if err = errors.Join(err, closeErr); err != nil {
 		return nil, append(temporaryFiles, interpreterFiles...), err
 	}
 	temporaryFiles = append(temporaryFiles, interpreterFiles...)
@@ -315,11 +362,14 @@ func materializePortableScript(source *os.File, executable, temporaryDir, expect
 	return path, nil
 }
 
-// shadowDirectory creates a private path matching sourceDirectory. Entries
-// outside the executable path are symlinked to the original installation so
-// relative imports and package lookups retain their provider-owned semantics.
-// The admitted entrypoint itself is materialized separately in this private
-// path and is never symlinked.
+// shadowDirectory creates a private path matching sourceDirectory. Entries in
+// the executable directory and each provider-path ancestor are symlinked to
+// the original installation so arbitrarily nested parent-relative imports and
+// loader paths such as @loader_path/../lib retain their provider-owned
+// semantics. Shared temporary and system roots are deliberately not
+// enumerated: their contents are unrelated to the provider and can be very
+// large. The admitted entrypoint itself is materialized separately in this
+// private path.
 func shadowDirectory(sourceDirectory, temporaryDir, excludedEntry string) (string, error) {
 	relative, err := filepath.Rel(string(filepath.Separator), sourceDirectory)
 	if err != nil {
@@ -335,19 +385,65 @@ func shadowDirectory(sourceDirectory, temporaryDir, excludedEntry string) (strin
 		if component == "" || component == "." || component == ".." {
 			return "", errors.New("invalid portable executable path")
 		}
-		if err := shadowEntries(source, mirror, component); err != nil {
-			return "", err
-		}
 		source = filepath.Join(source, component)
 		mirror = filepath.Join(mirror, component)
 		if err := os.Mkdir(mirror, 0o700); err != nil {
 			return "", err
 		}
 	}
-	if err := shadowEntries(source, mirror, excludedEntry); err != nil {
+	if err := shadowPathEntries(source, mirror, excludedEntry); err != nil {
 		return "", err
 	}
 	return mirror, nil
+}
+
+func shadowPathEntries(sourceDirectory, mirrorDirectory, excludedEntry string) error {
+	source := sourceDirectory
+	mirror := mirrorDirectory
+	excluded := excludedEntry
+	for {
+		if err := shadowEntries(source, mirror, excluded); err != nil {
+			return err
+		}
+		parentSource := filepath.Dir(source)
+		if parentSource == source || !shouldMirrorParent(parentSource) {
+			return nil
+		}
+		excluded = filepath.Base(source)
+		source = parentSource
+		mirror = filepath.Dir(mirror)
+	}
+}
+
+func shouldMirrorParent(path string) bool {
+	path = filepath.Clean(path)
+	if path == string(filepath.Separator) {
+		return false
+	}
+	if temporaryRoot, err := filepath.EvalSymlinks(os.TempDir()); err == nil && path == filepath.Clean(temporaryRoot) {
+		return false
+	}
+	for _, sharedRoot := range []string{
+		filepath.Clean(os.TempDir()),
+		"/tmp",
+		"/private/tmp",
+		"/var/tmp",
+		"/private/var/tmp",
+		"/var/folders",
+		"/private/var/folders",
+		"/bin",
+		"/sbin",
+		"/usr",
+		"/usr/bin",
+		"/usr/sbin",
+		"/System",
+		"/private",
+	} {
+		if path == sharedRoot {
+			return false
+		}
+	}
+	return true
 }
 
 func newPortableShadowRoot(temporaryDir, name string) (string, error) {

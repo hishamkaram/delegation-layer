@@ -708,10 +708,19 @@ func bundledSupervisorDirectory(deps Dependencies) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if resolved, resolveErr := filepath.EvalSymlinks(self); resolveErr == nil {
-		self = resolved
-	}
+	self = canonicalExecutablePath(self)
 	return filepath.Dir(self), nil
+}
+
+func canonicalExecutablePath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
+}
+
+func managedRunnerFromExecutable(self string) string {
+	return filepath.Join(filepath.Dir(canonicalExecutablePath(self)), "delegate-run")
 }
 
 func resolveSupervisorExecutable(candidate, name string) (string, error) {
@@ -738,7 +747,7 @@ func resolveRunner(raw string, deps Dependencies) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		raw = filepath.Join(filepath.Dir(self), "delegate-run")
+		raw = managedRunnerFromExecutable(self)
 	}
 	if !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
 		return "", pueue.ErrConfiguration

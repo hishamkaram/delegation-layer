@@ -327,7 +327,12 @@ esac
 		t.Fatal(writeErr)
 	}
 	environment := append(os.Environ(), "FAKE_LOG="+logPath, "FAKE_STATUS="+statusPath)
-	bound, err := pueue.Bind(context.Background(), executable, configPath, pueue.Options{Environment: environment, ObservationTimeout: time.Second})
+	// The initial bind probes the fixture through /bin/sh. Keep that setup
+	// budget at the production default so scheduler contention under -race
+	// cannot turn shell startup into a false binding failure. The returned
+	// client deliberately uses a shorter observation window below so the
+	// operation still exercises retained in-flight status ownership.
+	bound, err := pueue.Bind(context.Background(), executable, configPath, pueue.Options{Environment: environment, ObservationTimeout: pueue.DefaultObservationTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
