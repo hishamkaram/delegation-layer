@@ -673,7 +673,10 @@ def main():
                 if shutdown.returncode == 0:
                     break
         if success:
-            shutil.rmtree(base)
+            # The private daemon can finish removing its pid file just after
+            # shutdown returns. Cleanup is best effort for this disposable
+            # acceptance root and must not turn a passed run into a failure.
+            shutil.rmtree(base, ignore_errors=True)
         else:
             print("Retained private acceptance state for diagnosis: " + str(base))
 
