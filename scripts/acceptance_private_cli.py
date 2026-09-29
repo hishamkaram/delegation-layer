@@ -20,35 +20,49 @@ COLLECT_WATCH = "150s"
 COLLECT_TIMEOUT_SECONDS = 165
 
 
-PI_FIXTURE = r'''#!/bin/sh
-set -eu
-case "${1:-}" in
-  --list-models)
-    printf 'provider model context max-out thinking images\nopenai gpt-4.1 128000 8192 enabled enabled\n'
-    exit 0 ;;
-  --version) printf 'pi fixture 1.0.0\n'; exit 0 ;;
-  --help)
-    cat <<'HELP'
-Options: --mode --tools --model --thinking --session --list-models
-HELP
-    exit 0
-    ;;
-esac
-prompt=$(cat)
-case "$prompt" in
-  *DELEGATE_PRIVATE_UPGRADE_WAIT*)
-    while [ ! -e __GATE_PATH__ ]; do sleep 0.05; done
-    ;;
-esac
-cat <<'EVENTS'
-{"type":"session","id":"00000000-0000-4000-8000-000000000001"}
-{"type":"agent_start"}
-{"type":"turn_start"}
-{"type":"message_start","message":{"role":"assistant","content":[]}}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}}
-{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"},"toolResults":[]}
-{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}]}
-EVENTS
+PI_FIXTURE = r'''#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+const gatePath = __GATE_PATH_JSON__;
+const args = process.argv.slice(2);
+
+if (args[0] === "--list-models") {
+  process.stdout.write("provider model context max-out thinking images\nopenai gpt-4.1 128000 8192 enabled enabled\n");
+  process.exit(0);
+}
+if (args[0] === "--version") {
+  process.stdout.write("pi fixture 1.0.0\n");
+  process.exit(0);
+}
+if (args[0] === "--help") {
+  process.stdout.write("Options: --mode --tools --model --thinking --session --list-models\n");
+  process.exit(0);
+}
+
+let prompt = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { prompt += chunk; });
+process.stdin.on("end", () => {
+  const emit = () => {
+    process.stdout.write('{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n');
+    process.stdout.write('{"type":"agent_start"}\n');
+    process.stdout.write('{"type":"turn_start"}\n');
+    process.stdout.write('{"type":"message_start","message":{"role":"assistant","content":[]}}\n');
+    process.stdout.write('{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}}\n');
+    process.stdout.write('{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"},"toolResults":[]}\n');
+    process.stdout.write('{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}]}\n');
+  };
+  if (prompt.includes("DELEGATE_PRIVATE_UPGRADE_WAIT")) {
+    const wait = () => {
+      if (fs.existsSync(gatePath)) emit();
+      else setTimeout(wait, 50);
+    };
+    wait();
+  } else {
+    emit();
+  }
+});
 '''
 REPOSITORY = Path(__file__).resolve().parent.parent
 
@@ -76,6 +90,26 @@ def install_fixture(source, destination):
     destination.chmod(0o700)
 
 
+def package_layout(root, symlinked):
+    if not symlinked:
+        install = root / "install"
+        return install, install, root / "libexec"
+    cellar = root / "Cellar" / "delegation-layer" / "0.1.0"
+    return root / "bin", cellar / "bin", cellar / "libexec"
+
+
+def install_package_layout(delegate, runner, install, canonical_bin, symlinked):
+    canonical_bin.mkdir(mode=0o700, parents=True, exist_ok=True)
+    install_fixture(delegate, canonical_bin / "delegate")
+    install_fixture(runner, canonical_bin / "delegate-run")
+    if not symlinked:
+        return
+    install.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for name in ("delegate", "delegate-run"):
+        link = install / name
+        link.symlink_to(os.path.relpath(canonical_bin / name, install))
+
+
 def install_wrapper(destination, executable, marker, identity):
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     destination.write_text(
@@ -90,7 +124,7 @@ def install_wrapper(destination, executable, marker, identity):
 
 def install_pi_fixture(install_dir, gate_file):
     pi = install_dir / "pi"
-    pi.write_text(PI_FIXTURE.replace("__GATE_PATH__", shlex.quote(str(gate_file))))
+    pi.write_text(PI_FIXTURE.replace("__GATE_PATH_JSON__", json.dumps(str(gate_file))))
     pi.chmod(0o700)
 
 
@@ -226,17 +260,29 @@ def main():
     private_config = base / "state" / ".supervisor" / "pueue.yml"
     gate = base / "blocker-gate"
     try:
-        old_install = base / "old" / "install"
-        old_libexec = base / "old" / "libexec"
-        upgraded_install = base / "upgraded" / "install"
-        upgraded_libexec = base / "upgraded" / "libexec"
+        old_install, old_bin, old_libexec = package_layout(base / "old", not legacy_mode)
+        upgraded_install, upgraded_bin, upgraded_libexec = package_layout(base / "upgraded", True)
         provider_bin = base / "provider-bin"
         home = base / "home"
         workspace = base / "workspace"
         state = base / "state"
         output = args.output.resolve()
-        for directory in (old_install, old_libexec, upgraded_install, upgraded_libexec, provider_bin, home, workspace, output.parent):
+        for directory in (old_install, old_bin, old_libexec, upgraded_install, upgraded_bin, upgraded_libexec, provider_bin, home, workspace, output.parent):
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+        node = shutil.which("node")
+        if node is None:
+            raise RuntimeError("private CLI acceptance requires Node.js 22 or newer on PATH")
+        node_version = subprocess.run(
+            [node, "--version"], capture_output=True, text=True, check=False,
+        )
+        try:
+            node_major = int(node_version.stdout.strip().lstrip("v").split(".", 1)[0])
+        except (ValueError, IndexError):
+            node_major = 0
+        if node_version.returncode != 0 or node_major < 22:
+            raise RuntimeError("private CLI acceptance requires Node.js 22 or newer on PATH")
+        node_dir = str(Path(node).resolve(strict=True).parent)
 
         delegate_binary = args.delegate.resolve(strict=True)
         runner_binary = args.runner.resolve(strict=True)
@@ -244,10 +290,8 @@ def main():
         upgraded_runner_binary = (args.upgraded_runner or args.runner).resolve(strict=True)
         pueue_binary = args.pueue.resolve(strict=True)
         pueued_binary = args.pueued.resolve(strict=True)
-        install_fixture(delegate_binary, old_install / "delegate")
-        install_fixture(runner_binary, old_install / "delegate-run")
-        install_fixture(upgraded_delegate_binary, upgraded_install / "delegate")
-        install_fixture(upgraded_runner_binary, upgraded_install / "delegate-run")
+        install_package_layout(delegate_binary, runner_binary, old_install, old_bin, not legacy_mode)
+        install_package_layout(upgraded_delegate_binary, upgraded_runner_binary, upgraded_install, upgraded_bin, True)
         old_daemon_marker = base / "old-daemon-starts"
         upgraded_daemon_marker = base / "upgraded-daemon-starts"
         install_wrapper(old_libexec / "pueue", pueue_binary, base / "old-client-starts", "old-install")
@@ -261,7 +305,7 @@ def main():
         brief.chmod(0o600)
         env.update({
             "HOME": str(home),
-            "PATH": str(provider_bin) + os.pathsep + str(old_install) + os.pathsep + str(old_libexec) + os.pathsep + "/usr/bin:/bin",
+            "PATH": str(provider_bin) + os.pathsep + str(old_install) + os.pathsep + str(old_libexec) + os.pathsep + node_dir + os.pathsep + "/usr/bin:/bin",
             "XDG_CONFIG_HOME": str(home / ".config"),
             "XDG_DATA_HOME": str(home / ".local" / "share"),
             "LANG": "C.UTF-8",
@@ -415,7 +459,7 @@ def main():
         env["PATH"] = (
             str(provider_bin) + os.pathsep + str(upgraded_install) + os.pathsep
             + str(upgraded_libexec) + os.pathsep + str(old_install) + os.pathsep
-            + str(old_libexec) + os.pathsep + "/usr/bin:/bin"
+            + str(old_libexec) + os.pathsep + node_dir + os.pathsep + "/usr/bin:/bin"
         )
         repaired_status = run_json(upgraded_install / "delegate", env, [
             "--root", str(state), "status", queued_task_id, "--json",
@@ -531,7 +575,7 @@ def main():
             raise RuntimeError("upgraded CLI could not inspect models after old package removal")
 
         upgraded_task_id = uuid.uuid4().hex
-        env["PATH"] = str(provider_bin) + os.pathsep + str(upgraded_install) + os.pathsep + "/usr/bin:/bin"
+        env["PATH"] = str(provider_bin) + os.pathsep + str(upgraded_install) + os.pathsep + node_dir + os.pathsep + "/usr/bin:/bin"
         upgraded_dispatch = run_json(upgraded_install / "delegate", env, [
             "--root", str(state), "dispatch", "--provider", "pi:json",
             "--brief", str(brief), "--cwd", str(workspace),

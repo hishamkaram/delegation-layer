@@ -274,8 +274,12 @@ func TestBindPrivateUsesLateSuccessfulReadinessWithoutStartingDaemon(t *testing.
 	writeExecutable(t, daemonPath, privateDaemonFixture)
 	seedPrivateDaemonIdentity(t, privateBase, daemonPath)
 	options := Options{
-		ObservationTimeout: 100 * time.Millisecond,
-		Environment:        append(os.Environ(), "PRIVATE_STATUS_DELAY=0.25"),
+		// macOS validates a temporary shell-script executable before launch;
+		// keep that fixture startup outside the short readiness observation
+		// window while retaining a status command that must be reaped after it
+		// exceeds the per-command observation timeout.
+		ObservationTimeout: time.Second,
+		Environment:        append(os.Environ(), "PRIVATE_STATUS_DELAY=1.25"),
 	}
 	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, options)
 	if err != nil {
@@ -731,7 +735,7 @@ func makePrivateTestDirectory(t *testing.T, path string) {
 
 func bindPrivateForTest(t *testing.T, stateRoot, clientPath, daemonPath string) *Client {
 	t.Helper()
-	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{ObservationTimeout: time.Second})
+	client, err := BindPrivate(context.Background(), clientPath, daemonPath, stateRoot, Options{ObservationTimeout: DefaultObservationTimeout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +744,7 @@ func bindPrivateForTest(t *testing.T, stateRoot, clientPath, daemonPath string) 
 
 func recoverPrivateForTest(t *testing.T, stateRoot string, saved task.SupervisorRef, clientPath, daemonPath string) *Client {
 	t.Helper()
-	client, err := RecoverPrivate(context.Background(), stateRoot, saved, clientPath, daemonPath, Options{ObservationTimeout: time.Second})
+	client, err := RecoverPrivate(context.Background(), stateRoot, saved, clientPath, daemonPath, Options{ObservationTimeout: DefaultObservationTimeout})
 	if err != nil {
 		t.Fatalf("private supervisor recovery failed: %v", err)
 	}
