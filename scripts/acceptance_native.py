@@ -923,6 +923,8 @@ class NativeAcceptance:
 
     @staticmethod
     def _empty_private_queue(status: dict[str, object]) -> bool:
+        # This provider harness passes an explicit external supervisor config;
+        # external supervisors retain their owner's parallelism policy.
         rows = status.get("tasks")
         groups = status.get("groups")
         if not isinstance(rows, dict) or not isinstance(groups, dict) or rows:
@@ -975,6 +977,9 @@ class NativeAcceptance:
         require(set(groups) == expected_groups, "private queue contains an unknown supervisor group")
         for name in expected_groups:
             group = groups[name]
+            # The native provider harness uses an explicit external config.
+            # Private bundled-supervisor parallelism is asserted by the private
+            # CLI acceptance below.
             require(isinstance(group, dict) and group.get("status") == "Running" and
                     type(group.get("parallel_tasks")) is int and
                     group.get("parallel_tasks") == 1,

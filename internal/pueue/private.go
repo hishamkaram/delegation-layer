@@ -89,6 +89,67 @@ const (
 	privateReconciliationObservationPhases = 2
 )
 
+// ConfigureUnlimitedOrdinaryTasks changes only the private supervisor's
+// ordinary default group. Fresh admission calls it after creating the task
+// record and before submission; recovery and observational commands must not
+// call it because changing the limit can release unrelated queued work.
+func (c *Client) ConfigureUnlimitedOrdinaryTasks(ctx context.Context) error {
+	if c == nil {
+		return ErrConfiguration
+	}
+	if err := c.verifyForOrdinaryConfiguration(ctx); err != nil {
+		return err
+	}
+	result, err := c.command(ctx, nil, "parallel", "0")
+	if err != nil {
+		if pending := pendingFrom(err); pending != nil {
+			settled, waitErr := c.awaitPendingForControl(ctx, pending)
+			if waitErr == nil && settled.Err == nil {
+				return nil
+			}
+			result = settled
+			err = errors.Join(err, waitErr)
+		}
+		return fmt.Errorf("%w: configure unlimited ordinary task parallelism: %w", ErrBinding, errors.Join(err, result.Err))
+	}
+	return nil
+}
+
+func (c *Client) verifyForOrdinaryConfiguration(ctx context.Context) error {
+	err := c.verify(ctx)
+	if err == nil {
+		return nil
+	}
+	pending := pendingFrom(err)
+	if pending == nil {
+		return fmt.Errorf("%w: verify supervisor before configuring ordinary task parallelism: %w", ErrBinding, err)
+	}
+	result, waitErr := c.awaitPendingForControl(ctx, pending)
+	if waitErr != nil {
+		return fmt.Errorf("%w: verify supervisor before configuring ordinary task parallelism: %w", ErrBinding, errors.Join(err, waitErr))
+	}
+	if _, versionErr := validateVersionResult(result); versionErr != nil {
+		return fmt.Errorf("%w: verify supervisor before configuring ordinary task parallelism: %w", ErrBinding, errors.Join(err, versionErr))
+	}
+	if bindingErr := c.verifyBinding(); bindingErr != nil {
+		return fmt.Errorf("%w: verify supervisor binding before configuring ordinary task parallelism: %w", ErrBinding, bindingErr)
+	}
+	return nil
+}
+
+func (c *Client) awaitPendingForControl(ctx context.Context, pending *Pending) (CommandResult, error) {
+	if ctx == nil {
+		return CommandResult{}, context.Canceled
+	}
+	timeout := c.options.ObservationTimeout
+	if timeout <= 0 {
+		timeout = DefaultObservationTimeout
+	}
+	waitContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return awaitPending(waitContext, pending)
+}
+
 // PrivateControlTimeout bounds private bootstrap plus the final supervisor
 // version and status reconciliation. It gives callers a finite control
 // deadline while keeping the provider's queue-excluded execution budget

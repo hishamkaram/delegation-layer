@@ -1338,6 +1338,8 @@ class NativeTaskOps:
 
     @staticmethod
     def _empty_private_queue(status: dict[str, object]) -> bool:
+        # Shared native-provider acceptance uses an explicit external
+        # supervisor config; it must not impose private-supervisor policy.
         tasks = status.get("tasks")
         groups = status.get("groups")
         if not isinstance(tasks, dict) or not isinstance(groups, dict) or tasks:

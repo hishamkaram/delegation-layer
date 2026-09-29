@@ -133,6 +133,8 @@ func configForVerb(cfg Config, verb string) VerbConfig {
 	switch verb {
 	case "status":
 		return cfg.Status
+	case "parallel":
+		return cfg.Parallel
 	case "add":
 		return cfg.Add
 	case "kill":
@@ -179,14 +181,18 @@ func parseCommand(fixedConfig string, argv []string) (parsedCommand, error) {
 		return parsedCommand{verb: "status"}, nil
 	case "add":
 		return parseAdd(argv)
-	case "kill", "remove":
-		if len(argv) != 4 || !validNumericID(argv[3]) {
-			return parsedCommand{}, ErrInvalidArguments
-		}
-		return parsedCommand{verb: argv[2]}, nil
+	case "parallel", "kill", "remove":
+		return parseNumericCommand(argv)
 	default:
 		return parsedCommand{}, ErrInvalidArguments
 	}
+}
+
+func parseNumericCommand(argv []string) (parsedCommand, error) {
+	if len(argv) != 4 || !validNumericID(argv[3]) || (argv[2] == "parallel" && argv[3] != "0") {
+		return parsedCommand{}, ErrInvalidArguments
+	}
+	return parsedCommand{verb: argv[2]}, nil
 }
 
 func parseAdd(argv []string) (parsedCommand, error) {

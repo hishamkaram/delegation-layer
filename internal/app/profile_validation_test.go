@@ -219,7 +219,7 @@ func (f *runnerRefreshFixture) close(t *testing.T) {
 
 func writeRunnerSupervisor(t *testing.T, executable, configPath, statusPath, base string) {
 	t.Helper()
-	script := "#!/bin/sh\nset -eu\ncase \"${3-}\" in\n  --version) printf '%s\\n' 'pueue 4.0.4' ;;\n  status) cat \"$RUNNER_STATUS_PATH\" ;;\n  *) exit 64 ;;\nesac\n"
+	script := "#!/bin/sh\nset -eu\ncase \"${3-}\" in\n  --version) printf '%s\\n' 'pueue 4.0.4' ;;\n  status) cat \"$RUNNER_STATUS_PATH\" ;;\n  parallel) [ \"${4-}\" = 0 ] ;;\n  *) exit 64 ;;\nesac\n"
 	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

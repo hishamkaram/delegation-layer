@@ -293,7 +293,10 @@ class Case:
         self.delegate = copy_executable(tools / "delegate", self.bin_dir / "delegate")
         self.runner = copy_executable(tools / "delegate-run", self.bin_dir / "delegate-run")
         self.provider = copy_executable(tools / "provider", self.bin_dir / "provider")
-        self.pueue = copy_executable(tools / "pueue-fake", self.supervisor_dir / "pueue-fake")
+        fake_supervisor = tools / "pueue-fake"
+        self.pueue = copy_executable(fake_supervisor, self.supervisor_dir / "pueue")
+        copy_executable(fake_supervisor, self.supervisor_dir / "pueued")
+        copy_executable(fake_supervisor, self.supervisor_dir / "pueue-fake")
         self.probe = canonical_executable(tools / "harnessprobe")
 
     def _write_configs(self, scenario, hook):
@@ -328,6 +331,7 @@ class Case:
             "version": SUPERVISOR_VERSION,
             "add_id": self.numeric_id,
             "status": {"delay": 0, "exit_code": 0},
+            "parallel": {"delay": 0, "exit_code": 0},
             "add": {
                 "delay": 0,
                 "release_path": str(self.add_release) if self.add_release_enabled else "",
@@ -1782,7 +1786,7 @@ def run_session_chain(case, expect_session_block=False):
         counts = assert_counts(case, A=2, S=2, E=2, child_E=0, K=0, M=0)
         verbs = [entry.get("verb") for entry in case.entries()]
         require_true(
-            set(verbs).issubset({"add", "status", "--version"}) and
+            set(verbs).issubset({"add", "parallel", "status", "--version"}) and
             verbs.count("add") == 2,
             "baseline session refusal made an unexpected supervisor call",
         )
@@ -1840,7 +1844,7 @@ def run_session_chain(case, expect_session_block=False):
     counts = assert_counts(case, A=3, S=3, E=3, child_E=0, K=0, M=0)
     verbs = [entry.get("verb") for entry in case.entries()]
     require_true(
-        set(verbs).issubset({"add", "status", "--version"}) and
+        set(verbs).issubset({"add", "parallel", "status", "--version"}) and
         verbs.count("add") == 3,
         "continuation chain made an unexpected supervisor call",
     )

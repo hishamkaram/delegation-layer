@@ -268,10 +268,11 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     -c|--config) config=$2; shift 2 ;;
     --version) printf '%s\n' 'pueue 99.7.3'; exit 0 ;;
+    parallel) [ "$2" = 0 ]; exit 0 ;;
     status)
       base=${config%/*}
       [ -f "$base/ready" ] || exit 1
-      printf '%s\n' '{"tasks":{},"groups":{}}'
+      printf '%s\n' '{"tasks":{},"groups":{"default":{"status":"Running","parallel_tasks":0}}}'
       exit 0 ;;
     *) shift ;;
   esac

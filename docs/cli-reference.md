@@ -33,6 +33,12 @@ client and daemon in a private state-rooted configuration. `--pueue-config` or
 `DELEGATE_PUEUE_CONFIG` is optional and selects an existing compatible
 supervisor for advanced integrations.
 
+Private ordinary-task supervision uses Pueue's unlimited default group. The
+orchestrating model chooses fan-out by issuing multiple dispatches concurrently;
+tasks are still durably recorded and observable through `status` and `collect`.
+Inspection work uses separate single-slot groups. Use separate workspaces or
+read-only permissions when concurrent tasks could write the same files.
+
 ## Dispatch
 
 `dispatch` validates and persists the request before it contacts Pueue. Use
