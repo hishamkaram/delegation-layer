@@ -481,12 +481,14 @@ class NativeSuite:
         self.validate_command_event(command, "entry", command_id, pid=0, exit_code=-1)
         argv = command["argv"]
         require(len(argv) >= 4 and argv[:3] == [str(self.pueue), "-c", str(self.config_path)], "native client used an unbound endpoint")
-        require(argv[3] in ("--version", "status", "add"), "unexpected native supervisor operation")
+        require(argv[3] in ("--version", "status", "parallel", "add"), "unexpected native supervisor operation")
         prefix = [str(self.pueue), "-c", str(self.config_path)]
         if argv[3] == "--version":
             require(argv == [*prefix, "--version"], "native --version argv changed")
         elif argv[3] == "status":
             require(argv == [*prefix, "status", "--json"], "native status argv changed")
+        elif argv[3] == "parallel":
+            require(argv == [*prefix, "parallel", "0"], "native parallel argv changed")
         else:
             require(argv == [
                 *prefix, "add", "--escape", "--label",

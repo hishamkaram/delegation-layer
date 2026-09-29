@@ -81,6 +81,14 @@ if the fresh profile no longer matches admission. The runner observes provider
 identity, captures bounded streams, verifies declared artifacts, and seals the
 evidence.
 
+The private supervisor's ordinary default group uses Pueue's unlimited
+parallel_tasks: 0 setting. The orchestrating model chooses fan-out by issuing
+independent dispatches concurrently; Delegation Layer does not impose a
+task-count or CPU-based concurrency policy. Inspection groups remain explicitly
+single-slot so capability and model discovery observations stay deterministic.
+The operating system, provider, authentication, and available resources remain
+the practical limits.
+
 Queued inspection workers keep their original immutable worker binding during
 an upgrade. New inspection requests persist whether the runner is managed or
 custom. Before replacing a queued managed worker command, the CLI records a

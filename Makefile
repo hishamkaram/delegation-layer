@@ -108,8 +108,10 @@ acceptance-private-cli: build
 		trap 'rm -rf "$$source_dir"' EXIT; \
 		legacy_ref=$${DELEGATE_LEGACY_REF:-}; \
 		if [ -z "$$legacy_ref" ]; then \
-			if [ "$$(git branch --show-current)" = "main" ]; then legacy_ref=$$(git rev-parse HEAD^1); \
-			else legacy_ref=$$(git merge-base HEAD origin/main); fi; \
+			base_ref=$$(git merge-base HEAD origin/main); \
+			transition_ref=$$(git log --all --format=%H --grep='Make private supervisor setup self-contained' -1); \
+			if [ -n "$$transition_ref" ]; then legacy_ref=$$(git rev-parse "$$transition_ref^1"); \
+			else legacy_ref=$$(git rev-parse "$$base_ref^1"); fi; \
 		fi; \
 		git archive "$$legacy_ref" | tar -x -C "$$source_dir"; \
 		(cd "$$source_dir" && CGO_ENABLED=0 go build -buildvcs=false -o "$(BIN_DIR)/private-cli-legacy/delegate" ./cmd/delegate && CGO_ENABLED=0 go build -buildvcs=false -o "$(BIN_DIR)/private-cli-legacy/delegate-run" ./cmd/delegate-run)

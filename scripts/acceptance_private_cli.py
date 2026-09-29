@@ -384,6 +384,35 @@ def main():
             model.get("id") for model in initial_models.get("models", [])
         ] != ["openai/gpt-4.1"]:
             raise RuntimeError("legacy CLI could not complete its initial model inspection")
+        if not legacy_mode:
+            default_group = pueue_snapshot(old_libexec / "pueue", private_config, env).get("groups", {}).get("default", {})
+            if default_group.get("parallel_tasks") != 0:
+                raise RuntimeError("private ordinary supervisor did not enable unlimited parallelism")
+            shutdown = subprocess.run(
+                [str(old_libexec / "pueue"), "--config", str(private_config), "shutdown"],
+                env=env, capture_output=True, text=True, timeout=15, check=False,
+            )
+            if shutdown.returncode != 0:
+                raise RuntimeError("private CLI fallback supervisor did not shut down cleanly")
+            output.write_text(json.dumps({
+                "schema_version": 1,
+                "status": "passed",
+                "platform": platform.system(),
+                "task_ids": [task_id],
+                "checks": [
+                    "the CLI completed dispatch/status/collect against an isolated private supervisor",
+                    "private ordinary admission enabled unlimited parallelism",
+                    "private model discovery completed without changing ordinary supervisor ownership",
+                ],
+            }, sort_keys=True) + "\n")
+            success = True
+            print("PASS private CLI fallback acceptance: " + str(args.output))
+            return
+        # Ordinary dispatch now deliberately leaves the private default group
+        # unlimited. Restore a one-slot gate for this migration fixture so the
+        # queued-runner repair scenario remains deterministic; the upgraded
+        # dispatch below proves that normal admission returns it to unlimited.
+        pueue_command(old_libexec / "pueue", private_config, env, ["parallel", "1"])
         # Keep the private group occupied while an old-release task is queued.
         # This reproduces a package upgrade with an existing task command that
         # still points into the old installation.
@@ -584,6 +613,10 @@ def main():
         ])
         if upgraded_dispatch.get("task_id") != upgraded_task_id or upgraded_dispatch.get("admission") != "admitted":
             raise RuntimeError("upgraded CLI did not dispatch through the existing private supervisor")
+        upgraded_snapshot = pueue_snapshot(upgraded_libexec / "pueue", private_config, env)
+        default_group = upgraded_snapshot.get("groups", {}).get("default", {})
+        if default_group.get("parallel_tasks") != 0:
+            raise RuntimeError("private ordinary supervisor did not enable unlimited parallelism")
         upgraded_meta = json.loads((state / "tasks" / upgraded_task_id / "meta.json").read_text())
         if upgraded_meta.get("runner_executable") != state_runner_path:
             raise RuntimeError("upgraded task metadata did not retain the state-root runner")

@@ -445,6 +445,12 @@ func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.
 		return failed(response, withDispatchStage("create-task-record", err), classifyCode(err, 1))
 	}
 	response.TaskRecord = "created"
+	if pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
+		if err = supervisor.ConfigureUnlimitedOrdinaryTasks(context.Background()); err != nil {
+			err = errors.Join(err, td.Close())
+			return failed(response, withDispatchStage("start-supervisor", err), classifyCode(err, 1))
+		}
+	}
 	submitArgs := a
 	submitArgs.Runner = runner
 	result := submitPreparedWithProfile(submitArgs, deps, td, &req, &meta, supervisor, profile, response)

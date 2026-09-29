@@ -119,10 +119,11 @@ func validateConfig(cfg Config, path string) error {
 		return fmt.Errorf("%w: add_id must be nonnegative", ErrInvalidConfig)
 	}
 	for name, verb := range map[string]VerbConfig{
-		"status": cfg.Status,
-		"add":    cfg.Add,
-		"kill":   cfg.Kill,
-		"remove": cfg.Remove,
+		"status":   cfg.Status,
+		"parallel": cfg.Parallel,
+		"add":      cfg.Add,
+		"kill":     cfg.Kill,
+		"remove":   cfg.Remove,
 	} {
 		if err := validateVerb(name, verb); err != nil {
 			return err

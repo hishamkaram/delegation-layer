@@ -174,7 +174,7 @@ func newCancelQueueRepairFixture(t *testing.T, stateRoot string) cancelQueueRepa
 	initialExecutable := filepath.Join(bundleDir, "delegate")
 	commandLog := filepath.Join(t.TempDir(), "pueue-commands.log")
 	statusPath := filepath.Join(t.TempDir(), "pueue-status.json")
-	writeRunnerFixture(t, clientPath, "#!/bin/sh\nset -eu\ncommand=\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --version|status|remove|kill) command=$arg ;;\n  esac\ndone\nprintf '%s\\n' \"$command\" >> \"$FAKE_COMMAND_LOG\"\ncase \"$command\" in\n  --version) printf '%s\\n' 'pueue 4.0.4' ;;\n  status) cat \"$FAKE_STATUS_PATH\" ;;\n  remove|kill) ;;\n  *) exit 64 ;;\nesac\n")
+	writeRunnerFixture(t, clientPath, "#!/bin/sh\nset -eu\ncommand=\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --version|status|parallel|remove|kill) command=$arg ;;\n  esac\ndone\nprintf '%s\\n' \"$command\" >> \"$FAKE_COMMAND_LOG\"\ncase \"$command\" in\n  --version) printf '%s\\n' 'pueue 4.0.4' ;;\n  status) cat \"$FAKE_STATUS_PATH\" ;;\n  parallel) ;;\n  remove|kill) ;;\n  *) exit 64 ;;\nesac\n")
 	writeRunnerFixture(t, daemonPath, "#!/bin/sh\nexit 0\n")
 	writeRunnerFixture(t, initialExecutable, "#!/bin/sh\nexit 0\n")
 	configPath := pueue.PrivateConfigPath(stateRoot)

@@ -451,6 +451,12 @@ func TestBindPrivateBootstrapsAndReusesSupervisor(t *testing.T) {
 		t.Fatalf("launch provenance was published before daemon readiness: %q", identityAtStart)
 	}
 	assertPrivateConfigRootedInState(t, fixture.stateRoot)
+	if err := first.ConfigureUnlimitedOrdinaryTasks(context.Background()); err != nil {
+		t.Fatalf("private admission did not configure unlimited ordinary parallelism: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "parallel-unlimited")); err != nil {
+		t.Fatalf("private bootstrap did not configure unlimited ordinary parallelism: %v", err)
+	}
 
 	second := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
 	if second.Binding().ConfigPath != first.Binding().ConfigPath || second.Binding().Endpoint != first.Binding().Endpoint {
@@ -829,7 +835,7 @@ func writePrivateRunningTaskStatus(t *testing.T, path string, submission *task.S
 	t.Helper()
 	state := map[string]any{"Running": map[string]any{"enqueued_at": statusTestTime, "start": statusTestTime}}
 	job := statusTestJob(id, "delegate:"+submission.RootID+":"+submission.TaskID, state)
-	data := statusTestPayload(t, map[string]any{strconv.FormatInt(id, 10): job}, map[string]any{})
+	data := statusTestPayload(t, map[string]any{strconv.FormatInt(id, 10): job}, map[string]any{"default": map[string]any{"status": "Running", "parallel_tasks": 0}})
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1064,6 +1070,10 @@ while [ "$#" -gt 0 ]; do
       if [ "${PRIVATE_VERSION_DELAY:-}" != "" ]; then sleep "$PRIVATE_VERSION_DELAY"; elif [ "${PRIVATE_DELAY_VERSION:-}" = "1" ]; then sleep 0.08; fi
       if [ "${PRIVATE_VERSION_MARKER:-}" != "" ]; then printf '%s\n' completed >> "$PRIVATE_VERSION_MARKER"; fi
       printf '%s\n' 'pueue 99.7.3'; exit 0 ;;
+    parallel)
+      [ "$2" = "0" ] || exit 64
+      touch "$(dirname "$config")/parallel-unlimited"
+      exit 0 ;;
     status)
       if [ "${PRIVATE_STATUS_DELAY:-}" != "" ]; then sleep "$PRIVATE_STATUS_DELAY"; fi
       if [ "${PRIVATE_STATUS_STARTED:-}" != "" ]; then
@@ -1081,7 +1091,7 @@ while [ "$#" -gt 0 ]; do
         printf '%s\n' '{"tasks":{}}'
         exit 0
       fi
-      printf '%s\n' '{"tasks":{},"groups":{}}'
+      printf '%s\n' '{"tasks":{},"groups":{"default":{"status":"Running","parallel_tasks":0}}}'
       exit 0
       ;;
     kill|remove)

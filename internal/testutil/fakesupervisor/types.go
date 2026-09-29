@@ -40,6 +40,7 @@ type Config struct {
 	Version            string     `json:"version"`
 	AddID              int64      `json:"add_id"`
 	Status             VerbConfig `json:"status"`
+	Parallel           VerbConfig `json:"parallel"`
 	Add                VerbConfig `json:"add"`
 	Kill               VerbConfig `json:"kill"`
 	Remove             VerbConfig `json:"remove"`

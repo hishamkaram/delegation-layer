@@ -38,6 +38,11 @@ inspect, authenticate, or install a provider CLI directly.
    Providers load their own configuration and extensions. If a task is rejected,
    report delegate's evidence; do not assume the user's configuration is faulty
    or remove MCP servers, plugins, settings, or credentials to make it pass.
+10. The model chooses ordinary-task fan-out by issuing independent `dispatch`
+    commands concurrently. The private supervisor does not impose a task-count
+    or CPU-based limit. Use this for independent investigation, debate, review,
+    or provider comparison. Concurrent write tasks must use separate workspaces
+    or explicit coordination to avoid file conflicts.
 
 ## Operating procedure
 
@@ -149,6 +154,12 @@ The provider may allow access beyond the selected workspace. Delegate supplies
 the native approval options; do not add provider flags or call its CLI yourself.
 Keep the budget finite. A successful dispatch means the request was durably admitted;
 it does not mean the delegated work finished.
+
+For independent work, the model may run several complete `dispatch` commands
+concurrently. Keep each task's brief, workspace, permission, and task ID
+independent. Do not configure Pueue or wait for one task before dispatching the
+next solely to serialize ordinary work. Inspect each returned task separately
+with `status` and `collect`.
 
 When an explicit selection is supplied, pass it through the public fields:
 `--model MODEL` and `--effort VALUE`. Codex encodes effort as its native TOML
