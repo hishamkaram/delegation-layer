@@ -106,8 +106,11 @@ means the exact session can be continued; `mode` is `native`, `checkpoint`, or
 
 `providers --json` returns a bounded object with `schema_version: 1` and a
 sorted `providers` array. Each entry contains its ID, supported permission
-modes, supported request options, continuation mode, and runtime metadata:
-optional help-command arguments plus the flags required by the adapter.
+modes, supported request options, continuation mode, read-only mechanism and
+containment, and runtime metadata: optional help-command arguments plus the
+flags required by the adapter. The shipped profiles report
+`containment: "provider-owned"`, meaning the adapter selects provider-native
+behavior without creating an independent delegate-owned sandbox.
 
 Discovery is metadata only. It does not inspect the host, authenticate a
 provider, contact Pueue, create state, or launch a process. During dispatch,

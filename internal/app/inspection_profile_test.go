@@ -67,6 +67,7 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 		Description: commonprovider.Description{
 			ID:             config.ProviderFixture,
 			SupportedModes: []string{config.ModeReadOnly},
+			ReadOnly:       commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
 			Runtime:        commonprovider.RuntimeCapability{RequiredFlags: []string{"--fixture"}},
 			Discoverable:   true,
 		},

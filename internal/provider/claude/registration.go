@@ -13,6 +13,7 @@ func Description() commonprovider.Description {
 		SupportedModes:   []string{Mode, WorkspaceWriteMode},
 		SupportedOptions: []string{commonprovider.OptionContinuation, commonprovider.OptionEffort, commonprovider.OptionModel},
 		Continuation:     commonprovider.ContinuationNative,
+		ReadOnly:         commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
 		Runtime:          RuntimeRequirements(),
 		Discoverable:     true,
 	}

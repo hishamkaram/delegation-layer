@@ -87,8 +87,13 @@ shows one catalog entry):
     {
       "id": "codex:exec",
       "supported_modes": ["read-only", "workspace-write"],
-      "supported_options": ["continuation"],
+      "supported_options": ["continuation", "effort", "model"],
       "continuation": "native",
+      "read_only": {
+        "supported": true,
+        "mechanism": "native-sandbox",
+        "containment": "provider-owned"
+      },
       "runtime": {
         "help_args": ["exec"],
         "required_flags": [
@@ -160,6 +165,14 @@ supervisor, or launching a provider. Its `status: "unknown"` and
 `verification: "catalog"` values are deliberate: this response is discovery,
 not host readiness or live acceptance.
 
+The response includes supported permission modes, request options, continuation,
+and the read-only mechanism. `containment: "provider-owned"` means the adapter
+selects the provider's native read-only behavior but does not create an
+independent boundary around provider configuration, extensions, MCP servers, or
+plugins. Model and effort choices remain in the separate runtime `models`
+response, and authentication remains unknown until a runtime or live
+acceptance boundary observes it.
+
 ```json
 {
   "schema_version": 1,
@@ -170,6 +183,13 @@ not host readiness or live acceptance.
     "status": "unknown",
     "verification": "catalog",
     "continuation": "native",
+    "supported_modes": ["read-only", "workspace-write"],
+    "supported_options": ["continuation", "model", "effort"],
+    "read_only": {
+      "supported": true,
+      "mechanism": "native-plan",
+      "containment": "provider-owned"
+    },
     "required_flags": ["…"],
     "reason_code": "runtime_probe_not_run",
     "live_acceptance": {

@@ -17,6 +17,7 @@ func Description() commonprovider.Description {
 			commonprovider.OptionModel,
 		},
 		Continuation: commonprovider.ContinuationNative,
+		ReadOnly:     commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyToolAllowlist, Containment: commonprovider.ReadOnlyProviderOwned},
 		Runtime:      RuntimeRequirements(),
 		Discoverable: true,
 	}

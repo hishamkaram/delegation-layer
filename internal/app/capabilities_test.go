@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,6 +60,13 @@ func assertDeclaredCapability(t *testing.T, response CapabilityResponse) {
 	if capability.Continuation != string(commonprovider.ContinuationNative) {
 		t.Fatalf("continuation contract is incomplete: %+v", capability)
 	}
+	if !slices.Equal(capability.SupportedModes, []string{"read-only", "workspace-write"}) || !slices.Equal(capability.SupportedOptions, []string{"continuation", "effort", "model"}) {
+		t.Fatalf("static request metadata is incomplete: %+v", capability)
+	}
+	wantReadOnly := commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyToolAllowlist, Containment: commonprovider.ReadOnlyProviderOwned}
+	if capability.ReadOnly != wantReadOnly {
+		t.Fatalf("read-only metadata is incomplete: %+v", capability.ReadOnly)
+	}
 	if capability.LiveAcceptance.Status != acceptanceStatusNotRun || capability.LiveAcceptance.Authentication != authenticationStatusUnknown {
 		t.Fatalf("static command claimed live proof: %+v", capability.LiveAcceptance)
 	}
@@ -98,6 +106,9 @@ func TestCapabilitiesUnknownProviderReturnsMachineReadableRejection(t *testing.T
 	}
 	if response.Capability.Continuation != string(commonprovider.ContinuationUnsupported) {
 		t.Fatalf("unknown provider omitted unsupported continuation mode: %+v", response.Capability)
+	}
+	if response.Capability.ReadOnly.Supported || response.Capability.ReadOnly.Mechanism != "" || response.Capability.ReadOnly.Containment != "" {
+		t.Fatalf("unknown provider claimed read-only support: %+v", response.Capability.ReadOnly)
 	}
 	if response.Error == "" || stderr.Len() != 0 {
 		t.Fatalf("unexpected unknown-provider streams: stdout=%q stderr=%q", stdout.String(), stderr.String())
@@ -141,7 +152,13 @@ func TestRuntimeCapabilityReportRequiresObservedBehaviorForReady(t *testing.T) {
 		Plan:            execution.Plan{Executable: "/absolute/provider"},
 		ObservedVersion: "release-without-a-policy-pin",
 	}
-	report, err := runtimeCapability("example:run", candidate, profile)
+	description := commonprovider.Description{
+		ID:               "example:run",
+		SupportedModes:   []string{"read-only", "workspace-write"},
+		SupportedOptions: []string{commonprovider.OptionContinuation},
+		ReadOnly:         commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativeSandbox, Containment: commonprovider.ReadOnlyProviderOwned},
+	}
+	report, err := runtimeCapability("example:run", candidate, profile, description)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +167,9 @@ func TestRuntimeCapabilityReportRequiresObservedBehaviorForReady(t *testing.T) {
 	}
 	if report.Version != profile.ObservedVersion || report.ExecutableSHA256 != digest || len(report.RequiredFlags) != 2 {
 		t.Fatalf("runtime observations were not projected: %+v", report)
+	}
+	if !slices.Equal(report.SupportedModes, description.SupportedModes) || !slices.Equal(report.SupportedOptions, description.SupportedOptions) || report.ReadOnly != description.ReadOnly {
+		t.Fatalf("static capability metadata was not projected: %+v", report)
 	}
 	if report.LiveAcceptance.Status != acceptanceStatusNotRun {
 		t.Fatalf("runtime probe claimed live acceptance: %+v", report.LiveAcceptance)

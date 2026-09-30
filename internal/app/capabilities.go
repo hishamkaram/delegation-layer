@@ -42,17 +42,20 @@ type CapabilityResponse struct {
 // agents. Runtime versions and executable digests are observations only; they
 // never authorize a release or replace behavioral checks.
 type CapabilityReport struct {
-	Contract         string               `json:"contract"`
-	Provider         string               `json:"provider"`
-	Status           string               `json:"status"`
-	Verification     string               `json:"verification"`
-	Continuation     string               `json:"continuation"`
-	Version          string               `json:"version,omitempty"`
-	ExecutableSHA256 string               `json:"executable_sha256,omitempty"`
-	HelpArgs         []string             `json:"help_args,omitempty"`
-	RequiredFlags    []string             `json:"required_flags"`
-	ReasonCode       string               `json:"reason_code"`
-	LiveAcceptance   LiveAcceptanceReport `json:"live_acceptance"`
+	Contract         string                            `json:"contract"`
+	Provider         string                            `json:"provider"`
+	Status           string                            `json:"status"`
+	Verification     string                            `json:"verification"`
+	Continuation     string                            `json:"continuation"`
+	SupportedModes   []string                          `json:"supported_modes"`
+	SupportedOptions []string                          `json:"supported_options"`
+	ReadOnly         commonprovider.ReadOnlyCapability `json:"read_only"`
+	Version          string                            `json:"version,omitempty"`
+	ExecutableSHA256 string                            `json:"executable_sha256,omitempty"`
+	HelpArgs         []string                          `json:"help_args,omitempty"`
+	RequiredFlags    []string                          `json:"required_flags"`
+	ReasonCode       string                            `json:"reason_code"`
+	LiveAcceptance   LiveAcceptanceReport              `json:"live_acceptance"`
 }
 
 // LiveAcceptanceReport keeps authentication and real-provider proof separate
@@ -69,13 +72,15 @@ func runCapabilities(jsonOutput bool, stdout, stderr io.Writer, catalog commonpr
 		SchemaVersion: OutputSchemaVersion,
 		Command:       "capabilities",
 		Capability: CapabilityReport{
-			Contract:      commonprovider.RuntimeInspectionRevision,
-			Provider:      providerID,
-			Status:        capabilityStatusUnsupported,
-			Verification:  capabilityVerificationCatalog,
-			Continuation:  string(commonprovider.ContinuationUnsupported),
-			RequiredFlags: []string{},
-			ReasonCode:    capabilityReasonUnavailable,
+			Contract:         commonprovider.RuntimeInspectionRevision,
+			Provider:         providerID,
+			Status:           capabilityStatusUnsupported,
+			Verification:     capabilityVerificationCatalog,
+			Continuation:     string(commonprovider.ContinuationUnsupported),
+			SupportedModes:   []string{},
+			SupportedOptions: []string{},
+			RequiredFlags:    []string{},
+			ReasonCode:       capabilityReasonUnavailable,
 			LiveAcceptance: LiveAcceptanceReport{
 				Status:         acceptanceStatusNotRun,
 				Authentication: authenticationStatusUnknown,
@@ -113,14 +118,17 @@ func runCapabilities(jsonOutput bool, stdout, stderr io.Writer, catalog commonpr
 
 func declaredCapability(description commonprovider.Description) CapabilityReport {
 	return CapabilityReport{
-		Contract:      commonprovider.RuntimeInspectionRevision,
-		Provider:      description.ID,
-		Status:        capabilityStatusUnknown,
-		Verification:  capabilityVerificationCatalog,
-		Continuation:  capabilityContinuation(description),
-		HelpArgs:      cloneCapabilityStrings(description.Runtime.HelpArgs),
-		RequiredFlags: cloneCapabilityStrings(description.Runtime.RequiredFlags),
-		ReasonCode:    capabilityReasonNotRun,
+		Contract:         commonprovider.RuntimeInspectionRevision,
+		Provider:         description.ID,
+		Status:           capabilityStatusUnknown,
+		Verification:     capabilityVerificationCatalog,
+		Continuation:     capabilityContinuation(description),
+		SupportedModes:   cloneCapabilityStrings(description.SupportedModes),
+		SupportedOptions: cloneCapabilityStrings(description.SupportedOptions),
+		ReadOnly:         description.ReadOnly,
+		HelpArgs:         cloneCapabilityStrings(description.Runtime.HelpArgs),
+		RequiredFlags:    cloneCapabilityStrings(description.Runtime.RequiredFlags),
+		ReasonCode:       capabilityReasonNotRun,
 		LiveAcceptance: LiveAcceptanceReport{
 			Status:         acceptanceStatusNotRun,
 			Authentication: authenticationStatusUnknown,
@@ -153,13 +161,16 @@ func runtimeCapability(providerID string, candidate commonprovider.ProfileCandid
 	}
 	runtime := candidate.Inspection.Runtime
 	report := CapabilityReport{
-		Contract:      commonprovider.RuntimeInspectionRevision,
-		Provider:      providerID,
-		Status:        capabilityStatusReady,
-		Verification:  capabilityVerificationRuntime,
-		Continuation:  capabilityContinuation(description),
-		ReasonCode:    capabilityReasonReady,
-		RequiredFlags: cloneCapabilityStrings(runtime.RequiredFlags),
+		Contract:         commonprovider.RuntimeInspectionRevision,
+		Provider:         providerID,
+		Status:           capabilityStatusReady,
+		Verification:     capabilityVerificationRuntime,
+		Continuation:     capabilityContinuation(description),
+		SupportedModes:   cloneCapabilityStrings(description.SupportedModes),
+		SupportedOptions: cloneCapabilityStrings(description.SupportedOptions),
+		ReadOnly:         description.ReadOnly,
+		ReasonCode:       capabilityReasonReady,
+		RequiredFlags:    cloneCapabilityStrings(runtime.RequiredFlags),
 		LiveAcceptance: LiveAcceptanceReport{
 			Status:         acceptanceStatusNotRun,
 			Authentication: authenticationStatusUnknown,

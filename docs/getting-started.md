@@ -139,6 +139,9 @@ delegate capabilities --provider codex:exec --json
 Capability discovery is side-effect-free and reports the catalog projection. It
 does not prove that the executable, supervisor, or authentication is available
 on the current host. Dispatch performs those runtime checks before admission.
+The response also reports supported permission modes, request options,
+continuation, and the provider-owned read-only mechanism. Model and effort
+choices remain in the separate `models` discovery response.
 When a provider ID is explicitly required, `preflight --provider ID --cwd ABS
 --json` checks static admission without creating a task.
 

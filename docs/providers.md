@@ -4,16 +4,19 @@ Delegation Layer ships five launchable provider profiles. The profile name is
 part of the task request and determines the command, environment, policy,
 identity observer, input transport, output interpreter, and supported options.
 
-| Profile | Permission mode | Request options | Native command |
-| --- | --- | --- | --- |
-| `antigravity:print` | `read-only`, `workspace-write` | `continuation`, `model`, `effort`, `native-timeout` | `agy` |
-| `codex:exec` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `codex exec` |
-| `claude:print` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `claude` print mode |
-| `pi:json` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `pi --mode json` |
-| `opencode:run` | `read-only`, `workspace-write` | `continuation`, `model`, `effort` | `opencode run --format json` |
+| Profile | Permission mode | Read-only mechanism | Request options | Native command |
+| --- | --- | --- | --- | --- |
+| `antigravity:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort`, `native-timeout` | `agy` |
+| `codex:exec` | `read-only`, `workspace-write` | `native-sandbox` | `continuation`, `model`, `effort` | `codex exec` |
+| `claude:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `claude` print mode |
+| `pi:json` | `read-only`, `workspace-write` | `tool-allowlist` | `continuation`, `model`, `effort` | `pi --mode json` |
+| `opencode:run` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `opencode run --format json` |
 
 The catalog is available locally with `delegate providers --json`. Its runtime
 metadata describes the help arguments and flags required by each adapter.
+Its read-only metadata describes the native mechanism selected by the adapter;
+the containment value is `provider-owned` for the shipped profiles, so this
+mode is not an independent delegate-owned sandbox.
 The catalog uses public request option names; the native flag mapping is
 documented in each provider section below.
 
