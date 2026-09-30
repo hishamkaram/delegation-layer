@@ -46,6 +46,7 @@ func TestSelectAutoProviderUsesStaticReadinessAndDefaultPermission(t *testing.T)
 				SupportedModes:   []string{config.ModeReadOnly},
 				SupportedOptions: []string{commonprovider.OptionContinuation},
 				Continuation:     commonprovider.ContinuationNative,
+				ReadOnly:         commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
 				Runtime:          commonprovider.RuntimeCapability{RequiredFlags: []string{"--test"}},
 				Discoverable:     true,
 			},

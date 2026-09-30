@@ -54,6 +54,32 @@ const (
 	ContinuationUnsupported ContinuationMode = "unsupported"
 )
 
+// ReadOnlyMechanism identifies the native behavior selected for a provider's
+// read-only request. It describes the adapter contract; it is not a delegate
+// owned sandbox guarantee.
+type ReadOnlyMechanism string
+
+const (
+	ReadOnlyNativePlan    ReadOnlyMechanism = "native-plan"
+	ReadOnlyNativeSandbox ReadOnlyMechanism = "native-sandbox"
+	ReadOnlyToolAllowlist ReadOnlyMechanism = "tool-allowlist"
+)
+
+// ReadOnlyContainment identifies who owns the effective boundary around the
+// provider's configuration, extensions, and native tools.
+type ReadOnlyContainment string
+
+const ReadOnlyProviderOwned ReadOnlyContainment = "provider-owned"
+
+// ReadOnlyCapability is static metadata for a provider's read-only mode.
+// Supported is false and the other fields are empty when read-only is not
+// advertised.
+type ReadOnlyCapability struct {
+	Supported   bool                `json:"supported"`
+	Mechanism   ReadOnlyMechanism   `json:"mechanism,omitempty"`
+	Containment ReadOnlyContainment `json:"containment,omitempty"`
+}
+
 // PreparedProfile is the immutable, provider-produced execution input. It
 // carries no process, pipe, stop, capture, sealing, collection, or publication
 // authority. The app runner owns those lifetimes after preparation returns.
@@ -208,12 +234,13 @@ type RuntimeCapability struct {
 // Description is the bounded metadata exposed by the providers command.
 // Discoverable controls whether this registration appears in that response.
 type Description struct {
-	ID               string            `json:"id"`
-	SupportedModes   []string          `json:"supported_modes"`
-	SupportedOptions []string          `json:"supported_options"`
-	Continuation     ContinuationMode  `json:"continuation"`
-	Runtime          RuntimeCapability `json:"runtime"`
-	Discoverable     bool              `json:"-"`
+	ID               string             `json:"id"`
+	SupportedModes   []string           `json:"supported_modes"`
+	SupportedOptions []string           `json:"supported_options"`
+	Continuation     ContinuationMode   `json:"continuation"`
+	ReadOnly         ReadOnlyCapability `json:"read_only"`
+	Runtime          RuntimeCapability  `json:"runtime"`
+	Discoverable     bool               `json:"-"`
 }
 
 // Registration is one explicit catalog entry. A nil Prepare function is

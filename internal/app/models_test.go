@@ -88,7 +88,13 @@ func TestDiscoveryCandidateDoesNotRequireDispatchFlagsOrFinalize(t *testing.T) {
 		Runtime: &commonprovider.RuntimeProbeDefinition{Executable: "/fake/provider", ExecutableSHA256: task.ComputeSHA256([]byte("fake")), Directory: workspace, Environment: []string{}, RequiredFlags: []string{"--dispatch-only"}},
 	}
 	registration := commonprovider.Registration{
-		Description:  commonprovider.Description{ID: config.ProviderFixture, SupportedModes: []string{config.ModeReadOnly}, Discoverable: true, Runtime: commonprovider.RuntimeCapability{RequiredFlags: []string{"--dispatch-only"}}},
+		Description: commonprovider.Description{
+			ID:             config.ProviderFixture,
+			SupportedModes: []string{config.ModeReadOnly},
+			ReadOnly:       commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
+			Discoverable:   true,
+			Runtime:        commonprovider.RuntimeCapability{RequiredFlags: []string{"--dispatch-only"}},
+		},
 		Interpreters: []predicate.Interpreter{interpreter},
 		Prepare: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 			return commonprovider.ProfileCandidate{Directory: workspace, Inspection: &original, Finalize: func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {

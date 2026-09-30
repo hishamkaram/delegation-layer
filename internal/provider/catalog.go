@@ -108,6 +108,9 @@ func validateDescription(description Description) error {
 	if err := validateModes(description.SupportedModes); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
 	}
+	if err := validateReadOnlyCapability(description); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
+	}
 	if !validContinuationMode(description.Continuation) {
 		return fmt.Errorf("%w: provider %s has invalid continuation mode %q", ErrInvalidDescriptor, description.ID, description.Continuation)
 	}
@@ -128,6 +131,39 @@ func validateDescription(description Description) error {
 		return fmt.Errorf("%w: discoverable provider %s has no runtime flag requirements", ErrInvalidDescriptor, description.ID)
 	}
 	return nil
+}
+
+func validateReadOnlyCapability(description Description) error {
+	if !description.Discoverable {
+		return nil
+	}
+	readOnlyMode := slices.Contains(description.SupportedModes, config.ModeReadOnly)
+	metadata := description.ReadOnly
+	if !readOnlyMode {
+		if metadata.Supported || metadata.Mechanism != "" || metadata.Containment != "" {
+			return fmt.Errorf("provider %s has read-only metadata without read-only mode", description.ID)
+		}
+		return nil
+	}
+	if !metadata.Supported {
+		return fmt.Errorf("provider %s advertises read-only mode without read-only capability", description.ID)
+	}
+	if !validReadOnlyMechanism(metadata.Mechanism) {
+		return fmt.Errorf("provider %s has invalid read-only mechanism %q", description.ID, metadata.Mechanism)
+	}
+	if metadata.Containment != ReadOnlyProviderOwned {
+		return fmt.Errorf("provider %s has invalid read-only containment %q", description.ID, metadata.Containment)
+	}
+	return nil
+}
+
+func validReadOnlyMechanism(mechanism ReadOnlyMechanism) bool {
+	switch mechanism {
+	case ReadOnlyNativePlan, ReadOnlyNativeSandbox, ReadOnlyToolAllowlist:
+		return true
+	default:
+		return false
+	}
 }
 
 func validContinuationMode(mode ContinuationMode) bool {

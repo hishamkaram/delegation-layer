@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -21,18 +22,46 @@ func (catalogTestInterpreter) Evaluate(predicate.Input, predicate.Evidence, io.W
 
 func testRegistration(id, mode string, options ...string) Registration {
 	ref := task.PredicateRef{Adapter: id, Mode: mode, Version: "1", SHA256: task.ComputeSHA256([]byte(id + "/" + mode))}
+	description := Description{
+		ID:               id,
+		SupportedModes:   []string{mode},
+		SupportedOptions: options,
+		Runtime:          RuntimeCapability{RequiredFlags: []string{"--provider-test"}},
+		Discoverable:     true,
+	}
+	if mode == config.ModeReadOnly {
+		description.ReadOnly = ReadOnlyCapability{Supported: true, Mechanism: ReadOnlyNativePlan, Containment: ReadOnlyProviderOwned}
+	}
 	return Registration{
-		Description: Description{
-			ID:               id,
-			SupportedModes:   []string{mode},
-			SupportedOptions: options,
-			Runtime:          RuntimeCapability{RequiredFlags: []string{"--provider-test"}},
-			Discoverable:     true,
-		},
+		Description: description,
 		Prepare: ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) {
 			return PreparedProfile{}, nil
 		}),
 		Interpreters: []predicate.Interpreter{catalogTestInterpreter{ref: ref}},
+	}
+}
+
+func TestNewCatalogRejectsReadOnlyModeWithoutCapability(t *testing.T) {
+	registration := testRegistration("alpha:print", config.ModeReadOnly)
+	registration.Description.ReadOnly = ReadOnlyCapability{}
+	if _, err := NewCatalog(registration); !errors.Is(err, ErrInvalidDescriptor) {
+		t.Fatalf("read-only mode without capability was accepted: %v", err)
+	}
+}
+
+func TestNewCatalogRejectsInvalidReadOnlyCapability(t *testing.T) {
+	registration := testRegistration("alpha:print", config.ModeReadOnly)
+	registration.Description.ReadOnly.Mechanism = "provider-default"
+	if _, err := NewCatalog(registration); !errors.Is(err, ErrInvalidDescriptor) {
+		t.Fatalf("invalid read-only mechanism was accepted: %v", err)
+	}
+}
+
+func TestNewCatalogRejectsReadOnlyCapabilityWithoutMode(t *testing.T) {
+	registration := testRegistration("alpha:print", "workspace-write")
+	registration.Description.ReadOnly = ReadOnlyCapability{Supported: true, Mechanism: ReadOnlyNativePlan, Containment: ReadOnlyProviderOwned}
+	if _, err := NewCatalog(registration); !errors.Is(err, ErrInvalidDescriptor) {
+		t.Fatalf("read-only capability without mode was accepted: %v", err)
 	}
 }
 
@@ -272,6 +301,21 @@ func TestCatalogKeepsHistoricalInterpreterWithoutLaunchProfile(t *testing.T) {
 	}
 	if _, err = catalog.Registry().Resolve(ref); err != nil {
 		t.Fatalf("historical interpreter was not registered: %v", err)
+	}
+}
+
+func TestCatalogKeepsHistoricalReadOnlyDescriptionWithoutLaunchMetadata(t *testing.T) {
+	ref := task.FixturePredicateRef()
+	interp := catalogTestInterpreter{ref: ref}
+	_, err := NewCatalog(Registration{
+		Description: Description{
+			ID:             ref.Adapter,
+			SupportedModes: []string{config.ModeReadOnly},
+		},
+		Interpreters: []predicate.Interpreter{interp},
+	})
+	if err != nil {
+		t.Fatalf("historical-only read-only description was rejected: %v", err)
 	}
 }
 

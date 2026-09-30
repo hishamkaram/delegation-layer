@@ -82,6 +82,13 @@ It does not create a task, start the supervisor, or launch a provider. Do not ke
 retrying preflight when it says
 `blocked` or `unsupported`; report the bounded reason.
 
+The catalog and `capabilities` response expose supported permission modes,
+request options, continuation, and the read-only mechanism. A read-only
+capability with `containment: "provider-owned"` selects the provider's native
+behavior but is not an independent delegate-owned sandbox. Static discovery
+does not prove authentication or live acceptance; use the dispatch or live
+acceptance result for that evidence.
+
 If the caller needs an explicit model or effort, use the implemented native
 discovery command for that provider:
 
