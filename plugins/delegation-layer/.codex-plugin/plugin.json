@@ -1,6 +1,6 @@
 {
   "name": "delegation-layer",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "Route every delegated agent task through a bounded, resumable Delegation Layer CLI.",
   "author": {
     "name": "Hesham Karam",
