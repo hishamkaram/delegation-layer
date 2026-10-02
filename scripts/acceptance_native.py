@@ -34,6 +34,7 @@ from acceptance_provider_common import (
     parse_json_output,
     pueue_command,
     reject_tmp,
+    observed_pueue_version,
     require,
     snapshot,
     status_jobs,
@@ -73,7 +74,6 @@ PROFILES = {
         "default_mode": "read-only",
     },
 }
-PUEUE_VERSION = "4.0.4"
 TASK_BUDGET = "120s"
 CANONICAL_TASK_BUDGET = "2m0s"
 TASK_BUDGET_NANOS = 120_000_000_000
@@ -84,6 +84,7 @@ MODEL_DISCOVERY_TASK_BUDGET = "5m0s"
 MODEL_DISCOVERY_TASK_BUDGET_NANOS = 300_000_000_000
 MODEL_DISCOVERY_TIMEOUT_SECONDS = 330
 MAX_RAW_BYTES = 8 * 1024 * 1024
+MAX_CONTROL_BYTES = 1 << 20
 AUTHENTICATION_MARKERS = (
     "authentication required", "not authenticated", "please log in", "sign in",
     "unauthorized", "api key", "credentials", "login required", "no provider",
@@ -354,11 +355,14 @@ def workspace_snapshot(directory: Path) -> dict[str, dict[str, object]]:
     return result
 
 
-def bounded_text(path: Path, label: str) -> str:
+def bounded_text(path: Path, label: str, bound: int = MAX_RAW_BYTES) -> str:
     with path.open("rb") as stream:
-        data = stream.read(MAX_RAW_BYTES + 1)
-    require(len(data) <= MAX_RAW_BYTES, label + " exceeds the bounded output limit")
-    return data.decode("utf-8", errors="replace").strip()
+        data = stream.read(bound + 1)
+    require(len(data) <= bound, label + " exceeds the bounded output limit")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AcceptanceFailure(label + " is not valid UTF-8") from error
 
 
 def marker_answer(marker: str, continuation: bool) -> str:
@@ -528,6 +532,8 @@ class NativeAcceptance:
         self.root_id: str | None = None
         self.provider_version: str | None = None
         self.provider_sha256: str | None = None
+        self.pueue_version: str | None = None
+        self.pueued_version: str | None = None
         self.tasks: dict[str, str] = {}
         self.numeric_ids: dict[str, int] = {}
         self.records: dict[str, dict[str, object]] = {}
@@ -535,7 +541,7 @@ class NativeAcceptance:
         self.workspace_marker = self.workspace / "acceptance-marker.txt"
         self.marker_bytes = random_marker()
         write_bytes(self.workspace_marker, self.marker_bytes)
-        self.marker_text = bounded_text(self.workspace_marker, "acceptance marker")
+        self.marker_text = bounded_text(self.workspace_marker, "acceptance marker").removesuffix("\n")
         require(self.marker_bytes == (self.marker_text + "\n").encode(),
                 "acceptance marker has an unexpected value")
         self.nonce: str | None = None
@@ -632,7 +638,8 @@ class NativeAcceptance:
             "runner_sha256": digest(self.runner),
             "pueue_sha256": digest(self.pueue),
             "pueued_sha256": digest(self.pueued),
-            "pueue_version": PUEUE_VERSION,
+            "pueue_version": self.pueue_version,
+            "pueued_version": self.pueued_version,
             "credentials_in_receipt": False,
         })
 
@@ -763,10 +770,10 @@ class NativeAcceptance:
         self.provider_sha256 = digest(self.provider_executable)
         pueue_version = self.direct("pueue-version", pueue_command(self.pueue, self.config, "--version"), timeout=20)
         pueued_version = self.direct("pueued-version", [self.pueued, "-c", self.config, "--version"], timeout=20)
-        if bounded_text(pueue_version.directory / "stdout", "pueue version output") != f"pueue {PUEUE_VERSION}":
-            raise BlockedFailure(f"pueue {PUEUE_VERSION} is unavailable")
-        if bounded_text(pueued_version.directory / "stdout", "pueued version output") != f"pueued {PUEUE_VERSION}":
-            raise BlockedFailure(f"pueued {PUEUE_VERSION} is unavailable")
+        self.pueue_version = observed_pueue_version(
+            bounded_text(pueue_version.directory / "stdout", "pueue version output", MAX_CONTROL_BYTES), "pueue")
+        self.pueued_version = observed_pueue_version(
+            bounded_text(pueued_version.directory / "stdout", "pueued version output", MAX_CONTROL_BYTES), "pueued")
         discovery = parse_json_output(
             self.direct("discovery", [self.delegate, "providers", "--json"], timeout=30), "provider discovery")
         providers = discovery.get("providers")
@@ -1179,7 +1186,7 @@ class NativeAcceptance:
                 submit.get("label") == label and isinstance(supervisor, dict) and
                 supervisor.get("client_executable") == str(self.pueue) and
                 supervisor.get("config_path") == str(self.config) and
-                supervisor.get("observed_version") == f"pueue {PUEUE_VERSION}",
+                supervisor.get("observed_version") == self.pueue_version,
                 f"task {task_id} supervisor submission binding is invalid")
         for name in ("provider.start", "provider.started.json"):
             evidence = read_json(directory / name)

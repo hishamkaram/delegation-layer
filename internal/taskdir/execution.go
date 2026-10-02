@@ -32,6 +32,13 @@ func (td *TaskDir) ownedRunner() (*leaseState, error) {
 }
 
 func (td *TaskDir) RecordStarted(diagnosticNanos int64) error {
+	return td.RecordStartedWithIdentity(diagnosticNanos, task.ProviderRuntimeIdentity{})
+}
+
+// RecordStartedWithIdentity records the provider identity selected by the
+// final preflight. The optional fields make a runtime upgrade auditable while
+// retaining compatibility with older fixture and task records.
+func (td *TaskDir) RecordStartedWithIdentity(diagnosticNanos int64, identity task.ProviderRuntimeIdentity) error {
 	state, err := td.ownedRunner()
 	if err != nil {
 		return err
@@ -44,7 +51,7 @@ func (td *TaskDir) RecordStarted(diagnosticNanos int64) error {
 	if err != nil {
 		return err
 	}
-	rec := task.ProviderStartedRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: meta, StartedAt: timestamp(), DiagnosticNanos: diagnosticNanos}
+	rec := task.ProviderStartedRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: meta, StartedAt: timestamp(), DiagnosticNanos: diagnosticNanos, ProviderExecutable: identity.Executable, ProviderVersion: identity.Version, ProviderSHA256: identity.SHA256}
 	if err = task.ValidateProviderStartedRecord(&rec); err != nil {
 		return err
 	}
@@ -202,6 +209,12 @@ func (td *TaskDir) rawManifest() ([]task.RawManifestEntry, string, error) {
 }
 
 func (td *TaskDir) Seal(invocation string, exitCode int, exitErr string, predicate task.PredicateRef) (*task.ProviderExitRecord, error) {
+	return td.SealWithIdentity(invocation, exitCode, exitErr, predicate, task.ProviderRuntimeIdentity{})
+}
+
+// SealWithIdentity includes the provider runtime selected at the final launch
+// boundary in the immutable terminal evidence.
+func (td *TaskDir) SealWithIdentity(invocation string, exitCode int, exitErr string, predicate task.PredicateRef, identity task.ProviderRuntimeIdentity) (*task.ProviderExitRecord, error) {
 	state, err := td.ownedRunner()
 	if err != nil {
 		return nil, err
@@ -238,7 +251,7 @@ func (td *TaskDir) Seal(invocation string, exitCode int, exitErr string, predica
 	if err != nil {
 		return nil, err
 	}
-	rec := task.ProviderExitRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: specHash, MetaSHA256: metaHash, InvocationState: invocation, ExitCode: exitCode, Error: exitErr, Predicate: predicate, RawManifest: manifest, ManifestSHA256: digest, ClosedAt: timestamp()}
+	rec := task.ProviderExitRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: specHash, MetaSHA256: metaHash, InvocationState: invocation, ExitCode: exitCode, Error: exitErr, Predicate: predicate, RawManifest: manifest, ManifestSHA256: digest, ClosedAt: timestamp(), ProviderExecutable: identity.Executable, ProviderVersion: identity.Version, ProviderSHA256: identity.SHA256}
 	if err = task.ValidateProviderExitRecord(&rec); err != nil {
 		return nil, err
 	}

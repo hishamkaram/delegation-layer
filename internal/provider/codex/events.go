@@ -266,13 +266,24 @@ func applyInterrupted(state *eventState) {
 }
 
 func applyItemEvent(state *eventState, eventType string, fields map[string]json.RawMessage) {
-	if !state.threadSeen || !state.turnStarted || state.turnCompleted || state.terminalFailed || state.interrupted {
-		state.markSemantic("item event is outside the active turn")
-		return
-	}
 	eventItem, err := decodeItemEvent(fields)
 	if err != nil {
 		state.markSemantic(err.Error())
+		return
+	}
+	// Codex may publish configuration warnings as completed error items
+	// between thread.started and turn.started. They are diagnostics for the
+	// upcoming turn, not turn items; retain the strict lifecycle checks for all
+	// other pre-turn records.
+	if state.threadSeen && !state.turnStarted && eventType == eventItemCompleted && eventItem.typeName == "error" {
+		return
+	}
+	applyActiveItemEvent(state, eventType, eventItem)
+}
+
+func applyActiveItemEvent(state *eventState, eventType string, eventItem itemEvent) {
+	if !state.threadSeen || !state.turnStarted || state.turnCompleted || state.terminalFailed || state.interrupted {
+		state.markSemantic("item event is outside the active turn")
 		return
 	}
 	itemValue, knownItem := state.items[eventItem.id]
@@ -285,7 +296,7 @@ func applyItemEvent(state *eventState, eventType string, fields map[string]json.
 		return
 	}
 	itemValue.typeName = eventItem.typeName
-	if err = transitionItem(&itemValue, eventType); err != nil {
+	if err := transitionItem(&itemValue, eventType); err != nil {
 		state.markSemantic(err.Error())
 		return
 	}
@@ -333,6 +344,11 @@ func decodeItemEvent(fields map[string]json.RawMessage) (itemEvent, error) {
 		text, textErr = requiredString(item, "text")
 		if textErr != nil {
 			return itemEvent{}, errors.New("agent_message text is not a string")
+		}
+	}
+	if typeName == "error" {
+		if _, err := requiredString(item, "message"); err != nil {
+			return itemEvent{}, errors.New("error item message is not a string")
 		}
 	}
 	return itemEvent{id: itemID, typeName: typeName, text: text}, nil

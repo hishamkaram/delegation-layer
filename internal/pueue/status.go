@@ -98,9 +98,6 @@ func statusObject(raw []byte, names ...string) (map[string]json.RawMessage, erro
 	if err != nil {
 		return nil, err
 	}
-	if len(obj) != len(names) {
-		return nil, fmt.Errorf("%w: unexpected status fields", ErrUnknown)
-	}
 	for _, name := range names {
 		if _, present := obj[name]; !present {
 			return nil, fmt.Errorf("%w: missing status field", ErrUnknown)
@@ -257,13 +254,41 @@ func parseJobState(raw []byte, depth int) (State, error) {
 		return StateUnknown, ErrUnknown
 	}
 	obj, err := rawObject(raw)
-	if err != nil || len(obj) != 1 {
+	if err != nil {
 		return StateUnknown, ErrUnknown
 	}
+	var state State
+	recognized := 0
 	for variant, value := range obj {
-		return parseStateVariant(variant, value, depth)
+		if !isStateVariant(variant) {
+			// The outer object is an externally tagged lifecycle enum. Additive
+			// fields inside a recognized variant remain forward-compatible, but
+			// an unknown outer key may be a new lifecycle state. Treating it as
+			// metadata could turn ambiguous supervisor evidence into success.
+			return StateUnknown, ErrUnknown
+		}
+		recognized++
+		if recognized > 1 {
+			return StateUnknown, ErrUnknown
+		}
+		state, err = parseStateVariant(variant, value, depth)
+		if err != nil {
+			return StateUnknown, err
+		}
 	}
-	return StateUnknown, ErrUnknown
+	if recognized != 1 {
+		return StateUnknown, ErrUnknown
+	}
+	return state, nil
+}
+
+func isStateVariant(variant string) bool {
+	switch variant {
+	case "Queued", "Running", "Paused", "Stashed", "Done", "Locked":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseStateVariant(variant string, raw []byte, depth int) (State, error) {
@@ -295,8 +320,8 @@ func timestampState(raw []byte, state State, fields ...string) (State, error) {
 	if err != nil {
 		return StateUnknown, err
 	}
-	for _, value := range obj {
-		if err := validateTime(value); err != nil {
+	for _, field := range fields {
+		if err := validateTime(obj[field]); err != nil {
 			return StateUnknown, err
 		}
 	}

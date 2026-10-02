@@ -91,6 +91,30 @@ func TestTaskConfigurationBoundary(t *testing.T) {
 	}
 }
 
+func TestProviderRuntimeIdentityVersionHasNoReleaseBound(t *testing.T) {
+	identity := ProviderRuntimeIdentity{Executable: "/provider", Version: "provider-v1", SHA256: ComputeSHA256([]byte("provider"))}
+	if err := ValidateProviderRuntimeIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"provider\nversion", "provider\x1bversion", string([]byte{'p', 0xff, 'v'})} {
+		identity.Version = version
+		if err := ValidateProviderRuntimeIdentity(identity); err == nil {
+			t.Fatalf("invalid provider runtime version was accepted: %q", version)
+		}
+	}
+	identity.Version = strings.Repeat("v", 8<<10)
+	if err := ValidateProviderRuntimeIdentity(identity); err != nil {
+		t.Fatalf("large provider runtime version was rejected: %v", err)
+	}
+	identity.Version = strings.Repeat("v", MaxProviderRuntimeEvidenceVersionBytes+1)
+	if err := ValidateProviderRuntimeIdentity(identity); err != nil {
+		t.Fatalf("runtime identity acquired an admission size bound: %v", err)
+	}
+	if err := ValidateProviderRuntimeEvidenceIdentity(identity); !errors.Is(err, ErrControlRecordTooBig) {
+		t.Fatalf("oversized terminal evidence version error=%v, want ErrControlRecordTooBig", err)
+	}
+}
+
 func TestNormalizeRequestedConfig(t *testing.T) {
 	valid := fixtureTask(t)
 	input := valid

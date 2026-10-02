@@ -40,45 +40,64 @@ func inspectRuntimeWithHelp(scope execution.PreflightScope, definition provider.
 	if scope.Context() == nil || scope.Authorize() != nil || outputLimit <= 0 || outputLimit > provider.MaxInspectionOutput {
 		return provider.RuntimeFacts{}, nil, runtimeProbeError("inspection-scope-unavailable")
 	}
-	if err := verifyRuntimeExecutable(definition); err != nil {
+	facts, err := inspectRuntimeVersion(scope, definition, outputLimit)
+	if err != nil {
 		return provider.RuntimeFacts{}, nil, err
+	}
+	help, err := inspectRuntimeHelp(scope, definition, outputLimit, facts)
+	if err != nil {
+		return provider.RuntimeFacts{}, nil, err
+	}
+	return facts, help, nil
+}
+
+func inspectRuntimeVersion(scope execution.PreflightScope, definition provider.RuntimeProbeDefinition, outputLimit int64) (provider.RuntimeFacts, error) {
+	if err := verifyRuntimeExecutable(definition); err != nil {
+		return provider.RuntimeFacts{}, err
 	}
 	version, err := runCapabilityCommand(scope, definition, outputLimit, "--version")
 	if err != nil {
-		return provider.RuntimeFacts{}, nil, fmt.Errorf("%w: version-command", errRuntimeProbe)
+		return provider.RuntimeFacts{}, fmt.Errorf("%w: version-command", errRuntimeProbe)
 	}
 	defer clear(version.stdout)
 	defer clear(version.stderr)
 	reportedVersion, err := provider.ParseCLIVersion(version.stdout)
 	if err != nil {
-		return provider.RuntimeFacts{}, nil, runtimeProbeError("invalid-version-output")
+		return provider.RuntimeFacts{}, runtimeProbeError("invalid-version-output")
 	}
-	if err = verifyRuntimeExecutable(definition); err != nil {
-		return provider.RuntimeFacts{}, nil, err
+	facts := provider.RuntimeFacts{Executable: definition.Executable, Version: reportedVersion, SHA256: definition.ExecutableSHA256}
+	if err = provider.ValidateRuntimeFacts(facts); err != nil {
+		return provider.RuntimeFacts{}, runtimeProbeError("invalid-runtime-facts")
+	}
+	return facts, nil
+}
+
+func inspectRuntimeHelp(scope execution.PreflightScope, definition provider.RuntimeProbeDefinition, outputLimit int64, facts provider.RuntimeFacts) ([]byte, error) {
+	if err := verifyRuntimeExecutable(definition); err != nil {
+		return nil, err
 	}
 	helpArgs := append(append([]string(nil), definition.HelpArgs...), "--help")
 	help, err := runCapabilityCommand(scope, definition, outputLimit, helpArgs...)
 	if err != nil {
-		return provider.RuntimeFacts{}, nil, fmt.Errorf("%w: help-command", errRuntimeProbe)
+		return nil, fmt.Errorf("%w: help-command", errRuntimeProbe)
 	}
 	defer clear(help.stdout)
 	defer clear(help.stderr)
 	for _, flag := range definition.RequiredFlags {
 		if !provider.ContainsCLIFlag(help.stdout, flag) && !provider.ContainsCLIFlag(help.stderr, flag) {
-			return provider.RuntimeFacts{}, nil, runtimeProbeError("missing-required-flag-" + flag)
+			return nil, runtimeProbeError("missing-required-flag-" + flag)
 		}
 	}
 	if err = verifyRuntimeExecutable(definition); err != nil {
-		return provider.RuntimeFacts{}, nil, err
+		return nil, err
 	}
-	facts := provider.RuntimeFacts{Executable: definition.Executable, Version: reportedVersion, SHA256: definition.ExecutableSHA256}
 	if err = provider.ValidateRuntimeFacts(facts); err != nil {
-		return provider.RuntimeFacts{}, nil, runtimeProbeError("invalid-runtime-facts")
+		return nil, runtimeProbeError("invalid-runtime-facts")
 	}
 	helpBytes := make([]byte, 0, len(help.stdout)+len(help.stderr))
 	helpBytes = append(helpBytes, help.stdout...)
 	helpBytes = append(helpBytes, help.stderr...)
-	return facts, helpBytes, nil
+	return helpBytes, nil
 }
 
 func verifyRuntimeExecutable(definition provider.RuntimeProbeDefinition) error {

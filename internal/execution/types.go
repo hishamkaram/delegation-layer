@@ -18,7 +18,11 @@ type Plan struct {
 	// ExecutableSHA256 binds the final launch to the executable admitted by the
 	// provider inspection. Historical records may carry the same identity in
 	// effective policy details when this field is empty.
-	ExecutableSHA256     string
+	ExecutableSHA256 string
+	// ProviderRuntime is the identity observed for this plan. It is populated
+	// by the app after provider finalization and recorded at start/seal so a
+	// runtime upgrade remains reconstructable without mutating meta.json.
+	ProviderRuntime      task.ProviderRuntimeIdentity
 	Arguments            []string
 	Directory            string
 	Environment          []string
@@ -107,10 +111,14 @@ type Options struct {
 	// budget owner's final start authorization. A refusal follows normal
 	// start-failed capture/sealing; it never abandons the consumed start permit.
 	Preflight func(PreflightScope) error
-	Clock     Clock
-	Stopper   Stopper
-	Identity  IdentityObserver
-	Hooks     Hooks
+	// PreflightPlan performs the same finite validation and may return the
+	// current launch plan after runtime capability inspection. The returned
+	// plan is verified and materialized only after this callback succeeds.
+	PreflightPlan func(PreflightScope, Plan) (Plan, error)
+	Clock         Clock
+	Stopper       Stopper
+	Identity      IdentityObserver
+	Hooks         Hooks
 }
 
 type Result struct {
@@ -134,11 +142,14 @@ func (o Options) emit(name string) {
 	}
 }
 
-func (o Options) preflight(budget *budgetOwner) error {
-	if o.Preflight != nil {
-		return budget.runScoped(o, o.Preflight)
+func (o Options) preflight(budget *budgetOwner, plan Plan) (Plan, error) {
+	if o.PreflightPlan != nil {
+		return budget.runScopedPlan(o, plan, o.PreflightPlan)
 	}
-	return nil
+	if o.Preflight != nil {
+		return plan, budget.runScoped(o, o.Preflight)
+	}
+	return plan, nil
 }
 
 func (o Options) start(cmd *exec.Cmd) error {

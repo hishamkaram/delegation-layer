@@ -88,7 +88,15 @@ report the bounded supervisor error. For an advanced integration, pass an
 existing absolute `--pueue-config` path or set `DELEGATE_PUEUE_CONFIG` to that
 path and keep its configuration and credentials outside the task state root
 and workspace. The runtime accepts a nonempty observed version when readiness
-and queue behavior match the supported schema.
+and queue behavior match the supported schema, including additive fields that
+do not change the required lifecycle data. A Pueue release upgrade alone does
+not require changing the state root or installing a matching version.
+
+Provider executable upgrades are handled by the runner's fresh preflight. If
+the current CLI still passes its version/help and required-flag checks, the
+runner refreshes the launch plan and starts that current executable. A changed
+task policy, workspace, writable root, predicate, or artifact contract remains
+a refusal because those fields are admission-bound.
 
 A legacy private supervisor binding without daemon identity can be recovered
 when delegate resolves a matching executable pair and verifies the saved

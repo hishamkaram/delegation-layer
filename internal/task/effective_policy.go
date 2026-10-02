@@ -144,6 +144,25 @@ func CompareEffectiveConfigs(a, b EffectiveConfig) bool {
 	return comparePolicyDetails(*a.Policy, *b.Policy)
 }
 
+// CompareEffectiveConfigContract compares the immutable policy contract while
+// ignoring digests derived from a provider runtime observation when policy
+// details are present. Runtime identity is revalidated immediately before
+// launch; containment, approval, workspace, writable roots, and policy sources
+// remain admission-bound. Legacy records without policy details retain exact
+// effective-digest matching.
+func CompareEffectiveConfigContract(a, b EffectiveConfig) bool {
+	if a.Containment != b.Containment || a.Approval != b.Approval {
+		return false
+	}
+	if a.Policy == nil || b.Policy == nil {
+		return a.Policy == nil && b.Policy == nil && a.Digest == b.Digest
+	}
+	return a.Policy.ProfileRevision == b.Policy.ProfileRevision &&
+		a.Policy.Workspace == b.Policy.Workspace &&
+		slices.Equal(a.Policy.WritableRoots, b.Policy.WritableRoots) &&
+		slices.Equal(a.Policy.Sources, b.Policy.Sources)
+}
+
 func comparePolicyDetails(a, b PolicyDetails) bool {
 	return a.ProfileRevision == b.ProfileRevision &&
 		a.RuntimeSHA256 == b.RuntimeSHA256 &&

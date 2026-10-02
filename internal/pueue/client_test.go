@@ -152,6 +152,26 @@ func awaitPendingNaturally(pending *Pending, timeout time.Duration) bool {
 	}
 }
 
+func TestWithObservationTimeoutDoesNotChangeBoundClient(t *testing.T) {
+	fake := newFakeSupervisor(t, "normal")
+	inspection, err := fake.client.WithObservationTimeout(time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.options.ObservationTimeout != time.Minute {
+		t.Fatalf("inspection timeout=%s, want %s", inspection.options.ObservationTimeout, time.Minute)
+	}
+	if fake.client.options.ObservationTimeout != DefaultObservationTimeout {
+		t.Fatalf("ordinary timeout changed to %s", fake.client.options.ObservationTimeout)
+	}
+	if inspection.binding != fake.client.binding || inspection.runtimeBinding != fake.client.runtimeBinding {
+		t.Fatal("timeout-scoped client did not retain the bound supervisor identity")
+	}
+	if _, err = fake.client.WithObservationTimeout(-time.Second); !errors.Is(err, ErrConfiguration) {
+		t.Fatalf("negative timeout was accepted: %v", err)
+	}
+}
+
 const fakeSupervisorScript = `#!/bin/sh
 set -eu
 {

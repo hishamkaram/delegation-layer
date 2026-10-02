@@ -103,6 +103,127 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 	}
 }
 
+func TestRefreshAdmissionCandidateUsesCurrentRuntimeDefinition(t *testing.T) {
+	store := newBareInspectionStore(t)
+	request := newBareInspectionRequest(t, store)
+	admitted := runtimeAdmissionCandidate(t, request, "provider-old", "--run")
+	current := runtimeAdmissionCandidate(t, request, "provider-new", "--run")
+	refreshed, err := refreshAdmissionCandidate(Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		return current, nil
+	}}, store.Root, request, admitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Inspection == nil || refreshed.Inspection.Runtime == nil || refreshed.Inspection.Runtime.Executable != current.Inspection.Runtime.Executable {
+		t.Fatalf("admission candidate did not refresh runtime identity: %+v", refreshed.Inspection)
+	}
+}
+
+func TestRefreshAdmissionCandidateRejectsCapabilityContractDrift(t *testing.T) {
+	store := newBareInspectionStore(t)
+	request := newBareInspectionRequest(t, store)
+	admitted := runtimeAdmissionCandidate(t, request, "provider-old", "--run")
+	changed := runtimeAdmissionCandidate(t, request, "provider-new", "--changed")
+	_, err := refreshAdmissionCandidate(Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		return changed, nil
+	}}, store.Root, request, admitted)
+	if !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("capability contract drift was accepted: %v", err)
+	}
+}
+
+func TestMarkerlessRuntimeInspectionRejectsHistoricalCapabilityDrift(t *testing.T) {
+	store := newBareInspectionStore(t)
+	request := newBareInspectionRequest(t, store)
+	oldPath := filepath.Join(t.TempDir(), "provider-old")
+	oldSHA := strings.Repeat("a", 64)
+	oldDefinition, err := commonprovider.NewRuntimeInspectionDefinition(
+		commonprovider.CLIInfo{Path: oldPath, SHA256: oldSHA}, request.CanonicalCwd, []string{"LANG=C"},
+		commonprovider.RuntimeCapability{HelpArgs: []string{"--help"}, RequiredFlags: []string{"--run"}},
+	)
+	requireAppTest(t, err)
+	_, oldDigest, err := oldDefinition.Snapshot()
+	requireAppTest(t, err)
+	supervisor, _ := newBlockingInspectionSupervisor(t, store.RootID)
+	operation, err := inspection.OpenOperation(store, request, inspection.Binding{
+		DefinitionRevision: oldDefinition.Revision,
+		DefinitionSHA256:   oldDigest,
+		HelperExecutable:   oldPath,
+		HelperSHA256:       oldSHA,
+		WorkerExecutable:   "/usr/bin/true",
+		WorkerSHA256:       strings.Repeat("b", 64),
+		Environment:        []string{"LANG=C"},
+		Supervisor:         supervisor.Binding(),
+	}, time.Unix(100, 0).UTC())
+	requireAppTest(t, err)
+	t.Cleanup(func() { requireAppTest(t, operation.Close()) })
+	queuedCandidate := commonprovider.ProfileCandidate{Directory: request.CanonicalCwd, Inspection: &oldDefinition}
+	requireAppTest(t, validateInspectionCandidate(context.Background(), operation, request, queuedCandidate))
+	changedDefinition, err := commonprovider.NewRuntimeInspectionDefinition(
+		commonprovider.CLIInfo{Path: oldPath, SHA256: oldSHA}, request.CanonicalCwd, []string{"LANG=C"},
+		commonprovider.RuntimeCapability{HelpArgs: []string{"--help"}, RequiredFlags: []string{"--changed"}},
+	)
+	requireAppTest(t, err)
+	changedCandidate := commonprovider.ProfileCandidate{Directory: request.CanonicalCwd, Inspection: &changedDefinition}
+	requireAppTest(t, validateInspectionCandidate(context.Background(), operation, request, changedCandidate))
+	start, err := operation.ClaimStart(time.Unix(101, 0).UTC())
+	requireAppTest(t, err)
+	requireAppTest(t, start.Consume())
+	requireAppTest(t, operation.RecordReceipt(1))
+	changedCapability, err := commonprovider.RuntimeCapabilityDigest(changedDefinition)
+	requireAppTest(t, err)
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
+		Executable: oldPath, Version: "provider-old", SHA256: oldSHA, CapabilitySHA256: changedCapability,
+	}, nil)
+	requireAppTest(t, err)
+	requireAppTest(t, operation.Complete(inspection.ResultEligible, facts, time.Unix(102, 0).UTC()))
+	requireAppTest(t, operation.RecordWorkerSuccess(1))
+
+	newPath := filepath.Join(t.TempDir(), "provider-new")
+	newSHA := strings.Repeat("c", 64)
+	currentDefinition, err := commonprovider.NewRuntimeInspectionDefinition(commonprovider.CLIInfo{Path: newPath, SHA256: newSHA}, request.CanonicalCwd, []string{"LANG=C"}, commonprovider.RuntimeCapability{HelpArgs: []string{"--help"}, RequiredFlags: []string{"--changed"}})
+	requireAppTest(t, err)
+	candidate := commonprovider.ProfileCandidate{Directory: request.CanonicalCwd, Inspection: &currentDefinition}
+	requireAppTest(t, validateInspectionCandidate(context.Background(), operation, request, candidate))
+
+	changedDefinition, err = commonprovider.NewRuntimeInspectionDefinition(
+		commonprovider.CLIInfo{Path: newPath, SHA256: newSHA}, request.CanonicalCwd, []string{"LANG=C"},
+		commonprovider.RuntimeCapability{HelpArgs: []string{"--help"}, RequiredFlags: []string{"--different"}},
+	)
+	requireAppTest(t, err)
+	candidate.Inspection = &changedDefinition
+	if err = validateInspectionCandidate(context.Background(), operation, request, candidate); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("markerless runtime capability drift was accepted: %v", err)
+	}
+}
+
+func requireAppTest(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runtimeAdmissionCandidate(t *testing.T, request task.TaskRecord, name, requiredFlag string) commonprovider.ProfileCandidate {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	digest := task.ComputeSHA256([]byte(path))
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(commonprovider.CLIInfo{Path: path, SHA256: digest}, request.CanonicalCwd, []string{"LANG=C"}, commonprovider.RuntimeCapability{
+		HelpArgs:      []string{"--help"},
+		RequiredFlags: []string{requiredFlag},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return commonprovider.ProfileCandidate{
+		Directory:  request.CanonicalCwd,
+		Inspection: &definition,
+		Finalize: func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
+			return appInspectionPreparedProfile(request, request.CanonicalCwd, nil), nil
+		},
+	}
+}
+
 func TestPrepareMatchedProfileForRunnerRejectsChangedCustomInspectionWorker(t *testing.T) {
 	fixture := newAppInspectionProofFixture(t, true)
 	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
@@ -758,5 +879,32 @@ func TestInspectionFactsCompareCanonicalObjectsBeforeFinalize(t *testing.T) {
 	}
 	if inspectionFactsMatch(json.RawMessage(`{"eligible":true}`), json.RawMessage(`not-json`)) {
 		t.Fatal("malformed fresh facts were accepted")
+	}
+	runtime := commonprovider.RuntimeFacts{Executable: "/bin/provider", Version: "provider-1", SHA256: strings.Repeat("a", 64)}
+	stored, err := commonprovider.EncodeInspectionFacts(runtime, json.RawMessage(`{"eligible":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedRuntime := runtime
+	changedRuntime.Executable = "/opt/provider-new"
+	changedRuntime.Version = "provider-2"
+	changedRuntime.SHA256 = strings.Repeat("b", 64)
+	fresh, err := commonprovider.EncodeInspectionFacts(changedRuntime, json.RawMessage(`{"eligible":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inspectionFactsMatch(stored, fresh) {
+		t.Fatal("runtime identity drift changed the native inspection contract")
+	}
+	changedNative, err := commonprovider.EncodeInspectionFacts(changedRuntime, json.RawMessage(`{"eligible":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspectionFactsMatch(stored, changedNative) {
+		t.Fatal("native inspection drift was accepted with runtime identity drift")
+	}
+	nativeWithRuntimeKey := json.RawMessage(`{"runtime":{"provider":"native"},"eligible":true}`)
+	if !inspectionFactsMatchForDefinition(nativeWithRuntimeKey, nativeWithRuntimeKey, false) {
+		t.Fatal("native-only projection with a runtime key was decoded as an envelope")
 	}
 }

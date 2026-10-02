@@ -205,7 +205,10 @@ After successful runtime preparation, a dispatch JSON response contains the
 same `capability` object with `status: "ready"`,
 `verification: "runtime"`, the observed version, and the executable digest.
 The observed version is omitted from this projection if its diagnostic text is
-unusually large; the exact validated value remains bound in task metadata.
+unusually large. Terminal launch evidence has its own bounded storage field;
+if a refreshed version cannot fit that field, dispatch rejects it before the
+provider starts. This is a record-size safeguard, not a release-version
+compatibility check.
 This proves only the bounded compatibility probe for that admission boundary.
 Live acceptance remains separate: `passed` requires authenticated provider
 evidence, while missing authentication is `blocked` and neutral.

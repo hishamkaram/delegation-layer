@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -92,6 +95,220 @@ func TestPreflightPassesBeforeExactlyOneLaunch(t *testing.T) {
 	assertOrder(t, eventsSnapshot, "preflight", "start-authorized")
 	assertOrder(t, eventsSnapshot, "start-authorized", "start-hook")
 	assertOrder(t, eventsSnapshot, "start-hook", "started")
+}
+
+func TestPreflightPlanRefreshesLaunchBeforeExactlyOneStart(t *testing.T) {
+	td, permit, plan, _ := fixtureTask(t, "echo")
+	refreshed := plan
+	refreshed.Environment = append([]string{}, plan.Environment...)
+	refreshed.Environment = append(refreshed.Environment, "DELEGATE_REFRESHED_PLAN=1")
+	seenRefreshedPlan := false
+	result := Run(td, permit, plan, Options{
+		PreflightPlan: func(PreflightScope, Plan) (Plan, error) {
+			return refreshed, nil
+		},
+		Hooks: Hooks{Start: func(cmd *exec.Cmd) error {
+			for _, value := range cmd.Env {
+				if value == "DELEGATE_REFRESHED_PLAN=1" {
+					seenRefreshedPlan = true
+				}
+			}
+			return cmd.Start()
+		}},
+	})
+	assertSuccess(t, result)
+	if !seenRefreshedPlan {
+		t.Fatal("provider was launched with the preflight plan instead of the refreshed plan")
+	}
+}
+
+func TestPreflightPlanRebindsExplicitEmptyEnvironment(t *testing.T) {
+	td, permit, plan, _ := fixtureTask(t, "echo")
+	plan.Environment = nil
+	refreshed := plan
+	refreshed.Environment = []string{}
+	observedExplicitEmpty := false
+	injected := errors.New("stop after environment binding check")
+	result := Run(td, permit, plan, Options{
+		PreflightPlan: func(PreflightScope, Plan) (Plan, error) {
+			return refreshed, nil
+		},
+		Hooks: Hooks{Start: func(cmd *exec.Cmd) error {
+			observedExplicitEmpty = cmd.Env != nil && len(cmd.Env) == 0
+			return injected
+		}},
+	})
+	require(t, errors.Join(result.Error, result.CleanupError, result.ReceiptError, result.StopError))
+	if !observedExplicitEmpty {
+		t.Fatal("preflight refresh reused an inherited environment instead of rebinding the explicit empty environment")
+	}
+}
+
+func TestPreflightPlanRefreshesExecutableIdentityBeforeStart(t *testing.T) {
+	td, permit, plan, _ := fixtureTask(t, "echo")
+	replacementDir, err := os.MkdirTemp(filepath.Dir(plan.Executable), "preflight-refresh-")
+	require(t, err)
+	t.Cleanup(func() { require(t, os.RemoveAll(replacementDir)) })
+	replacement := filepath.Join(replacementDir, "provider")
+	data, err := os.ReadFile(plan.Executable)
+	require(t, err)
+	require(t, os.Link(plan.Executable, replacement))
+	refreshed := plan
+	refreshed.Executable = replacement
+	refreshed.ExecutableSHA256 = task.ComputeSHA256(data)
+	refreshed.ProviderRuntime = task.ProviderRuntimeIdentity{Executable: replacement, Version: "provider-refresh-v2", SHA256: refreshed.ExecutableSHA256}
+	startedExecutable := ""
+	result := Run(td, permit, plan, Options{
+		PreflightPlan: func(PreflightScope, Plan) (Plan, error) {
+			return refreshed, nil
+		},
+		Hooks: Hooks{Start: func(cmd *exec.Cmd) error {
+			startedExecutable = cmd.Args[0]
+			return cmd.Start()
+		}},
+	})
+	assertSuccess(t, result)
+	if startedExecutable != replacement {
+		t.Fatalf("provider started with %q, want refreshed executable %q", startedExecutable, replacement)
+	}
+	startedData, err := os.ReadFile(filepath.Join(td.Dir, "provider.started.json"))
+	require(t, err)
+	var started task.ProviderStartedRecord
+	require(t, task.DecodeStrict(startedData, &started))
+	if started.ProviderExecutable != replacement || started.ProviderVersion != "provider-refresh-v2" || started.ProviderSHA256 != refreshed.ExecutableSHA256 {
+		t.Fatalf("provider.started.json did not record refreshed identity: %+v", started)
+	}
+	sealData, err := os.ReadFile(filepath.Join(td.Dir, "provider.exit"))
+	require(t, err)
+	var seal task.ProviderExitRecord
+	require(t, task.DecodeStrict(sealData, &seal))
+	if seal.ProviderExecutable != replacement || seal.ProviderVersion != "provider-refresh-v2" || seal.ProviderSHA256 != refreshed.ExecutableSHA256 {
+		t.Fatalf("provider.exit did not record refreshed identity: %+v", seal)
+	}
+}
+
+func TestPreflightPlanBindRefusalSealsAdmittedPlan(t *testing.T) {
+	td, permit, plan, _ := fixtureTask(t, "echo")
+	refreshed := plan
+	refreshed.Predicate = plan.Predicate
+	refreshed.Predicate.Adapter = "fixture:changed"
+	result := Run(td, permit, plan, Options{
+		PreflightPlan: func(PreflightScope, Plan) (Plan, error) {
+			return refreshed, nil
+		},
+	})
+	require(t, errors.Join(result.Error, result.CleanupError, result.ReceiptError, result.StopError))
+	if result.Outcome == nil || result.Outcome.Verdict != task.VerdictRejected {
+		t.Fatalf("bind refusal did not publish a rejection: %+v", result)
+	}
+	inspection, err := td.Inspect()
+	require(t, err)
+	if !inspection.SealExists || !inspection.OutcomeExists || inspection.StartedExists {
+		t.Fatalf("bind refusal left incomplete terminal evidence: %+v", inspection)
+	}
+}
+
+func TestPreflightPlanReplacesHistoricalProviderVersion(t *testing.T) {
+	td, permit, plan, _ := fixtureTask(t, "echo")
+	plan.ProviderRuntime = task.ProviderRuntimeIdentity{
+		Executable: plan.Executable,
+		Version:    strings.Repeat("legacy-provider-version ", 256),
+		SHA256:     plan.ExecutableSHA256,
+	}
+	refreshed := plan
+	refreshed.ProviderRuntime.Version = "provider-refresh-v2"
+	result := Run(td, permit, plan, Options{
+		PreflightPlan: func(PreflightScope, Plan) (Plan, error) {
+			return refreshed, nil
+		},
+		Hooks: Hooks{Start: func(cmd *exec.Cmd) error { return cmd.Start() }},
+	})
+	assertSuccess(t, result)
+	startedData, err := os.ReadFile(filepath.Join(td.Dir, "provider.started.json"))
+	require(t, err)
+	var started task.ProviderStartedRecord
+	require(t, task.DecodeStrict(startedData, &started))
+	if started.ProviderVersion != refreshed.ProviderRuntime.Version {
+		t.Fatalf("provider.started.json retained historical version: %q", started.ProviderVersion)
+	}
+}
+
+func TestPreflightPlanAcceptsLargeUnchangedProviderVersion(t *testing.T) {
+	td, permit, plan, _ := fixtureTask(t, "echo")
+	plan.ProviderRuntime = task.ProviderRuntimeIdentity{
+		Executable: plan.Executable,
+		Version:    strings.Repeat("legacy-provider-version ", 256),
+		SHA256:     plan.ExecutableSHA256,
+	}
+	result := Run(td, permit, plan, Options{
+		PreflightPlan: func(PreflightScope, Plan) (Plan, error) {
+			return plan, nil
+		},
+		Hooks: Hooks{Start: func(cmd *exec.Cmd) error { return cmd.Start() }},
+	})
+	assertSuccess(t, result)
+	startedData, err := os.ReadFile(filepath.Join(td.Dir, "provider.started.json"))
+	require(t, err)
+	var started task.ProviderStartedRecord
+	require(t, task.DecodeStrict(startedData, &started))
+	if started.ProviderVersion != plan.ProviderRuntime.Version {
+		t.Fatalf("provider.started.json changed large version: %q", started.ProviderVersion)
+	}
+}
+
+func TestPreflightPlanRejectsUnrecordableProviderVersionBeforeStart(t *testing.T) {
+	td, permit, plan, _ := fixtureTask(t, "echo")
+	plan.ProviderRuntime = task.ProviderRuntimeIdentity{
+		Executable: plan.Executable,
+		Version:    strings.Repeat("v", task.MaxProviderRuntimeEvidenceVersionBytes+1),
+		SHA256:     plan.ExecutableSHA256,
+	}
+	startCalls := 0
+	result := Run(td, permit, plan, Options{
+		PreflightPlan: func(PreflightScope, Plan) (Plan, error) {
+			return plan, nil
+		},
+		Hooks: Hooks{Start: func(*exec.Cmd) error {
+			startCalls++
+			return errors.New("unexpected provider launch")
+		}},
+	})
+	require(t, errors.Join(result.Error, result.CleanupError, result.ReceiptError, result.StopError))
+	if startCalls != 0 {
+		t.Fatalf("unrecordable provider version launched the provider %d times", startCalls)
+	}
+	if result.Outcome == nil || result.Outcome.Verdict != task.VerdictRejected {
+		t.Fatalf("unrecordable provider version was not rejected before launch: %+v", result)
+	}
+}
+
+func TestPreflightRefusalDoesNotSealHistoricalProviderIdentity(t *testing.T) {
+	td, permit, plan, _ := fixtureTask(t, "echo")
+	plan.ProviderRuntime = task.ProviderRuntimeIdentity{
+		Executable: plan.Executable,
+		Version:    strings.Repeat("legacy-provider-version ", 256),
+		SHA256:     plan.ExecutableSHA256,
+	}
+	injected := errors.New("provider capability changed before launch")
+	result := Run(td, permit, plan, Options{
+		PreflightPlan: func(PreflightScope, Plan) (Plan, error) {
+			return Plan{}, injected
+		},
+	})
+	require(t, errors.Join(result.Error, result.CleanupError, result.ReceiptError, result.StopError))
+	if result.Outcome == nil || result.Outcome.Verdict != task.VerdictRejected {
+		t.Fatalf("preflight refusal was not published as a rejection: %+v", result)
+	}
+	if got := string(payload(t, td, result.Outcome)); got != "start_failed: "+injected.Error() {
+		t.Fatalf("wrong refusal payload: %q", got)
+	}
+	sealData, err := os.ReadFile(filepath.Join(td.Dir, "provider.exit"))
+	require(t, err)
+	var seal task.ProviderExitRecord
+	require(t, task.DecodeStrict(sealData, &seal))
+	if seal.ProviderExecutable != "" || seal.ProviderVersion != "" || seal.ProviderSHA256 != "" {
+		t.Fatalf("preflight refusal sealed an unlaunched provider identity: %+v", seal)
+	}
 }
 
 func TestTimerExpiryDuringSuccessfulPreflightCannotLaunch(t *testing.T) {

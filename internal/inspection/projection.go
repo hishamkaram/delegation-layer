@@ -13,7 +13,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-const maxProjectedFacts = 4 << 10
+const (
+	maxProjectedFacts = 4 << 10
+	// Runtime facts include the observed provider version and capability
+	// digest. Their version is bounded by the durable runtime-evidence limit,
+	// so the complete envelope can use the normal control-record budget.
+	maxRuntimeFacts = task.MaxControlRecordSize
+)
 
 var (
 	// ErrProjectionDefinition is returned when the immutable inspection

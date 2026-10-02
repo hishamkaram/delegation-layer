@@ -41,7 +41,8 @@ command, environment, policy, input/output declarations, and identity
 observer. It does not start a process.
 
 The inspection worker performs the provider's version and help checks under a
-bounded timeout. Its non-secret facts are passed to the profile finalizer,
+bounded timeout. Its non-secret facts, including a bounded observed version,
+are passed to the profile finalizer,
 which records the observed version, executable identity, effective policy, and
 bounded launch environment in the task metadata. The inspection binding keeps
 the same environment for a queued worker, including when a private daemon is
@@ -50,9 +51,18 @@ and the executable identity decide compatibility. New profiles record native
 permission selections without inventorying provider configuration. MCP servers,
 hooks, plugins, skills, and authentication are owned by the provider CLI.
 Workspace-write asks for unattended native tool execution; it does not add a
-provider-independent sandbox. Historical tasks retain their recorded preparation
-contract. New continuation tasks inherit the requested permission mode and use
+provider-independent sandbox. Historical tasks retain their recorded task and
+policy contract; only a fresh provider runtime identity may be refreshed before
+launch. New continuation tasks inherit the requested permission mode and use
 the current native mapping without modifying predecessor evidence.
+
+Immediately before a provider process may start, the runner performs a fresh
+capability inspection and receives a current launch plan. A provider path,
+reported version, or executable digest may therefore change after admission
+when the current CLI still satisfies the adapter's version/help and flag
+contract. The runner keeps the admitted task request, predicate, permission,
+workspace, writable roots, policy sources, and declared artifacts fixed; a
+change to any of those contracts is rejected before launch.
 
 Pueue owns queueing and process supervision. Every normal install carries the
 matching `pueue` and `pueued` executables and creates a private state-rooted
@@ -79,7 +89,16 @@ receives only the saved root and task ID,
 reconstructs the recorded profile, and refuses to start
 if the fresh profile no longer matches admission. The runner observes provider
 identity, captures bounded streams, verifies declared artifacts, and seals the
-evidence.
+evidence. The final provider executable, observed version, and digest are also
+written to `provider.started.json` and `provider.exit`, so a runtime upgrade
+remains reconstructable without rewriting immutable `meta.json`.
+
+Pueue compatibility is behavioral at this boundary. Delegate requires the
+observed client and daemon version output to be nonempty and well formed, and
+requires the status fields and lifecycle variants it consumes; it accepts
+additive version text and status fields. It does not use a release-version
+allowlist for an installed Pueue. The bundled Pueue release remains pinned in
+the build inputs so shipped artifacts are reproducible.
 
 The private supervisor's ordinary default group uses Pueue's unlimited
 parallel_tasks: 0 setting. The orchestrating model chooses fan-out by issuing

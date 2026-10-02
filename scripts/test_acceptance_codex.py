@@ -218,6 +218,35 @@ class CodexOracleTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unknown thread/turn lifecycle"):
                 gate.parse_codex_events(unknown_lifecycle)
 
+    def test_pre_turn_completed_error_item_is_a_valid_diagnostic(self):
+        values = [
+            {"type": "thread.started", "thread_id": THREAD},
+            {"type": "item.completed", "item": item(
+                "warning", "error", message="configuration warning")},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": item(
+                "answer", "agent_message", text="recovered")},
+            {"type": "turn.completed", "status": "completed"},
+        ]
+        parsed = gate.parse_codex_events(b"\n".join(event(value) for value in values))
+        self.assertEqual(parsed["final_message"], b"recovered")
+        self.assertEqual(parsed["item_states"], [{
+            "id": "answer", "type": "agent_message", "started": False,
+            "updated": False, "completed": True,
+        }])
+
+    def test_pre_turn_completed_error_item_requires_a_message(self):
+        values = [
+            {"type": "thread.started", "thread_id": THREAD},
+            {"type": "item.completed", "item": item("warning", "error")},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": item(
+                "answer", "agent_message", text="answer")},
+            {"type": "turn.completed", "status": "completed"},
+        ]
+        with self.assertRaisesRegex(RuntimeError, "error item message"):
+            gate.parse_codex_events(b"\n".join(event(value) for value in values))
+
     def test_duplicate_nested_keys_and_blank_final_are_rejected(self):
         duplicate = (b'{"type":"thread.started","thread_id":"' + THREAD.encode() +
                      b'","details":{"x":1,"x":2}}')

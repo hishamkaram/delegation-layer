@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -149,6 +150,40 @@ func TestPolicyDigestBindsFactsWithoutObservationTime(t *testing.T) {
 	}
 	if _, err = finalizePolicy(request, environment, nil, digest, facts, now.Add(59*time.Minute)); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatal("auth horizon omitted budget and refresh margin")
+	}
+}
+
+func TestPolicyDigestPreservesHistoricalProofAcrossRuntimeRefresh(t *testing.T) {
+	now := time.Unix(2_000_000_000, 0)
+	facts, err := projectNativePolicy(nativePolicyFixture(t, "team", now.Add(time.Hour).UnixMilli()), 404, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := task.TaskRecord{CanonicalCwd: "/workspace", BudgetNanos: int64(time.Minute)}
+	environment := profileEnvironment{WritableRoots: []string{"/home/test/.claude"}, RuntimeSHA256: strings.Repeat("c", 64)}
+	old, err := finalizePolicy(request, environment, nil, strings.Repeat("a", 64), facts, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var historical *task.PolicySourceDigest
+	for _, source := range old.Policy.Sources {
+		if source.Kind == "native-oauth-policy-proof" {
+			copy := source
+			historical = &copy
+		}
+	}
+	if historical == nil {
+		t.Fatal("native policy proof source was not recorded")
+	}
+	refreshed, err := finalizePolicy(request, environment, nil, strings.Repeat("b", 64), facts, now, historical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.CompareEffectiveConfigContract(old, refreshed) {
+		t.Fatalf("runtime refresh changed the historical policy contract: old=%+v refreshed=%+v", old, refreshed)
+	}
+	if !slices.Equal(old.Policy.Sources, refreshed.Policy.Sources) {
+		t.Fatalf("runtime refresh changed the native proof source: old=%+v refreshed=%+v", old.Policy.Sources, refreshed.Policy.Sources)
 	}
 }
 

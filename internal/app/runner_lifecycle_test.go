@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,42 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+func TestApplySavedEnvironmentClearsRecordedEmptyEnvironment(t *testing.T) {
+	const key = "DELEGATE_RECORDED_EMPTY_ENV_TEST"
+	t.Setenv(key, "ambient")
+	restore, err := applySavedEnvironment(nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv(key); got != "" {
+		t.Fatalf("recorded empty environment retained ambient value %q", got)
+	}
+	if err = restore(); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv(key); got != "ambient" {
+		t.Fatalf("environment was not restored after explicit empty environment: %q", got)
+	}
+}
+
+func TestNewMetaPreservesInheritedEnvironmentMarker(t *testing.T) {
+	meta := newMeta(task.TaskRecord{}, PreparedProfile{Plan: execution.Plan{}}, task.SupervisorRef{}, "", "", "")
+	if meta.Environment != nil {
+		t.Fatalf("inherited environment was materialized: %#v", meta.Environment)
+	}
+	if meta.EnvironmentRecorded {
+		t.Fatal("inherited environment was marked as explicitly recorded")
+	}
+
+	explicitEmpty := newMeta(task.TaskRecord{}, PreparedProfile{Plan: execution.Plan{Environment: []string{}}}, task.SupervisorRef{}, "", "", "")
+	if explicitEmpty.Environment == nil {
+		t.Fatal("explicit empty environment lost its distinction from inheritance")
+	}
+	if !explicitEmpty.EnvironmentRecorded {
+		t.Fatal("explicit empty environment was not marked as recorded")
+	}
+}
 
 func TestRunnerStartStateErrorRefusesUnknownBeforeProviderStart(t *testing.T) {
 	cases := []struct {

@@ -18,6 +18,7 @@ import re
 import shlex
 import sys
 import time
+import unicodedata
 from typing import Callable
 
 from acceptance_supervisor_common import config_for, digest, read_json, sha, write_json
@@ -27,7 +28,7 @@ MAX_CONTROL_BYTES = 1 << 20
 MAX_PROVIDER_BYTES = 8 << 20
 INSPECTION_GROUP_PREFIX = "delegation-inspection-"
 INSPECTION_FAILURE_RESULTS = {"Killed", "Errored", "DependencyFailed", "Failed", "FailedToSpawn"}
-PUEUE_VERSION = "4.0.4"
+PUEUE_STATE_VARIANTS = frozenset({"Queued", "Running", "Paused", "Stashed", "Done", "Locked"})
 STATIC_REFUSAL_ERROR = "unsupported-effective-config"
 AUTHENTICATION_REFUSAL_ERROR = "provider authentication unavailable"
 _STATIC_REFUSAL_RESPONSE_KEYS = {
@@ -72,7 +73,9 @@ _INSPECTION_BINDING_KEYS = {
     "definition_revision", "definition_sha256", "helper_executable", "helper_sha256",
     "worker_executable", "worker_sha256", "supervisor",
 }
-_INSPECTION_BINDING_OPTIONAL_KEYS = {"environment"}
+_INSPECTION_BINDING_OPTIONAL_KEYS = {
+    "capability_sha256", "environment", "environment_recorded", "runner_ownership",
+}
 _SUPERVISOR_BINDING_KEYS = {
     "client_executable", "client_sha256", "resolved_config_sha256", "endpoint",
     "config_path", "config_digest", "observed_version",
@@ -141,6 +144,13 @@ def _exact_keys(value: dict[str, object], required: set[str], optional: set[str]
     keys = set(value)
     require(required <= keys and keys <= required | optional,
             f"{label} has unknown or missing fields")
+
+
+def _required_keys(value: dict[str, object], required: set[str],
+                   label: str = "record") -> None:
+    """Require protocol fields while allowing additive producer fields."""
+    require(isinstance(value, dict), f"{label} is not an object")
+    require(required <= set(value), f"{label} has missing fields")
 
 
 def _canonical_timestamp(value: object, label: str) -> tuple[datetime, int]:
@@ -259,6 +269,27 @@ def canonical_go_json(value: object, newline: bool = True) -> bytes:
     return data + (b"\n" if newline else b"")
 
 
+def runtime_capability_sha(definition: dict[str, object]) -> str:
+    """Hash runtime capability fields while excluding executable identity."""
+    runtime = definition.get("runtime")
+    require(isinstance(runtime, dict), "runtime capability definition is missing runtime fields")
+
+    def go_slice(value: object) -> object:
+        # The Go digest clones slices into nil-backed values, so an empty
+        # slice is encoded as JSON null. Keep this mirror byte-identical.
+        return None if isinstance(value, list) and not value else value
+
+    contract = {
+        "revision": definition["revision"],
+        "directory": definition["directory"],
+        "environment": go_slice(definition["environment"]),
+        "output_limit": definition["output_limit"],
+        "help_args": go_slice(runtime["help_args"]),
+        "required_flags": go_slice(runtime["required_flags"]),
+    }
+    return sha(canonical_go_json(contract))
+
+
 def resolved_supervisor_config(base: Path) -> dict[str, object]:
     """Map the trusted pueue config source into ResolvedConfig field order."""
     source = config_for(Path(base))
@@ -310,7 +341,7 @@ def resolved_supervisor_config_digest(base: Path) -> str:
 
 
 def supervisor_binding(pueue: Path, config: Path, base: Path,
-                       config_digest: str) -> dict[str, object]:
+                       config_digest: str, pueue_version: str) -> dict[str, object]:
     """Build a supervisor binding from harness-owned executable/config sources."""
     base = Path(base).resolve()
     config = Path(config).resolve()
@@ -322,7 +353,7 @@ def supervisor_binding(pueue: Path, config: Path, base: Path,
         "endpoint": "unix:" + str(base / "run" / "p.sock"),
         "config_path": str(config),
         "config_digest": config_digest,
-        "observed_version": "pueue " + PUEUE_VERSION,
+        "observed_version": pueue_version,
     }
     binding.update(supervisor_resolution())
     return binding
@@ -471,17 +502,59 @@ def status_jobs(process: object) -> dict[str, object]:
     return value
 
 
+def bounded_text(path: Path, label: str, bound: int = MAX_CONTROL_BYTES) -> str:
+    """Read bounded UTF-8 text before any whitespace normalization."""
+    require(type(bound) is int and bound > 0, label + " bound is invalid")
+    with Path(path).open("rb") as stream:
+        data = stream.read(bound + 1)
+    require(len(data) <= bound, label + " exceeds the bounded output limit")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AcceptanceFailure(label + " is not valid UTF-8") from error
+
+
+def observed_pueue_version(value: str | bytes, command: str) -> str:
+    """Validate one bounded pueue executable version observation."""
+    if isinstance(value, bytes):
+        require(len(value) <= MAX_CONTROL_BYTES, f"{command} version output exceeds the control bound")
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AcceptanceFailure(f"{command} version output is not valid UTF-8") from error
+    require(isinstance(value, str), f"{command} version output is malformed")
+    try:
+        raw_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise AcceptanceFailure(f"{command} version output is not valid UTF-8") from error
+    require(raw_length <= MAX_CONTROL_BYTES,
+            f"{command} version output exceeds the control bound")
+    observed = value.strip()
+    require(observed and
+            not any(unicodedata.category(character) == "Cc" for character in observed),
+            f"{command} version output is empty or malformed")
+    return observed
+
+
 def row_state(row: dict[str, object]) -> str:
     value = row.get("status")
-    require(isinstance(value, dict) and len(value) == 1,
-            "pueue row status is not a one-state object")
-    return next(iter(value))
+    require(isinstance(value, dict), "pueue row status is not a one-state object")
+    require(set(value) <= PUEUE_STATE_VARIANTS,
+            "pueue row status contains an unknown lifecycle variant")
+    recognized = [name for name in value if name in PUEUE_STATE_VARIANTS]
+    require(len(recognized) == 1, "pueue row status is not a one-state object")
+    return recognized[0]
 
 
 def done_result(row: dict[str, object]) -> str | None:
     """Return a recognized pueue terminal result, if the row is Done."""
     status = row.get("status")
-    if not isinstance(status, dict) or set(status) != {"Done"}:
+    if not isinstance(status, dict):
+        return None
+    if not set(status) <= PUEUE_STATE_VARIANTS:
+        return None
+    recognized = [name for name in status if name in PUEUE_STATE_VARIANTS]
+    if recognized != ["Done"]:
         return None
     done = status.get("Done")
     if not isinstance(done, dict):
@@ -509,23 +582,28 @@ def _validate_pueue_timestamp(value: object, label: str) -> None:
 
 
 def _validate_pueue_state(value: object, label: str, depth: int = 0) -> None:
-    require(isinstance(value, dict) and len(value) == 1, f"pueue {label} state is invalid")
+    require(isinstance(value, dict), f"pueue {label} state is invalid")
     require(depth <= 32, f"pueue {label} state nesting is excessive")
-    name, state = next(iter(value.items()))
+    require(set(value) <= PUEUE_STATE_VARIANTS,
+            f"pueue {label} state contains an unknown lifecycle variant")
+    recognized = [name for name in value if name in PUEUE_STATE_VARIANTS]
+    require(len(recognized) == 1, f"pueue {label} state is invalid")
+    name = recognized[0]
+    state = value[name]
     if name == "Queued":
-        _exact_keys(state, {"enqueued_at"}, label=f"pueue {label} queued state")
+        _required_keys(state, {"enqueued_at"}, label=f"pueue {label} queued state")
         _validate_pueue_timestamp(state["enqueued_at"], f"{label} enqueued_at")
     elif name in {"Running", "Paused"}:
-        _exact_keys(state, {"enqueued_at", "start"}, label=f"pueue {label} running state")
+        _required_keys(state, {"enqueued_at", "start"}, label=f"pueue {label} running state")
         _validate_pueue_timestamp(state["enqueued_at"], f"{label} enqueued_at")
         _validate_pueue_timestamp(state["start"], f"{label} start")
     elif name == "Stashed":
-        _exact_keys(state, {"enqueue_at"}, label=f"pueue {label} stashed state")
+        _required_keys(state, {"enqueue_at"}, label=f"pueue {label} stashed state")
         if state["enqueue_at"] is not None:
             _validate_pueue_timestamp(state["enqueue_at"], f"{label} enqueue_at")
     elif name == "Done":
-        _exact_keys(state, {"enqueued_at", "start", "end", "result"},
-                    label=f"pueue {label} done state")
+        _required_keys(state, {"enqueued_at", "start", "end", "result"},
+                       label=f"pueue {label} done state")
         for key in ("enqueued_at", "start", "end"):
             _validate_pueue_timestamp(state[key], f"{label} {key}")
         result = state["result"]
@@ -543,14 +621,12 @@ def _validate_pueue_state(value: object, label: str, depth: int = 0) -> None:
             else:
                 raise AcceptanceFailure(f"pueue {label} result is unknown")
     elif name == "Locked":
-        _exact_keys(state, {"previous_status"}, label=f"pueue {label} locked state")
+        _required_keys(state, {"previous_status"}, label=f"pueue {label} locked state")
         _validate_pueue_state(state["previous_status"], label, depth + 1)
-    else:
-        raise AcceptanceFailure(f"pueue {label} state is unknown")
 
 
 def _validate_pueue_status(value: dict[str, object]) -> None:
-    _exact_keys(value, _PUEUE_STATUS_KEYS, label="pueue status")
+    _required_keys(value, _PUEUE_STATUS_KEYS, label="pueue status")
     tasks = value["tasks"]
     groups = value["groups"]
     require(isinstance(tasks, dict), "pueue status JSON has no tasks object")
@@ -558,7 +634,7 @@ def _validate_pueue_status(value: dict[str, object]) -> None:
     for name, group in groups.items():
         require(isinstance(name, str), "pueue group name is invalid")
         require(isinstance(group, dict), f"pueue group {name} is not an object")
-        _exact_keys(group, _PUEUE_GROUP_KEYS, label=f"pueue group {name}")
+        _required_keys(group, _PUEUE_GROUP_KEYS, label=f"pueue group {name}")
         require(group["status"] in {"Running", "Paused", "Reset"},
                 f"pueue group {name} status is invalid")
         require(type(group["parallel_tasks"]) is int and group["parallel_tasks"] >= 0,
@@ -567,7 +643,7 @@ def _validate_pueue_status(value: dict[str, object]) -> None:
         require(isinstance(key, str) and key.isdecimal() and str(int(key)) == key,
                 "pueue task map key is not canonical")
         require(isinstance(row, dict), f"pueue task {key} is not an object")
-        _exact_keys(row, _PUEUE_ROW_KEYS, label=f"pueue task {key}")
+        _required_keys(row, _PUEUE_ROW_KEYS, label=f"pueue task {key}")
         require(type(row["id"]) is int and row["id"] >= 0 and row["id"] == int(key),
                 f"pueue task {key} numeric identity is invalid")
         _validate_pueue_timestamp(row["created_at"], f"task {key} created_at")
@@ -640,8 +716,7 @@ def _validate_supervisor_binding(value: object, label: str) -> None:
         require(_hex_digest(value.get(key)), f"{label} {key} is invalid")
     require(isinstance(value.get("endpoint"), str) and value["endpoint"],
             f"{label} endpoint is invalid")
-    require(value.get("observed_version") == "pueue " + PUEUE_VERSION,
-            f"{label} version is unsupported")
+    observed_pueue_version(value.get("observed_version"), "pueue")
     resolution_keys = _SUPERVISOR_BINDING_OPTIONAL_KEYS & set(value)
     if resolution_keys == {"resolution_cwd"}:
         path = value["resolution_cwd"]
@@ -675,6 +750,14 @@ def _validate_inspection_binding(value: object, label: str) -> None:
             value["definition_revision"], f"{label} definition revision is invalid")
     for key in ("definition_sha256", "helper_sha256", "worker_sha256"):
         require(_hex_digest(value.get(key)), f"{label} {key} is invalid")
+    if "capability_sha256" in value:
+        require(_hex_digest(value["capability_sha256"]), f"{label} capability_sha256 is invalid")
+    if "runner_ownership" in value:
+        require(value["runner_ownership"] in {"managed", "custom"},
+                f"{label} runner ownership is invalid")
+    if "environment_recorded" in value:
+        require(type(value["environment_recorded"]) is bool,
+                f"{label} environment_recorded is invalid")
     for key in ("helper_executable", "worker_executable"):
         path = value.get(key)
         require(isinstance(path, str) and Path(path).is_absolute() and
@@ -749,7 +832,7 @@ def failure_queue_finished(status: dict[str, object], dispatch_attempts: set[str
         return False
     if "default" in groups:
         try:
-            _exact_keys(groups["default"], _PUEUE_GROUP_KEYS, label="private queue default group")
+            _required_keys(groups["default"], _PUEUE_GROUP_KEYS, label="private queue default group")
             require(groups["default"].get("status") in {"Running", "Paused", "Reset"} and
                     type(groups["default"].get("parallel_tasks")) is int and
                     groups["default"]["parallel_tasks"] >= 0,
@@ -1089,9 +1172,9 @@ class NativeTaskOps:
         require(supervisor.get("client_executable") == str(self.pueue) and
                 supervisor.get("client_sha256") == digest(self.pueue) and
                 supervisor.get("config_path") == str(self.pueue_config) and
-                supervisor.get("config_digest") == digest(self.pueue_config) and
-                supervisor.get("observed_version") == "pueue " + PUEUE_VERSION,
+                supervisor.get("config_digest") == digest(self.pueue_config),
                 f"inspection request supervisor binding mismatch for {task}")
+        observed_pueue_version(supervisor.get("observed_version"), "pueue")
 
         request_digest = digest(request_path)
         receipt = _read_control_record(directory / "receipt.json", f"inspection receipt for {task}")
@@ -1227,7 +1310,7 @@ class NativeTaskOps:
         for name in expected:
             group = groups[name]
             require(isinstance(group, dict), f"private queue group {name} is malformed")
-            _exact_keys(group, _PUEUE_GROUP_KEYS, label=f"private queue group {name}")
+            _required_keys(group, _PUEUE_GROUP_KEYS, label=f"private queue group {name}")
             require(group.get("status") in {"Running", "Paused", "Reset"} and
                     type(group.get("parallel_tasks")) is int and
                     group["parallel_tasks"] >= 0,

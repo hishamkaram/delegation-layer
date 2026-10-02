@@ -76,6 +76,36 @@ func TestParseStatusAcceptsEverySupportedLifecycleState(t *testing.T) {
 	}
 }
 
+func TestParseStatusAcceptsAdditiveFields(t *testing.T) {
+	job := statusTestJob(7, "label", map[string]any{
+		"Queued": map[string]any{"enqueued_at": statusTestTime, "future_state_field": true},
+	})
+	job["future_job_field"] = map[string]any{"version": 2}
+	data, err := json.Marshal(map[string]any{
+		"tasks":   map[string]any{"7": job},
+		"groups":  map[string]any{"default": map[string]any{"status": "Running", "parallel_tasks": 1, "future_group_field": "ignored"}},
+		"version": "pueue future",
+		"future":  []string{"ignored"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ParseQueueSnapshot(data, "pueue future"); err != nil {
+		t.Fatalf("additive supervisor fields were rejected: %v", err)
+	}
+}
+
+func TestParseStatusRejectsUnknownLifecycleVariantAlongsideKnownState(t *testing.T) {
+	state := map[string]any{
+		"Done":    map[string]any{"enqueued_at": statusTestTime, "start": statusTestTime, "end": statusTestTime, "result": "Success"},
+		"Aborted": map[string]any{"end": statusTestTime},
+	}
+	data := statusTestPayload(t, map[string]any{"7": statusTestJob(7, "label", state)}, map[string]any{})
+	if _, err := ParseStatus(data, FixtureVersion); !errors.Is(err, ErrUnknown) {
+		t.Fatalf("ambiguous lifecycle state was accepted: %v", err)
+	}
+}
+
 func TestParseStatusAcceptsTaskResultVariants(t *testing.T) {
 	results := map[string]any{
 		"success":         "Success",

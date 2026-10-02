@@ -29,9 +29,10 @@ remains under the caller's supervisor controls.
 
 Before admission and again immediately before launch, the system compares the
 executable identity, command profile, canonical workspace, effective policy,
-input/output bindings, and session expectation. A provider executable replaced
-between checks is rejected. Provider version numbers are observed for evidence
-but are not hardcoded release constraints.
+input/output bindings, and session expectation. A provider upgrade observed by
+the fresh preflight is accepted when its capability check succeeds; a replacement
+during the final binding and start handoff is rejected. Provider version numbers
+are observed for evidence but are not hardcoded release constraints.
 
 Provider CLIs load and enforce their own settings, MCP servers, hooks, plugins,
 and skills. New tasks do not inventory these sources or disable them. Permission

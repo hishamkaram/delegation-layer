@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 )
@@ -276,6 +278,49 @@ func ValidateEnvironment(values []string) error {
 			return fmt.Errorf("duplicate environment key %q", key)
 		}
 		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateProviderRuntimeIdentity validates an optional final-launch
+// observation. Empty identities preserve compatibility with records written
+// before runtime identity evidence was recorded; partial identities are never
+// accepted.
+func ValidateProviderRuntimeIdentity(identity ProviderRuntimeIdentity) error {
+	empty := identity.Executable == "" && identity.Version == "" && identity.SHA256 == ""
+	if empty {
+		return nil
+	}
+	if !filepath.IsAbs(identity.Executable) || filepath.Clean(identity.Executable) != identity.Executable {
+		return errors.New("provider runtime executable must be a resolved absolute path")
+	}
+	if !nonblank(identity.Version) {
+		return errors.New("provider runtime version must be nonempty")
+	}
+	if !utf8.ValidString(identity.Version) {
+		return errors.New("provider runtime version must be valid UTF-8")
+	}
+	for _, character := range identity.Version {
+		if unicode.IsControl(character) {
+			return errors.New("provider runtime version contains control characters")
+		}
+	}
+	if err := ValidateSHA256(identity.SHA256); err != nil {
+		return fmt.Errorf("provider runtime executable digest: %w", err)
+	}
+	return nil
+}
+
+// ValidateProviderRuntimeEvidenceIdentity applies the terminal-record bound
+// after validating the provider identity itself. Capability observations keep
+// accepting any valid nonempty version; only the bounded terminal evidence
+// representation has this storage safeguard.
+func ValidateProviderRuntimeEvidenceIdentity(identity ProviderRuntimeIdentity) error {
+	if err := ValidateProviderRuntimeIdentity(identity); err != nil {
+		return err
+	}
+	if identity.Executable != "" && len(identity.Version) > MaxProviderRuntimeEvidenceVersionBytes {
+		return fmt.Errorf("%w: provider runtime version exceeds terminal evidence bound", ErrControlRecordTooBig)
 	}
 	return nil
 }

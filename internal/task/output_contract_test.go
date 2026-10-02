@@ -126,6 +126,23 @@ func TestMetaRecordValidatesAndRoundTripsDeclarations(t *testing.T) {
 	}
 }
 
+func TestMetaRecordPreservesExplicitEmptyEnvironment(t *testing.T) {
+	meta := fixtureMeta(t)
+	meta.Environment = []string{}
+	meta.EnvironmentRecorded = true
+	data, err := MarshalCanonical(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded MetaRecord
+	if err = DecodeStrict(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Environment != nil || !decoded.EnvironmentRecorded {
+		t.Fatalf("explicit empty environment marker was not preserved: environment=%#v recorded=%v", decoded.Environment, decoded.EnvironmentRecorded)
+	}
+}
+
 func TestMetaRecordRequiresCanonicalDeclarationOrder(t *testing.T) {
 	meta := fixtureMeta(t)
 	meta.InputFiles = []InputFile{

@@ -845,7 +845,16 @@ func bindInitialWithOptions(a Arguments, deps Dependencies, root string, supervi
 
 func newMeta(req task.TaskRecord, profile PreparedProfile, supervisor task.SupervisorRef, runner, ownership, publisher string) task.MetaRecord {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, RunnerExecutable: runner, RunnerOwnership: ownership, PublisherBuild: publisher, PublisherVersion: publisher, Environment: append([]string(nil), profile.Plan.Environment...), Predicate: profile.Plan.Predicate, InputFiles: profile.Plan.InputFiles, OutputArtifacts: profile.Plan.OutputArtifacts, OutputWriterContract: profile.Plan.OutputWriterContract, SupervisorConfig: supervisor, CreatedAt: now}
+	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, RunnerExecutable: runner, RunnerOwnership: ownership, PublisherBuild: publisher, PublisherVersion: publisher, Environment: cloneEnvironment(profile.Plan.Environment), EnvironmentRecorded: profile.Plan.Environment != nil, Predicate: profile.Plan.Predicate, InputFiles: profile.Plan.InputFiles, OutputArtifacts: profile.Plan.OutputArtifacts, OutputWriterContract: profile.Plan.OutputWriterContract, SupervisorConfig: supervisor, CreatedAt: now}
+}
+
+func cloneEnvironment(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]string, len(values))
+	copy(cloned, values)
+	return cloned
 }
 
 func taskIdentity(req *task.TaskRecord, meta *task.MetaRecord, specHash, metaHash string, receipt *task.SupervisorReceipt) pueue.Identity {
