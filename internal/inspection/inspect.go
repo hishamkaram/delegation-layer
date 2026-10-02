@@ -50,8 +50,17 @@ func Inspect(scope execution.PreflightScope, definition provider.InspectionDefin
 	if scope.Authorize() != nil {
 		return nil, errNativeInspection
 	}
-	if runtimeFacts != nil {
-		return provider.EncodeInspectionFacts(*runtimeFacts, nativeFacts)
+	return encodeInspectionFacts(definition, runtimeFacts, nativeFacts)
+}
+
+func encodeInspectionFacts(definition provider.InspectionDefinition, runtimeFacts *provider.RuntimeFacts, nativeFacts json.RawMessage) (json.RawMessage, error) {
+	if runtimeFacts == nil {
+		return nativeFacts, nil
 	}
-	return nativeFacts, nil
+	capabilitySHA, err := provider.RuntimeCapabilityDigest(definition)
+	if err != nil {
+		return nil, errNativeInspection
+	}
+	runtimeFacts.CapabilitySHA256 = capabilitySHA
+	return provider.EncodeInspectionFacts(*runtimeFacts, nativeFacts)
 }

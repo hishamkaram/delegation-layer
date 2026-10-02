@@ -145,3 +145,43 @@ func TestCompareEffectiveConfigsAndClone(t *testing.T) {
 		t.Fatal("nil policy details should compare equal")
 	}
 }
+
+func TestCompareEffectiveConfigContractSeparatesRuntimeIdentity(t *testing.T) {
+	base := EffectiveConfig{Containment: "workspace", Approval: "never", Digest: effectivePolicyTestDigest, Policy: validPolicyDetailsForTest()}
+	runtimeDrift := CloneEffectiveConfig(base)
+	runtimeDrift.Digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	runtimeDrift.Policy.RuntimeSHA256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	if !CompareEffectiveConfigContract(base, runtimeDrift) {
+		t.Fatal("runtime identity drift changed the immutable effective policy contract")
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*EffectiveConfig)
+	}{
+		{"containment", func(config *EffectiveConfig) { config.Containment = "workspace-write" }},
+		{"approval", func(config *EffectiveConfig) { config.Approval = "accept-edits" }},
+		{"profile-revision", func(config *EffectiveConfig) { config.Policy.ProfileRevision = "changed" }},
+		{"workspace", func(config *EffectiveConfig) { config.Policy.Workspace = "/other" }},
+		{"writable-root", func(config *EffectiveConfig) { config.Policy.WritableRoots[0] = "/other" }},
+		{"source", func(config *EffectiveConfig) {
+			config.Policy.Sources[0].SHA256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := CloneEffectiveConfig(base)
+			tc.mutate(&changed)
+			if CompareEffectiveConfigContract(base, changed) {
+				t.Fatal("immutable policy drift was accepted")
+			}
+		})
+	}
+
+	legacy := EffectiveConfig{Containment: base.Containment, Approval: base.Approval, Digest: base.Digest}
+	legacyChanged := legacy
+	legacyChanged.Digest = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	if CompareEffectiveConfigContract(legacy, legacyChanged) {
+		t.Fatal("legacy effective configuration digest drift was accepted")
+	}
+}

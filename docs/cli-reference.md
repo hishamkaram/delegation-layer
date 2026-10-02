@@ -128,6 +128,11 @@ The compatibility check does not use a web release lookup, semver allowlist, or
 hardcoded provider version. Probe diagnostics expose bounded reason classes;
 provider output and process diagnostics are not copied into control fields.
 
+The runner repeats the capability check immediately before launch and uses the
+returned current launch plan. This permits a provider relink or upgrade after
+admission when the new CLI preserves the adapter contract, while the task's
+permission, policy, workspace, predicate, and artifact contract remain fixed.
+
 The compatibility probe is only a startup check. Provider output shape,
 identity, containment, policy, authentication, and result integrity remain
 strict runtime contracts; a CLI that starts successfully can still produce a

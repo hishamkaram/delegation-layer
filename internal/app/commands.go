@@ -299,7 +299,7 @@ func continuationRunner(root, savedRunner, ownership string) (string, error) {
 }
 
 func validateContinuationMetadata(root string, a Arguments, meta *task.MetaRecord) error {
-	if meta == nil || len(meta.Environment) == 0 {
+	if meta == nil || (!meta.EnvironmentRecorded && len(meta.Environment) == 0) {
 		return errors.New("continuation unavailable: predecessor launch environment is not recorded")
 	}
 	if meta.RunnerExecutable == "" && a.Runner == "" {
@@ -319,7 +319,7 @@ func validateContinuationMetadata(root string, a Arguments, meta *task.MetaRecor
 }
 
 func applyContinuationEnvironment(root string, meta *task.MetaRecord) (func() error, error) {
-	restore, err := applySavedEnvironment(meta.Environment)
+	restore, err := applySavedEnvironment(meta.Environment, meta.EnvironmentRecorded)
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +397,7 @@ func retryExistingTask(a Arguments, deps Dependencies, store *taskdir.Store, td 
 		return failed(response, task.ErrAlreadyStarted, 1)
 	}
 	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
-	restoreEnvironment, restoreErr := applySavedEnvironment(oldMeta.Environment)
+	restoreEnvironment, restoreErr := applySavedEnvironment(oldMeta.Environment, oldMeta.EnvironmentRecorded)
 	if restoreErr != nil {
 		return failed(response, restoreErr, 1)
 	}
@@ -1085,7 +1085,7 @@ func applyTimeoutContinuationWithRecordsAndRunner(response *Response, root strin
 		}
 		commandRunner = timeoutContinuationCommandRunner(meta, ownership)
 	}
-	launchStateRecorded := meta != nil && len(meta.Environment) > 0
+	launchStateRecorded := meta != nil && (meta.EnvironmentRecorded || len(meta.Environment) > 0)
 	applyTimeoutContinuationWithRunnerStateAndCommandRunner(response, root, req, records, catalog, session, runner, commandRunner, savedSupervisor(meta), runnerReleased, launchStateRecorded)
 	return nil
 }

@@ -520,7 +520,7 @@ class ClaudeOracleTests(unittest.TestCase):
 
             binding = gate.expected_claude_inspection_binding(
                 pueue, config, base, gate.digest(config), workspace, claude,
-                runner, environment)
+                runner, environment, "pueue fixture")
             definition = {
                 "revision": gate.RUNTIME_INSPECTION_REVISION,
                 "executable": str(claude.resolve()),
@@ -572,7 +572,8 @@ class ClaudeOracleTests(unittest.TestCase):
                            "CLAUDE_CONFIG_DIR": str(root / "claude-config"),
                            "ANTHROPIC_API_KEY": "ambient-secret"}
             binding = gate.expected_claude_inspection_binding(
-                paths[0], config, base, gate.digest(config), home, paths[2], paths[1], environment)
+                paths[0], config, base, gate.digest(config), home, paths[2], paths[1], environment,
+                "pueue fixture")
             self.assertIn("XDG_CONFIG_HOME=" + str(root / "config"), binding["environment"])
             self.assertIn("CLAUDE_CONFIG_DIR=" + str(root / "claude-config"), binding["environment"])
             self.assertNotIn("ANTHROPIC_API_KEY=ambient-secret", binding["environment"])

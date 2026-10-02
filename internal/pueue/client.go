@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -101,6 +102,24 @@ func normalizeOptions(options Options) (Options, error) {
 }
 
 func (c *Client) Binding() task.SupervisorRef { return c.binding }
+
+// WithObservationTimeout returns an independent client with the same bound
+// supervisor identity and a different finite command observation timeout. The
+// binding and runtime executable pair remain unchanged; this is used when a
+// bounded inspection needs a longer observation window without changing the
+// timeout for ordinary supervisor controls.
+func (c *Client) WithObservationTimeout(timeout time.Duration) (*Client, error) {
+	if c == nil {
+		return nil, ErrConfiguration
+	}
+	options := c.options
+	options.ObservationTimeout = timeout
+	options, err := normalizeOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{binding: c.binding, runtimeBinding: c.runtimeBinding, options: options}, nil
+}
 
 func canonicalExecutable(path string) (string, error) {
 	if !filepath.IsAbs(path) {

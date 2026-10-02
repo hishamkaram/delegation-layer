@@ -200,10 +200,17 @@ func writeModelMessages(writer io.Writer, messages [][]byte) error {
 }
 
 func (o *Operation) factsLimit() int {
-	if o.request.Binding.DefinitionRevision == provider.ModelsRevision {
+	switch o.request.Binding.DefinitionRevision {
+	case provider.ModelsRevision:
 		return provider.MaxModelFactsBytes
+	case provider.RuntimeInspectionRevision:
+		// Runtime envelopes contain bounded version text and capability metadata,
+		// so use the complete control-record budget rather than the native
+		// projection budget.
+		return maxRuntimeFacts
+	default:
+		return maxProjectedFacts
 	}
-	return maxProjectedFacts
 }
 
 func inspectionFactsLimit(limits []int) int {

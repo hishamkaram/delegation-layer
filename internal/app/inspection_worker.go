@@ -124,7 +124,7 @@ func prepareInspectionWorkerEnvironment(ctx context.Context, root string, operat
 	if err := validateInspectionWorkerStartup(ctx, root, operation, binding); err != nil {
 		return nil, err
 	}
-	return applySavedEnvironment(binding.Environment)
+	return applySavedEnvironment(binding.Environment, binding.EnvironmentRecorded)
 }
 
 func reconcileInspectionWorker(ctx context.Context, root string, operation *inspection.Operation, binding task.SupervisorRef, options pueue.Options, initialSupervisorExecutable string) (*pueue.Client, pueue.InspectionIdentity, error) {
@@ -174,7 +174,7 @@ func runInspectionCallback(scope execution.PreflightScope, operation *inspection
 	if err != nil {
 		return err
 	}
-	if err = validateInspectionCandidate(operation, record.Task, candidate); err != nil {
+	if err = validateInspectionCandidate(scope.Context(), operation, record.Task, candidate); err != nil {
 		return err
 	}
 	inspected, err := inspection.Inspect(scope, *candidate.Inspection)

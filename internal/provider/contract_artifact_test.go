@@ -100,6 +100,18 @@ func TestPreparedProfileMatchesInputContentAndOutputDeclarations(t *testing.T) {
 	if err := profile.Matches(request, meta); err != nil {
 		t.Fatal(err)
 	}
+	profile.Plan.Executable = "/opt/provider-new"
+	profile.ObservedVersion = "provider-2"
+	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
+		t.Fatal("runtime executable/version drift bypassed the strict profile match")
+	}
+	profile.Plan.Environment = []string{"PATH=/bin"}
+	meta.Environment = []string{"PATH=/bin"}
+	if err := profile.MatchesWithRuntimeRefresh(request, meta); err != nil {
+		t.Fatalf("runtime executable/version drift was rejected after refresh: %v", err)
+	}
+	profile.Plan = plan
+	profile.ObservedVersion = meta.ProviderVersion
 	meta.Environment = []string{"HOME=/different"}
 	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed launch environment matched immutable metadata")
@@ -109,14 +121,17 @@ func TestPreparedProfileMatchesInputContentAndOutputDeclarations(t *testing.T) {
 	if err := profile.Matches(request, meta); err != nil {
 		t.Fatalf("legacy metadata without a launch environment was rejected: %v", err)
 	}
+	if !errors.Is(profile.MatchesWithRuntimeRefresh(request, meta), task.ErrIdentityMismatch) {
+		t.Fatal("runtime refresh accepted legacy metadata without a launch environment")
+	}
 	meta.EffectiveConfig.Policy.Sources[0].SHA256 = task.ComputeSHA256([]byte("changed-source"))
-	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
+	if !errors.Is(profile.MatchesWithRuntimeRefresh(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed policy source matched legacy metadata")
 	}
 	meta.EffectiveConfig.Policy.Sources[0].SHA256 = profile.Effective.Policy.Sources[0].SHA256
 	profile.WritableRoots = []string{"/changed-runtime"}
 	profile.Effective.Policy.WritableRoots = []string{"/changed-runtime"}
-	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
+	if !errors.Is(profile.MatchesWithRuntimeRefresh(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed legacy writable-root policy matched immutable metadata")
 	}
 	profile.WritableRoots = []string{"/runtime"}
@@ -129,5 +144,49 @@ func TestPreparedProfileMatchesInputContentAndOutputDeclarations(t *testing.T) {
 	meta.OutputWriterContract = ""
 	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
 		t.Fatal("changed output writer contract matched immutable metadata")
+	}
+}
+
+func TestPreparedProfileRuntimeRefreshPreservesRecordedEmptyEnvironment(t *testing.T) {
+	request := artifactRequest()
+	plan := artifactPlan(request)
+	profile := PreparedProfile{
+		Plan:            plan,
+		ObservedVersion: "provider-1",
+		Effective: task.EffectiveConfig{
+			Containment: "read-only",
+			Approval:    "never",
+			Digest:      task.ComputeSHA256([]byte("config")),
+			Policy: &task.PolicyDetails{
+				ProfileRevision: "fixture-v1",
+				RuntimeSHA256:   task.ComputeSHA256([]byte("runtime")),
+				Workspace:       "/workspace",
+				WritableRoots:   []string{"/runtime"},
+			},
+		},
+		WritableRoots: []string{"/runtime"},
+	}
+	meta := task.MetaRecord{
+		ProviderExecutable:   plan.Executable,
+		ProviderVersion:      profile.ObservedVersion,
+		EnvironmentRecorded:  true,
+		EffectiveConfig:      task.CloneEffectiveConfig(profile.Effective),
+		Containment:          profile.Effective.Containment,
+		Approval:             profile.Effective.Approval,
+		Predicate:            plan.Predicate,
+		InputFiles:           plan.InputFiles,
+		OutputArtifacts:      plan.OutputArtifacts,
+		OutputWriterContract: plan.OutputWriterContract,
+	}
+	if err := profile.Matches(request, meta); err != nil {
+		t.Fatalf("explicit empty environment did not match its admitted policy: %v", err)
+	}
+	profile.Effective.Digest = task.ComputeSHA256([]byte("changed-policy"))
+	if !errors.Is(profile.Matches(request, meta), task.ErrIdentityMismatch) {
+		t.Fatal("explicit empty environment allowed an effective policy digest change")
+	}
+	profile.Plan.Environment = []string{"PROVIDER_RUNTIME_CHANGED=1"}
+	if !errors.Is(profile.MatchesWithRuntimeRefresh(request, meta), task.ErrIdentityMismatch) {
+		t.Fatal("runtime refresh accepted a changed environment for an explicitly recorded empty environment")
 	}
 }

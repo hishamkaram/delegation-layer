@@ -140,6 +140,36 @@ func TestEarlierErrorMayRecoverBeforeSuccessfulCompletion(t *testing.T) {
 	}
 }
 
+func TestPreTurnCompletedErrorItemsAreDiagnostics(t *testing.T) {
+	stdout := jsonl(
+		threadStarted(),
+		`{"type":"item.completed","item":{"id":"warning","type":"error","message":"configuration warning"}}`,
+		`{"type":"turn.started"}`,
+		itemCompleted("answer", itemAgentMessage, "recovered"),
+		turnCompleted(`{}`),
+	)
+	var answer bytes.Buffer
+	interpretation, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, nil)}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "recovered" {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+}
+
+func TestPreTurnCompletedErrorItemRequiresMessage(t *testing.T) {
+	stdout := jsonl(
+		threadStarted(),
+		`{"type":"item.completed","item":{"id":"warning","type":"error"}}`,
+		`{"type":"turn.started"}`,
+		itemCompleted("answer", itemAgentMessage, "answer"),
+		turnCompleted(`{}`),
+	)
+	var answer bytes.Buffer
+	interpretation, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, nil)}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictRejected || answer.Len() != 0 {
+		t.Fatalf("malformed diagnostic interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+}
+
 func TestUnknownTelemetryIsToleratedButUnknownLifecycleRejects(t *testing.T) {
 	accepted := jsonl(
 		threadStarted(),

@@ -19,9 +19,11 @@ the executable identity in the immutable candidate. The already-supervised
 inspection worker then verifies that the file is still executable, runs its
 version and help commands, and checks that every flag used in its command shape
 is advertised in help output before finalization and provider launch. Any
-reported version and binary digest are observations bound to that task's
-admission and start identity; no release version, operating system, architecture,
-profile revision, or digest is compared with a checked-in value.
+reported version that fits the bounded durable evidence record and its binary
+digest are recorded in the task evidence; a fresh
+launch may refresh provider runtime identity after the current capability
+probe. No release version, operating system, architecture, profile revision, or
+digest is compared with a checked-in value.
 
 ## 2. Launch Planning and Preflight Policy
 - **Native Configuration**: Provider CLIs own configuration, authentication,
@@ -43,8 +45,15 @@ profile revision, or digest is compared with a checked-in value.
 - **Working Directory**: Set strictly to the validated canonical workspace directory (`Cmd.Dir = workdir`).
 - **Launch Verification**:
   - Records the requested native permission mode, runtime identity, and workspace.
-  - Rechecks the admitted launch contract immediately before launch. Personal
-    provider configuration is not hashed or rejected for drift by new profiles.
+  - Rechecks the provider capability and rebuilds the current launch plan
+    immediately before launch. Personal provider configuration is not hashed or
+    rejected for drift by new profiles. A changed provider path, reported
+    version, or executable digest is accepted only when the fresh capability
+    check succeeds; the task policy, workspace, predicate, writable roots, and
+    artifact declarations remain admission-bound.
+  - Records the final provider executable, observed version, and digest in
+    `provider.started.json` and `provider.exit`; `meta.json` remains the
+    immutable admission record.
   - Previously admitted tasks retain their original preparation contract.
 - **Credential Safety**: Credentials, tokens, and unrelated user environment variables are never included in command arguments, logs, metadata, or committed fixtures.
 

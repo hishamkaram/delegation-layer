@@ -88,6 +88,10 @@ func TestDiscoveryFactsDoNotWidenHistoricalProjectionLimit(t *testing.T) {
 	if op.factsLimit() != maxProjectedFacts {
 		t.Fatal("legacy journal limit changed")
 	}
+	op.request.Binding.DefinitionRevision = provider.RuntimeInspectionRevision
+	if op.factsLimit() != maxRuntimeFacts {
+		t.Fatal("runtime journal did not reserve space for capability metadata")
+	}
 	if _, err := canonicalFactsWithin([]byte(strings.Repeat("a", task.MaxControlRecordSize)), task.MaxControlRecordSize/2); err == nil {
 		t.Fatal("oversized model facts accepted")
 	}

@@ -15,13 +15,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func TestReadyRequiresTheBoundedQueueSchema(t *testing.T) {
+func TestReadyAcceptsAdditiveQueueSchema(t *testing.T) {
 	fake := newFakeSupervisor(t, "ok")
 	if err := os.WriteFile(fake.statusPath, []byte(`{"tasks":{},"groups":{},"future":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := fake.client.Ready(context.Background()); !errors.Is(err, ErrBinding) {
-		t.Fatalf("malformed supervisor status was accepted: %v", err)
+	if err := fake.client.Ready(context.Background()); err != nil {
+		t.Fatalf("additive supervisor status was rejected: %v", err)
 	}
 }
 

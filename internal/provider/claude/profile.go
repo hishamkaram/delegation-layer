@@ -142,7 +142,7 @@ func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (co
 	if !hasLegacyNativePolicy(meta) {
 		return preparePortableCandidate(request, meta.Predicate)
 	}
-	return prepareLegacyCandidate(request, meta.Predicate)
+	return prepareLegacyCandidate(request, meta.Predicate, legacyPolicyProof(meta))
 }
 
 func hasLegacyNativePolicy(meta task.MetaRecord) bool {
@@ -155,6 +155,19 @@ func hasLegacyNativePolicy(meta task.MetaRecord) bool {
 		}
 	}
 	return false
+}
+
+func legacyPolicyProof(meta task.MetaRecord) *task.PolicySourceDigest {
+	if meta.EffectiveConfig.Policy == nil {
+		return nil
+	}
+	for _, source := range meta.EffectiveConfig.Policy.Sources {
+		if source.Path == nativeCredentialHelper && source.Kind == "native-oauth-policy-proof" && source.Present {
+			proof := source
+			return &proof
+		}
+	}
+	return nil
 }
 
 func preparePortableCandidate(request task.TaskRecord, predicateReference task.PredicateRef) (commonprovider.ProfileCandidate, error) {
@@ -197,7 +210,7 @@ func preparePortableCandidate(request task.TaskRecord, predicateReference task.P
 	}, nil
 }
 
-func prepareLegacyCandidate(request task.TaskRecord, predicateReference task.PredicateRef) (commonprovider.ProfileCandidate, error) {
+func prepareLegacyCandidate(request task.TaskRecord, predicateReference task.PredicateRef, historicalProof ...*task.PolicySourceDigest) (commonprovider.ProfileCandidate, error) {
 	arguments, inputs, err := legacyPrintArguments(request)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -241,7 +254,7 @@ func prepareLegacyCandidate(request task.TaskRecord, predicateReference task.Pre
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
 		Finalize: func(data json.RawMessage, now time.Time) (commonprovider.PreparedProfile, error) {
-			return finalizeLegacyPreparedProfile(request, arguments, inputs, cli, environment, sources, definitionDigest, predicateReference, data, now)
+			return finalizeLegacyPreparedProfile(request, arguments, inputs, cli, environment, sources, definitionDigest, predicateReference, data, now, historicalProof...)
 		},
 	}, nil
 }
@@ -351,12 +364,13 @@ func finalizeLegacyPreparedProfile(
 	predicateReference task.PredicateRef,
 	data json.RawMessage,
 	now time.Time,
+	historicalProof ...*task.PolicySourceDigest,
 ) (commonprovider.PreparedProfile, error) {
 	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
 	if decodeErr != nil || facts.Runtime == nil || len(facts.Native) == 0 || facts.Runtime.Executable != cli.Path || facts.Runtime.SHA256 != cli.SHA256 {
 		return commonprovider.PreparedProfile{}, unsupportedNativeFacts()
 	}
-	effective, err := finalizePolicy(request, environment, sources, definitionDigest, facts.Native, now)
+	effective, err := finalizePolicy(request, environment, sources, definitionDigest, facts.Native, now, historicalProof...)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
@@ -409,7 +423,7 @@ func finalizePortablePolicy(request task.TaskRecord, environment profileEnvironm
 	return effective, nil
 }
 
-func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest, definitionDigest string, data json.RawMessage, now time.Time) (task.EffectiveConfig, error) {
+func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sources []task.PolicySourceDigest, definitionDigest string, data json.RawMessage, now time.Time, historicalProof ...*task.PolicySourceDigest) (task.EffectiveConfig, error) {
 	if now.IsZero() || request.BudgetNanos <= 0 || task.ValidateSHA256(definitionDigest) != nil {
 		return task.EffectiveConfig{}, unsupportedNativeFacts()
 	}
@@ -417,17 +431,11 @@ func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sou
 	if err != nil {
 		return task.EffectiveConfig{}, err
 	}
-	proof, err := task.MarshalCanonical(struct {
-		Revision         string            `json:"revision"`
-		DefinitionSHA256 string            `json:"definition_sha256"`
-		Facts            nativePolicyFacts `json:"facts"`
-	}{nativeInspectionRevision, definitionDigest, facts})
+	proofSource, err := nativePolicyProofSource(definitionDigest, facts, historicalProof...)
 	if err != nil {
-		return task.EffectiveConfig{}, unsupportedNativeFacts()
+		return task.EffectiveConfig{}, err
 	}
-	sources = append(slices.Clone(sources), task.PolicySourceDigest{
-		Path: nativeCredentialHelper, Kind: "native-oauth-policy-proof", Present: true, SHA256: task.ComputeSHA256(proof),
-	})
+	sources = append(slices.Clone(sources), proofSource)
 	slices.SortFunc(sources, func(a, b task.PolicySourceDigest) int {
 		if order := cmp.Compare(a.Path, b.Path); order != 0 {
 			return order
@@ -454,4 +462,25 @@ func finalizePolicy(request task.TaskRecord, environment profileEnvironment, sou
 		return task.EffectiveConfig{}, err
 	}
 	return effective, nil
+}
+
+func nativePolicyProofSource(definitionDigest string, facts nativePolicyFacts, historicalProof ...*task.PolicySourceDigest) (task.PolicySourceDigest, error) {
+	if len(historicalProof) > 0 && historicalProof[0] != nil {
+		proof := *historicalProof[0]
+		if proof.Path != nativeCredentialHelper || proof.Kind != "native-oauth-policy-proof" || !proof.Present || task.ValidateSHA256(proof.SHA256) != nil {
+			return task.PolicySourceDigest{}, unsupportedNativeFacts()
+		}
+		return proof, nil
+	}
+	proof, err := task.MarshalCanonical(struct {
+		Revision         string            `json:"revision"`
+		DefinitionSHA256 string            `json:"definition_sha256"`
+		Facts            nativePolicyFacts `json:"facts"`
+	}{nativeInspectionRevision, definitionDigest, facts})
+	if err != nil {
+		return task.PolicySourceDigest{}, unsupportedNativeFacts()
+	}
+	return task.PolicySourceDigest{
+		Path: nativeCredentialHelper, Kind: "native-oauth-policy-proof", Present: true, SHA256: task.ComputeSHA256(proof),
+	}, nil
 }

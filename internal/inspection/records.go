@@ -29,15 +29,20 @@ var (
 // Binding records the immutable inspection definition and all executable and
 // supervisor coordinates needed to reproduce it.
 type Binding struct {
-	DefinitionRevision string             `json:"definition_revision"`
-	DefinitionSHA256   string             `json:"definition_sha256"`
-	HelperExecutable   string             `json:"helper_executable"`
-	HelperSHA256       string             `json:"helper_sha256"`
-	WorkerExecutable   string             `json:"worker_executable"`
-	WorkerSHA256       string             `json:"worker_sha256"`
-	RunnerOwnership    string             `json:"runner_ownership,omitempty"`
-	Environment        []string           `json:"environment,omitempty"`
-	Supervisor         task.SupervisorRef `json:"supervisor"`
+	DefinitionRevision string `json:"definition_revision"`
+	DefinitionSHA256   string `json:"definition_sha256"`
+	// CapabilitySHA256 covers the runtime command contract without binding the
+	// provider executable path or bytes. It is optional for historical journals;
+	// those are re-probed before a provider launch.
+	CapabilitySHA256    string             `json:"capability_sha256,omitempty"`
+	HelperExecutable    string             `json:"helper_executable"`
+	HelperSHA256        string             `json:"helper_sha256"`
+	WorkerExecutable    string             `json:"worker_executable"`
+	WorkerSHA256        string             `json:"worker_sha256"`
+	RunnerOwnership     string             `json:"runner_ownership,omitempty"`
+	Environment         []string           `json:"environment,omitempty"`
+	EnvironmentRecorded bool               `json:"environment_recorded,omitempty"`
+	Supervisor          task.SupervisorRef `json:"supervisor"`
 }
 
 // RequestRecord is the immutable admission request persisted outside ordinary
@@ -104,6 +109,11 @@ func ValidateBinding(binding Binding) error {
 	}
 	if err := task.ValidateSHA256(binding.DefinitionSHA256); err != nil {
 		return fmt.Errorf("inspection definition digest: %w", err)
+	}
+	if binding.CapabilitySHA256 != "" {
+		if err := task.ValidateSHA256(binding.CapabilitySHA256); err != nil {
+			return fmt.Errorf("inspection capability digest: %w", err)
+		}
 	}
 	for name, value := range map[string]string{
 		"inspection helper executable": binding.HelperExecutable,

@@ -15,6 +15,13 @@ const SchemaVersion = 1
 // Maximum size for any control record JSON file (1 MiB).
 const MaxControlRecordSize = 1024 * 1024
 
+// Maximum provider version text retained in terminal launch evidence. Runtime
+// capability parsing remains unbounded by release policy; this separate bound
+// leaves room for the rest of the bounded provider.started.json and
+// provider.exit control records so a refreshed observation cannot make
+// publication fail after the provider has started.
+const MaxProviderRuntimeEvidenceVersionBytes = 64 * 1024
+
 // Maximum size for input brief (8 MiB).
 const MaxBriefSize = 8 * 1024 * 1024
 
@@ -277,7 +284,10 @@ type MetaRecord struct {
 	PublisherBuild     string          `json:"publisher_build"`
 	PublisherVersion   string          `json:"publisher_version"`
 	// Environment is the adapter's bounded, nonsecret launch environment.
-	Environment          []string         `json:"environment,omitempty"`
+	Environment []string `json:"environment,omitempty"`
+	// EnvironmentRecorded distinguishes a newly admitted empty environment from
+	// a legacy record that predates persisted launch environments.
+	EnvironmentRecorded  bool             `json:"environment_recorded,omitempty"`
 	Predicate            PredicateRef     `json:"predicate"`
 	SupervisorConfig     SupervisorRef    `json:"supervisor_config"`
 	CreatedAt            string           `json:"created_at"`
@@ -336,15 +346,27 @@ type ProviderStartRecord struct {
 	CreatedAt     string `json:"created_at"`
 }
 
+// ProviderRuntimeIdentity records the provider executable selected at the
+// final launch boundary. It is separate from MetaRecord because a provider
+// may be upgraded after admission and before its turn starts.
+type ProviderRuntimeIdentity struct {
+	Executable string
+	Version    string
+	SHA256     string
+}
+
 // ProviderStartedRecord is stored in provider.started.json.
 type ProviderStartedRecord struct {
-	SchemaVersion   int    `json:"schema_version"`
-	RootID          string `json:"root_id"`
-	TaskID          string `json:"task_id"`
-	SpecSHA256      string `json:"spec_sha256"`
-	MetaSHA256      string `json:"meta_sha256"`
-	StartedAt       string `json:"started_at"`
-	DiagnosticNanos int64  `json:"diagnostic_nanos"`
+	SchemaVersion      int    `json:"schema_version"`
+	RootID             string `json:"root_id"`
+	TaskID             string `json:"task_id"`
+	SpecSHA256         string `json:"spec_sha256"`
+	MetaSHA256         string `json:"meta_sha256"`
+	StartedAt          string `json:"started_at"`
+	DiagnosticNanos    int64  `json:"diagnostic_nanos"`
+	ProviderExecutable string `json:"provider_executable,omitempty"`
+	ProviderVersion    string `json:"provider_version,omitempty"`
+	ProviderSHA256     string `json:"provider_sha256,omitempty"`
 }
 
 // ProviderRefRecord is stored in provider.ref.json.
@@ -368,18 +390,21 @@ type RawManifestEntry struct {
 
 // ProviderExitRecord is stored in provider.exit (the seal).
 type ProviderExitRecord struct {
-	SchemaVersion   int                `json:"schema_version"`
-	RootID          string             `json:"root_id"`
-	TaskID          string             `json:"task_id"`
-	SpecSHA256      string             `json:"spec_sha256"`
-	MetaSHA256      string             `json:"meta_sha256"`
-	InvocationState string             `json:"invocation_state"`
-	ExitCode        int                `json:"exit_code"`
-	Error           string             `json:"error"`
-	Predicate       PredicateRef       `json:"predicate"`
-	RawManifest     []RawManifestEntry `json:"raw_manifest"`
-	ManifestSHA256  string             `json:"manifest_sha256"`
-	ClosedAt        string             `json:"closed_at"`
+	SchemaVersion      int                `json:"schema_version"`
+	RootID             string             `json:"root_id"`
+	TaskID             string             `json:"task_id"`
+	SpecSHA256         string             `json:"spec_sha256"`
+	MetaSHA256         string             `json:"meta_sha256"`
+	InvocationState    string             `json:"invocation_state"`
+	ExitCode           int                `json:"exit_code"`
+	Error              string             `json:"error"`
+	Predicate          PredicateRef       `json:"predicate"`
+	RawManifest        []RawManifestEntry `json:"raw_manifest"`
+	ManifestSHA256     string             `json:"manifest_sha256"`
+	ClosedAt           string             `json:"closed_at"`
+	ProviderExecutable string             `json:"provider_executable,omitempty"`
+	ProviderVersion    string             `json:"provider_version,omitempty"`
+	ProviderSHA256     string             `json:"provider_sha256,omitempty"`
 }
 
 // PayloadDescriptor describes an immutable payload file (result.txt or publish.reject).
@@ -657,6 +682,9 @@ func ValidateProviderStartedRecord(r *ProviderStartedRecord) error {
 	if r.DiagnosticNanos < 0 {
 		return errors.New("negative start diagnostic duration")
 	}
+	if err := ValidateProviderRuntimeEvidenceIdentity(ProviderRuntimeIdentity{Executable: r.ProviderExecutable, Version: r.ProviderVersion, SHA256: r.ProviderSHA256}); err != nil {
+		return fmt.Errorf("provider.started runtime identity: %w", err)
+	}
 	return validateTimestamp(r.StartedAt)
 }
 
@@ -735,6 +763,9 @@ func ValidateProviderExitRecord(r *ProviderExitRecord) error {
 	}
 	if err := ValidatePredicateRef(r.Predicate); err != nil {
 		return err
+	}
+	if err := ValidateProviderRuntimeEvidenceIdentity(ProviderRuntimeIdentity{Executable: r.ProviderExecutable, Version: r.ProviderVersion, SHA256: r.ProviderSHA256}); err != nil {
+		return fmt.Errorf("provider.exit runtime identity: %w", err)
 	}
 	return validateExitObservation(r)
 }

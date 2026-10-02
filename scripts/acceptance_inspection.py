@@ -7,11 +7,12 @@ from pathlib import Path
 import secrets
 import shlex
 import shutil
+import sys
 import time
 
 from acceptance_provider_common import (
     AcceptanceFailure, NativeTaskOps, canonical_go_json, canonical_queue, done_result,
-    ensure_private_directory, parse_json_output, require, row_state, snapshot,
+    bounded_text, ensure_private_directory, observed_pueue_version, parse_json_output, require, row_state, snapshot,
     supervisor_binding,
     verify_collected_outcome, write_bytes, write_json,
 )
@@ -67,7 +68,9 @@ def fixture_inspection_binding(helper: Path, helper_config: Path, workspace: Pat
         "helper_sha256": digest(helper),
         "worker_executable": str(runner),
         "worker_sha256": digest(runner),
+        "runner_ownership": "custom",
         "environment": [key + "=" + environment[key] for key in sorted(environment)],
+        "environment_recorded": True,
         "supervisor": supervisor,
     }
 
@@ -217,11 +220,26 @@ def validate_concurrent_response(response: dict[str, object], exit_code: int, ta
     if exit_code == 0:
         require(response.get("admission") == "admitted", "successful caller did not prove admission")
         return root
+    failure = response.get("failure")
     require(exit_code == 1 and response.get("admission") == "unknown" and
-            isinstance(response.get("error"), str) and
-            (response["error"].startswith("lock acquisition busy") or
-             response["error"] == "task already submitted"),
-            "concurrent caller failed for a reason other than held admission authority")
+            response.get("liveness") == "undetermined" and
+            response.get("publication") == "unknown" and isinstance(failure, dict),
+            "concurrent caller did not report a bounded non-admitted result")
+    stage = failure.get("stage")
+    code = failure.get("code")
+    next_action = failure.get("next_action")
+    task_record = response.get("task_record")
+    creation_race = (task_record == "unknown" and code == "dispatch_failed" and
+                     stage == "create-task-record" and next_action == "stop_and_report" and
+                     response.get("error") == "Delegate could not complete dispatch.")
+    submission_race = (task_record == "created" and
+                       code == "task_submission_preparation_failed" and
+                       stage == "prepare-task-submission" and next_action == "check_status" and
+                       response.get("error") ==
+                       "Delegate created the task record but could not prepare it for submission. "
+                       "Check its status before taking further action.")
+    require(creation_race or submission_race,
+            "concurrent caller failed outside the known task admission race envelope")
     return root
 
 
@@ -256,6 +274,8 @@ class InspectionAcceptance:
         self.config = None
         self.pueue_base = None
         self.supervisor_config_digest = None
+        self.pueue_version: str | None = None
+        self.pueued_version: str | None = None
         self.sentinel = secrets.token_hex(32).encode()
         self.sentinel_file = self.inputs / "private-sentinel"
         write_bytes(self.sentinel_file, self.sentinel)
@@ -264,7 +284,8 @@ class InspectionAcceptance:
         self.blocker: tuple[int, str] | None = None
 
     def setup(self) -> None:
-        base = ensure_private_directory(Path("/Users/Shared") / ("dl-inspect-" + secrets.token_hex(6)),
+        parent = Path("/Users/Shared") if sys.platform == "darwin" else Path.home() / ".dl-acceptance"
+        base = ensure_private_directory(parent / ("dl-inspect-" + secrets.token_hex(6)),
                                         "private supervisor", create=True)
         self.pueue_base = base
         for name in ("state", "run"):
@@ -273,10 +294,12 @@ class InspectionAcceptance:
         self.config = base / "pueue.json"
         write_json(self.config, config_for(base))
         self.supervisor_config_digest = digest(self.config)
-        for name, binary in (("pueue", self.pueue), ("pueued", self.pueued)):
-            proc = self.ops.direct(name + "-version", [binary, "-c", self.config, "--version"])
-            require((proc.directory / "stdout").read_text().strip() == name + " 4.0.4",
-                    "unsupported supervisor fixture version")
+        pueue = self.ops.direct("pueue-version", [self.pueue, "-c", self.config, "--version"])
+        pueued = self.ops.direct("pueued-version", [self.pueued, "-c", self.config, "--version"])
+        self.pueue_version = observed_pueue_version(
+            bounded_text(pueue.directory / "stdout", "pueue version output"), "pueue")
+        self.pueued_version = observed_pueue_version(
+            bounded_text(pueued.directory / "stdout", "pueued version output"), "pueued")
         self.daemon = self.processes.start("daemon", [self.pueued, "-c", self.config], self.base)
         self.ops.bind_supervisor(self.config, self.daemon)
         deadline = time.monotonic() + 15
@@ -324,10 +347,11 @@ class InspectionAcceptance:
 
     def expected_inspection_binding(self, helper_config: Path) -> dict[str, object]:
         require(self.pueue_base is not None and self.config is not None and
-                self.supervisor_config_digest is not None,
+                self.supervisor_config_digest is not None and self.pueue_version is not None,
                 "fixture supervisor binding is unavailable")
         supervisor = supervisor_binding(
-            self.pueue, self.config, self.pueue_base, self.supervisor_config_digest)
+            self.pueue, self.config, self.pueue_base, self.supervisor_config_digest,
+            self.pueue_version)
         return fixture_inspection_binding(self.helper, helper_config, self.workspace,
                                           self.environment, self.runner, supervisor)
 
@@ -450,8 +474,14 @@ class InspectionAcceptance:
         require(proc.result["exit_code"] == 1 and response.get("task_id") == task_id and
                 response.get("root_id") == self.ops.root_id and
                 response.get("admission") == "unknown" and
-                response.get("error") == "inspection admission deadline expired",
-                "expired inspection did not return the exact admission deadline error")
+                response.get("liveness") == "undetermined" and
+                response.get("publication") == "unknown" and
+                response.get("failure") == {
+                    "code": "provider_preflight_failed",
+                    "stage": "inspect-provider",
+                    "next_action": "stop_and_report",
+                } and response.get("error") == "Delegate could not complete provider preflight.",
+                "expired inspection did not return the stable provider-preflight failure envelope")
         label = "delegation-inspection-" + str(self.ops.root_id) + "-" + task_id
         row = self.wait_row(label)
         require(done_result(row) != "Success", "expired inspection worker reported success")

@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -121,9 +122,14 @@ class InspectionDriverTests(unittest.TestCase):
     def test_concurrent_unknown_is_not_treated_as_admitted(self):
         task = "a" * 32
         root = "b" * 32
-        unknown = {"task_id": task, "root_id": root, "admission": "unknown", "error": "lock acquisition busy"}
+        unknown = {
+            "task_id": task, "root_id": root, "task_record": "unknown",
+            "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
+            "failure": {"code": "dispatch_failed", "stage": "create-task-record",
+                         "next_action": "stop_and_report"},
+            "error": "Delegate could not complete dispatch.",
+        }
         self.assertEqual(validate_concurrent_response(unknown, 1, task), root)
-        self.assertEqual(validate_concurrent_response({**unknown, "error": "task already submitted"}, 1, task), root)
         with self.assertRaises(AcceptanceFailure):
             validate_concurrent_response(unknown, 0, task)
         with self.assertRaises(AcceptanceFailure):
@@ -203,12 +209,13 @@ class InspectionDriverSetupTests(unittest.TestCase):
             output = root / "output"
             args = SimpleNamespace(tools=str(tools), pueue=str(pueue),
                                    pueued=str(pueued), output=str(output))
-            shared_prefix = Path("/Users/Shared")
+            private_prefix = (Path("/Users/Shared") if sys.platform == "darwin"
+                              else Path.home() / ".dl-acceptance")
             setup_calls: list[tuple[str, list[object], Path]] = []
 
             def private_directory(path: Path, _label: str, create: bool = False) -> Path:
                 path = Path(path)
-                if path.parent == shared_prefix and path.name.startswith("dl-inspect-"):
+                if path.parent == private_prefix and path.name.startswith("dl-inspect-"):
                     path = root / "private-supervisor"
                 if create:
                     path.mkdir(mode=0o700, parents=True, exist_ok=False)

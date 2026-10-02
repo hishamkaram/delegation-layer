@@ -29,6 +29,7 @@ from acceptance_provider_common import (
     clean_absolute,
     ensure_private_directory,
     path_is_within,
+    observed_pueue_version,
     reject_tmp,
     require,
     sha,
@@ -50,7 +51,6 @@ AUTHENTICATION_MARKERS = (
     b"authentication required", b"not authenticated", b"please log in", b"sign in",
     b"unauthorized", b"api key", b"credentials", b"login required",
 )
-PUEUE_VERSION = "4.0.4"
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
@@ -591,8 +591,13 @@ def status_row(status: dict[str, object], task_number: int) -> dict[str, object]
 
 def row_state(row: dict[str, object]) -> str:
     status = row.get("status")
-    require(isinstance(status, dict) and len(status) == 1, "pueue row status is not a one-state object")
-    return next(iter(status))
+    require(isinstance(status, dict), "pueue row status is not a one-state object")
+    recognized = [name for name in status
+                  if name in {"Queued", "Running", "Paused", "Stashed", "Done", "Locked"}]
+    require(len(status) == len(recognized),
+            "pueue row status contains an unknown lifecycle variant")
+    require(len(recognized) == 1, "pueue row status is not a one-state object")
+    return recognized[0]
 
 
 def validate_queue_row(row: dict[str, object], label: str, runner: Path, state: Path, task: str) -> None:
@@ -658,6 +663,8 @@ class NativeRun:
         require_discovery("agy", self.agy)
         require_discovery("pueue", self.pueue)
         self.provider_version: str | None = None
+        self.pueue_version: str | None = None
+        self.pueued_version: str | None = None
         self.provider_sha256 = digest(self.agy)
         self.profile_revision: str | None = None
         self.output.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -686,16 +693,16 @@ class NativeRun:
         self.provider_version = version
         self.processes.run("pueue-version", pueue_command(self.pueue, self.pueue_config, "--version"), REPO_ROOT, timeout=15)
         self.processes.run("pueued-version", [str(self.pueued), "-c", str(self.pueue_config), "--version"], REPO_ROOT, timeout=15)
-        pueue_version = self.processes.entries[-2].output().decode().strip()
-        pueued_version = self.processes.entries[-1].output().decode().strip()
-        require(pueue_version == f"pueue {PUEUE_VERSION}", f"unexpected pueue version: {pueue_version!r}")
-        require(pueued_version == f"pueued {PUEUE_VERSION}", f"unexpected pueued version: {pueued_version!r}")
+        pueue_version = self.processes.entries[-2].output()
+        pueued_version = self.processes.entries[-1].output()
+        self.pueue_version = observed_pueue_version(pueue_version, "pueue")
+        self.pueued_version = observed_pueue_version(pueued_version, "pueued")
         self.processes.run("isolation-probe", [str(self.probe), "isolate", str(self.pueue_config), str(self.pueue_base)], REPO_ROOT, timeout=30)
         write_json(self.output / "binding.json", {
             "agy": str(self.agy), "agy_version": self.provider_version, "agy_sha256": self.provider_sha256,
             "pueue": str(self.pueue), "pueue_sha256": digest(self.pueue),
             "pueued": str(self.pueued), "pueued_sha256": digest(self.pueued),
-            "pueue_version": PUEUE_VERSION, "pueued_version": PUEUE_VERSION,
+            "pueue_version": self.pueue_version, "pueued_version": self.pueued_version,
             "pueue_base": str(self.pueue_base), "pueue_config": str(self.pueue_config),
             "environment_values_in_record": False,
         })
@@ -835,7 +842,7 @@ class NativeRun:
                 submit.get("label") == self.labels[task], f"{name} submit evidence identity mismatch")
         supervisor = submit.get("supervisor")
         require(isinstance(supervisor, dict) and supervisor.get("config_path") == str(self.pueue_config) and
-                supervisor.get("observed_version") == f"pueue {PUEUE_VERSION}" and supervisor.get("client_executable") == str(self.pueue),
+                supervisor.get("observed_version") == self.pueue_version and supervisor.get("client_executable") == str(self.pueue),
                 f"{name} submit supervisor binding mismatch")
         start = self.read_record(task, "provider.start")
         require(start.get("root_id") == self.root_id and start.get("task_id") == task and

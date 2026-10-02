@@ -204,7 +204,7 @@ func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, p
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	preflight := func(scope execution.PreflightScope) error {
+	preflight := func(scope execution.PreflightScope, _ execution.Plan) (execution.Plan, error) {
 		root := filepath.Dir(filepath.Dir(td.Dir))
 		return freshPreflightProfile(deps, root, *admittedReq, *admittedMeta, scope)
 	}
@@ -212,7 +212,7 @@ func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, p
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	runResult := execution.Run(td, permit, profile.Plan, execution.Options{Preflight: preflight, Stopper: stopper, Identity: identityObserver, Hooks: deps.ExecutionHooks})
+	runResult := execution.Run(td, permit, profile.Plan, execution.Options{PreflightPlan: preflight, Stopper: stopper, Identity: identityObserver, Hooks: deps.ExecutionHooks})
 	if runResult.Outcome != nil {
 		response.Outcome = runResult.Outcome
 		response.Payload = &runResult.Outcome.Payload
@@ -258,7 +258,7 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 		return failed(response, err, 1)
 	}
 	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
-	restoreEnvironment, err := applySavedEnvironment(meta.Environment)
+	restoreEnvironment, err := applySavedEnvironment(meta.Environment, meta.EnvironmentRecorded)
 	if err != nil {
 		return failed(response, err, 1)
 	}
@@ -305,8 +305,8 @@ func supervisorContextForRunner(req *task.TaskRecord, options pueue.Options) (co
 	return context.WithTimeout(context.Background(), controlTimeout)
 }
 
-func applySavedEnvironment(values []string) (func() error, error) {
-	if len(values) == 0 {
+func applySavedEnvironment(values []string, recorded bool) (func() error, error) {
+	if len(values) == 0 && !recorded {
 		return func() error { return nil }, nil
 	}
 	if err := task.ValidateEnvironment(values); err != nil {

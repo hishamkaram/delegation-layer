@@ -25,14 +25,17 @@ from datetime import datetime, timezone
 from acceptance_provider_common import (
     AcceptanceFailure,
     NativeTaskOps,
+    bounded_text,
     canonical_go_json,
     clean_absolute,
     ensure_private_directory,
     failure_queue_finished,
     no_prompt_argv as _no_prompt_argv,
     path_is_within,
+    observed_pueue_version,
     reject_tmp,
     require,
+    runtime_capability_sha,
     snapshot,
     supervisor_binding,
     status_jobs,
@@ -66,7 +69,6 @@ WATCH_SECONDS = 150
 PLANNED_NATIVE_AI_TURNS = 2
 ACCEPTANCE_STATUS = "acceptance-passed"
 PRELAUNCH_STATUS = "planned"
-PUEUE_VERSION = "4.0.4"
 MAX_CONTROL_BYTES = 1 << 20
 MAX_PROVIDER_BYTES = 8 << 20
 MAX_INT64 = (1 << 63) - 1
@@ -100,7 +102,8 @@ TASK_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 def expected_codex_inspection_binding(
         pueue: Path, config: Path, base: Path, config_digest: str,
         runner: Path, workspace: Path, environment: dict[str, str],
-        provider: Path, provider_digest: str) -> dict[str, object]:
+        provider: Path, provider_digest: str,
+        pueue_version: str) -> dict[str, object]:
     """Build the expected runtime-only inspection binding from setup sources."""
     values = sorted(key + "=" + environment[key]
                     for key in CODEX_ENVIRONMENT_KEYS if key in environment)
@@ -124,12 +127,15 @@ def expected_codex_inspection_binding(
     return {
         "definition_revision": RUNTIME_INSPECTION_REVISION,
         "definition_sha256": sha(canonical_go_json(definition)),
+        "capability_sha256": runtime_capability_sha(definition),
         "helper_executable": str(provider),
         "helper_sha256": provider_digest,
         "worker_executable": str(runner),
         "worker_sha256": digest(runner),
+        "runner_ownership": "custom",
         "environment": values,
-        "supervisor": supervisor_binding(pueue, config, base, config_digest),
+        "environment_recorded": True,
+        "supervisor": supervisor_binding(pueue, config, base, config_digest, pueue_version),
     }
 
 
@@ -332,9 +338,6 @@ def parse_codex_events(raw: bytes) -> dict[str, object]:
             elif turn_completed:
                 fault("error event follows turn completion")
         elif event_type in {"item.started", "item.updated", "item.completed"}:
-            if thread_id is None or not turn_started or turn_completed or terminal_failed or interrupted:
-                fault("item event is outside the active turn")
-                continue
             item = event.get("item")
             if not isinstance(item, dict):
                 fault("item event has no object item")
@@ -353,6 +356,25 @@ def parse_codex_events(raw: bytes) -> dict[str, object]:
             if len(item_type.encode("utf-8")) > MAX_ITEM_TYPE_BYTES:
                 fault("item type exceeds bounded size")
                 continue
+            if item_type == "agent_message":
+                text = item.get("text")
+                if not isinstance(text, str):
+                    fault("agent_message text is not a string")
+                    continue
+            if item_type == "error":
+                if not isinstance(item.get("message"), str):
+                    fault("error item message is not a string")
+                    continue
+            # Codex may publish a completed error item as a configuration
+            # diagnostic after thread.started and before turn.started. It is
+            # outside the turn lifecycle and must not enter item state, while
+            # its identity and message remain subject to the same validation
+            # as the Go parser.
+            if thread_id is not None and not turn_started and event_type == "item.completed" and item_type == "error":
+                continue
+            if thread_id is None or not turn_started or turn_completed or terminal_failed or interrupted:
+                fault("item event is outside the active turn")
+                continue
             if item_id not in items and len(items) >= MAX_ITEMS:
                 fault("item identity state exceeds bounded count")
                 continue
@@ -362,10 +384,6 @@ def parse_codex_events(raw: bytes) -> dict[str, object]:
                 fault("item id changed type")
                 continue
             if item_type == "agent_message":
-                text = item.get("text")
-                if not isinstance(text, str):
-                    fault("agent_message text is not a string")
-                    continue
                 state["text"] = text
             elif item_type == "command_execution":
                 command = commands.setdefault(item_id, {"id": item_id, "type": item_type})
@@ -726,6 +744,8 @@ class CodexAcceptance:
         self.pueued = resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued")
         self.codex = resolve_executable(args.codex, Path(shutil.which("codex") or "/opt/homebrew/bin/codex"), "codex")
         self.provider_version: str | None = None
+        self.pueue_version: str | None = None
+        self.pueued_version: str | None = None
         self.provider_sha256 = digest(self.codex)
         self.profile_revision: str | None = None
         self.inspection_binding: dict[str, object] | None = None
@@ -848,20 +868,20 @@ class CodexAcceptance:
         write_bytes(aliases, b"{}\n")
         self.pueue_config = self.pueue_base / "pueue.yml"
         write_json(self.pueue_config, config_for(self.pueue_base))
-        self.inspection_binding = expected_codex_inspection_binding(
-            self.pueue, self.pueue_config, self.pueue_base, digest(self.pueue_config),
-            self.runner, self.workspace, self.environment, self.codex, self.provider_sha256)
-
         pueue_version = self.direct("pueue-version", [self.pueue, "--version"], timeout=15)
         pueued_version = self.direct("pueued-version", [self.pueued, "-c", self.pueue_config, "--version"], timeout=15)
-        require((pueue_version.directory / "stdout").read_text().strip() == "pueue " + PUEUE_VERSION,
-                "unexpected pueue version")
-        require((pueued_version.directory / "stdout").read_text().strip() == "pueued " + PUEUE_VERSION,
-                "unexpected pueued version")
+        self.pueue_version = observed_pueue_version(
+            bounded_text(pueue_version.directory / "stdout", "pueue version output"), "pueue")
+        self.pueued_version = observed_pueue_version(
+            bounded_text(pueued_version.directory / "stdout", "pueued version output"), "pueued")
         codex_version = self.direct("codex-version", [self.codex, "--version"], timeout=15)
         observed = (codex_version.directory / "stdout").read_text().strip()
         require(observed, "Codex returned an empty version")
         self.provider_version = observed
+        self.inspection_binding = expected_codex_inspection_binding(
+            self.pueue, self.pueue_config, self.pueue_base, digest(self.pueue_config),
+            self.runner, self.workspace, self.environment, self.codex, self.provider_sha256,
+            self.pueue_version)
 
         self.daemon = self.processes.start("private-daemon", [self.pueued, "-c", self.pueue_config], self.state_parent)
         self.ops.bind_supervisor(self.pueue_config, self.daemon)
@@ -891,8 +911,8 @@ class CodexAcceptance:
             "pueue_sha256": digest(self.pueue),
             "pueued": str(self.pueued),
             "pueued_sha256": digest(self.pueued),
-            "pueue_version": PUEUE_VERSION,
-            "pueued_version": PUEUE_VERSION,
+            "pueue_version": self.pueue_version,
+            "pueued_version": self.pueued_version,
             "pueue_base": str(self.pueue_base),
             "pueue_config": str(self.pueue_config),
             "config_sha256": digest(self.pueue_config),
@@ -1052,7 +1072,7 @@ class CodexAcceptance:
                 f"{name} submit binding mismatch")
         supervisor = submit.get("supervisor")
         require(isinstance(supervisor, dict) and supervisor.get("config_path") == str(self.pueue_config) and
-                supervisor.get("observed_version") == "pueue " + PUEUE_VERSION and
+                supervisor.get("observed_version") == self.pueue_version and
                 supervisor.get("client_executable") == str(self.pueue),
                 f"{name} submit supervisor binding mismatch")
 

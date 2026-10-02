@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +60,192 @@ func TestInspectionPollingStopsWhenSupervisorCommandIsInFlight(t *testing.T) {
 	}
 }
 
+func TestSupervisorOptionsForCandidateKeepOrdinaryTimeout(t *testing.T) {
+	workspace, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := filepath.EvalSymlinks("/usr/bin/true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := commonprovider.FingerprintExecutable(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := commonprovider.ProfileCandidate{Inspection: &commonprovider.InspectionDefinition{
+		Revision: commonprovider.RuntimeInspectionRevision, Executable: executable,
+		ExecutableSHA256: digest, Arguments: []string{"--version"}, Directory: workspace,
+		Environment: []string{}, OutputLimit: commonprovider.MaxInspectionOutput,
+		Project: func([]byte) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
+	}}
+	options, err := supervisorOptionsForCandidate(pueue.Options{ObservationTimeout: time.Millisecond}, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.ObservationTimeout != time.Millisecond {
+		t.Fatalf("ordinary observation timeout=%s, want %s", options.ObservationTimeout, time.Millisecond)
+	}
+	longer, err := supervisorOptionsForCandidate(pueue.Options{ObservationTimeout: time.Minute}, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if longer.ObservationTimeout != time.Minute {
+		t.Fatalf("explicit longer observation timeout=%s was reduced", longer.ObservationTimeout)
+	}
+	if _, err = supervisorOptionsForCandidate(pueue.Options{ObservationTimeout: -time.Second}, candidate); !errors.Is(err, pueue.ErrConfiguration) {
+		t.Fatalf("negative observation timeout was accepted: %v", err)
+	}
+}
+
+func TestRuntimeInspectionBindingKeepsCapabilityContractAcrossIdentityRefresh(t *testing.T) {
+	base := inspection.Binding{DefinitionRevision: commonprovider.RuntimeInspectionRevision, CapabilitySHA256: strings.Repeat("a", 64), Environment: []string{"LANG=C"}, EnvironmentRecorded: true}
+	changed := base
+	changed.CapabilitySHA256 = strings.Repeat("b", 64)
+	if sameInspectionBindingBase(base, changed) {
+		t.Fatal("runtime capability contract drift was accepted")
+	}
+	identityRefresh := base
+	identityRefresh.DefinitionSHA256 = strings.Repeat("c", 64)
+	if !sameInspectionBindingBase(base, identityRefresh) {
+		t.Fatal("runtime executable identity refresh was rejected")
+	}
+	legacy := base
+	legacy.CapabilitySHA256 = ""
+	if !sameInspectionBindingBase(base, legacy) {
+		t.Fatal("legacy runtime binding was not left for a fresh capability probe")
+	}
+	legacyChanged := legacy
+	legacyChanged.DefinitionSHA256 = strings.Repeat("d", 64)
+	if sameInspectionBindingBase(base, legacyChanged) {
+		t.Fatal("markerless runtime binding relaxed executable identity")
+	}
+	legacyNonEmpty := base
+	legacyNonEmpty.EnvironmentRecorded = false
+	if !sameInspectionBindingBase(base, legacyNonEmpty) {
+		t.Fatal("legacy non-empty environment binding was not normalized as recorded")
+	}
+	explicitEmpty := base
+	explicitEmpty.Environment = []string{}
+	explicitEmpty.EnvironmentRecorded = true
+	legacyEmpty := explicitEmpty
+	legacyEmpty.EnvironmentRecorded = false
+	if sameInspectionBindingBase(explicitEmpty, legacyEmpty) {
+		t.Fatal("inherited and explicit-empty environment bindings were treated as equivalent")
+	}
+	mixed := inspection.Binding{
+		DefinitionRevision: commonprovider.RuntimeInspectionRevision,
+		DefinitionSHA256:   strings.Repeat("a", 64),
+		HelperExecutable:   "/usr/bin/security",
+		HelperSHA256:       strings.Repeat("c", 64),
+		Environment:        []string{"LANG=C"},
+	}
+	mixedChanged := mixed
+	mixedChanged.DefinitionSHA256 = strings.Repeat("b", 64)
+	mixedChanged.HelperExecutable = "/usr/bin/other-helper"
+	if sameInspectionBindingBase(mixed, mixedChanged) {
+		t.Fatal("mixed native/runtime binding relaxed its native contract")
+	}
+}
+
+func TestAdmissionRejectsCompletedRuntimeProofAfterIdentityDrift(t *testing.T) {
+	store := newBareInspectionStore(t)
+	request := newBareInspectionRequest(t, store)
+	supervisor, _ := newBlockingInspectionSupervisor(t, store.RootID)
+	oldBinding := inspection.Binding{
+		DefinitionRevision: commonprovider.RuntimeInspectionRevision,
+		DefinitionSHA256:   strings.Repeat("a", 64),
+		CapabilitySHA256:   strings.Repeat("b", 64),
+		HelperExecutable:   "/usr/bin/true",
+		HelperSHA256:       strings.Repeat("c", 64),
+		WorkerExecutable:   "/usr/bin/true",
+		WorkerSHA256:       strings.Repeat("d", 64),
+		Environment:        []string{"LANG=C"},
+		Supervisor:         supervisor.Binding(),
+	}
+	openedAt := time.Now().UTC()
+	operation, err := inspection.OpenOperation(store, request, oldBinding, openedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submission, err := operation.ClaimSubmissionContext(context.Background(), openedAt.Add(time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = submission.ConsumeInspectionSubmission(); err != nil {
+		t.Fatal(err)
+	}
+	start, err := operation.ClaimStart(openedAt.Add(2 * time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = start.Consume(); err != nil {
+		t.Fatal(err)
+	}
+	if err = operation.Complete(inspection.ResultEligible, []byte(`{"eligible":true}`), openedAt.Add(3*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err = operation.RecordReceipt(17); err != nil {
+		t.Fatal(err)
+	}
+	if err = operation.RecordWorkerSuccess(17); err != nil {
+		t.Fatal(err)
+	}
+	if err = operation.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	currentBinding := oldBinding
+	currentBinding.DefinitionSHA256 = strings.Repeat("e", 64)
+	replayed, err := openAdmissionInspectionOperation(store, request, currentBinding, time.Now().UTC())
+	if replayed != nil || !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("completed runtime proof crossed identity drift: operation=%v err=%v", replayed, err)
+	}
+}
+
+func TestAdmissionReplayReprobesIncompleteMarkerlessRuntimeAfterRefresh(t *testing.T) {
+	store := newBareInspectionStore(t)
+	request := newBareInspectionRequest(t, store)
+	supervisor, _ := newBlockingInspectionSupervisor(t, store.RootID)
+	oldBinding := inspection.Binding{
+		DefinitionRevision: commonprovider.RuntimeInspectionRevision,
+		DefinitionSHA256:   strings.Repeat("a", 64),
+		HelperExecutable:   "/usr/bin/provider-old",
+		HelperSHA256:       strings.Repeat("b", 64),
+		WorkerExecutable:   "/usr/bin/true",
+		WorkerSHA256:       strings.Repeat("c", 64),
+		Environment:        []string{"LANG=C"},
+		Supervisor:         supervisor.Binding(),
+	}
+	operation, err := inspection.OpenOperation(store, request, oldBinding, time.Unix(100, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = operation.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	currentBinding := oldBinding
+	currentBinding.DefinitionSHA256 = strings.Repeat("d", 64)
+	currentBinding.CapabilitySHA256 = strings.Repeat("e", 64)
+	currentBinding.HelperExecutable = "/usr/bin/provider-new"
+	currentBinding.HelperSHA256 = strings.Repeat("f", 64)
+	currentBinding.RunnerOwnership = task.RunnerOwnershipManaged
+	currentBinding.EnvironmentRecorded = true
+	replayed, err := openAdmissionInspectionOperation(store, request, currentBinding, time.Unix(101, 0).UTC())
+	if err != nil {
+		t.Fatalf("incomplete markerless runtime journal was not reopened for re-probe: %v", err)
+	}
+	defer func() {
+		if closeErr := replayed.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	if got := replayed.Request().Binding; !reflect.DeepEqual(got, oldBinding) {
+		t.Fatalf("replay mutated immutable markerless binding: got=%+v want=%+v", got, oldBinding)
+	}
+}
+
 func TestEnsureInspectionGroupReconcilesUncertainCreate(t *testing.T) {
 	store := newBareInspectionStore(t)
 	client, logPath, donePath := newUncertainGroupSupervisor(t, store.RootID)
@@ -92,7 +279,7 @@ func TestAwaitInspectionJoinsInFlightSupervisorObservation(t *testing.T) {
 		HelperExecutable: "/usr/bin/true", HelperSHA256: digest,
 		WorkerExecutable: "/usr/bin/true", WorkerSHA256: digest,
 		Supervisor: client.Binding(),
-	}, time.Unix(100, 0).UTC())
+	}, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,12 +53,46 @@ func finalizeCandidate(candidate commonprovider.ProfileCandidate, req task.TaskR
 	if profile.Plan.Directory != candidate.Directory || !slices.Equal(profile.WritableRoots, candidate.WritableRoots) {
 		return PreparedProfile{}, ErrProfileUnavailable
 	}
+	if profile.Plan.ExecutableSHA256 != "" && profile.ObservedVersion != "" {
+		profile.Plan.ProviderRuntime = task.ProviderRuntimeIdentity{
+			Executable: profile.Plan.Executable,
+			Version:    profile.ObservedVersion,
+			SHA256:     profile.Plan.ExecutableSHA256,
+		}
+	}
 	return profile, nil
 }
 
+func refreshAdmissionCandidate(deps Dependencies, root string, req task.TaskRecord, admitted commonprovider.ProfileCandidate) (commonprovider.ProfileCandidate, error) {
+	if admitted.Inspection == nil || admitted.Inspection.Runtime == nil {
+		return admitted, nil
+	}
+	current, err := prepareCandidate(deps, root, req)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	if current.Inspection == nil || current.Inspection.Runtime == nil {
+		return commonprovider.ProfileCandidate{}, task.ErrEvidenceFault
+	}
+	if current.Directory != admitted.Directory || !slices.Equal(current.WritableRoots, admitted.WritableRoots) {
+		return commonprovider.ProfileCandidate{}, task.ErrEvidenceFault
+	}
+	admittedCapability, err := commonprovider.RuntimeInspectionContractDigest(*admitted.Inspection)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, task.ErrEvidenceFault
+	}
+	currentCapability, err := commonprovider.RuntimeInspectionContractDigest(*current.Inspection)
+	if err != nil || currentCapability != admittedCapability {
+		return commonprovider.ProfileCandidate{}, task.ErrEvidenceFault
+	}
+	return current, nil
+}
+
 // validateInspectionCandidate binds the reconstructed compiled definition and
-// full immutable task to existing evidence. It never reads native credentials.
-func validateInspectionCandidate(operation *inspection.Operation, req task.TaskRecord, candidate commonprovider.ProfileCandidate) error {
+// full immutable task to existing evidence. Runtime-only provider identity is
+// refreshed by the current capability probe; the inspection worker identity
+// remains separately bound. It never reads native credentials.
+func validateInspectionCandidate(ctx context.Context, operation *inspection.Operation, req task.TaskRecord, candidate commonprovider.ProfileCandidate) error {
 	if operation == nil || candidate.Inspection == nil {
 		return task.ErrEvidenceFault
 	}
@@ -67,16 +101,120 @@ func validateInspectionCandidate(operation *inspection.Operation, req task.TaskR
 		return task.ErrEvidenceFault
 	}
 	record := operation.Request()
+	if err = validateInspectionTaskBinding(record, req, definition); err != nil {
+		return err
+	}
+	if definition.Runtime == nil {
+		return validateStaticInspectionCandidate(record, definition, digest)
+	}
+	if runtimeOnlyInspectionDefinition(definition) {
+		return validateRuntimeInspectionCandidate(ctx, operation, record, req, definition, digest)
+	}
+	if err = validateMixedInspectionCandidate(ctx, operation, record, definition, digest); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateInspectionTaskBinding(record inspection.RequestRecord, req task.TaskRecord, definition commonprovider.InspectionDefinition) error {
 	requestBytes, err := task.MarshalCanonical(req)
+	if err != nil || record.TaskSHA256 != task.ComputeSHA256(requestBytes) || record.Binding.DefinitionRevision != definition.Revision {
+		return task.ErrEvidenceFault
+	}
+	return nil
+}
+
+func validateStaticInspectionCandidate(record inspection.RequestRecord, definition commonprovider.InspectionDefinition, digest string) error {
+	if record.Binding.DefinitionSHA256 != digest || record.Binding.HelperExecutable != definition.Executable || record.Binding.HelperSHA256 != definition.ExecutableSHA256 {
+		return task.ErrEvidenceFault
+	}
+	return nil
+}
+
+func validateMixedInspectionCandidate(ctx context.Context, operation *inspection.Operation, record inspection.RequestRecord, definition commonprovider.InspectionDefinition, digest string) error {
+	if !runtimeOwnsInspectionExecutable(definition) && (record.Binding.HelperExecutable != definition.Executable || record.Binding.HelperSHA256 != definition.ExecutableSHA256) {
+		return task.ErrEvidenceFault
+	}
+	if !slices.Equal(record.Binding.Environment, definition.Environment) {
+		return task.ErrEvidenceFault
+	}
+	if record.Binding.CapabilitySHA256 != "" {
+		capability, capabilityErr := commonprovider.RuntimeInspectionContractDigest(definition)
+		if capabilityErr != nil || capability != record.Binding.CapabilitySHA256 {
+			return task.ErrEvidenceFault
+		}
+	}
+	if record.Binding.DefinitionSHA256 == digest {
+		return nil
+	}
+	return validateHistoricalRuntimeDefinition(ctx, operation, record.Binding.DefinitionSHA256, definition)
+}
+
+func validateHistoricalRuntimeDefinition(ctx context.Context, operation *inspection.Operation, expectedDigest string, definition commonprovider.InspectionDefinition) error {
+	proof, err := operation.ReadProofContext(ctx)
 	if err != nil {
 		return task.ErrEvidenceFault
 	}
-	if record.TaskSHA256 != task.ComputeSHA256(requestBytes) || record.Binding.DefinitionRevision != definition.Revision || record.Binding.DefinitionSHA256 != digest || record.Binding.HelperExecutable != definition.Executable || record.Binding.HelperSHA256 != definition.ExecutableSHA256 {
+	facts, err := commonprovider.DecodeInspectionFacts(proof)
+	if err != nil || facts.Runtime == nil {
 		return task.ErrEvidenceFault
 	}
-	// The inspection worker identity was checked before its one allowed start.
-	// This is now historical evidence: a CLI upgrade may replace or remove the
-	// package path while a queued task still depends on the completed proof.
+	if runtimeOnlyInspectionDefinition(definition) {
+		if facts.Native != nil {
+			return task.ErrEvidenceFault
+		}
+		capability, capabilityErr := commonprovider.RuntimeCapabilityDigest(definition)
+		if capabilityErr == nil && facts.Runtime.CapabilitySHA256 == capability {
+			return nil
+		}
+	}
+	replayed := definition
+	runtime := *definition.Runtime
+	runtime.Executable = facts.Runtime.Executable
+	runtime.ExecutableSHA256 = facts.Runtime.SHA256
+	replayed.Runtime = &runtime
+	if runtimeOwnsInspectionExecutable(definition) {
+		replayed.Executable = facts.Runtime.Executable
+		replayed.ExecutableSHA256 = facts.Runtime.SHA256
+	}
+	if _, digest, snapshotErr := replayed.Snapshot(); snapshotErr != nil || digest != expectedDigest {
+		return task.ErrEvidenceFault
+	}
+	return nil
+}
+
+func validateRuntimeInspectionCandidate(ctx context.Context, operation *inspection.Operation, record inspection.RequestRecord, req task.TaskRecord, definition commonprovider.InspectionDefinition, digest string) error {
+	if definition.Directory != req.CanonicalCwd || !slices.Equal(record.Binding.Environment, definition.Environment) {
+		return task.ErrEvidenceFault
+	}
+	capabilitySHA, err := commonprovider.RuntimeCapabilityDigest(definition)
+	if err != nil {
+		return task.ErrEvidenceFault
+	}
+	if record.Binding.CapabilitySHA256 != "" {
+		if record.Binding.CapabilitySHA256 != capabilitySHA {
+			return task.ErrEvidenceFault
+		}
+		return nil
+	}
+	if record.Binding.DefinitionSHA256 == digest {
+		return nil
+	}
+	if runtimeOnlyInspectionDefinition(definition) {
+		if _, _, completionErr := operation.ReadCompletedContext(ctx); errors.Is(completionErr, os.ErrNotExist) {
+			// A markerless historical journal has no persisted capability
+			// contract. Its current worker is the fresh supervised probe, so
+			// allow the probe to establish the current contract in its facts.
+			return nil
+		}
+	}
+	// Older runtime journals predate CapabilitySHA256. Reconstruct the
+	// historical definition using the provider identity in the sealed proof so
+	// a changed help/flag contract cannot become authoritative merely because
+	// the current probe succeeds.
+	if err = validateHistoricalRuntimeDefinition(ctx, operation, record.Binding.DefinitionSHA256, definition); err != nil {
+		return task.ErrEvidenceFault
+	}
 	return nil
 }
 
@@ -95,7 +233,7 @@ func storedInspectionFactsContext(ctx context.Context, deps Dependencies, root s
 		return nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
-	if err = validateInspectionCandidate(operation, req, candidate); err != nil {
+	if err = validateInspectionCandidate(ctx, operation, req, candidate); err != nil {
 		return nil, err
 	}
 	if !task.SameSupervisorIdentity(operation.Request().Binding.Supervisor, meta.SupervisorConfig) {
@@ -181,11 +319,16 @@ func validateManagedTaskRunnerExecutable(root, recorded, current string) error {
 }
 
 func finalizeMatchedProfile(candidate commonprovider.ProfileCandidate, facts json.RawMessage, root string, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {
+	var err error
+	facts, err = factsForCurrentRuntime(candidate, facts)
+	if err != nil {
+		return PreparedProfile{}, err
+	}
 	profile, err := finalizeCandidate(candidate, req, facts)
 	if err != nil {
 		return PreparedProfile{}, err
 	}
-	if err = profile.Matches(req, meta); err != nil {
+	if err = matchPreparedProfile(candidate, profile, req, meta); err != nil {
 		return PreparedProfile{}, err
 	}
 	if err = profile.ValidateStatePlacement(root); err != nil {
@@ -246,36 +389,98 @@ func (d Dependencies) useCatalogExistingFor(request task.TaskRecord) bool {
 	return err == nil && registration.PrepareExisting != nil
 }
 
-func freshPreflightProfile(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord, scope execution.PreflightScope) error {
+func runtimeOnlyInspectionDefinition(definition commonprovider.InspectionDefinition) bool {
+	return definition.Runtime != nil && definition.Models == nil && len(definition.Arguments) == 0 && definition.Project == nil && definition.Remote == nil
+}
+
+func runtimeOwnsInspectionExecutable(definition commonprovider.InspectionDefinition) bool {
+	return definition.Runtime != nil && definition.Executable == definition.Runtime.Executable && definition.ExecutableSHA256 == definition.Runtime.ExecutableSHA256
+}
+
+func factsForCurrentRuntime(candidate commonprovider.ProfileCandidate, facts json.RawMessage) (json.RawMessage, error) {
+	if candidate.Inspection == nil || candidate.Inspection.Runtime == nil || len(facts) == 0 {
+		return facts, nil
+	}
+	decoded, err := commonprovider.DecodeInspectionFacts(facts)
+	if err != nil || decoded.Runtime == nil {
+		return nil, task.ErrEvidenceFault
+	}
+	runtime := *decoded.Runtime
+	runtime.Executable = candidate.Inspection.Runtime.Executable
+	runtime.SHA256 = candidate.Inspection.Runtime.ExecutableSHA256
+	return commonprovider.EncodeInspectionFacts(runtime, decoded.Native)
+}
+
+func freshPreflightProfile(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord, scope execution.PreflightScope) (execution.Plan, error) {
 	candidate, facts, err := prepareExistingCandidateContext(scope.Context(), deps, root, req, meta)
 	if err != nil {
-		return err
+		return execution.Plan{}, err
 	}
 	if candidate.Inspection != nil {
 		freshFacts, inspectErr := inspection.Inspect(scope, *candidate.Inspection)
 		if inspectErr != nil {
-			return inspectErr
+			return execution.Plan{}, inspectErr
 		}
-		if !inspectionFactsMatch(facts, freshFacts) {
-			return task.ErrEvidenceFault
+		// Runtime-only journals from before capability digests were recorded do
+		// not contain enough information to compare command shape. The current
+		// supervised probe is therefore authoritative for those records. Native
+		// projections remain byte-for-byte bound to their admission proof.
+		if !runtimeOnlyInspectionDefinition(*candidate.Inspection) && !inspectionFactsMatchForDefinition(facts, freshFacts, candidate.Inspection.Runtime != nil) {
+			return execution.Plan{}, task.ErrEvidenceFault
 		}
 		facts = freshFacts
 	}
 	profile, err := finalizeCandidate(candidate, req, facts)
 	if err != nil {
-		return err
+		return execution.Plan{}, err
 	}
-	if err = profile.Matches(req, meta); err != nil {
-		return err
+	if err = matchPreparedProfile(candidate, profile, req, meta); err != nil {
+		return execution.Plan{}, err
 	}
-	return profile.ValidateStatePlacement(root)
+	if err = profile.ValidateStatePlacement(root); err != nil {
+		return execution.Plan{}, err
+	}
+	return profile.Plan, nil
+}
+
+func matchPreparedProfile(candidate commonprovider.ProfileCandidate, profile PreparedProfile, req task.TaskRecord, meta task.MetaRecord) error {
+	if candidate.Inspection != nil && candidate.Inspection.Runtime != nil {
+		return profile.MatchesWithRuntimeRefresh(req, meta)
+	}
+	return profile.Matches(req, meta)
 }
 
 // inspectionFactsMatch compares the canonical nonsecret projection returned
-// by admission with the fresh projection at the ordinary start boundary. Both
-// inspection APIs already canonicalize their object, while this normalization
-// keeps the comparison independent of object field order at this caller.
+// by admission with the fresh projection at the ordinary start boundary. For
+// runtime-only profiles it excludes the provider identity, which is replaced
+// by the current launch plan; all native capability facts remain exact.
 func inspectionFactsMatch(stored, fresh json.RawMessage) bool {
+	return inspectionFactsMatchForDefinition(stored, fresh, true)
+}
+
+func inspectionFactsMatchForDefinition(stored, fresh json.RawMessage, runtimeEnabled bool) bool {
+	if !runtimeEnabled {
+		canonicalStored, storedErr := canonicalInspectionFacts(stored)
+		canonicalFresh, freshErr := canonicalInspectionFacts(fresh)
+		return storedErr == nil && freshErr == nil && bytes.Equal(canonicalStored, canonicalFresh)
+	}
+	storedFacts, storedErr := commonprovider.DecodeInspectionFacts(stored)
+	freshFacts, freshErr := commonprovider.DecodeInspectionFacts(fresh)
+	if storedErr != nil || freshErr != nil || (storedFacts.Runtime == nil) != (freshFacts.Runtime == nil) {
+		return false
+	}
+	if storedFacts.Runtime != nil {
+		return canonicalNativeFactsEqual(storedFacts.Native, freshFacts.Native)
+	}
+	canonicalStored, storedErr := canonicalInspectionFacts(storedFacts.Native)
+	canonicalFresh, freshErr := canonicalInspectionFacts(freshFacts.Native)
+	return storedErr == nil && freshErr == nil && bytes.Equal(canonicalStored, canonicalFresh)
+}
+
+func canonicalNativeFactsEqual(stored, fresh json.RawMessage) bool {
+	if len(stored) == 0 || len(fresh) == 0 {
+		return len(stored) == 0 && len(fresh) == 0
+	}
 	canonicalStored, storedErr := canonicalInspectionFacts(stored)
 	canonicalFresh, freshErr := canonicalInspectionFacts(fresh)
 	return storedErr == nil && freshErr == nil && bytes.Equal(canonicalStored, canonicalFresh)

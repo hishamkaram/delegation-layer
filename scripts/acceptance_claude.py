@@ -30,14 +30,17 @@ import uuid
 from acceptance_provider_common import (
     AcceptanceFailure,
     NativeTaskOps,
+    bounded_text,
     canonical_go_json,
     clean_absolute,
     ensure_private_directory,
     no_prompt_argv,
+    observed_pueue_version,
     path_is_within,
     reject_tmp,
     read_outcome_payload,
     require,
+    runtime_capability_sha,
     snapshot,
     supervisor_binding,
     unique_object,
@@ -63,7 +66,6 @@ WATCH_SECONDS = 150
 PLANNED_NATIVE_AI_TURNS = 2
 ACCEPTANCE_STATUS = "acceptance-passed"
 PRELAUNCH_STATUS = "planned"
-PUEUE_VERSION = "4.0.4"
 MAX_CONTROL_BYTES = 1 << 20
 MAX_PROVIDER_BYTES = 8 << 20
 CLAUDE_XDG_DIRECTORY = "claude"
@@ -202,7 +204,8 @@ def _native_environment(environment: dict[str, str]) -> list[str]:
 def expected_claude_inspection_binding(
         pueue: Path, config: Path, base: Path, config_digest: str,
         workspace: Path, executable: Path,
-        runner: Path, environment: dict[str, str]) -> dict[str, object]:
+        runner: Path, environment: dict[str, str],
+        pueue_version: str) -> dict[str, object]:
     """Build Claude's expected portable runtime inspection binding."""
     executable = Path(executable).resolve()
     runner = Path(runner).resolve()
@@ -227,12 +230,15 @@ def expected_claude_inspection_binding(
     return {
         "definition_revision": RUNTIME_INSPECTION_REVISION,
         "definition_sha256": sha(canonical_go_json(definition)),
+        "capability_sha256": runtime_capability_sha(definition),
         "helper_executable": str(executable),
         "helper_sha256": digest(executable),
         "worker_executable": str(runner),
         "worker_sha256": digest(runner),
+        "runner_ownership": "custom",
         "environment": values,
-        "supervisor": supervisor_binding(pueue, config, base, config_digest),
+        "environment_recorded": True,
+        "supervisor": supervisor_binding(pueue, config, base, config_digest, pueue_version),
     }
 
 
@@ -887,6 +893,8 @@ class ClaudeAcceptance:
         self.pueued = resolve_executable(args.pueued, Path("/opt/homebrew/bin/pueued"), "pueued")
         self.claude = resolve_executable(args.claude, Path(shutil.which("claude") or "/opt/homebrew/bin/claude"), "claude")
         self.provider_version: str | None = None
+        self.pueue_version: str | None = None
+        self.pueued_version: str | None = None
         self.provider_sha256 = digest(self.claude)
         self.profile_revision: str | None = None
         require_discovery("claude", self.claude)
@@ -970,19 +978,20 @@ class ClaudeAcceptance:
         self.pueue_config = self.pueue_base / "pueue.yml"
         write_json(self.pueue_config, config_for(self.pueue_base))
         config_digest = digest(self.pueue_config)
-        self.inspection_binding = expected_claude_inspection_binding(
-            self.pueue, self.pueue_config, self.pueue_base, config_digest,
-            self.workspace, self.claude, self.runner, self.environment)
         pueue_version = self.ops.direct("pueue-version", [self.pueue, "--version"], timeout=15)
         pueued_version = self.ops.direct("pueued-version", [self.pueued, "-c", self.pueue_config, "--version"], timeout=15)
-        require((pueue_version.directory / "stdout").read_text().strip() == "pueue " + PUEUE_VERSION,
-                "unexpected pueue version")
-        require((pueued_version.directory / "stdout").read_text().strip() == "pueued " + PUEUE_VERSION,
-                "unexpected pueued version")
+        self.pueue_version = observed_pueue_version(
+            bounded_text(pueue_version.directory / "stdout", "pueue version output"), "pueue")
+        self.pueued_version = observed_pueue_version(
+            bounded_text(pueued_version.directory / "stdout", "pueued version output"), "pueued")
         claude_version = self.ops.direct("claude-version", [self.claude, "--version"], timeout=15)
         observed = (claude_version.directory / "stdout").read_text().strip()
         require(observed, "Claude returned an empty version")
         self.provider_version = observed
+        self.inspection_binding = expected_claude_inspection_binding(
+            self.pueue, self.pueue_config, self.pueue_base, config_digest,
+            self.workspace, self.claude, self.runner, self.environment,
+            self.pueue_version)
         self.daemon = self.processes.start("private-daemon", [self.pueued, "-c", self.pueue_config], self.state_parent)
         self.ops.bind_supervisor(self.pueue_config, self.daemon)
         for _ in range(200):
@@ -1002,8 +1011,8 @@ class ClaudeAcceptance:
             "delegate_sha256": digest(self.delegate), "runner": str(self.runner),
             "runner_sha256": digest(self.runner), "pueue": str(self.pueue),
             "pueue_sha256": digest(self.pueue), "pueued": str(self.pueued),
-            "pueued_sha256": digest(self.pueued), "pueue_version": PUEUE_VERSION,
-            "pueued_version": PUEUE_VERSION, "pueue_base": str(self.pueue_base),
+            "pueued_sha256": digest(self.pueued), "pueue_version": self.pueue_version,
+            "pueued_version": self.pueued_version, "pueue_base": str(self.pueue_base),
             "pueue_config": str(self.pueue_config), "config_sha256": digest(self.pueue_config),
             "state": str(self.state), "workspace": str(self.workspace), "sibling": str(self.sibling),
             "host_home": str(self.host_home), "isolated_temporary_root": str(self.test_tmp),
@@ -1150,7 +1159,7 @@ class ClaudeAcceptance:
                 f"{name} submit binding mismatch")
         supervisor = submit.get("supervisor")
         require(isinstance(supervisor, dict) and supervisor.get("config_path") == str(self.pueue_config) and
-                supervisor.get("observed_version") == "pueue " + PUEUE_VERSION and
+                supervisor.get("observed_version") == self.pueue_version and
                 supervisor.get("client_executable") == str(self.pueue),
                 f"{name} submit supervisor binding mismatch")
         start = self.read_record(task, "provider.start")

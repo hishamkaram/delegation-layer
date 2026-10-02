@@ -23,6 +23,77 @@ TASK = "b" * 32
 
 
 class InspectionHarnessTests(unittest.TestCase):
+    def test_concurrent_response_accepts_only_known_admission_races(self):
+        creation_race = {
+            "task_id": TASK, "root_id": ROOT, "task_record": "unknown",
+            "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
+            "failure": {"code": "dispatch_failed", "stage": "create-task-record",
+                         "next_action": "stop_and_report"},
+            "error": "Delegate could not complete dispatch.",
+        }
+        submission_race = {
+            "task_id": TASK, "root_id": ROOT, "task_record": "created",
+            "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
+            "failure": {"code": "task_submission_preparation_failed",
+                         "stage": "prepare-task-submission", "next_action": "check_status"},
+            "error": ("Delegate created the task record but could not prepare it for submission. "
+                      "Check its status before taking further action."),
+        }
+        for response in (creation_race, submission_race):
+            with self.subTest(response=response):
+                self.assertEqual(
+                    inspection_acceptance.validate_concurrent_response(response, 1, TASK), ROOT)
+
+    def test_concurrent_response_rejects_unbounded_failure(self):
+        response = {
+            "task_id": TASK, "root_id": ROOT, "task_record": "unknown",
+            "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
+            "failure": {"code": "provider_preparation_failed", "stage": "prepare-provider",
+                         "next_action": "stop_and_report"},
+            "error": "Delegate could not complete provider preflight.",
+        }
+        with self.assertRaisesRegex(AcceptanceFailure, "known task admission race envelope"):
+            inspection_acceptance.validate_concurrent_response(response, 1, TASK)
+
+    def test_observed_pueue_version_accepts_any_bounded_nonempty_text(self):
+        for output in ("5.0.0\n", "pueue 5.0.0\n", "future-release-preview\n"):
+            with self.subTest(output=output):
+                self.assertEqual(
+                    provider_common.observed_pueue_version(output, "pueue"), output.strip())
+
+        for output in ("", "\n", "release\x00candidate\n"):
+            with self.subTest(output=output):
+                with self.assertRaises(AcceptanceFailure):
+                    provider_common.observed_pueue_version(output, "pueue")
+
+        with self.assertRaises(AcceptanceFailure):
+            provider_common.observed_pueue_version(
+                b" " * provider_common.MAX_CONTROL_BYTES + b"version", "pueue")
+
+    def test_runtime_capability_digest_encodes_empty_slices_like_go(self):
+        definition = {
+            "revision": "runtime-capability-v1",
+            "directory": "/workspace",
+            "environment": [],
+            "output_limit": 1024,
+            "runtime": {"help_args": [], "required_flags": []},
+        }
+        expected = provider_common.sha(provider_common.canonical_go_json({
+            "revision": definition["revision"],
+            "directory": definition["directory"],
+            "environment": None,
+            "output_limit": definition["output_limit"],
+            "help_args": None,
+            "required_flags": None,
+        }))
+        self.assertEqual(provider_common.runtime_capability_sha(definition), expected)
+
+    def test_bounded_text_rejects_raw_output_before_trimming(self):
+        path = self.base / "version"
+        path.write_bytes(b" " * provider_common.MAX_CONTROL_BYTES + b"version")
+        with self.assertRaises(AcceptanceFailure):
+            provider_common.bounded_text(path, "version output")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.base = Path(self.temporary.name)
@@ -371,6 +442,43 @@ class InspectionHarnessTests(unittest.TestCase):
                 ops.daemon.wait.assert_not_called()
                 self.assertNotIn(["shutdown"], [call.args[1] for call in ops.client.call_args_list])
 
+    def test_pueue_status_accepts_additive_fields(self):
+        row = {
+            "id": 99, "created_at": "2026-09-15T00:00:00Z", "label": "known",
+            "original_command": "known", "command": "known", "path": str(self.state),
+            "envs": {}, "group": "default", "dependencies": [], "priority": 0,
+            "status": {"Queued": {"enqueued_at": "2026-09-15T00:00:00Z",
+                                    "future_state_field": True}},
+            "future_task_field": {"version": 2},
+        }
+        status = {
+            "tasks": {"99": row},
+            "groups": {"default": {"status": "Running", "parallel_tasks": 1,
+                                     "future_group_field": "ignored"}},
+            "future_status_field": ["ignored"],
+        }
+
+        provider_common._validate_pueue_status(status)
+        self.assertEqual(provider_common.row_state(row), "Queued")
+
+    def test_pueue_status_rejects_unknown_lifecycle_variant(self):
+        row = {
+            "id": 99, "created_at": "2026-09-15T00:00:00Z", "label": "known",
+            "original_command": "known", "command": "known", "path": str(self.state),
+            "envs": {}, "group": "default", "dependencies": [], "priority": 0,
+            "status": {
+                "Done": {"enqueued_at": "2026-09-15T00:00:00Z",
+                          "start": "2026-09-15T00:00:00Z",
+                          "end": "2026-09-15T00:00:00Z", "result": "Success"},
+                "Aborted": {"end": "2026-09-15T00:00:00Z"},
+            },
+        }
+        status = {"tasks": {"99": row},
+                  "groups": {"default": {"status": "Running", "parallel_tasks": 1}}}
+
+        with self.assertRaises(AcceptanceFailure):
+            provider_common._validate_pueue_status(status)
+
     def test_preadmission_cleanup_refuses_unproven_durable_or_attempted_work(self):
         status = {"tasks": {}, "groups": {"default": {"status": "Running", "parallel_tasks": 1}}}
         for name in ("tasks", "inspections", "inspection-group", "unexpected"):
@@ -682,7 +790,7 @@ class InspectionHarnessTests(unittest.TestCase):
         helper_config.chmod(0o600)
         environment = {"FIXTURE": "yes", "LANG": "C"}
         supervisor = provider_common.supervisor_binding(
-            self.pueue, self.config, self.base, digest(self.config))
+            self.pueue, self.config, self.base, digest(self.config), "pueue fixture")
         binding = inspection_acceptance.fixture_inspection_binding(
             helper, helper_config, self.base / "workspace", environment,
             self.runner, supervisor)
@@ -711,7 +819,9 @@ class InspectionHarnessTests(unittest.TestCase):
 
     def test_legacy_supervisor_binding_accepts_cwd_only_resolution(self):
         binding = provider_common.supervisor_binding(
-            self.pueue, self.config, self.base, digest(self.config))
+            self.pueue, self.config, self.base, digest(self.config), "pueue fixture")
+        binding["observed_version"] = "pueue 99.1.0"
+        provider_common._validate_supervisor_binding(binding, "future supervisor")
         for key in ("resolution_os", "resolution_home", "resolution_data_local",
                     "resolution_config", "resolution_runtime", "resolution_username"):
             binding.pop(key, None)
@@ -847,7 +957,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
         process.result = {"exit_code": 0, "natural_wait": True}
         write_json(directory / "stdout", {"Tasks": {}, "groups": {}}, replace=True)
-        with self.assertRaisesRegex(AcceptanceFailure, "unknown or missing"):
+        with self.assertRaisesRegex(AcceptanceFailure, "missing fields"):
             provider_common.status_jobs(process)
 
     def test_status_observation_rejects_nonstandard_json_constants(self):

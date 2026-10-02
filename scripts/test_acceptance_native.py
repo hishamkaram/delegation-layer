@@ -640,6 +640,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.runner = files["runner"]
             operation.pueue = files["pueue"]
             operation.pueued = files["pueued"]
+            operation.pueue_version = "pueue 4.0.4"
+            operation.pueued_version = "pueued 4.0.4"
             operation.write_binding()
             receipt = gate.read_json(output / "binding.json")
             self.assertEqual(receipt["task_budget"], gate.TASK_BUDGET)

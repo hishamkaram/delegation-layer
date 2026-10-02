@@ -56,23 +56,38 @@ Before a task is admitted, the selected adapter resolves a canonical regular
 executable and records its observed identity. A supervised runtime probe then:
 
 1. invokes the executable's version command and accepts any nonempty, valid
-   reported version;
+   reported version that fits the bounded durable evidence record;
 2. invokes the provider help command, including any profile-specific subcommand;
 3. checks that every complete flag used by the adapter is advertised; and
 4. fingerprints the executable again before the profile is finalized.
 
 This detects missing commands, non-executable files, and incompatible flag
 changes without pinning a release number or binary hash. A reported version
-is valid when it is trimmed nonempty UTF-8 text without control characters; no
-semantic-version pattern is required. A newer provider build is accepted when
-it preserves the command capabilities the adapter needs.
+is valid when it is trimmed nonempty UTF-8 text without control characters and
+fits the bounded durable evidence record; no semantic-version pattern is
+required. A newer provider build is accepted when it preserves the command
+capabilities the adapter needs.
+
+The runner uses a fresh inspection result to build the launch plan it will
+actually execute. A provider can be upgraded or relinked between admission and
+launch when the new executable passes the current capability probe. The task's
+requested mode, policy, workspace, writable roots, predicate, environment
+contract, and input/output declarations remain immutable and are still matched
+exactly before the process starts. The final executable, observed version, and
+digest are recorded in the started and sealed task evidence.
+
+The same compatibility rule applies to the private Pueue boundary: delegate
+checks the required queue behavior and fields, accepts nonempty observed Pueue
+version output and additive status fields, and keeps the bundled artifact pin
+only for reproducible packaging.
 
 The observed version is descriptive evidence stored with the task. It does not
 authorize a release by itself, and Delegation Layer does not query a web release
-list or maintain a semver allowlist. An unusually large version observation is
-omitted from the bounded JSON projection while the exact validated value stays
-bound in task metadata. The inspection definition and executable digest bind
-the capability result to the exact command that was checked; the runner
+list or maintain a semver allowlist. The version-size bound is a durable-record
+safety limit, not a release compatibility check; an observation that exceeds it
+is rejected before admission evidence is committed. Terminal launch evidence
+uses the same bound so publication remains durable. The inspection definition and
+executable digest bind the capability result to the exact command that was checked; the runner
 repeats the check before launch. Probe failures expose only a bounded reason
 class, such as a missing required flag or executable identity drift, and never
 provider output or process diagnostics.

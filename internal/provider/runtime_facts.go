@@ -28,6 +28,91 @@ type RuntimeProbeDefinition struct {
 	RequiredFlags    []string `json:"required_flags"`
 }
 
+type runtimeCapabilityContract struct {
+	Revision      string   `json:"revision"`
+	Directory     string   `json:"directory"`
+	Environment   []string `json:"environment"`
+	OutputLimit   int64    `json:"output_limit"`
+	HelpArgs      []string `json:"help_args"`
+	RequiredFlags []string `json:"required_flags"`
+}
+
+type runtimeIndependentProbeContract struct {
+	Directory     string   `json:"directory"`
+	Environment   []string `json:"environment"`
+	HelpArgs      []string `json:"help_args"`
+	RequiredFlags []string `json:"required_flags"`
+}
+
+type runtimeIndependentInspectionContract struct {
+	Models           *ModelDiscoveryDefinition        `json:"models,omitempty"`
+	Revision         string                           `json:"revision"`
+	Executable       string                           `json:"executable"`
+	ExecutableSHA256 string                           `json:"executable_sha256"`
+	Arguments        []string                         `json:"arguments"`
+	Directory        string                           `json:"directory"`
+	Environment      []string                         `json:"environment"`
+	OutputLimit      int64                            `json:"output_limit"`
+	Runtime          *runtimeIndependentProbeContract `json:"runtime,omitempty"`
+	Remote           *HTTPInspectionDefinition        `json:"remote,omitempty"`
+}
+
+// RuntimeCapabilityDigest returns the stable identity of the capability
+// contract while excluding the provider executable path and bytes. It binds
+// the command shape and bounded launch context, so a replay cannot silently
+// reuse a proof after the adapter changes its required flags.
+func RuntimeCapabilityDigest(definition InspectionDefinition) (string, error) {
+	snapshot, _, err := definition.Snapshot()
+	if err != nil || snapshot.Runtime == nil {
+		return "", fmt.Errorf("%w: runtime capability contract", ErrProfileUnavailable)
+	}
+	contract := runtimeCapabilityContract{
+		Revision: snapshot.Revision, Directory: snapshot.Directory, Environment: append([]string(nil), snapshot.Environment...),
+		OutputLimit: snapshot.OutputLimit, HelpArgs: append([]string(nil), snapshot.Runtime.HelpArgs...), RequiredFlags: append([]string(nil), snapshot.Runtime.RequiredFlags...),
+	}
+	data, err := task.MarshalCanonical(contract)
+	if err != nil {
+		return "", err
+	}
+	return task.ComputeSHA256(data), nil
+}
+
+// RuntimeInspectionContractDigest returns the inspection contract with runtime
+// executable identity removed. Runtime-only definitions retain the historical
+// capability digest format for journal compatibility; mixed definitions also
+// bind their native command and remote projection shape.
+func RuntimeInspectionContractDigest(definition InspectionDefinition) (string, error) {
+	snapshot, _, err := definition.Snapshot()
+	if err != nil || snapshot.Runtime == nil {
+		return "", fmt.Errorf("%w: runtime inspection contract", ErrProfileUnavailable)
+	}
+	if snapshot.Models == nil && len(snapshot.Arguments) == 0 && snapshot.Project == nil && snapshot.Remote == nil {
+		return RuntimeCapabilityDigest(snapshot)
+	}
+	contract := runtimeIndependentInspectionContract{
+		Models: snapshot.Models, Revision: snapshot.Revision, Executable: snapshot.Executable, ExecutableSHA256: snapshot.ExecutableSHA256,
+		Arguments: append([]string(nil), snapshot.Arguments...), Directory: snapshot.Directory,
+		Environment: append([]string(nil), snapshot.Environment...), OutputLimit: snapshot.OutputLimit,
+		Runtime: &runtimeIndependentProbeContract{
+			Directory: snapshot.Runtime.Directory, Environment: append([]string(nil), snapshot.Runtime.Environment...),
+			HelpArgs: append([]string(nil), snapshot.Runtime.HelpArgs...), RequiredFlags: append([]string(nil), snapshot.Runtime.RequiredFlags...),
+		},
+		Remote: snapshot.Remote,
+	}
+	if snapshot.Executable == snapshot.Runtime.Executable && snapshot.ExecutableSHA256 == snapshot.Runtime.ExecutableSHA256 {
+		// Some legacy mixed definitions add a native projection to the runtime
+		// command without changing the top-level executable fields. Those fields
+		// are provider identity, not native inspection contract.
+		contract.Executable = ""
+		contract.ExecutableSHA256 = ""
+	}
+	data, err := task.MarshalCanonical(contract)
+	if err != nil {
+		return "", err
+	}
+	return task.ComputeSHA256(data), nil
+}
+
 // NewRuntimeInspectionDefinition builds a runtime-only inspection definition
 // from static executable discovery. The duplicated top-level executable
 // fields preserve the existing inspection binding record; Runtime carries the
@@ -63,9 +148,10 @@ func NewRuntimeInspectionDefinition(info CLIInfo, directory string, environment 
 // capability probe. Version is whatever valid text the CLI reported; it is
 // never compared with a hardcoded release or binary hash.
 type RuntimeFacts struct {
-	Executable string `json:"executable"`
-	Version    string `json:"version"`
-	SHA256     string `json:"sha256"`
+	Executable       string `json:"executable"`
+	Version          string `json:"version"`
+	SHA256           string `json:"sha256"`
+	CapabilitySHA256 string `json:"capability_sha256,omitempty"`
 }
 
 // InspectionFacts is the common envelope delivered to a candidate finalizer.
@@ -85,8 +171,16 @@ func ValidateRuntimeFacts(facts RuntimeFacts) error {
 	if err := task.ValidateSHA256(facts.SHA256); err != nil {
 		return fmt.Errorf("runtime fact executable digest: %w", err)
 	}
+	if facts.CapabilitySHA256 != "" {
+		if err := task.ValidateSHA256(facts.CapabilitySHA256); err != nil {
+			return fmt.Errorf("runtime fact capability digest: %w", err)
+		}
+	}
 	if err := validateRuntimeVersion(facts.Version); err != nil {
 		return err
+	}
+	if len(facts.Version) > task.MaxProviderRuntimeEvidenceVersionBytes {
+		return fmt.Errorf("runtime fact version exceeds durable evidence bound")
 	}
 	return nil
 }

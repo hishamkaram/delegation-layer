@@ -27,13 +27,16 @@ type admissionPreparation struct {
 }
 
 // supervisorOptionsForCandidate carries the provider's bounded, nonsecret
-// launch environment into the supervisor client used for inspection and the
-// ordinary task. The inspection worker is started by that supervisor and
-// reconstructs the candidate from its process environment; using the same
-// values here keeps its immutable definition identical to admission. The
-// caller's explicit supervisor environment remains authoritative for keys it
-// does not share with the provider profile.
+// launch environment into the ordinary supervisor client. The inspection
+// worker is started by that supervisor and reconstructs the candidate from its
+// process environment; using the same values here keeps its immutable
+// definition identical to admission. Inspection commands receive a separate
+// timeout-scoped client so ordinary supervisor controls keep their normal
+// finite observation boundary.
 func supervisorOptionsForCandidate(base pueue.Options, candidate commonprovider.ProfileCandidate) (pueue.Options, error) {
+	if base.ObservationTimeout < 0 {
+		return pueue.Options{}, pueue.ErrConfiguration
+	}
 	if candidate.Inspection == nil {
 		return base, nil
 	}
@@ -154,7 +157,7 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	}
 	prepared := admissionPreparation{Profile: profile, Supervisor: supervisor, RunnerExecutable: runner, RunnerOwnership: runnerOwnership}
 	if candidate.Inspection != nil {
-		prepared.Profile, prepared.InspectionDeadline, err = finalizeAdmissionInspection(a, deps, store, req, candidate, supervisor)
+		prepared.Profile, prepared.InspectionDeadline, candidate, err = finalizeAdmissionInspection(a, deps, store, req, candidate, supervisor)
 		if err != nil {
 			return admissionPreparation{}, err
 		}
@@ -255,16 +258,30 @@ func admissionUsesPrivateSupervisor(a Arguments, root string) (bool, error) {
 	return configPath == "", nil
 }
 
-func finalizeAdmissionInspection(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, candidate commonprovider.ProfileCandidate, supervisor *pueue.Client) (PreparedProfile, time.Time, error) {
+func finalizeAdmissionInspection(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, candidate commonprovider.ProfileCandidate, supervisor *pueue.Client) (PreparedProfile, time.Time, commonprovider.ProfileCandidate, error) {
+	var err error
+	candidate, err = refreshAdmissionCandidate(deps, store.Root, req, candidate)
+	if err != nil {
+		return PreparedProfile{}, time.Time{}, commonprovider.ProfileCandidate{}, withDispatchStage("finalize-provider", err)
+	}
 	facts, deadline, err := admissionInspectionFacts(a, deps, store, req, candidate, supervisor)
 	if err != nil {
-		return PreparedProfile{}, time.Time{}, withDispatchStage("inspect-provider", err)
+		return PreparedProfile{}, time.Time{}, commonprovider.ProfileCandidate{}, withDispatchStage("inspect-provider", err)
+	}
+	// The inspection worker reconstructs the candidate when it actually runs.
+	// Refresh once more after its proof is complete so finalization uses the
+	// same current provider identity that the worker inspected. The finalizer
+	// still binds the returned facts to this candidate; a replacement during
+	// this last handoff fails closed instead of relabeling the proof.
+	candidate, err = refreshAdmissionCandidate(deps, store.Root, req, candidate)
+	if err != nil {
+		return PreparedProfile{}, time.Time{}, commonprovider.ProfileCandidate{}, withDispatchStage("finalize-provider", err)
 	}
 	profile, err := finalizeCandidate(candidate, req, facts)
 	if err != nil {
-		return PreparedProfile{}, time.Time{}, withDispatchStage("finalize-provider", err)
+		return PreparedProfile{}, time.Time{}, commonprovider.ProfileCandidate{}, withDispatchStage("finalize-provider", err)
 	}
-	return profile, deadline, nil
+	return profile, deadline, candidate, nil
 }
 
 func admissionRuntimeCapability(deps Dependencies, req task.TaskRecord, candidate commonprovider.ProfileCandidate, profile PreparedProfile) (CapabilityReport, error) {
@@ -341,15 +358,28 @@ func admissionInspectionFacts(a Arguments, deps Dependencies, store *taskdir.Sto
 	if err != nil {
 		return nil, time.Time{}, annotateMissingInspectionStage("snapshotting definition", err)
 	}
-	if err = ensureInspectionGroup(store, supervisor, inspection.TimeoutForRevision(definition.Revision)); err != nil {
+	capabilitySHA := ""
+	if runtimeOnlyInspectionDefinition(definition) {
+		capabilitySHA, err = commonprovider.RuntimeCapabilityDigest(definition)
+		if err != nil {
+			return nil, time.Time{}, annotateMissingInspectionStage("snapshotting capability", err)
+		}
+	}
+	inspectionTimeout := inspection.TimeoutForRevision(definition.Revision)
+	inspectionSupervisor, err := supervisor.WithObservationTimeout(inspectionTimeout)
+	if err != nil {
+		return nil, time.Time{}, annotateMissingInspectionStage("preparing inspection supervisor", err)
+	}
+	if err = ensureInspectionGroup(store, inspectionSupervisor, inspectionTimeout); err != nil {
 		return nil, time.Time{}, annotateMissingInspectionStage("ensuring inspection group", err)
 	}
 	binding := inspection.Binding{
-		DefinitionRevision: definition.Revision, DefinitionSHA256: definitionSHA,
+		DefinitionRevision: definition.Revision, DefinitionSHA256: definitionSHA, CapabilitySHA256: capabilitySHA,
 		HelperExecutable: definition.Executable, HelperSHA256: definition.ExecutableSHA256,
 		WorkerExecutable: runner, WorkerSHA256: workerSHA,
 		RunnerOwnership: requestedRunnerOwnership(a),
-		Environment:     append([]string(nil), definition.Environment...), Supervisor: supervisor.Binding(),
+		Environment:     append([]string(nil), definition.Environment...), EnvironmentRecorded: true,
+		Supervisor: supervisor.Binding(),
 	}
 	operation, err := openAdmissionInspectionOperation(store, req, binding, time.Now())
 	if err != nil {
@@ -361,10 +391,10 @@ func admissionInspectionFacts(a Arguments, deps Dependencies, store *taskdir.Sto
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), operation.Deadline())
 	defer cancel()
-	if err = submitInspectionOnce(ctx, operation, supervisor, runner, store.Root); err != nil {
+	if err = submitInspectionOnce(ctx, operation, inspectionSupervisor, runner, store.Root); err != nil {
 		return nil, operation.Deadline(), annotateMissingInspectionStage("submitting inspection", err)
 	}
-	facts, err = awaitInspection(ctx, operation, supervisor)
+	facts, err = awaitInspection(ctx, operation, inspectionSupervisor)
 	if err != nil {
 		return nil, operation.Deadline(), annotateMissingInspectionStage("awaiting inspection", err)
 	}
@@ -397,6 +427,16 @@ func openAdmissionInspectionOperation(store *taskdir.Store, request task.TaskRec
 	if record.RootID != store.RootID || record.TaskID != request.TaskID || record.TaskSHA256 != task.ComputeSHA256(requestBytes) {
 		return nil, task.ErrEvidenceFault
 	}
+	if err = rejectCompletedRuntimeIdentityDrift(operation, record.Binding, binding); err != nil {
+		return nil, err
+	}
+	if allowIncompleteMarkerlessRuntimeReplay(operation, record.Binding, binding) {
+		// Keep the original create-once request. The worker will validate the
+		// current runtime definition and establish its capability contract in
+		// fresh supervised facts before this operation can become eligible.
+		keepOperation = true
+		return operation, nil
+	}
 	if sameInspectionBinding(record.Binding, binding) {
 		keepOperation = true
 		return operation, nil
@@ -411,6 +451,47 @@ func openAdmissionInspectionOperation(store *taskdir.Store, request task.TaskRec
 	}
 	keepOperation = true
 	return operation, nil
+}
+
+// allowIncompleteMarkerlessRuntimeReplay lets a pre-capability-marker runtime
+// journal survive a provider or probe-contract refresh while it is still
+// incomplete. Its immutable worker, supervisor, and environment bindings must
+// remain unchanged; only the runtime identity/definition may be re-probed.
+// Completed markerless journals remain subject to the conservative identity
+// drift rejection above because their proof cannot be relabeled in place.
+func allowIncompleteMarkerlessRuntimeReplay(operation *inspection.Operation, saved, current inspection.Binding) bool {
+	if operation == nil || saved.DefinitionRevision != commonprovider.RuntimeInspectionRevision || current.DefinitionRevision != commonprovider.RuntimeInspectionRevision || saved.CapabilitySHA256 != "" || current.CapabilitySHA256 == "" || (saved.RunnerOwnership != "" && saved.RunnerOwnership != current.RunnerOwnership) || saved.WorkerExecutable != current.WorkerExecutable || saved.WorkerSHA256 != current.WorkerSHA256 || !task.SameSupervisorIdentity(saved.Supervisor, current.Supervisor) {
+		return false
+	}
+	savedEnvironmentRecorded := saved.EnvironmentRecorded || len(saved.Environment) > 0
+	currentEnvironmentRecorded := current.EnvironmentRecorded || len(current.Environment) > 0
+	if savedEnvironmentRecorded != currentEnvironmentRecorded || !slices.Equal(saved.Environment, current.Environment) {
+		return false
+	}
+	_, _, err := operation.ReadCompletedContext(context.Background())
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// rejectCompletedRuntimeIdentityDrift prevents a completed capability proof
+// from being relabeled as proof for a different provider executable. A queued
+// or incomplete operation can still run its one worker against the current
+// candidate; a completed operation has no safe way to rerun that worker under
+// the same create-once journal.
+func rejectCompletedRuntimeIdentityDrift(operation *inspection.Operation, saved, current inspection.Binding) error {
+	if operation == nil ||
+		(saved.CapabilitySHA256 == "" && current.CapabilitySHA256 == "") ||
+		saved.DefinitionRevision != commonprovider.RuntimeInspectionRevision ||
+		current.DefinitionRevision != commonprovider.RuntimeInspectionRevision ||
+		saved.DefinitionSHA256 == current.DefinitionSHA256 {
+		return nil
+	}
+	if _, _, err := operation.ReadCompletedContext(context.Background()); err == nil {
+		return task.ErrEvidenceFault
+	} else if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else {
+		return err
+	}
 }
 
 func validateManagedInspectionReplay(root string, operation *inspection.Operation, binding inspection.Binding) error {
@@ -442,12 +523,40 @@ func sameInspectionBinding(left, right inspection.Binding) bool {
 }
 
 func sameInspectionBindingBase(left, right inspection.Binding) bool {
+	return sameInspectionEnvironment(left, right) &&
+		task.SameSupervisorIdentity(left.Supervisor, right.Supervisor) &&
+		sameInspectionDefinition(left, right)
+}
+
+func sameInspectionEnvironment(left, right inspection.Binding) bool {
+	leftEnvironmentRecorded := left.EnvironmentRecorded || len(left.Environment) > 0
+	rightEnvironmentRecorded := right.EnvironmentRecorded || len(right.Environment) > 0
+	return leftEnvironmentRecorded == rightEnvironmentRecorded && slices.Equal(left.Environment, right.Environment)
+}
+
+func sameInspectionDefinition(left, right inspection.Binding) bool {
+	if left.DefinitionRevision == commonprovider.RuntimeInspectionRevision && right.DefinitionRevision == commonprovider.RuntimeInspectionRevision {
+		return sameRuntimeInspectionDefinition(left, right)
+	}
+	return sameExactInspectionDefinition(left, right)
+}
+
+func sameRuntimeInspectionDefinition(left, right inspection.Binding) bool {
+	// Only bindings carrying the runtime-only capability contract may relax
+	// executable identity. A mixed native/runtime binding without that marker
+	// remains exact so native command and helper changes cannot be silently
+	// reused.
+	if left.CapabilitySHA256 != "" && right.CapabilitySHA256 != "" {
+		return left.CapabilitySHA256 == right.CapabilitySHA256
+	}
+	return sameExactInspectionDefinition(left, right)
+}
+
+func sameExactInspectionDefinition(left, right inspection.Binding) bool {
 	return left.DefinitionRevision == right.DefinitionRevision &&
 		left.DefinitionSHA256 == right.DefinitionSHA256 &&
 		left.HelperExecutable == right.HelperExecutable &&
-		left.HelperSHA256 == right.HelperSHA256 &&
-		slices.Equal(left.Environment, right.Environment) &&
-		task.SameSupervisorIdentity(left.Supervisor, right.Supervisor)
+		left.HelperSHA256 == right.HelperSHA256
 }
 
 func sameInspectionBindingExceptManagedWorker(saved, current inspection.Binding) bool {
@@ -546,10 +655,7 @@ func awaitInspection(ctx context.Context, operation *inspection.Operation, super
 		return nil, err
 	}
 	for {
-		if ctx.Err() != nil {
-			return nil, inspection.ErrAdmissionExpired
-		}
-		observation, observeErr := supervisor.ReconcileInspection(ctx, identity)
+		observation, observeErr := reconcileInspectionObservation(ctx, operation, supervisor, identity)
 		if shouldStopInspectionPolling(observeErr) {
 			// ReconcileInspection has handed ownership of a still-running
 			// supervisor command to Pending. Join it before returning and avoid
@@ -564,6 +670,13 @@ func awaitInspection(ctx context.Context, operation *inspection.Operation, super
 			id := observation.Job.ID
 			identity.NumericTaskID = &id
 			if observation.Job.State == pueue.StateEnded {
+				// A worker that reaches its own deadline can be observed as a
+				// failed terminal job at the same boundary. The persisted
+				// admission deadline is authoritative: do not turn that boundary
+				// into a provider rejection or record worker success after it.
+				if operation.Expired(time.Now()) || ctx.Err() != nil {
+					return nil, inspection.ErrAdmissionExpired
+				}
 				return completedInspectionFacts(ctx, operation, observation.Job)
 			}
 		}
@@ -573,8 +686,28 @@ func awaitInspection(ctx context.Context, operation *inspection.Operation, super
 	}
 }
 
+func reconcileInspectionObservation(ctx context.Context, operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity) (pueue.InspectionObservation, error) {
+	if inspectionDeadlineReached(ctx, operation) {
+		return pueue.InspectionObservation{}, inspection.ErrAdmissionExpired
+	}
+	observation, observeErr := supervisor.ReconcileInspection(ctx, identity)
+	if inspectionDeadlineReached(ctx, operation) {
+		// The supervisor observation may reach the deadline with either an
+		// in-flight status command or a terminal failed worker. The persisted
+		// admission deadline is authoritative in both cases; retain command
+		// ownership before returning the stable expiry result.
+		joinInspectionPending(inFlightInspectionError(observeErr))
+		return observation, inspection.ErrAdmissionExpired
+	}
+	return observation, observeErr
+}
+
+func inspectionDeadlineReached(ctx context.Context, operation *inspection.Operation) bool {
+	return ctx.Err() != nil || operation.Expired(time.Now())
+}
+
 func shouldStopInspectionPolling(err error) bool {
-	return inFlightInspectionError(err) != nil
+	return errors.Is(err, inspection.ErrAdmissionExpired) || inFlightInspectionError(err) != nil
 }
 
 func inFlightInspectionError(err error) *pueue.Pending {

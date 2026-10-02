@@ -147,10 +147,34 @@ func (p PreparedProfile) Validate(request task.TaskRecord) error {
 }
 
 // Matches checks a freshly prepared profile against immutable admitted
-// metadata. This is used immediately before a runner starts a provider.
+// metadata. It retains the original executable, version, and effective
+// configuration identity checks for callers that have not performed a fresh
+// runtime capability probe.
 func (p PreparedProfile) Matches(request task.TaskRecord, meta task.MetaRecord) error {
+	return p.matches(request, meta, false)
+}
+
+// MatchesWithRuntimeRefresh checks a profile after the caller has performed
+// the current supervised runtime capability probe. Provider executable path,
+// reported version, and runtime-derived policy identity may change; the task
+// policy, workspace, predicate, writable roots, and artifact declarations
+// remain immutable.
+func (p PreparedProfile) MatchesWithRuntimeRefresh(request task.TaskRecord, meta task.MetaRecord) error {
+	return p.matches(request, meta, true)
+}
+
+func (p PreparedProfile) matches(request task.TaskRecord, meta task.MetaRecord, allowRuntimeRefresh bool) error {
 	if err := p.Validate(request); err != nil {
 		return err
+	}
+	if allowRuntimeRefresh && meta.Environment == nil && !meta.EnvironmentRecorded {
+		// A legacy record without its original launch environment cannot prove
+		// that a refreshed runtime was inspected under the same inputs. Keep
+		// legacy replay available through Matches, but fail closed at the fresh
+		// runtime boundary. A fresh record may intentionally have an empty
+		// environment; EnvironmentRecorded preserves that fact after JSON
+		// omitempty removes the empty slice.
+		return task.ErrIdentityMismatch
 	}
 	inputs, err := task.NormalizeInputFiles(p.Plan.InputFiles)
 	if err != nil {
@@ -160,21 +184,34 @@ func (p PreparedProfile) Matches(request task.TaskRecord, meta task.MetaRecord) 
 	if err != nil {
 		return err
 	}
-	if p.Plan.Executable != meta.ProviderExecutable || p.ObservedVersion != meta.ProviderVersion || !environmentMatches(p, meta) || !effectiveConfigMatches(p, meta) || !p.Plan.Predicate.Equal(meta.Predicate) || !task.CompareInputFiles(inputs, meta.InputFiles) || !task.CompareOutputArtifacts(outputs, meta.OutputArtifacts) || p.Plan.OutputWriterContract != meta.OutputWriterContract {
+	if !profileMatchesAdmittedContract(p, meta, inputs, outputs, allowRuntimeRefresh) {
 		return task.ErrIdentityMismatch
 	}
 	return nil
 }
 
+func profileMatchesAdmittedContract(profile PreparedProfile, meta task.MetaRecord, inputs []task.InputFile, outputs []task.OutputArtifact, allowRuntimeRefresh bool) bool {
+	if !allowRuntimeRefresh && (profile.Plan.Executable != meta.ProviderExecutable || profile.ObservedVersion != meta.ProviderVersion) {
+		return false
+	}
+	effectiveMatches := effectiveConfigMatches(profile, meta)
+	if allowRuntimeRefresh {
+		effectiveMatches = effectiveConfigMatchesAfterRuntimeRefresh(profile, meta)
+	}
+	return environmentMatches(profile, meta) && effectiveMatches &&
+		profile.Plan.Predicate.Equal(meta.Predicate) && task.CompareInputFiles(inputs, meta.InputFiles) &&
+		task.CompareOutputArtifacts(outputs, meta.OutputArtifacts) && profile.Plan.OutputWriterContract == meta.OutputWriterContract
+}
+
 func environmentMatches(profile PreparedProfile, meta task.MetaRecord) bool {
-	if meta.Environment == nil {
+	if meta.Environment == nil && !meta.EnvironmentRecorded {
 		return true
 	}
 	return slices.Equal(profile.Plan.Environment, meta.Environment)
 }
 
 func effectiveConfigMatches(profile PreparedProfile, meta task.MetaRecord) bool {
-	if meta.Environment == nil {
+	if meta.Environment == nil && !meta.EnvironmentRecorded {
 		if meta.EffectiveConfig.Policy == nil || profile.Effective.Policy == nil {
 			return task.CompareEffectiveConfigs(profile.Effective, meta.EffectiveConfig)
 		}
@@ -190,6 +227,10 @@ func effectiveConfigMatches(profile PreparedProfile, meta task.MetaRecord) bool 
 			slices.Equal(profile.Effective.Policy.Sources, meta.EffectiveConfig.Policy.Sources)
 	}
 	return task.CompareEffectiveConfigs(profile.Effective, meta.EffectiveConfig)
+}
+
+func effectiveConfigMatchesAfterRuntimeRefresh(profile PreparedProfile, meta task.MetaRecord) bool {
+	return task.CompareEffectiveConfigContract(profile.Effective, meta.EffectiveConfig)
 }
 
 func validatePlanBindings(plan execution.Plan) error {

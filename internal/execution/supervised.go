@@ -49,6 +49,13 @@ type deadlineContext struct {
 func (c deadlineContext) Deadline() (time.Time, bool) { return c.deadline, true }
 
 func (b *budgetOwner) runScoped(opts Options, work func(PreflightScope) error) error {
+	_, err := b.runScopedPlan(opts, Plan{}, func(scope PreflightScope, _ Plan) (Plan, error) {
+		return Plan{}, work(scope)
+	})
+	return err
+}
+
+func (b *budgetOwner) runScopedPlan(opts Options, plan Plan, work func(PreflightScope, Plan) (Plan, error)) (Plan, error) {
 	ctx, cancel := context.WithCancel(b.workContext)
 	defer cancel()
 	scope := PreflightScope{
@@ -57,9 +64,9 @@ func (b *budgetOwner) runScoped(opts Options, work func(PreflightScope) error) e
 		start:     func(start func() error) error { return b.authorizeAndStart(opts, start) },
 	}
 	if err := scope.Authorize(); err != nil {
-		return err
+		return Plan{}, err
 	}
-	return work(scope)
+	return work(scope, plan)
 }
 
 // SupervisedOptions supplies the same clock and durable stop boundary used by
