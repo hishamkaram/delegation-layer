@@ -1,0 +1,22 @@
+{
+  "name": "delegation-layer",
+  "displayName": "Delegation Layer",
+  "version": "0.1.16",
+  "description": "Route every delegated agent task through a bounded, resumable Delegation Layer CLI.",
+  "author": {
+    "name": "Hesham Karam",
+    "url": "https://github.com/hishamkaram"
+  },
+  "homepage": "https://github.com/hishamkaram/delegation-layer",
+  "repository": "https://github.com/hishamkaram/delegation-layer",
+  "license": "MIT",
+  "keywords": [
+    "agent-delegation",
+    "agent-skills",
+    "coding-agents",
+    "orchestration",
+    "task-lifecycle"
+  ],
+  "defaultEnabled": true,
+  "skills": "./skills/"
+}

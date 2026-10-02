@@ -31,14 +31,41 @@ already use instead of replacing them.
 
 ## How it works
 
-1. Install the Agent Skill so your harness knows how to use Delegation Layer.
+1. Install the plugin so the skill and self-contained CLI are available together.
 2. The lead agent discovers the available provider capabilities.
 3. Delegation Layer admits one bounded provider turn through the supervisor.
 4. The lead agent collects the sealed result and evidence.
 
 ## Install
 
-### Install the Agent Skill
+### Recommended for Codex and Claude Code
+
+Install the plugin from this repository. It installs the provider-neutral skill
+and runs a trusted session-start bootstrap that reuses the checksum-verified
+Delegation Layer release installer when `delegate` is missing. The bootstrap
+installs the CLI and its bundled supervisor; it does not install provider CLIs,
+change provider authentication, or change provider configuration.
+
+For Codex:
+
+```sh
+codex plugin marketplace add hishamkaram/delegation-layer
+codex plugin add delegation-layer@delegation-layer
+```
+
+For Claude Code:
+
+```sh
+claude plugin marketplace add hishamkaram/delegation-layer
+claude plugin install delegation-layer@delegation-layer
+```
+
+Start a new harness session after installation. Plugin hooks require the
+harness trust review before they run. If the bootstrap reports that the
+install directory is not on `PATH`, add the reported directory to `PATH` and
+start a new session; the skill never falls back to a provider-native CLI.
+
+### Install the Agent Skill only
 
 The standard Agent Skills installer works across popular coding agents. From
 the project where you want the skill available, run:
@@ -68,8 +95,9 @@ npx --yes delegation-layer install \
   --yes
 ```
 
-The skill installer only installs guidance for your agent. It does not install
-the CLI, change provider logins, or run a task.
+This path installs guidance only. It does not install the CLI, change provider
+logins, or run a task. Use the plugin path above when you want the skill and
+CLI bootstrap together.
 
 ### Install the CLI
 

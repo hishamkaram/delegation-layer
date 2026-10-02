@@ -1,0 +1,15 @@
+{
+  "name": "delegation-layer",
+  "description": "A provider-neutral agent delegation plugin.",
+  "owner": {
+    "name": "Hesham Karam",
+    "url": "https://github.com/hishamkaram"
+  },
+  "plugins": [
+    {
+      "name": "delegation-layer",
+      "source": "./plugins/delegation-layer",
+      "description": "Route external agent work through the Delegation Layer CLI."
+    }
+  ]
+}
