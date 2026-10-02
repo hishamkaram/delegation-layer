@@ -18,6 +18,7 @@ go test -race ./...
 python3 -m unittest discover -s scripts -p 'test_*.py'
 make check
 make skill-package-check
+make plugin-package-check
 ```
 
 The repository's `AGENTS.md`, invariant contracts under `agents/_data/`, and
@@ -29,6 +30,16 @@ Agent integrations should follow the provider-agnostic
 [agent-integration skill](../skills/agent-integration/SKILL.md), which uses the
 same capability, admission, evidence, authentication, and bounded-output
 criteria as the runtime and acceptance tests.
+
+The Claude Code and Codex plugin under `plugins/delegation-layer/` is a
+packaging layer around that skill. Codex uses the supported
+`.codex-plugin/plugin.json` compatibility manifest so its session-start hook
+is discovered by current Codex releases; do not add a root Agent Plugin
+manifest unless the Codex hook loader changes. The hook only verifies or
+bootstraps the self-contained Delegation Layer CLI through the checked-in
+release installer. It does not install provider CLIs or modify provider
+authentication. Keep the plugin skill synchronized with the canonical skill
+tree and run `make plugin-package-check` after changing either one.
 
 ## Adapter boundary
 

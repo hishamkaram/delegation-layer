@@ -32,6 +32,17 @@ if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx 'package/install.sh' >/dev/null; t
     echo "ERROR: package archive does not contain the CLI installer." >&2
     exit 1
 fi
+for plugin_file in \
+    plugins/delegation-layer/.codex-plugin/plugin.json \
+    plugins/delegation-layer/.claude-plugin/plugin.json \
+    plugins/delegation-layer/hooks/hooks.json \
+    plugins/delegation-layer/scripts/ensure-delegate.sh \
+    plugins/delegation-layer/scripts/install-cli.sh; do
+    if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx "package/${plugin_file}" >/dev/null; then
+        echo "ERROR: package archive does not contain ${plugin_file}." >&2
+        exit 1
+    fi
+done
 if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx 'package/docs/assets/delegation-layer-hero.jpg' >/dev/null; then
     echo "ERROR: package archive does not contain the README hero asset." >&2
     exit 1

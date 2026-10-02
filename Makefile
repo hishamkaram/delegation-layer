@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills skill-package-check test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-agy codex-acceptance-tools acceptance-codex claude-acceptance-tools acceptance-claude acceptance-pi acceptance-opencode acceptance-native
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills skill-package-check plugin-package-check test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-agy codex-acceptance-tools acceptance-codex claude-acceptance-tools acceptance-claude acceptance-pi acceptance-opencode acceptance-native
 
 tools:
 	./scripts/install-tools.sh
@@ -59,6 +59,9 @@ verify-skills:
 
 skill-package-check:
 	./scripts/check-skill-package.sh
+
+plugin-package-check:
+	./scripts/check-plugin-package.sh
 
 test-race: tool-versions
 	go test -race -count=1 ./...
@@ -169,6 +172,7 @@ vuln: tool-versions
 check:
 	$(MAKE) tool-versions
 	$(MAKE) verify-skills
+	$(MAKE) plugin-package-check
 	$(MAKE) fmt-check
 	$(MAKE) config-check
 	$(MAKE) vet

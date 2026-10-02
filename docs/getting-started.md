@@ -1,10 +1,31 @@
 # Getting started
 
 Delegation Layer gives an agent a supervised way to send one bounded task to a
-provider CLI and collect the validated result later. Install the skill and CLI
-separately so each part stays easy to understand.
+provider CLI and collect the validated result later.
 
-## 1. Install the Agent Skill
+For Codex or Claude Code, install the plugin. It installs the skill and
+bootstraps the self-contained Delegation Layer CLI when needed.
+
+For Codex:
+
+```sh
+codex plugin marketplace add hishamkaram/delegation-layer
+codex plugin add delegation-layer@delegation-layer
+```
+
+For Claude Code:
+
+```sh
+claude plugin marketplace add hishamkaram/delegation-layer
+claude plugin install delegation-layer@delegation-layer
+```
+
+Start a new harness session after installation and trust the plugin hook when
+the harness asks. The plugin does not install provider CLIs or change provider
+authentication. If it reports a PATH repair, apply the reported PATH change
+and start a new session.
+
+## 1. Install the Agent Skill only
 
 Use the common Agent Skills installer from the project where your agent works:
 
@@ -36,8 +57,9 @@ npx --yes delegation-layer install \
   --yes
 ```
 
-This step installs agent guidance only. It does not install provider CLIs,
-change authentication, or run a task.
+This step installs agent guidance only. It does not install the Delegation Layer
+CLI, provider CLIs, change authentication, or run a task. Use the plugin path
+above when the skill and CLI should be installed together.
 
 ## 2. Install the CLI
 

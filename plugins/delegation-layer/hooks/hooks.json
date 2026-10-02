@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'plugin_root=\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:?plugin root environment variable is missing}}\"; exec \"$plugin_root/scripts/ensure-delegate.sh\"'"
+          }
+        ]
+      }
+    ]
+  }
+}

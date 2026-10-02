@@ -1,0 +1,33 @@
+{
+  "name": "delegation-layer",
+  "version": "0.1.16",
+  "description": "Route every delegated agent task through a bounded, resumable Delegation Layer CLI.",
+  "author": {
+    "name": "Hesham Karam",
+    "url": "https://github.com/hishamkaram"
+  },
+  "homepage": "https://github.com/hishamkaram/delegation-layer",
+  "repository": "https://github.com/hishamkaram/delegation-layer",
+  "license": "MIT",
+  "keywords": [
+    "agent-delegation",
+    "agent-skills",
+    "coding-agents",
+    "orchestration",
+    "task-lifecycle"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Delegation Layer",
+    "shortDescription": "Delegate agent work reliably",
+    "longDescription": "Routes external agent work through a bounded, resumable CLI with durable evidence and provider-neutral capability handling.",
+    "developerName": "Hesham Karam",
+    "category": "Productivity",
+    "capabilities": [
+      "Agent delegation",
+      "Bounded execution",
+      "Resumable tasks"
+    ],
+    "defaultPrompt": "Use $agent-integration whenever another agent, harness, model, or provider should perform work."
+  }
+}

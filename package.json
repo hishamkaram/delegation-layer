@@ -25,6 +25,7 @@
     "docs/assets/delegation-layer-hero.jpg",
     "install.sh",
     "skills/agent-integration/",
+    "plugins/delegation-layer/",
     "scripts/install-agent-integration.mjs",
     "scripts/install-cli.mjs"
   ],

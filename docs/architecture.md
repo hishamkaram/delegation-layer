@@ -7,7 +7,8 @@ result.
 
 ```mermaid
 flowchart TD
-    A[delegate dispatch --auto] --> B[Validate request and canonical paths]
+    BOOT[Claude/Codex plugin SessionStart] -->|ensure delegate| A[delegate dispatch --auto]
+    A --> B[Validate request and canonical paths]
     B --> C[Static provider selection]
     C --> D[Prepare provider candidate]
     D --> E[Supervised runtime capability probe]
@@ -32,6 +33,11 @@ The maintained Archify views are [system components](../diagrams/components.html
 and [one task lifecycle](../diagrams/lead-interface.html). Their editable
 sources are [components.architecture.json](../diagrams/components.architecture.json)
 and [lead-interface.sequence.json](../diagrams/lead-interface.sequence.json).
+
+The plugin bootstrap is outside the task lifecycle. It only makes the
+provider-neutral control CLI available before the agent can use the skill; the
+CLI and its private supervisor still own admission, execution, evidence, and
+continuation after dispatch.
 
 ## Ownership boundaries
 

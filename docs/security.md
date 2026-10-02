@@ -4,6 +4,13 @@ Delegation Layer is designed for a local, single-user supervisor. It reduces
 accidental cross-task access and ambiguous process outcomes; it does not make a
 provider CLI or its account server trustworthy by itself.
 
+The Claude Code and Codex plugin has one bootstrap responsibility: verify that
+the Delegation Layer CLI is usable and install the checksum-verified release bundle when
+it is missing. It does not install provider CLIs, read provider credentials,
+or change provider settings. If a newly installed binary is outside the
+current harness `PATH`, the hook stops with a PATH and new-session instruction
+instead of allowing direct provider execution.
+
 ## State and workspace boundaries
 
 The state root, workspace, declared provider runtime directories, and temporary paths
