@@ -7,8 +7,10 @@ provider differences explicit at the adapter boundary.
 
 Install Go 1.27.1, Node.js 22 or newer, and the repository's pinned verification
 tools. Node.js is required by `make acceptance-private-cli` because that gate
-executes the legacy release binary against a real Pi-shaped executable fixture
-on macOS and Linux. The unit and hermetic acceptance suites provide their own
+executes the current build against a Pi-shaped executable fixture and a real
+private supervisor on macOS and Linux. This gate checks startup, dispatch,
+status, collection, model discovery, and ordinary-task parallelism; it does not
+build historical releases. The unit and hermetic acceptance suites provide their own
 supervisor fixtures. Clone the repository and run the local checks before
 editing:
 
@@ -40,6 +42,80 @@ bootstraps the self-contained Delegation Layer CLI through the checked-in
 release installer. It does not install provider CLIs or modify provider
 authentication. Keep the plugin skill synchronized with the canonical skill
 tree and run `make plugin-package-check` after changing either one.
+
+## Skill selection acceptance
+
+The routing suite tests natural requests without naming Delegate or preloading
+its skill. It keeps the user's normal harness profile and competing plugins.
+The runner installs the candidate skill in disposable Claude/Codex workspaces;
+it never rewrites user settings. An older personal Claude skill with the same
+name blocks the attempt because it takes precedence over the project candidate
+([Claude skill precedence](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name)).
+Hermes requires an already installed, identical
+candidate under `HERMES_HOME/skills/agent-integration`; otherwise its receipt is
+blocked, because project-local discovery is not supported by the tested build. Run only against a trusted test profile:
+Claude and Codex initiators use unattended permissions without a filesystem
+sandbox so the Delegate supervisor can operate. Child task permissions still
+come from the agent’s dispatch request. Routing mode puts a recording Delegate
+fixture on the test PATH and stops before provider work. Competing integrations
+remain enabled, so a routing bypass can still execute paid work; inspect those
+attempts as failures. Use `--mode live` for real Delegate execution.
+
+```sh
+python3 scripts/acceptance_skill_routing.py --harness claude \
+  --split development --output /tmp/skill-routing-claude
+```
+
+Use `--harness codex` or `--harness hermes` for the other initiating harnesses,
+`--model` for an explicit model, and `--case` for a focused probe. Each case
+runs three times by default in a fresh workspace/session. Outputs are private
+local evidence and must not be committed. Each attempt runs under an isolated Pueue supervisor with a 180-second deadline
+(`--budget-seconds` overrides it). Only that private queue may be stopped; the
+runner uses the existing acceptance process/evidence helpers. It replaces any
+inherited `DELEGATE_PUEUE_CONFIG` with that attempt’s private queue, so nested
+Delegate work is also observed and stopped before cleanup is declared complete. Pueue and pueued
+must be on the test PATH. Delegate state roots are separate private directories
+under `~/delegation-routing-acceptance`, outside provider-writable `/tmp` and
+cache directories. A shell that bypasses the PATH fixture cannot establish
+routing-only proof; inspect the recorded fixture calls and use live mode when
+needed. The receipt distinguishes routing fixtures from live execution; fixture
+results are never live-provider proof. The runner returns `2` until reviewed;
+a successful harness exit alone cannot establish correct selection. Missing
+executables and authentication are blocked prerequisites, not passing skips.
+
+Review each complete transcript, including nested tool calls. For positive
+cases, require the candidate skill to be loaded, actual Delegate commands,
+preservation of named destinations, and no direct external-provider CLI,
+plugin, or API bypass. An unsupported destination should be reported from the
+catalog without dispatching a substitute. Cases with `native_alternative_for` also permit native delegation in that
+initiating harness; a separate CLI session still requires Delegate. For
+negatives, require no unwanted external delegation. Text saying “I will use Delegate” is insufficient.
+Record the actual model from the transcript and competing integrations present.
+
+Beside each receipt, write `judgment.json` with `status` (`passed`, `failed`, or
+`blocked`), `receipt_sha256` (SHA-256 of that receipt), and `evidence` (transcript
+line/tool-event references and the observed reason). Review the full transcript
+for bypasses, including provider plugins called through a native subagent.
+Then summarize the exact same case selection:
+
+```sh
+python3 scripts/acceptance_skill_routing.py --harness claude \
+  --split development --output /tmp/skill-routing-claude --summarize
+```
+
+Summaries return `0` only when every selected repetition has a passing reviewed
+receipt, `1` when any attempt failed, and `2` for incomplete or blocked evidence.
+They reject changed transcripts, stale judgments, and mismatched candidate,
+model, mode, repetition, or budget selections. Summarize with the same options used to run. Summaries of selected
+cases are focused evidence, not full-matrix acceptance.
+
+Freeze the eight validation prompts before tuning on the twelve development
+prompts. Run the full suite on the final candidate; retain all attempts rather
+than rerunning failures until they disappear. If validation informs another
+skill revision, disclose that it is no longer an unseen holdout. Review routing
+and live task evidence separately: real review, authorized write, and comparison
+or follow-up tasks need Delegate task IDs and collected outcomes. Skill-only
+routing cannot guarantee precedence over every model or competing plugin.
 
 ## Adapter boundary
 

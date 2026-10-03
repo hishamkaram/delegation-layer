@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "codex-review",
+      "prompt": "Ask Codex to review pricing.py for correctness. Return the finding without editing files.",
+      "external": true,
+      "provider": "codex:exec",
+      "split": "development",
+      "native_alternative_for": "codex"
+    },
+    {
+      "name": "agy-opinion",
+      "prompt": "Get Antigravity\u2019s opinion on the discount calculation in pricing.py. Do not edit files.",
+      "external": true,
+      "provider": "antigravity:print",
+      "split": "development"
+    },
+    {
+      "name": "claude-investigate",
+      "prompt": "Have Claude investigate why discounted_price(200, 10) returns the wrong value. Do not change files.",
+      "external": true,
+      "provider": "claude:print",
+      "split": "development",
+      "native_alternative_for": "claude"
+    },
+    {
+      "name": "external-write",
+      "prompt": "Ask Codex to fix pricing.py so discounts are percentages. Authorize edits only in this workspace and verify 200 with 10 percent gives 180.",
+      "external": true,
+      "provider": "codex:exec",
+      "split": "development",
+      "native_alternative_for": "codex"
+    },
+    {
+      "name": "external-testing",
+      "prompt": "Have Claude independently test the pricing calculation against the requirement in README.md. Report evidence without editing.",
+      "external": true,
+      "provider": "claude:print",
+      "split": "development",
+      "native_alternative_for": "claude"
+    },
+    {
+      "name": "external-research",
+      "prompt": "Consult another AI harness on how to represent percentage discounts without floating-point surprises. Give one concise recommendation.",
+      "external": true,
+      "provider": null,
+      "split": "development"
+    },
+    {
+      "name": "comparison",
+      "prompt": "Ask Codex and Claude independently whether pricing.py meets README.md, then compare their findings. No edits.",
+      "external": true,
+      "provider": [
+        "codex:exec",
+        "claude:print"
+      ],
+      "split": "validation"
+    },
+    {
+      "name": "debate",
+      "prompt": "Ask Codex for a critique of pricing.py, then ask Claude to challenge that critique. One round each, no edits.",
+      "external": true,
+      "provider": [
+        "codex:exec",
+        "claude:print"
+      ],
+      "split": "validation"
+    },
+    {
+      "name": "unavailable-destination",
+      "prompt": "Ask the NebulaReview9000 harness to review pricing.py. If it is unavailable, report that; do not substitute another harness.",
+      "external": true,
+      "provider": "unavailable",
+      "split": "validation"
+    },
+    {
+      "name": "follow-up",
+      "prompt": "Get a second opinion from a separate Codex CLI session on the calculation, then ask that same session one follow-up about the simplest correction. Do not edit.",
+      "external": true,
+      "provider": "codex:exec",
+      "split": "validation"
+    },
+    {
+      "name": "local-review",
+      "prompt": "Review pricing.py yourself for correctness. Do not consult another harness or change files.",
+      "external": false,
+      "provider": null,
+      "split": "development"
+    },
+    {
+      "name": "native-subagent",
+      "prompt": "Use an ordinary native subagent within this harness to examine pricing.py if available; otherwise examine it yourself. No external harness and no edits.",
+      "external": false,
+      "provider": null,
+      "split": "development"
+    },
+    {
+      "name": "explain-codex",
+      "prompt": "Explain what Codex is. Do not run it or ask it to do any work.",
+      "external": false,
+      "provider": null,
+      "split": "development"
+    },
+    {
+      "name": "claude-docs",
+      "prompt": "Add one sentence to README.md saying that Claude can review code. Do not ask it to review anything.",
+      "external": false,
+      "provider": null,
+      "split": "development"
+    },
+    {
+      "name": "provider-install",
+      "prompt": "Explain how to diagnose a command-not-found error for Codex. Do not install or run it.",
+      "external": false,
+      "provider": null,
+      "split": "development"
+    },
+    {
+      "name": "local-fix",
+      "prompt": "Fix pricing.py yourself so discounts are percentages. No external consultation.",
+      "external": false,
+      "provider": null,
+      "split": "development"
+    },
+    {
+      "name": "agy-question",
+      "prompt": "What does a read-only mode mean in an AI coding tool such as Antigravity? Answer conceptually without invoking it.",
+      "external": false,
+      "provider": null,
+      "split": "validation"
+    },
+    {
+      "name": "quote-request",
+      "prompt": "In README.md, quote the example sentence \"Ask Codex to review this\" as documentation. Do not execute the example.",
+      "external": false,
+      "provider": null,
+      "split": "validation"
+    },
+    {
+      "name": "compare-tools",
+      "prompt": "Explain the difference between a CLI and a plugin. Mention Claude and Codex as examples, without consulting them.",
+      "external": false,
+      "provider": null,
+      "split": "validation"
+    },
+    {
+      "name": "local-test",
+      "prompt": "Check the discount function yourself against README.md and report the result. No other agents.",
+      "external": false,
+      "provider": null,
+      "split": "validation"
+    }
+  ]
+}

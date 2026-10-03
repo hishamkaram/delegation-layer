@@ -1,16 +1,32 @@
 ---
 name: agent-integration
-description: Use the Delegation Layer CLI whenever another agent, harness, model, or provider should perform work, then collect durable evidence and continue timed out sessions safely.
+description: Consult external AI agents and harnesses through Delegate for reviews, research, implementation, testing, second opinions, comparisons, and debates. Use when asked to ask Codex, consult Claude, get Antigravity’s opinion, or assign work to another harness or model, including external collaboration you choose during a task. Not for ordinary native subagents, provider setup, or questions merely about a tool.
 ---
 
 # Delegation Layer
 
-Use this skill whenever the user asks another agent, harness, model, or provider
-to perform any part of the work. This includes implementation, research,
-review, testing, debate, comparison, summarization, and follow-up work. Route
-that work through the local `delegate` CLI. The CLI is the only integration
-surface. Do not call, inspect, authenticate, or install a provider CLI directly,
-and do not replace delegation with a provider's native subagent or team feature.
+## When to use
+
+Use this skill before selecting a provider-specific plugin or launching an
+external harness to do work. Requests such as “ask Codex to review this”,
+“get Antigravity’s opinion”, and “have Claude investigate” are external
+collaboration even when the user never mentions Delegate. The same applies
+when you decide external expertise is useful to fulfill the user's task.
+These names are examples; discover supported destinations through the CLI.
+
+Ordinary subagents within the current harness remain available. Naming the
+current harness (for example, “have Claude investigate” while using Claude)
+also permits native delegation unless the user requests a separate session.
+A separate CLI session uses Delegate even when its brand matches yours. A subagent
+or plugin that calls an external harness is still external collaboration and
+uses Delegate. Merely discussing a provider, editing documentation about it,
+or troubleshooting its installation does not trigger delegation. Respect an
+explicit user choice of another integration; this skill does not override it.
+
+The local `delegate` CLI is the integration surface for external work. Do not
+replace it with a provider command, a provider-specific plugin, or an API call.
+Do not inspect, authenticate, install, or repair provider CLIs to bypass a
+Delegate blocker.
 
 ## Rules
 
@@ -19,11 +35,13 @@ and do not replace delegation with a provider's native subagent or team feature.
    never installs or repairs the CLI itself. If `delegate` is still missing or
    unusable, report the bootstrap failure and stop; never fall back to a native
    provider command.
-2. Use `dispatch --auto` unless the user explicitly selected a provider ID.
+2. Preserve a named harness or provider, even when the user supplied a natural
+   name rather than a provider ID. Use `dispatch --auto` when none was chosen.
    Provider selection, executable checks, compatibility checks, authentication
    gates, and supervisor admission belong inside Delegation Layer.
 3. Give every turn an absolute workspace, a separate state root, an explicit
-   permission mode, and a finite budget.
+   permission mode, and a finite budget. Preserve a caller-supplied
+   `DELEGATE_ROOT`; do not replace it with a temporary directory.
 4. Use `--json` and save the returned `task_id`. Read `admission`, `liveness`,
    `publication`, `status`, `outcome`, `continuation`, `task_record`, `failure`,
    and `error` as separate fields.
@@ -66,15 +84,18 @@ Do not substitute a provider command.
 
 ### 2. Discover only when useful
 
-For the normal path, use automatic selection directly. If you need to explain
-what the installed build knows, run:
+If no destination was named, use automatic selection directly. If the user
+named a harness (for example, “Codex”), resolve its exact provider ID from:
 
 ```sh
 delegate providers --json
 ```
 
-This is a catalog, not proof that a provider is installed, authenticated, or
-ready. If the caller named one provider ID and wants a side-effect-free check,
+Use the matching catalog ID with `--provider`; do not silently substitute
+`--auto` or another provider. If the name is ambiguous, clarify the intended
+destination. If it is absent, report that this build does not support it.
+The catalog is not proof that a provider is installed, authenticated, or ready.
+If a side-effect-free readiness check is useful,
 run:
 
 ```sh
@@ -95,39 +116,17 @@ behavior but is not an independent delegate-owned sandbox. Static discovery
 does not prove authentication or live acceptance; use the dispatch or live
 acceptance result for that evidence.
 
-If the caller needs an explicit model or effort, use the implemented native
-discovery command for that provider:
-
-```sh
-delegate models --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
-```
-
-Omit `--cwd` to use the current directory. Run discovery only when the caller
-needs a non-default choice; provider defaults are valid. The command uses the
-state-rooted supervisor and a bounded `model-discovery-v1` five-minute native
-inspection to allow first-run provider model/cache initialization. It creates
-inspection evidence without admitting a provider task, and may contact the
-provider CLI. It is advisory and never an admission allowlist. Do not reject a
-requested value merely because discovery did not list it, and do not infer
-per-model effort support from the harness-wide list. If a selected model has
-`efforts: null` or `efforts: []`, omit `--effort` unless the caller explicitly
-requested it; do not invent model aliases or combine options by guessing.
-
-The response includes `schema_version`, `command: "models"`, `provider`,
-`observed_at`, `status`, `reason_code`, `complete`, `source`, nullable
-`efforts`, and model rows with exact `id` values plus optional `name`, nullable
-`efforts`, and optional `default_effort`. `complete` describes model
-enumeration, not effort metadata. `null` means effort metadata is unknown;
-`[]` means the provider explicitly reported no choices. Discovery exits `0`
-for `available` or `partial`, `2` for `blocked` or `unavailable`, and `1` for
-`failed`. Preserve a blocked or unavailable discovery result as unresolved;
-defaults remain allowed.
+Keep provider defaults when no model or effort was requested. When an explicit
+choice is needed, read [model and effort guidance](references/command-reference.md#choosing-models-and-effort).
+Pass requested choices through Delegate's public `--model` and `--effort`
+fields; discovery is advisory, never an allowlist.
 
 ### 3. Prepare separate paths and a finite brief
 
 Use an existing task brief when one is supplied. Otherwise create a bounded
 brief file that contains the requested work and its acceptance criteria. Keep
-the state root outside the workspace:
+the state root outside the workspace and provider-writable trees (which can
+include the system temporary directory). Use `DELEGATE_ROOT` when supplied:
 
 ```sh
 STATE_ROOT="${DELEGATE_ROOT:-$HOME/delegation-state}"
@@ -148,8 +147,8 @@ observation and continuation.
 
 ### 4. Dispatch one bounded turn
 
-Use automatic selection unless the user explicitly supplied `PROVIDER_ID`.
-For a named provider, replace `--auto` with `--provider PROVIDER_ID`; never
+Use automatic selection unless the user named a destination.
+For a named harness or provider resolved in step 2, replace `--auto` with `--provider PROVIDER_ID`; never
 combine the two:
 
 ```sh
@@ -173,15 +172,6 @@ concurrently. Keep each task's brief, workspace, permission, and task ID
 independent. Do not configure Pueue or wait for one task before dispatching the
 next solely to serialize ordinary work. Inspect each returned task separately
 with `status` and `collect`.
-
-When an explicit selection is supplied, pass it through the public fields:
-`--model MODEL` and `--effort VALUE`. Codex encodes effort as its native TOML
-`model_reasoning_effort` setting; Claude and AGY use their native effort flags;
-Pi maps effort to `--thinking`; and OpenCode maps effort to `--variant`. An
-omitted or `default` effort is omitted from native argv. For AGY read-only,
-`--permission read-only` selects the exact native `--sandbox --mode plan` path
-without a bypass. Authorized AGY workspace-write retains its existing native
-bypass. Do not add these native flags yourself.
 
 Save the exact `task_id` from the JSON response. The recovery steps below apply
 to parsed dispatch responses. If the CLI rejects the command syntax before
@@ -220,79 +210,39 @@ copy unrestricted provider output into the control response.
 
 ### 6. Continue a timed out turn
 
-When `status` or `collect` returns `status: "timed_out"`, inspect the nested
-continuation object:
+When `status` or `collect` reports `timed_out`, read
+[continuation and timeout recovery](references/continuation.md). If
+`continuation.resumable` is true, use `continue --task TASK_ID` with the original
+state root and a finite budget, then observe the returned successor ID. Do not
+wait indefinitely for pending publication or restart the task as an unrelated
+dispatch. If continuation is unavailable, report its reason. Apply the same
+`failure` and `task_record` decisions as for dispatch; never repeat an uncertain
+successor creation.
 
-```json
-{
-  "status": "timed_out",
-  "continuation": {
-    "resumable": true,
-    "mode": "native",
-    "predecessor_task_id": "TASK_ID",
-    "continue_command": "delegate continue --task TASK_ID --json"
-  }
-}
-```
+## Comparisons, debate, and follow-up
 
-If `resumable` is true, create the linked successor through the public
-continuation command. Supply a new follow-up brief when the next turn needs a
-new instruction:
+Choose a finite scope and number of rounds appropriate to the user's request.
+For independent opinions, dispatch separate briefs to the chosen destinations
+and collect each result. Summarize the relevant findings as task data in the
+next brief; do not forward credentials or unrestricted output. Use a supported
+`continue` for an exact-session follow-up, or a new bounded task for an
+independent question. Preserve which agent supplied each finding, explain
+agreements and disagreements, and stop at the agreed scope or a blocker.
+An external worker should perform its assigned work; do not ask it to recursively
+recruit more agents unless that is explicitly part of the task.
 
-```sh
-delegate --root "$STATE_ROOT" continue \
-  --task TASK_ID \
-  --brief "$FOLLOW_UP_BRIEF" \
-  --budget 30m \
-  --json
-```
+## Details when needed
 
-The command preserves the exact provider session and permission mode and
-creates a new task ID. Do not add `--permission` to `continue`. Always include
-the original `--root`, even if a returned command hint omits it. Observe and
-collect the successor by repeating step 5. If `resumable` is
-false, report the reason and stop; a fresh dispatch would lose the original
-conversation and is not an equivalent recovery.
-
-If `continue` returns an error, use its `failure` and `task_record` fields just
-as for dispatch: when the record is `created`, check the returned successor
-`task_id` with `status`; when it is `not_created`, correct the request only if
-`failure.next_action` is `correct_request`; and when it is `unknown`, stop and
-report the failure. Do not repeat `continue` while successor creation is
-unknown.
-
-## JSON decisions
-
-The capability projection uses the stable `runtime-capability-v1` contract.
-Catalog responses have `verification: "catalog"` and `status: "unknown"`.
-Preflight responses have `verification: "preflight"` and describe static
-readiness. A dispatch response can report `verification: "runtime"` only after
-the supervised runtime probe has observed the required behavior and executable
-identity.
-
-Versions and help text are observations. Accept any valid nonempty version
-reported by the CLI; never apply a semantic-version allowlist or web lookup.
-The adapter’s required flags and runtime behavior decide compatibility.
-
-Authentication is a separate live gate. `live_acceptance.status` values are
-`not_run`, `passed`, or `blocked`; a blocked authentication prerequisite is
-neutral evidence and must not be relabeled. Report the missing authentication
-prerequisite and stop that attempt; do not retry or authenticate the provider.
-
-The task response separates:
-
-- `admission`: whether the request was accepted by the durable boundary;
-- `liveness`: the observed supervisor state;
-- `publication`: whether validated evidence was committed or rejected;
-- `outcome`: the terminal authority, when available;
-- `continuation`: whether the exact session can make a linked successor; and
-- `error`: bounded operational diagnostics.
-
-See [references/command-reference.md](references/command-reference.md) for
-the command matrix, [references/result-handling.md](references/result-handling.md)
-for decision rules, and [references/continuation.md](references/continuation.md)
-for timeout recovery. The examples and machine-readable checks in `examples/`
-and `evals/` are part of this skill package.
+- Read [command reference](references/command-reference.md) when choosing
+  model/effort options or another public command.
+- Read [result handling](references/result-handling.md) when interpreting
+  admission, publication, authentication, errors, or exit codes.
+- Read [continuation](references/continuation.md) for timeout recovery or an
+  exact-session follow-up.
+- Use [read-only example](examples/read-only-task.md),
+  [write example](examples/workspace-write-task.md), and
+  [JSON examples](examples/json-results.md) when constructing a task or parsing
+  unfamiliar output. Do not load every reference for a routine dispatch.
 
 ## Completion report
 

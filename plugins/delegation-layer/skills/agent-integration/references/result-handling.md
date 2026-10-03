@@ -4,10 +4,12 @@ Use the response fields independently. A successful control command is not
 the same as a successful provider result.
 
 1. Save `task_id` immediately after dispatch or continue.
-2. If a dispatch or continue response does not confirm admission, preserve any
-   task ID and report its bounded error. An uncertain admission must be
-   inspected, never automatically dispatched again. Status and collect can
-   report `admission: "unknown"` alongside valid terminal evidence.
+2. For a dispatch or continue error, inspect `task_record` first. When it is
+   `created`, observe the returned ID with `status`. When it is `not_created`,
+   do not poll; correct the request only if `failure.next_action` is
+   `correct_request`, otherwise report and stop. When it is `unknown`, stop and
+   report without polling or retrying. Status and collect can report
+   `admission: "unknown"` alongside valid terminal evidence for an existing task.
 3. If `status` is `timed_out`, follow the continuation procedure before treating
    pending publication as a reason to wait. `continuation.resumable: true`
    permits a linked successor even when no outcome has been published.
@@ -19,9 +21,8 @@ the same as a successful provider result.
    observe the same task again with a finite watch interval.
 7. If authentication is `blocked`, preserve that neutral state and tell the
    caller what prerequisite is unavailable without inventing a login command.
-8. If a command reports an operational uncertainty, inspect the original task
-   with `status` and `collect` before considering any action. Never relaunch an
-   uncertain task by guessing.
+8. Never relaunch an uncertain task by guessing. Observe only a task whose
+   record is known to exist; the `task_record` decision above takes precedence.
 
 For `delegate models`, validate the complete JSON envelope before using any
 fact. Treat `available` and `partial` with exit `0` as observations, preserve
@@ -35,3 +36,9 @@ model is not an execution guarantee.
 Exit codes are bounded control signals: `0` is a completed command, `1` is an
 operational error, `2` is an invalid or unsupported request, `3` is a pending
 collection watch, and `4` is a validated rejected outcome.
+
+Catalog facts (`verification: "catalog"`) are not runtime proof. Preflight
+checks static readiness; runtime verification requires the supervised probe.
+Versions and help are observations, not semantic-version allowlists.
+Authentication is a separate live gate (`not_run`, `passed`, or `blocked`).
+Report a blocked prerequisite without inventing a login command or retrying.

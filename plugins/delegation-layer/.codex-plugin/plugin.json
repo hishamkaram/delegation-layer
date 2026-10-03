@@ -1,7 +1,7 @@
 {
   "name": "delegation-layer",
-  "version": "0.1.17",
-  "description": "Route every delegated agent task through a bounded, resumable Delegation Layer CLI.",
+  "version": "0.1.18",
+  "description": "Consult external AI harnesses for reviews, research, implementation, and debate through the bounded, resumable Delegate CLI.",
   "author": {
     "name": "Hesham Karam",
     "url": "https://github.com/hishamkaram"
@@ -19,7 +19,7 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Delegation Layer",
-    "shortDescription": "Delegate agent work reliably",
+    "shortDescription": "Consult external AI harnesses",
     "longDescription": "Routes external agent work through a bounded, resumable CLI with durable evidence and provider-neutral capability handling.",
     "developerName": "Hesham Karam",
     "category": "Productivity",
@@ -28,6 +28,6 @@
       "Bounded execution",
       "Resumable tasks"
     ],
-    "defaultPrompt": "Use $agent-integration whenever another agent, harness, model, or provider should perform work."
+    "defaultPrompt": "Use $agent-integration to consult another harness or model for review, research, implementation, testing, or debate."
   }
 }

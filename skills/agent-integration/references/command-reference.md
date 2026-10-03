@@ -28,7 +28,7 @@ Dispatch flags:
 - `--permission read-only|workspace-write`: read-only investigation or authorized unattended write execution, including commands (not independent containment);
 - `--budget DURATION`: finite turn budget;
 - `--auto`: let the CLI select a ready provider;
-- `--provider ID`: use only when the caller explicitly selected an ID;
+- `--provider ID`: preserve the caller’s named harness or provider, resolved through the catalog;
 - `--model MODEL` and `--effort VALUE`: optional provider-advertised choices;
   Codex maps effort to TOML `model_reasoning_effort`, while Claude and AGY
   pass native effort flags; Pi maps effort to `--thinking`; OpenCode maps it to
@@ -48,3 +48,33 @@ Continuation flags:
 - `--task TASK`: predecessor task ID;
 - `--brief FILE`: optional new follow-up instruction;
 - `--budget DURATION`, `--model MODEL`, and `--effort VALUE`: optional overrides.
+
+## Choosing models and effort
+
+If the caller needs an explicit model or effort, use the implemented native
+discovery command for that provider:
+
+```sh
+delegate models --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
+```
+
+Omit `--cwd` to use the current directory. Run discovery only when the caller
+needs a non-default choice; provider defaults are valid. The command uses the
+state-rooted supervisor and a bounded `model-discovery-v1` five-minute native
+inspection to allow first-run provider model/cache initialization. It creates
+inspection evidence without admitting a provider task, and may contact the
+provider CLI. It is advisory and never an admission allowlist. Do not reject a
+requested value merely because discovery did not list it, and do not infer
+per-model effort support from the harness-wide list. If a selected model has
+`efforts: null` or `efforts: []`, omit `--effort` unless the caller explicitly
+requested it; do not invent model aliases or combine options by guessing.
+
+The response includes `schema_version`, `command: "models"`, `provider`,
+`observed_at`, `status`, `reason_code`, `complete`, `source`, nullable
+`efforts`, and model rows with exact `id` values plus optional `name`, nullable
+`efforts`, and optional `default_effort`. `complete` describes model
+enumeration, not effort metadata. `null` means effort metadata is unknown;
+`[]` means the provider explicitly reported no choices. Discovery exits `0`
+for `available` or `partial`, `2` for `blocked` or `unavailable`, and `1` for
+`failed`. Preserve a blocked or unavailable discovery result as unresolved;
+defaults remain allowed.

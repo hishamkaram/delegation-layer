@@ -61,6 +61,9 @@ This step installs agent guidance only. It does not install the Delegation Layer
 CLI, provider CLIs, change authentication, or run a task. Use the plugin path
 above when the skill and CLI should be installed together.
 
+For natural collaboration requests and selection limitations, see
+[Ask naturally](../README.md#ask-naturally).
+
 ## 2. Install the CLI
 
 Choose one released CLI installer:
