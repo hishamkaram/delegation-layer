@@ -69,8 +69,6 @@ jobs:
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
-          # v0.1.11 is the last release with the pre-migration supervisor layout.
-          DELEGATE_LEGACY_REF: v0.1.11
         run: make acceptance-private-cli
 
       - name: Run supervisor acceptance
@@ -136,8 +134,6 @@ jobs:
         env:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
-          # v0.1.11 is the last release with the pre-migration supervisor layout.
-          DELEGATE_LEGACY_REF: v0.1.11
         run: make acceptance-private-cli
 
       - name: Run supervisor acceptance

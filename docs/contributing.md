@@ -7,8 +7,10 @@ provider differences explicit at the adapter boundary.
 
 Install Go 1.27.1, Node.js 22 or newer, and the repository's pinned verification
 tools. Node.js is required by `make acceptance-private-cli` because that gate
-executes the legacy release binary against a real Pi-shaped executable fixture
-on macOS and Linux. The unit and hermetic acceptance suites provide their own
+executes the current build against a Pi-shaped executable fixture and a real
+private supervisor on macOS and Linux. This gate checks startup, dispatch,
+status, collection, model discovery, and ordinary-task parallelism; it does not
+build historical releases. The unit and hermetic acceptance suites provide their own
 supervisor fixtures. Clone the repository and run the local checks before
 editing:
 
