@@ -1,6 +1,6 @@
 {
   "name": "delegation-layer",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Consult external AI harnesses for reviews, research, implementation, and debate through the bounded, resumable Delegate CLI.",
   "author": {
     "name": "Hesham Karam",
