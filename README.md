@@ -36,6 +36,21 @@ already use instead of replacing them.
 3. Delegation Layer admits one bounded provider turn through the supervisor.
 4. The lead agent collects the sealed result and evidence.
 
+## Ask naturally
+
+Try “Ask Codex to review this change”, “Get Antigravity’s opinion”, or
+“Have Claude investigate this failure”. The skill routes external collaboration
+through `delegate`, preserves a named destination, and collects task evidence.
+Ordinary native subagents remain available for work inside the current harness,
+even when you name that harness. Ask for a separate session when you want
+Delegate to launch another instance of the same CLI.
+
+Skill installation makes this workflow discoverable; it does not force a model
+to choose it over another plugin. Selection depends on the harness, model, and
+loaded instructions. No user rules, settings, or competing plugins are rewritten.
+If an agent bypasses Delegate, that is a selection failure, not proof the
+integration worked.
+
 ## Install
 
 ### Recommended for Codex and Claude Code

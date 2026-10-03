@@ -30,7 +30,10 @@ indefinitely for a publication that the interrupted turn cannot complete.
 
 The follow-up brief is optional. If it is omitted, Delegation Layer reuses the
 validated predecessor brief. A successful continuation returns a new task ID
-and links it to the predecessor. Observe and collect the new ID separately.
+and links it to the predecessor. Observe and collect the new ID separately. Always retain the original state
+root, even if a returned command hint omits it. Permission is inherited; do not
+add `--permission` to `continue`. Apply the dispatch `task_record` error rules
+in [result handling](result-handling.md) before retrying or observing.
 
 `mode` describes the provider contract:
 

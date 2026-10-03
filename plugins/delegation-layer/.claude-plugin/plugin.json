@@ -2,7 +2,7 @@
   "name": "delegation-layer",
   "displayName": "Delegation Layer",
   "version": "0.1.17",
-  "description": "Route every delegated agent task through a bounded, resumable Delegation Layer CLI.",
+  "description": "Consult external AI harnesses for reviews, research, implementation, and debate through the bounded, resumable Delegate CLI.",
   "author": {
     "name": "Hesham Karam",
     "url": "https://github.com/hishamkaram"
