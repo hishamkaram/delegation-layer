@@ -184,19 +184,21 @@ independent. Do not configure Pueue or wait for one task before dispatching the
 next solely to serialize ordinary work. Inspect each returned task separately
 with `status` and `collect`.
 
-Save the exact `task_id` from the JSON response. The recovery steps below apply
-to parsed dispatch responses. If the CLI rejects the command syntax before
-dispatch (nonzero exit with a usage error and no JSON response), correct the
-reported syntax and invoke it again; argument parsing fails before admission and
-does not create a task record. For a parsed dispatch error, read its `failure`
-and `task_record` fields. If `task_record` is
-`not_created`, do not run `status`, `collect`, or `continue`; correct the request
-only when `failure.next_action` is `correct_request`, otherwise report the
-delegate failure and stop. If it is `created`, use `status` before taking any
-other action. If it is `unknown`, stop and report the failure: with an
-explicit task ID, absence can race another dispatch that is creating the same
-ID. Never retry that ID, run Pueue commands, or silently try another provider
-after a task may have been admitted.
+Save the exact `task_id` from the JSON response. Apply this decision separately
+for **each attempt**, including requests issued together:
+
+| Response | Next action |
+|---|---|
+| Usage error, no JSON response | Correct the reported syntax using Delegate help or `providers --json`, then invoke that request again. Parsing failed before admission. |
+| `task_record: not_created` and `failure.next_action: correct_request` | Correct that request and retry it. |
+| `task_record: not_created` with any other next action | Report that attempt's failure and stop it. Do not diagnose provider setup or substitute an integration. |
+| `task_record: created` | Use `status` before taking any other action. Do not dispatch again. |
+| `task_record: unknown` or an ambiguous response | Stop and report; do not retry an uncertain task creation. |
+
+One attempt's `stop_and_report` does not prevent correcting another independent
+request's usage error. Keep the failed attempt reported as failed. With an
+explicit task ID, absence can race another dispatch creating the same ID;
+never retry that uncertain ID or run Pueue commands.
 
 ### 5. Observe and collect
 

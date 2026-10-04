@@ -15,9 +15,12 @@ For external agent or model collaboration (reviews, research, implementation,
 testing, second opinions, comparisons, or debates), load the installed
 agent-integration skill before choosing tools or issuing commands, then use
 Delegate. This includes CCR / Claude Code Router. Do not invent Delegate syntax
-or substitute provider CLIs, plugins, or APIs. If Delegate returns
-failure.next_action=stop_and_report, report the failure and stop; do not retry,
-investigate provider setup, or fall back. Ordinary native subagents within this
+or substitute provider CLIs, plugins, or APIs. Handle each requested task
+independently. Before task creation, correct CLI usage errors or failures with
+next_action=correct_request. A failure with next_action=stop_and_report ends
+only that attempt: report it without retrying it, investigating provider setup,
+or falling back. Continue other independently requested tasks through Delegate.
+Ordinary native subagents within this
 harness remain available unless a separate external session is requested.
 Respect an explicit user choice of a different integration. Merely discussing
 or configuring a provider does not request delegation.
