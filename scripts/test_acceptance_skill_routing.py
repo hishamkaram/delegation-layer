@@ -164,7 +164,7 @@ class RoutingTests(unittest.TestCase):
         gate.write_json(self.root / "catalog.json", catalog)
         for argv, expected in ((["--root", "/state", "providers", "--json"], catalog),
                                (["providers", "--root=/state", "--json"], catalog),
-                               (["version"], "delegate routing-fixture")):
+                               (["version"], "delegate dev")):
             output = io.StringIO()
             with patch.dict(gate.os.environ, {"DELEGATE_ROUTING_FIXTURE": str(self.root)}), \
                     patch.object(gate.sys, "argv", ["delegate", *argv]), contextlib.redirect_stdout(output):

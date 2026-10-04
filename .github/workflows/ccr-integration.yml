@@ -43,7 +43,9 @@ jobs:
           npm install --global @anthropic-ai/claude-code
           ./scripts/install-test-supervisor.sh
       - name: Build Delegate
-        run: make build
+        run: |
+          CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o bin/delegate ./cmd/delegate
+          CGO_ENABLED=0 go build -buildvcs=false -ldflags "-X main.version=dev" -o bin/delegate-run ./cmd/delegate-run
       - name: Prove foreground lifecycle using real CLIs
         run: |
           export PATH="$GITHUB_WORKSPACE/bin:$GITHUB_WORKSPACE/bin/test-supervisor:$PATH"

@@ -16,7 +16,7 @@ for flag in ("--root", "--runner", "--pueue-config"):
 parser.add_argument("--json", action="store_true")
 _, command = parser.parse_known_args(argv)
 if command in (["--version"], ["version"]):
-    print("delegate routing-fixture")
+    print("delegate dev")
     sys.exit(0)
 if command == ["providers"]:
     print((root / "catalog.json").read_text(encoding="utf-8"))
@@ -33,5 +33,5 @@ print(json.dumps({
     "task_record": "not_created", "admission": "unknown", "liveness": "undetermined",
     "publication": "unknown", "failure": {"code": "provider_unavailable",
         "stage": "prepare-provider", "next_action": "stop_and_report"},
-    "error": "Routing-only test fixture: no provider work is launched."}))
+    "error": "The requested provider is unavailable in this environment."}))
 sys.exit(2)
