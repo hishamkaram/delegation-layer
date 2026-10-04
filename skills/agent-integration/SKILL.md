@@ -1,6 +1,6 @@
 ---
 name: agent-integration
-description: Consult external AI agents and harnesses through Delegate for reviews, research, implementation, testing, second opinions, comparisons, and debates. Use when asked to ask Codex, consult Claude, get Antigravity’s opinion, or assign work to another harness or model, including external collaboration you choose during a task. Not for ordinary native subagents, provider setup, or questions merely about a tool.
+description: Delegate external tasks to CCR (Claude Code Router) and other agents. Use for Codex, Claude, AGY, and other external agent or model collaboration for reviews, research, implementation, testing, second opinions, comparisons, and debates, including collaboration you choose during a task. Discover other supported harnesses such as Pi and OpenCode through Delegate. Not for ordinary native subagents, provider setup, or questions merely about a tool.
 ---
 
 # Delegation Layer
@@ -13,6 +13,9 @@ external harness to do work. Requests such as “ask Codex to review this”,
 collaboration even when the user never mentions Delegate. The same applies
 when you decide external expertise is useful to fulfill the user's task.
 These names are examples; discover supported destinations through the CLI.
+“Claude Code Router” and “CCR” mean `ccr:print`, not ordinary Claude Code.
+For that request, use Delegate with a CCR model alias; a Claude-specific skill
+or subscription model does not fulfill the requested route.
 
 Ordinary subagents within the current harness remain available. Naming the
 current harness (for example, “have Claude investigate” while using Claude)
@@ -28,6 +31,16 @@ replace it with a provider command, a provider-specific plugin, or an API call.
 Do not inspect, authenticate, install, or repair provider CLIs to bypass a
 Delegate blocker.
 
+A reported blocker is a valid final response to a delegation request. It does
+not turn that request into an environment-repair task. When a response says
+`failure.next_action: "stop_and_report"`, that attempt is finished. Include its
+failure in your final response without opening a clarification dialog to choose
+a fallback. For `task_record: not_created`, identify the requested destination
+and quote the returned `task_id` (if present), `task_record`, `failure`, and
+`error`. Do not append inferred state paths or provider-setup diagnoses. Do not run diagnostic commands, retry it, or use another integration.
+Troubleshooting requires a separate user request. Other independently requested
+tasks may proceed; the failed attempt must remain reported as failed or blocked.
+
 ## Rules
 
 1. Check whether `delegate` is already installed. A plugin SessionStart hook
@@ -39,9 +52,10 @@ Delegate blocker.
    name rather than a provider ID. Use `dispatch --auto` when none was chosen.
    Provider selection, executable checks, compatibility checks, authentication
    gates, and supervisor admission belong inside Delegation Layer.
-3. Give every turn an absolute workspace, a separate state root, an explicit
-   permission mode, and a finite budget. Preserve a caller-supplied
-   `DELEGATE_ROOT`; do not replace it with a temporary directory.
+3. Give every turn an absolute workspace, an explicit permission mode, and a
+   finite budget. Keep the state root outside the workspace. Reuse a supplied
+   `DELEGATE_ROOT` for all providers and tasks; do not invent per-provider or
+   per-task state roots. Task IDs separate work within that root.
 4. Use `--json` and save the returned `task_id`. Read `admission`, `liveness`,
    `publication`, `status`, `outcome`, `continuation`, `task_record`, `failure`,
    and `error` as separate fields.
@@ -95,19 +109,9 @@ Use the matching catalog ID with `--provider`; do not silently substitute
 `--auto` or another provider. If the name is ambiguous, clarify the intended
 destination. If it is absent, report that this build does not support it.
 The catalog is not proof that a provider is installed, authenticated, or ready.
-If a side-effect-free readiness check is useful,
-run:
-
-```sh
-delegate preflight --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE \
-  --permission REQUESTED_MODE --json
-```
-
-Replace `REQUESTED_MODE` with `read-only` for investigation or
-`workspace-write` for authorized edits. Preflight reports static admission only.
-It does not create a task, start the supervisor, or launch a provider. Do not keep
-retrying preflight when it says
-`blocked` or `unsupported`; report the bounded reason.
+Dispatch performs admission checks; a separate preflight is not needed for a
+normal task. For an explicitly requested readiness check, see
+[preflight guidance](references/command-reference.md#checking-readiness).
 
 The catalog and `capabilities` response expose supported permission modes,
 request options, continuation, and the read-only mechanism. A read-only
@@ -116,7 +120,14 @@ behavior but is not an independent delegate-owned sandbox. Static discovery
 does not prove authentication or live acceptance; use the dispatch or live
 acceptance result for that evidence.
 
-Keep provider defaults when no model or effort was requested. When an explicit
+Read `required_options` in provider discovery before dispatch. Supply every
+required option; a provider's optional defaults do not replace required inputs.
+For CCR / Claude Code Router or a CCR model request, read
+[CCR model selection](references/ccr.md). A CCR route is external collaboration
+even when you are already using Claude. Do not assume every open-source model
+name belongs to CCR; clarify only if discovery leaves the destination ambiguous.
+
+Keep provider defaults when no model or effort was requested and neither is required. When an explicit
 choice is needed, read [model and effort guidance](references/command-reference.md#choosing-models-and-effort).
 Pass requested choices through Delegate's public `--model` and `--effort`
 fields; discovery is advisory, never an allowlist.
@@ -128,22 +139,18 @@ brief file that contains the requested work and its acceptance criteria. Keep
 the state root outside the workspace and provider-writable trees (which can
 include the system temporary directory). Use `DELEGATE_ROOT` when supplied:
 
-```sh
-STATE_ROOT="${DELEGATE_ROOT:-$HOME/delegation-state}"
-WORKSPACE="$PWD"
-BRIEF="$(mktemp)"
-cat >"$BRIEF" <<'EOF'
-Describe the delegated task, the files or behavior to change, and the checks
-that must pass. Keep the response concise and report validation evidence.
-EOF
-```
+Run path preparation and dispatch in **one shell/tool invocation**, as shown
+below. Shell variables may disappear between tool calls. For later commands,
+use the actual saved absolute paths or assign them again in that invocation;
+never pass an empty `--root`, `--brief`, or `--cwd`.
 
-Replace the example brief with the actual user request. Do not place the state
+Replace the example brief below with the actual user request. Do not place the state
 root inside the workspace or place secrets in either path’s task data. Keep it
 outside provider configuration and runtime directories as well. If delegate
-rejects placement before admission, choose a separate state directory; do not
-change provider settings. Once admitted, retain that state root for every
-observation and continuation.
+rejects a caller-supplied state root, report the placement error rather than
+silently replacing that root. If no root was supplied, choose one outside the
+workspace and reuse it. Do not change provider settings. Retain the selected
+root for every observation and continuation.
 
 ### 4. Dispatch one bounded turn
 
@@ -152,6 +159,13 @@ For a named harness or provider resolved in step 2, replace `--auto` with `--pro
 combine the two:
 
 ```sh
+STATE_ROOT="${DELEGATE_ROOT:-$HOME/delegation-state}"
+WORKSPACE="$PWD"
+BRIEF="$(mktemp)"
+cat >"$BRIEF" <<'EOF'
+Describe the delegated task, the files or behavior to change, and the checks
+that must pass. Keep the response concise and report validation evidence.
+EOF
 delegate --root "$STATE_ROOT" dispatch --auto \
   --brief "$BRIEF" \
   --cwd "$WORKSPACE" \
@@ -173,19 +187,21 @@ independent. Do not configure Pueue or wait for one task before dispatching the
 next solely to serialize ordinary work. Inspect each returned task separately
 with `status` and `collect`.
 
-Save the exact `task_id` from the JSON response. The recovery steps below apply
-to parsed dispatch responses. If the CLI rejects the command syntax before
-dispatch (nonzero exit with a usage error and no JSON response), correct the
-reported syntax and invoke it again; argument parsing fails before admission and
-does not create a task record. For a parsed dispatch error, read its `failure`
-and `task_record` fields. If `task_record` is
-`not_created`, do not run `status`, `collect`, or `continue`; correct the request
-only when `failure.next_action` is `correct_request`, otherwise report the
-delegate failure and stop. If it is `created`, use `status` before taking any
-other action. If it is `unknown`, stop and report the failure: with an
-explicit task ID, absence can race another dispatch that is creating the same
-ID. Never retry that ID, run Pueue commands, or silently try another provider
-after a task may have been admitted.
+Save the exact `task_id` from the JSON response. Apply this decision separately
+for **each attempt**, including requests issued together:
+
+| Response | Next action |
+|---|---|
+| Usage error, no JSON response | Correct the reported syntax using Delegate help or `providers --json`, then invoke that request again. Parsing failed before admission. |
+| `task_record: not_created` and `failure.next_action: correct_request` | Correct that request and retry it. |
+| `task_record: not_created` with any other next action | Report that attempt's failure and stop it. Do not diagnose provider setup or substitute an integration. |
+| `task_record: created` | Use `status` before taking any other action. Do not dispatch again. |
+| `task_record: unknown` or an ambiguous response | Stop and report; do not retry an uncertain task creation. |
+
+One attempt's `stop_and_report` does not prevent correcting another independent
+request's usage error. Keep the failed attempt reported as failed. With an
+explicit task ID, absence can race another dispatch creating the same ID;
+never retry that uncertain ID or run Pueue commands.
 
 ### 5. Observe and collect
 
@@ -245,6 +261,10 @@ recruit more agents unless that is explicitly part of the task.
   unfamiliar output. Do not load every reference for a routine dispatch.
 
 ## Completion report
+
+Build the report from observed CLI responses and collected evidence. Copy
+returned values; do not reconstruct paths from example commands or shell
+defaults. Omit unobserved configuration details.
 
 Report the original task ID, selected provider ID when the CLI returns one,
 the final admission/liveness/publication fields, the terminal outcome and

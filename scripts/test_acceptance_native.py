@@ -797,7 +797,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             gate.require_replay_unchanged(before, {"outcome.json": {"sha256": "b"}})
 
     def test_profiles_and_parser_expose_normal_permission_matrix(self):
-        expected = {"antigravity:print", "claude:print", "codex:exec", "pi:json", "opencode:run"}
+        expected = {"antigravity:print", "ccr:print", "claude:print", "codex:exec", "pi:json", "opencode:run"}
         self.assertEqual(set(gate.PROFILES), expected)
         self.assertEqual(gate.PROFILES["antigravity:print"]["default_mode"], "workspace-write")
         for profile in gate.PROFILES.values():
@@ -829,13 +829,13 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_aggregate_wrapper_runs_write_and_read_profiles(self):
         wrapper = Path(__file__).with_name("acceptance_native_all.sh").read_text()
-        for provider in ("antigravity:print", "claude:print", "codex:exec", "pi:json", "opencode:run"):
+        for provider in ("antigravity:print", "claude:print", "ccr:print", "codex:exec", "pi:json", "opencode:run"):
             self.assertIn(provider, wrapper)
         self.assertIn('--permission "$case_permission"', wrapper)
         self.assertIn('--scenario "$case_scenario"', wrapper)
         self.assertIn('run_case "$provider" workspace-write write', wrapper)
         self.assertIn('run_case "$provider" read-only read-only', wrapper)
-        self.assertIn('for provider in antigravity:print claude:print codex:exec pi:json opencode:run; do', wrapper)
+        self.assertIn('for provider in antigravity:print claude:print ccr:print codex:exec pi:json opencode:run; do', wrapper)
         self.assertIn("2) # User-authorized authentication/prerequisite blocks remain neutral.", wrapper)
         self.assertIn("passed=%s blocked=%s failed=%s", wrapper)
         self.assertIn("aggregate_status=BLOCKED", wrapper)
@@ -852,7 +852,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
                 capture_output=True, text=True, check=False, timeout=10)
             self.assertEqual(blocked.returncode, 0)
-            self.assertIn("status=BLOCKED passed=0 blocked=10 failed=0", blocked.stdout)
+            self.assertIn("status=BLOCKED passed=0 blocked=12 failed=0", blocked.stdout)
             self.assertIn("auth_blocks_neutral=true", blocked.stdout)
 
             fake_python.write_text(
@@ -867,7 +867,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
                 capture_output=True, text=True, check=False, timeout=10)
             self.assertEqual(mixed.returncode, 1)
-            self.assertIn("status=failed passed=2 blocked=6 failed=2", mixed.stdout)
+            self.assertIn("status=failed passed=2 blocked=8 failed=2", mixed.stdout)
 
     def test_normal_setup_does_not_probe_provider_version_directly(self):
         source = Path(__file__).with_name("acceptance_native.py").read_text()

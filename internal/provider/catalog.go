@@ -87,6 +87,8 @@ func normalizeRegistration(supplied Registration) (Registration, error) {
 	if registration.Prepare != nil && len(registration.Interpreters) == 0 {
 		return Registration{}, fmt.Errorf("%w: provider %s has no interpreter", ErrInvalidDescriptor, registration.Description.ID)
 	}
+	registration.Description.RequiredOptions = slices.Clone(registration.Description.RequiredOptions)
+	slices.Sort(registration.Description.RequiredOptions)
 	registration.Description.SupportedOptions = slices.Clone(registration.Description.SupportedOptions)
 	slices.Sort(registration.Description.SupportedOptions)
 	registration.Description.SupportedModes = slices.Clone(registration.Description.SupportedModes)
@@ -101,6 +103,9 @@ func normalizeRegistration(supplied Registration) (Registration, error) {
 func validateDescription(description Description) error {
 	if err := config.ValidateProvider(description.ID); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
+	}
+	if err := validateRequiredOptions(description); err != nil {
+		return err
 	}
 	if err := validateOptions(description.SupportedOptions); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
@@ -194,6 +199,18 @@ func validateInterpreters(registration Registration, seenRefs map[string]struct{
 		seenRefs[key] = struct{}{}
 	}
 	return registration.Interpreters, nil
+}
+
+func validateRequiredOptions(description Description) error {
+	if err := validateOptions(description.RequiredOptions); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
+	}
+	for _, option := range description.RequiredOptions {
+		if !slices.Contains(description.SupportedOptions, option) {
+			return fmt.Errorf("%w: required option %s is not supported", ErrInvalidDescriptor, option)
+		}
+	}
+	return nil
 }
 
 func validateOptions(options []string) error {
@@ -293,6 +310,8 @@ func (c Catalog) Lookup(id string) (Registration, error) {
 }
 
 func cloneRegistration(registration Registration) Registration {
+	registration.Description.RequiredOptions = slices.Clone(registration.Description.RequiredOptions)
+	slices.Sort(registration.Description.RequiredOptions)
 	registration.Description.SupportedOptions = slices.Clone(registration.Description.SupportedOptions)
 	registration.Description.SupportedModes = slices.Clone(registration.Description.SupportedModes)
 	registration.Description.Runtime.HelpArgs = slices.Clone(registration.Description.Runtime.HelpArgs)
@@ -356,6 +375,9 @@ func (c Catalog) ValidateRequest(request task.TaskRecord) error {
 		{name: OptionNativeTimeout, present: request.RequestedConfig.NativeTimeout != ""},
 	}
 	for _, option := range options {
+		if !option.present && slices.Contains(registration.Description.RequiredOptions, option.name) {
+			return fmt.Errorf("%w: %s requires --%s", ErrUnsupportedOption, request.Provider, option.name)
+		}
 		if option.present && !slices.Contains(registration.Description.SupportedOptions, option.name) {
 			return fmt.Errorf("%w: %s does not support %s", ErrUnsupportedOption, request.Provider, option.name)
 		}

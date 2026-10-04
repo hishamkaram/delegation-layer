@@ -49,7 +49,8 @@ Skill installation makes this workflow discoverable; it does not force a model
 to choose it over another plugin. Selection depends on the harness, model, and
 loaded instructions. No user rules, settings, or competing plugins are rewritten.
 If an agent bypasses Delegate, that is a selection failure, not proof the
-integration worked.
+integration worked. For a persistent preference, see
+[configure agent routing](docs/agent-routing.md).
 
 ## Install
 
@@ -249,3 +250,10 @@ The successor receives a new task ID and is observed with the same `status` and
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+### Consult models through Claude Code Router
+
+Delegate also supports CCR-configured third-party and local models through
+`ccr:print`. Ask your agent to “have CCR review this” and it can discover and
+choose a configured model alias. CCR and Claude Code must already be installed
+and the provider configured. See [provider guidance](docs/providers.md#claude-code-router).

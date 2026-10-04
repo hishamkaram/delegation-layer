@@ -11,7 +11,11 @@ run_case() {
     case_permission=$2
     case_scenario=$3
     set +e
-    python3 "$repo_root/scripts/acceptance_native.py" \
+    set --
+    if [ "$case_provider" = ccr:print ]; then
+        set -- --model "${CCR_LIVE_MODEL:-}"
+    fi
+    python3 "$repo_root/scripts/acceptance_native.py" "$@" \
         --provider "$case_provider" \
         --permission "$case_permission" \
         --scenario "$case_scenario" \
@@ -28,10 +32,10 @@ run_case() {
     esac
 }
 
-for provider in antigravity:print claude:print codex:exec pi:json opencode:run; do
+for provider in antigravity:print claude:print ccr:print codex:exec pi:json opencode:run; do
     run_case "$provider" workspace-write write
 done
-for provider in antigravity:print claude:print codex:exec pi:json opencode:run; do
+for provider in antigravity:print claude:print ccr:print codex:exec pi:json opencode:run; do
     run_case "$provider" read-only read-only
 done
 if [ "$failed" -ne 0 ]; then

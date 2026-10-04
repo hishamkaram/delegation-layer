@@ -1,6 +1,6 @@
 # Provider guide
 
-Delegation Layer ships five launchable provider profiles. The profile name is
+Delegation Layer ships six launchable provider profiles. The profile name is
 part of the task request and determines the command, environment, policy,
 identity observer, input transport, output interpreter, and supported options.
 
@@ -8,6 +8,7 @@ identity observer, input transport, output interpreter, and supported options.
 | --- | --- | --- | --- | --- |
 | `antigravity:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort`, `native-timeout` | `agy` |
 | `codex:exec` | `read-only`, `workspace-write` | `native-sandbox` | `continuation`, `model`, `effort` | `codex exec` |
+| `ccr:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model` (required alias), `effort` | CCR foreground launch |
 | `claude:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `claude` print mode |
 | `pi:json` | `read-only`, `workspace-write` | `tool-allowlist` | `continuation`, `model`, `effort` | `pi --mode json` |
 | `opencode:run` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `opencode run --format json` |
@@ -26,7 +27,7 @@ side-effect-free and reports `status: "unknown"` until dispatch performs the
 supervised runtime probe. It does not claim authentication or live acceptance.
 
 Use `delegate models --provider PROFILE [--cwd ABS] --json` when an explicit
-model or effort choice is needed. Model discovery is implemented for all five
+model or effort choice is needed. Model discovery is implemented for all six
 profiles. It uses the state-rooted supervisor and the `model-discovery-v1`
 five-minute native inspection to allow first-run provider model/cache
 initialization; it creates inspection evidence without admitting
@@ -104,7 +105,7 @@ proof is `passed`, and unavailable authentication is `blocked` and neutral.
 
 ## Live acceptance
 
-The shared live gate covers all five providers through the shipped dispatcher
+The shared live gate covers all six providers through the shipped dispatcher
 and runner with a private Pueue instance. Each supported mode performs a fresh
 turn, an exact continuation, and collection replay. Read-only scenarios verify
 that the workspace is unchanged. Write scenarios verify file creation, editing,
@@ -223,3 +224,27 @@ environment and policy calculation, identity observation, and output
 interpretation. Add unit tests for capability drift and predicate failures,
 then document the profile here and in the discovery output. The development
 workflow is described in [Contributing](contributing.md).
+
+## Claude Code Router
+
+`ccr:print` launches Claude Code through CCR's foreground provider-only route.
+Both `ccr` and `claude` must be installed. Configure providers and credentials in
+CCR beforehand. Delegate manages task execution; it does not configure CCR.
+
+Supply `--model` with a configured CCR alias. To choose one, use
+`delegate models --provider ccr:print --json`; this reads CCR's public
+`model list --json` interface. Listing does not prove authentication or model
+availability. Explicit aliases remain valid inputs even if discovery is unavailable.
+Unknown effort choices remain null; an explicit `--effort` is forwarded to Claude.
+
+Read-only selects `plan`; workspace-write selects `bypassPermissions`. These are
+provider-owned permission modes, not an independent sandbox. CCR loads its own
+configuration and extensions. Fresh sessions and exact continuations use Claude
+session UUIDs, while Delegate records the provider as `ccr:print`.
+
+CCR's foreground exit and sealed Claude stream must both indicate success.
+The requested alias is recorded; it is not independent proof of upstream model
+identity. CCR detached jobs are not used by this adapter.
+
+Run the shared native acceptance gate with `--provider ccr:print --model ALIAS`
+for each permission mode. Missing authentication is BLOCKED rather than passed.

@@ -150,6 +150,54 @@
       "external": false,
       "provider": null,
       "split": "validation"
+    },
+    {
+      "name": "ccr-review",
+      "prompt": "Ask Claude Code Router to review pricing.py for correctness without editing. Choose an appropriate configured model and report which one you used.",
+      "external": true,
+      "provider": "ccr:print",
+      "split": "development"
+    },
+    {
+      "name": "ccr-explicit-alias",
+      "prompt": "Ask CCR using the alias local-review to investigate pricing.py. Do not edit files.",
+      "external": true,
+      "provider": "ccr:print",
+      "model": "local-review",
+      "split": "validation"
+    },
+    {
+      "name": "ccr-write",
+      "prompt": "Have CCR with the alias local-review fix pricing.py so discounts are percentages, and test the correction. Authorize edits in this workspace.",
+      "external": true,
+      "provider": "ccr:print",
+      "model": "local-review",
+      "split": "validation"
+    },
+    {
+      "name": "ccr-follow-up",
+      "prompt": "Ask CCR using local-review to critique pricing.py, then ask that same session one follow-up about its recommendation. No edits.",
+      "external": true,
+      "provider": "ccr:print",
+      "model": "local-review",
+      "split": "validation"
+    },
+    {
+      "name": "ccr-explain",
+      "prompt": "Explain what Claude Code Router does. Do not ask it to perform work.",
+      "external": false,
+      "provider": null,
+      "split": "validation"
+    },
+    {
+      "name": "ccr-compare",
+      "prompt": "Ask CCR using local-review and a separate Codex session for independent reviews of pricing.py, then compare their findings. No edits.",
+      "external": true,
+      "provider": [
+        "ccr:print",
+        "codex:exec"
+      ],
+      "split": "validation"
     }
   ]
 }

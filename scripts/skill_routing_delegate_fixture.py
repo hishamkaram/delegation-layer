@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
-"""Routing-only Delegate double. Never launches provider work."""
-import argparse
+"""Record routing calls; use real Delegate validation without provider executables."""
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 root = Path(os.environ["DELEGATE_ROUTING_FIXTURE"])
 argv = sys.argv[1:]
 with (root / "calls.jsonl").open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(argv) + "\n")
-parser = argparse.ArgumentParser(add_help=False)
-for flag in ("--root", "--runner", "--pueue-config"):
-    parser.add_argument(flag)
-parser.add_argument("--json", action="store_true")
-_, command = parser.parse_known_args(argv)
-if command in (["--version"], ["version"]):
-    print("delegate routing-fixture")
+runtime = json.loads((root / "runtime.json").read_text(encoding="utf-8"))
+# Only this child loses provider executables. The initiating harness keeps its
+# normal profile, PATH, and competing integrations, so bypasses remain observable.
+result = subprocess.run([runtime["delegate"], *argv],
+                        env=dict(os.environ, PATH=runtime["path"]),
+                        capture_output=True, text=True, check=False)
+try:
+    response = json.loads(result.stdout)
+except ValueError:
+    response = None
+# Keep model selection deterministic, but only after real parsing accepted a
+# CCR discovery request. Syntax errors retain their actual error response.
+if isinstance(response, dict) and response.get("command") == "models" \
+        and response.get("provider") == "ccr:print" \
+        and response.get("reason_code") == "discovery_unavailable" \
+        and result.returncode == 2:
+    response.update(status="available", reason_code="ok", complete=True,
+                    source="ccr model list --json", efforts=None,
+                    models=[{"id": "local-review", "name": "Local review model", "efforts": None}])
+    print(json.dumps(response))
     sys.exit(0)
-if command == ["providers"]:
-    print((root / "catalog.json").read_text(encoding="utf-8"))
-    sys.exit(0)
-print(json.dumps({
-    "schema_version": 1, "command": next((a for a in argv if a in
-        ("dispatch", "preflight", "models", "capabilities")), "unknown"),
-    "task_record": "not_created", "admission": "unknown", "liveness": "undetermined",
-    "publication": "unknown", "failure": {"code": "provider_unavailable",
-        "stage": "prepare-provider", "next_action": "stop_and_report"},
-    "error": "Routing-only test fixture: no provider work is launched."}))
-sys.exit(2)
+sys.stdout.write(result.stdout)
+sys.stderr.write(result.stderr)
+sys.exit(result.returncode)

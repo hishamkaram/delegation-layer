@@ -53,6 +53,10 @@ from acceptance_supervisor_common import (
 
 
 PROFILES = {
+    "ccr:print": {
+        "executable": "ccr", "modes": ("read-only", "workspace-write"),
+        "default_mode": "read-only",
+    },
     "antigravity:print": {
         "executable": "agy", "modes": ("read-only", "workspace-write"),
         "default_mode": "workspace-write",
@@ -1391,6 +1395,8 @@ def main(argv: list[str] | None = None) -> int:
     output: Path | None = None
     try:
         output = choose_output(args.provider, args.output)
+        if args.provider == "ccr:print" and not args.model and not args.discover_models:
+            raise BlockedFailure("CCR acceptance requires --model with a configured alias")
         run = NativeAcceptance(argparse.Namespace(**{**vars(args), "output": str(output)}))
         code = run.run()
         status = "passed" if code == 0 else "BLOCKED" if code == 2 else "failed"

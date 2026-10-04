@@ -1,7 +1,7 @@
 # Adapter Contract and Runtime Capability Checks
 
 This document defines the normative requirements for provider adapters
-(`antigravity:print`, `codex:exec`, `claude:print`, `pi:json`, and
+(`antigravity:print`, `codex:exec`, `claude:print`, `ccr:print`, `pi:json`, and
 `opencode:run`).
 
 ## 1. Supported Runtime Profiles
@@ -11,6 +11,7 @@ This document defines the normative requirements for provider adapters
 | `antigravity:print` | `read-only`, `workspace-write` | native `plan` for read-only; native automatic approval (`always-proceed`) for writes | read-only: `agy --sandbox --mode plan --add-dir <canonical-workspace> ...`; write: `agy --sandbox --mode accept-edits --dangerously-skip-permissions --add-dir <canonical-workspace> ...` | extra writable roots |
 | `codex:exec` | `read-only`, `workspace-write` | native sandbox | `codex exec ... --sandbox <mode> ...` | unrestricted execution, ephemeral sessions |
 | `claude:print` | `read-only`, `workspace-write` | native `plan` for read-only; `bypassPermissions` for unattended writes | `claude --print ... --permission-mode <mode> ...` | independent containment |
+| `ccr:print` | `read-only`, `workspace-write` | Claude native `plan` for read-only; `bypassPermissions` for unattended writes | `ccr launch --model <alias> --auth-mode provider-only --print --permission-mode <mode> -- ...` | subscription pools, independent containment |
 | `pi:json` | `read-only`, `workspace-write` | read-only uses read,grep,find,ls; write uses provider-native tools and approval | `pi --mode json ...`; read-only adds `--tools read,grep,find,ls` | independent containment |
 | `opencode:run` | `read-only`, `workspace-write` | native plan/build agent; native `--auto` for workspace-write | `opencode run --format json --dir <workspace> ...` | unrestricted execution |
 

@@ -68,11 +68,16 @@ func (s *Store) createNewRoot(cleanRoot string) error {
 		return fmt.Errorf("marshaling root.json: %w", mErr)
 	}
 	committed, cleanupErr, cErr := s.stageAndCommit(cleanRoot, "root.json", data, nil)
-	if cErr != nil && !committed {
+	if cErr != nil && !committed && !errors.Is(cErr, os.ErrExist) {
 		return fmt.Errorf("committing root.json: %w", cErr)
 	}
 	if cleanupErr != nil {
 		return fmt.Errorf("cleanup root.json: %w", cleanupErr)
+	}
+	if !committed && errors.Is(cErr, os.ErrExist) {
+		// Another initializer chose the root identity. Stage cleanup has
+		// synchronized the directory; validate and reuse that immutable winner.
+		return s.loadExistingRoot(filepath.Join(cleanRoot, "root.json"))
 	}
 	s.RootID = rootID
 	return nil

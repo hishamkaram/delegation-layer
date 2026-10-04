@@ -62,7 +62,8 @@ CLI, provider CLIs, change authentication, or run a task. Use the plugin path
 above when the skill and CLI should be installed together.
 
 For natural collaboration requests and selection limitations, see
-[Ask naturally](../README.md#ask-naturally).
+[Ask naturally](../README.md#ask-naturally). To make Delegate your persistent
+external-collaboration preference, see [agent routing](agent-routing.md).
 
 ## 2. Install the CLI
 

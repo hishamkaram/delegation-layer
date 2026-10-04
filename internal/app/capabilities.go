@@ -49,6 +49,7 @@ type CapabilityReport struct {
 	Continuation     string                            `json:"continuation"`
 	SupportedModes   []string                          `json:"supported_modes"`
 	SupportedOptions []string                          `json:"supported_options"`
+	RequiredOptions  []string                          `json:"required_options,omitempty"`
 	ReadOnly         commonprovider.ReadOnlyCapability `json:"read_only"`
 	Version          string                            `json:"version,omitempty"`
 	ExecutableSHA256 string                            `json:"executable_sha256,omitempty"`
@@ -125,6 +126,7 @@ func declaredCapability(description commonprovider.Description) CapabilityReport
 		Continuation:     capabilityContinuation(description),
 		SupportedModes:   cloneCapabilityStrings(description.SupportedModes),
 		SupportedOptions: cloneCapabilityStrings(description.SupportedOptions),
+		RequiredOptions:  cloneCapabilityStrings(description.RequiredOptions),
 		ReadOnly:         description.ReadOnly,
 		HelpArgs:         cloneCapabilityStrings(description.Runtime.HelpArgs),
 		RequiredFlags:    cloneCapabilityStrings(description.Runtime.RequiredFlags),
@@ -168,6 +170,7 @@ func runtimeCapability(providerID string, candidate commonprovider.ProfileCandid
 		Continuation:     capabilityContinuation(description),
 		SupportedModes:   cloneCapabilityStrings(description.SupportedModes),
 		SupportedOptions: cloneCapabilityStrings(description.SupportedOptions),
+		RequiredOptions:  cloneCapabilityStrings(description.RequiredOptions),
 		ReadOnly:         description.ReadOnly,
 		ReasonCode:       capabilityReasonReady,
 		RequiredFlags:    cloneCapabilityStrings(runtime.RequiredFlags),

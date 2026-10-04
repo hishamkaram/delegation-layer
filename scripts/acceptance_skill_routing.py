@@ -221,11 +221,14 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180):
             delegate = shutil.which("delegate")
             if not delegate:
                 raise FileNotFoundError("Delegate catalog executable missing")
-            catalog = owner.capture("catalog", [delegate, "providers", "--json"])
-            catalog_bytes = catalog.read_bytes()
-            if not isinstance(json.loads(catalog_bytes).get("providers"), list):
-                raise ValueError("Delegate catalog has no provider list")
-            (fixture / "catalog.json").write_bytes(catalog_bytes)
+            private_path = fixture / "supervisor-bin"
+            private_path.mkdir()
+            for name, path in (("pueue", owner.client), ("pueued", owner.daemon_path)):
+                (private_path / name).symlink_to(Path(path).resolve())
+            write_json(fixture / "runtime.json", {
+                "delegate": str(Path(delegate).resolve()), "path": str(private_path),
+                "delegate_sha256": digest(Path(delegate)),
+            })
             executable = fixture / "delegate"
             shutil.copyfile(REPO / "scripts/skill_routing_delegate_fixture.py", executable)
             executable.chmod(0o700)

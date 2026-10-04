@@ -57,7 +57,7 @@ If an explicit choice is needed, run:
 
 `delegate models --provider PROFILE [--cwd ABS] --json`
 
-The command is implemented for all five profiles and
+The command is implemented for all six profiles and
 returns advisory model facts through the state-rooted supervisor with a
 `model-discovery-v1` five-minute inspection bound. The longer bound covers
 first-run provider model/cache initialization. `complete` describes model
