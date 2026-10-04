@@ -159,37 +159,51 @@ class RoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "receipt selection mismatch"):
             gate.summarize(self.root, [self.case], 2, "codex")
 
-    def test_fixture_accepts_global_flags_and_version_alias(self):
-        catalog = {"providers": [{"id": "codex:exec"}]}
-        gate.write_json(self.root / "catalog.json", catalog)
-        for argv, expected in ((["--root", "/state", "providers", "--json"], catalog),
-                               (["providers", "--root=/state", "--json"], catalog),
-                               (["version"], "delegate dev")):
-            output = io.StringIO()
-            with patch.dict(gate.os.environ, {"DELEGATE_ROUTING_FIXTURE": str(self.root)}), \
-                    patch.object(gate.sys, "argv", ["delegate", *argv]), contextlib.redirect_stdout(output):
-                with self.assertRaises(SystemExit) as stopped:
-                    runpy.run_path(str(gate.REPO / "scripts/skill_routing_delegate_fixture.py"), run_name="__main__")
-                self.assertEqual(stopped.exception.code, 0)
-            actual = output.getvalue().strip()
-            self.assertEqual(json.loads(actual) if isinstance(expected, dict) else actual, expected)
+    def run_fixture(self, argv, result):
+        (self.root / "runtime.json").write_text(json.dumps({"delegate": "/candidate/delegate", "path": "/private/path"}))
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.dict(gate.os.environ, {"DELEGATE_ROUTING_FIXTURE": str(self.root)}), \
+                patch.object(gate.sys, "argv", ["delegate", *argv]), \
+                patch("subprocess.run", return_value=result) as run, \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as stopped:
+                runpy.run_path(str(gate.REPO / "scripts/skill_routing_delegate_fixture.py"), run_name="__main__")
+        self.assertEqual(run.call_args.args[0], ["/candidate/delegate", *argv])
+        self.assertEqual(run.call_args.kwargs["env"]["PATH"], "/private/path")
+        self.assertNotIn("timeout", run.call_args.kwargs)
+        self.assertEqual(json.loads((self.root / "calls.jsonl").read_text().splitlines()[-1]), argv)
+        return stopped.exception.code, stdout.getvalue(), stderr.getvalue()
 
-    def test_fixture_help_and_unknown_command_do_not_claim_provider_failure(self):
-        help_text = "Usage: delegate [global flags] <command> [command flags]\n"
-        (self.root / "help.txt").write_text(help_text)
-        for argv, code in ((["--help"], 0), (["help"], 0),
-                           (["task", "--provider", "ccr:print"], 2)):
-            stdout, stderr = io.StringIO(), io.StringIO()
-            with patch.dict(gate.os.environ, {"DELEGATE_ROUTING_FIXTURE": str(self.root)}), \
-                    patch.object(gate.sys, "argv", ["delegate", *argv]), \
-                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                with self.assertRaises(SystemExit) as stopped:
-                    runpy.run_path(str(gate.REPO / "scripts/skill_routing_delegate_fixture.py"), run_name="__main__")
-                self.assertEqual(stopped.exception.code, code)
-            output = stdout.getvalue() + stderr.getvalue()
-            self.assertIn(help_text, output)
-            self.assertNotIn("provider_unavailable", output)
-            self.assertNotIn("stop_and_report", output)
+    def test_fixture_preserves_actual_cli_responses(self):
+        cases = [
+            (["--root", "/state", "providers", "--json"], 0, '{"providers": []}\n', ""),
+            (["version"], 0, "delegate candidate\n", ""),
+            (["--help"], 0, "Usage: delegate\n", ""),
+            (["task"], 2, "", "error: unknown command\n"),
+            (["dispatch", "--provider", "ccr:print", "--json"], 2,
+             '{"failure":{"next_action":"correct_request"}}\n', ""),
+            (["dispatch", "--provider", "ccr:print", "--model", "local-review", "--json"], 2,
+             '{"failure":{"next_action":"stop_and_report"}}\n', ""),
+        ]
+        for argv, code, stdout, stderr in cases:
+            with self.subTest(argv=argv):
+                result = Mock(returncode=code, stdout=stdout, stderr=stderr)
+                self.assertEqual(self.run_fixture(argv, result), (code, stdout, stderr))
+
+    def test_fixture_models_override_only_valid_unavailable_ccr_discovery(self):
+        response = {"command": "models", "provider": "ccr:print", "reason_code": "discovery_unavailable"}
+        code, stdout, stderr = self.run_fixture(
+            ["models", "--provider", "ccr:print", "--json"],
+            Mock(returncode=2, stdout=json.dumps(response), stderr=""))
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(json.loads(stdout)["models"][0]["id"], "local-review")
+        for change, code in [({"provider": "codex:exec"}, 2),
+                             ({"reason_code": "invalid_request"}, 2),
+                             ({"command": "dispatch"}, 2), ({}, 1)]:
+            payload = json.dumps(dict(response, **change))
+            self.assertEqual(self.run_fixture(["models", "--json"],
+                             Mock(returncode=code, stdout=payload, stderr="")), (code, payload, ""))
 
     def test_supervised_deadline_stops_only_owned_queue(self):
         owner = object.__new__(gate.AttemptSupervisor)

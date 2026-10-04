@@ -57,7 +57,11 @@ blocked, because project-local discovery is not supported by the tested build. R
 Claude and Codex initiators use unattended permissions without a filesystem
 sandbox so the Delegate supervisor can operate. Child task permissions still
 come from the agent’s dispatch request. Routing mode puts a recording Delegate
-fixture on the test PATH and stops before provider work. Competing integrations
+wrapper on the test PATH. The wrapper runs the real Delegate parser and admission
+with a private PATH containing only the test supervisor executables, so provider
+work is unavailable. CCR model discovery supplies one controlled alias after
+valid CLI parsing; request errors and stop-required failures retain their real
+responses. Competing integrations
 remain enabled, so a routing bypass can still execute paid work; inspect those
 attempts as failures. Use `--mode live` for real Delegate execution.
 

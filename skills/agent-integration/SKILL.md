@@ -49,9 +49,10 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
    name rather than a provider ID. Use `dispatch --auto` when none was chosen.
    Provider selection, executable checks, compatibility checks, authentication
    gates, and supervisor admission belong inside Delegation Layer.
-3. Give every turn an absolute workspace, a separate state root, an explicit
-   permission mode, and a finite budget. Preserve a caller-supplied
-   `DELEGATE_ROOT`; do not replace it with a temporary directory.
+3. Give every turn an absolute workspace, an explicit permission mode, and a
+   finite budget. Keep the state root outside the workspace. Reuse a supplied
+   `DELEGATE_ROOT` for all providers and tasks; do not invent per-provider or
+   per-task state roots. Task IDs separate work within that root.
 4. Use `--json` and save the returned `task_id`. Read `admission`, `liveness`,
    `publication`, `status`, `outcome`, `continuation`, `task_record`, `failure`,
    and `error` as separate fields.
@@ -143,9 +144,10 @@ never pass an empty `--root`, `--brief`, or `--cwd`.
 Replace the example brief below with the actual user request. Do not place the state
 root inside the workspace or place secrets in either path’s task data. Keep it
 outside provider configuration and runtime directories as well. If delegate
-rejects placement before admission, choose a separate state directory; do not
-change provider settings. Once admitted, retain that state root for every
-observation and continuation.
+rejects a caller-supplied state root, report the placement error rather than
+silently replacing that root. If no root was supplied, choose one outside the
+workspace and reuse it. Do not change provider settings. Retain the selected
+root for every observation and continuation.
 
 ### 4. Dispatch one bounded turn
 
