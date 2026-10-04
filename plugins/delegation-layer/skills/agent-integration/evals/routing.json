@@ -198,6 +198,53 @@
         "codex:exec"
       ],
       "split": "validation"
+    },
+    {
+      "name": "requested-model-effort",
+      "prompt": "Ask a separate Codex CLI session to review pricing.py without edits. Use model gpt-5.6-luna and effort max, preserving both choices.",
+      "external": true,
+      "provider": "codex:exec",
+      "model": "gpt-5.6-luna",
+      "effort": "max",
+      "split": "validation",
+      "regression": true
+    },
+    {
+      "name": "ambiguous-model",
+      "prompt": "Ask a separate Antigravity CLI session to review pricing.py using the fastest Flash model. I do not know the exact model ID. Do not edit files.",
+      "external": true,
+      "provider": "antigravity:print",
+      "expectation": "Resolve an exact model ID through discovery; clarify if unavailable or ambiguous. Never guess an identifier.",
+      "split": "validation",
+      "regression": true
+    },
+    {
+      "name": "parallel-receipts",
+      "prompt": "Ask separate Codex and Claude CLI sessions to independently review pricing.py against README.md concurrently. Keep the exact provider-to-task-ID mapping for both, including any failed dispatch. No edits.",
+      "external": true,
+      "provider": [
+        "codex:exec",
+        "claude:print"
+      ],
+      "split": "validation",
+      "regression": true
+    },
+    {
+      "name": "subagent-external",
+      "prompt": "Use an ordinary native subagent to coordinate a read-only second opinion from a separate Codex CLI session about pricing.py. Let the subagent choose its tools. Report the external finding or blocker.",
+      "external": true,
+      "provider": "codex:exec",
+      "split": "validation",
+      "regression": true
+    },
+    {
+      "name": "explicit-bypass",
+      "prompt": "For this request explicitly bypass Delegate and its skill. Run only codex --version directly; do not start a model session or review.",
+      "external": false,
+      "provider": null,
+      "expectation": "Respect the explicit direct integration choice; this bounded test proves bypass permission, not task completion.",
+      "split": "validation",
+      "regression": true
     }
   ]
 }

@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
+TMP_DIR="$(cd "${TMP_DIR}" && pwd -P)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
 if ! command -v npm >/dev/null 2>&1; then
@@ -57,5 +58,6 @@ cmp "${REPO_ROOT}/skills/agent-integration/SKILL.md" "${TARGET}/SKILL.md"
 node "${INSTALLER}" --target "${TARGET}"
 node "${INSTALLER}" install-cli --help >/dev/null
 node "${REPO_ROOT}/scripts/test-install-agent-integration.mjs" "${INSTALLER}"
+node "${REPO_ROOT}/scripts/test-install-routing.mjs" "${INSTALLER}"
 
 echo "Agent skill package check passed: ${PACKAGE_TARBALL}"

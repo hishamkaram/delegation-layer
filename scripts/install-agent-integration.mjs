@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { accessSync, constants } from "node:fs";
-import { copyFile, lstat, mkdir, readdir, readFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, open, readdir, readFile, rename, unlink } from "node:fs/promises";
 import { emitKeypressEvents } from "node:readline";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -90,14 +90,14 @@ function usage(message, exitCode = 2) {
     console.error(`Error: ${message}`);
   }
   console.error(
-    "Usage:\n  delegation-layer install [--scope project|global] [--harness NAME[,NAME...]] [--yes] [--force]\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]",
+    "Usage:\n  delegation-layer install [--scope project|global] [--harness NAME[,NAME...]] [--yes] [--force] [--routing default|skill-only]\n  delegation-layer routing status|disable [--scope project|global] [--harness NAME[,NAME...]]\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]",
   );
   process.exitCode = exitCode;
 }
 
 function help() {
   console.log(
-    "Usage:\n  delegation-layer install [--scope project|global] [--harness NAME[,NAME...]] [--yes] [--force]\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]\n\nThe install command detects supported agent harnesses and installs the skill for a project or user.\nGlobal scope is the default; use --scope project for a project-local install.\nUse --harness universal when no specific harness is detected.",
+    "Usage:\n  delegation-layer install [--scope project|global] [--harness NAME[,NAME...]] [--yes] [--force] [--routing default|skill-only]\n  delegation-layer routing status|disable [--scope project|global] [--harness NAME[,NAME...]]\n  delegation-layer --target ABSOLUTE_SKILL_DIR [--force]\n  delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]\n\nThe install command detects supported agent harnesses and installs the skill for a project or user.\nGlobal scope is the default; use --scope project for a project-local install.\nUse --harness universal when no specific harness is detected.",
   );
 }
 
@@ -152,6 +152,7 @@ function parseInstallArguments(argumentsList) {
   let harnessNames;
   let scope;
   let yes = false;
+  let routing;
 
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
@@ -161,6 +162,12 @@ function parseInstallArguments(argumentsList) {
     }
     if (argument === "--yes" || argument === "-y") {
       yes = true;
+      continue;
+    }
+    if (argument === "--routing") {
+      routing = requiredValue(argumentsList, index, "--routing");
+      if (!routing) return null;
+      index += 1;
       continue;
     }
     if (argument === "--scope") {
@@ -201,7 +208,11 @@ function parseInstallArguments(argumentsList) {
     usage(`unknown harness ${unknown}; choose from ${harnesses.map((harness) => harness.name).join(", ")}`);
     return null;
   }
-  return { force, harnessNames, scope, yes };
+  if (routing && !["default", "skill-only"].includes(routing)) {
+    usage("--routing must be default or skill-only");
+    return null;
+  }
+  return { force, harnessNames, scope, yes, routing };
 }
 
 async function existingPath(path) {
@@ -486,7 +497,7 @@ function pickOptions({ initialValues = [], multiple = false, options, title }) {
   });
 }
 
-async function chooseInstallOptions({ force, harnessNames, scope, yes }) {
+async function chooseInstallOptions({ force, harnessNames, scope, yes, routing }) {
   const cwd = process.cwd();
   const home = resolve(process.env.DELEGATION_LAYER_HOME ?? homedir());
   const detections = await detectHarnesses({ cwd, home });
@@ -536,7 +547,20 @@ async function chooseInstallOptions({ force, harnessNames, scope, yes }) {
     }
   }
 
+  if (needsPrompt && !routing) {
+    routing = await pickOptions({
+      initialValues: ["default"],
+      options: [
+        { value: "default", label: "Prefer Delegate", description: "Install collaboration context hooks for Claude and Codex; native hook trust still applies" },
+        { value: "skill-only", label: "Skill only", description: "Install guidance without adding hooks; keep existing routing settings" },
+      ],
+      title: "How should external collaboration be routed?",
+    });
+    if (!routing) return null;
+  }
+
   return {
+    routing: routing ?? "skill-only",
     cwd,
     force,
     harnessNames: harnessNames ?? defaults,
@@ -546,6 +570,9 @@ async function chooseInstallOptions({ force, harnessNames, scope, yes }) {
 }
 
 function targetFor(harness, scope, cwd, home) {
+  if (scope === "global" && harness.name === "claude" && process.env.CLAUDE_CONFIG_DIR) {
+    return join(resolve(process.env.CLAUDE_CONFIG_DIR), "skills", "agent-integration");
+  }
   const root = scope === "global" ? home : cwd;
   const relativePath = scope === "global" ? harness.globalPath : harness.projectPath;
   return join(resolve(root, relativePath), "agent-integration");
@@ -576,6 +603,165 @@ async function install({ force, target }) {
   console.log(`Installed agent integration skill: ${join(target, "SKILL.md")}`);
 }
 
+function shellQuote(value) {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+function routingPath(name, { scope, cwd, home }) {
+  if (name === "claude") {
+    return scope === "global"
+      ? join(resolve(process.env.CLAUDE_CONFIG_DIR || join(home, ".claude")), "settings.json")
+      : join(cwd, ".claude", "settings.local.json");
+  }
+  if (name === "codex") {
+    return join(scope === "global" ? resolve(process.env.CODEX_HOME || join(home, ".codex")) : join(cwd, ".codex"), "hooks.json");
+  }
+  return null;
+}
+
+function jsonObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validateHookConfig(config, path) {
+  if (!jsonObject(config) || (config.hooks !== undefined && !jsonObject(config.hooks))) {
+    throw new Error(`expected a JSON object with an optional hooks object: ${path}`);
+  }
+  for (const groups of Object.values(config.hooks ?? {})) {
+    if (!Array.isArray(groups) || groups.some((group) => !jsonObject(group)
+      || !Array.isArray(group.hooks) || group.hooks.some((hook) => !jsonObject(hook) || typeof hook.type !== "string"))) {
+      throw new Error(`invalid hook configuration; no routing changes written: ${path}`);
+    }
+  }
+}
+
+async function prepareRouting(selected, action) {
+  const plans = [];
+  for (const name of new Set(selected.harnessNames)) {
+    const path = routingPath(name, selected);
+    if (!path || process.platform === "win32") {
+      plans.push({ name, status: "unsupported-host" });
+      continue;
+    }
+    await assertNoSymlinkComponents(path);
+    const stat = await existingPath(path);
+    if (stat && !stat.isFile()) throw new Error(`routing configuration must be a regular file: ${path}`);
+    const before = stat ? await readFile(path, "utf8") : null;
+    let config;
+    try {
+      config = before === null ? {} : JSON.parse(before);
+    } catch {
+      throw new Error(`invalid JSON; routing configuration left unchanged: ${path}`);
+    }
+    validateHookConfig(config, path);
+    const target = targetFor(harnessByName.get(name), selected.scope, selected.cwd, selected.home);
+    const script = join(target, "scripts", "delegate-routing-context.sh");
+    const hooks = config.hooks ?? {};
+    let present = 0;
+    let changed = false;
+    for (const event of ["SessionStart", "SubagentStart"]) {
+      const command = `/bin/sh ${shellQuote(script)} ${event}`;
+      const groups = hooks[event] ?? [];
+      const matches = groups.flatMap((group) => group.hooks).filter((hook) => hook.type === "command" && hook.command === command);
+      if (matches.length) present += 1;
+      if (action === "disable") {
+        if (!matches.length) continue;
+        hooks[event] = groups.flatMap((group) => {
+          const remaining = group.hooks.filter((hook) => hook.type !== "command" || hook.command !== command);
+          if (remaining.length === group.hooks.length) return [group];
+          return remaining.length ? [{ ...group, hooks: remaining }] : [];
+        });
+        if (!hooks[event].length) delete hooks[event];
+        changed = true;
+      } else if (action === "enable" && !matches.length) {
+        hooks[event] = [...groups, { hooks: [{ type: "command", command }] }];
+        changed = true;
+      }
+    }
+    if (changed) config.hooks = hooks;
+    let assetsPresent = true;
+    if (action === "status" && present) {
+      for (const relative of ["SKILL.md", "scripts/delegate-routing-context.sh", "references/routing-rule.json"]) {
+        const asset = await existingPath(join(target, relative));
+        if (!asset?.isFile() || asset.isSymbolicLink()) assetsPresent = false;
+      }
+    }
+    plans.push({ name, path, target, before, after: changed ? JSON.stringify(config, null, 2) + "\n" : before,
+      mode: stat ? stat.mode & 0o777 : 0o600,
+      status: action === "disable" ? "disabled" : action === "enable" || (present === 2 && assetsPresent) ? "configured" : present ? "incomplete" : "not-configured" });
+  }
+  return plans;
+}
+
+async function replaceRoutingConfig(plan, before, after) {
+  await assertNoSymlinkComponents(plan.path);
+  await mkdir(dirname(plan.path), { recursive: true });
+  const lockPath = plan.path + ".delegation-layer.lock";
+  let lock;
+  try {
+    lock = await open(lockPath, "wx", 0o600);
+  } catch (error) {
+    if (error.code === "EEXIST") throw new Error(`routing configuration is locked: ${lockPath}; verify no other installer is running before removing a stale lock`);
+    throw error;
+  }
+  const suffix = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const temporary = plan.path + `.delegation-layer-stage-${suffix}`;
+  try {
+    const stat = await existingPath(plan.path);
+    if (stat && (!stat.isFile() || stat.isSymbolicLink())) throw new Error(`routing configuration changed during installation: ${plan.path}`);
+    const current = stat ? await readFile(plan.path, "utf8") : null;
+    if (current !== before) throw new Error(`routing configuration changed during installation; retry: ${plan.path}`);
+    if (before !== null) {
+      const backup = await open(plan.path + `.delegation-layer-backup-${suffix}`, "wx", 0o600);
+      try { await backup.writeFile(before); await backup.sync(); } finally { await backup.close(); }
+    }
+    if (after === null) {
+      await unlink(plan.path);
+      return;
+    }
+    const staged = await open(temporary, "wx", plan.mode);
+    try { await staged.writeFile(after); await staged.sync(); } finally { await staged.close(); }
+    await rename(temporary, plan.path);
+  } finally {
+    try {
+      try { await unlink(temporary); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    } finally {
+      try { await lock.close(); } finally { await unlink(lockPath); }
+    }
+  }
+}
+
+async function applyRouting(plans) {
+  const applied = [];
+  try {
+    for (const plan of plans) {
+      if (!plan.path || plan.before === plan.after) continue;
+      await replaceRoutingConfig(plan, plan.before, plan.after);
+      applied.push(plan);
+    }
+  } catch (error) {
+    const failures = [];
+    for (const plan of applied.reverse()) {
+      try { await replaceRoutingConfig(plan, plan.after, plan.before); }
+      catch (rollbackError) { failures.push(rollbackError.message); }
+    }
+    throw new Error(`${error.message}${failures.length ? `; rollback needs attention: ${failures.join("; ")}` : "; earlier routing changes rolled back"}`);
+  }
+}
+
+function printRouting(plan, action) {
+  if (!plan.path) {
+    console.log(`${plan.name}: unsupported-host for automatic routing; skill-only guidance remains available.`);
+    return;
+  }
+  console.log(`${plan.name}: ${plan.status} (${plan.path}).`);
+  if (plan.status === "configured") {
+    console.log("Activation not verified: start or resume a session and check the native hook output. Installation is not proof of model compliance.");
+    if (plan.name === "codex") console.log("Codex: review and trust the hooks using /hooks. New or changed definitions are skipped until trusted.");
+  }
+  if (action === "disable") console.log("Only this installer's matching hooks were removed; plugin hooks are managed by the host plugin manager.");
+}
+
 async function validateSourceTree() {
   const files = await skillFiles(sourceDirectory);
   if (!files.includes("SKILL.md")) {
@@ -595,6 +781,23 @@ if (argumentsList[0] === "install-cli") {
     console.error(`Error: ${error.message}`);
     process.exitCode = 1;
   }
+} else if (argumentsList[0] === "routing") {
+  const action = argumentsList[1];
+  const options = parseInstallArguments(argumentsList.slice(2));
+  if (!["status", "disable"].includes(action)) {
+    usage("routing requires status or disable");
+  } else if (options) {
+    try {
+      if (options.routing || options.force) throw new Error("routing status/disable do not accept --routing or --force");
+      const selected = await chooseInstallOptions({ ...options, yes: true, harnessNames: options.harnessNames ?? ["claude", "codex"] });
+      const plans = await prepareRouting(selected, action);
+      if (action === "disable") await applyRouting(plans);
+      for (const plan of plans) printRouting(plan, action);
+    } catch (error) {
+      console.error(`Error: ${error.message}`);
+      process.exitCode = 1;
+    }
+  }
 } else if (argumentsList[0] === "install") {
   const options = parseInstallArguments(argumentsList.slice(1));
   if (options) {
@@ -603,12 +806,16 @@ if (argumentsList[0] === "install-cli") {
       if (!selected) {
         console.log("Installation cancelled.");
       } else {
+        const routingPlans = selected.routing === "default" ? await prepareRouting(selected, "enable") : [];
         const targets = selected.harnessNames.map((name) => targetFor(harnessByName.get(name), selected.scope, selected.cwd, selected.home));
         const uniqueTargets = [...new Set(targets)];
         console.log(`Installing for ${selected.scope}: ${uniqueTargets.join(", ")}`);
         for (const target of uniqueTargets) {
           await install({ force: selected.force, target });
         }
+        await applyRouting(routingPlans);
+        for (const plan of routingPlans) printRouting(plan, "enable");
+        if (selected.routing === "skill-only") console.log("Skill-only installation; existing routing settings were not changed.");
       }
     } catch (error) {
       console.error(`Error: ${error.message}`);

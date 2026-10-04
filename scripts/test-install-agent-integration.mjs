@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -16,6 +16,8 @@ function runInstaller(args, { cwd, home, path, input = "" }) {
     env: {
       ...process.env,
       DELEGATION_LAYER_HOME: home,
+      CLAUDE_CONFIG_DIR: "",
+      CODEX_HOME: "",
       PATH: path,
     },
     input,
@@ -48,7 +50,7 @@ async function assertInstalled(target) {
   }
 }
 
-const root = await mkdtemp(join(tmpdir(), "delegation-layer-installer-"));
+const root = await realpath(await mkdtemp(join(tmpdir(), "delegation-layer-installer-")));
 try {
   const project = join(root, "project");
   const home = join(root, "home");

@@ -57,6 +57,11 @@ command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
 require("CLAUDE_PLUGIN_ROOT" in command and "PLUGIN_ROOT" in command, "shared hook must support both harness plugin root variables")
 require(command.startswith("/bin/sh -c '") and command.endswith("'"), "shared hook must invoke its bootstrap through POSIX sh")
 
+for event in ("SessionStart", "SubagentStart"):
+    context = hooks["hooks"][event][-1]["hooks"][0]["command"]
+    require("delegate-routing-context.sh" in context and event in context, "routing context hook missing")
+    require("CLAUDE_PLUGIN_ROOT" in context and "PLUGIN_ROOT" in context, "routing context must support both plugin roots")
+
 for marketplace in (codex_marketplace, claude_marketplace):
     require(len(marketplace.get("plugins", [])) == 1, "marketplace must contain exactly one plugin")
     entry = marketplace["plugins"][0]

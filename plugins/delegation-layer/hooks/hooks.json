@@ -8,6 +8,24 @@
             "command": "/bin/sh -c 'plugin_root=\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:?plugin root environment variable is missing}}\"; exec \"$plugin_root/scripts/ensure-delegate.sh\"'"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'plugin_root=\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:?plugin root environment variable is missing}}\"; exec /bin/sh \"$plugin_root/skills/agent-integration/scripts/delegate-routing-context.sh\" SessionStart'"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'plugin_root=\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:?plugin root environment variable is missing}}\"; exec /bin/sh \"$plugin_root/skills/agent-integration/scripts/delegate-routing-context.sh\" SubagentStart'"
+          }
+        ]
       }
     ]
   }
