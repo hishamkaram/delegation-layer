@@ -1,6 +1,6 @@
 ---
 name: agent-integration
-description: Consult CCR (Claude Code Router), Codex, Claude, or AGY. Route external agent and model collaboration through Delegate for reviews, research, implementation, testing, second opinions, comparisons, and debates, including collaboration you choose during a task. Discover other supported harnesses such as Pi and OpenCode through Delegate. Not for ordinary native subagents, provider setup, or questions merely about a tool.
+description: Delegate external tasks to CCR (Claude Code Router) and other agents. Use for Codex, Claude, AGY, and other external agent or model collaboration for reviews, research, implementation, testing, second opinions, comparisons, and debates, including collaboration you choose during a task. Discover other supported harnesses such as Pi and OpenCode through Delegate. Not for ordinary native subagents, provider setup, or questions merely about a tool.
 ---
 
 # Delegation Layer
@@ -138,17 +138,12 @@ brief file that contains the requested work and its acceptance criteria. Keep
 the state root outside the workspace and provider-writable trees (which can
 include the system temporary directory). Use `DELEGATE_ROOT` when supplied:
 
-```sh
-STATE_ROOT="${DELEGATE_ROOT:-$HOME/delegation-state}"
-WORKSPACE="$PWD"
-BRIEF="$(mktemp)"
-cat >"$BRIEF" <<'EOF'
-Describe the delegated task, the files or behavior to change, and the checks
-that must pass. Keep the response concise and report validation evidence.
-EOF
-```
+Run path preparation and dispatch in **one shell/tool invocation**, as shown
+below. Shell variables may disappear between tool calls. For later commands,
+use the actual saved absolute paths or assign them again in that invocation;
+never pass an empty `--root`, `--brief`, or `--cwd`.
 
-Replace the example brief with the actual user request. Do not place the state
+Replace the example brief below with the actual user request. Do not place the state
 root inside the workspace or place secrets in either path’s task data. Keep it
 outside provider configuration and runtime directories as well. If delegate
 rejects placement before admission, choose a separate state directory; do not
@@ -162,6 +157,13 @@ For a named harness or provider resolved in step 2, replace `--auto` with `--pro
 combine the two:
 
 ```sh
+STATE_ROOT="${DELEGATE_ROOT:-$HOME/delegation-state}"
+WORKSPACE="$PWD"
+BRIEF="$(mktemp)"
+cat >"$BRIEF" <<'EOF'
+Describe the delegated task, the files or behavior to change, and the checks
+that must pass. Keep the response concise and report validation evidence.
+EOF
 delegate --root "$STATE_ROOT" dispatch --auto \
   --brief "$BRIEF" \
   --cwd "$WORKSPACE" \
