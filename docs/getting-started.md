@@ -4,7 +4,8 @@ Delegation Layer gives an agent a supervised way to send one bounded task to a
 provider CLI and collect the validated result later.
 
 For Codex or Claude Code, install the plugin. It installs the skill and
-bootstraps the self-contained Delegation Layer CLI when needed.
+bootstraps the self-contained Delegation Layer CLI when needed. Its context
+hooks supply the shared external-collaboration preference.
 
 For Codex:
 
@@ -46,7 +47,9 @@ npx --yes delegation-layer install
 ```
 
 It selects global installation by default. If it cannot identify a specific
-harness, choose the shared `.agents/skills` location.
+harness, choose the shared `.agents/skills` location. The interactive installer
+also offers routing hooks for Claude/Codex by default, or skill-only guidance.
+Other hosts currently receive skill-only guidance.
 
 For automation, select the destination explicitly:
 
@@ -57,7 +60,8 @@ npx --yes delegation-layer install \
   --yes
 ```
 
-This step installs agent guidance only. It does not install the Delegation Layer
+Noninteractive commands install agent guidance only unless `--routing default`
+is requested. They do not install the Delegation Layer
 CLI, provider CLIs, change authentication, or run a task. Use the plugin path
 above when the skill and CLI should be installed together.
 

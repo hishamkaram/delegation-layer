@@ -47,7 +47,9 @@ Delegate to launch another instance of the same CLI.
 
 Skill installation makes this workflow discoverable; it does not force a model
 to choose it over another plugin. Selection depends on the harness, model, and
-loaded instructions. No user rules, settings, or competing plugins are rewritten.
+loaded instructions. The plugin and optional installer routing hooks supply a
+shared preference at session and subagent startup; they do not intercept tools
+or rewrite your persistent instructions.
 If an agent bypasses Delegate, that is a selection failure, not proof the
 integration worked. For a persistent preference, see
 [configure agent routing](docs/agent-routing.md).
@@ -57,7 +59,7 @@ integration worked. For a persistent preference, see
 ### Recommended for Codex and Claude Code
 
 Install the plugin from this repository. It installs the provider-neutral skill
-and runs a trusted session-start bootstrap that reuses the checksum-verified
+and provides collaboration context hooks plus a trusted session-start bootstrap that reuses the checksum-verified
 Delegation Layer release installer when `delegate` is missing. The bootstrap
 installs the CLI and its bundled supervisor; it does not install provider CLIs,
 change provider authentication, or change provider configuration.
@@ -101,8 +103,9 @@ If you want the Delegation Layer guided installer instead, run:
 npx --yes delegation-layer install
 ```
 
-It provides an interactive scope and harness picker, with global installation
-selected by default. For scripts or a choice without prompts:
+It provides interactive scope, harness, and routing choices. Global installation
+and routing hooks for Claude/Codex are selected by default; choose skill-only
+to omit hooks. Codex requires native hook trust before activation. For scripts or a choice without prompts:
 
 ```sh
 npx --yes delegation-layer install \
@@ -111,8 +114,10 @@ npx --yes delegation-layer install \
   --yes
 ```
 
-This path installs guidance only. It does not install the CLI, change provider
-logins, or run a task. Use the plugin path above when you want the skill and
+The commands above do not install the CLI, change provider
+logins, or run a task. Noninteractive installs remain skill-only unless you add
+`--routing default`. See [routing setup and removal](docs/agent-routing.md).
+Use the plugin path above when you want the skill and
 CLI bootstrap together.
 
 ### Install the CLI

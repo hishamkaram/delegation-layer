@@ -11,8 +11,12 @@ permissions:
 
 jobs:
   skill-package:
-    name: Agent skill package
-    runs-on: ubuntu-24.04
+    name: Agent skill package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - name: Checkout repository

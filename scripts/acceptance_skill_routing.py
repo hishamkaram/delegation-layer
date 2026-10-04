@@ -75,7 +75,7 @@ class AttemptSupervisor:
     """Own only this attempt's private daemon; stopping always goes through Pueue."""
 
     def __init__(self, run, environment):
-        self.base = Path(tempfile.mkdtemp(prefix="skill-queue-"))
+        self.base = Path(tempfile.mkdtemp(prefix="skill-queue-")).resolve()
         self.config = self.base / "pueue.json"
         for name in ("state", "run"):
             (self.base / name).mkdir()
@@ -170,7 +170,35 @@ class AttemptSupervisor:
         write_json(self.run / "supervisor-closed.json", {"termination_observed": True})
 
 
-def run_case(output, harness, model, case, repetition, mode="live", budget=180):
+def routing_hook_arguments(harness, workspace):
+    if harness not in ("claude", "codex"):
+        raise ValueError("automatic routing hooks are supported only for Claude and Codex")
+    location = ".claude" if harness == "claude" else ".agents"
+    script = workspace / location / "skills/agent-integration/scripts/delegate-routing-context.sh"
+    commands = {event: shlex.join(["/bin/sh", str(script), event])
+                for event in ("SessionStart", "SubagentStart")}
+    if harness == "claude":
+        hooks = {event: [{"hooks": [{"type": "command", "command": command}]}]
+                 for event, command in commands.items()}
+        return ["--settings", json.dumps({"hooks": hooks})]
+    # Test-only, invocation-scoped trust for the reviewed candidate helper.
+    # This does not prove that installation grants trust in an ordinary session.
+    args = ["--dangerously-bypass-hook-trust"]
+    for event, command in commands.items():
+        args += ["-c", "hooks." + event + "=[{hooks=[{type=\"command\",command="
+                 + json.dumps(command) + "}]}]"]
+    return args
+
+
+def executable_digest(path):
+    try:
+        return digest(path) if path.is_file() else None
+    except OSError:
+        return None
+
+
+def run_case(output, harness, model, case, repetition, mode="live", budget=180,
+             routing_context=False, delegate_bin=None):
     run = output / f"{case['name']}-{repetition}"
     run.mkdir(mode=0o700)
     workspace = run / "workspace"
@@ -178,14 +206,33 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180):
     prompt = case["prompt"]
     (run / "prompt.txt").write_text(prompt, encoding="utf-8")
     argv, stdin = command(harness, model, prompt)
+    if routing_context:
+        argv += routing_hook_arguments(harness, workspace)
     state_parent = Path.home() / "delegation-routing-acceptance"
     state_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     state = Path(tempfile.mkdtemp(prefix="state-", dir=state_parent))
     env = dict(os.environ, DELEGATE_ROOT=str(state))
     env.pop("DELEGATE_PUEUE_CONFIG", None)
+    if delegate_bin is not None:
+        delegate_bin = Path(delegate_bin).resolve()
+        candidate_path = run / "candidate-bin"
+        candidate_path.mkdir()
+        (candidate_path / "delegate").symlink_to(delegate_bin)
+        env["PATH"] = str(candidate_path) + os.pathsep + env.get("PATH", "")
+        candidate_env = run / "candidate-env.sh"
+        previous = env.get("BASH_ENV")
+        setup = (". " + shlex.quote(previous) + "\n") if previous else ""
+        setup += "export PATH=" + shlex.quote(str(candidate_path)) + ':"$PATH"\n'
+        candidate_env.write_text(setup, encoding="utf-8")
+        env["BASH_ENV"] = str(candidate_env)
     receipt = {"case": case, "repetition": repetition, "harness": harness,
                "model_requested": model, "argv": argv, "status": "unreviewed", "mode": mode,
-               "budget_seconds": budget, "state_root": str(state), "candidate": candidate_digests()}
+               "budget_seconds": budget, "state_root": str(state), "candidate": candidate_digests(),
+               "routing_context": routing_context,
+               "hook_trust": "vetted-per-invocation" if routing_context and harness == "codex" else "native"}
+    if delegate_bin is not None:
+        receipt["delegate_executable"] = str(delegate_bin)
+        receipt["delegate_sha256"] = executable_digest(delegate_bin)
     owner = None
     try:
         if harness == "claude":
@@ -200,6 +247,9 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180):
             if candidate_digests(installed) != candidate_digests():
                 receipt.update(status="blocked", reason="hermes_candidate_not_installed")
                 return receipt
+        if delegate_bin is not None:
+            if not delegate_bin.is_file() or not os.access(delegate_bin, os.X_OK):
+                raise FileNotFoundError("candidate Delegate binary missing; build before acceptance")
         executable = shutil.which(harness)
         if not executable:
             raise FileNotFoundError("initiating harness missing")
@@ -218,7 +268,7 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180):
         if mode == "routing":
             fixture = run / "fixture"
             fixture.mkdir()
-            delegate = shutil.which("delegate")
+            delegate = str(delegate_bin) if delegate_bin is not None else shutil.which("delegate")
             if not delegate:
                 raise FileNotFoundError("Delegate catalog executable missing")
             private_path = fixture / "supervisor-bin"
@@ -242,6 +292,10 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180):
             setup += "export PATH=" + shlex.quote(str(fixture)) + ':"$PATH"\n'
             bash_env.write_text(setup, encoding="utf-8")
             owner.processes.environment["BASH_ENV"] = str(bash_env)
+        if delegate_bin is not None:
+            receipt["delegate_version"] = owner.capture("delegate-version", [str(delegate_bin), "--version"]).read_text().strip()
+            catalog = owner.capture("delegate-catalog", [str(delegate_bin), "providers", "--json"])
+            receipt["delegate_catalog_sha256"] = digest(catalog)
         receipt["supervisor_result"] = owner.execute(argv, stdin, budget)
     except FileNotFoundError:
         receipt.update(status="blocked", reason="required_executable_missing")
@@ -265,7 +319,8 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180):
     return receipt
 
 
-def summarize(output, cases, repetitions, harness, mode="live", model=None, budget=180):
+def summarize(output, cases, repetitions, harness, mode="live", model=None, budget=180,
+              routing_context=False, delegate_bin=None):
     rows = []
     for case in cases:
         for repetition in range(1, repetitions + 1):
@@ -276,6 +331,9 @@ def summarize(output, cases, repetitions, harness, mode="live", model=None, budg
                 if (receipt.get("harness") != harness or receipt.get("case") != case
                         or receipt.get("repetition") != repetition
                         or receipt.get("mode") != mode or receipt.get("model_requested") != model
+                        or receipt.get("routing_context", False) != routing_context
+                        or (delegate_bin is not None and (receipt.get("delegate_executable") != str(Path(delegate_bin).resolve())
+                            or receipt.get("delegate_sha256") != executable_digest(Path(delegate_bin))))
                         or receipt.get("candidate") != candidate_digests()
                         or receipt.get("budget_seconds") != budget):
                     raise ValueError(f"receipt selection mismatch: {run}")
@@ -312,6 +370,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--harness", choices=("codex", "claude", "hermes"), required=True)
     parser.add_argument("--model")
+    parser.add_argument("--delegate-bin", type=Path, default=REPO / "bin/delegate")
+    parser.add_argument("--routing-context", action="store_true",
+                        help="exercise candidate context hooks; Codex trust is vetted only for this invocation")
     parser.add_argument("--mode", choices=("routing", "live"), default="routing")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--split", choices=("development", "validation", "all"), default="all")
@@ -320,6 +381,8 @@ def main():
     parser.add_argument("--summarize", action="store_true")
     parser.add_argument("--budget-seconds", type=int, default=180)
     args = parser.parse_args()
+    if args.routing_context and args.harness == "hermes":
+        parser.error("Hermes currently supports skill-only acceptance")
     suite = read_json(CASES)["cases"]
     names = {c["name"] for c in suite}
     if args.repetitions < 1 or args.budget_seconds < 1 or set(args.case) - names:
@@ -330,13 +393,13 @@ def main():
         parser.error("selection contains no cases")
     output = args.output.resolve()
     if args.summarize:
-        report = summarize(output, cases, args.repetitions, args.harness, args.mode, args.model, args.budget_seconds)
+        report = summarize(output, cases, args.repetitions, args.harness, args.mode, args.model, args.budget_seconds, args.routing_context, args.delegate_bin)
         print(json.dumps(report, indent=2))
         return {"passed": 0, "failed": 1, "blocked": 2}[report["status"]]
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     for case in cases:
         for repetition in range(1, args.repetitions + 1):
-            receipt = run_case(output, args.harness, args.model, case, repetition, args.mode, args.budget_seconds)
+            receipt = run_case(output, args.harness, args.model, case, repetition, args.mode, args.budget_seconds, args.routing_context, args.delegate_bin)
             if receipt.get("reason") == "supervisor_cleanup_unproven":
                 return 1
     # Executing a harness is not proof of routing success.

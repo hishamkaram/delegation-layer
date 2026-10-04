@@ -1,6 +1,6 @@
 ---
 name: agent-integration
-description: Delegate external tasks to CCR (Claude Code Router) and other agents. Use for Codex, Claude, AGY, and other external agent or model collaboration for reviews, research, implementation, testing, second opinions, comparisons, and debates, including collaboration you choose during a task. Discover other supported harnesses such as Pi and OpenCode through Delegate. Not for ordinary native subagents, provider setup, or questions merely about a tool.
+description: Coordinate external agent, model, and separate harness tasks through Delegate, including research, implementation, tests, reviews, consultations, comparisons, and debates. Use before choosing an external integration; ordinary native subagents and questions about tools remain local.
 ---
 
 # Delegation Layer
@@ -56,13 +56,20 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
    finite budget. Keep the state root outside the workspace. Reuse a supplied
    `DELEGATE_ROOT` for all providers and tasks; do not invent per-provider or
    per-task state roots. Task IDs separate work within that root.
-4. Use `--json` and save the returned `task_id`. Read `admission`, `liveness`,
+4. Use `--json` and save each response separately with its requested destination,
+   model, effort, workspace, and returned `task_id`. Never merge concurrent
+   responses into an unlabeled output stream. Read `admission`, `liveness`,
    `publication`, `status`, `outcome`, `continuation`, `task_record`, `failure`,
    and `error` as separate fields.
    Delegate owns the supervisor lifecycle. Never install, configure, start,
    inspect, or repair Pueue, and never poll a task unless the response says its
    `task_record` is `created`.
-5. Observe with `status` and collect with `collect`. Collection may recover the
+5. Observe with `status` and collect with `collect`. Keep collection in the
+   foreground until all requested tasks reach a terminal result or an explicit
+   blocker. Do not end a headless turn promising a background notification.
+   Pending publication (exit 3) means keep waiting, not success. Only detach
+   when the user explicitly requests it, retaining the exact task IDs.
+   Collection may recover the
    saved supervisor only to observe an already-requested budget stop; it never
    launches a provider or retries a task.
 6. If a task is timed out and its JSON says `continuation.resumable: true`, use
@@ -129,8 +136,12 @@ name belongs to CCR; clarify only if discovery leaves the destination ambiguous.
 
 Keep provider defaults when no model or effort was requested and neither is required. When an explicit
 choice is needed, read [model and effort guidance](references/command-reference.md#choosing-models-and-effort).
-Pass requested choices through Delegate's public `--model` and `--effort`
-fields; discovery is advisory, never an allowlist.
+Pass exact requested model IDs and effort values unchanged through Delegate's
+public `--model` and `--effort` fields; discovery is advisory, never an allowlist.
+For a natural-language model name, resolve one exact ID through discovery. If
+it remains ambiguous or discovery is unavailable, ask for the exact model ID;
+do not turn a display name into a guessed alias. An explicit ID needs no such
+clarification just because it is absent from discovery.
 
 ### 3. Prepare separate paths and a finite brief
 
@@ -185,7 +196,10 @@ For independent work, the model may run several complete `dispatch` commands
 concurrently. Keep each task's brief, workspace, permission, and task ID
 independent. Do not configure Pueue or wait for one task before dispatching the
 next solely to serialize ordinary work. Inspect each returned task separately
-with `status` and `collect`.
+with `status` and `collect`. Use independent tool calls or separate response
+files, never background commands writing to the same stdout. Read
+[parallel reviews and debates](references/collaboration.md) when coordinating
+multiple participants or challenge rounds.
 
 Save the exact `task_id` from the JSON response. Apply this decision separately
 for **each attempt**, including requests issued together:

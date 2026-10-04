@@ -51,8 +51,9 @@ Continuation flags:
 
 ## Choosing models and effort
 
-If the caller needs an explicit model or effort, use the implemented native
-discovery command for that provider:
+Pass an explicitly supplied model ID and effort unchanged, even if discovery
+is incomplete or does not list them. To resolve a natural-language model name
+or choose an option the caller left open, use native discovery:
 
 ```sh
 delegate models --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
@@ -68,6 +69,10 @@ requested value merely because discovery did not list it, and do not infer
 per-model effort support from the harness-wide list. If a selected model has
 `efforts: null` or `efforts: []`, omit `--effort` unless the caller explicitly
 requested it; do not invent model aliases or combine options by guessing.
+If a natural-language name cannot be resolved to a single exact ID, ask one
+focused question for that ID. Do not silently select a default or transform
+spaces into hyphens to manufacture an ID. This ambiguity rule is guidance for
+selecting a value, not a new admission restriction.
 
 The response includes `schema_version`, `command: "models"`, `provider`,
 `observed_at`, `status`, `reason_code`, `complete`, `source`, nullable

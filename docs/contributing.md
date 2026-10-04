@@ -45,6 +45,15 @@ tree and run `make plugin-package-check` after changing either one.
 
 ## Skill selection acceptance
 
+Build the candidate CLI before routing acceptance. The driver defaults to
+`bin/delegate`, records its digest, version and provider catalog, and keeps that
+candidate on the initiating harness's shell path. Use `--delegate-bin ABS` for a
+specific packaged candidate; it must not silently fall back to an installed CLI.
+Add `--routing-context` to exercise the shipped context helper with native hook
+configuration. Codex uses reviewed, invocation-scoped hook trust for this test;
+that is not proof of ordinary installation or persisted host trust. Summaries
+must use the same binary and routing-context options as their captures.
+
 The routing suite tests natural requests without naming Delegate or preloading
 its skill. It keeps the user's normal harness profile and competing plugins.
 The runner installs the candidate skill in disposable Claude/Codex workspaces;

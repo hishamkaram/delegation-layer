@@ -15,7 +15,7 @@ class RoutingTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         home = patch.object(gate.Path, "home", return_value=self.root)
         home.start()
         self.addCleanup(home.stop)
@@ -143,6 +143,50 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(instance.processes.environment["DELEGATE_PUEUE_CONFIG"], str(instance.config))
         instance.close.assert_called_once()
 
+    def test_missing_candidate_preserves_selection_and_summarizes_blocked(self):
+        missing = self.root / "missing-candidate"
+        gate.run_case(self.root, "codex", None, self.case, 1, delegate_bin=missing)
+        receipt = gate.read_json(self.root / "review-1/receipt.json")
+        self.assertEqual(receipt["delegate_executable"], str(missing))
+        self.assertIsNone(receipt["delegate_sha256"])
+        self.assertEqual(gate.summarize(self.root, [self.case], 1, "codex", delegate_bin=missing)["status"], "blocked")
+
+    def test_renamed_candidate_gets_a_private_delegate_entry(self):
+        binary = self.root / "renamed-candidate"
+        binary.write_text("candidate executable")
+        binary.chmod(0o700)
+        with patch.object(gate, "AttemptSupervisor") as owner, patch.object(gate.shutil, "which", return_value="/mock/bin/tool"):
+            owner.return_value.capture.side_effect = ValueError("stop after setup")
+            gate.run_case(self.root, "codex", None, self.case, 1, delegate_bin=binary)
+        private = self.root / "review-1/candidate-bin/delegate"
+        self.assertEqual(private.resolve(), binary)
+        env = owner.call_args.args[1]
+        self.assertEqual(env["PATH"].split(gate.os.pathsep)[0], str(private.parent))
+        self.assertIn(str(private.parent), Path(env["BASH_ENV"]).read_text())
+
+    def test_hook_mode_is_explicit_and_uses_the_candidate_helper(self):
+        workspace = self.root / "workspace with ' quote"
+        claude = gate.routing_hook_arguments("claude", workspace)
+        config = json.loads(claude[1])
+        self.assertEqual(set(config["hooks"]), {"SessionStart", "SubagentStart"})
+        for event, groups in config["hooks"].items():
+            self.assertEqual(gate.shlex.split(groups[0]["hooks"][0]["command"]),
+                             ["/bin/sh", str(workspace / ".claude/skills/agent-integration/scripts/delegate-routing-context.sh"), event])
+        codex = gate.routing_hook_arguments("codex", workspace)
+        self.assertIn("--dangerously-bypass-hook-trust", codex)
+        self.assertTrue(any(value.startswith("hooks.SubagentStart=") for value in codex))
+        with self.assertRaisesRegex(ValueError, "supported only"):
+            gate.routing_hook_arguments("hermes", workspace)
+
+    def test_hook_and_binary_receipts_cannot_masquerade_as_other_modes(self):
+        self.judgment(self.receipt())
+        with self.assertRaisesRegex(ValueError, "receipt selection mismatch"):
+            gate.summarize(self.root, [self.case], 1, "codex", routing_context=True)
+        binary = self.root / "candidate-delegate"
+        binary.write_text("candidate bytes")
+        with self.assertRaisesRegex(ValueError, "receipt selection mismatch"):
+            gate.summarize(self.root, [self.case], 1, "codex", delegate_bin=binary)
+
     def test_commands_do_not_preload_skill_or_disable_competitors(self):
         for harness in ("codex", "claude", "hermes"):
             argv, stdin = gate.command(harness, None, self.case["prompt"])
@@ -223,6 +267,22 @@ class RoutingTests(unittest.TestCase):
         owner.daemon.wait.assert_called_once_with(30, expected=0)
         self.assertTrue((self.root / "supervisor-closed.json").is_file())
 
+    def test_supervisor_config_uses_canonical_temporary_directory(self):
+        actual = self.root / "actual"
+        actual.mkdir()
+        alias = self.root / "alias"
+        alias.symlink_to(actual, target_is_directory=True)
+        run = self.root / "run"
+        run.mkdir()
+        with patch.object(gate.tempfile, "mkdtemp", return_value=str(alias)), \
+                patch.object(gate.shutil, "which", return_value="/mock/bin/tool"):
+            owner = gate.AttemptSupervisor(run, {})
+        self.assertEqual(owner.config, actual.resolve() / "pueue.json")
+        config = gate.read_json(owner.config)
+        self.assertEqual(config["shared"]["unix_socket_path"],
+                         str(actual.resolve() / "run/p.sock"))
+        self.assertEqual(gate.read_json(run / "supervisor.json")["config"], str(owner.config))
+
     def test_cleanup_removes_queued_work_before_shutdown(self):
         owner = object.__new__(gate.AttemptSupervisor)
         owner.run = self.root
@@ -254,6 +314,12 @@ class RoutingTests(unittest.TestCase):
     def test_suite_is_balanced_with_fixed_holdout(self):
         cases = gate.read_json(gate.CASES)["cases"]
         self.assertEqual(len({c["name"] for c in cases}), len(cases))
+        regressions = [c for c in cases if c.get("regression")]
+        self.assertEqual({c["name"] for c in regressions}, {
+            "requested-model-effort", "ambiguous-model", "parallel-receipts",
+            "subagent-external", "explicit-bypass"})
+        self.assertEqual(sum(c["external"] for c in regressions), 4)
+        cases = [c for c in cases if not c.get("regression")]
         ccr_cases = [c for c in cases if c["name"].startswith("ccr-")]
         self.assertEqual(len(ccr_cases), 6)
         self.assertTrue(any(not c["external"] for c in ccr_cases))
