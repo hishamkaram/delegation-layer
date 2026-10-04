@@ -174,6 +174,23 @@ class RoutingTests(unittest.TestCase):
             actual = output.getvalue().strip()
             self.assertEqual(json.loads(actual) if isinstance(expected, dict) else actual, expected)
 
+    def test_fixture_help_and_unknown_command_do_not_claim_provider_failure(self):
+        help_text = "Usage: delegate [global flags] <command> [command flags]\n"
+        (self.root / "help.txt").write_text(help_text)
+        for argv, code in ((["--help"], 0), (["help"], 0),
+                           (["task", "--provider", "ccr:print"], 2)):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.dict(gate.os.environ, {"DELEGATE_ROUTING_FIXTURE": str(self.root)}), \
+                    patch.object(gate.sys, "argv", ["delegate", *argv]), \
+                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                with self.assertRaises(SystemExit) as stopped:
+                    runpy.run_path(str(gate.REPO / "scripts/skill_routing_delegate_fixture.py"), run_name="__main__")
+                self.assertEqual(stopped.exception.code, code)
+            output = stdout.getvalue() + stderr.getvalue()
+            self.assertIn(help_text, output)
+            self.assertNotIn("provider_unavailable", output)
+            self.assertNotIn("stop_and_report", output)
+
     def test_supervised_deadline_stops_only_owned_queue(self):
         owner = object.__new__(gate.AttemptSupervisor)
         owner.run = self.root

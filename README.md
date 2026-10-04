@@ -49,7 +49,8 @@ Skill installation makes this workflow discoverable; it does not force a model
 to choose it over another plugin. Selection depends on the harness, model, and
 loaded instructions. No user rules, settings, or competing plugins are rewritten.
 If an agent bypasses Delegate, that is a selection failure, not proof the
-integration worked.
+integration worked. For a persistent preference, see
+[configure agent routing](docs/agent-routing.md).
 
 ## Install
 

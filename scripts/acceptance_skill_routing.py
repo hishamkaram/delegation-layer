@@ -226,6 +226,8 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180):
             if not isinstance(json.loads(catalog_bytes).get("providers"), list):
                 raise ValueError("Delegate catalog has no provider list")
             (fixture / "catalog.json").write_bytes(catalog_bytes)
+            help_output = owner.capture("help", [delegate, "--help"])
+            (fixture / "help.txt").write_bytes(help_output.read_bytes())
             executable = fixture / "delegate"
             shutil.copyfile(REPO / "scripts/skill_routing_delegate_fixture.py", executable)
             executable.chmod(0o700)

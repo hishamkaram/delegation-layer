@@ -15,12 +15,21 @@ for flag in ("--root", "--runner", "--pueue-config"):
     parser.add_argument(flag)
 parser.add_argument("--json", action="store_true")
 _, command = parser.parse_known_args(argv)
+if command in (["--help"], ["-h"], ["help"]):
+    print((root / "help.txt").read_text(encoding="utf-8"), end="")
+    sys.exit(0)
 if command in (["--version"], ["version"]):
     print("delegate dev")
     sys.exit(0)
 if command == ["providers"]:
     print((root / "catalog.json").read_text(encoding="utf-8"))
     sys.exit(0)
+if not command or command[0] not in (
+        "dispatch", "preflight", "models", "capabilities", "providers",
+        "status", "collect", "cancel", "logs", "continue"):
+    print("error: unknown command\n", file=sys.stderr)
+    print((root / "help.txt").read_text(encoding="utf-8"), end="", file=sys.stderr)
+    sys.exit(2)
 if "models" in command and "ccr:print" in command:
     print(json.dumps({"schema_version": 1, "command": "models", "provider": "ccr:print",
         "status": "available", "reason_code": "ok", "complete": True,
