@@ -78,3 +78,21 @@ enumeration, not effort metadata. `null` means effort metadata is unknown;
 for `available` or `partial`, `2` for `blocked` or `unavailable`, and `1` for
 `failed`. Preserve a blocked or unavailable discovery result as unresolved;
 defaults remain allowed.
+
+## Checking readiness
+
+Use `preflight` when the caller asks about static readiness, rather than as a
+required step before every dispatch:
+
+```sh
+delegate preflight --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE \
+  --permission REQUESTED_MODE --json
+```
+
+Use `read-only` for investigation or `workspace-write` for authorized edits.
+Supply any required provider options, including `--model ALIAS` for `ccr:print`.
+Preflight does not create a task, start the supervisor, or launch a provider.
+Its result is not proof of live authentication or successful execution. Report
+`blocked` or `unsupported` results; a readiness request does not authorize
+provider configuration changes. Honor `failure.next_action` without probing
+provider CLIs yourself.

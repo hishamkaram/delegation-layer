@@ -31,6 +31,13 @@ replace it with a provider command, a provider-specific plugin, or an API call.
 Do not inspect, authenticate, install, or repair provider CLIs to bypass a
 Delegate blocker.
 
+A reported blocker is a valid final response to a delegation request. It does
+not turn that request into an environment-repair task. When a response says
+`failure.next_action: "stop_and_report"`, report that attempt's failure to the
+user; do not run diagnostic commands, retry it, or use a different integration.
+Troubleshooting requires a separate user request. Other independently requested
+tasks may proceed; the failed attempt must remain reported as failed or blocked.
+
 ## Rules
 
 1. Check whether `delegate` is already installed. A plugin SessionStart hook
@@ -98,19 +105,9 @@ Use the matching catalog ID with `--provider`; do not silently substitute
 `--auto` or another provider. If the name is ambiguous, clarify the intended
 destination. If it is absent, report that this build does not support it.
 The catalog is not proof that a provider is installed, authenticated, or ready.
-If a side-effect-free readiness check is useful,
-run:
-
-```sh
-delegate preflight --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE \
-  --permission REQUESTED_MODE --json
-```
-
-Replace `REQUESTED_MODE` with `read-only` for investigation or
-`workspace-write` for authorized edits. Preflight reports static admission only.
-It does not create a task, start the supervisor, or launch a provider. Do not keep
-retrying preflight when it says
-`blocked` or `unsupported`; report the bounded reason.
+Dispatch performs admission checks; a separate preflight is not needed for a
+normal task. For an explicitly requested readiness check, see
+[preflight guidance](references/command-reference.md#checking-readiness).
 
 The catalog and `capabilities` response expose supported permission modes,
 request options, continuation, and the read-only mechanism. A read-only
