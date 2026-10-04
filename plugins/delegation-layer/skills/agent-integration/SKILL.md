@@ -33,8 +33,9 @@ Delegate blocker.
 
 A reported blocker is a valid final response to a delegation request. It does
 not turn that request into an environment-repair task. When a response says
-`failure.next_action: "stop_and_report"`, report that attempt's failure to the
-user; do not run diagnostic commands, retry it, or use a different integration.
+`failure.next_action: "stop_and_report"`, that attempt is finished. Include its
+failure in your final response without opening a clarification dialog to choose
+a fallback. Do not run diagnostic commands, retry it, or use another integration.
 Troubleshooting requires a separate user request. Other independently requested
 tasks may proceed; the failed attempt must remain reported as failed or blocked.
 

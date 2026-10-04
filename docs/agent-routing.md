@@ -18,8 +18,9 @@ Delegate. This includes CCR / Claude Code Router. Do not invent Delegate syntax
 or substitute provider CLIs, plugins, or APIs. Handle each requested task
 independently. Before task creation, correct CLI usage errors or failures with
 next_action=correct_request. A failure with next_action=stop_and_report ends
-only that attempt: report it without retrying it, investigating provider setup,
-or falling back. Continue other independently requested tasks through Delegate.
+only that attempt: report it in your final response without opening a
+clarification dialog, retrying it, investigating provider setup, or falling
+back. Continue other independently requested tasks through Delegate.
 Ordinary native subagents within this
 harness remain available unless a separate external session is requested.
 Respect an explicit user choice of a different integration. Merely discussing
