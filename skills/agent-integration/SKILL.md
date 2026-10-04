@@ -35,7 +35,9 @@ A reported blocker is a valid final response to a delegation request. It does
 not turn that request into an environment-repair task. When a response says
 `failure.next_action: "stop_and_report"`, that attempt is finished. Include its
 failure in your final response without opening a clarification dialog to choose
-a fallback. Do not run diagnostic commands, retry it, or use another integration.
+a fallback. For `task_record: not_created`, identify the requested destination
+and quote the returned `task_id` (if present), `task_record`, `failure`, and
+`error`. Do not append inferred state paths or provider-setup diagnoses. Do not run diagnostic commands, retry it, or use another integration.
 Troubleshooting requires a separate user request. Other independently requested
 tasks may proceed; the failed attempt must remain reported as failed or blocked.
 
@@ -259,6 +261,10 @@ recruit more agents unless that is explicitly part of the task.
   unfamiliar output. Do not load every reference for a routine dispatch.
 
 ## Completion report
+
+Build the report from observed CLI responses and collected evidence. Copy
+returned values; do not reconstruct paths from example commands or shell
+defaults. Omit unobserved configuration details.
 
 Report the original task ID, selected provider ID when the CLI returns one,
 the final admission/liveness/publication fields, the terminal outcome and
