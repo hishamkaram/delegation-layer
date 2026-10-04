@@ -278,6 +278,7 @@ type Description struct {
 	ID               string             `json:"id"`
 	SupportedModes   []string           `json:"supported_modes"`
 	SupportedOptions []string           `json:"supported_options"`
+	RequiredOptions  []string           `json:"required_options,omitempty"`
 	Continuation     ContinuationMode   `json:"continuation"`
 	ReadOnly         ReadOnlyCapability `json:"read_only"`
 	Runtime          RuntimeCapability  `json:"runtime"`

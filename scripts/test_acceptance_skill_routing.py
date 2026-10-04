@@ -222,8 +222,13 @@ class RoutingTests(unittest.TestCase):
 
     def test_suite_is_balanced_with_fixed_holdout(self):
         cases = gate.read_json(gate.CASES)["cases"]
+        self.assertEqual(len({c["name"] for c in cases}), len(cases))
+        ccr_cases = [c for c in cases if c["name"].startswith("ccr-")]
+        self.assertEqual(len(ccr_cases), 6)
+        self.assertTrue(any(not c["external"] for c in ccr_cases))
+        self.assertTrue(any(c.get("model") == "local-review" for c in ccr_cases))
+        cases = [c for c in cases if not c["name"].startswith("ccr-")]
         self.assertEqual(len(cases), 20)
-        self.assertEqual(len({c["name"] for c in cases}), 20)
         for split, count in (("development", 12), ("validation", 8)):
             rows = [c for c in cases if c["split"] == split]
             self.assertEqual(len(rows), count)

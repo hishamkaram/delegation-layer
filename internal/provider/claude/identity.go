@@ -9,6 +9,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -51,6 +52,14 @@ func FreshSessionID(rootID, taskID string) (string, error) {
 // Fresh tasks are bound to the deterministic UUID derived from rootID/taskID;
 // continuation tasks are bound to the exact expected session ID.
 func NewIdentityObserver(rootID, taskID string, expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
+	return NewStreamIdentityObserver(Provider, rootID, taskID, expected, record)
+}
+
+// NewStreamIdentityObserver observes the same Claude protocol under a distinct adapter identity.
+func NewStreamIdentityObserver(providerID, rootID, taskID string, expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
+	if err := config.ValidateProvider(providerID); err != nil {
+		return nil, err
+	}
 	if err := task.ValidateRootID(rootID); err != nil {
 		return nil, err
 	}
@@ -65,8 +74,9 @@ func NewIdentityObserver(rootID, taskID string, expected task.SessionExpectation
 		return nil, errors.New("nil Claude identity recorder")
 	}
 	observer := &identityObserver{
-		expected: expectedID,
-		record:   record,
+		providerID: providerID,
+		expected:   expectedID,
+		record:     record,
 	}
 	observer.framer = commonprovider.NewJSONLFramer(maxEventLineBytes, observer.processLine)
 	return observer, nil
@@ -86,6 +96,7 @@ func expectedSessionID(rootID, taskID string, expected task.SessionExpectation) 
 }
 
 type identityObserver struct {
+	providerID  string
 	mu          sync.Mutex
 	expected    string
 	record      func(task.SessionIdentity) error
@@ -159,7 +170,7 @@ func (o *identityObserver) processLine(line []byte) error {
 	o.seen = true
 	o.sessionID = sessionID
 	if sessionID == o.expected && o.callbackErr == nil {
-		o.callbackErr = o.record(task.SessionIdentity{Provider: Provider, ConversationID: sessionID})
+		o.callbackErr = o.record(task.SessionIdentity{Provider: o.providerID, ConversationID: sessionID})
 		if o.callbackErr != nil {
 			o.callbackErr = fmt.Errorf("recording Claude session identity: %w", o.callbackErr)
 		}

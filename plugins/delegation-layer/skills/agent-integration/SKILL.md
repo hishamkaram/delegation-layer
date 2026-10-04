@@ -1,6 +1,6 @@
 ---
 name: agent-integration
-description: Consult external AI agents and harnesses through Delegate for reviews, research, implementation, testing, second opinions, comparisons, and debates. Use when asked to ask Codex, consult Claude, get Antigravity’s opinion, or assign work to another harness or model, including external collaboration you choose during a task. Not for ordinary native subagents, provider setup, or questions merely about a tool.
+description: Consult CCR (Claude Code Router), Codex, Claude, or AGY. Route external agent and model collaboration through Delegate for reviews, research, implementation, testing, second opinions, comparisons, and debates, including collaboration you choose during a task. Discover other supported harnesses such as Pi and OpenCode through Delegate. Not for ordinary native subagents, provider setup, or questions merely about a tool.
 ---
 
 # Delegation Layer
@@ -13,6 +13,9 @@ external harness to do work. Requests such as “ask Codex to review this”,
 collaboration even when the user never mentions Delegate. The same applies
 when you decide external expertise is useful to fulfill the user's task.
 These names are examples; discover supported destinations through the CLI.
+“Claude Code Router” and “CCR” mean `ccr:print`, not ordinary Claude Code.
+For that request, use Delegate with a CCR model alias; a Claude-specific skill
+or subscription model does not fulfill the requested route.
 
 Ordinary subagents within the current harness remain available. Naming the
 current harness (for example, “have Claude investigate” while using Claude)
@@ -116,7 +119,14 @@ behavior but is not an independent delegate-owned sandbox. Static discovery
 does not prove authentication or live acceptance; use the dispatch or live
 acceptance result for that evidence.
 
-Keep provider defaults when no model or effort was requested. When an explicit
+Read `required_options` in provider discovery before dispatch. Supply every
+required option; a provider's optional defaults do not replace required inputs.
+For CCR / Claude Code Router or a CCR model request, read
+[CCR model selection](references/ccr.md). A CCR route is external collaboration
+even when you are already using Claude. Do not assume every open-source model
+name belongs to CCR; clarify only if discovery leaves the destination ambiguous.
+
+Keep provider defaults when no model or effort was requested and neither is required. When an explicit
 choice is needed, read [model and effort guidance](references/command-reference.md#choosing-models-and-effort).
 Pass requested choices through Delegate's public `--model` and `--effort`
 fields; discovery is advisory, never an allowlist.

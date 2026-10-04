@@ -277,3 +277,16 @@ budget stop; it never starts a provider or submits work.
 
 For setup failures, see [Troubleshooting](troubleshooting.md). For provider
 specific behavior, see [Providers](providers.md).
+
+### Required provider options
+
+Provider catalog and capability JSON can include `required_options`. Supply
+those fields before dispatch or preflight. `ccr:print` requires `model` to be a
+configured CCR alias; other existing profiles retain their optional defaults.
+Use `delegate models --provider ccr:print --json` to discover aliases when needed.
+
+```sh
+delegate --root "$HOME/delegation-state" dispatch --provider ccr:print \
+  --model local-review --brief /absolute/task.txt --cwd /absolute/workspace \
+  --permission read-only --budget 30m --json
+```

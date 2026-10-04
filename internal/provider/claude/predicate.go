@@ -21,6 +21,7 @@ const (
 )
 
 type interpreter struct {
+	streamReference  *task.PredicateRef
 	mode             string
 	legacy           bool
 	legacyPortable   bool
@@ -60,6 +61,9 @@ func NewWorkspaceWriteInterpreter() predicate.Interpreter {
 }
 
 func (v interpreter) Reference() task.PredicateRef {
+	if v.streamReference != nil {
+		return *v.streamReference
+	}
 	if v.nativeHistorical {
 		return legacyNativeReferenceForMode(v.mode)
 	}
@@ -86,13 +90,13 @@ func (v interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out
 	if err != nil {
 		return task.Interpretation{}, err
 	}
-	if refusal := refusalFor(input, state); refusal != "" {
+	if refusal := refusalForProvider(input, state, v.Reference().Adapter); refusal != "" {
 		return rejectedWithUsage(refusal, usageFromResult(state, task.UsageReliabilityUnreliable)), nil
 	}
 	if err := writeAnswer(out, []byte(state.result.answer)); err != nil {
 		return task.Interpretation{}, err
 	}
-	session := task.SessionIdentity{Provider: Provider, ConversationID: state.result.sessionID}
+	session := task.SessionIdentity{Provider: v.Reference().Adapter, ConversationID: state.result.sessionID}
 	return task.Interpretation{
 		Verdict: task.VerdictCommitted,
 		Session: &session,
@@ -134,6 +138,10 @@ func readEvidence(raw predicate.Evidence, mode string, strict, nativeHistorical 
 }
 
 func refusalFor(input predicate.Input, state eventState) string {
+	return refusalForProvider(input, state, Provider)
+}
+
+func refusalForProvider(input predicate.Input, state eventState, providerID string) string {
 	if refusal := sealRefusal(input.Seal); refusal != "" {
 		return refusal
 	}
@@ -143,7 +151,7 @@ func refusalFor(input predicate.Input, state eventState) string {
 	if !state.initSeen {
 		return refusalMalformed
 	}
-	if !identityMatches(input, state.init.sessionID) {
+	if !identityMatchesProvider(input, state.init.sessionID, providerID) {
 		return refusalIdentity
 	}
 	if !state.resultSeen {
@@ -212,13 +220,17 @@ func sealRefusal(seal task.ProviderExitRecord) string {
 }
 
 func identityMatches(input predicate.Input, sessionID string) bool {
+	return identityMatchesProvider(input, sessionID, Provider)
+}
+
+func identityMatchesProvider(input predicate.Input, sessionID, providerID string) bool {
 	if !validSessionID(sessionID) {
 		return false
 	}
 	if !sessionMatchesExpectation(input.Seal.RootID, input.Seal.TaskID, input.ExpectedSession, sessionID) {
 		return false
 	}
-	if input.RecordedSession != nil && (input.RecordedSession.Provider != Provider || input.RecordedSession.ConversationID != sessionID) {
+	if input.RecordedSession != nil && (input.RecordedSession.Provider != providerID || input.RecordedSession.ConversationID != sessionID) {
 		return false
 	}
 	return true

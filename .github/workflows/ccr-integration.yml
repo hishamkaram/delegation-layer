@@ -1,0 +1,57 @@
+name: CCR integration
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  foreground:
+    name: CCR foreground (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: hishamkaram/claude-code-router
+          ref: 32002113221056b3ecbec3f115b2e3fad2e646b4
+          path: .local/ccr
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.25.13'
+          cache: false
+      - name: Build CCR
+        run: go build -C .local/ccr -o "$GITHUB_WORKSPACE/bin/ccr" ./cmd/ccr
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.1'
+          cache: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.x'
+      - name: Install current Claude Code and test supervisor
+        run: |
+          npm install --global @anthropic-ai/claude-code
+          ./scripts/install-test-supervisor.sh
+      - name: Build Delegate
+        run: make build
+      - name: Prove foreground lifecycle using real CLIs
+        run: |
+          export PATH="$GITHUB_WORKSPACE/bin:$GITHUB_WORKSPACE/bin/test-supervisor:$PATH"
+          python3 scripts/acceptance_ccr_fixture.py --output "$HOME/ccr-integration-evidence"
+      - name: Retain sanitized result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ccr-integration-${{ runner.os }}
+          path: ~/ccr-integration-evidence/success.json
+          if-no-files-found: warn

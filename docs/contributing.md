@@ -109,8 +109,9 @@ They reject changed transcripts, stale judgments, and mismatched candidate,
 model, mode, repetition, or budget selections. Summarize with the same options used to run. Summaries of selected
 cases are focused evidence, not full-matrix acceptance.
 
-Freeze the eight validation prompts before tuning on the twelve development
-prompts. Run the full suite on the final candidate; retain all attempts rather
+The original twenty cases retain their twelve development and eight validation
+prompts. Six CCR cases add alias selection, writes, continuation, comparison,
+and a non-delegation control. Freeze validation prompts before tuning. Run the full suite on the final candidate; retain all attempts rather
 than rerunning failures until they disappear. If validation informs another
 skill revision, disclose that it is no longer an unseen holdout. Review routing
 and live task evidence separately: real review, authorized write, and comparison
@@ -177,8 +178,9 @@ release workflow.
 
 When native provider credentials are available, run the relevant live gate with
 a disposable workspace. `make acceptance-native` covers each supported mode
-across all five providers, including AGY read-only, positive unattended writes,
-continuation, and replay. `make acceptance-agy`, `make acceptance-codex`,
+across all six providers, including AGY read-only, positive unattended writes,
+continuation, and replay. Set `CCR_LIVE_MODEL` to a configured CCR alias for
+the aggregate; without it, CCR is explicitly blocked. `make acceptance-agy`, `make acceptance-codex`,
 `make acceptance-claude`, `make acceptance-pi`, and `make acceptance-opencode`
 select individual profiles. A live
 gate returns `0` for a pass, `1` for a real behavior or evidence failure, and
@@ -200,6 +202,19 @@ The harness records the JSON observation and applies the command's `0`, `1`,
 and `2` status mapping. A run must produce its own receipt before it is treated
 as live evidence; documentation and tests do not imply that a live run has
 already passed.
+
+The CCR foreground fixture runs real Delegate, CCR, and Claude binaries against
+an isolated local HTTP provider, without account credentials or paid requests:
+
+```sh
+PATH="$PWD/bin:$PWD/bin/test-supervisor:$PATH" python3 scripts/acceptance_ccr_fixture.py
+```
+
+It proves overlapping sessions, successful and budget-stopped continuation,
+file editing and shell execution, cancellation, rejected aliases, observational
+replay, and upstream connection cleanup. The `CCR integration` workflow runs it
+on Linux and native macOS. This fixture proves CLI integration, not third-party
+account availability; keep authenticated acceptance receipts separate.
 
 ## Release promotion
 

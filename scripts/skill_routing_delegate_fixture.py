@@ -21,6 +21,12 @@ if command in (["--version"], ["version"]):
 if command == ["providers"]:
     print((root / "catalog.json").read_text(encoding="utf-8"))
     sys.exit(0)
+if "models" in command and "ccr:print" in command:
+    print(json.dumps({"schema_version": 1, "command": "models", "provider": "ccr:print",
+        "status": "available", "reason_code": "ok", "complete": True,
+        "source": "ccr model list --json", "efforts": None,
+        "models": [{"id": "local-review", "name": "Local review model", "efforts": None}]}))
+    sys.exit(0)
 print(json.dumps({
     "schema_version": 1, "command": next((a for a in argv if a in
         ("dispatch", "preflight", "models", "capabilities")), "unknown"),

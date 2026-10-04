@@ -106,6 +106,9 @@ func preflight(a Arguments, deps Dependencies) commandResult {
 	if lookupErr != nil {
 		return failed(response, lookupErr, 2)
 	}
+	if validationErr := normalized.Catalog.ValidateRequest(request); validationErr != nil {
+		return failed(response, validationErr, 2)
+	}
 	report := declaredCapability(registration.Description)
 	report.Verification = "preflight"
 	report.ReasonCode = "preflight_not_launched"

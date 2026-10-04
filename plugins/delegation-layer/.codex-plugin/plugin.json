@@ -1,7 +1,7 @@
 {
   "name": "delegation-layer",
-  "version": "0.1.18",
-  "description": "Consult external AI harnesses for reviews, research, implementation, and debate through the bounded, resumable Delegate CLI.",
+  "version": "0.1.19",
+  "description": "Consult external AI harnesses and CCR-configured models for reviews, research, implementation, and debate through the resumable Delegate CLI.",
   "author": {
     "name": "Hesham Karam",
     "url": "https://github.com/hishamkaram"

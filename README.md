@@ -249,3 +249,10 @@ The successor receives a new task ID and is observed with the same `status` and
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+### Consult models through Claude Code Router
+
+Delegate also supports CCR-configured third-party and local models through
+`ccr:print`. Ask your agent to “have CCR review this” and it can discover and
+choose a configured model alias. CCR and Claude Code must already be installed
+and the provider configured. See [provider guidance](docs/providers.md#claude-code-router).

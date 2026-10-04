@@ -29,10 +29,10 @@ Dispatch flags:
 - `--budget DURATION`: finite turn budget;
 - `--auto`: let the CLI select a ready provider;
 - `--provider ID`: preserve the caller’s named harness or provider, resolved through the catalog;
-- `--model MODEL` and `--effort VALUE`: optional provider-advertised choices;
+- `--model MODEL` and `--effort VALUE`: provider-advertised choices (CCR requires a model alias);
   Codex maps effort to TOML `model_reasoning_effort`, while Claude and AGY
   pass native effort flags; Pi maps effort to `--thinking`; OpenCode maps it to
-  `--variant`; `default` is omitted;
+  `--variant`; CCR forwards effort to Claude and uses `--model` as a CCR alias; `default` is omitted;
 - `--native-timeout DURATION`: optional provider-native timeout where advertised.
 
 Model discovery uses the same `--provider ID` profiles and accepts an optional

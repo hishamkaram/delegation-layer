@@ -5,6 +5,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/provider/antigravity"
+	"github.com/hishamkaram/delegation-layer/internal/provider/ccr"
 	"github.com/hishamkaram/delegation-layer/internal/provider/claude"
 	"github.com/hishamkaram/delegation-layer/internal/provider/codex"
 	"github.com/hishamkaram/delegation-layer/internal/provider/opencode"
@@ -22,6 +23,7 @@ func NativeCatalog() commonprovider.Catalog {
 		panic(err) // the immutable built-in fixture contract is a build invariant
 	}
 	catalog, err := commonprovider.NewCatalog(
+		ccr.Registration(),
 		withModels(antigravity.Registration(), antigravity.ModelDiscovery),
 		withModels(codex.Registration(), codex.ModelDiscovery),
 		withModels(claude.Registration(), claude.ModelDiscovery),
