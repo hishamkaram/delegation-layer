@@ -188,6 +188,7 @@ func (p PredicateRef) Equal(other PredicateRef) bool {
 
 // TaskConfig captures requested configuration parameters.
 type TaskConfig struct {
+	Interactive   bool   `json:"interactive,omitempty"`
 	Model         string `json:"model,omitempty"`
 	Effort        string `json:"effort,omitempty"`
 	Permission    string `json:"permission,omitempty"`

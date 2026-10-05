@@ -53,6 +53,7 @@ func fixtureTaskWithPlan(t *testing.T, mode string, configure func(*task.MetaRec
 	plan := Plan{Executable: exe, ExecutableSHA256: exeDigest, Arguments: []string{"-test.run=^TestExecutionHelper$"}, Directory: cwd, Environment: append(os.Environ(), "DELEGATE_EXECUTION_HELPER="+mode), Predicate: task.FixturePredicateRef()}
 	if configure != nil {
 		configure(meta, &plan)
+		req.RequestedConfig = meta.RequestedConfig
 	}
 	td, err := s.CreateTask(id, req, brief, meta)
 	require(t, err)

@@ -103,6 +103,7 @@ type Hooks struct {
 }
 
 type Options struct {
+	Interaction InteractionProtocol
 	// Preflight performs finite policy validation at the last boundary before
 	// provider Start; it has no provider-start authority. Any native inspection
 	// remains core-owned inside this runner's supervisor lifetime and budget.

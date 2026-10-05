@@ -37,7 +37,10 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
    receipt.
 2. Launch through the shipped dispatcher/runner with its isolated private
    supervisor, finite
-   stdin followed by EOF, and the declared profile. Do not call the provider
+   stdin followed by EOF for ordinary tasks, or the explicit interactive profile
+   with core-owned protocol stdin until native completion. Exercise native
+   question replies and steering only where advertised; waiting retains the
+   original finite budget. Do not call the provider
    directly, pass the brief in argv, mutate global config, or use direct
    signals.
 3. Inspect filesystem and sealed evidence directly. Exercise the profile's

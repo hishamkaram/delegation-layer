@@ -1,8 +1,8 @@
 # JSON decision sketch
 
 ```sh
-delegate --root "$STATE_ROOT" status "$TASK_ID" --json
-delegate --root "$STATE_ROOT" collect "$TASK_ID" --watch 5s --json
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" status "$TASK_ID" --json
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect "$TASK_ID" --watch 5s --json
 ```
 
 Decision order:

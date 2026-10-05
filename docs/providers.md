@@ -59,7 +59,7 @@ executable and records its observed identity. A supervised runtime probe then:
 1. invokes the executable's version command and accepts any nonempty, valid
    reported version that fits the bounded durable evidence record;
 2. invokes the provider help command, including any profile-specific subcommand;
-3. checks that every complete flag used by the adapter is advertised; and
+3. checks the public flags required by the adapter; and
 4. fingerprints the executable again before the profile is finalized.
 
 This detects missing commands, non-executable files, and incompatible flag
@@ -162,10 +162,18 @@ responsibility. Missing or expired login is reported by the provider.
 
 `codex:exec` invokes `exec` with the requested `read-only` or `workspace-write`
 native sandbox and noninteractive approval policy. It preserves native user
-configuration without injecting feature overrides. `--model` maps to Codex's
+configuration. Ordinary exec tasks do not inject feature overrides. `--model` maps to Codex's
 native model option. `--effort` is encoded as the TOML setting
 `-c model_reasoning_effort="VALUE"`; an omitted or `default` effort is not
 added to native argv. Continuation uses the exact recorded provider session.
+
+With `--interactive`, Codex uses its native app-server over core-owned stdio
+instead of exec. Delegate enables `default_mode_request_user_input` only for that
+invocation, starts or resumes the exact thread, and starts one turn. Native
+question batches are exposed through `collect`/`events`; `reply` answers them and
+`steer` targets that same active turn. Model and effort use native turn parameters.
+The native sandbox and never-ask approval policy remain selected by the requested
+permission. No global settings are changed.
 
 ## Claude
 
@@ -177,6 +185,16 @@ stream structure, session identity, and result integrity. Continuation selects
 the exact recorded provider session.
 `--model` and `--effort` pass through to Claude's native flags; an omitted or
 `default` effort leaves the provider default untouched.
+
+With `--interactive`, Claude uses its native stream-json control protocol,
+`--permission-prompts host`, the SDK's `--permission-prompt-tool stdio` transport,
+and invocation-local `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`. The adapter answers
+only root `AskUserQuestion` requests. Other permission requests are denied rather
+than treated as clarification. This does not change the selected native permission
+mode. There is no active-turn steering for Claude. Native background-agent
+completion is observed before closing the input channel. Public help checks do
+not prove the SDK control protocol; its initialization and structured events are
+validated during the task.
 
 ## Pi
 

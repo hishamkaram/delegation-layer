@@ -51,6 +51,9 @@ Commands:
   models        Discover native model IDs and effort choices
   status        Observe admission, liveness, and publication
   collect       Recover or read the immutable publication
+  reply         Answer an outstanding native clarification request
+  steer         Send guidance to a supported active native turn
+  events        Read interaction events, optionally with a bounded watch
   cancel        Request one explicit supervisor stop
   logs          Return validated output descriptors
   preflight     Check one provider without creating a task
@@ -62,6 +65,13 @@ Global flags:
   --root ABS              State root (default: user config directory)
   --pueue-config ABS      Initial supervisor configuration
   --runner ABS            Runner executable for dispatch
+
+Interactive tasks:
+  dispatch ... --interactive
+  continue --task ID ... --interactive
+  reply ID --request REQUEST_ID --answers FILE --id MESSAGE_ID --json
+  steer ID --brief FILE --id MESSAGE_ID --json
+  events ID [--after SEQUENCE] [--watch DURATION] --json
 
 Use --json on task, providers, capabilities, models, preflight, and continue commands for the versioned response.
 `
@@ -137,29 +147,33 @@ func (d Dependencies) normalized() Dependencies {
 // rooted paths and availability. Answer bytes are streamed by a future typed
 // result API rather than copied into an unbounded control object.
 type Response struct {
-	SchemaVersion  int                      `json:"schema_version"`
-	Command        string                   `json:"command"`
-	RootID         string                   `json:"root_id,omitempty"`
-	TaskID         string                   `json:"task_id,omitempty"`
-	TaskRecord     string                   `json:"task_record,omitempty"`
-	ParentTaskID   string                   `json:"parent_task_id,omitempty"`
-	Status         string                   `json:"status,omitempty"`
-	Admission      string                   `json:"admission"`
-	Liveness       string                   `json:"liveness"`
-	Publication    string                   `json:"publication"`
-	Outcome        *task.OutcomeRecord      `json:"outcome,omitempty"`
-	Payload        *task.PayloadDescriptor  `json:"payload,omitempty"`
-	Raw            []taskdir.LogDescriptor  `json:"raw,omitempty"`
-	EvidenceSHA256 string                   `json:"evidence_sha256,omitempty"`
-	Supervisor     *SupervisorResponse      `json:"supervisor,omitempty"`
-	Stops          []StopResponse           `json:"stops,omitempty"`
-	Stop           *StopResponse            `json:"stop,omitempty"`
-	Pending        *PendingResponse         `json:"pending,omitempty"`
-	Capability     *CapabilityReport        `json:"capability,omitempty"`
-	Continuation   *ContinuationResponse    `json:"continuation,omitempty"`
-	Failure        *DispatchFailureResponse `json:"failure,omitempty"`
-	Error          string                   `json:"error,omitempty"`
-	ErrorTruncated bool                     `json:"error_truncated,omitempty"`
+	Interaction    *task.InteractionState    `json:"interaction,omitempty"`
+	Delivery       *task.InteractionDelivery `json:"delivery,omitempty"`
+	Events         []task.InteractionEvent   `json:"events,omitempty"`
+	Cursor         *uint64                   `json:"cursor,omitempty"`
+	SchemaVersion  int                       `json:"schema_version"`
+	Command        string                    `json:"command"`
+	RootID         string                    `json:"root_id,omitempty"`
+	TaskID         string                    `json:"task_id,omitempty"`
+	TaskRecord     string                    `json:"task_record,omitempty"`
+	ParentTaskID   string                    `json:"parent_task_id,omitempty"`
+	Status         string                    `json:"status,omitempty"`
+	Admission      string                    `json:"admission"`
+	Liveness       string                    `json:"liveness"`
+	Publication    string                    `json:"publication"`
+	Outcome        *task.OutcomeRecord       `json:"outcome,omitempty"`
+	Payload        *task.PayloadDescriptor   `json:"payload,omitempty"`
+	Raw            []taskdir.LogDescriptor   `json:"raw,omitempty"`
+	EvidenceSHA256 string                    `json:"evidence_sha256,omitempty"`
+	Supervisor     *SupervisorResponse       `json:"supervisor,omitempty"`
+	Stops          []StopResponse            `json:"stops,omitempty"`
+	Stop           *StopResponse             `json:"stop,omitempty"`
+	Pending        *PendingResponse          `json:"pending,omitempty"`
+	Capability     *CapabilityReport         `json:"capability,omitempty"`
+	Continuation   *ContinuationResponse     `json:"continuation,omitempty"`
+	Failure        *DispatchFailureResponse  `json:"failure,omitempty"`
+	Error          string                    `json:"error,omitempty"`
+	ErrorTruncated bool                      `json:"error_truncated,omitempty"`
 }
 
 // DispatchFailureResponse gives an agent a stable recovery decision without
@@ -295,6 +309,8 @@ func runCommand(a Arguments, deps Dependencies) commandResult {
 		return collect(a, deps.storeDependencies())
 	case "cancel":
 		return cancel(a, deps)
+	case "reply", "steer", "events":
+		return interactionCommand(a, deps.storeDependencies())
 	case "logs":
 		return logs(a, deps.storeDependencies())
 	default:
@@ -348,6 +364,9 @@ func writeHumanResponse(w io.Writer, response Response) error {
 	}
 	for _, stop := range response.Stops {
 		writeHumanStop(&output, "stop", stop)
+	}
+	if err := writeHumanInteraction(&output, response); err != nil {
+		return err
 	}
 	return writeAll(w, []byte(output.String()))
 }

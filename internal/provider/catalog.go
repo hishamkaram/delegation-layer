@@ -91,6 +91,7 @@ func normalizeRegistration(supplied Registration) (Registration, error) {
 	slices.Sort(registration.Description.RequiredOptions)
 	registration.Description.SupportedOptions = slices.Clone(registration.Description.SupportedOptions)
 	slices.Sort(registration.Description.SupportedOptions)
+	registration.Description.Interaction.SupportedModes = slices.Clone(registration.Description.Interaction.SupportedModes)
 	registration.Description.SupportedModes = slices.Clone(registration.Description.SupportedModes)
 	slices.Sort(registration.Description.SupportedModes)
 	registration.Description.Runtime.HelpArgs = slices.Clone(registration.Description.Runtime.HelpArgs)
@@ -112,6 +113,9 @@ func validateDescription(description Description) error {
 	}
 	if err := validateModes(description.SupportedModes); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
+	}
+	if err := validateInteractionCapability(description); err != nil {
+		return err
 	}
 	if err := validateReadOnlyCapability(description); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
@@ -267,7 +271,7 @@ func validateRuntimeCapability(capability RuntimeCapability) error {
 
 func validOption(option string) bool {
 	switch option {
-	case OptionContinuation, OptionEffort, OptionModel, OptionNativeTimeout:
+	case OptionContinuation, OptionEffort, OptionModel, OptionNativeTimeout, OptionInteractive:
 		return true
 	default:
 		return false
@@ -313,6 +317,7 @@ func cloneRegistration(registration Registration) Registration {
 	registration.Description.RequiredOptions = slices.Clone(registration.Description.RequiredOptions)
 	slices.Sort(registration.Description.RequiredOptions)
 	registration.Description.SupportedOptions = slices.Clone(registration.Description.SupportedOptions)
+	registration.Description.Interaction.SupportedModes = slices.Clone(registration.Description.Interaction.SupportedModes)
 	registration.Description.SupportedModes = slices.Clone(registration.Description.SupportedModes)
 	registration.Description.Runtime.HelpArgs = slices.Clone(registration.Description.Runtime.HelpArgs)
 	registration.Description.Runtime.RequiredFlags = slices.Clone(registration.Description.Runtime.RequiredFlags)
@@ -362,11 +367,19 @@ func (c Catalog) ValidateRequest(request task.TaskRecord) error {
 	if !slices.Contains(registration.Description.SupportedModes, request.Mode) {
 		return fmt.Errorf("%w: %s does not support permission mode %s", ErrProfileUnavailable, request.Provider, request.Mode)
 	}
+	if request.RequestedConfig.Interactive && !slices.Contains(registration.Description.Interaction.SupportedModes, request.Mode) {
+		return fmt.Errorf("%w: interaction unavailable for permission mode %s", ErrUnsupportedOption, request.Mode)
+	}
+	return validateRequestOptions(request, registration.Description)
+}
+
+func validateRequestOptions(request task.TaskRecord, description Description) error {
 	options := []struct {
 		name    string
 		present bool
 	}{
 		{name: OptionContinuation, present: request.PriorSession != nil},
+		{name: OptionInteractive, present: request.RequestedConfig.Interactive},
 		// The explicit default is a provider-default selection, so it does not
 		// request an effort override and must retain compatibility with agy's
 		// existing persisted request representation.
@@ -375,10 +388,10 @@ func (c Catalog) ValidateRequest(request task.TaskRecord) error {
 		{name: OptionNativeTimeout, present: request.RequestedConfig.NativeTimeout != ""},
 	}
 	for _, option := range options {
-		if !option.present && slices.Contains(registration.Description.RequiredOptions, option.name) {
+		if !option.present && slices.Contains(description.RequiredOptions, option.name) {
 			return fmt.Errorf("%w: %s requires --%s", ErrUnsupportedOption, request.Provider, option.name)
 		}
-		if option.present && !slices.Contains(registration.Description.SupportedOptions, option.name) {
+		if option.present && !slices.Contains(description.SupportedOptions, option.name) {
 			return fmt.Errorf("%w: %s does not support %s", ErrUnsupportedOption, request.Provider, option.name)
 		}
 	}
@@ -482,4 +495,21 @@ func finalizeCatalogProfile(request task.TaskRecord, profile PreparedProfile) (P
 		return PreparedProfile{}, fmt.Errorf("%w: invalid finalized profile: %w", ErrProfileUnavailable, err)
 	}
 	return cloneCandidateProfile(profile), nil
+}
+
+func validateInteractionCapability(description Description) error {
+	capability := description.Interaction
+	declared := slices.Contains(description.SupportedOptions, OptionInteractive)
+	if declared != (capability.Clarification || capability.Steering) {
+		return fmt.Errorf("%w: inconsistent interaction options", ErrInvalidDescriptor)
+	}
+	if declared && len(capability.SupportedModes) == 0 {
+		return fmt.Errorf("%w: missing interaction permission modes", ErrInvalidDescriptor)
+	}
+	for _, mode := range capability.SupportedModes {
+		if !declared || !slices.Contains(description.SupportedModes, mode) {
+			return fmt.Errorf("%w: invalid interaction permission mode", ErrInvalidDescriptor)
+		}
+	}
+	return nil
 }

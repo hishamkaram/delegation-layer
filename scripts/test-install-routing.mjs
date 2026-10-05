@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -51,6 +51,17 @@ try {
     const output = JSON.parse(hook.stdout).hookSpecificOutput;
     assert.equal(output.hookEventName, event);
     assert.match(output.additionalContext, /external agent/);
+    assert.ok(output.additionalContext.includes(join(dirname(dirname(helper)), "SKILL.md")));
+  }
+  const unusualSkill = join(root, "skill \"quoted\" \\ tab\tline\n雪");
+  await cp(dirname(dirname(helper)), unusualSkill, { recursive: true });
+  for (const event of ["SessionStart", "SubagentStart"]) {
+    const hook = success(spawnSync("/bin/sh", [join(unusualSkill, "scripts/delegate-routing-context.sh"), event], {
+      encoding: "utf8", env: { PATH: "/usr/bin:/bin" }, input: "{}",
+    }));
+    const context = JSON.parse(hook.stdout).hookSpecificOutput.additionalContext;
+    assert.ok(context.includes(join(unusualSkill, "SKILL.md")), "hook must preserve the exact skill path");
+    assert.match(context, /external agent/);
   }
   success(run(["install", "--scope", "global", "--harness", "claude", "--routing", "skill-only"]));
   assert.equal(await readFile(configPath, "utf8"), configured);

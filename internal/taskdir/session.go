@@ -1,12 +1,14 @@
 package taskdir
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -29,7 +31,12 @@ func (td *TaskDir) withSession(provider, conversation string, fn func(string) er
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	if err = lock.LockEXNonblocking(); err != nil {
+	// This lock protects short metadata mutations, not the active provider turn.
+	// A runner and collector may release the same claim concurrently. Serialize
+	// those mutations; the claim records still reject a genuinely active owner.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err = lock.LockEX(ctx); err != nil {
 		return fmt.Errorf("%w: %w", task.ErrSessionBusy, err)
 	}
 	return fn(dir)

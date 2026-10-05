@@ -3,6 +3,7 @@ package codex
 import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 // Description returns Codex's static request capabilities. The executable
@@ -11,8 +12,9 @@ import (
 func Description() commonprovider.Description {
 	return commonprovider.Description{
 		ID:               Provider,
+		Interaction:      task.InteractionCapabilities{SupportedModes: []string{Mode, WorkspaceWriteMode}, Clarification: true, Steering: true},
 		SupportedModes:   []string{Mode, WorkspaceWriteMode},
-		SupportedOptions: []string{commonprovider.OptionContinuation, commonprovider.OptionEffort, commonprovider.OptionModel},
+		SupportedOptions: []string{commonprovider.OptionInteractive, commonprovider.OptionContinuation, commonprovider.OptionEffort, commonprovider.OptionModel},
 		Continuation:     commonprovider.ContinuationNative,
 		ReadOnly:         commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativeSandbox, Containment: commonprovider.ReadOnlyProviderOwned},
 		Runtime:          RuntimeRequirements(),
@@ -27,6 +29,6 @@ func Registration() commonprovider.Registration {
 		Description:     Description(),
 		Prepare:         PrepareCandidate,
 		PrepareExisting: PrepareExistingCandidate,
-		Interpreters:    []predicate.Interpreter{NewInterpreter(Mode), NewInterpreter(WorkspaceWriteMode), newLegacyInterpreter()},
+		Interpreters:    []predicate.Interpreter{NewInterpreter(Mode), NewInterpreter(WorkspaceWriteMode), newLegacyInterpreter(), interactionInterpreter{mode: Mode}, interactionInterpreter{mode: WorkspaceWriteMode}},
 	}
 }

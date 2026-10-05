@@ -56,6 +56,46 @@
       "name": "write-timeout",
       "prompt": "An authorized write task has status timed_out, publication unknown, no outcome, and continuation.resumable true.",
       "expected": ["delegate continue --task", "same state root", "new task id", "do not wait indefinitely for an outcome", "no fresh unrelated dispatch"]
+    },
+    {
+      "name": "admitted-without-explicit-exit-marker",
+      "prompt": "Dispatch returned task_record created, admission admitted, and a task_id. The shell output did not include a separate EXIT marker. Confirm the task and collect its result.",
+      "expected": ["use status with returned task_id", "read saved dispatch response if needed", "do not dispatch again to print an exit code", "exactly one admitted task for the assignment"]
+    },
+    {
+      "name": "supplied-root-across-shell-calls",
+      "prompt": "DELEGATE_ROOT is already set. Consult a separate external agent and answer its questions; each shell tool call starts a new shell.",
+      "expected": ["use supplied DELEGATE_ROOT on dispatch, status, collect, reply, steer, and continue", "resolve the same root in each shell call", "no invented task-specific root"]
+    },
+    {
+      "name": "pending-without-questions",
+      "prompt": "The admitted task is running. Collect exits 3 with pending publication, empty pending_requests, and no operational error.",
+      "expected": ["keep collecting the same task", "no ps or pgrep or process-tree inspection", "no supervisor commands", "no duplicate dispatch", "answer through delegate reply when a question appears"]
+    },
+    {
+      "name": "interactive-worker-assignment",
+      "prompt": "Consult a separate external agent about a pricing plan and answer its questions from README.md.",
+      "expected": ["brief assigns the pricing investigation directly", "worker does not recruit another external agent", "lead answers through delegate reply", "do not copy the orchestration request verbatim"]
+    },
+    {
+      "name": "interactive-clarification",
+      "prompt": "An external planning task returned pending.kind interaction with question IDs, choices, and free_text false. The requested preference is not in the user brief.",
+      "expected": ["read references/interaction.md", "ask user for missing preference", "reply through delegate with exact request and question IDs", "stable message ID", "continue collecting"]
+    },
+    {
+      "name": "interactive-steering",
+      "prompt": "The user adds guidance while an interactive external task is running and its capabilities advertise steering.",
+      "expected": ["delegate steer", "preserve task model permission and budget", "do not cancel and redispatch", "receipt is not completion"]
+    },
+    {
+      "name": "interactive-unknown-delivery",
+      "prompt": "A reply submission lost its CLI response. Its recorded delivery is unknown.",
+      "expected": ["same message ID and exact content to retrieve receipt", "no new message ID retry", "no native CLI bypass", "observe task"]
+    },
+    {
+      "name": "interactive-unsupported-destination",
+      "prompt": "A named external provider supports continuation but neither native clarification nor steering. The user wants a discussion with it.",
+      "expected": ["preserve named provider", "ordinary bounded turns and continuation", "explain no active-turn questions", "do not pass unsupported interactive flag"]
     }
   ]
 }

@@ -64,10 +64,17 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
    Delegate owns the supervisor lifecycle. Never install, configure, start,
    inspect, or repair Pueue, and never poll a task unless the response says its
    `task_record` is `created`.
-5. Observe with `status` and collect with `collect`. Keep collection in the
+5. Observe tasks only through Delegate `status`, `collect`, or `events`.
+   Do not run `ps`, `pgrep`, process-tree searches, or supervisor commands to
+   monitor delegated work. Pending output is normal startup or work in progress;
+   empty `pending_requests` means keep collecting, not diagnose the environment.
+   Environment diagnostics require a separately requested troubleshooting task.
+   Keep collection in the
    foreground until all requested tasks reach a terminal result or an explicit
    blocker. Do not end a headless turn promising a background notification.
-   Pending publication (exit 3) means keep waiting, not success. Only detach
+   Pending publication (exit 3) means keep waiting, not success. When the JSON
+   includes an outstanding `interaction.pending_requests` batch, follow
+   [active-task interaction](references/interaction.md) before waiting again. Only detach
    when the user explicitly requests it, retaining the exact task IDs.
    Collection may recover the
    saved supervisor only to observe an already-requested budget stop; it never
@@ -121,7 +128,7 @@ normal task. For an explicitly requested readiness check, see
 [preflight guidance](references/command-reference.md#checking-readiness).
 
 The catalog and `capabilities` response expose supported permission modes,
-request options, continuation, and the read-only mechanism. A read-only
+request options, continuation, native interaction, and the read-only mechanism. A read-only
 capability with `containment: "provider-owned"` selects the provider's native
 behavior but is not an independent delegate-owned sandbox. Static discovery
 does not prove authentication or live acceptance; use the dispatch or live
@@ -143,25 +150,41 @@ it remains ambiguous or discovery is unavailable, ask for the exact model ID;
 do not turn a display name into a guessed alias. An explicit ID needs no such
 clarification just because it is absent from discovery.
 
+For planning, consultation, debate, or other external work that may need
+answers or guidance while it runs, read [active-task interaction](references/interaction.md)
+and use `--interactive` when supported. Answer known facts yourself; ask the
+user for missing preferences, authorization, or scope. Keep ordinary native
+subagents available under the same-harness rule above.
+
 ### 3. Prepare separate paths and a finite brief
 
 Use an existing task brief when one is supplied. Otherwise create a bounded
 brief file that contains the requested work and its acceptance criteria. Keep
 the state root outside the workspace and provider-writable trees (which can
-include the system temporary directory). Use `DELEGATE_ROOT` when supplied:
+include the system temporary directory). Use `DELEGATE_ROOT` when supplied.
 
 Run path preparation and dispatch in **one shell/tool invocation**, as shown
 below. Shell variables may disappear between tool calls. For later commands,
 use the actual saved absolute paths or assign them again in that invocation;
 never pass an empty `--root`, `--brief`, or `--cwd`.
 
-Replace the example brief below with the actual user request. Do not place the state
+Write the brief as the **worker’s own assignment**, not a copy of the
+orchestration request. For “consult another agent about X”, tell the worker
+“Investigate X and return your findings; you are the assigned worker, do not
+delegate this assignment.” Keep dispatching, answering questions, and
+collecting results in the lead session unless recursive delegation was
+explicitly requested.
+
+Replace the example brief below with that bounded worker assignment. Do not place the state
 root inside the workspace or place secrets in either path’s task data. Keep it
 outside provider configuration and runtime directories as well. If delegate
 rejects a caller-supplied state root, report the placement error rather than
-silently replacing that root. If no root was supplied, choose one outside the
-workspace and reuse it. Do not change provider settings. Retain the selected
-root for every observation and continuation.
+silently replacing that root. For every task command, use
+`--root "${DELEGATE_ROOT:-$HOME/delegation-state}"` as shown below. This reads the supplied root in each shell call and uses the
+same default when none was supplied; no root setup or new directory choice is
+needed. If the user explicitly requests another root, substitute that exact
+absolute path consistently. Do not change provider settings or switch roots
+when waiting, replying, steering, or continuing.
 
 ### 4. Dispatch one bounded turn
 
@@ -170,19 +193,22 @@ For a named harness or provider resolved in step 2, replace `--auto` with `--pro
 combine the two:
 
 ```sh
-STATE_ROOT="${DELEGATE_ROOT:-$HOME/delegation-state}"
 WORKSPACE="$PWD"
 BRIEF="$(mktemp)"
+RESPONSE="$(mktemp)"
 cat >"$BRIEF" <<'EOF'
 Describe the delegated task, the files or behavior to change, and the checks
 that must pass. Keep the response concise and report validation evidence.
 EOF
-delegate --root "$STATE_ROOT" dispatch --auto \
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
   --brief "$BRIEF" \
   --cwd "$WORKSPACE" \
   --permission read-only \
   --budget 30m \
-  --json
+  --json >"$RESPONSE"
+dispatch_exit=$?
+cat "$RESPONSE"
+printf '\nDispatch exit: %s; saved response: %s\n' "$dispatch_exit" "$RESPONSE"
 ```
 
 For an authorized code change, use `--permission workspace-write`; this requests
@@ -200,6 +226,12 @@ with `status` and `collect`. Use independent tool calls or separate response
 files, never background commands writing to the same stdout. Read
 [parallel reviews and debates](references/collaboration.md) when coordinating
 multiple participants or challenge rounds.
+
+Capture the response and exit status in the **original** dispatch invocation,
+as above. Read the saved response if you need it again. Never repeat dispatch
+to obtain its exit code, recover output, or confirm that it worked: each call
+can create new paid work. Once a response says `task_record: created`, save its
+`task_id` and switch to observation. A missing exit code does not undo admission.
 
 Save the exact `task_id` from the JSON response. Apply this decision separately
 for **each attempt**, including requests issued together:
@@ -219,16 +251,20 @@ never retry that uncertain ID or run Pueue commands.
 
 ### 5. Observe and collect
 
-Use the same state root and task ID:
+Use the same state root and task ID. Each command below resolves the root
+in its own shell call, so it does not depend on a previous shell variable:
 
 ```sh
-delegate --root "$STATE_ROOT" status TASK_ID --json
-delegate --root "$STATE_ROOT" collect TASK_ID --watch 5s --json
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" status TASK_ID --json
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 5s --json
 ```
 
 Check `status` first: if it is `timed_out`, follow step 6 even when publication
-is pending and no outcome is present. Otherwise, if `collect` exits with code
-`3` because publication is still pending, wait a short interval and run
+is pending and no outcome is present. If `interaction.pending_requests` is
+nonempty and the interaction is not closed, answer the questions using
+[active-task interaction](references/interaction.md) before collecting again.
+Otherwise, if `collect` exits with code `3` because publication is still
+pending, wait a short interval and run
 `collect` again. Do not dispatch again. Continue until
 the response has a terminal `outcome` or a bounded operational error that
 requires the caller’s attention.

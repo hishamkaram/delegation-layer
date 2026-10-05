@@ -3,6 +3,7 @@ package claude
 import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 // Description returns Claude's static request capabilities. Runtime
@@ -10,8 +11,9 @@ import (
 func Description() commonprovider.Description {
 	return commonprovider.Description{
 		ID:               Provider,
+		Interaction:      task.InteractionCapabilities{SupportedModes: []string{Mode, WorkspaceWriteMode}, Clarification: true},
 		SupportedModes:   []string{Mode, WorkspaceWriteMode},
-		SupportedOptions: []string{commonprovider.OptionContinuation, commonprovider.OptionEffort, commonprovider.OptionModel},
+		SupportedOptions: []string{commonprovider.OptionInteractive, commonprovider.OptionContinuation, commonprovider.OptionEffort, commonprovider.OptionModel},
 		Continuation:     commonprovider.ContinuationNative,
 		ReadOnly:         commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
 		Runtime:          RuntimeRequirements(),
@@ -32,6 +34,8 @@ func Registration() commonprovider.Registration {
 			newLegacyNativeWorkspaceWriteInterpreter(),
 			newLegacyPortableInterpreter(Mode), newLegacyPortableInterpreter(WorkspaceWriteMode),
 			newLegacyInterpreter(),
+			interactionInterpreter{mode: Mode},
+			interactionInterpreter{mode: WorkspaceWriteMode},
 		},
 	}
 }

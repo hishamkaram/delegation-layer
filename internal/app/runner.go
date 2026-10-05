@@ -212,7 +212,14 @@ func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, p
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	runResult := execution.Run(td, permit, profile.Plan, execution.Options{PreflightPlan: preflight, Stopper: stopper, Identity: identityObserver, Hooks: deps.ExecutionHooks})
+	var interaction execution.InteractionProtocol
+	if profile.Interaction != nil {
+		interaction, err = profile.Interaction(continuationExpectation(req), func(identity task.SessionIdentity) error { return td.RecordProviderIdentity(identity) })
+		if err != nil {
+			return failed(response, errors.Join(err, permit.Release()), 1)
+		}
+	}
+	runResult := execution.Run(td, permit, profile.Plan, execution.Options{Interaction: interaction, PreflightPlan: preflight, Stopper: stopper, Identity: identityObserver, Hooks: deps.ExecutionHooks})
 	if runResult.Outcome != nil {
 		response.Outcome = runResult.Outcome
 		response.Payload = &runResult.Outcome.Payload
