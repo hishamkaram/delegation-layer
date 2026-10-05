@@ -14,6 +14,9 @@ All paths passed to `--root`, `--cwd`, and `--brief` must be absolute. Add
 | `delegate status TASK --json` | Reconcile and observe task state | No provider launch |
 | `delegate collect TASK --watch 5s --json` | Read or wait for publication | No provider launch |
 | `delegate continue --task TASK ... --json` | Create an exact-session successor | Yes, at most once for the successor |
+| `delegate reply TASK --request ID --answers FILE --id MESSAGE_ID --json` | Answer a pending native question | No new launch |
+| `delegate steer TASK --brief FILE --id MESSAGE_ID --json` | Guide a supported active turn | No new launch |
+| `delegate events TASK --after SEQUENCE --watch 5s --json` | Read a bounded interaction event page | No |
 | `delegate logs TASK --json` | Return validated output descriptors | No |
 | `delegate cancel TASK --json` | Record one explicit stop request | Stops, does not relaunch |
 
@@ -30,9 +33,11 @@ Dispatch flags:
 - `--auto`: let the CLI select a ready provider;
 - `--provider ID`: preserve the caller’s named harness or provider, resolved through the catalog;
 - `--model MODEL` and `--effort VALUE`: provider-advertised choices (CCR requires a model alias);
-  Codex maps effort to TOML `model_reasoning_effort`, while Claude and AGY
+  Codex maps effort to TOML `model_reasoning_effort` for ordinary turns or a native
+  turn parameter for interactive turns, while Claude and AGY
   pass native effort flags; Pi maps effort to `--thinking`; OpenCode maps it to
   `--variant`; CCR forwards effort to Claude and uses `--model` as a CCR alias; `default` is omitted;
+- `--interactive`: enable advertised native clarification and steering; see [interaction](interaction.md);
 - `--native-timeout DURATION`: optional provider-native timeout where advertised.
 
 Model discovery uses the same `--provider ID` profiles and accepts an optional
@@ -47,7 +52,8 @@ Continuation flags:
 
 - `--task TASK`: predecessor task ID;
 - `--brief FILE`: optional new follow-up instruction;
-- `--budget DURATION`, `--model MODEL`, and `--effort VALUE`: optional overrides.
+- `--budget DURATION`, `--model MODEL`, and `--effort VALUE`: optional overrides;
+- `--interactive`: enable interaction when supported; already-interactive predecessors keep it.
 
 ## Choosing models and effort
 

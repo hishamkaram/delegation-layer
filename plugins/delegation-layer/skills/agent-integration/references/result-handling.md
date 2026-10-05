@@ -17,8 +17,10 @@ the same as a successful provider result.
    the result and its payload/evidence descriptors.
 5. If `outcome.verdict` is rejected, report a terminal rejected result with its
    refusal and evidence. Do not retry automatically.
-6. Otherwise, if `liveness` is queued or running or publication is pending,
-   observe the same task again with a finite watch interval.
+6. If `pending.kind` is `interaction`, handle the returned questions using
+   [interaction guidance](interaction.md) before waiting again. Otherwise, if
+   `liveness` is queued or running or publication is pending, observe the same
+   task with a finite watch interval.
 7. If authentication is `blocked`, preserve that neutral state and tell the
    caller what prerequisite is unavailable without inventing a login command.
 8. Never relaunch an uncertain task by guessing. Observe only a task whose

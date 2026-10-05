@@ -197,3 +197,23 @@ is `correct_request` only for known correctable request errors when no record
 was created; it is `check_status` whenever a record exists, and otherwise
 `stop_and_report`. The JSON response does not expose supervisor process
 diagnostics or private configuration paths.
+
+## Structured interaction within a turn
+
+An interactive task still owns one initial brief, one provider launch, one
+execution deadline, and one terminal outcome. The shared execution core owns a
+bounded stdio channel. Provider adapters only translate native protocol messages;
+they do not open terminals, start processes, or control stopping. Pueue retains
+process-stop authority.
+
+The runner records native questions in a private append-only interaction journal.
+`reply` and `steer` append immutable messages under its lock; they never contact a
+provider directly. Before writing a frame, the runner durably reserves its message
+ID. A crash after reservation leaves delivery uncertain and cannot cause a replay.
+Native receipts can improve delivery evidence but cannot establish task success.
+
+The native terminal event closes input. Capture continues through process exit,
+and the closed journal becomes sealed raw evidence with stdout and stderr.
+Cancellation and the original budget still apply while a question is outstanding.
+A subsequent conversational turn is a new linked task through `continue`, never a
+second launch of the original task. See [interactive commands](cli-reference.md#interactive-tasks).

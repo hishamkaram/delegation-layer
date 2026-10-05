@@ -18,8 +18,11 @@ This document defines the normative requirements for provider adapters
 Each native adapter locates its executable during static preparation and records
 the executable identity in the immutable candidate. The already-supervised
 inspection worker then verifies that the file is still executable, runs its
-version and help commands, and checks that every flag used in its command shape
-is advertised in help output before finalization and provider launch. Any
+version and help commands, and checks that public flags used in its command shape
+are advertised in help output before finalization and provider launch.
+Documented SDK protocol options that are absent from public help (Claude
+`--permission-prompt-tool stdio`) additionally require protocol fixtures and
+live handshake acceptance; public help alone does not prove native interaction. Any
 reported version that fits the bounded durable evidence record and its binary
 digest are recorded in the task evidence; a fresh
 launch may refresh provider runtime identity after the current capability
@@ -34,7 +37,13 @@ digest is compared with a checked-in value.
   Workspace-write requests unattended execution, including native automatic
   approval where available. Native access may extend beyond the workspace;
   remaining provider restrictions are reported, not repaired by the adapter.
-- **Input Delivery**: Brief text is delivered exclusively via finite regular file passed to child stdin, followed by immediate EOF. Brief text is never passed in argv. Brief size limit is 8 MiB.
+- **Input Delivery**: Ordinary tasks deliver the finite brief through a regular
+  file on stdin followed by EOF. Explicit interactive tasks use a core-owned
+  pipe carrying one initial brief and bounded native clarification/steering
+  frames. Adapters only encode and interpret frames. Brief text is never passed
+  in argv; its size limit remains 8 MiB. The original budget includes waiting
+  for interaction. Native completion closes stdin; only the supervisor stops
+  processes. No PTY or terminal scraping is permitted.
 - **Argv Construction**: Built strictly as Go string slices (`[]string`), executed directly via `exec.Command` without shell wrapper or reparsing.
 - **Model and Effort Selection**: `--model` and `--effort` are explicit bounded
   request fields for Codex, Claude, and AGY, in addition to profiles that
@@ -94,7 +103,7 @@ can execute it; dispatch remains the admission boundary.
 - **Success Criteria**:
   - Valid envelope structure (JSON/JSONL) with positive status and non-whitespace final response string.
   - Exact match of task and session identities (expected session matches provider-reported session).
-  - Absolute absence of timeout markers (e.g. `[agy] print timeout`), refusal envelopes, or error payloads.
+  - Absence of timeout markers (e.g. `[agy] print timeout`), refusal envelopes, or fatal error payloads. A documented native transient retry (such as Codex `willRetry: true`) still requires a later successful root completion; a non-retrying error cannot be erased by later success.
   - Nonzero exit code with a success-shaped body is treated as a conflicting completion and rejected.
 - **Continuation**:
   - Continuation tasks reference layer-recorded session handles from a predecessor with either a validated terminal outcome or durable supervisor-ended budget-stop evidence.
@@ -106,3 +115,20 @@ can execute it; dispatch remains the admission boundary.
 - Usage metrics are recorded with explicit scope: `task`, `conversation-cumulative`, `main-agent`, `whole-tree`, or `unknown`.
 - Missing or unreported fields remain null; they are never assumed to be zero.
 - Cumulative counters from successive turns are never conflated with single-turn usage unless explicitly calculated from verified endpoints.
+
+## Native interaction
+
+`codex:exec` uses app-server stdio for explicit interactive requests, including
+native question replies and `turn/steer` with an exact active-turn precondition.
+Its invocation opts into `default_mode_request_user_input`; this changes no
+user settings or permission mode. `claude:print` uses stream-json input and
+the documented SDK stdio host permission handler for `AskUserQuestion` only.
+It retains native permission mode and does not implement steering. Other
+adapters reject the interactive option and retain ordinary continuation.
+
+Replies never authorize other tools or change permissions. Unknown native
+permission requests are denied rather than converted to clarification.
+Delivery reservation is durable before writing; uncertain messages are never
+replayed. Native acknowledgement and completion of requested work remain
+separate facts. The core seals the closed interaction journal with stdout and
+stderr; outcome.json remains terminal authority.

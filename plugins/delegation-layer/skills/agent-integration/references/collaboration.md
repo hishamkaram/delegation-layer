@@ -19,14 +19,14 @@ RECEIPTS="$(mktemp -d)" || exit 1
 # Set these absolute paths and catalog IDs in this same tool invocation.
 # BRIEF_A and BRIEF_B contain the real independent assignments.
 (
-  delegate --root "$STATE_ROOT" dispatch --provider "$PROVIDER_A" \
+  delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --provider "$PROVIDER_A" \
     --brief "$BRIEF_A" --cwd "$WORKSPACE_A" \
     --permission read-only --budget 30m --json \
     >"$RECEIPTS/review-a.json" 2>"$RECEIPTS/review-a.stderr"
   printf '%s\n' "$?" >"$RECEIPTS/review-a.exit"
 ) &
 (
-  delegate --root "$STATE_ROOT" dispatch --provider "$PROVIDER_B" \
+  delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --provider "$PROVIDER_B" \
     --brief "$BRIEF_B" --cwd "$WORKSPACE_B" \
     --permission read-only --budget 30m --json \
     >"$RECEIPTS/review-b.json" 2>"$RECEIPTS/review-b.stderr"

@@ -17,7 +17,7 @@ When `status` or `collect` reports a timed-out turn with:
 run:
 
 ```sh
-delegate --root "$STATE_ROOT" continue \
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" continue \
   --task PREDECESSOR_TASK_ID \
   --brief FOLLOW_UP_BRIEF \
   --budget 30m \

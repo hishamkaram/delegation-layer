@@ -77,3 +77,16 @@ changed command flag, output contract, or authentication behavior can cause a
 task to be rejected until its adapter is updated. The runtime capability probe
 detects command and flag drift early, while the behavioral predicates protect
 the result boundary.
+
+## Interactive input
+
+Clarification replies are data for a specific pending question; they do not grant
+new permissions. Steering changes guidance within the existing task authority.
+Neither command changes model, workspace, permission, or deadline. Native tool
+approval requests are not exposed as questions or automatically approved by this
+protocol. Existing provider-native permission modes still apply.
+
+Question text, answers, and steering are stored in the private task journal and
+sealed evidence. Treat them as task content, including any sensitive content the
+caller supplies. An uncertain delivery is never automatically repeated. The
+interaction transport is bounded stdio, with no PTY or network listener.

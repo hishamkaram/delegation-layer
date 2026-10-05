@@ -37,6 +37,7 @@ var (
 )
 
 const (
+	OptionInteractive   = "interactive"
 	OptionContinuation  = "continuation"
 	OptionEffort        = "effort"
 	OptionModel         = "model"
@@ -84,6 +85,7 @@ type ReadOnlyCapability struct {
 // carries no process, pipe, stop, capture, sealing, collection, or publication
 // authority. The app runner owns those lifetimes after preparation returns.
 type PreparedProfile struct {
+	Interaction     func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.InteractionProtocol, error)
 	Plan            execution.Plan
 	ObservedVersion string
 	Effective       task.EffectiveConfig
@@ -122,6 +124,9 @@ func pathContains(parent, child string) bool {
 // It validates shape and identity only; the caller remains responsible for
 // process admission and launch.
 func (p PreparedProfile) Validate(request task.TaskRecord) error {
+	if request.RequestedConfig.Interactive != (p.Interaction != nil) {
+		return ErrUnsupportedOption
+	}
 	if err := validatePlanBindings(p.Plan); err != nil {
 		return err
 	}
@@ -275,14 +280,15 @@ type RuntimeCapability struct {
 // Description is the bounded metadata exposed by the providers command.
 // Discoverable controls whether this registration appears in that response.
 type Description struct {
-	ID               string             `json:"id"`
-	SupportedModes   []string           `json:"supported_modes"`
-	SupportedOptions []string           `json:"supported_options"`
-	RequiredOptions  []string           `json:"required_options,omitempty"`
-	Continuation     ContinuationMode   `json:"continuation"`
-	ReadOnly         ReadOnlyCapability `json:"read_only"`
-	Runtime          RuntimeCapability  `json:"runtime"`
-	Discoverable     bool               `json:"-"`
+	Interaction      task.InteractionCapabilities `json:"interaction"`
+	ID               string                       `json:"id"`
+	SupportedModes   []string                     `json:"supported_modes"`
+	SupportedOptions []string                     `json:"supported_options"`
+	RequiredOptions  []string                     `json:"required_options,omitempty"`
+	Continuation     ContinuationMode             `json:"continuation"`
+	ReadOnly         ReadOnlyCapability           `json:"read_only"`
+	Runtime          RuntimeCapability            `json:"runtime"`
+	Discoverable     bool                         `json:"-"`
 }
 
 // Registration is one explicit catalog entry. A nil Prepare function is

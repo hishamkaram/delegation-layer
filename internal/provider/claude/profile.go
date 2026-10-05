@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
@@ -76,6 +77,9 @@ func normalizeNativePreparationOptions(request task.TaskRecord, options nativePr
 	if options.permissionMode == nativeHistoricalPermission(request.Mode) {
 		expected = legacyNativeReferenceForMode(request.Mode)
 	}
+	if request.RequestedConfig.Interactive {
+		expected = interactionReference(request.Mode)
+	}
 	if options.predicateReference.Equal(task.PredicateRef{}) {
 		options.predicateReference = expected
 	} else if !options.predicateReference.Equal(expected) {
@@ -104,6 +108,10 @@ func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnviron
 	environment, err := prepareEnvironmentFn(environmentValues)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
+	}
+	if request.RequestedConfig.Interactive {
+		environment.Values = slices.DeleteFunc(environment.Values, func(value string) bool { return strings.HasPrefix(value, "CLAUDE_CODE_SDK_READS_SESSION_STATE=") })
+		environment.Values = append(environment.Values, "CLAUDE_CODE_SDK_READS_SESSION_STATE=1")
 	}
 	if len(recordedRoots) > 0 {
 		environment.WritableRoots = slices.Clone(recordedRoots)
@@ -346,6 +354,12 @@ func finalizeNativePreparedProfileWithContract(
 		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 			return NewIdentityObserver(request.RootID, request.TaskID, expected, record)
 		},
+	}
+	if request.RequestedConfig.Interactive {
+		prepared.Identity = nil
+		prepared.Interaction = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
+			return newClaudeInteraction(request, expected, record)
+		}
 	}
 	if err = prepared.Validate(request); err != nil {
 		return commonprovider.PreparedProfile{}, err

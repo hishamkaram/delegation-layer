@@ -47,9 +47,16 @@ func printArgumentsWithPermission(request task.TaskRecord, permissionMode string
 	if !nativePermissionAllowed(request.Mode, permissionMode) {
 		return nil, nil, fmt.Errorf("%w: unsupported Claude native permission mode %q", ErrUnsupportedProfile, permissionMode)
 	}
+	inputFormat, prompts := "text", "none"
+	if request.RequestedConfig.Interactive {
+		inputFormat, prompts = "stream-json", "host"
+	}
 	arguments := []string{
-		"--print", "--input-format", "text", "--output-format", "stream-json", "--verbose",
-		"--permission-mode", permissionMode, "--permission-prompts", "none",
+		"--print", "--input-format", inputFormat, "--output-format", "stream-json", "--verbose",
+		"--permission-mode", permissionMode, "--permission-prompts", prompts,
+	}
+	if request.RequestedConfig.Interactive {
+		arguments = append(arguments, "--permission-prompt-tool", "stdio")
 	}
 	arguments = appendModelArguments(arguments, request)
 	return appendSessionArguments(request, arguments, nil)

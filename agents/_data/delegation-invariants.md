@@ -11,7 +11,12 @@ This document establishes the normative operational invariants for the delegatio
 - **Replay & Idempotence**: Collection is purely observational and recovers existing sealed evidence; it may reconcile the saved supervisor binding to record termination for an already-requested budget stop, but it never launches, retries, or resumes paid provider work.
 
 ## 2. Task Identity and Turns
-- **One Task = One Turn**: A task represents exactly one provider turn.
+- **One Task = One Turn**: A task represents one initial user-request turn and
+  at most one provider launch. Explicit native clarification replies and
+  active-turn steering belong to that same task; they do not create another
+  initial user message, reset its budget, or grant another launch. Provider-owned
+  background-agent completion remains within the original invocation. A new
+  user-request turn requires a separate continuation task.
 - **Continuation by Reference**: Resuming or continuing a conversation creates a new task with a new unique task ID bound to an explicit layer-recorded session handle.
 - **Session Handoff**: A continuation may transfer a session claim after either a validated terminal outcome or a durable supervisor-ended observation for a budget stop. The budget-stop observation proves only that the predecessor turn ended for handoff; it never establishes task completion or replaces `outcome.json`.
 - **No Shared Mutability**: Original task records, identities, and results remain immutable and sealed. Launch count and execution metadata are preserved per task.

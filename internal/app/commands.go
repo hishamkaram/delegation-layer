@@ -256,6 +256,7 @@ func buildContinuationArguments(a Arguments, root string, predecessor *task.Task
 }
 
 func continuationConfig(requested, overrides task.TaskConfig) task.TaskConfig {
+	requested.Interactive = requested.Interactive || overrides.Interactive
 	if overrides.Budget != "" {
 		requested.Budget = overrides.Budget
 	}
@@ -837,6 +838,7 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	inspection, err := td.Inspect()
+	err = errors.Join(err, fillInspectedInteraction(&response, td, inspection))
 	fillInspection(&response, inspection)
 	if err != nil {
 		return failed(response, err, 1)
@@ -1171,7 +1173,7 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	deadline := time.Now().Add(a.Watch)
 	nextSupervisorReconcile := time.Time{}
 	for {
-		outcome, collectErr := collectAttempt(td, meta.Predicate)
+		outcome, collectErr := collectWithInteraction(td, meta.Predicate, &response)
 		if outcome != nil {
 			result := collectionResult(response, outcome, collectErr)
 			result = decorateCollectedTerminal(result, root, td, req, meta, deps.providerCatalog())
@@ -1194,6 +1196,10 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 		}
 		if terminalInspectionWithoutError(inspection, inspectErr) {
 			return commandResult{response: response, code: 0}
+		}
+		if interactionWaiting(response.Interaction) {
+			response.Pending = &PendingResponse{Kind: "interaction"}
+			return commandResult{response: response, code: 3}
 		}
 		if collectionWatchExpired(a.Watch, deadline) {
 			response.Pending = &PendingResponse{Kind: "publication"}

@@ -94,6 +94,9 @@ func (td *TaskDir) admittedRawNames() ([]string, error) {
 		return nil, err
 	}
 	names := []string{"stderr", "stdout"}
+	if meta.RequestedConfig.Interactive {
+		names = append(names, "interaction")
+	}
 	for _, output := range meta.OutputArtifacts {
 		exists, err := td.store.exists(filepath.Join(td.Dir, "raw", output.Name))
 		if err != nil {
@@ -112,6 +115,9 @@ func (td *TaskDir) validateManifestDeclarations(manifest []task.RawManifestEntry
 		return err
 	}
 	allowed := map[string]bool{"raw/stdout": true, "raw/stderr": true}
+	if meta.RequestedConfig.Interactive {
+		allowed["raw/interaction"] = true
+	}
 	for _, output := range meta.OutputArtifacts {
 		allowed["raw/"+output.Name] = true
 	}

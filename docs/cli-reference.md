@@ -10,7 +10,7 @@ or integrating a custom supervisor.
 delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
   (--auto | --provider PROFILE) --brief FILE --cwd ABS [--id TASK_ID] \
   [--permission MODE] [--budget DURATION] [--model MODEL] \
-  [--effort EFFORT] [--native-timeout DURATION] \
+  [--effort EFFORT] [--native-timeout DURATION] [--interactive] \
   [--resume-task PREDECESSOR_ID] [--json]
 
 delegate [--root ABS] providers [--json]
@@ -18,9 +18,12 @@ delegate [--root ABS] capabilities --provider PROFILE [--json]
 delegate [--root ABS] models --provider PROFILE [--cwd ABS] [--json]
 delegate [--root ABS] preflight --provider PROFILE --cwd ABS [--json]
 delegate [--root ABS] continue --task PREDECESSOR_ID [--brief FILE] \
-  [--budget DURATION] [--model MODEL] [--effort EFFORT] [--json]
+  [--budget DURATION] [--model MODEL] [--effort EFFORT] [--interactive] [--json]
 delegate [--root ABS] status TASK_ID [--json]
 delegate [--root ABS] collect TASK_ID [--watch DURATION] [--json]
+delegate [--root ABS] reply TASK_ID --request REQUEST_ID --answers FILE --id MESSAGE_ID [--json]
+delegate [--root ABS] steer TASK_ID --brief FILE --id MESSAGE_ID [--json]
+delegate [--root ABS] events TASK_ID [--after SEQUENCE] [--watch DURATION] [--json]
 delegate [--root ABS] logs TASK_ID [--json]
 delegate [--root ABS] cancel TASK_ID [--json]
 delegate help
@@ -66,6 +69,7 @@ paths must remain disjoint.
 | `--effort EFFORT` | Provider effort selector when the chosen profile advertises it. Codex writes TOML `model_reasoning_effort`; Claude and AGY pass their native effort flag; Pi maps it to `--thinking`; OpenCode maps it to `--variant`. `default` keeps the provider default and is omitted from native argv. |
 | `--native-timeout DURATION` | Antigravity's native print timeout, no greater than `--budget`. |
 | `--resume-task TASK_ID` | Exact predecessor for a continuation; creates a new task. |
+| `--interactive` | Enable native clarification and supported active-turn steering. Unsupported providers reject this option before admission. |
 | `--json` | Emit the versioned control response. |
 
 Raw provider arguments, token ceilings, and dollar ceilings are deliberately not
@@ -116,7 +120,7 @@ Discovery is metadata only. It does not inspect the host, authenticate a
 provider, contact Pueue, create state, or launch a process. During dispatch,
 the selected adapter locates its executable, verifies that it is a regular
 executable file, runs its version command, then runs its help command and
-checks that every required flag is advertised. Any valid nonempty version is
+checks the required public flags. Interactive protocols additionally validate their native handshake and event contract. Any valid nonempty version is
 accepted; valid means trimmed UTF-8 text without control characters, not a
 particular semantic-version pattern. A missing executable or required flag
 rejects the request. The
@@ -208,6 +212,68 @@ The dispatch response reports `status: "ready"` and
 identity have passed the shared probe. Version text is descriptive. Live
 acceptance is a separate gate: authenticated evidence is `passed`, while an
 unavailable authentication prerequisite is `blocked` and neutral.
+
+## Interactive tasks
+
+Use `dispatch --interactive` for a task that may need clarification while it is
+running. Discover `interaction.clarification`, `interaction.steering`, and
+`interaction.supported_modes` with `providers` or `capabilities`. These describe
+adapter support, not authentication or live readiness. Codex supports clarification
+and steering; Claude supports clarification. Other providers use ordinary
+`continue` turns and reject `--interactive`.
+
+`collect --watch` returns early with exit `3` and `pending.kind: "interaction"`
+when a native question is pending. Read `interaction.pending_requests`; each
+batch has a request ID and questions with IDs, text, options, and `multiple` and
+`free_text` flags. Answer every question in that batch in one JSON file:
+
+```json
+{"color": ["Blue"]}
+```
+
+Use the returned question IDs, not this example's ID. Send the answer with:
+
+```sh
+delegate reply TASK_ID --request REQUEST_ID --answers /absolute/answers.json \
+  --id 0123456789abcdef0123456789abcdef --json
+```
+
+Allocate a new 32-character lowercase hexadecimal message ID for each distinct
+message. Keep that ID and the file unchanged for a retry after a lost CLI
+response. Repeating the same ID and content returns its existing receipt;
+changing the content under that ID is a conflict. Do not resend an uncertain
+message with a new ID.
+
+`steer TASK_ID --brief FILE --id MESSAGE_ID --json` sends guidance to the current
+Codex turn. It cannot change the task's model, permission, workspace, or budget.
+For a new user turn, wait for completion and use `continue --task TASK_ID`.
+Continuation inherits interactive mode; `--interactive` can also enable it on a
+continuation of an ordinary task.
+
+Delivery states are `queued`, `unknown`, `sent`, `acknowledged`, and `rejected`.
+`unknown` means delivery was reserved but may or may not have reached the provider;
+it is never replayed. `sent` means the local pipe accepted the frame. Only an
+explicit native receipt establishes `acknowledged`; neither state proves the
+model followed the instruction. Codex question resolution alone is not an
+acknowledgement. The collected outcome remains the completion authority.
+
+`events --after SEQUENCE --watch 30s --json` returns a bounded event page and the
+next `cursor`. Persist that cursor before the next call. A positive watch only
+waits for observation; it never extends the task budget. Pages contain up to 100
+events and at most 512 KiB; the private journal is bounded to 8192 records and
+16 MiB, reserving room for closure. Each event, answer, or steering message must fit a 512 KiB record including its
+envelope. The full interaction state, including pending questions and delivery
+receipts, is limited to 256 KiB, with closure accounted for before admission.
+These bounds keep event pages and task observations inside the 1 MiB JSON
+response limit. Larger inputs fail explicitly before they enter the journal.
+
+Waiting for answers consumes the original execution budget. `interaction.deadline`
+reports the execution deadline once the native channel is ready. Cancellation,
+timeout, provider completion, or loss of the runner closes interaction. A crash
+never restarts the original provider. Use the reported continuation path when
+available. Questions and replies are private task evidence; the runner seals the
+closed interaction journal with the raw streams. This is a structured asynchronous
+protocol, not a terminal or arbitrary provider command interface.
 
 ## Observation commands
 

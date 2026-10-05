@@ -15,6 +15,7 @@ import (
 )
 
 type invocation struct {
+	interaction         *interactiveInvocation
 	td                  *taskdir.TaskDir
 	cmd                 *exec.Cmd
 	stdin               *os.File
@@ -56,6 +57,17 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 	if err != nil {
 		result.Error = errors.Join(err, i.discard())
 		return result
+	}
+	if request.RequestedConfig.Interactive != (opts.Interaction != nil) {
+		result.Error = errors.Join(task.ErrInteractionUnavailable, i.discard())
+		return result
+	}
+	if opts.Interaction != nil {
+		opts.Identity, err = i.prepareInteraction(opts.Interaction)
+		if err != nil {
+			result.Error = errors.Join(err, i.discard())
+			return result
+		}
 	}
 	return runPreparedInvocation(i, request.BudgetNanos, plan, opts, allowRuntimeRefresh)
 }
@@ -115,10 +127,19 @@ func finishInvocation(i *invocation, plan Plan, startErr error, opts Options) (r
 	if startErr == nil {
 		result.ReceiptError = recordStart(i.td, i, plan, opts)
 	}
+	if i.interaction != nil {
+		i.interaction.start(i.budget, opts.clock(), startErr)
+	}
 	result.Error = errors.Join(parentErr, i.finishCaptures(startErr))
-	i.budget.complete(opts)
+	if i.interaction == nil {
+		i.budget.complete(opts)
+	}
 	if opts.Identity != nil {
 		result.ReceiptError = errors.Join(result.ReceiptError, opts.Identity.Complete())
+	}
+	i.budget.complete(opts)
+	if i.interaction != nil {
+		result.Error = errors.Join(result.Error, i.td.SealInteraction())
 	}
 	if result.Error == nil {
 		result.Outcome, result.CleanupError, result.Error = sealAndPublish(i.td, i, plan, startErr, opts)
@@ -435,6 +456,11 @@ func observedWaitError(err error) error {
 
 func sealAndPublish(td *taskdir.TaskDir, i *invocation, plan Plan, startErr error, opts Options) (*task.OutcomeRecord, error, error) {
 	invocationState, exitCode, diagnostic := task.InvocationStarted, 0, ""
+	if i.interaction != nil && opts.Identity != nil {
+		if interactionErr := i.interaction.completionError(); interactionErr != nil {
+			diagnostic = "interactive protocol did not complete: " + interactionErr.Error()
+		}
+	}
 	if startErr != nil {
 		invocationState, exitCode, diagnostic = task.InvocationStartFailed, 1, startErr.Error()
 	} else if i.cmd.ProcessState != nil {

@@ -16,6 +16,10 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
+	MessageID   string
+	RequestID   string
+	Answers     string
+	After       uint64
 	Command     string
 	Root        string
 	PueueConfig string
@@ -85,7 +89,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "cancel", "logs":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "cancel", "logs", "reply", "steer", "events":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -104,8 +108,11 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		return
 	}
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
-	if a.Command == "collect" {
+	if a.Command == "collect" || a.Command == "events" {
 		fs.StringVar(watch, "watch", "0s", "finite observation bound")
+	}
+	if registerInteractionFlags(fs, a) {
+		return
 	}
 	if a.Command == "models" {
 		fs.StringVar(&a.Provider, "provider", "", "provider profile")
@@ -211,8 +218,11 @@ func (a *Arguments) validate(positional []string, watch string) error {
 		return a.validateContinue(positional)
 	case "dispatch":
 		return a.validateDispatch(positional)
-	case "status", "collect", "cancel", "logs":
-		return a.validateTaskCommand(positional, watch)
+	case "status", "collect", "cancel", "logs", "reply", "steer", "events":
+		if err := a.validateTaskCommand(positional, watch); err != nil {
+			return err
+		}
+		return a.validateInteractionArguments()
 	}
 	return nil
 }
@@ -325,4 +335,42 @@ func (a *Arguments) validateDispatchIDs() error {
 		return errors.New("automatic dispatch cannot resume a predecessor")
 	}
 	return nil
+}
+
+func (a *Arguments) validateInteractionArguments() error {
+	if a.Command != "reply" && a.Command != "steer" {
+		return nil
+	}
+	if err := task.ValidateTaskID(a.MessageID); err != nil {
+		return err
+	}
+	if a.Command == "reply" && (a.RequestID == "" || a.Answers == "") {
+		return errors.New("reply requires --request ID --answers FILE --id MESSAGE_ID")
+	}
+	if a.Command == "steer" && a.Brief == "" {
+		return errors.New("steer requires --brief FILE --id MESSAGE_ID")
+	}
+	return nil
+}
+
+func registerInteractionFlags(fs *flag.FlagSet, a *Arguments) bool {
+	if a.Command == "reply" || a.Command == "steer" {
+		fs.StringVar(&a.MessageID, "id", "", "idempotent message ID")
+		if a.Command == "reply" {
+			fs.StringVar(&a.RequestID, "request", "", "pending request ID")
+			fs.StringVar(&a.Answers, "answers", "", "answers JSON file")
+		} else {
+			fs.StringVar(&a.Brief, "brief", "", "steering brief file")
+		}
+		return true
+	}
+	if a.Command == "events" {
+		fs.Uint64Var(&a.After, "after", 0, "last observed event sequence")
+		return true
+	}
+	if a.Command == "dispatch" || a.Command == "continue" || a.Command == "preflight" {
+		fs.BoolVar(&a.Config.Interactive, "interactive", false, "enable native clarification and supported steering")
+	}
+
+	return false
 }

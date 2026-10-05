@@ -23,7 +23,7 @@ if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx 'package/skills/agent-integration/
     echo "ERROR: package archive does not contain the canonical agent skill." >&2
     exit 1
 fi
-for skill_file in references/command-reference.md references/result-handling.md references/continuation.md examples/read-only-task.md examples/workspace-write-task.md examples/json-results.md evals/evals.json; do
+for skill_file in references/interaction.md references/command-reference.md references/result-handling.md references/continuation.md examples/read-only-task.md examples/workspace-write-task.md examples/json-results.md evals/evals.json; do
     if ! tar -tzf "${PACKAGE_TARBALL}" | grep -Fx "package/skills/agent-integration/${skill_file}" >/dev/null; then
         echo "ERROR: package archive does not contain skill/${skill_file}." >&2
         exit 1

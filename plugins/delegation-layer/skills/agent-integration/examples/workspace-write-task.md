@@ -1,8 +1,7 @@
 # Authorized workspace write task
 
 ```sh
-STATE_ROOT="${DELEGATE_ROOT:-$HOME/delegation-state}"
-delegate --root "$STATE_ROOT" dispatch --auto \
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
   --brief "$PWD/delegated-task.md" --cwd "$PWD" \
   --permission workspace-write --budget 30m --json
 ```

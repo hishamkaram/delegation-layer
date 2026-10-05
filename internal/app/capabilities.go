@@ -7,6 +7,8 @@ import (
 	"io"
 	"slices"
 
+	"github.com/hishamkaram/delegation-layer/internal/task"
+
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
@@ -42,6 +44,7 @@ type CapabilityResponse struct {
 // agents. Runtime versions and executable digests are observations only; they
 // never authorize a release or replace behavioral checks.
 type CapabilityReport struct {
+	Interaction      task.InteractionCapabilities      `json:"interaction"`
 	Contract         string                            `json:"contract"`
 	Provider         string                            `json:"provider"`
 	Status           string                            `json:"status"`
@@ -128,6 +131,7 @@ func declaredCapability(description commonprovider.Description) CapabilityReport
 		SupportedOptions: cloneCapabilityStrings(description.SupportedOptions),
 		RequiredOptions:  cloneCapabilityStrings(description.RequiredOptions),
 		ReadOnly:         description.ReadOnly,
+		Interaction:      description.Interaction,
 		HelpArgs:         cloneCapabilityStrings(description.Runtime.HelpArgs),
 		RequiredFlags:    cloneCapabilityStrings(description.Runtime.RequiredFlags),
 		ReasonCode:       capabilityReasonNotRun,
@@ -172,6 +176,7 @@ func runtimeCapability(providerID string, candidate commonprovider.ProfileCandid
 		SupportedOptions: cloneCapabilityStrings(description.SupportedOptions),
 		RequiredOptions:  cloneCapabilityStrings(description.RequiredOptions),
 		ReadOnly:         description.ReadOnly,
+		Interaction:      description.Interaction,
 		ReasonCode:       capabilityReasonReady,
 		RequiredFlags:    cloneCapabilityStrings(runtime.RequiredFlags),
 		LiveAcceptance: LiveAcceptanceReport{

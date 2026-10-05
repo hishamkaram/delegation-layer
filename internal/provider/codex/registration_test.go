@@ -14,10 +14,21 @@ func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 		t.Fatalf("runtime capability metadata is missing: %+v", description)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || registration.PrepareExisting == nil || len(registration.Interpreters) != 3 {
+	if registration.Prepare == nil || registration.PrepareExisting == nil || len(registration.Interpreters) != 5 {
 		t.Fatalf("registration did not expose preparation and interpreter: %+v", registration)
 	}
 	if !registration.Interpreters[2].Reference().Equal(LegacyReference()) {
 		t.Fatalf("legacy predicate reference is not registered: %+v", registration.Interpreters[2].Reference())
+	}
+}
+
+func TestInteractionRegistration(t *testing.T) {
+	registration := Registration()
+	description := Description()
+	if !registration.Interpreters[3].Reference().Equal(interactionReference(Mode)) || !registration.Interpreters[4].Reference().Equal(interactionReference(WorkspaceWriteMode)) {
+		t.Fatal("interactive predicates missing")
+	}
+	if !description.Interaction.Clarification || description.Interaction.Steering != true {
+		t.Fatalf("wrong interaction capabilities: %+v", description.Interaction)
 	}
 }

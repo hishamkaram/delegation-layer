@@ -26,6 +26,11 @@ the harness asks. The plugin does not install provider CLIs or change provider
 authentication. If it reports a PATH repair, apply the reported PATH change
 and start a new session.
 
+In Codex, enabling the plugin alone does not trust its hooks. Review and trust
+its hooks in the startup prompt or `/hooks`; otherwise the skill is available
+but the shared startup guidance is skipped. A trusted routing hook supplies
+the exact installed skill path, so the agent does not need to guess cache paths.
+
 ## 1. Install the Agent Skill only
 
 Use the common Agent Skills installer from the project where your agent works:

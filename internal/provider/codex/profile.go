@@ -50,6 +50,9 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
 	}
 	predicateReference := profilePredicateReference(native, request.Mode, storedPredicate)
+	if request.RequestedConfig.Interactive {
+		predicateReference = interactionReference(request.Mode)
+	}
 	return commonprovider.ProfileCandidate{
 		Directory:     request.CanonicalCwd,
 		WritableRoots: slices.Clone(environment.WritableRoots),
@@ -61,6 +64,9 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 }
 
 func profileArguments(request task.TaskRecord, native bool) ([]string, int, error) {
+	if request.RequestedConfig.Interactive {
+		return []string{"app-server", "--listen", "stdio://", "--enable", "default_mode_request_user_input"}, -1, nil
+	}
 	if native {
 		return execArguments(request)
 	}
@@ -75,6 +81,9 @@ func historicalEffectiveConfig(request task.TaskRecord, environment profileEnvir
 }
 
 func profileRuntimeRequirements(request task.TaskRecord, native bool) commonprovider.RuntimeCapability {
+	if request.RequestedConfig.Interactive {
+		return commonprovider.RuntimeCapability{HelpArgs: []string{"app-server"}, RequiredFlags: []string{"--listen", "--enable"}}
+	}
 	if native {
 		return runtimeRequirementsForRequest(request, RuntimeRequirements())
 	}
@@ -105,6 +114,14 @@ func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments [
 		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 			return NewIdentityObserver(request.TaskID, expected, record)
 		},
+	}
+	if request.RequestedConfig.Interactive {
+		prepared.Plan.OutputArtifacts = nil
+		prepared.Plan.OutputWriterContract = ""
+		prepared.Identity = nil
+		prepared.Interaction = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
+			return newAppServerProtocol(request, expected, record)
+		}
 	}
 	if err := prepared.Validate(request); err != nil {
 		return commonprovider.PreparedProfile{}, err

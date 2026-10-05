@@ -33,6 +33,9 @@ func selectAutoProvider(deps Dependencies, root, rootID, taskID, cwd string, req
 	considered := 0
 	authenticationBlocked := true
 	for _, description := range providers {
+		if requested.Interactive && !slices.Contains(description.SupportedOptions, commonprovider.OptionInteractive) {
+			continue
+		}
 		if !slices.Contains(description.SupportedModes, requested.Permission) {
 			continue
 		}

@@ -20,6 +20,8 @@ already use instead of replacing them.
   and time budget.
 - **Recoverable results** — a later `collect` call can read a finished task
   without launching the provider again.
+- **Clarify while work runs** — answer native questions through Delegate; steer
+  an active Codex turn without restarting it. [Interactive tasks](docs/cli-reference.md#interactive-tasks).
 - **Resumable turns** — a durable timeout can continue the exact provider
   session through a linked successor task.
 - **Runtime compatibility** — the selected provider's executable and advertised
