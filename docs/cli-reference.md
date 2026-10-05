@@ -21,6 +21,7 @@ delegate [--root ABS] continue --task PREDECESSOR_ID [--brief FILE] \
   [--budget DURATION] [--model MODEL] [--effort EFFORT] [--interactive] [--json]
 delegate [--root ABS] status TASK_ID [--json]
 delegate [--root ABS] collect TASK_ID [--watch DURATION] [--json]
+delegate [--root ABS] recheck TASK_ID [--json]
 delegate [--root ABS] reply TASK_ID --request REQUEST_ID --answers FILE --id MESSAGE_ID [--json]
 delegate [--root ABS] steer TASK_ID --brief FILE --id MESSAGE_ID [--json]
 delegate [--root ABS] events TASK_ID [--after SEQUENCE] [--watch DURATION] [--json]
@@ -291,6 +292,27 @@ When a task has a committed outcome, that outcome is the terminal authority.
 Payload and sealed raw streams are returned as descriptors with rooted paths,
 byte sizes, and SHA-256 digests rather than copied into the control response.
 
+## Offline evidence recheck
+
+`recheck TASK_ID --json` reassesses an eligible rejected task using a newer,
+explicitly compatible provider interpreter. It reads the original validated
+outcome, seal, and complete evidence; it does not probe authentication, contact
+providers, start a supervisor, or launch another turn.
+
+The original outcome and evidence stay unchanged. A successful recheck returns
+`recheck.status: "recovered"`, a verified `answer` descriptor, and absolute
+`answer_path` and `report_path` values while the original
+`publication` remains `rejected`. A failed semantic reassessment returns
+`recheck.status: "rejected"`. Derived reports live under
+`rechecks/<assessment-id>/report.json`; a recovered answer is published before
+its report. The assessment identity binds the original outcome and seal hashes
+to the target predicate. Repeated requests reuse and validate that assessment.
+
+A rejected `collect` response offers `failure.next_action: "recheck"` only when
+an eligible interpretation is available and has not already been assessed.
+Otherwise report the rejection. Recovery does not change continuation eligibility.
+Do not treat a raw stdout file as a substitute answer.
+
 ## JSON responses and exit codes
 
 With `--json`, task-command responses contain `schema_version: 1`, the command
@@ -299,17 +321,19 @@ name, task identity when applicable, and separate `admission`, `liveness`, and
 states; `parent_task_id` identifies a continuation successor and
 `continuation` carries resumability metadata. The `providers` response is a
 separate catalog schema.
-An `outcome` is present only after it has passed the recorded provider
-predicate. Operational diagnostics appear in `error` and do not erase an
+An `outcome` is present only after its publication and evidence have been
+validated; its verdict may be committed or rejected. Bounded `diagnostics`
+explain new interpretation failures without copying raw provider content. Old
+outcomes remain readable and do not acquire an invented rejection cause. Operational diagnostics appear in `error` and do not erase an
 independently valid published outcome.
 
 | Exit code | Meaning |
 | --- | --- |
-| `0` | Command completed; collection returned a committed outcome when applicable. |
+| `0` | Command completed; collection returned a committed outcome, or recheck recovered an answer, when applicable. |
 | `1` | Operational, storage, supervisor-binding, or output error. |
 | `2` | Invalid request or unsupported profile/configuration. |
 | `3` | `collect` reached the end of its bounded watch interval without a terminal publication. |
-| `4` | Collection returned a valid rejected provider outcome. |
+| `4` | Collection returned a valid rejected provider outcome, or recheck still rejected the evidence. |
 
 All complete JSON responses are bounded. Oversized diagnostic text is shortened
 while authority fields and descriptors are retained.

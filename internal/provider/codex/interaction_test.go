@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -135,5 +136,71 @@ func TestAppServerSealedResultRequiresRootCompletion(t *testing.T) {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
 		})
+	}
+}
+
+func TestCurrentAppServerRecordPathStreamsLargeFinalAndIgnoresOpaqueToolData(t *testing.T) {
+	largeTool := strings.Repeat("tool-output-", task.MaxControlRecordSize/len("tool-output-")+2048)
+	largeFinal := strings.Repeat("final-answer-", 32*1024*1024/len("final-answer-")+3)
+	largeFinal = largeFinal[:32*1024*1024+11]
+	tool := fmt.Sprintf(`{"method":"item/completed","params":{"threadId":%q,"turnId":"turn-1","item":{"type":"webSearch","id":"a","id":"b","phase":"opaque-a","phase":"opaque-b","aggregatedOutput":%q}}}`, testThreadID, largeTool)
+	final := fmt.Sprintf(`{"method":"item/completed","params":{"threadId":%q,"turnId":"turn-1","item":{"type":"agentMessage","phase":"final_answer","text":%q}}}`, testThreadID, largeFinal)
+	complete := fmt.Sprintf(`{"method":"turn/completed","params":{"threadId":%q,"turn":{"id":"turn-1","status":"completed"}}}`, testThreadID)
+	stdout := []byte(strings.Join(append(append(append([]string{}, appServerSetup()...), tool), final, complete), "\n") + "\n")
+	seal := validSeal(stdout, nil)
+	seal.Predicate = interactionReference(Mode)
+	var answer bytes.Buffer
+	result, err := (interactionInterpreter{mode: Mode}).Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || result.Verdict != task.VerdictCommitted || answer.Len() != len(largeFinal) || answer.String() != largeFinal {
+		t.Fatalf("large app-server result=%+v answer=%d err=%v", result, answer.Len(), err)
+	}
+}
+
+func TestCurrentAppServerUnknownLifecycleCannotComplete(t *testing.T) {
+	lines := appServerSetup()
+	lines = append(lines,
+		fmt.Sprintf(`{"method":"turn/future","params":{"threadId":%q,"state":"completed"}}`, testThreadID),
+		fmt.Sprintf(`{"method":"item/completed","params":{"threadId":%q,"turnId":"turn-1","item":{"type":"agentMessage","phase":"final_answer","text":"answer"}}}`, testThreadID),
+		fmt.Sprintf(`{"method":"turn/completed","params":{"threadId":%q,"turn":{"id":"turn-1","status":"completed"}}}`, testThreadID),
+	)
+	stdout := []byte(strings.Join(lines, "\n") + "\n")
+	seal := validSeal(stdout, nil)
+	seal.Predicate = interactionReference(Mode)
+	var answer bytes.Buffer
+	result, err := (interactionInterpreter{mode: Mode}).Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || result.Verdict != task.VerdictRejected || answer.Len() != 0 {
+		t.Fatalf("unknown lifecycle result=%+v answer=%q err=%v", result, answer.String(), err)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != "incomplete_output" {
+		t.Fatalf("unknown lifecycle diagnostics=%+v", result.Diagnostics)
+	}
+}
+
+func TestHistoricalInteractiveV1RemainsReplayableAndCurrentRecoveryIsDeclared(t *testing.T) {
+	lines := appServerSetup()
+	lines = append(lines,
+		fmt.Sprintf(`{"method":"item/completed","params":{"threadId":%q,"turnId":"turn-1","item":{"type":"agentMessage","phase":"final_answer","text":"answer"}}}`, testThreadID),
+		fmt.Sprintf(`{"method":"turn/completed","params":{"threadId":%q,"turn":{"id":"turn-1","status":"completed"}}}`, testThreadID),
+	)
+	stdout := []byte(strings.Join(lines, "\n") + "\n")
+	old := newHistoricalInteractionInterpreter(Mode)
+	seal := validSeal(stdout, nil)
+	seal.Predicate = old.Reference()
+	var answer bytes.Buffer
+	result, err := old.Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || result.Verdict != task.VerdictCommitted || answer.String() != "answer" {
+		t.Fatalf("historical interactive result=%+v answer=%q err=%v", result, answer.String(), err)
+	}
+	current, ok := newInteractionInterpreter(Mode).(interface {
+		CanRecover(task.PredicateRef) bool
+		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
+	})
+	if !ok || !current.CanRecover(old.Reference()) {
+		t.Fatal("current interactive interpreter did not declare v1 recovery")
+	}
+	answer.Reset()
+	result, err = current.Recover(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || result.Verdict != task.VerdictCommitted || answer.String() != "answer" {
+		t.Fatalf("recovered interactive result=%+v answer=%q err=%v", result, answer.String(), err)
 	}
 }

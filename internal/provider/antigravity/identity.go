@@ -78,6 +78,7 @@ type identityScanner struct {
 	rawUTF8Need           int
 	conversationSeen      bool
 	key                   string
+	keyTooLong            bool
 	stopped               bool
 }
 
@@ -303,6 +304,10 @@ func (s *identityScanner) appendOrStop(r rune) {
 func (s *identityScanner) appendDecodedRune(r rune) bool {
 	var encoded [utf8.UTFMax]byte
 	n := utf8.EncodeRune(encoded[:], r)
+	if s.stringKind == identityStringKey && (s.keyTooLong || len(s.stringBytes)+n > maxSmallFieldBytes) {
+		s.keyTooLong = true
+		return true
+	}
 	if len(s.stringBytes)+n > maxSmallFieldBytes {
 		return false
 	}
@@ -397,6 +402,7 @@ func (s *identityScanner) feedStructuralValueByte(b byte) {
 func (s *identityScanner) beginString(kind identityStringKind) {
 	s.inString, s.stringKind = true, kind
 	s.escaped = false
+	s.keyTooLong = false
 	s.stringBytes = s.stringBytes[:0]
 	s.stringEscape = identityEscapeNone
 	s.unicodeValue, s.unicodeDigits = 0, 0
@@ -408,6 +414,9 @@ func (s *identityScanner) finishString() {
 	switch s.stringKind {
 	case identityStringKey:
 		s.key = string(s.stringBytes)
+		if s.keyTooLong {
+			s.key = ""
+		}
 		s.expectingKey, s.expectingColon = false, true
 	case identityStringConversation:
 		s.wantConversationValue = false

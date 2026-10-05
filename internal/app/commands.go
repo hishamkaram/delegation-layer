@@ -10,6 +10,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -887,10 +888,99 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	return commandResult{response: response, code: 0}
 }
 
+func recheck(a Arguments, deps storeDependencies) (result commandResult) {
+	response := newResponse("recheck")
+	root, err := resolveRoot(a.Root)
+	if err != nil {
+		return failed(response, err, 2)
+	}
+	store, err := openStore(root, deps, false)
+	if err != nil {
+		code := 1
+		if errors.Is(err, task.ErrUnsupportedSchema) {
+			code = 2
+		}
+		return failed(response, err, code)
+	}
+	defer func() { mergeCommandClose(&result, store.Close) }()
+	td, err := store.OpenTask(a.TaskID)
+	if err != nil {
+		code := 1
+		if errors.Is(err, os.ErrNotExist) {
+			code = 2
+		}
+		return failed(response, err, code)
+	}
+	defer func() { mergeCommandClose(&result, td.Close) }()
+	response.RootID, response.TaskID = store.RootID, a.TaskID
+	return recheckTask(response, td, deps.registry())
+}
+
+func recheckTask(response Response, td *taskdir.TaskDir, registry predicate.Registry) commandResult {
+	inspection, err := td.Inspect()
+	fillInspection(&response, inspection)
+	if err != nil {
+		code := 1
+		if errors.Is(err, task.ErrUnsupportedSchema) {
+			code = 2
+		}
+		return failed(response, err, code)
+	}
+	if inspection == nil || inspection.Outcome == nil || inspection.Publication != task.PublicationRejected || inspection.Outcome.Verdict != task.VerdictRejected {
+		return failed(response, task.ErrRecheckNotRejected, 2)
+	}
+	interpreter, err := registry.ResolveRecovery(inspection.Outcome.Predicate)
+	if err != nil {
+		return failed(response, err, 2)
+	}
+	assessment, err := td.Recheck(interpreter)
+	if err != nil {
+		code := 1
+		if errors.Is(err, predicate.ErrRecoveryUnsupported) || errors.Is(err, predicate.ErrRecoveryAmbiguous) || errors.Is(err, task.ErrRecheckNotRejected) || errors.Is(err, task.ErrUnsupportedSchema) {
+			code = 2
+		}
+		return failed(response, err, code)
+	}
+	response.Recheck = recheckResponse(assessment, td.Dir)
+	response.Error = ""
+	response.Failure = nil
+	response.Diagnostics = nil
+	applyOutputDiagnostics(&response, assessment.Report.Diagnostics)
+	if assessment.Report.Status == task.RecheckStatusRecovered {
+		return commandResult{response: response, code: 0}
+	}
+	return commandResult{response: response, code: 4}
+}
+
+func recheckResponse(result *taskdir.RecheckResult, taskPath string) *RecheckResponse {
+	if result == nil || result.Report == nil {
+		return nil
+	}
+	report := result.Report
+	response := &RecheckResponse{
+		Status:               report.Status,
+		AssessmentID:         report.AssessmentID,
+		SourceOutcomeSHA256:  report.SourceOutcomeSHA256,
+		SourceSealSHA256:     report.SourceSealSHA256,
+		SourceEvidenceSHA256: report.SourceEvidenceSHA256,
+		SourcePredicate:      report.SourcePredicate,
+		Target:               report.TargetPredicate,
+		ReportPath:           filepath.Join(taskPath, result.ReportPath),
+		Diagnostics:          task.CloneOutputDiagnostics(report.Diagnostics),
+	}
+	if report.Result != nil {
+		answer := *report.Result
+		response.Answer = &answer
+		response.AnswerPath = filepath.Join(taskPath, result.AnswerPath)
+	}
+	return response
+}
+
 func collectionResult(response Response, outcome *task.OutcomeRecord, collectErr error) commandResult {
 	response.Outcome = outcome
 	response.Payload = &outcome.Payload
 	response.EvidenceSHA256 = outcome.EvidenceSHA256
+	applyOutputDiagnostics(&response, outcome.Diagnostics)
 	if outcome.Verdict == task.VerdictCommitted {
 		response.Publication = task.PublicationCommitted.String()
 		if collectErr != nil {
@@ -913,6 +1003,26 @@ func collectionInspectionResult(response Response, inspection *taskdir.TaskInspe
 		collectErr = nil
 	}
 	return collectionResult(response, inspection.Outcome, errors.Join(collectErr, inspectErr, descriptorErr)), true
+}
+
+// decorateRejectedRecovery makes a rejected publication actionable without
+// changing its terminal authority. The offer is deliberately advisory: an
+// unavailable, ambiguous, already-assessed, or corrupt recovery target falls
+// back to stop_and_report and never turns collection into a re-evaluation.
+func decorateRejectedRecovery(result commandResult, td *taskdir.TaskDir, registry predicate.Registry) commandResult {
+	if result.response.Publication != task.PublicationRejected.String() || result.response.Outcome == nil || result.err != nil {
+		return result
+	}
+	failure := DispatchFailureResponse{Code: "provider_output_rejected", Stage: "collect", NextAction: "stop_and_report"}
+	interpreter, err := registry.ResolveRecovery(result.response.Outcome.Predicate)
+	if err == nil && td != nil {
+		available, availabilityErr := td.RecheckAvailable(interpreter)
+		if availabilityErr == nil && available {
+			failure.NextAction = "recheck"
+		}
+	}
+	result.response.Failure = &failure
+	return result
 }
 
 func releaseCollectedContinuation(result commandResult, td *taskdir.TaskDir, req *task.TaskRecord, outcome *task.OutcomeRecord) commandResult {
@@ -1177,7 +1287,8 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 		if outcome != nil {
 			result := collectionResult(response, outcome, collectErr)
 			result = decorateCollectedTerminal(result, root, td, req, meta, deps.providerCatalog())
-			return releaseCollectedContinuation(result, td, req, outcome)
+			result = releaseCollectedContinuation(result, td, req, outcome)
+			return decorateRejectedRecovery(result, td, deps.registry())
 		}
 		var supervisorErr error
 		nextSupervisorReconcile, supervisorErr = reconcileCollectionTimeoutIfActive(a.Watch, deadline, nextSupervisorReconcile, root, td, req, meta, deps, &response)
@@ -1187,7 +1298,8 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 		response.Raw = descriptors
 		if terminal, handled := collectionInspectionResult(response, inspection, collectErr, inspectErr, descriptorErr); handled {
 			terminal = decorateCollectedTerminal(terminal, root, td, req, meta, deps.providerCatalog())
-			return releaseCollectedContinuation(terminal, td, req, terminal.response.Outcome)
+			terminal = releaseCollectedContinuation(terminal, td, req, terminal.response.Outcome)
+			return decorateRejectedRecovery(terminal, td, deps.registry())
 		}
 		timeoutErr := applyTimeoutContinuationOnce(&timeoutAnnotated, &response, root, td, req, meta, deps.providerCatalog())
 		combinedErr := errors.Join(collectErr, inspectErr, descriptorErr, supervisorErr, timeoutErr)

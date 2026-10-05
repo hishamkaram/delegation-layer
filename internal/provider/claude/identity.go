@@ -12,6 +12,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -120,6 +121,56 @@ func (o *identityObserver) Observe(data []byte) {
 	o.framer.Feed(data)
 }
 
+// ObserveRecord is the current record-aware identity path. It validates only
+// the session-bearing system/init controls and retains no native record data.
+func (o *identityObserver) ObserveRecord(value providerjson.Value) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.done {
+		return o.completeErr
+	}
+	event, err := decodeClaudeCurrentEvent(value)
+	if err != nil {
+		return err
+	}
+	return o.observeCurrentRecord(event)
+}
+
+func (o *identityObserver) observeCurrentRecord(event claudeCurrentEvent) error {
+	if rawSession, present := event.fields["session_id"]; present {
+		sessionID, sessionErr := rawSession.String(128)
+		if sessionErr != nil || !validSessionID(sessionID) || sessionID != o.expected {
+			return errors.New("claude event session identity conflicts with expected session")
+		}
+	}
+	if event.typeName != "system" {
+		return nil
+	}
+	subtype, present, err := claudeCurrentOptionalString(event.fields, "subtype", 128)
+	if err != nil {
+		return errors.New("claude system subtype is invalid")
+	}
+	if !present || subtype != "init" {
+		return nil
+	}
+	if o.seen {
+		return errors.New("multiple Claude system/init events")
+	}
+	sessionID, err := claudeCurrentRequiredString(event.fields, "session_id", 128)
+	if err != nil || !validSessionID(sessionID) {
+		return errors.New("claude system/init session_id is not a UUID")
+	}
+	o.seen = true
+	o.sessionID = sessionID
+	if sessionID == o.expected && o.callbackErr == nil {
+		o.callbackErr = o.record(task.SessionIdentity{Provider: o.providerID, ConversationID: sessionID})
+		if o.callbackErr != nil {
+			o.callbackErr = fmt.Errorf("recording Claude session identity: %w", o.callbackErr)
+		}
+	}
+	return o.callbackErr
+}
+
 // Complete flushes a final unterminated line and freezes observation. The
 // callback is deliberately allowed before completion so the runner can retain
 // the provider reference even when later evidence rejects publication.
@@ -186,4 +237,7 @@ func sessionMatchesExpectation(rootID, taskID string, expected task.SessionExpec
 	return err == nil && sessionID == expectedID
 }
 
-var _ execution.IdentityObserver = (*identityObserver)(nil)
+var (
+	_ execution.IdentityObserver       = (*identityObserver)(nil)
+	_ execution.RecordIdentityObserver = (*identityObserver)(nil)
+)

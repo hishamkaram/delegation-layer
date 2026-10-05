@@ -30,11 +30,14 @@ const (
 
 	// predicateVersion identifies the current interpreter contract, independent
 	// of the installed Pi CLI release.
-	predicateVersion       = "4"
-	historicalPredicateV3  = "3"
-	historicalPredicateV2  = "2"
-	legacyPredicateVersion = "1"
-	Version                = predicateVersion
+	// v4 is retained for the pre-issue47 current parser. Fresh tasks use v5,
+	// which keeps offsets and text digests instead of retaining native blobs.
+	predicateVersion        = "4"
+	currentPredicateVersion = "5"
+	historicalPredicateV3   = "3"
+	historicalPredicateV2   = "2"
+	legacyPredicateVersion  = "1"
+	Version                 = currentPredicateVersion
 )
 
 const readOnlyTools = "read,grep,find,ls"
@@ -76,6 +79,20 @@ func workspaceContractForVersion(version string) string {
 	return strings.Replace(contract, "agent_end in order; auto_retry_start", "agent_end in order; message events may occur between turn_start and turn_end; auto_retry_start", 1)
 }
 
+func readOnlyContractV5Current() string {
+	contract := strings.Replace(readOnlyContractV4Current(), `"version":"4"`, `"version":"5"`, 1)
+	contract = strings.Replace(contract, "malformed or oversized JSONL", "malformed JSONL or invalid relevant control values", 1)
+	contract = strings.Replace(contract, "or more than 1024 retained usage rows", "usage is optional and unreliable; malformed usage is ignored", 1)
+	return contract
+}
+
+func workspaceContractV5Current() string {
+	contract := strings.Replace(workspaceContractForVersion(predicateVersion), `"version":"4"`, `"version":"5"`, 1)
+	contract = strings.Replace(contract, "malformed or oversized JSONL", "malformed JSONL or invalid relevant control values", 1)
+	contract = strings.Replace(contract, "or more than 1024 retained usage rows", "usage is optional and unreliable; malformed usage is ignored", 1)
+	return contract
+}
+
 func readOnlyContractV4Current() string {
 	return strings.Replace(readOnlyContractV4, "agent_end in order; auto_retry_start", "agent_end in order; message events may occur between turn_start and turn_end; auto_retry_start", 1)
 }
@@ -89,9 +106,9 @@ func Contract(mode ...string) string {
 	}
 	switch selected {
 	case ModeReadOnly:
-		return readOnlyContractV4Current()
+		return readOnlyContractV5Current()
 	case ModeWorkspaceWrite:
-		return workspaceContractForVersion(predicateVersion)
+		return workspaceContractV5Current()
 	default:
 		return ""
 	}
@@ -108,7 +125,7 @@ func ContractDigest(mode ...string) string {
 
 // ReferenceForMode returns the exact predicate reference for one Pi mode.
 func ReferenceForMode(mode string) task.PredicateRef {
-	return referenceForVersion(mode, predicateVersion)
+	return referenceForVersion(mode, currentPredicateVersion)
 }
 
 // Reference returns the read-only predicate for compatibility with provider
@@ -134,6 +151,14 @@ func workspaceWriteV3Reference() task.PredicateRef {
 	return referenceForVersion(ModeWorkspaceWrite, historicalPredicateV3)
 }
 
+func readOnlyV4Reference() task.PredicateRef {
+	return referenceForVersion(ModeReadOnly, predicateVersion)
+}
+
+func workspaceWriteV4Reference() task.PredicateRef {
+	return referenceForVersion(ModeWorkspaceWrite, predicateVersion)
+}
+
 func referenceForVersion(mode, version string) task.PredicateRef {
 	contract := contractForVersion(mode, version)
 	if contract == "" {
@@ -143,19 +168,31 @@ func referenceForVersion(mode, version string) task.PredicateRef {
 }
 
 func contractForVersion(mode, version string) string {
-	switch {
-	case mode == ModeReadOnly && version == legacyPredicateVersion:
+	switch mode {
+	case ModeReadOnly:
+		return readOnlyContractForVersion(version)
+	case ModeWorkspaceWrite:
+		if version == currentPredicateVersion {
+			return workspaceContractV5Current()
+		}
+		return workspaceContractForVersion(version)
+	default:
+		return ""
+	}
+}
+
+func readOnlyContractForVersion(version string) string {
+	switch version {
+	case legacyPredicateVersion:
 		return legacyContractV1
-	case mode == ModeReadOnly && version == historicalPredicateV2:
+	case historicalPredicateV2:
 		return readOnlyContractV2
-	case mode == ModeReadOnly && version == historicalPredicateV3:
+	case historicalPredicateV3:
 		return readOnlyContractV3
-	case mode == ModeReadOnly && version == predicateVersion:
+	case predicateVersion:
 		return readOnlyContractV4Current()
-	case mode == ModeWorkspaceWrite && version == historicalPredicateV3:
-		return workspaceContractForVersion(historicalPredicateV3)
-	case mode == ModeWorkspaceWrite && version == predicateVersion:
-		return workspaceContractForVersion(predicateVersion)
+	case currentPredicateVersion:
+		return readOnlyContractV5Current()
 	default:
 		return ""
 	}

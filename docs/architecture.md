@@ -135,6 +135,24 @@ are payload evidence referenced by validated descriptors. Collection can replay
 that publication without requiring the provider or supervisor to remain
 available.
 
+## Native output and derived recovery
+
+The core owns captured files and callback-scoped readers. Provider adapters
+interpret bounded views of records, selecting the fields their completion
+contract uses and streaming answer text into core-owned staging. Unused tool
+payloads and metadata are skipped without retaining an entire native event.
+JSON syntax remains validated; consumed identity and completion fields remain
+unambiguous. Optional accounting cannot veto an otherwise valid answer.
+
+Historical predicate revisions remain registered for reproducible collection.
+New tasks select corrected revisions. Explicit `recheck` uses a separate
+adapter-declared recovery interface with the original sealed input unchanged;
+it never substitutes a newer reference into the old seal. The task store
+verifies the source records and complete evidence, then publishes a derived
+answer and immutable report under `rechecks/`. Payload publication precedes
+report publication. The original terminal outcome remains authoritative for
+task lifecycle and continuation, even when a derived answer is recovered.
+
 ## One turn and continuation
 
 Each task has one immutable request and at most one provider launch attempt. A

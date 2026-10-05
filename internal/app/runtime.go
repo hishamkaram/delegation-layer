@@ -51,6 +51,7 @@ Commands:
   models        Discover native model IDs and effort choices
   status        Observe admission, liveness, and publication
   collect       Recover or read the immutable publication
+  recheck       Re-evaluate a rejected task from sealed local evidence
   reply         Answer an outstanding native clarification request
   steer         Send guidance to a supported active native turn
   events        Read interaction events, optionally with a bounded watch
@@ -73,7 +74,7 @@ Interactive tasks:
   steer ID --brief FILE --id MESSAGE_ID --json
   events ID [--after SEQUENCE] [--watch DURATION] --json
 
-Use --json on task, providers, capabilities, models, preflight, and continue commands for the versioned response.
+Use --json on task, providers, capabilities, models, preflight, continue, and recheck commands for the versioned response.
 `
 
 // Dependencies is the explicit composition boundary for production and the
@@ -172,6 +173,8 @@ type Response struct {
 	Capability     *CapabilityReport         `json:"capability,omitempty"`
 	Continuation   *ContinuationResponse     `json:"continuation,omitempty"`
 	Failure        *DispatchFailureResponse  `json:"failure,omitempty"`
+	Diagnostics    []task.OutputDiagnostic   `json:"diagnostics,omitempty"`
+	Recheck        *RecheckResponse          `json:"recheck,omitempty"`
 	Error          string                    `json:"error,omitempty"`
 	ErrorTruncated bool                      `json:"error_truncated,omitempty"`
 }
@@ -193,6 +196,22 @@ type ContinuationResponse struct {
 	PredecessorID   string `json:"predecessor_task_id,omitempty"`
 	ContinueCommand string `json:"continue_command,omitempty"`
 	Reason          string `json:"reason,omitempty"`
+}
+
+// RecheckResponse describes one immutable offline assessment while retaining
+// the source task's original outcome and publication fields in Response.
+type RecheckResponse struct {
+	Status               string                  `json:"status"`
+	AssessmentID         string                  `json:"assessment_id"`
+	SourceOutcomeSHA256  string                  `json:"source_outcome_sha256"`
+	SourceSealSHA256     string                  `json:"source_seal_sha256"`
+	SourceEvidenceSHA256 string                  `json:"source_evidence_sha256"`
+	SourcePredicate      task.PredicateRef       `json:"source_predicate"`
+	Target               task.PredicateRef       `json:"target"`
+	ReportPath           string                  `json:"report_path"`
+	Diagnostics          []task.OutputDiagnostic `json:"diagnostics,omitempty"`
+	Answer               *task.PayloadDescriptor `json:"answer,omitempty"`
+	AnswerPath           string                  `json:"answer_path,omitempty"`
 }
 
 type SupervisorResponse struct {
@@ -307,6 +326,8 @@ func runCommand(a Arguments, deps Dependencies) commandResult {
 		return status(a, deps)
 	case "collect":
 		return collect(a, deps.storeDependencies())
+	case "recheck":
+		return recheck(a, deps.storeDependencies())
 	case "cancel":
 		return cancel(a, deps)
 	case "reply", "steer", "events":
@@ -349,6 +370,14 @@ func writeHumanResponse(w io.Writer, response Response) error {
 	if response.Payload != nil {
 		fmt.Fprintf(&output, "payload=%s length=%d sha256=%s\n", response.Payload.Basename, response.Payload.Length, response.Payload.SHA256)
 	}
+	writeHumanOutputDiagnostics(&output, response.Diagnostics)
+	if response.Recheck != nil {
+		fmt.Fprintf(&output, "recheck status=%s assessment_id=%s report=%s", response.Recheck.Status, response.Recheck.AssessmentID, response.Recheck.ReportPath)
+		if response.Recheck.AnswerPath != "" {
+			fmt.Fprintf(&output, " answer=%s", response.Recheck.AnswerPath)
+		}
+		output.WriteByte('\n')
+	}
 	for _, descriptor := range response.Raw {
 		fmt.Fprintf(&output, "raw path=%s available=%t sealed=%t", descriptor.Path, descriptor.Available, descriptor.Sealed)
 		if descriptor.Size != nil {
@@ -369,6 +398,22 @@ func writeHumanResponse(w io.Writer, response Response) error {
 		return err
 	}
 	return writeAll(w, []byte(output.String()))
+}
+
+func writeHumanOutputDiagnostics(output *strings.Builder, diagnostics []task.OutputDiagnostic) {
+	for _, diagnostic := range diagnostics {
+		fmt.Fprintf(output, "diagnostic code=%s message=%s", diagnostic.Code, diagnostic.Message)
+		if diagnostic.Field != "" {
+			fmt.Fprintf(output, " field=%s", diagnostic.Field)
+		}
+		if diagnostic.Event != 0 {
+			fmt.Fprintf(output, " event=%d", diagnostic.Event)
+		}
+		if diagnostic.Offset != 0 {
+			fmt.Fprintf(output, " offset=%d", diagnostic.Offset)
+		}
+		output.WriteByte('\n')
+	}
 }
 
 func writeHumanStop(output *strings.Builder, prefix string, stop StopResponse) {
@@ -457,6 +502,12 @@ func truncateDiagnostics(response Response, budget int) Response {
 		stop.Message, truncated = truncateDiagnostic(response.Stop.Message, budget)
 		stop.MessageTruncated = response.Stop.MessageTruncated || truncated
 		candidate.Stop = &stop
+	}
+	if response.Diagnostics != nil {
+		candidate.Diagnostics = append([]task.OutputDiagnostic(nil), response.Diagnostics...)
+		for i := range candidate.Diagnostics {
+			candidate.Diagnostics[i].Message, _ = truncateDiagnostic(response.Diagnostics[i].Message, budget)
+		}
 	}
 	return candidate
 }
@@ -920,6 +971,22 @@ func fillInspection(response *Response, insp *taskdir.TaskInspection) {
 		payload := insp.Outcome.Payload
 		response.Payload = &payload
 		response.EvidenceSHA256 = insp.Outcome.EvidenceSHA256
+		applyOutputDiagnostics(response, insp.Outcome.Diagnostics)
+	}
+}
+
+func applyOutputDiagnostics(response *Response, diagnostics []task.OutputDiagnostic) {
+	if response == nil || len(diagnostics) == 0 {
+		return
+	}
+	response.Diagnostics = task.CloneOutputDiagnostics(diagnostics)
+	rejected := response.Outcome != nil && response.Outcome.Verdict == task.VerdictRejected
+	if response.Recheck != nil {
+		rejected = response.Recheck.Status == task.RecheckStatusRejected
+	}
+	if rejected && response.Error == "" {
+		first := diagnostics[0]
+		response.Error = first.Code + ": " + first.Message
 	}
 }
 

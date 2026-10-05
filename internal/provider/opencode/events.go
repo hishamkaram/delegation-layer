@@ -23,19 +23,27 @@ const (
 )
 
 type eventState struct {
-	sessionID          string
-	sessionSeen        bool
-	stepStarted        bool
-	stepActive         bool
-	terminal           bool
-	providerFail       bool
-	semanticErr        error
-	answer             []byte
-	stepAnswer         []byte
-	stepAnswerSeen     bool
-	terminalAnswer     []byte
-	terminalAnswerSeen bool
-	usage              []*usageTotals
+	current              bool
+	sessionID            string
+	sessionSeen          bool
+	stepStarted          bool
+	stepActive           bool
+	terminal             bool
+	providerFail         bool
+	semanticErr          error
+	answer               []byte
+	stepAnswer           []byte
+	stepAnswerSeen       bool
+	terminalAnswer       []byte
+	terminalAnswerSeen   bool
+	usage                []*usageTotals
+	currentStepText      opencodeTextSummary
+	currentTerminalText  opencodeTextSummary
+	currentStepStart     int64
+	currentTerminalStart int64
+	currentTerminalEnd   int64
+	currentUsagePresent  bool
+	currentUsageReliable bool
 }
 
 type parsedEvent struct {
@@ -56,7 +64,7 @@ func (s eventState) semanticFault() bool { return s.semanticErr != nil }
 // parseStdout drains the complete stream while retaining only bounded parser
 // state. Once a semantic fault is found, later bytes are still consumed so the
 // execution core can close and seal the provider invocation deterministically.
-func parseStdout(reader io.Reader) (eventState, error) {
+func parseHistoricalStdout(reader io.Reader) (eventState, error) {
 	state := newEventState()
 	semanticErr, readErr := commonprovider.ReadJSONL(reader, maxEventLineBytes, func(line []byte) error {
 		return processEventLine(&state, line)

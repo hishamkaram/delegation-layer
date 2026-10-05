@@ -57,7 +57,8 @@ func existingNativePreparationOptions(request task.TaskRecord, meta task.MetaRec
 }
 
 func nativePermissionForReference(mode string, reference task.PredicateRef) string {
-	if reference.Equal(ReferenceForMode(mode)) {
+	if reference.Equal(ReferenceForMode(mode)) || reference.Equal(historicalNativeReferenceForMode(mode)) ||
+		reference.Equal(interactionReference(mode)) || reference.Equal(historicalInteractionReference(mode)) {
 		return nativeDefaultPermission(mode)
 	}
 	if reference.Equal(legacyNativeReferenceForMode(mode)) {
@@ -74,15 +75,18 @@ func normalizeNativePreparationOptions(request task.TaskRecord, options nativePr
 		return nativePreparationOptions{}, fmt.Errorf("%w: unsupported stored Claude native permission mode %q", ErrUnsupportedProfile, options.permissionMode)
 	}
 	expected := ReferenceForMode(request.Mode)
+	historical := historicalNativeReferenceForMode(request.Mode)
 	if options.permissionMode == nativeHistoricalPermission(request.Mode) {
 		expected = legacyNativeReferenceForMode(request.Mode)
+		historical = expected
 	}
 	if request.RequestedConfig.Interactive {
 		expected = interactionReference(request.Mode)
+		historical = historicalInteractionReference(request.Mode)
 	}
 	if options.predicateReference.Equal(task.PredicateRef{}) {
 		options.predicateReference = expected
-	} else if !options.predicateReference.Equal(expected) {
+	} else if !options.predicateReference.Equal(expected) && !options.predicateReference.Equal(historical) {
 		return nativePreparationOptions{}, fmt.Errorf("%w: stored Claude native predicate does not match permission mode", ErrUnsupportedProfile)
 	}
 	return options, nil
@@ -358,7 +362,7 @@ func finalizeNativePreparedProfileWithContract(
 	if request.RequestedConfig.Interactive {
 		prepared.Identity = nil
 		prepared.Interaction = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
-			return newClaudeInteraction(request, expected, record)
+			return newClaudeInteractionWithCapture(request, expected, record, options.predicateReference.Equal(interactionReference(request.Mode)))
 		}
 	}
 	if err = prepared.Validate(request); err != nil {

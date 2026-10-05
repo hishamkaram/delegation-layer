@@ -100,7 +100,7 @@ func TestFinalizeRequiresBothRuntimeAndForwardedFacts(t *testing.T) {
 		if factsErr != nil {
 			t.Fatal(factsErr)
 		}
-		profile, finalErr := finalize(request, args, permission, cli, []string{"HOME=/home/test"}, []string{"/tmp"}, facts)
+		profile, finalErr := finalize(request, args, permission, cli, []string{"HOME=/home/test"}, []string{"/tmp"}, Reference(request.Mode), facts)
 		if !verified {
 			if finalErr == nil {
 				t.Fatal("missing forwarded facts accepted")

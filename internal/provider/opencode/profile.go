@@ -115,6 +115,9 @@ func validateLegacyPreparation(request task.TaskRecord, environment profileEnvir
 
 func candidatePredicateReference(mode string, native bool, meta *task.MetaRecord) task.PredicateRef {
 	if native {
+		if meta != nil && meta.Predicate.Equal(historicalReferenceForMode(mode)) {
+			return meta.Predicate
+		}
 		return ReferenceForMode(mode)
 	}
 	if meta != nil && meta.Predicate != (task.PredicateRef{}) {
@@ -126,7 +129,7 @@ func candidatePredicateReference(mode string, native bool, meta *task.MetaRecord
 func candidateFinalizer(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, native bool, predicateReference task.PredicateRef) func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
 	if native {
 		return func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
-			return finalizeCandidate(request, arguments, launchEnvironment, cli, environment, data)
+			return finalizeCandidate(request, arguments, launchEnvironment, cli, environment, predicateReference, data)
 		}
 	}
 	return func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
@@ -137,7 +140,7 @@ func candidateFinalizer(request task.TaskRecord, arguments, launchEnvironment []
 // finalizeCandidate accepts only the supervised runtime facts needed by the
 // current native profile. Native OpenCode policy is intentionally not projected
 // into admission facts.
-func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, data json.RawMessage) (commonprovider.PreparedProfile, error) {
+func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, predicateReference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
 	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
 	if decodeErr != nil || facts.Runtime == nil || facts.Native != nil {
 		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
@@ -157,7 +160,7 @@ func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []s
 	prepared := commonprovider.PreparedProfile{
 		Plan: execution.Plan{
 			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: cloneArguments(arguments), Directory: request.CanonicalCwd,
-			Environment: slices.Clone(launchEnvironment), Predicate: ReferenceForMode(request.Mode),
+			Environment: slices.Clone(launchEnvironment), Predicate: predicateReference,
 		},
 		ObservedVersion: runtime.Version,
 		Effective:       task.CloneEffectiveConfig(effective),

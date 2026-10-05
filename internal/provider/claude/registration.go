@@ -30,12 +30,16 @@ func Registration() commonprovider.Registration {
 		PrepareExisting: PrepareExistingCandidate,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(Mode), NewInterpreter(WorkspaceWriteMode),
+			newHistoricalNativeInterpreter(Mode),
+			newHistoricalNativeInterpreter(WorkspaceWriteMode),
 			newLegacyNativeInterpreter(),
 			newLegacyNativeWorkspaceWriteInterpreter(),
 			newLegacyPortableInterpreter(Mode), newLegacyPortableInterpreter(WorkspaceWriteMode),
 			newLegacyInterpreter(),
 			interactionInterpreter{mode: Mode},
 			interactionInterpreter{mode: WorkspaceWriteMode},
+			interactionInterpreter{mode: Mode, historical: true},
+			interactionInterpreter{mode: WorkspaceWriteMode, historical: true},
 		},
 	}
 }

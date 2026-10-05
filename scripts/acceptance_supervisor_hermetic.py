@@ -1507,7 +1507,7 @@ class HermeticSuite:
             provider_kwargs={"scenario": "parent_exit", "provider_hold": True, "child_lifetime_ms": 5000},
             budget="1s",
         )
-        self.run_case("B05", run_b05, hook="start-delayed", budget="100ms")
+        self.run_case("B05", run_b05, hook="start-delayed", budget="1s")
         self.run_case("B06-complete-first", run_b06_complete_first)
         self.run_case(
             "B06-expire-first",
@@ -1520,7 +1520,7 @@ class HermeticSuite:
             run_b07,
             hook="publication-delayed",
             provider_kwargs={"scenario": "hold", "provider_hold": True, "lifetime_ms": 5000},
-            budget="100ms",
+            budget="1s",
         )
         self.run_case("C01-mismatch", run_c01_mismatch)
         self.run_case("C02-valid", run_c02_valid)
@@ -2539,7 +2539,9 @@ def run_b05(case):
     case.dispatch_dynamic()
     case.set_status("running")
     runner = case.start_runner(expected=(0, 1))
-    case.wait_event("start-entry")
+    # start-entry precedes preflight. This case tests expiry during an
+    # already-authorized native Start, not expiry before launch authorization.
+    case.wait_event("start-authorized")
     case.wait_path(case.task_dir() / "stop" / "budget.request.json", timeout=5)
     require_true(case.start_release is not None, "start delayed case lacks release")
     case.release(case.start_release)

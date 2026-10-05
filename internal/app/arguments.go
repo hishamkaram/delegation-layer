@@ -89,7 +89,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "cancel", "logs", "reply", "steer", "events":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -223,8 +223,18 @@ func (a *Arguments) validate(positional []string, watch string) error {
 			return err
 		}
 		return a.validateInteractionArguments()
+	case "recheck":
+		return a.validateRecheck(positional)
 	}
 	return nil
+}
+
+func (a *Arguments) validateRecheck(positional []string) error {
+	if len(positional) != 1 {
+		return errors.New("exactly one task ID is required")
+	}
+	a.TaskID = positional[0]
+	return task.ValidateTaskID(a.TaskID)
 }
 
 func validateNoPositional(command string, positional []string) error {

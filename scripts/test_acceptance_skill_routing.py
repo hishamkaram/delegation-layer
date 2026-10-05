@@ -21,14 +21,16 @@ class RoutingTests(unittest.TestCase):
         self.addCleanup(home.stop)
         self.case = {"name": "review", "prompt": "Ask Codex for a review.", "external": True}
 
-    def receipt(self):
-        run = self.root / "review-1"
+    def receipt(self, case=None, mode="live", fixture_scenario=None):
+        case = self.case if case is None else case
+        run = self.root / (case["name"] + "-1")
         run.mkdir()
         (run / "stdout.txt").write_text('tool call evidence\n')
         gate.write_json(run / "receipt.json", {
-            "status": "unreviewed", "case": self.case, "harness": "codex", "repetition": 1,
-            "mode": "live", "model_requested": None, "budget_seconds": 180,
+            "status": "unreviewed", "case": case, "harness": "codex", "repetition": 1,
+            "mode": mode, "model_requested": None, "budget_seconds": 180,
             "candidate": gate.candidate_digests(),
+            "fixture_scenario": fixture_scenario,
             "stdout.txt_sha256": gate.digest(run / "stdout.txt")})
         return run
 
@@ -218,6 +220,54 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(json.loads((self.root / "calls.jsonl").read_text().splitlines()[-1]), argv)
         return stopped.exception.code, stdout.getvalue(), stderr.getvalue()
 
+    def synthetic_fixture(self, scenario, argv, result, candidate=True):
+        fixture = self.root / "synthetic-fixture"
+        fixture.mkdir(exist_ok=True)
+        state = self.root / "synthetic-state"
+        state.mkdir(exist_ok=True)
+        workspace = self.root / "synthetic-workspace"
+        workspace.mkdir(exist_ok=True)
+        brief = self.root / "synthetic-brief.txt"
+        brief.write_text("finite routing brief\n")
+        delegate = self.root / "synthetic-delegate"
+        if candidate:
+            delegate.write_text("candidate delegate\n")
+            delegate.chmod(0o700)
+            delegate_sha256 = gate.digest(delegate)
+        else:
+            if delegate.exists():
+                delegate.unlink()
+            delegate_sha256 = None
+        (fixture / "runtime.json").write_text(json.dumps({
+            "delegate": str(delegate), "path": "/private/path",
+            "delegate_sha256": delegate_sha256, "scenario": scenario,
+            "provider": "codex:exec",
+        }))
+        stdout, stderr = io.StringIO(), io.StringIO()
+        environment = {"DELEGATE_ROUTING_FIXTURE": str(fixture),
+                       "DELEGATE_ROOT": str(state)}
+        with patch.dict(gate.os.environ, environment), \
+                patch.object(gate.sys, "argv", ["delegate", *argv]), \
+                patch("subprocess.run", return_value=result) as run, \
+                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as stopped:
+                runpy.run_path(str(gate.REPO / "scripts/skill_routing_delegate_fixture.py"), run_name="__main__")
+        return stopped.exception.code, json.loads(stdout.getvalue()), stderr.getvalue(), run
+
+    def synthetic_dispatch_argv(self, state=None):
+        state = self.root / "synthetic-state" if state is None else state
+        return ["--root", str(state), "dispatch", "--provider", "codex:exec",
+                "--brief", str(self.root / "synthetic-brief.txt"),
+                "--cwd", str(self.root / "synthetic-workspace"),
+                "--permission", "read-only", "--budget", "30s", "--json"]
+
+    def synthetic_task_id(self):
+        return json.loads((self.root / "synthetic-fixture/routing-state.json").read_text())["task_id"]
+
+    def synthetic_task_argv(self, command, task_id=None):
+        task_id = self.synthetic_task_id() if task_id is None else task_id
+        return ["--root", str(self.root / "synthetic-state"), command, task_id, "--json"]
+
     def test_fixture_preserves_actual_cli_responses(self):
         cases = [
             (["--root", "/state", "providers", "--json"], 0, '{"providers": []}\n', ""),
@@ -248,6 +298,121 @@ class RoutingTests(unittest.TestCase):
             payload = json.dumps(dict(response, **change))
             self.assertEqual(self.run_fixture(["models", "--json"],
                              Mock(returncode=code, stdout=payload, stderr="")), (code, payload, ""))
+
+    def test_recoverable_synthetic_fixture_binds_one_dispatch_and_one_recheck(self):
+        scenario = "recoverable-rejection"
+        normal = lambda command: Mock(
+            returncode=2,
+            stdout=json.dumps({"command": command, "failure": {
+                "code": "provider_preparation_failed",
+                "stage": "prepare-provider",
+                "next_action": "stop_and_report"}}),
+            stderr="")
+        code, dispatch, stderr, _ = self.synthetic_fixture(
+            scenario, self.synthetic_dispatch_argv(), normal("dispatch"))
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(dispatch["task_record"], "created")
+        self.assertEqual(dispatch["fixture"]["source"], "synthetic-routing-evidence")
+        self.assertEqual(dispatch["fixture"]["provider_execution"], "not_run")
+        task_id = self.synthetic_task_id()
+
+        code, terminal, stderr, _ = self.synthetic_fixture(
+            scenario, self.synthetic_task_argv("status", task_id), normal("status"))
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(terminal["publication"], "rejected")
+        self.assertEqual(terminal["outcome"]["verdict"], "rejected")
+        self.assertEqual(terminal["failure"]["next_action"], "recheck")
+
+        code, recovered, stderr, _ = self.synthetic_fixture(
+            scenario, self.synthetic_task_argv("recheck", task_id), normal("recheck"))
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(recovered["publication"], "rejected")
+        self.assertEqual(recovered["outcome"]["verdict"], "rejected")
+        self.assertEqual(recovered["recheck"]["status"], "recovered")
+        self.assertEqual(recovered["recheck"]["assessment_id"],
+                         json.loads((self.root / "synthetic-fixture/routing-state.json").read_text())["assessment_id"])
+        self.assertEqual(recovered["recheck"]["answer"]["basename"], "result.txt")
+        self.assertTrue(recovered["recheck"]["answer"]["sha256"])
+        answer_path = Path(recovered["recheck"]["answer_path"])
+        self.assertTrue(answer_path.is_absolute())
+        self.assertEqual(gate.digest(answer_path), recovered["recheck"]["answer"]["sha256"])
+        self.assertEqual(answer_path.stat().st_size, recovered["recheck"]["answer"]["length"])
+        self.assertTrue(Path(recovered["recheck"]["report_path"]).is_file())
+        self.assertNotIn("raw", json.dumps(recovered))
+
+        code, duplicate, stderr, _ = self.synthetic_fixture(
+            scenario, self.synthetic_task_argv("recheck", task_id), normal("recheck"))
+        self.assertEqual(code, 2)
+        self.assertEqual(stderr, "")
+        self.assertEqual(duplicate["failure"]["next_action"], "stop_and_report")
+        state = json.loads((self.root / "synthetic-fixture/routing-state.json").read_text())
+        self.assertEqual((state["dispatch_count"], state["recheck_count"]), (1, 1))
+        self.assertTrue(state["sealed_evidence"]["sealed"])
+        self.assertFalse(state["sealed_evidence"]["raw_content_returned"])
+        events = [json.loads(line) for line in
+                  (self.root / "synthetic-fixture/routing-events.jsonl").read_text().splitlines()]
+        self.assertEqual([event["action"] for event in events],
+                         ["dispatch", "status", "recheck", "duplicate-recheck"])
+        self.assertEqual({event["root"] for event in events}, {str(self.root / "synthetic-state")})
+        self.assertEqual({event["task_id"] for event in events}, {task_id})
+
+    def test_still_rejected_synthetic_fixture_uses_rejection_exit_and_no_answer(self):
+        scenario = "still-rejected-recheck"
+        normal = lambda command: Mock(returncode=2, stdout=json.dumps({"command": command}), stderr="")
+        self.synthetic_fixture(scenario, self.synthetic_dispatch_argv(), normal("dispatch"))
+        task_id = self.synthetic_task_id()
+        self.synthetic_fixture(scenario, self.synthetic_task_argv("collect", task_id), normal("collect"))
+        code, rejected, stderr, _ = self.synthetic_fixture(
+            scenario, self.synthetic_task_argv("recheck", task_id), normal("recheck"))
+        self.assertEqual(code, 4)
+        self.assertEqual(stderr, "")
+        self.assertEqual(rejected["publication"], "rejected")
+        self.assertEqual(rejected["outcome"]["verdict"], "rejected")
+        self.assertEqual(rejected["recheck"]["status"], "rejected")
+        self.assertNotIn("answer", rejected["recheck"])
+        self.assertNotIn("answer_path", rejected["recheck"])
+
+    def test_synthetic_fixture_preserves_invalid_requests_and_missing_delegate(self):
+        scenario = "recoverable-rejection"
+        invalid = Mock(returncode=2, stdout=json.dumps({
+            "command": "dispatch",
+            "failure": {"code": "invalid_request", "next_action": "correct_request"},
+        }), stderr="")
+        argv = ["--root", str(self.root / "synthetic-state"), "dispatch",
+                "--provider", "codex:exec", "--json"]
+        code, response, _, _ = self.synthetic_fixture(scenario, argv, invalid)
+        self.assertEqual((code, response), (2, json.loads(invalid.stdout)))
+        self.assertFalse((self.root / "synthetic-fixture/routing-state.json").exists())
+
+        missing = Mock(returncode=2, stdout=json.dumps({"command": "dispatch"}), stderr="")
+        code, response, _, _ = self.synthetic_fixture(
+            scenario, self.synthetic_dispatch_argv(), missing, candidate=False)
+        self.assertEqual((code, response), (2, json.loads(missing.stdout)))
+        self.assertFalse((self.root / "synthetic-fixture/routing-state.json").exists())
+
+    def test_synthetic_fixture_rejects_a_different_root_or_task(self):
+        scenario = "recoverable-rejection"
+        normal = lambda command: Mock(returncode=2, stdout=json.dumps({"command": command}), stderr="")
+        self.synthetic_fixture(scenario, self.synthetic_dispatch_argv(), normal("dispatch"))
+        task_id = self.synthetic_task_id()
+        different_root = self.root / "different-state"
+        different_root.mkdir()
+        wrong_root = ["--root", str(different_root), "recheck", task_id, "--json"]
+        code, response, _, _ = self.synthetic_fixture(scenario, wrong_root, normal("recheck"))
+        self.assertEqual((code, response), (2, {"command": "recheck"}))
+        state = json.loads((self.root / "synthetic-fixture/routing-state.json").read_text())
+        self.assertEqual(state["recheck_count"], 0)
+
+    def test_changed_fixture_scenario_cannot_reuse_a_routing_receipt(self):
+        case = dict(self.case, name="recovery", fixture_scenario="recoverable-rejection")
+        run = self.receipt(case, mode="routing", fixture_scenario="recoverable-rejection")
+        self.judgment(run)
+        changed = dict(case, fixture_scenario="still-rejected-recheck")
+        with self.assertRaisesRegex(ValueError, "receipt selection mismatch"):
+            gate.summarize(self.root, [changed], 1, "codex", mode="routing")
 
     def test_supervised_deadline_stops_only_owned_queue(self):
         owner = object.__new__(gate.AttemptSupervisor)
@@ -314,12 +479,19 @@ class RoutingTests(unittest.TestCase):
     def test_suite_is_balanced_with_fixed_holdout(self):
         cases = gate.read_json(gate.CASES)["cases"]
         self.assertEqual(len({c["name"] for c in cases}), len(cases))
+        holdouts = [c for c in cases if c.get("holdout")]
+        self.assertEqual({c["name"] for c in holdouts}, {
+            "recheck-recoverable", "recheck-still-rejected",
+            "external-collaboration-holdout"})
+        self.assertEqual({c.get("fixture_scenario") for c in holdouts},
+                         {None, "recoverable-rejection", "still-rejected-recheck"})
+        self.assertTrue(all(c["external"] and c["split"] == "validation" for c in holdouts))
         regressions = [c for c in cases if c.get("regression")]
         self.assertEqual({c["name"] for c in regressions}, {
             "requested-model-effort", "ambiguous-model", "parallel-receipts",
             "subagent-external", "explicit-bypass"})
         self.assertEqual(sum(c["external"] for c in regressions), 4)
-        cases = [c for c in cases if not c.get("regression")]
+        cases = [c for c in cases if not c.get("regression") and not c.get("holdout")]
         ccr_cases = [c for c in cases if c["name"].startswith("ccr-")]
         self.assertEqual(len(ccr_cases), 6)
         self.assertTrue(any(not c["external"] for c in ccr_cases))

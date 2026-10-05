@@ -172,3 +172,21 @@ func TestClaudeInteractionSealedResultRequiresSettledSuccessfulRoot(t *testing.T
 		})
 	}
 }
+
+func TestCurrentClaudeInteractionStreamsLargeRecordAndWarnsOnUsage(t *testing.T) {
+	largeOpaque := strings.Repeat("opaque", (task.MaxControlRecordSize/6)+4096)
+	result := resultLine(claudeTestUUID, "interactive answer")
+	result = strings.Replace(result, `,"session_id":`, fmt.Sprintf(`,"opaque":%q,"session_id":`, largeOpaque), 1)
+	result = strings.Replace(result, `"input_tokens":12`, `"input_tokens":-1`, 1)
+	stdout := []byte(strings.Join([]string{initLine(claudeTestUUID), result, `{"type":"system","subtype":"session_state_changed","state":"idle"}`}, "\n"))
+	var answer bytes.Buffer
+	interpreter := interactionInterpreter{mode: Mode}
+	input := predicate.Input{Seal: claudeTestSealForPredicate(stdout, interpreter.Reference()), ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}
+	interpretation, err := interpreter.Evaluate(input, &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "interactive answer" {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+	if len(interpretation.Diagnostics) != 1 || interpretation.Diagnostics[0].Code != "optional_usage_unavailable" || strings.Contains(interpretation.Diagnostics[0].Message, "opaque") {
+		t.Fatalf("interaction diagnostics=%+v", interpretation.Diagnostics)
+	}
+}

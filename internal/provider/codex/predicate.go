@@ -21,8 +21,9 @@ const (
 )
 
 type interpreter struct {
-	mode   string
-	legacy bool
+	mode              string
+	legacy            bool
+	historicalRuntime bool
 }
 
 // NewInterpreter returns the immutable Codex exec JSONL interpreter.
@@ -39,6 +40,10 @@ func newLegacyInterpreter() predicate.Interpreter {
 	return interpreter{mode: Mode, legacy: true}
 }
 
+func newHistoricalRuntimeInterpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, historicalRuntime: true}
+}
+
 // NewWorkspaceWriteInterpreter returns the Codex interpreter bound to the
 // native workspace-write sandbox contract.
 func NewWorkspaceWriteInterpreter() predicate.Interpreter {
@@ -49,6 +54,9 @@ func (v interpreter) Reference() task.PredicateRef {
 	if v.legacy {
 		return LegacyReference()
 	}
+	if v.historicalRuntime {
+		return historicalRuntimeReferenceForMode(v.mode)
+	}
 	if v.mode == WorkspaceWriteMode {
 		return WorkspaceWriteReference()
 	}
@@ -56,6 +64,13 @@ func (v interpreter) Reference() task.PredicateRef {
 }
 
 func (v interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
+	if !v.legacy && !v.historicalRuntime {
+		return evaluateCurrentInterpreter(v, input, raw, out)
+	}
+	return v.evaluateHistorical(input, raw, out)
+}
+
+func (v interpreter) evaluateHistorical(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
 	if err := validateEvaluationInput(v, input, raw, out); err != nil {
 		return task.Interpretation{}, err
 	}

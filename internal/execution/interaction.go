@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -27,6 +28,7 @@ type interactiveInvocation struct {
 	input        *os.File
 	brief        []byte
 	chunks       chan []byte
+	records      chan providerjson.Value
 	outbound     chan interactionFrame
 	written      chan string
 	protocolDone chan struct{}
@@ -67,7 +69,7 @@ func (i *invocation) prepareInteraction(protocol InteractionProtocol) (IdentityO
 	i.stdin = reader
 	i.interaction = &interactiveInvocation{
 		td: i.td, protocol: protocol, input: writer, brief: brief,
-		chunks: make(chan []byte, 16), outbound: make(chan interactionFrame, 16), written: make(chan string, 16),
+		records: make(chan providerjson.Value, 16), chunks: make(chan []byte, 16), outbound: make(chan interactionFrame, 16), written: make(chan string, 16),
 		protocolDone: make(chan struct{}), writerDone: make(chan struct{}), closerDone: make(chan struct{}), done: make(chan struct{}),
 	}
 	return i.interaction, nil
@@ -82,6 +84,14 @@ func (c *interactiveInvocation) Observe(data []byte) {
 	case c.chunks <- copyData:
 	case <-c.protocolDone:
 	}
+}
+
+func (c *interactiveInvocation) ObserveRecord(v providerjson.Value) error {
+	select {
+	case c.records <- v:
+	case <-c.protocolDone:
+	}
+	return nil
 }
 
 func (c *interactiveInvocation) start(budget *budgetOwner, clock Clock, startErr error) {
@@ -135,6 +145,9 @@ func (c *interactiveInvocation) writeFrames() {
 
 func (c *interactiveInvocation) Complete() error {
 	close(c.chunks)
+	if c.records != nil {
+		close(c.records)
+	}
 	<-c.done
 	return errors.Join(c.completionError(), c.flushWritten())
 }
@@ -162,28 +175,34 @@ func (c *interactiveInvocation) run() error {
 	}
 	timer := c.clock.NewTimer(interactionPollInterval)
 	defer func() { timer.Stop() }()
-	for {
+	chunks, records := c.chunks, c.records
+	for chunks != nil || records != nil {
 		select {
 		case <-c.budget.workContext.Done():
 			return nil
-		case data, ok := <-c.chunks:
+		case v, ok := <-records:
 			if !ok {
-				return c.endStream()
+				records = nil
+				continue
 			}
-			if err = c.consume(data); err != nil {
-				return err
+			err = c.consumeRecord(v)
+		case data, ok := <-chunks:
+			if !ok {
+				chunks = nil
+				continue
 			}
+			err = c.consume(data)
 		case id := <-c.written:
-			if err = c.recordSent(id); err != nil {
-				return err
-			}
+			err = c.recordSent(id)
 		case <-timer.C():
-			if err = c.pollInbox(); err != nil {
-				return err
-			}
+			err = c.pollInbox()
 			timer = c.clock.NewTimer(interactionPollInterval)
 		}
+		if err != nil {
+			return err
+		}
 	}
+	return c.endStream()
 }
 
 func (c *interactiveInvocation) consume(data []byte) error {
@@ -331,4 +350,22 @@ func (c *interactiveInvocation) flushWritten() error {
 			return nil
 		}
 	}
+}
+
+func (c *interactiveInvocation) consumeRecord(v providerjson.Value) error {
+	var update InteractionUpdate
+	var err error
+	if protocol, ok := c.protocol.(CurrentRecordInteractionProtocol); ok && protocol.UseRecordCapture() {
+		update, err = protocol.ReceiveRecord(v)
+	} else {
+		var data []byte
+		data, err = v.Raw(task.MaxControlRecordSize)
+		if err == nil {
+			update, err = c.protocol.Receive(data)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return c.apply(update)
 }

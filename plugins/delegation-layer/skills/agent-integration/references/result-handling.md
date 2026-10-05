@@ -15,8 +15,9 @@ the same as a successful provider result.
    permits a linked successor even when no outcome has been published.
 4. If `publication` is committed and `outcome.verdict` is committed, return
    the result and its payload/evidence descriptors.
-5. If `outcome.verdict` is rejected, report a terminal rejected result with its
-   refusal and evidence. Do not retry automatically.
+5. If `outcome.verdict` is rejected and `failure.next_action` is `recheck`,
+   follow [offline recovery](#offline-recovery) once. Otherwise report the
+   terminal rejection with its diagnostic and evidence. Do not redispatch.
 6. If `pending.kind` is `interaction`, handle the returned questions using
    [interaction guidance](interaction.md) before waiting again. Otherwise, if
    `liveness` is queued or running or publication is pending, observe the same
@@ -44,3 +45,29 @@ checks static readiness; runtime verification requires the supervised probe.
 Versions and help are observations, not semantic-version allowlists.
 Authentication is a separate live gate (`not_run`, `passed`, or `blocked`).
 Report a blocked prerequisite without inventing a login command or retrying.
+
+## Offline recovery
+
+When Delegate returns `failure.next_action: "recheck"`, use the same root and
+exact task ID:
+
+```sh
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" recheck TASK_ID --json
+```
+
+This command checks the already sealed evidence with an explicitly compatible
+new interpreter. It does not run the provider, contact a service, spend model
+tokens, or change the original outcome.
+
+- Exit `0` with `recheck.status: "recovered"`: use only the answer descriptor
+  returned for that recheck. Report that the answer was recovered from saved
+  evidence. The original `publication` remains `rejected`; do not call the
+  original task committed or use recovery to infer continuation permission.
+- Exit `4` with `recheck.status: "rejected"`: report the diagnostic and stop.
+- Exit `1` or `2`, or any response without a verified recovered answer:
+  report the error and stop. Do not read raw streams as a substitute answer,
+  invent a result path, run a provider directly, or launch a replacement task.
+
+Keep the assessment ID and source/target descriptors with the result. Do not
+loop on the same recheck. A separate user request is required for further
+troubleshooting or a new provider task.

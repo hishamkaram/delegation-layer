@@ -504,21 +504,15 @@ func assertPermissionStrings(t *testing.T, permissions permissionMap, keys []str
 
 func testWorkspace(t *testing.T) string {
 	t.Helper()
-	home, homeErr := os.UserHomeDir()
-	// A system temporary directory may itself be inside another Git worktree.
-	// Keep this workspace independent so the permission tests exercise the
-	// selected boundary rather than an ambient parent repository.
-	var path string
-	if homeErr == nil {
-		path, homeErr = os.MkdirTemp(home, "delegation-layer-opencode-workspace-")
+	// Keep this workspace in the configured temporary area so the permission
+	// tests exercise the selected boundary rather than an ambient parent
+	// repository or a read-only user home.
+	path, err := os.MkdirTemp(os.TempDir(), "delegation-layer-opencode-workspace-")
+	if err != nil {
+		t.Fatalf("create temporary OpenCode workspace: %v", err)
 	}
-	if homeErr != nil {
-		// The default system temp directory may itself be a Git worktree. Use the
-		// separate Unix temporary area when HOME is read-only.
-		path, homeErr = os.MkdirTemp("/var/tmp", "delegation-layer-opencode-workspace-")
-	}
-	if homeErr != nil {
-		t.Fatalf("create temporary OpenCode workspace: %v", homeErr)
+	if markerErr := os.Mkdir(filepath.Join(path, ".git"), 0o700); markerErr != nil {
+		t.Fatalf("create temporary OpenCode Git marker: %v", markerErr)
 	}
 	t.Cleanup(func() {
 		if removeErr := os.RemoveAll(path); removeErr != nil {

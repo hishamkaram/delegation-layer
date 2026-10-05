@@ -142,6 +142,29 @@ user's settings are wrong: an obsolete adapter-supplied command override can
 also cause it. Preserve the evidence and check the installed delegate version;
 do not delete provider settings or MCP configuration as a generic repair.
 
+### Completed provider output rejected after a provider update
+
+Native providers can add large tool payloads, metadata, or duplicate fields in
+opaque data without changing their final-answer contract. Current interpreters
+skip unconsumed payloads while validating JSON syntax; duplicate fields that
+control identity, completion, or the selected answer still reject the result.
+Native event and answer text do not inherit the 1 MiB control-response limit.
+Invalid optional usage metadata is reported separately from answer validity.
+
+For an older rejected task, run `collect TASK_ID --json` with its original root.
+If it offers `failure.next_action: "recheck"`, run:
+
+```sh
+delegate --root "$HOME/delegation-state" recheck TASK_ID --json
+```
+
+Use your original root if it differs from the example. Exit `0` and
+`recheck.status: "recovered"` identify a verified derived answer. The original
+rejected outcome is retained for audit. Exit `4` means the newer interpreter
+still rejects the evidence; exit `1` or `2` means an operational error or an
+ineligible request. Preserve those diagnostics rather than relaunching paid work,
+editing task records, or extracting a plausible answer from raw logs.
+
 ## Collection fails after a successful run
 
 If the response contains a valid outcome alongside an operational error, keep

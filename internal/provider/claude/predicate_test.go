@@ -41,7 +41,7 @@ func TestReferenceBindsImmutableContract(t *testing.T) {
 func TestWorkspaceWriteReferenceRevisionsPreserveAcceptEditsContract(t *testing.T) {
 	current := WorkspaceWriteReference()
 	historical := legacyNativeReferenceForMode(WorkspaceWriteMode)
-	if current.Equal(historical) || current.Version != workspaceWritePredicateVersion || historical.Version != predicateVersion {
+	if current.Equal(historical) || current.Version != workspaceWritePredicateVersion || historical.Version != legacyNativeWorkspaceWritePredicateVersion {
 		t.Fatalf("workspace-write references were not versioned: current=%+v historical=%+v", current, historical)
 	}
 	if !strings.Contains(WorkspaceWriteContract(), "permissionMode=bypassPermissions") || !strings.Contains(nativeWorkspaceWriteContractV1, "permissionMode=acceptEdits") {
@@ -49,6 +49,27 @@ func TestWorkspaceWriteReferenceRevisionsPreserveAcceptEditsContract(t *testing.
 	}
 	if historical.SHA256 != task.ComputeSHA256([]byte(nativeWorkspaceWriteContractV1)) {
 		t.Fatal("historical acceptEdits reference changed its contract bytes")
+	}
+}
+
+func TestCurrentNativeInterpreterRecoversHistoricalWireWithoutChangingSeal(t *testing.T) {
+	stdout := jsonl(initLine(claudeTestUUID), resultLine(claudeTestUUID, "recovered"))
+	historical := newHistoricalNativeInterpreter(Mode)
+	seal := claudeTestSealForPredicate(stdout, historical.Reference())
+	input := predicate.Input{Seal: seal, ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}
+	current := NewInterpreter()
+	recoverable, ok := current.(interface {
+		Target() task.PredicateRef
+		CanRecover(task.PredicateRef) bool
+		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
+	})
+	if !ok || !recoverable.CanRecover(historical.Reference()) || recoverable.CanRecover(current.Reference()) {
+		t.Fatal("current native interpreter recovery mapping is incorrect")
+	}
+	var answer bytes.Buffer
+	interpretation, err := recoverable.Recover(input, &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "recovered" || !input.Seal.Predicate.Equal(historical.Reference()) {
+		t.Fatalf("recovery interpretation=%+v answer=%q err=%v seal=%+v", interpretation, answer.String(), err, input.Seal.Predicate)
 	}
 }
 
@@ -90,7 +111,7 @@ func assertClaudeSuccess(t *testing.T, interpretation task.Interpretation, answe
 
 func assertClaudeUsage(t *testing.T, usage []task.UsageMetadata) {
 	t.Helper()
-	if len(usage) != 3 {
+	if len(usage) != 2 {
 		t.Fatalf("usage=%+v", usage)
 	}
 	mainUsage := usage[0]
@@ -114,9 +135,6 @@ func assertClaudeWholeTreeUsage(t *testing.T, usage []task.UsageMetadata) {
 	t.Helper()
 	if usage[1].Scope != task.UsageScopeWholeTree || usage[1].EstimatedCostUSD == nil || *usage[1].EstimatedCostUSD != "0.0012" {
 		t.Fatalf("aggregate usage=%+v", usage[1])
-	}
-	if usage[2].Model == nil || *usage[2].Model != "claude-test" || usage[2].Scope != task.UsageScopeWholeTree {
-		t.Fatalf("model usage=%+v", usage[2])
 	}
 }
 
@@ -375,16 +393,19 @@ func TestModelNamesRejectUsageInvalidWhitespace(t *testing.T) {
 	cases := []struct {
 		name   string
 		stdout []byte
+		valid  bool
 	}{
 		{
-			name: "init model",
+			name:  "init model",
+			valid: false,
 			stdout: jsonl(
 				strings.Replace(initLine(claudeTestUUID), `"model":"claude-test"`, `"model":" claude-test "`, 1),
 				resultLine(claudeTestUUID, "answer"),
 			),
 		},
 		{
-			name: "modelUsage key",
+			name:  "modelUsage key",
+			valid: true,
 			stdout: jsonl(
 				initLine(claudeTestUUID),
 				strings.Replace(resultLine(claudeTestUUID, "answer"), `"modelUsage":{"claude-test":`, `"modelUsage":{" claude-test ":`, 1),
@@ -395,6 +416,12 @@ func TestModelNamesRejectUsageInvalidWhitespace(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			var answer bytes.Buffer
 			interp, err := NewInterpreter().Evaluate(claudeContinuationInput(testCase.stdout, claudeTestUUID), &claudeTestEvidence{stdout: testCase.stdout}, &answer)
+			if testCase.valid {
+				if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "answer" {
+					t.Fatalf("optional model usage interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+				}
+				return
+			}
 			if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalMalformed || answer.Len() != 0 {
 				t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 			}
@@ -611,8 +638,11 @@ func TestUsagePreservesNullsAndRejectsNegativeCounters(t *testing.T) {
 	stdout := jsonl(initLine(claudeTestUUID), `{"type":"result","subtype":"success","is_error":false,"result":"answer","session_id":"`+claudeTestUUID+`","usage":{"input_tokens":null,"output_tokens":2,"cache_read_input_tokens":null},"modelUsage":{"claude-test":{"inputTokens":null,"outputTokens":2,"costUSD":null}}}`)
 	var answer bytes.Buffer
 	interp, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &answer)
-	if err != nil || interp.Verdict != task.VerdictCommitted || len(interp.Usage) != 2 {
+	if err != nil || interp.Verdict != task.VerdictCommitted || len(interp.Usage) != 1 {
 		t.Fatalf("interpretation=%+v err=%v", interp, err)
+	}
+	if len(interp.Diagnostics) != 1 || interp.Diagnostics[0].Code != "optional_usage_unavailable" || strings.Contains(interp.Diagnostics[0].Message, "input_tokens") {
+		t.Fatalf("unreliable usage warning=%+v", interp.Diagnostics)
 	}
 	if interp.Usage[0].InputTokens != nil || interp.Usage[0].CacheReadTokens != nil || interp.Usage[0].TotalTokens != nil {
 		t.Fatalf("null usage became available: %+v", interp.Usage[0])
@@ -620,8 +650,14 @@ func TestUsagePreservesNullsAndRejectsNegativeCounters(t *testing.T) {
 	assertClaudeInt64(t, "output", interp.Usage[0].OutputTokens, 2)
 	negative := jsonl(initLine(claudeTestUUID), `{"type":"result","subtype":"success","is_error":false,"result":"answer","session_id":"`+claudeTestUUID+`","usage":{"output_tokens":-1}}`)
 	interp, err = NewInterpreter().Evaluate(claudeContinuationInput(negative, claudeTestUUID), &claudeTestEvidence{stdout: negative}, &bytes.Buffer{})
-	if err != nil || interp.Verdict != task.VerdictRejected {
+	if err != nil || interp.Verdict != task.VerdictCommitted {
 		t.Fatalf("negative usage interpretation=%+v err=%v", interp, err)
+	}
+	historicalInput := claudeContinuationInput(negative, claudeTestUUID)
+	historicalInput.Seal.Predicate = historicalNativeReferenceForMode(Mode)
+	interp, err = newHistoricalNativeInterpreter(Mode).Evaluate(historicalInput, &claudeTestEvidence{stdout: negative}, &bytes.Buffer{})
+	if err != nil || interp.Verdict != task.VerdictRejected || len(interp.Diagnostics) != 0 {
+		t.Fatalf("historical negative usage interpretation=%+v err=%v", interp, err)
 	}
 }
 
@@ -637,11 +673,72 @@ func TestManyLargeAssistantEventsDoNotBecomeParserState(t *testing.T) {
 	stream.WriteByte('\n')
 	stream.WriteString(resultLine(claudeTestUUID, "final"))
 	state, err := parseStdout(strings.NewReader(stream.String()))
-	if err != nil || state.semanticFault() || !state.resultSeen || state.result.answer != "final" {
+	if err != nil || state.semanticFault() || !state.resultSeen || !state.result.currentAnswerSet || state.result.currentAnswer.length != int64(len("final")) {
 		t.Fatalf("state=%+v err=%v", state, err)
 	}
-	if len(state.result.answer) != len("final") || len(state.init.tools) != 3 {
+	if len(state.result.answer) != 0 || len(state.init.tools) != 3 {
 		t.Fatalf("parser retained unexpected answer/init state: %+v", state)
+	}
+}
+
+func TestCurrentInterpreterSkipsLargeOpaqueToolInputAndDuplicateMetadata(t *testing.T) {
+	opaque := strings.Repeat("x", task.MaxControlRecordSize+4096)
+	assistant := fmt.Sprintf(`{"type":"assistant","session_id":%q,"message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"provider-tool","input":{"opaque":%q,"metadata":{"same":1,"other":2}}}]},"metadata":{"same":1,"other":2}}`, claudeTestUUID, opaque)
+	stdout := jsonl(initLine(claudeTestUUID), assistant, resultLine(claudeTestUUID, "small answer"))
+	var answer bytes.Buffer
+	interpretation, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "small answer" {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+}
+
+func TestCurrentInterpreterRejectsDuplicateUnknownNestedKeys(t *testing.T) {
+	assistant := fmt.Sprintf(`{"type":"assistant","session_id":%q,"message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"provider-tool","input":{"metadata":{"same":1,"SAME":2}}}]}}`, claudeTestUUID)
+	stdout := jsonl(initLine(claudeTestUUID), assistant, resultLine(claudeTestUUID, "answer"))
+	interpretation, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, io.Discard)
+	if err != nil || interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != refusalMalformed {
+		t.Fatalf("duplicate nested key interpretation=%+v err=%v", interpretation, err)
+	}
+}
+
+func TestCurrentToolInventoryIsBounded(t *testing.T) {
+	var tools strings.Builder
+	for index := 0; index <= maxCurrentToolCount; index++ {
+		if index > 0 {
+			tools.WriteByte(',')
+		}
+		fmt.Fprintf(&tools, "%q", fmt.Sprintf("provider-tool-%d", index))
+	}
+	init := strings.Replace(initLine(claudeTestUUID), `"tools":["Read","Glob","Grep"]`, `"tools":[`+tools.String()+`]`, 1)
+	stdout := jsonl(init, resultLine(claudeTestUUID, "answer"))
+	interpretation, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &bytes.Buffer{})
+	if err != nil || interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != refusalMalformed {
+		t.Fatalf("unbounded tool inventory interpretation=%+v err=%v", interpretation, err)
+	}
+}
+
+func TestCurrentInterpreterStreamsThirtyTwoMiBClaudeResult(t *testing.T) {
+	answerText := strings.Repeat("a", 32<<20+1)
+	stdout := jsonl(initLine(claudeTestUUID), resultLine(claudeTestUUID, answerText))
+	var sink claudeCountingWriter
+	interpretation, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &sink)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || sink.count != len(answerText) || sink.max > 64<<10 {
+		t.Fatalf("interpretation=%+v count=%d max=%d err=%v", interpretation, sink.count, sink.max, err)
+	}
+}
+
+func TestCurrentDiagnosticDoesNotExposeProviderText(t *testing.T) {
+	secret := "provider-secret-value"
+	stdout := jsonl(initLine(claudeTestUUID), errorResultLine(claudeTestUUID, resultErrorDuringExecution, secret))
+	var answer bytes.Buffer
+	interpretation, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictRejected || len(interpretation.Diagnostics) == 0 || answer.Len() != 0 {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+	for _, diagnostic := range interpretation.Diagnostics {
+		if strings.Contains(diagnostic.Code, secret) || strings.Contains(diagnostic.Message, secret) {
+			t.Fatalf("provider text leaked through diagnostic: %+v", diagnostic)
+		}
 	}
 }
 
@@ -744,6 +841,17 @@ func (r *claudeErrorReader) Read(p []byte) (int, error) {
 	return 0, r.err
 }
 
+func (r *claudeErrorReader) ReadAt(p []byte, offset int64) (int, error) {
+	if offset < 0 || offset >= int64(len(r.data)) {
+		return 0, r.err
+	}
+	n := copy(p, r.data[offset:])
+	if n < len(p) {
+		return n, r.err
+	}
+	return n, nil
+}
+
 type claudeTrackingReader struct {
 	data  []byte
 	chunk int
@@ -768,6 +876,17 @@ func (r *claudeTrackingReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+func (r *claudeTrackingReader) ReadAt(p []byte, offset int64) (int, error) {
+	if offset < 0 || offset >= int64(len(r.data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[offset:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
 type claudeFailingWriter struct{ err error }
 
 func (w *claudeFailingWriter) Write([]byte) (int, error) { return 0, w.err }
@@ -775,6 +894,16 @@ func (w *claudeFailingWriter) Write([]byte) (int, error) { return 0, w.err }
 type claudeShortWriter struct {
 	bytes.Buffer
 	remaining int
+}
+
+type claudeCountingWriter struct{ count, max int }
+
+func (w *claudeCountingWriter) Write(data []byte) (int, error) {
+	w.count += len(data)
+	if len(data) > w.max {
+		w.max = len(data)
+	}
+	return len(data), nil
 }
 
 func (w *claudeShortWriter) Write(data []byte) (int, error) {

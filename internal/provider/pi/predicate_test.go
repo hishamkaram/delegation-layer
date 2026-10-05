@@ -199,6 +199,133 @@ func TestPiInterpreterCommitsValidatedJSONStream(t *testing.T) {
 	}
 }
 
+func TestCurrentPiInterpreterWarnsOnUnreliableUsage(t *testing.T) {
+	stdout := bytes.Replace(piStream(testUUID, "answer from Pi", true), []byte(`"output_tokens":2`), []byte(`"output_tokens":-1`), 1)
+	var out bytes.Buffer
+	result, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(ReferenceForMode(ModeReadOnly), stdout, nil)}, evidence{stdout: stdout}, &out)
+	if err != nil || result.Verdict != task.VerdictCommitted || out.String() != "answer from Pi" {
+		t.Fatalf("result=%+v output=%q err=%v", result, out.String(), err)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != "optional_usage_unavailable" || strings.Contains(result.Diagnostics[0].Message, "output_tokens") {
+		t.Fatalf("usage diagnostics=%+v", result.Diagnostics)
+	}
+	if len(result.Usage) != 1 || result.Usage[0].Reliability != task.UsageReliabilityUnreliable || result.Usage[0].OutputTokens != nil {
+		t.Fatalf("unreliable usage=%+v", result.Usage)
+	}
+}
+
+func TestCurrentPiDiagnosticDoesNotExposeProviderText(t *testing.T) {
+	secret := "provider-secret-value"
+	stdout := append(piStream(testUUID, "answer", true), []byte(fmt.Sprintf("\n{\"type\":\"error\",\"error\":{\"message\":%q}}", secret))...)
+	result, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(ReferenceForMode(ModeReadOnly), stdout, nil)}, evidence{stdout: stdout}, io.Discard)
+	if err != nil || result.Verdict != task.VerdictRejected || len(result.Diagnostics) == 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	for _, diagnostic := range result.Diagnostics {
+		if strings.Contains(diagnostic.Code, secret) || strings.Contains(diagnostic.Message, secret) {
+			t.Fatalf("provider text leaked through diagnostic: %+v", diagnostic)
+		}
+	}
+}
+
+func TestCurrentInterpreterSkipsLargeOpaqueToolArguments(t *testing.T) {
+	opaque := strings.Repeat("x", task.MaxControlRecordSize+4096)
+	toolMessage := fmt.Sprintf(`{"role":"assistant","content":[{"type":"toolCall","id":"call-large","name":"read","text":1,"text":2,"arguments":{"opaque":%q,"metadata":{"same":1,"same":2}}}],"stopReason":"toolUse"}`, opaque)
+	finalMessage := `{"role":"assistant","content":[{"type":"text","text":"small answer"}],"stopReason":"stop"}`
+	stdout := []byte(strings.Join([]string{
+		sessionLine(testUUID), `{"type":"agent_start"}`, `{"type":"turn_start"}`,
+		`{"type":"message_start","message":{"role":"assistant","content":[]}}`,
+		fmt.Sprintf(`{"type":"message_end","message":%s}`, toolMessage),
+		fmt.Sprintf(`{"type":"turn_end","message":%s,"toolResults":[{}]}`, toolMessage),
+		`{"type":"turn_start"}`, `{"type":"message_start","message":{"role":"assistant","content":[]}}`,
+		fmt.Sprintf(`{"type":"message_end","message":%s}`, finalMessage),
+		fmt.Sprintf(`{"type":"turn_end","message":%s,"toolResults":[]}`, finalMessage),
+		fmt.Sprintf(`{"type":"agent_end","messages":[%s,%s]}`, toolMessage, finalMessage),
+	}, "\n"))
+	var answer bytes.Buffer
+	interpretation, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(ReferenceForMode(ModeReadOnly), stdout, nil)}, evidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "small answer" {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+}
+
+func TestCurrentInterpreterStreamsThirtyTwoMiBPiAnswer(t *testing.T) {
+	answerText := strings.Repeat("a", (32<<20)+1)
+	stdout := piStream(testUUID, answerText, true)
+	var sink piCountingWriter
+	interpretation, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(ReferenceForMode(ModeReadOnly), stdout, nil)}, evidence{stdout: stdout}, &sink)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || sink.count != len(answerText) || sink.max > 64<<10 {
+		t.Fatalf("interpretation=%+v count=%d max=%d err=%v", interpretation, sink.count, sink.max, err)
+	}
+}
+
+func TestCurrentInterpreterStreamsFragmentedPiAnswer(t *testing.T) {
+	const fragments = 2048
+	message := fragmentedPiMessage(fragments)
+	stdout := []byte(strings.Join([]string{
+		sessionLine(testUUID),
+		`{"type":"agent_start"}`,
+		`{"type":"turn_start"}`,
+		`{"type":"message_start","message":{"role":"assistant","content":[]}}`,
+		fmt.Sprintf(`{"type":"message_end","message":%s}`, message),
+		fmt.Sprintf(`{"type":"turn_end","message":%s,"toolResults":[]}`, message),
+		fmt.Sprintf(`{"type":"agent_end","messages":[%s]}`, message),
+	}, "\n"))
+	var answer bytes.Buffer
+	interpretation, err := NewInterpreter(ModeReadOnly).Evaluate(
+		predicate.Input{Seal: validSeal(ReferenceForMode(ModeReadOnly), stdout, nil)},
+		evidence{stdout: stdout}, &answer,
+	)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != strings.Repeat("x", fragments) {
+		t.Fatalf("interpretation=%+v answer length=%d err=%v", interpretation, answer.Len(), err)
+	}
+}
+
+func TestCurrentInterpreterRejectsDuplicateAnswerText(t *testing.T) {
+	stdout := bytes.ReplaceAll(piStream(testUUID, "answer", true), []byte(`"text":"answer"`), []byte(`"text":"answer","text":"different"`))
+	result, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(ReferenceForMode(ModeReadOnly), stdout, nil)}, evidence{stdout: stdout}, io.Discard)
+	if err != nil || result.Verdict != task.VerdictRejected || len(result.Diagnostics) == 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if result.Diagnostics[0].Event != 0 {
+		t.Fatalf("diagnostic invented an event position: %+v", result.Diagnostics[0])
+	}
+}
+
+func fragmentedPiMessage(fragments int) string {
+	var message strings.Builder
+	message.WriteString(`{"role":"assistant","content":[`)
+	for i := 0; i < fragments; i++ {
+		if i > 0 {
+			message.WriteByte(',')
+		}
+		message.WriteString(`{"type":"text","text":"x"}`)
+	}
+	message.WriteString(`],"stopReason":"stop"}`)
+	return message.String()
+}
+
+func TestCurrentInterpreterRecoversHistoricalV4WithoutChangingSeal(t *testing.T) {
+	stdout := piStream(testUUID, "recovered", true)
+	historical := newHistoricalV4Interpreter(ModeReadOnly)
+	seal := validSeal(historical.Reference(), stdout, nil)
+	input := predicate.Input{Seal: seal}
+	current := NewInterpreter(ModeReadOnly)
+	recoverable, ok := current.(interface {
+		Target() task.PredicateRef
+		CanRecover(task.PredicateRef) bool
+		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
+	})
+	if !ok || !recoverable.CanRecover(historical.Reference()) || recoverable.CanRecover(current.Reference()) {
+		t.Fatal("current Pi interpreter recovery mapping is incorrect")
+	}
+	var answer bytes.Buffer
+	interpretation, err := recoverable.Recover(input, evidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "recovered" || !input.Seal.Predicate.Equal(historical.Reference()) {
+		t.Fatalf("recovery interpretation=%+v answer=%q err=%v seal=%+v", interpretation, answer.String(), err, input.Seal.Predicate)
+	}
+}
+
 func TestPiInterpreterAcceptsNativeSettledCompletion(t *testing.T) {
 	// Pi JSON mode emits agent_settled immediately after agent_end for a
 	// successful noninteractive invocation. It is a terminal lifecycle marker;
@@ -393,6 +520,7 @@ func TestPiInterpreterRejectsInvalidNativeCycleLifecycle(t *testing.T) {
 		{name: "truncated final cycle", stdout: truncated, refusal: refusalIncomplete},
 		{name: "trailing retry start", stdout: trailingRetry, refusal: refusalIncomplete},
 		{name: "retry end without a subsequent cycle", stdout: append(append([]byte{}, trailingRetry...), []byte("\n{\"type\":\"auto_retry_end\",\"success\":false}")...), refusal: refusalIncomplete},
+		{name: "retry end before active cycle", stdout: append([]byte(`{"type":"auto_retry_end","success":true}`+"\n"), piStream(testUUID, "later cycle", true)...), refusal: refusalMalformed},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -719,4 +847,14 @@ func TestPiInterpreterBoundsUsageRows(t *testing.T) {
 	if state.semanticErr == nil || len(state.usage) != maxUsageRows {
 		t.Fatalf("after bound state=%+v", state)
 	}
+}
+
+type piCountingWriter struct{ count, max int }
+
+func (w *piCountingWriter) Write(data []byte) (int, error) {
+	w.count += len(data)
+	if len(data) > w.max {
+		w.max = len(data)
+	}
+	return len(data), nil
 }

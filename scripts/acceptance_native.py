@@ -507,7 +507,9 @@ class NativeAcceptance:
                 raise BlockedFailure("Codex git prerequisite is unavailable") from error
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(6)
-        self.base = Path.home() / "delegation-layer-live" / f"{self.provider.replace(':', '-')}-{stamp}"
+        # Provider identity is recorded in the receipt; keep the disposable path
+        # short enough for Darwin's Unix socket address limit.
+        self.base = Path.home() / "delegation-layer-live" / stamp
         reject_tmp(self.base, "live acceptance base")
         self.base.mkdir(mode=0o700, parents=True, exist_ok=False)
         self.state = self.base / "state"

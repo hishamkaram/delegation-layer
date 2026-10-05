@@ -266,7 +266,7 @@ func applyInterrupted(state *eventState) {
 }
 
 func applyItemEvent(state *eventState, eventType string, fields map[string]json.RawMessage) {
-	eventItem, err := decodeItemEvent(fields)
+	eventItem, err := decodeItemEvent(fields, eventType)
 	if err != nil {
 		state.markSemantic(err.Error())
 		return
@@ -315,7 +315,7 @@ type itemEvent struct {
 	text     string
 }
 
-func decodeItemEvent(fields map[string]json.RawMessage) (itemEvent, error) {
+func decodeItemEvent(fields map[string]json.RawMessage, eventType string) (itemEvent, error) {
 	rawItem, ok := fields["item"]
 	if !ok {
 		return itemEvent{}, errors.New("item event has no item")
@@ -339,7 +339,7 @@ func decodeItemEvent(fields map[string]json.RawMessage) (itemEvent, error) {
 		return itemEvent{}, errors.New("item type exceeds bounded size")
 	}
 	text := ""
-	if typeName == itemAgentMessage {
+	if typeName == itemAgentMessage && eventType == eventItemCompleted {
 		var textErr error
 		text, textErr = requiredString(item, "text")
 		if textErr != nil {

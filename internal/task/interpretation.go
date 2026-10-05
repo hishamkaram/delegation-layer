@@ -18,10 +18,11 @@ type (
 	}
 	// Interpretation contains only the semantic decision; storage owns payload identity.
 	Interpretation struct {
-		Verdict string
-		Refusal string
-		Session *SessionIdentity
-		Usage   []UsageMetadata
+		Verdict     string
+		Refusal     string
+		Session     *SessionIdentity
+		Usage       []UsageMetadata
+		Diagnostics []OutputDiagnostic
 	}
 )
 
@@ -34,6 +35,9 @@ func ValidateSessionIdentity(v SessionIdentity) error {
 
 func ValidateInterpretation(v Interpretation) error {
 	if err := ValidateUsageMetadataList(v.Usage); err != nil {
+		return err
+	}
+	if err := ValidateOutputDiagnostics(v.Diagnostics); err != nil {
 		return err
 	}
 	if v.Session != nil {

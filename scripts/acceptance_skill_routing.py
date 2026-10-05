@@ -208,9 +208,9 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
     argv, stdin = command(harness, model, prompt)
     if routing_context:
         argv += routing_hook_arguments(harness, workspace)
-    state_parent = Path.home() / "delegation-routing-acceptance"
-    state_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    state = Path(tempfile.mkdtemp(prefix="state-", dir=state_parent))
+    # Keep supervisor state beside the captured evidence. This makes the
+    # acceptance run self-contained and works when the user's home is read-only.
+    state = Path(tempfile.mkdtemp(prefix="state-", dir=output))
     env = dict(os.environ, DELEGATE_ROOT=str(state))
     env.pop("DELEGATE_PUEUE_CONFIG", None)
     if delegate_bin is not None:
@@ -229,7 +229,8 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
                "model_requested": model, "argv": argv, "status": "unreviewed", "mode": mode,
                "budget_seconds": budget, "state_root": str(state), "candidate": candidate_digests(),
                "routing_context": routing_context,
-               "hook_trust": "vetted-per-invocation" if routing_context and harness == "codex" else "native"}
+               "hook_trust": "vetted-per-invocation" if routing_context and harness == "codex" else "native",
+               "fixture_scenario": case.get("fixture_scenario") if mode == "routing" else None}
     if delegate_bin is not None:
         receipt["delegate_executable"] = str(delegate_bin)
         receipt["delegate_sha256"] = executable_digest(delegate_bin)
@@ -278,6 +279,9 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
             write_json(fixture / "runtime.json", {
                 "delegate": str(Path(delegate).resolve()), "path": str(private_path),
                 "delegate_sha256": digest(Path(delegate)),
+                "case": case["name"],
+                "scenario": case.get("fixture_scenario"),
+                "provider": case.get("provider") if isinstance(case.get("provider"), str) else None,
             })
             executable = fixture / "delegate"
             shutil.copyfile(REPO / "scripts/skill_routing_delegate_fixture.py", executable)
@@ -311,7 +315,8 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
                 owner.close()
             except (OSError, ValueError, RuntimeError, KeyError):
                 receipt.update(status="failed", reason="supervisor_cleanup_unproven")
-        for name in ("stdout.txt", "stderr.txt", "fixture/calls.jsonl"):
+        for name in ("stdout.txt", "stderr.txt", "fixture/calls.jsonl",
+                     "fixture/routing-events.jsonl", "fixture/routing-state.json"):
             if (run / name).exists():
                 receipt[name + "_sha256"] = digest(run / name)
         write_json(run / "receipt.json", receipt)
@@ -332,6 +337,7 @@ def summarize(output, cases, repetitions, harness, mode="live", model=None, budg
                         or receipt.get("repetition") != repetition
                         or receipt.get("mode") != mode or receipt.get("model_requested") != model
                         or receipt.get("routing_context", False) != routing_context
+                        or receipt.get("fixture_scenario") != (case.get("fixture_scenario") if mode == "routing" else None)
                         or (delegate_bin is not None and (receipt.get("delegate_executable") != str(Path(delegate_bin).resolve())
                             or receipt.get("delegate_sha256") != executable_digest(Path(delegate_bin))))
                         or receipt.get("candidate") != candidate_digests()
@@ -347,7 +353,8 @@ def summarize(output, cases, repetitions, harness, mode="live", model=None, budg
                             or not isinstance(judgment.get("evidence"), str)
                             or not judgment["evidence"].strip()):
                         raise ValueError(f"invalid or stale judgment: {judgment_path}")
-                    for name in ("stdout.txt", "stderr.txt", "fixture/calls.jsonl"):
+                    for name in ("stdout.txt", "stderr.txt", "fixture/calls.jsonl",
+                                 "fixture/routing-events.jsonl", "fixture/routing-state.json"):
                         expected = receipt.get(name + "_sha256")
                         if expected is not None and digest(run / name) != expected:
                             raise ValueError(f"changed transcript: {run / name}")
@@ -358,6 +365,11 @@ def summarize(output, cases, repetitions, harness, mode="live", model=None, budg
                             and judgment["status"] == "passed"
                             and "fixture/calls.jsonl_sha256" not in receipt):
                         raise ValueError(f"routing fixture was not observed: {run}")
+                    if (mode == "routing" and case.get("fixture_scenario")
+                            and judgment["status"] == "passed"
+                            and ("fixture/routing-events.jsonl_sha256" not in receipt
+                                 or "fixture/routing-state.json_sha256" not in receipt)):
+                        raise ValueError(f"synthetic routing evidence was not observed: {run}")
                     row["status"] = judgment["status"]
             rows.append(row)
     status = "failed" if any(r["status"] == "failed" for r in rows) else (

@@ -27,12 +27,19 @@ type payloadStage struct {
 }
 
 func (td *TaskDir) newPayloadStage(name string) (*payloadStage, error) {
+	return td.newPayloadStageAt(td.Dir, name)
+}
+
+func (td *TaskDir) newPayloadStageAt(dir, name string) (*payloadStage, error) {
+	if name == "" || filepath.Base(name) != name || name == "." || name == ".." {
+		return nil, task.ErrEvidenceFault
+	}
 	id, err := task.NewRandomID()
 	if err != nil {
 		return nil, err
 	}
-	stage := filepath.Join(td.Dir, "stage."+id+".tmp")
-	dest := filepath.Join(td.Dir, name)
+	stage := filepath.Join(dir, "stage."+id+".tmp")
+	dest := filepath.Join(dir, name)
 	if observer, ok := td.store.faultInjector.(StageCreateInjector); ok {
 		if err = observer.OnBeforeStageCreate(stage, dest); err != nil {
 			return nil, err
@@ -161,7 +168,7 @@ func (td *TaskDir) evaluateAndPublish(interpreter predicate.Interpreter, seal *t
 		return nil, stage.discard(), err
 	}
 	descriptor := stage.descriptor()
-	candidate := task.OutcomeRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: meta, Predicate: seal.Predicate, EvidenceSHA256: seal.ManifestSHA256, Verdict: interpretation.Verdict, Payload: descriptor, Usage: task.CloneUsageMetadata(interpretation.Usage)}
+	candidate := task.OutcomeRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: meta, Predicate: seal.Predicate, EvidenceSHA256: seal.ManifestSHA256, Verdict: interpretation.Verdict, Payload: descriptor, Usage: task.CloneUsageMetadata(interpretation.Usage), Diagnostics: task.CloneOutputDiagnostics(interpretation.Diagnostics)}
 	if err = task.ValidateOutcomeRecord(&candidate); err != nil {
 		return nil, stage.discard(), err
 	}
@@ -193,7 +200,7 @@ func (td *TaskDir) commitPayloadStage(stage *payloadStage) (error, error) {
 	if digest != stage.descriptor().SHA256 || size != stage.size {
 		return cleanup, task.ErrInvariantFault
 	}
-	return cleanup, td.store.barrierDir(td.Dir)
+	return cleanup, td.store.barrierDir(filepath.Dir(stage.dest))
 }
 
 func (s *payloadStage) writeFailure() error { s.mu.Lock(); defer s.mu.Unlock(); return s.failure }

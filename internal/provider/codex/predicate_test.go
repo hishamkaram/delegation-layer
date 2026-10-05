@@ -2,6 +2,7 @@ package codex
 
 import (
 	"bytes"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -209,7 +210,7 @@ func TestItemStateIsBoundedAndStartedTextIsDiscarded(t *testing.T) {
 	large := strings.Repeat("draft", 32*1024)
 	started := fmt.Sprintf(`{"type":"item.started","item":{"id":"answer","type":"agent_message","text":%q}}`, large)
 	updated := fmt.Sprintf(`{"type":"item.updated","item":{"id":"answer","type":"agent_message","text":%q}}`, large)
-	stdout := jsonl(threadStarted(), `{"type":"turn.started"}`, started, updated, itemCompleted("answer", itemAgentMessage, "final"), turnCompleted(`{}`))
+	stdout := jsonl(threadStarted(), `{"type":"turn.started"}`, started, updated, itemCompletedRecord("answer", itemAgentMessage, "final"), turnCompleted(`{}`))
 	state, err := parseStdout(bytes.NewReader(stdout))
 	if err != nil || state.semantic != nil || !state.finalSeen || string(state.finalMessage) != "final" {
 		t.Fatalf("large item state=%+v err=%v", state, err)
@@ -257,12 +258,21 @@ func TestSemanticFailureStopsLaterStateAccumulation(t *testing.T) {
 func TestItemCompletionUpdatesStartedCandidateByID(t *testing.T) {
 	started := fmt.Sprintf(`{"type":"item.started","item":{"id":"answer","type":"agent_message","text":%q}}`, "draft")
 	updated := fmt.Sprintf(`{"type":"item.updated","item":{"id":"answer","type":"agent_message","text":%q}}`, "updated")
-	completed := itemCompleted("answer", itemAgentMessage, "final")
+	completed := itemCompletedRecord("answer", itemAgentMessage, "final")
 	stdout := jsonl(threadStarted(), `{"type":"turn.started"}`, started, updated, completed, turnCompleted(`{}`))
 	var answer bytes.Buffer
 	interp, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, nil)}, &testEvidence{stdout: stdout}, &answer)
 	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "final" {
 		t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestCurrentInterpreterRejectsUnstartedAgentMessageCompletion(t *testing.T) {
+	stdout := jsonl(threadStarted(), `{"type":"turn.started"}`, itemCompletedRecord("answer", itemAgentMessage, "answer"), turnCompleted(`{}`))
+	var answer bytes.Buffer
+	interpretation, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, nil)}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != refusalMalformed || answer.Len() != 0 {
+		t.Fatalf("unstarted completion interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
 	}
 }
 
@@ -438,8 +448,91 @@ func TestMissingUsageCountersStayNull(t *testing.T) {
 
 	negative := jsonl(threadStarted(), `{"type":"turn.started"}`, itemCompleted("answer", itemAgentMessage, "answer"), turnCompleted(`{"output_tokens":-1}`))
 	interp, err = NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(negative, nil)}, &testEvidence{stdout: negative}, &bytes.Buffer{})
-	if err != nil || interp.Verdict != task.VerdictRejected {
+	if err != nil || interp.Verdict != task.VerdictCommitted || interp.Usage[0].Reliability != task.UsageReliabilityUnreliable {
 		t.Fatalf("negative usage interpretation=%+v err=%v", interp, err)
+	}
+}
+
+func TestCurrentInterpreterIgnoresLargeOpaqueToolPayloadAndDuplicateToolID(t *testing.T) {
+	opaque := strings.Repeat("x", task.MaxControlRecordSize+2048)
+	tool := fmt.Sprintf(`{"type":"item.completed","item":{"type":"web_search","id":"native-a","id":"flattened-a","aggregated_output":%q,"arguments":{"query":%q}}}`, opaque, opaque)
+	stdout := jsonl(threadStarted(), `{"type":"turn.started"}`, tool, itemCompleted("answer", itemAgentMessage, "accepted"), turnCompleted(`{}`))
+	var answer bytes.Buffer
+	interp, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, nil)}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "accepted" {
+		t.Fatalf("current opaque tool interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestCurrentInterpreterStreamsLargeFinalAndComparesArtifactDigest(t *testing.T) {
+	large := strings.Repeat("answer-", 32*1024*1024/len("answer-")+3)
+	large = large[:32*1024*1024+17]
+	final := itemCompleted("answer", itemAgentMessage, large)
+	stdout := jsonl(threadStarted(), `{"type":"turn.started"}`, final, turnCompleted(`{}`))
+	artifact := []byte(large)
+	var answer bytes.Buffer
+	interp, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, &artifact)}, &testEvidence{stdout: stdout, artifact: &artifact}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.Len() != len(large) {
+		t.Fatalf("large current interpretation=%+v answer=%d want=%d err=%v", interp, answer.Len(), len(large), err)
+	}
+	if got, want := sha256.Sum256(answer.Bytes()), sha256.Sum256(artifact); got != want {
+		t.Fatalf("streamed answer digest=%x want=%x", got, want)
+	}
+}
+
+func TestCurrentInterpreterTreatsUsageErrorsAsUnreliable(t *testing.T) {
+	stdout := jsonl(
+		threadStarted(),
+		`{"type":"turn.started"}`,
+		itemCompleted("answer", itemAgentMessage, "answer"),
+		`{"type":"turn.completed","usage":{"output_tokens":-1,"opaque":{"value":1},"opaque":{"value":2}}}`,
+	)
+	var answer bytes.Buffer
+	interp, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, nil)}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || len(interp.Usage) != 1 || interp.Usage[0].Reliability != task.UsageReliabilityUnreliable {
+		t.Fatalf("usage-error interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+	if len(interp.Diagnostics) != 1 || interp.Diagnostics[0].Code != "optional_usage_unavailable" {
+		t.Fatalf("usage warning=%+v", interp.Diagnostics)
+	}
+
+	duplicateUsage := jsonl(
+		threadStarted(),
+		`{"type":"turn.started"}`,
+		itemCompleted("answer", itemAgentMessage, "answer"),
+		`{"type":"turn.completed","usage":{},"usage":{"output_tokens":1}}`,
+	)
+	answer.Reset()
+	interp, err = NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(duplicateUsage, nil)}, &testEvidence{stdout: duplicateUsage}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || len(interp.Diagnostics) != 1 || interp.Diagnostics[0].Code != "optional_usage_unavailable" {
+		t.Fatalf("duplicate usage interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestHistoricalRuntimeReferenceRemainsReplayableAndRecoverable(t *testing.T) {
+	if Reference().Equal(historicalRuntimeReferenceForMode(Mode)) {
+		t.Fatal("current and historical runtime references unexpectedly equal")
+	}
+	stdout := fixtureSuccess
+	old := newHistoricalRuntimeInterpreter(Mode)
+	seal := validSeal(stdout, nil)
+	seal.Predicate = old.Reference()
+	var answer bytes.Buffer
+	interp, err := old.Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.Len() == 0 {
+		t.Fatalf("historical interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+	recoverable, ok := NewInterpreter().(interface {
+		CanRecover(task.PredicateRef) bool
+		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
+	})
+	if !ok || !recoverable.CanRecover(old.Reference()) {
+		t.Fatal("current interpreter did not declare historical recovery")
+	}
+	answer.Reset()
+	interp, err = recoverable.Recover(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.Len() == 0 {
+		t.Fatalf("recovered interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 	}
 }
 
@@ -448,6 +541,18 @@ func threadStarted() string {
 }
 
 func itemCompleted(id, typeName, text string) string {
+	completed := itemCompletedRecord(id, typeName, text)
+	if typeName != itemAgentMessage {
+		return completed
+	}
+	return itemStarted(id) + "\n" + completed
+}
+
+func itemStarted(id string) string {
+	return fmt.Sprintf(`{"type":"item.started","item":{"id":%q,"type":%q}}`, id, itemAgentMessage)
+}
+
+func itemCompletedRecord(id, typeName, text string) string {
 	encoded, err := json.Marshal(text)
 	if err != nil {
 		panic(err)
@@ -545,6 +650,9 @@ func (e *testEvidence) Read(stream predicate.Stream, consume func(io.Reader) err
 	default:
 		return fmt.Errorf("unknown stream %v", stream)
 	}
+	if resettable, ok := reader.(interface{ ResetRead() }); ok {
+		resettable.ResetRead()
+	}
 	return consume(reader)
 }
 
@@ -567,11 +675,18 @@ type errorReader struct {
 	off  int
 }
 
+func (r *errorReader) ResetRead() { r.off = 0 }
+
 type trackingEOFReader struct {
 	data  []byte
 	chunk int
 	off   int
 	eof   bool
+}
+
+func (r *trackingEOFReader) ResetRead() {
+	r.off = 0
+	r.eof = false
 }
 
 func (r *trackingEOFReader) Read(p []byte) (int, error) {
@@ -641,6 +756,44 @@ func (r *errorReader) Read(p []byte) (int, error) {
 	return 0, r.err
 }
 
+func (r *errorReader) ReadAt(p []byte, offset int64) (int, error) {
+	if offset < 0 || offset >= int64(len(r.data)) {
+		return 0, r.err
+	}
+	n := copy(p, r.data[offset:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func (r *trackingEOFReader) ReadAt(p []byte, offset int64) (int, error) {
+	if offset < 0 || offset >= int64(len(r.data)) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[offset:])
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
 type failingWriter struct{ err error }
 
 func (w *failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestCurrentDiagnosticPreservesSelectedFieldFaultWithoutInventingEvent(t *testing.T) {
+	stdout := jsonl(threadStarted(), `{"type":"turn.started"}`, `{"type":"item.completed","item":{"type":"agent_message","id":"final","text":"private-one","text":"private-two"}}`, turnCompleted(`{}`))
+	var answer bytes.Buffer
+	result, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, nil)}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || result.Verdict != task.VerdictRejected || len(result.Diagnostics) != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	d := result.Diagnostics[0]
+	if d.Code != "duplicate_control_field" || d.Field != "text" || d.Offset <= int64(len(threadStarted())) || d.Event != 0 {
+		t.Fatalf("fault location or code lost: %+v", d)
+	}
+	if strings.Contains(d.Message, "private-") || answer.Len() != 0 {
+		t.Fatal("rejected native content leaked")
+	}
+}

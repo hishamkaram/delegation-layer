@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -38,6 +39,26 @@ type Plan struct {
 type IdentityObserver interface {
 	Observe([]byte)
 	Complete() error
+}
+
+// RecordIdentityObserver consumes a complete captured record without retaining
+// its bytes. The core expires the reader after observation completes.
+type RecordIdentityObserver interface {
+	ObserveRecord(providerjson.Value) error
+}
+
+// RecordInteractionProtocol adds bounded record views to native protocols.
+type RecordInteractionProtocol interface {
+	ReceiveRecord(providerjson.Value) (InteractionUpdate, error)
+}
+
+// CurrentRecordInteractionProtocol opts the current provider protocol into
+// callback-scoped record capture. Historical protocols may retain the record
+// method for replay compatibility, but must return false so live processing
+// keeps its historical line-framing semantics.
+type CurrentRecordInteractionProtocol interface {
+	RecordInteractionProtocol
+	UseRecordCapture() bool
 }
 
 // Stopper durably prepares one budget request while expiry owns the completion

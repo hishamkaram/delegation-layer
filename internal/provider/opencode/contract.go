@@ -23,8 +23,11 @@ const (
 	ProfileRevision      = "opencode-direct-cli-v1"
 	OutputWriterContract = ""
 
-	predicateVersion       = "2"
-	legacyPredicateVersion = "1"
+	// v2 remains registered for sealed evidence produced by the bounded
+	// interpreter. Fresh tasks use v3 and replay selected text by offset.
+	predicateVersion           = "3"
+	historicalPredicateVersion = "2"
+	legacyPredicateVersion     = "1"
 
 	maxEventLineBytes = task.MaxControlRecordSize
 	maxAnswerBytes    = task.MaxBriefSize
@@ -43,21 +46,29 @@ const nativeContractReadOnly = `{"adapter":"opencode:run","mode":"read-only","ve
 
 const nativeContractWorkspaceWrite = `{"adapter":"opencode:run","mode":"workspace-write","version":"2","native":"OpenCode run JSONL producer","permissions":"workspace-write selects the native build agent and passes native --auto approval; OpenCode owns configuration, MCP servers, hooks, plugins, skills, authentication, permissions, and Git settings; the adapter does not impose an independent workspace boundary","events":"the current interpreter preserves the legacy JSONL identity, step lifecycle, text selection, tool-state, malformed-event, and bounded-output rules","success":"exit_code=0, sealed error empty, one matching session identity, at least one step_start, a terminal step_finish with reason stop, and non-whitespace text","failure":"malformed or oversized JSONL, invalid UTF-8, missing or conflicting identity, missing terminal step_finish, empty answer, provider error, nonzero exit, start failure, seal error, or usage row bound exceeded rejects","usage":"each completed step's part.tokens and part.cost are copied as an independent provider-event record with unknown scope; no conversation total is synthesized"}` + "\n"
 
+func correctedContractForMode(mode string) string {
+	contract := nativeContractWorkspaceWrite
+	if mode == ModeReadOnly {
+		contract = nativeContractReadOnly
+	} else if mode != ModeWorkspaceWrite {
+		return ""
+	}
+	contract = strings.Replace(contract, `"version":"2"`, `"version":"3"`, 1)
+	contract = strings.Replace(contract, "and bounded-output rules", "and offset-streamed answer rules", 1)
+	contract = strings.Replace(contract, "malformed or oversized JSONL", "malformed JSONL or invalid relevant control values", 1)
+	contract = strings.Replace(contract, "or usage row bound exceeded", "; malformed optional usage is ignored", 1)
+	return contract
+}
+
 // Contract returns the default workspace-write predicate contract.
-func Contract() string { return nativeContractWorkspaceWrite }
+func Contract() string { return correctedContractForMode(ModeWorkspaceWrite) }
 
 // ContractDigest returns the digest of the default workspace-write contract.
 func ContractDigest() string { return task.ComputeSHA256([]byte(Contract())) }
 
 // ContractForMode returns the immutable contract bytes for a supported mode.
 func ContractForMode(mode string) string {
-	if mode == ModeReadOnly {
-		return nativeContractReadOnly
-	}
-	if mode == ModeWorkspaceWrite {
-		return nativeContractWorkspaceWrite
-	}
-	return ""
+	return correctedContractForMode(mode)
 }
 
 func legacyContractForMode(mode string) string {
@@ -88,6 +99,24 @@ func ReferenceForMode(mode string) task.PredicateRef {
 		Version: predicateVersion,
 		SHA256:  task.ComputeSHA256([]byte(contract)),
 	}
+}
+
+func historicalReferenceForMode(mode string) task.PredicateRef {
+	contract := nativeContractForMode(mode)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: historicalPredicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+func nativeContractForMode(mode string) string {
+	if mode == ModeReadOnly {
+		return nativeContractReadOnly
+	}
+	if mode == ModeWorkspaceWrite {
+		return nativeContractWorkspaceWrite
+	}
+	return ""
 }
 
 // LegacyReference returns the historical workspace-write predicate reference

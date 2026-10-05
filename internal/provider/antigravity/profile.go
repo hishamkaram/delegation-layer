@@ -26,11 +26,38 @@ const unattendedApproval = "always-proceed"
 // supervised runtime capability probe. The core owns every provider process;
 // the finalizer receives only the resulting nonsecret runtime facts.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, true)
+	candidate, err := prepareCandidate(request, true)
+	if err != nil {
+		return candidate, err
+	}
+	return withPredicate(candidate, NewRecordPrintInterpreter(request.Mode).Reference()), nil
 }
 
-// PrepareExistingCandidate retains the preparation contract of admitted tasks.
+// PrepareExistingCandidate retains the exact predicate selected at admission.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+	candidate, err := prepareExistingCandidate(request, meta)
+	if err != nil {
+		return candidate, err
+	}
+	if meta.Predicate != (task.PredicateRef{}) {
+		candidate = withPredicate(candidate, meta.Predicate)
+	}
+	return candidate, nil
+}
+
+func withPredicate(candidate commonprovider.ProfileCandidate, reference task.PredicateRef) commonprovider.ProfileCandidate {
+	finalize := candidate.Finalize
+	candidate.Finalize = func(data json.RawMessage, observed time.Time) (commonprovider.PreparedProfile, error) {
+		prepared, err := finalize(data, observed)
+		if err == nil {
+			prepared.Plan.Predicate = reference
+		}
+		return prepared, err
+	}
+	return candidate
+}
+
+func prepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
 	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
 	if !native {
 		return prepareCandidate(request, false)

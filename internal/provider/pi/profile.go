@@ -156,9 +156,9 @@ func profilePredicateReference(native bool, mode string, stored task.PredicateRe
 		return LegacyReference()
 	}
 	switch {
-	case mode == ModeReadOnly && (stored.Equal(readOnlyV2Reference()) || stored.Equal(readOnlyV3Reference())):
+	case mode == ModeReadOnly && (stored.Equal(readOnlyV2Reference()) || stored.Equal(readOnlyV3Reference()) || stored.Equal(readOnlyV4Reference())):
 		return stored
-	case mode == ModeWorkspaceWrite && stored.Equal(workspaceWriteV3Reference()):
+	case mode == ModeWorkspaceWrite && (stored.Equal(workspaceWriteV3Reference()) || stored.Equal(workspaceWriteV4Reference())):
 		return stored
 	}
 	return ReferenceForMode(mode)
