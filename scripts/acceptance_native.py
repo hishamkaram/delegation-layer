@@ -885,8 +885,14 @@ class NativeAcceptance:
                 return path
             prefix = "DELEGATION_LIVE_CONTINUED:" if continuation else "DELEGATION_LIVE_OK:"
             text = "Continue the exact previous conversation. " if continuation else ""
-            text += (f"Read the actual file `{self.workspace_marker}` using a file-read tool or a read-only "
-                     "shell command. Do not infer its contents from examples or other repositories. "
+            provider = getattr(self, "provider", None)
+            read_instruction = ("using the provider's file-read tool only"
+                                if provider == "antigravity:print"
+                                else "using a file-read tool or a read-only shell command")
+            no_command = (" Do not use a command or shell tool."
+                          if provider == "antigravity:print" else "")
+            text += (f"Read the actual file `{self.workspace_marker}` {read_instruction}.{no_command} "
+                     "Do not infer its contents from examples or other repositories. "
                      f"Reply with exactly the literal prefix `{prefix}` followed by one space and the exact "
                      "contents read from that file, with no other text. "
                      "Do not modify files, use network, or access paths outside the current workspace.\n")
@@ -1168,6 +1174,7 @@ class NativeAcceptance:
         require(self.nonce is not None, "write acceptance nonce is unavailable")
         require(self.workspace_baseline is not None,
                 "write acceptance workspace baseline is unavailable")
+        self._validate_pi_runtime_roots()
         generated = {
             "acceptance-write-target.txt", "acceptance-write-check.txt",
             "acceptance-write-continue-check.txt",
@@ -1178,14 +1185,17 @@ class NativeAcceptance:
         expected.update({"acceptance-write-target.txt", "acceptance-write-check.txt"})
         if continuation:
             expected.add("acceptance-write-continue-check.txt")
+        actual = workspace_snapshot(self.workspace)
+        expected.update(name for name in actual if self._is_pi_runtime_entry(name))
         git_directory = self.workspace / ".git"
         for path in self.workspace.rglob("*"):
             require(not path.is_symlink(), "write acceptance workspace contains a symlink")
             if path.is_dir():
+                relative = str(path.relative_to(self.workspace))
                 require(self.provider == "codex:exec" and
-                        (path == git_directory or git_directory in path.parents),
+                        (path == git_directory or git_directory in path.parents) or
+                        self._is_pi_runtime_entry(relative),
                         "write acceptance workspace contains an unexpected directory")
-        actual = workspace_snapshot(self.workspace)
         require(set(actual) == expected,
                 "write acceptance workspace contains unexpected files")
         fixture_name = str(self.fixture_file.relative_to(self.workspace))
@@ -1199,6 +1209,19 @@ class NativeAcceptance:
                 "write acceptance changed harness-controlled files")
         verify_write_fixture(self.nonce, self.fixture_file)
         return actual
+
+    def _is_pi_runtime_entry(self, relative: str) -> bool:
+        return (self.provider == "pi:json" and self.mode == "workspace-write" and
+                (relative == ".pi" or relative == ".pi/tasks" or relative.startswith(".pi/tasks/")))
+
+    def _validate_pi_runtime_roots(self) -> None:
+        if self.provider != "pi:json" or self.mode != "workspace-write":
+            return
+        for relative in (".pi", ".pi/tasks"):
+            path = self.workspace / relative
+            if path.is_symlink() or path.exists():
+                require(path.is_dir() and not path.is_symlink(),
+                        f"Pi runtime root is not a directory: {relative}")
 
     def task_binding(self, task_id: str, predecessor: str | None = None,
                      predecessor_session: str | None = None) -> None:

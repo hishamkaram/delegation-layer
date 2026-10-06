@@ -65,7 +65,7 @@ paths must remain disjoint.
 | `--cwd ABS` | Canonical workspace directory. |
 | `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID. Omit to allocate one. |
 | `--permission MODE` | `read-only` (default) or authorized unattended `workspace-write`, including commands and edits. Native access can extend beyond the workspace. |
-| `--budget DURATION` | Positive Go duration; default `30m`. Queue time is excluded. |
+| `--budget DURATION` | Positive Go duration; default `30m` for ordinary tasks and `1h` for `codex:review`. Queue time is excluded. |
 | `--model MODEL` | Model selector when the chosen profile advertises `model` (Codex, Claude, AGY, Pi, or OpenCode). |
 | `--effort EFFORT` | Provider effort selector when the chosen profile advertises it. Codex writes TOML `model_reasoning_effort`; Claude and AGY pass their native effort flag; Pi maps it to `--thinking`; OpenCode maps it to `--variant`. `default` keeps the provider default and is omitted from native argv. |
 | `--native-timeout DURATION` | Antigravity's native print timeout, no greater than `--budget`. |

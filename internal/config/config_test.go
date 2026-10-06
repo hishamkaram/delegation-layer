@@ -33,6 +33,18 @@ func TestParseBudget(t *testing.T) {
 	}
 }
 
+func TestParseBudgetForProvider(t *testing.T) {
+	if got, err := ParseBudgetForProvider(ProviderCodexReview, ""); err != nil || got != DefaultCodexReviewBudgetDuration {
+		t.Fatalf("codex review default=%v, err=%v", got, err)
+	}
+	if got, err := ParseBudgetForProvider(ProviderCodexExec, ""); err != nil || got != DefaultBudgetDuration {
+		t.Fatalf("ordinary default=%v, err=%v", got, err)
+	}
+	if got, err := ParseBudgetForProvider(ProviderCodexReview, "5m"); err != nil || got != 5*time.Minute {
+		t.Fatalf("explicit codex review budget=%v, err=%v", got, err)
+	}
+}
+
 func TestValidateMode(t *testing.T) {
 	if err := ValidateMode(""); err != nil {
 		t.Errorf("expected empty mode to default without error, got: %v", err)

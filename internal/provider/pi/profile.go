@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -16,27 +18,69 @@ import (
 // shared supervised runtime capability probe. The finalizer consumes only the
 // nonsecret facts produced by that probe.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, true, task.PredicateRef{})
+	return prepareCandidate(request, nativeCurrentProfile, task.PredicateRef{}, os.Environ())
 }
 
 // PrepareExistingCandidate retains the launch and policy contract recorded by
 // an already admitted task. New native tasks use the native profile; older
 // records continue through the legacy isolated preparation path.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
-	return prepareCandidate(request, native, meta.Predicate)
+	profile := legacyProfile
+	if meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision {
+		profile = nativeCurrentProfile
+		if historicalNativePredicate(meta.Predicate) {
+			profile = nativeHistoricalProfile
+		}
+	}
+	environment := os.Environ()
+	if meta.EnvironmentRecorded {
+		environment = slices.Clone(meta.Environment)
+	}
+	return prepareCandidate(request, profile, meta.Predicate, environment)
 }
 
-func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task.PredicateRef) (commonprovider.ProfileCandidate, error) {
-	arguments, err := profileArguments(request, native)
+type profileKind uint8
+
+const (
+	legacyProfile profileKind = iota
+	nativeHistoricalProfile
+	nativeCurrentProfile
+)
+
+func prepareCandidate(request task.TaskRecord, profile profileKind, storedPredicate task.PredicateRef, environmentValues []string) (commonprovider.ProfileCandidate, error) {
+	native := profile != legacyProfile
+	environment, err := prepareProfileEnvironment(environmentValues, native)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	environment, err := prepareProfileEnvironment(os.Environ(), native)
+	if profile == nativeCurrentProfile && request.Mode == ModeReadOnly {
+		initialSessionDir := environment.SessionDir
+		baseSessionDir, baseErr := config.CanonicalizePath(filepath.Join(environment.AgentDir, "sessions"))
+		if baseErr != nil {
+			return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: resolve Pi default session directory: %w", ErrUnsupportedProfile, baseErr)
+		}
+		environment.SessionDir, err = resolveNativeSessionDirectory(environment, request.CanonicalCwd)
+		if err != nil {
+			return commonprovider.ProfileCandidate{}, err
+		}
+		if initialSessionDir != baseSessionDir {
+			environment.WritableRoots = slices.DeleteFunc(environment.WritableRoots, func(root string) bool { return root == initialSessionDir })
+		}
+		if !pathContains(baseSessionDir, environment.SessionDir) {
+			environment.WritableRoots = append(environment.WritableRoots, environment.SessionDir)
+		}
+		environment.WritableRoots = append(environment.WritableRoots, baseSessionDir)
+		slices.Sort(environment.WritableRoots)
+		environment.WritableRoots = slices.Compact(environment.WritableRoots)
+		// Pin the settings-derived directory in the admitted launch environment
+		// so retries and continuations reuse the exact session location.
+		environment.Values = pinSessionDirectory(environment.Values, environment.SessionDir)
+	}
+	arguments, err := profileArguments(request, profile, environment)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	arguments, err = historicalArguments(arguments, request, environment, native)
+	arguments, err = historicalArguments(arguments, request, environment, profile)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -48,7 +92,7 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	requirements := profileRuntimeRequirements(native)
+	requirements := profileRuntimeRequirements(profile, request.Mode)
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, requirements)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
@@ -63,15 +107,26 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 	}, nil
 }
 
-func profileArguments(request task.TaskRecord, native bool) ([]string, error) {
-	if native {
-		return jsonArguments(request)
+func profileArguments(request task.TaskRecord, profile profileKind, environment profileEnvironment) ([]string, error) {
+	switch profile {
+	case nativeCurrentProfile:
+		return jsonArgumentsForProfileWithSessionDir(request, true, true, environment.SessionDir)
+	case nativeHistoricalProfile:
+		return jsonArgumentsForProfile(request, true, false)
+	case legacyProfile:
+		return legacyJSONArguments(request)
+	default:
+		return nil, fmt.Errorf("%w: unknown Pi profile kind", ErrUnsupportedProfile)
 	}
-	return legacyJSONArguments(request)
 }
 
-func historicalArguments(arguments []string, request task.TaskRecord, environment profileEnvironment, native bool) ([]string, error) {
-	if native {
+func historicalArguments(arguments []string, request task.TaskRecord, environment profileEnvironment, profile profileKind) ([]string, error) {
+	if profile == nativeCurrentProfile && request.Mode == ModeReadOnly {
+		if err := validateStartupMigrations(request.CanonicalCwd, environment.AgentDir, environment.SessionDir); err != nil {
+			return nil, err
+		}
+	}
+	if profile != legacyProfile {
 		return arguments, nil
 	}
 	if err := validateStartupMigrations(request.CanonicalCwd, environment.AgentDir, environment.SessionDir); err != nil {
@@ -91,11 +146,17 @@ func historicalEffectiveConfig(request task.TaskRecord, environment profileEnvir
 	return effectivePolicy(request, environment, runtimeSHA256, sources)
 }
 
-func profileRuntimeRequirements(native bool) commonprovider.RuntimeCapability {
-	if native {
-		return RuntimeRequirements()
+func profileRuntimeRequirements(profile profileKind, mode string) commonprovider.RuntimeCapability {
+	switch profile {
+	case nativeCurrentProfile:
+		return RuntimeRequirements(mode)
+	case nativeHistoricalProfile:
+		return historicalNativeRuntimeRequirements()
+	case legacyProfile:
+		return legacyRuntimeRequirements()
+	default:
+		return commonprovider.RuntimeCapability{}
 	}
-	return legacyRuntimeRequirements()
 }
 
 func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments []string, environment profileEnvironment, cli commonprovider.CLIInfo, legacyEffective task.EffectiveConfig, predicateReference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
@@ -156,10 +217,20 @@ func profilePredicateReference(native bool, mode string, stored task.PredicateRe
 		return LegacyReference()
 	}
 	switch {
-	case mode == ModeReadOnly && (stored.Equal(readOnlyV2Reference()) || stored.Equal(readOnlyV3Reference()) || stored.Equal(readOnlyV4Reference())):
+	case mode == ModeReadOnly && (stored.Equal(readOnlyV2Reference()) || stored.Equal(readOnlyV3Reference()) || stored.Equal(readOnlyV4Reference()) || stored.Equal(readOnlyV5Reference())):
 		return stored
-	case mode == ModeWorkspaceWrite && (stored.Equal(workspaceWriteV3Reference()) || stored.Equal(workspaceWriteV4Reference())):
+	case mode == ModeWorkspaceWrite && (stored.Equal(workspaceWriteV3Reference()) || stored.Equal(workspaceWriteV4Reference()) || stored.Equal(workspaceWriteV5Reference())):
 		return stored
 	}
 	return ReferenceForMode(mode)
+}
+
+func historicalNativePredicate(reference task.PredicateRef) bool {
+	return reference.Equal(readOnlyV2Reference()) ||
+		reference.Equal(readOnlyV3Reference()) ||
+		reference.Equal(readOnlyV4Reference()) ||
+		reference.Equal(readOnlyV5Reference()) ||
+		reference.Equal(workspaceWriteV3Reference()) ||
+		reference.Equal(workspaceWriteV4Reference()) ||
+		reference.Equal(workspaceWriteV5Reference())
 }

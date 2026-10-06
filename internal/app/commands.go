@@ -357,7 +357,7 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 		return dispatchNew(a, deps, store, req, nil, response)
 	}
 
-	if !sameRequest(&req, oldReq) {
+	if !sameExistingRequest(a, &req, oldReq) {
 		return failed(response, task.ErrRequestConflict, 2)
 	}
 	if a.PueueConfig != "" && a.PueueConfig != oldMeta.SupervisorConfig.ConfigPath {

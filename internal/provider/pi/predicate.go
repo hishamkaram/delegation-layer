@@ -33,7 +33,7 @@ func NewInterpreter(mode ...string) predicate.Interpreter {
 	if len(mode) > 0 && mode[0] != "" {
 		selected = mode[0]
 	}
-	return interpreter{mode: selected, version: currentPredicateVersion}
+	return interpreter{mode: selected, version: currentVersionForMode(selected)}
 }
 
 func newLegacyInterpreter() predicate.Interpreter {
@@ -50,6 +50,10 @@ func newHistoricalV3Interpreter(mode string) predicate.Interpreter {
 
 func newHistoricalV4Interpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, version: predicateVersion}
+}
+
+func newHistoricalV5Interpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, version: currentPredicateVersion}
 }
 
 func (i interpreter) Reference() task.PredicateRef {
@@ -70,7 +74,7 @@ func (i interpreter) evaluateAgainst(input predicate.Input, raw predicate.Eviden
 	nativeRetryContract := i.version == predicateVersion || i.version == historicalPredicateV3
 	var stdout eventState
 	var err error
-	if i.version == currentPredicateVersion {
+	if usesCurrentEvidence(i.mode, i.version) {
 		stdout, err = readCurrentEvidence(raw)
 	} else {
 		stdout, err = readEvidenceWithOptions(raw, parserOptions{
@@ -136,7 +140,28 @@ func (i interpreter) Target() task.PredicateRef { return i.Reference() }
 // native revision for the same Pi permission mode. Older policy revisions are
 // deliberately not treated as interchangeable evidence.
 func (i interpreter) CanRecover(source task.PredicateRef) bool {
-	return !i.legacy && i.version == currentPredicateVersion && source.Equal(referenceForVersion(i.mode, predicateVersion))
+	return !i.legacy && i.version == currentVersionForMode(i.mode) &&
+		source.Equal(previousReferenceForMode(i.mode))
+}
+
+func currentVersionForMode(mode string) string {
+	if mode == ModeReadOnly {
+		return currentReadOnlyVersion
+	}
+	return currentWorkspaceVersion
+}
+
+func previousReferenceForMode(mode string) task.PredicateRef {
+	if mode == ModeReadOnly {
+		return readOnlyV5Reference()
+	}
+	return workspaceWriteV5Reference()
+}
+
+func usesCurrentEvidence(mode, version string) bool {
+	return version == currentPredicateVersion ||
+		(mode == ModeReadOnly && version == currentReadOnlyVersion) ||
+		(mode == ModeWorkspaceWrite && version == currentWorkspaceVersion)
 }
 
 func (i interpreter) Recover(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {

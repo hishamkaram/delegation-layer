@@ -11,14 +11,17 @@ identity observer, input transport, output interpreter, and supported options.
 | `codex:review` | `read-only` | `native-sandbox` | `review-target`, `model`, `effort` | `codex exec review` |
 | `ccr:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model` (required alias), `effort` | CCR foreground launch |
 | `claude:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `claude` print mode |
-| `pi:json` | `read-only`, `workspace-write` | `tool-allowlist` | `continuation`, `model`, `effort` | `pi --mode json` |
+| `pi:json` | `read-only`, `workspace-write` | `tool-allowlist` plus disabled extensions for read-only | `continuation`, `model`, `effort` | `pi --mode json` |
 | `opencode:run` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `opencode run --format json` |
 
 The catalog is available locally with `delegate providers --json`. Its runtime
 metadata describes the help arguments and flags required by each adapter.
 Its read-only metadata describes the native mechanism selected by the adapter;
 the containment value is `provider-owned` for the shipped profiles, so this
-mode is not an independent delegate-owned sandbox.
+mode is not an independent delegate-owned sandbox. Provider-native controls
+such as Pi read-only's `--no-extensions` remain part of that provider contract;
+they are capability-probed before admission rather than treated as delegate
+owned policy.
 The catalog uses public request option names; the native flag mapping is
 documented in each provider section below.
 
@@ -215,10 +218,13 @@ validated during the task.
 
 ## Pi
 
-`pi:json` uses JSON event mode with the native `read,grep,find,ls` tool selection
-for `read-only`. Native extensions and configuration remain enabled; the tool
-selection is not an independent sandbox for extensions. Continuation uses the
-exact recorded Pi session in the same workspace. `workspace-write` leaves the
+`pi:json` uses JSON event mode with the native `read,grep,find,ls` tool selection,
+`--no-extensions`, and the effective `--session-dir` for `read-only`, so
+extension startup and session persistence cannot create project state before a
+read-only turn begins. A configured session directory that overlaps the
+workspace or Delegate state is rejected before admission. Provider configuration
+and authentication remain native. Continuation uses the exact recorded Pi
+session in the same workspace. `workspace-write` leaves the
 native tool selection to Pi, including its default shell, edit, and write tools;
 custom configuration can change that selection. It records `provider-native`
 approval and does not add a filesystem sandbox. `model` is passed through, and

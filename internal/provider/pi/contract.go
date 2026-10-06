@@ -28,16 +28,19 @@ const (
 	answerChunkBytes  = 32 * 1024
 	maxUsageRows      = 1024
 
-	// predicateVersion identifies the current interpreter contract, independent
-	// of the installed Pi CLI release.
-	// v4 is retained for the pre-issue47 current parser. Fresh tasks use v5,
-	// which keeps offsets and text digests instead of retaining native blobs.
+	// predicateVersion identifies the pre-v5 interpreter contract, independent
+	// of the installed Pi CLI release. v5 is the historical native contract;
+	// fresh read-only tasks use v6 after the startup extension boundary was
+	// added, and fresh workspace-write tasks use v7 after its runtime probe was
+	// made mode-specific. Each mode keeps its prior bytes registered for replay.
 	predicateVersion        = "4"
 	currentPredicateVersion = "5"
+	currentReadOnlyVersion  = "6"
+	currentWorkspaceVersion = "7"
 	historicalPredicateV3   = "3"
 	historicalPredicateV2   = "2"
 	legacyPredicateVersion  = "1"
-	Version                 = currentPredicateVersion
+	Version                 = currentReadOnlyVersion
 )
 
 const readOnlyTools = "read,grep,find,ls"
@@ -79,18 +82,29 @@ func workspaceContractForVersion(version string) string {
 	return strings.Replace(contract, "agent_end in order; auto_retry_start", "agent_end in order; message events may occur between turn_start and turn_end; auto_retry_start", 1)
 }
 
-func readOnlyContractV5Current() string {
+func readOnlyContractV5Historical() string {
 	contract := strings.Replace(readOnlyContractV4Current(), `"version":"4"`, `"version":"5"`, 1)
 	contract = strings.Replace(contract, "malformed or oversized JSONL", "malformed JSONL or invalid relevant control values", 1)
 	contract = strings.Replace(contract, "or more than 1024 retained usage rows", "usage is optional and unreliable; malformed usage is ignored", 1)
 	return contract
 }
 
-func workspaceContractV5Current() string {
+func readOnlyContractV6Current() string {
+	contract := strings.Replace(readOnlyContractV5Historical(), `"version":"5"`, `"version":"6"`, 1)
+	return strings.Replace(contract,
+		`read-only maps the native --tools allowlist to read,grep,find,ls; provider configuration, extensions, authentication, and startup behavior remain provider-owned`,
+		`read-only maps the native --tools allowlist to read,grep,find,ls, disables provider extensions during startup, and pins the effective native session directory; provider configuration and authentication remain provider-owned`, 1)
+}
+
+func workspaceContractV5Historical() string {
 	contract := strings.Replace(workspaceContractForVersion(predicateVersion), `"version":"4"`, `"version":"5"`, 1)
 	contract = strings.Replace(contract, "malformed or oversized JSONL", "malformed JSONL or invalid relevant control values", 1)
 	contract = strings.Replace(contract, "or more than 1024 retained usage rows", "usage is optional and unreliable; malformed usage is ignored", 1)
 	return contract
+}
+
+func workspaceContractV7Current() string {
+	return strings.Replace(workspaceContractV5Historical(), `"version":"5"`, `"version":"7"`, 1)
 }
 
 func readOnlyContractV4Current() string {
@@ -106,9 +120,9 @@ func Contract(mode ...string) string {
 	}
 	switch selected {
 	case ModeReadOnly:
-		return readOnlyContractV5Current()
+		return readOnlyContractV6Current()
 	case ModeWorkspaceWrite:
-		return workspaceContractV5Current()
+		return workspaceContractV7Current()
 	default:
 		return ""
 	}
@@ -125,7 +139,11 @@ func ContractDigest(mode ...string) string {
 
 // ReferenceForMode returns the exact predicate reference for one Pi mode.
 func ReferenceForMode(mode string) task.PredicateRef {
-	return referenceForVersion(mode, currentPredicateVersion)
+	version := currentWorkspaceVersion
+	if mode == ModeReadOnly {
+		version = currentReadOnlyVersion
+	}
+	return referenceForVersion(mode, version)
 }
 
 // Reference returns the read-only predicate for compatibility with provider
@@ -155,8 +173,20 @@ func readOnlyV4Reference() task.PredicateRef {
 	return referenceForVersion(ModeReadOnly, predicateVersion)
 }
 
+func readOnlyV5Reference() task.PredicateRef {
+	return referenceForVersion(ModeReadOnly, currentPredicateVersion)
+}
+
 func workspaceWriteV4Reference() task.PredicateRef {
 	return referenceForVersion(ModeWorkspaceWrite, predicateVersion)
+}
+
+func workspaceWriteV5Reference() task.PredicateRef {
+	return referenceForVersion(ModeWorkspaceWrite, currentPredicateVersion)
+}
+
+func workspaceWriteV7Reference() task.PredicateRef {
+	return referenceForVersion(ModeWorkspaceWrite, currentWorkspaceVersion)
 }
 
 func referenceForVersion(mode, version string) task.PredicateRef {
@@ -173,7 +203,10 @@ func contractForVersion(mode, version string) string {
 		return readOnlyContractForVersion(version)
 	case ModeWorkspaceWrite:
 		if version == currentPredicateVersion {
-			return workspaceContractV5Current()
+			return workspaceContractV5Historical()
+		}
+		if version == currentWorkspaceVersion {
+			return workspaceContractV7Current()
 		}
 		return workspaceContractForVersion(version)
 	default:
@@ -192,7 +225,9 @@ func readOnlyContractForVersion(version string) string {
 	case predicateVersion:
 		return readOnlyContractV4Current()
 	case currentPredicateVersion:
-		return readOnlyContractV5Current()
+		return readOnlyContractV5Historical()
+	case currentReadOnlyVersion:
+		return readOnlyContractV6Current()
 	default:
 		return ""
 	}

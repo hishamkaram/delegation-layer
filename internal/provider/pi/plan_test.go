@@ -30,9 +30,17 @@ func TestJSONArgumentsMapCallerPermissionAndContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--mode", "json", "--tools", readOnlyTools}
+	want := []string{"--mode", "json", "--tools", readOnlyTools, "--no-extensions"}
 	if !slices.Equal(args, want) {
 		t.Fatalf("read-only argv=%q want=%q", args, want)
+	}
+	args, err = jsonArgumentsForProfileWithSessionDir(readOnly, true, true, "/home/pi/sessions/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"--mode", "json", "--tools", readOnlyTools, "--no-extensions", "--session-dir", "/home/pi/sessions/project"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("pinned read-only argv=%q want=%q", args, want)
 	}
 
 	write := planRequest(config.ModeWorkspaceWrite)
@@ -49,6 +57,9 @@ func TestJSONArgumentsMapCallerPermissionAndContinuation(t *testing.T) {
 	}
 	if slices.Contains(args, "--tools") {
 		t.Fatalf("workspace-write argv restored a read-only tool allowlist: %q", args)
+	}
+	if slices.Contains(args, "--no-extensions") {
+		t.Fatalf("workspace-write argv disabled native extensions: %q", args)
 	}
 	if _, err = legacyJSONArguments(write); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("legacy workspace-write error=%v want unsupported profile", err)
@@ -94,19 +105,38 @@ func TestJSONArgumentsRejectUnsupportedRequests(t *testing.T) {
 }
 
 func TestRuntimeRequirementsCoverAllLaunchFlags(t *testing.T) {
-	requirements := RuntimeRequirements()
-	for _, flag := range []string{"--mode", "--tools", "--model", "--thinking", "--session"} {
+	requirements := RuntimeRequirements(ModeReadOnly)
+	for _, flag := range []string{"--mode", "--tools", "--model", "--thinking", "--session", "--session-dir", "--no-extensions"} {
 		if !slices.Contains(requirements.RequiredFlags, flag) {
 			t.Fatalf("required flags=%q missing %q", requirements.RequiredFlags, flag)
 		}
 	}
-	if len(requirements.HelpArgs) != 0 {
-		t.Fatalf("native Pi help args=%q want empty", requirements.HelpArgs)
+	if !slices.Equal(requirements.HelpArgs, []string{"--no-extensions"}) {
+		t.Fatalf("native Pi help args=%q", requirements.HelpArgs)
 	}
-	for _, removed := range []string{"--no-extensions", "--offline", "--session-dir"} {
+	for _, removed := range []string{"--offline"} {
 		if slices.Contains(requirements.RequiredFlags, removed) {
 			t.Fatalf("native Pi runtime requirements retain removed flag %q", removed)
 		}
+	}
+}
+
+func TestWorkspaceRuntimeRequirementsMatchWorkspaceLaunch(t *testing.T) {
+	requirements := RuntimeRequirements(ModeWorkspaceWrite)
+	want := []string{"--mode", "--model", "--thinking", "--session"}
+	if !slices.Equal(requirements.RequiredFlags, want) {
+		t.Fatalf("workspace-write runtime requirements=%q want=%q", requirements.RequiredFlags, want)
+	}
+	if len(requirements.HelpArgs) != 0 {
+		t.Fatalf("workspace-write help args=%q", requirements.HelpArgs)
+	}
+}
+
+func TestHistoricalNativeRuntimeRequirementsPreserveSnapshot(t *testing.T) {
+	requirements := historicalNativeRuntimeRequirements()
+	want := []string{"--mode", "--tools", "--model", "--thinking", "--session"}
+	if len(requirements.HelpArgs) != 0 || !slices.Equal(requirements.RequiredFlags, want) {
+		t.Fatalf("historical native runtime requirements=%+v", requirements)
 	}
 }
 

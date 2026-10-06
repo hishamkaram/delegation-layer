@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -190,10 +194,11 @@ func inspectSettingsConfig(path, kind string) (task.PolicySourceDigest, error) {
 	if !source.Present {
 		return result, nil
 	}
-	if structureErr := task.ValidateJSONStructure(source.Data); structureErr != nil {
+	data := stripUTF8BOM(source.Data)
+	if structureErr := task.ValidateJSONStructure(data); structureErr != nil {
 		return task.PolicySourceDigest{}, fmt.Errorf("%w: invalid Pi settings config: %w", ErrUnsupportedProfile, structureErr)
 	}
-	decoder := json.NewDecoder(bytes.NewReader(source.Data))
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	var value any
 	if decodeErr := decoder.Decode(&value); decodeErr != nil {
@@ -236,6 +241,149 @@ func inspectPolicySources(agentDir, workspace string) ([]task.PolicySourceDigest
 		return cmp.Compare(left.Kind, right.Kind)
 	})
 	return sources, nil
+}
+
+func resolveNativeSessionDirectory(environment profileEnvironment, workspace string) (string, error) {
+	if environment.SessionDirExplicit {
+		return environment.SessionDir, nil
+	}
+	configured := ""
+	for _, path := range []string{
+		filepath.Join(environment.AgentDir, "settings.json"),
+		filepath.Join(workspace, ".pi", "settings.json"),
+	} {
+		value, present, err := configuredSessionDirectory(path, environment.Home)
+		if err != nil {
+			return "", err
+		}
+		if present {
+			configured = value
+		}
+	}
+	if configured == "" {
+		return defaultSessionDirectory(environment.AgentDir, workspace)
+	}
+	resolved, err := normalizePiPath(configured, environment.Home)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(workspace, resolved)
+	}
+	canonical, err := config.CanonicalizePath(resolved)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid configured Pi session directory", ErrUnsupportedProfile)
+	}
+	if err = validateExistingDirectory(canonical, "Pi session"); err != nil {
+		return "", err
+	}
+	return canonical, nil
+}
+
+func configuredSessionDirectory(path, home string) (string, bool, error) {
+	source, err := commonprovider.ReadPolicySource(path)
+	if err != nil {
+		return "", false, fmt.Errorf("%w: inspect Pi session directory setting: %w", ErrUnsupportedProfile, err)
+	}
+	if !source.Present {
+		return "", false, nil
+	}
+	data := stripUTF8BOM(source.Data)
+	if err = task.ValidateJSONStructure(data); err != nil {
+		return "", false, fmt.Errorf("%w: invalid Pi settings config: %w", ErrUnsupportedProfile, err)
+	}
+	var settings map[string]json.RawMessage
+	if err = json.Unmarshal(data, &settings); err != nil || settings == nil {
+		return "", false, fmt.Errorf("%w: Pi settings config must be an object", ErrUnsupportedProfile)
+	}
+	raw, present := settings["sessionDir"]
+	if !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "", present, nil
+	}
+	var value string
+	if err = json.Unmarshal(raw, &value); err != nil {
+		return "", false, fmt.Errorf("%w: Pi sessionDir setting must be a string or null", ErrUnsupportedProfile)
+	}
+	normalized, err := normalizePiPath(value, home)
+	if err != nil {
+		return "", false, err
+	}
+	return normalized, true, nil
+}
+
+func stripUTF8BOM(data []byte) []byte {
+	return bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})
+}
+
+func expandHomePath(path, home string) string {
+	if path == "~" {
+		return home
+	}
+	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~\\") {
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
+func normalizePiPath(path, home string) (string, error) {
+	path = expandHomePath(path, home)
+	if !strings.HasPrefix(path, "file://") {
+		return path, nil
+	}
+	parsed, err := url.Parse(path)
+	if err != nil || parsed.Scheme != "file" || parsed.Path == "" {
+		return "", fmt.Errorf("%w: invalid Pi file URL", ErrUnsupportedProfile)
+	}
+	host := parsed.Hostname()
+	if parsed.Port() != "" {
+		return "", fmt.Errorf("%w: Pi file URL must not include a port", ErrUnsupportedProfile)
+	}
+	if host != "" && !strings.EqualFold(host, "localhost") {
+		if filepath.Separator != '\\' {
+			return "", fmt.Errorf("%w: non-local Pi file URL is unsupported", ErrUnsupportedProfile)
+		}
+		if len(parsed.Host) == 2 && parsed.Host[1] == ':' {
+			parsed.Path = parsed.Host + parsed.Path
+		} else {
+			parsed.Path = "//" + parsed.Host + parsed.Path
+		}
+	}
+	path = parsed.Path
+	if filepath.Separator == '\\' && len(path) >= 3 && path[0] == '/' && path[2] == ':' {
+		path = path[1:]
+	}
+	return filepath.FromSlash(path), nil
+}
+
+func defaultSessionDirectory(agentDir, workspace string) (string, error) {
+	safeWorkspace := workspace
+	if strings.HasPrefix(safeWorkspace, "/") || strings.HasPrefix(safeWorkspace, "\\") {
+		safeWorkspace = safeWorkspace[1:]
+	}
+	safeWorkspace = strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(safeWorkspace)
+	path := filepath.Join(agentDir, "sessions", "--"+safeWorkspace+"--")
+	canonical, err := config.CanonicalizePath(path)
+	if err != nil {
+		return "", fmt.Errorf("%w: resolve default Pi session directory", ErrUnsupportedProfile)
+	}
+	if err = validateExistingDirectory(canonical, "Pi session"); err != nil {
+		return "", err
+	}
+	return canonical, nil
+}
+
+func validateExistingDirectory(path, label string) error {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%w: inspect %s: %w", ErrUnsupportedProfile, label, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: %s is not a directory", ErrUnsupportedProfile, label)
+	}
+	return nil
 }
 
 func rejectCommandConfigValues(value any, path string) error {

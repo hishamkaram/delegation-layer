@@ -71,6 +71,29 @@ func TestPrepareEnvironmentRejectsInvalidNativeDirectorySelectors(t *testing.T) 
 	}
 }
 
+func TestNativeEnvironmentTreatsEmptyDirectorySelectorsAsUnset(t *testing.T) {
+	home := t.TempDir()
+	environment, err := prepareProfileEnvironment([]string{
+		"HOME=" + home,
+		piAgentDirEnv + "=",
+		piSessionDirEnv + "=",
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAgent := filepath.Join(home, ".pi", "agent")
+	wantSession := filepath.Join(wantAgent, "sessions")
+	if environment.AgentDir != wantAgent || environment.SessionDir != wantSession || environment.SessionDirExplicit {
+		t.Fatalf("empty native selectors were not treated as unset: %+v", environment)
+	}
+	if slices.Contains(environment.Values, piAgentDirEnv+"="+wantAgent) || slices.Contains(environment.Values, piSessionDirEnv+"="+wantSession) {
+		t.Fatalf("empty native selectors were emitted: %q", environment.Values)
+	}
+	if slices.Contains(environment.Values, piAgentDirEnv+"=") || slices.Contains(environment.Values, piSessionDirEnv+"=") {
+		t.Fatalf("empty native selectors were retained: %q", environment.Values)
+	}
+}
+
 func TestNativeEnvironmentPreservesDiscoveryEndpointsWithoutCredentials(t *testing.T) {
 	home := t.TempDir()
 	values := []string{
