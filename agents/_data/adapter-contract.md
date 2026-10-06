@@ -13,7 +13,7 @@ This document defines the normative requirements for provider adapters
 | `codex:review` | `read-only` | native review operation | `codex exec review --uncommitted|--base <branch>|--commit <sha> ...` | no continuation or workspace-write |
 | `claude:print` | `read-only`, `workspace-write` | native `plan` for read-only; `bypassPermissions` for unattended writes | `claude --print ... --permission-mode <mode> ...` | independent containment |
 | `ccr:print` | `read-only`, `workspace-write` | Claude native `plan` for read-only; `bypassPermissions` for unattended writes | `ccr launch --model <alias> --auth-mode provider-only --print --permission-mode <mode> -- ...` | subscription pools, independent containment |
-| `pi:json` | `read-only`, `workspace-write` | read-only uses read,grep,find,ls; write uses provider-native tools and approval | `pi --mode json ...`; read-only adds `--tools read,grep,find,ls` | independent containment |
+| `pi:json` | `read-only`, `workspace-write` | read-only uses read,grep,find,ls with extensions disabled; write uses provider-native tools and approval | `pi --mode json ...`; read-only adds `--tools read,grep,find,ls --no-extensions` | independent containment |
 | `opencode:run` | `read-only`, `workspace-write` | native plan/build agent; native `--auto` for workspace-write | `opencode run --format json --dir <workspace> ...` | unrestricted execution |
 
 Each native adapter locates its executable during static preparation and records
@@ -33,8 +33,11 @@ digest is compared with a checked-in value.
 ## 2. Launch Planning and Preflight Policy
 - **Native Configuration**: Provider CLIs own configuration, authentication,
   MCP servers, hooks, plugins, skills, and native policy. New admission does not
-  inventory these sources or inject settings to disable them. Permission modes
-  select native behavior; they do not establish independent containment.
+  rewrite these sources. A provider-specific permission contract may inspect
+  documented startup state and pass native controls required to make the
+  requested mode effective; those controls are capability-probed and recorded
+  with the launch plan. Permission modes select native behavior; they do not
+  establish independent containment.
   Workspace-write requests unattended execution, including native automatic
   approval where available. Native access may extend beyond the workspace;
   remaining provider restrictions are reported, not repaired by the adapter.

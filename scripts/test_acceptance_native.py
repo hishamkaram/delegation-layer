@@ -753,6 +753,48 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 self.assertIn(str(operation.workspace_marker), text)
                 self.assertIn("file-read tool or a read-only shell command", text)
 
+    def test_antigravity_read_only_brief_requires_file_read_tool(self):
+        with tempfile.TemporaryDirectory(prefix="native-read-brief-unit-") as directory:
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.provider = "antigravity:print"
+            operation.mode = "read-only"
+            operation.briefs = Path(directory)
+            operation.workspace_marker = Path(directory) / "acceptance-marker.txt"
+            path = operation.brief("fresh")
+            text = path.read_text()
+            self.assertIn("provider's file-read tool only", text)
+            self.assertIn("Do not use a command or shell tool", text)
+
+    def test_pi_runtime_entries_are_limited_to_workspace_write(self):
+        operation = object.__new__(gate.NativeAcceptance)
+        operation.provider = "pi:json"
+        operation.mode = "workspace-write"
+        self.assertTrue(operation._is_pi_runtime_entry(".pi"))
+        self.assertTrue(operation._is_pi_runtime_entry(".pi/tasks/session/file"))
+        operation.mode = "read-only"
+        self.assertFalse(operation._is_pi_runtime_entry(".pi/tasks/session/file"))
+        operation.provider = "antigravity:print"
+        operation.mode = "workspace-write"
+        self.assertFalse(operation._is_pi_runtime_entry(".pi/tasks/session"))
+
+    def test_pi_runtime_roots_must_be_directories(self):
+        with tempfile.TemporaryDirectory(prefix="native-pi-runtime-unit-") as directory:
+            workspace = Path(directory)
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.provider = "pi:json"
+            operation.mode = "workspace-write"
+            operation.workspace = workspace
+            operation._validate_pi_runtime_roots()
+            (workspace / ".pi").write_text("invalid runtime root")
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "not a directory"):
+                operation._validate_pi_runtime_roots()
+
+            (workspace / ".pi").unlink()
+            (workspace / ".pi").mkdir()
+            (workspace / ".pi" / "tasks").write_text("invalid task root")
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "not a directory"):
+                operation._validate_pi_runtime_roots()
+
     def test_replay_delegates_complete_collection_receipts(self):
         payload = {"basename": "result.txt", "length": 1, "sha256": "a" * 64}
         fresh_outcome = {"verdict": "committed", "payload": payload,

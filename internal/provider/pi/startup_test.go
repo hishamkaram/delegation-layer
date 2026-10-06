@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func TestValidateStartupMigrationsRejectsProjectCommandsRename(t *testing.T) {
@@ -18,6 +20,43 @@ func TestValidateStartupMigrationsRejectsProjectCommandsRename(t *testing.T) {
 	}
 	if err := validateStartupMigrations(workspace, agentDir); err == nil {
 		t.Fatal("migration-triggering project state was accepted")
+	}
+}
+
+func TestNativeProfilePreparationRejectsProjectMigrationState(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".pi", "commands"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agentDir := filepath.Join(t.TempDir(), "agent")
+	if err := os.Mkdir(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(agentDir, "sessions")
+	request := task.TaskRecord{CanonicalCwd: workspace, Mode: ModeReadOnly}
+	_, err := historicalArguments([]string{"--mode", "json"}, request,
+		profileEnvironment{AgentDir: agentDir, SessionDir: sessionDir}, nativeCurrentProfile)
+	if err == nil {
+		t.Fatal("native profile accepted startup migration state")
+	}
+}
+
+func TestHistoricalAndWorkspaceProfilesPreserveProjectMigrationState(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".pi", "commands"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agentDir := filepath.Join(t.TempDir(), "agent")
+	if err := os.Mkdir(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(agentDir, "sessions")
+	environment := profileEnvironment{AgentDir: agentDir, SessionDir: sessionDir}
+	for _, profile := range []profileKind{nativeHistoricalProfile, nativeCurrentProfile} {
+		request := task.TaskRecord{CanonicalCwd: workspace, Mode: ModeWorkspaceWrite}
+		if _, err := historicalArguments([]string{"--mode", "json"}, request, environment, profile); err != nil {
+			t.Fatalf("profile %d rejected provider-owned migration state: %v", profile, err)
+		}
 	}
 }
 

@@ -10,12 +10,13 @@ import (
 )
 
 type profileEnvironment struct {
-	Home          string
-	PiRoot        string
-	AgentDir      string
-	SessionDir    string
-	Values        []string
-	WritableRoots []string
+	Home               string
+	PiRoot             string
+	AgentDir           string
+	SessionDir         string
+	SessionDirExplicit bool
+	Values             []string
+	WritableRoots      []string
 }
 
 const (
@@ -50,11 +51,24 @@ func prepareProfileEnvironment(values []string, native bool) (profileEnvironment
 	if err != nil {
 		return profileEnvironment{}, fmt.Errorf("%w: invalid Pi home", ErrUnsupportedProfile)
 	}
-	agentDir, err := resolveNativeDirectory(entries, piAgentDirEnv, filepath.Join(piRoot, "agent"), "config")
+	agentDirEntries := entries
+	if native {
+		agentDirEntries = make(map[string]string, len(entries))
+		for key, value := range entries {
+			agentDirEntries[key] = value
+		}
+		if agentDirEntries[piAgentDirEnv] == "" {
+			delete(agentDirEntries, piAgentDirEnv)
+		}
+		if agentDirEntries[piSessionDirEnv] == "" {
+			delete(agentDirEntries, piSessionDirEnv)
+		}
+	}
+	agentDir, err := resolveNativeDirectory(agentDirEntries, piAgentDirEnv, filepath.Join(piRoot, "agent"), "config", home)
 	if err != nil {
 		return profileEnvironment{}, err
 	}
-	sessionDir, err := resolveNativeDirectory(entries, piSessionDirEnv, filepath.Join(agentDir, "sessions"), "session")
+	sessionDir, err := resolveNativeDirectory(agentDirEntries, piSessionDirEnv, filepath.Join(agentDir, "sessions"), "session", home)
 	if err != nil {
 		return profileEnvironment{}, err
 	}
@@ -63,7 +77,9 @@ func prepareProfileEnvironment(values []string, native bool) (profileEnvironment
 	if err != nil {
 		return profileEnvironment{}, err
 	}
-	return profileEnvironment{Home: home, PiRoot: piRoot, AgentDir: agentDir, SessionDir: sessionDir, Values: environmentValues, WritableRoots: writableRoots}, nil
+	sessionDirValue, sessionDirExplicit := entries[piSessionDirEnv]
+	sessionDirExplicit = sessionDirExplicit && sessionDirValue != ""
+	return profileEnvironment{Home: home, PiRoot: piRoot, AgentDir: agentDir, SessionDir: sessionDir, SessionDirExplicit: sessionDirExplicit, Values: environmentValues, WritableRoots: writableRoots}, nil
 }
 
 func profileEnvironmentValues(entries map[string]string, native bool, agentDir, sessionDir string) []string {
@@ -76,11 +92,11 @@ func profileEnvironmentValues(entries map[string]string, native bool, agentDir, 
 			values = append(values, key+"="+value)
 		}
 	}
-	if _, exists := entries[piAgentDirEnv]; exists {
+	if value, exists := entries[piAgentDirEnv]; exists && (value != "" || !native) {
 		values = append(values, piAgentDirEnv+"="+agentDir)
 	}
 	if native {
-		if _, exists := entries[piSessionDirEnv]; exists {
+		if value, exists := entries[piSessionDirEnv]; exists && value != "" {
 			values = append(values, piSessionDirEnv+"="+sessionDir)
 		}
 		values = appendNativeDiscoveryValues(values, entries)
@@ -88,6 +104,20 @@ func profileEnvironmentValues(entries map[string]string, native bool, agentDir, 
 		// Pin the resolved session directory for historical read-only tasks.
 		values = append(values, piSessionDirEnv+"="+sessionDir)
 	}
+	slices.Sort(values)
+	return values
+}
+
+func pinSessionDirectory(values []string, sessionDir string) []string {
+	for index, value := range values {
+		key, _, ok := strings.Cut(value, "=")
+		if ok && key == piSessionDirEnv {
+			values[index] = piSessionDirEnv + "=" + sessionDir
+			slices.Sort(values)
+			return values
+		}
+	}
+	values = append(values, piSessionDirEnv+"="+sessionDir)
 	slices.Sort(values)
 	return values
 }
@@ -156,10 +186,15 @@ func nativeDiscoveryKey(key string) bool {
 	}
 }
 
-func resolveNativeDirectory(entries map[string]string, key, fallback, label string) (string, error) {
+func resolveNativeDirectory(entries map[string]string, key, fallback, label, home string) (string, error) {
 	value, exists := entries[key]
 	if !exists {
 		value = fallback
+	}
+	var err error
+	value, err = normalizePiPath(value, home)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid Pi %s directory", ErrUnsupportedProfile, label)
 	}
 	if value == "" {
 		return "", fmt.Errorf("%w: empty Pi %s directory", ErrUnsupportedProfile, label)
@@ -167,6 +202,9 @@ func resolveNativeDirectory(entries map[string]string, key, fallback, label stri
 	canonical, err := config.CanonicalizePath(value)
 	if err != nil {
 		return "", fmt.Errorf("%w: invalid Pi %s directory", ErrUnsupportedProfile, label)
+	}
+	if err = validateExistingDirectory(canonical, "Pi "+label); err != nil {
+		return "", err
 	}
 	return canonical, nil
 }

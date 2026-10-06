@@ -620,7 +620,7 @@ func openBriefForRead(path string) (*os.File, error) {
 }
 
 func buildRequest(rootID, id, provider, cwd string, requested task.TaskConfig, brief []byte, prior *task.PriorSession) (task.TaskRecord, error) {
-	budget, err := config.ParseBudget(requested.Budget)
+	budget, err := config.ParseBudgetForProvider(provider, requested.Budget)
 	if err != nil {
 		return task.TaskRecord{}, err
 	}
@@ -1037,6 +1037,23 @@ func validateRootAndCwd(root, cwd string) (string, string, error) {
 
 func sameRequest(a, b *task.TaskRecord) bool {
 	return task.CompareRequests(a, b)
+}
+
+// sameExistingRequest preserves the immutable request recorded by an earlier
+// dispatch when a retry omits the budget. Defaults are resolved when a new
+// task is admitted, but an omitted retry option must remain idempotent across a
+// default change; an explicit budget still has to match exactly.
+func sameExistingRequest(args Arguments, request, existing *task.TaskRecord) bool {
+	if sameRequest(request, existing) {
+		return true
+	}
+	if args.Config.Budget == "" && request != nil && existing != nil {
+		candidate := *request
+		candidate.BudgetNanos = existing.BudgetNanos
+		candidate.RequestedConfig.Budget = existing.RequestedConfig.Budget
+		return sameRequest(&candidate, existing)
+	}
+	return false
 }
 
 func continuationExpectation(req *task.TaskRecord) task.SessionExpectation {

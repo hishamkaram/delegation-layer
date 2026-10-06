@@ -120,6 +120,17 @@ func TestInspectSettingsConfigTracksDefaultsWithoutCredentialBytes(t *testing.T)
 	}
 }
 
+func TestInspectSettingsConfigAcceptsUTF8BOM(t *testing.T) {
+	path := filepath.Join(canonicalTempDir(t), "settings.json")
+	contents := append([]byte{0xef, 0xbb, 0xbf}, []byte(`{"defaultModel":"gpt-5"}`)...)
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectSettingsConfig(path, piGlobalSettingsConfigKind); err != nil {
+		t.Fatalf("BOM-prefixed settings were rejected: %v", err)
+	}
+}
+
 func TestInspectAuthConfigRecordsShapeWithoutCredentialBytes(t *testing.T) {
 	agentDir := canonicalTempDir(t)
 	path := filepath.Join(agentDir, "auth.json")
@@ -166,6 +177,164 @@ func TestInspectPolicySourcesIncludesNativePolicyFiles(t *testing.T) {
 	}
 	if len(sources) != 4 || sources[0].Path >= sources[1].Path || sources[1].Path >= sources[2].Path || sources[2].Path >= sources[3].Path {
 		t.Fatalf("sources=%+v", sources)
+	}
+}
+
+func TestResolveNativeSessionDirectoryUsesEffectiveSettings(t *testing.T) {
+	home := canonicalTempDir(t)
+	agentDir := filepath.Join(home, "agent")
+	workspace := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".pi"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	global := filepath.Join(home, "global-sessions")
+	project := filepath.Join(home, "project-sessions")
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"sessionDir":"`+global+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".pi", "settings.json"), []byte(`{"sessionDir":"`+project+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveNativeSessionDirectory(profileEnvironment{Home: home, AgentDir: agentDir}, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := config.CanonicalizePath(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("session directory=%q want=%q", got, want)
+	}
+}
+
+func TestResolveNativeSessionDirectoryResolvesRelativeSettingFromWorkspace(t *testing.T) {
+	home := canonicalTempDir(t)
+	agentDir := filepath.Join(home, "agent")
+	workspace := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, ".pi"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".pi", "settings.json"), []byte(`{"sessionDir":".pi/sessions"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveNativeSessionDirectory(profileEnvironment{Home: home, AgentDir: agentDir}, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := config.CanonicalizePath(filepath.Join(workspace, ".pi", "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("relative session directory=%q want=%q", got, want)
+	}
+}
+
+func TestResolveNativeSessionDirectoryRejectsExistingFile(t *testing.T) {
+	home := canonicalTempDir(t)
+	agentDir := filepath.Join(home, "agent")
+	workspace := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, ".pi"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	selected := filepath.Join(home, "session-file")
+	if err := os.WriteFile(selected, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	settings := []byte(`{"sessionDir":"` + selected + `"}`)
+	if err := os.WriteFile(filepath.Join(workspace, ".pi", "settings.json"), settings, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := resolveNativeSessionDirectory(profileEnvironment{Home: home, AgentDir: agentDir}, workspace); !errors.Is(err, ErrUnsupportedProfile) {
+		t.Fatalf("error=%v want unsupported profile", err)
+	}
+}
+
+func TestResolveNativeSessionDirectoryNormalizesFileURL(t *testing.T) {
+	home := canonicalTempDir(t)
+	agentDir := filepath.Join(home, "agent")
+	workspace := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, ".pi"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	selected := filepath.Join(home, "file-url-sessions")
+	uri := "file://" + filepath.ToSlash(selected)
+	settings := []byte(`{"sessionDir":"` + uri + `"}`)
+	if err := os.WriteFile(filepath.Join(workspace, ".pi", "settings.json"), settings, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveNativeSessionDirectory(profileEnvironment{Home: home, AgentDir: agentDir}, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := config.CanonicalizePath(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("session directory=%q want=%q", got, want)
+	}
+}
+
+func TestDefaultSessionDirectoryStripsOnlyOneLeadingSeparator(t *testing.T) {
+	agentDir := canonicalTempDir(t)
+	got, err := defaultSessionDirectory(agentDir, `/\project`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(agentDir, "sessions", "---project--")
+	if got != want {
+		t.Fatalf("session directory=%q want=%q", got, want)
+	}
+}
+
+func TestResolveNativeSessionDirectoryUsesNativeDefaultForEmptySetting(t *testing.T) {
+	home := canonicalTempDir(t)
+	agentDir := filepath.Join(home, "agent")
+	workspace := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, ".pi"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".pi", "settings.json"), []byte(`{"sessionDir":""}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveNativeSessionDirectory(profileEnvironment{Home: home, AgentDir: agentDir}, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := defaultSessionDirectory(agentDir, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("session directory=%q want native default %q", got, want)
+	}
+}
+
+func TestResolveNativeSessionDirectoryPinsEnvironmentSelector(t *testing.T) {
+	home := canonicalTempDir(t)
+	selected := filepath.Join(home, "selected")
+	got, err := resolveNativeSessionDirectory(profileEnvironment{
+		Home: home, AgentDir: filepath.Join(home, "agent"), SessionDir: selected, SessionDirExplicit: true,
+	}, filepath.Join(home, "workspace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := config.CanonicalizePath(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("session directory=%q want=%q", got, want)
 	}
 }
 

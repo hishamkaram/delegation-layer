@@ -16,14 +16,18 @@ var ErrUnsupportedProfile = errors.New("unsupported-effective-config")
 // noninteractive mode. Session continuation is bound to one exact ID rather
 // than Pi's "most recent" shorthand.
 func jsonArguments(request task.TaskRecord) ([]string, error) {
-	return jsonArgumentsForProfile(request, true)
+	return jsonArgumentsForProfile(request, true, true)
 }
 
 func legacyJSONArguments(request task.TaskRecord) ([]string, error) {
-	return jsonArgumentsForProfile(request, false)
+	return jsonArgumentsForProfile(request, false, false)
 }
 
-func jsonArgumentsForProfile(request task.TaskRecord, native bool) ([]string, error) {
+func jsonArgumentsForProfile(request task.TaskRecord, native, currentNative bool) ([]string, error) {
+	return jsonArgumentsForProfileWithSessionDir(request, native, currentNative, "")
+}
+
+func jsonArgumentsForProfileWithSessionDir(request task.TaskRecord, native, currentNative bool, sessionDir string) ([]string, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, err
 	}
@@ -34,11 +38,11 @@ func jsonArgumentsForProfile(request task.TaskRecord, native bool) ([]string, er
 	if request.Mode == ModeReadOnly {
 		arguments = append(arguments, "--tools", readOnlyTools)
 	}
-	if !native {
-		// Extensions can replace built-in tools and run lifecycle hooks. A
-		// missing configured package can also trigger installation during
-		// startup, so offline mode is part of the historical read-only boundary.
-		arguments = append(arguments, "--no-extensions", "--offline")
+	arguments = appendStartupControls(arguments, native, currentNative, request.Mode)
+	var err error
+	arguments, err = appendSessionDirectory(arguments, native, currentNative, request.Mode, sessionDir)
+	if err != nil {
+		return nil, err
 	}
 	if request.RequestedConfig.Model != "" {
 		arguments = append(arguments, "--model", request.RequestedConfig.Model)
@@ -53,6 +57,29 @@ func jsonArgumentsForProfile(request task.TaskRecord, native bool) ([]string, er
 		arguments = append(arguments, "--session", prior.ConversationID)
 	}
 	return arguments, nil
+}
+
+func appendSessionDirectory(arguments []string, native, currentNative bool, mode, sessionDir string) ([]string, error) {
+	if native && currentNative && mode == ModeReadOnly && sessionDir != "" {
+		return append(arguments, "--session-dir", sessionDir), nil
+	}
+	return arguments, nil
+}
+
+func appendStartupControls(arguments []string, native, currentNative bool, mode string) []string {
+	if !native {
+		// Extensions can replace built-in tools and run lifecycle hooks. A
+		// missing configured package can also trigger installation during
+		// startup, so offline mode is part of the historical read-only boundary.
+		return append(arguments, "--no-extensions", "--offline")
+	}
+	if currentNative && mode == ModeReadOnly {
+		// Native read-only tasks must not run ambient extensions. Extensions can
+		// execute startup hooks and persist project state before the model gets
+		// a chance to use the read-only tool allowlist.
+		return append(arguments, "--no-extensions")
+	}
+	return arguments
 }
 
 // printArguments is kept as the conventional adapter-internal name used by

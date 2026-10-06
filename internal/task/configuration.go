@@ -42,7 +42,7 @@ func normalizeRequestedConfig(r *TaskRecord) error {
 	if r.RequestedConfig.Budget == "" && r.BudgetNanos > 0 {
 		r.RequestedConfig.Budget = time.Duration(r.BudgetNanos).String()
 	}
-	duration, err := config.ParseBudget(r.RequestedConfig.Budget)
+	duration, err := config.ParseBudgetForProvider(r.Provider, r.RequestedConfig.Budget)
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func normalizeRequestedConfig(r *TaskRecord) error {
 	if err != nil {
 		return err
 	}
-	return validateRequestedConfig(r.RequestedConfig, r.Mode, r.BudgetNanos)
+	return validateRequestedConfig(r.Provider, r.RequestedConfig, r.Mode, r.BudgetNanos)
 }
 
 func normalizedNativeTimeout(provider, value string, budget int64) (string, error) {
@@ -83,14 +83,14 @@ func validateNativeTimeout(provider string, request TaskConfig, budget int64) er
 	return nil
 }
 
-func validateRequestedConfig(request TaskConfig, mode string, budget int64) error {
+func validateRequestedConfig(provider string, request TaskConfig, mode string, budget int64) error {
 	if mode == "" || request.Permission == "" || request.Permission != mode {
 		return errors.New("requested permission must match the explicit task mode")
 	}
 	if err := config.ValidateMode(mode); err != nil {
 		return err
 	}
-	duration, err := config.ParseBudget(request.Budget)
+	duration, err := config.ParseBudgetForProvider(provider, request.Budget)
 	if err != nil {
 		return err
 	}
@@ -142,7 +142,7 @@ func validateTaskConfiguration(r *TaskRecord) error {
 	if err := config.ValidateProvider(r.Provider); err != nil {
 		return err
 	}
-	if err := validateRequestedConfig(r.RequestedConfig, r.Mode, r.BudgetNanos); err != nil {
+	if err := validateRequestedConfig(r.Provider, r.RequestedConfig, r.Mode, r.BudgetNanos); err != nil {
 		return err
 	}
 	if err := validateNativeTimeout(r.Provider, r.RequestedConfig, r.BudgetNanos); err != nil {
@@ -365,11 +365,11 @@ func validateMetaConfiguration(r *MetaRecord) error {
 	if err := ValidatePredicateRef(r.Predicate); err != nil {
 		return err
 	}
-	duration, err := config.ParseBudget(r.RequestedConfig.Budget)
+	duration, err := config.ParseBudgetForProvider(r.Predicate.Adapter, r.RequestedConfig.Budget)
 	if err != nil {
 		return err
 	}
-	if err := validateRequestedConfig(r.RequestedConfig, r.Predicate.Mode, int64(duration)); err != nil {
+	if err := validateRequestedConfig(r.Predicate.Adapter, r.RequestedConfig, r.Predicate.Mode, int64(duration)); err != nil {
 		return err
 	}
 	if err := validateNativeTimeout(r.Predicate.Adapter, r.RequestedConfig, int64(duration)); err != nil {

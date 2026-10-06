@@ -11,8 +11,9 @@ import (
 
 // Supported default and mode constants.
 const (
-	DefaultBudgetDuration = 30 * time.Minute
-	DefaultMode           = "read-only"
+	DefaultBudgetDuration            = 30 * time.Minute
+	DefaultCodexReviewBudgetDuration = time.Hour
+	DefaultMode                      = "read-only"
 
 	ModeReadOnly       = "read-only"
 	ModeWorkspaceWrite = "workspace-write"
@@ -53,6 +54,16 @@ func ParseBudget(budgetStr string) (time.Duration, error) {
 		return 0, ErrInvalidBudget
 	}
 	return d, nil
+}
+
+// ParseBudgetForProvider applies the ordinary default unless a provider has a
+// deliberately longer operation-specific default. Explicit budgets always
+// win.
+func ParseBudgetForProvider(provider, budgetStr string) (time.Duration, error) {
+	if budgetStr == "" && provider == ProviderCodexReview {
+		return DefaultCodexReviewBudgetDuration, nil
+	}
+	return ParseBudget(budgetStr)
 }
 
 // ValidateMode validates that mode is a recognized permission mode.

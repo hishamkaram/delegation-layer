@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -18,6 +19,58 @@ func TestProfileReconstructionRetainsNativeAndLegacyBindings(t *testing.T) {
 		})
 	}
 	t.Run("legacy", testLegacyProfileReconstruction)
+}
+
+func TestNativeReadOnlyProfilePinsSettingsSessionDirectory(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, ".pi"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cliDir := t.TempDir()
+	if writeErr := os.WriteFile(filepath.Join(cliDir, "pi"), []byte("pi fixture"), 0o700); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", cliDir)
+	request := planRequest(ModeReadOnly)
+	request.CanonicalCwd = workspace
+	firstSession, err := config.CanonicalizePath(filepath.Join(home, ".pi", "agent", "sessions", "first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writeErr := os.WriteFile(filepath.Join(workspace, ".pi", "settings.json"), []byte(`{"sessionDir":"`+firstSession+`"}`), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	first := finalizeProfile(t, mustPrepareCandidate(t, request), time.Now())
+	if !slices.Contains(first.Plan.Environment, piSessionDirEnv+"="+firstSession) {
+		t.Fatalf("resolved session directory was not pinned: %q", first.Plan.Environment)
+	}
+
+	secondSession := filepath.Join(home, ".pi", "agent", "sessions", "second")
+	if writeErr := os.WriteFile(filepath.Join(workspace, ".pi", "settings.json"), []byte(`{"sessionDir":"`+secondSession+`"}`), 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	replayCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{
+		EffectiveConfig:     first.Effective,
+		Environment:         first.Plan.Environment,
+		EnvironmentRecorded: true,
+		Predicate:           first.Plan.Predicate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay := finalizeProfile(t, replayCandidate, time.Now())
+	if !slices.Contains(replay.Plan.Environment, piSessionDirEnv+"="+firstSession) || slices.Contains(replay.Plan.Environment, piSessionDirEnv+"="+secondSession) {
+		t.Fatalf("replay did not retain admitted session directory: %q", replay.Plan.Environment)
+	}
+	if !slices.Equal(replay.Plan.Environment, first.Plan.Environment) || !slices.Equal(replay.Plan.Arguments, first.Plan.Arguments) || !task.CompareEffectiveConfigs(replay.Effective, first.Effective) {
+		t.Fatalf("replay changed the admitted launch contract: environment=%q/%q arguments=%q/%q policy=%+v/%+v", replay.Plan.Environment, first.Plan.Environment, replay.Plan.Arguments, first.Plan.Arguments, *replay.Effective.Policy, *first.Effective.Policy)
+	}
 }
 
 func testNativeProfileReconstruction(t *testing.T, mode string) {
@@ -62,8 +115,12 @@ func testNativeProfileReconstruction(t *testing.T, mode string) {
 		t.Fatal(err)
 	}
 	historicalProfile := finalizeProfile(t, historicalCandidate, now)
-	if !historicalProfile.Plan.Predicate.Equal(historical) {
-		t.Fatalf("native %s v3 reconstruction changed predicate=%+v", mode, historicalProfile.Plan.Predicate)
+	historicalArguments, err := jsonArgumentsForProfile(request, true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !historicalProfile.Plan.Predicate.Equal(historical) || !slices.Equal(historicalProfile.Plan.Arguments, historicalArguments) {
+		t.Fatalf("native %s v3 reconstruction changed launch binding: args=%q predicate=%+v", mode, historicalProfile.Plan.Arguments, historicalProfile.Plan.Predicate)
 	}
 }
 
@@ -94,7 +151,7 @@ func testLegacyProfileReconstruction(t *testing.T) {
 }
 
 func TestProfileReconstructionPreservesPreUpgradePredicate(t *testing.T) {
-	for _, reference := range []task.PredicateRef{readOnlyV4Reference(), workspaceWriteV4Reference()} {
+	for _, reference := range []task.PredicateRef{readOnlyV5Reference(), readOnlyV4Reference(), workspaceWriteV5Reference(), workspaceWriteV4Reference()} {
 		t.Run(reference.Mode, func(t *testing.T) {
 			request, now := profileReconstructionFixture(t, reference.Mode)
 			current := finalizeProfile(t, mustPrepareCandidate(t, request), now)
@@ -103,7 +160,11 @@ func TestProfileReconstructionPreservesPreUpgradePredicate(t *testing.T) {
 				t.Fatal(err)
 			}
 			rebuilt := finalizeProfile(t, candidate, now)
-			if !rebuilt.Plan.Predicate.Equal(reference) || !slices.Equal(rebuilt.Plan.Arguments, current.Plan.Arguments) || !task.CompareEffectiveConfigs(rebuilt.Effective, current.Effective) {
+			historicalArguments, err := jsonArgumentsForProfile(request, true, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !rebuilt.Plan.Predicate.Equal(reference) || !slices.Equal(rebuilt.Plan.Arguments, historicalArguments) || !task.CompareEffectiveConfigs(rebuilt.Effective, current.Effective) {
 				t.Fatalf("existing task contract changed: %+v", rebuilt)
 			}
 		})

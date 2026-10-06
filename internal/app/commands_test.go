@@ -528,6 +528,28 @@ func TestDispatchExistingRejectsChangedExplicitSupervisorConfig(t *testing.T) {
 	}
 }
 
+func TestSameExistingRequestPreservesOmittedBudgetAcrossDefaultChanges(t *testing.T) {
+	briefSHA := task.ComputeSHA256([]byte("brief"))
+	existing := &task.TaskRecord{
+		Provider:        config.ProviderCodexReview,
+		Mode:            config.ModeReadOnly,
+		CanonicalCwd:    "/workspace",
+		RequestedConfig: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "30m0s"},
+		BudgetNanos:     int64(30 * time.Minute),
+		BriefSHA256:     briefSHA,
+		BriefLength:     5,
+	}
+	current := *existing
+	current.RequestedConfig.Budget = "1h0m0s"
+	current.BudgetNanos = int64(time.Hour)
+	if !sameExistingRequest(Arguments{Config: task.TaskConfig{Permission: config.ModeReadOnly}}, &current, existing) {
+		t.Fatal("omitted retry budget did not preserve the existing request")
+	}
+	if sameExistingRequest(Arguments{Config: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1h"}}, &current, existing) {
+		t.Fatal("explicit retry budget bypassed immutable request comparison")
+	}
+}
+
 func TestDispatchExistingAcceptsMatchingExplicitSupervisorConfig(t *testing.T) {
 	store, td, req := newAppTestTask(t, true)
 	if _, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef()); cleanupErr != nil || collectErr != nil {

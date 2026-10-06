@@ -42,17 +42,20 @@ during the final binding and start handoff is rejected. Provider version numbers
 are observed for evidence but are not hardcoded release constraints.
 
 Provider CLIs load and enforce their own settings, MCP servers, hooks, plugins,
-and skills. New tasks do not inventory these sources or disable them. Permission
-flags request native behavior; custom tools and extensions remain governed by
-the provider. Delegation Layer does not independently contain their effects.
+and skills. New tasks do not rewrite these sources. A provider-specific
+permission contract may inspect documented startup state and pass native
+controls required to make the requested mode effective; capability inspection
+records those controls before launch. Permission flags request native behavior;
+Delegation Layer does not independently contain provider effects.
 Workspace-write requests unattended native execution. Antigravity read-only
 uses exactly `--sandbox --mode plan` without a bypass; its authorized
 workspace-write path retains `--sandbox --mode accept-edits` with the existing
-native bypass. Claude uses permission bypass, Pi uses native configured tools,
-and OpenCode uses its automatic build mode. These modes can permit access
-beyond the selected workspace; configured native restrictions still belong to
-each provider. Previously admitted tasks retain their recorded preparation
-contract.
+native bypass. Claude uses permission bypass, Pi read-only uses its native tool
+allowlist with extensions disabled, Pi workspace-write uses native configured
+tools, and OpenCode uses its automatic build mode. These modes can permit
+access beyond the selected workspace; configured native restrictions still
+belong to each provider. Previously admitted tasks retain their recorded
+preparation contract.
 
 Model discovery reports bounded, nonsecret model facts through the same
 state-rooted inspection boundary. Its output is advisory and never an

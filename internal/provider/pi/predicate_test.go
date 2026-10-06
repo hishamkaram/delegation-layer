@@ -305,24 +305,28 @@ func fragmentedPiMessage(fragments int) string {
 	return message.String()
 }
 
-func TestCurrentInterpreterRecoversHistoricalV4WithoutChangingSeal(t *testing.T) {
-	stdout := piStream(testUUID, "recovered", true)
-	historical := newHistoricalV4Interpreter(ModeReadOnly)
-	seal := validSeal(historical.Reference(), stdout, nil)
-	input := predicate.Input{Seal: seal}
-	current := NewInterpreter(ModeReadOnly)
-	recoverable, ok := current.(interface {
-		Target() task.PredicateRef
-		CanRecover(task.PredicateRef) bool
-		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
-	})
-	if !ok || !recoverable.CanRecover(historical.Reference()) || recoverable.CanRecover(current.Reference()) {
-		t.Fatal("current Pi interpreter recovery mapping is incorrect")
-	}
-	var answer bytes.Buffer
-	interpretation, err := recoverable.Recover(input, evidence{stdout: stdout}, &answer)
-	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "recovered" || !input.Seal.Predicate.Equal(historical.Reference()) {
-		t.Fatalf("recovery interpretation=%+v answer=%q err=%v seal=%+v", interpretation, answer.String(), err, input.Seal.Predicate)
+func TestCurrentInterpreterRecoversHistoricalV5WithoutChangingSeal(t *testing.T) {
+	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+		t.Run(mode, func(t *testing.T) {
+			stdout := piStream(testUUID, "recovered", true)
+			historical := newHistoricalV5Interpreter(mode)
+			seal := validSeal(historical.Reference(), stdout, nil)
+			input := predicate.Input{Seal: seal}
+			current := NewInterpreter(mode)
+			recoverable, ok := current.(interface {
+				Target() task.PredicateRef
+				CanRecover(task.PredicateRef) bool
+				Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
+			})
+			if !ok || !recoverable.CanRecover(historical.Reference()) || recoverable.CanRecover(current.Reference()) {
+				t.Fatal("current Pi interpreter recovery mapping is incorrect")
+			}
+			var answer bytes.Buffer
+			interpretation, err := recoverable.Recover(input, evidence{stdout: stdout}, &answer)
+			if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "recovered" || !input.Seal.Predicate.Equal(historical.Reference()) {
+				t.Fatalf("recovery interpretation=%+v answer=%q err=%v seal=%+v", interpretation, answer.String(), err, input.Seal.Predicate)
+			}
+		})
 	}
 }
 

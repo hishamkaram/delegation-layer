@@ -40,7 +40,7 @@ func requirePiDescription(t *testing.T, description commonprovider.Description) 
 
 func requirePiInterpreters(t *testing.T, registration commonprovider.Registration) {
 	t.Helper()
-	if registration.Prepare == nil || registration.PrepareExisting == nil || len(registration.Interpreters) != 8 {
+	if registration.Prepare == nil || registration.PrepareExisting == nil || len(registration.Interpreters) != 10 {
 		t.Fatalf("registration=%+v", registration)
 	}
 	if !registration.Interpreters[0].Reference().Equal(ReferenceForMode(ModeReadOnly)) {
@@ -49,22 +49,28 @@ func requirePiInterpreters(t *testing.T, registration commonprovider.Registratio
 	if !registration.Interpreters[1].Reference().Equal(ReferenceForMode(ModeWorkspaceWrite)) {
 		t.Fatalf("interpreter reference does not bind workspace-write mode")
 	}
-	if !registration.Interpreters[2].Reference().Equal(readOnlyV4Reference()) {
+	if !registration.Interpreters[2].Reference().Equal(readOnlyV5Reference()) {
+		t.Fatalf("read-only v5 interpreter reference is not registered")
+	}
+	if !registration.Interpreters[3].Reference().Equal(workspaceWriteV5Reference()) {
+		t.Fatalf("workspace-write v5 interpreter reference is not registered")
+	}
+	if !registration.Interpreters[4].Reference().Equal(readOnlyV4Reference()) {
 		t.Fatalf("read-only v4 interpreter reference is not registered")
 	}
-	if !registration.Interpreters[3].Reference().Equal(workspaceWriteV4Reference()) {
+	if !registration.Interpreters[5].Reference().Equal(workspaceWriteV4Reference()) {
 		t.Fatalf("workspace-write v4 interpreter reference is not registered")
 	}
-	if !registration.Interpreters[4].Reference().Equal(readOnlyV3Reference()) {
+	if !registration.Interpreters[6].Reference().Equal(readOnlyV3Reference()) {
 		t.Fatalf("read-only v3 interpreter reference is not registered")
 	}
-	if !registration.Interpreters[5].Reference().Equal(workspaceWriteV3Reference()) {
+	if !registration.Interpreters[7].Reference().Equal(workspaceWriteV3Reference()) {
 		t.Fatalf("workspace-write v3 interpreter reference is not registered")
 	}
-	if !registration.Interpreters[6].Reference().Equal(readOnlyV2Reference()) {
+	if !registration.Interpreters[8].Reference().Equal(readOnlyV2Reference()) {
 		t.Fatalf("read-only v2 interpreter reference is not registered")
 	}
-	if !registration.Interpreters[7].Reference().Equal(LegacyReference()) {
+	if !registration.Interpreters[9].Reference().Equal(LegacyReference()) {
 		t.Fatalf("legacy interpreter reference is not registered")
 	}
 }
@@ -85,11 +91,17 @@ func TestReadOnlyPredicateReferencesRemainStable(t *testing.T) {
 	if got := readOnlyV4Reference().SHA256; got != "dcb001a0874aadb1dddc034f778b62fbcc5146016f3ecd2ff0c9dca0fe6f11bc" {
 		t.Fatalf("read-only v4 digest changed: %s", got)
 	}
+	if got := readOnlyV5Reference().SHA256; got != "cd9b1fcd05395a13ddda10de45a458bbd1d21200348508214570b6b02797330b" {
+		t.Fatalf("read-only v5 digest changed: %s", got)
+	}
 	if got := workspaceWriteV4Reference().SHA256; got != "48f77734d7dcfb2268e4b3b835d9952779026e57bb2fa2d770539fdf4004535d" {
 		t.Fatalf("workspace-write v4 digest changed: %s", got)
 	}
-	if ReferenceForMode(ModeReadOnly).Version != currentPredicateVersion || ReferenceForMode(ModeReadOnly).SHA256 != ContractDigest(ModeReadOnly) {
-		t.Fatalf("current read-only reference is not bound to v5 contract: %+v", ReferenceForMode(ModeReadOnly))
+	if ReferenceForMode(ModeReadOnly).Version != currentReadOnlyVersion || ReferenceForMode(ModeReadOnly).SHA256 != ContractDigest(ModeReadOnly) {
+		t.Fatalf("current read-only reference is not bound to v6 contract: %+v", ReferenceForMode(ModeReadOnly))
+	}
+	if ReferenceForMode(ModeWorkspaceWrite).Version != currentWorkspaceVersion || ReferenceForMode(ModeWorkspaceWrite).SHA256 != ContractDigest(ModeWorkspaceWrite) {
+		t.Fatalf("current workspace-write reference is not bound to v7 contract: %+v", ReferenceForMode(ModeWorkspaceWrite))
 	}
 	if strings.Contains(Contract(ModeReadOnly), "Pi workspace-write is not advertised") {
 		t.Fatal("current read-only contract retains the historical workspace-write limitation")

@@ -155,6 +155,16 @@ func TestNormalizeRequestedConfig(t *testing.T) {
 	if err := ValidateTaskRecord(&input); err != nil {
 		t.Fatal(err)
 	}
+	review := fixtureTask(t)
+	review.Provider = config.ProviderCodexReview
+	review.RequestedConfig = TaskConfig{Permission: config.ModeReadOnly}
+	review.BudgetNanos = 0
+	if err := NormalizeRequestedConfig(&review); err != nil {
+		t.Fatal(err)
+	}
+	if review.BudgetNanos != int64(config.DefaultCodexReviewBudgetDuration) || review.RequestedConfig.Budget != "1h0m0s" {
+		t.Fatalf("codex review default was not normalized: %+v", review)
+	}
 	input = valid
 	input.RequestedConfig.Budget = "2s"
 	before := input
