@@ -27,6 +27,6 @@ func Registration() commonprovider.Registration {
 		Description:     Description(),
 		Prepare:         PrepareCandidate,
 		PrepareExisting: PrepareExistingCandidate,
-		Interpreters:    []predicate.Interpreter{NewPrintInterpreter(), NewCurrentPrintInterpreter(), NewCurrentPrintInterpreterForMode(ModeReadOnly)},
+		Interpreters:    []predicate.Interpreter{NewPrintInterpreter(), NewCurrentPrintInterpreter(), NewCurrentPrintInterpreterForMode(ModeReadOnly), NewRecordPrintInterpreter(ModeWorkspaceWrite), NewRecordPrintInterpreter(ModeReadOnly)},
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -20,8 +21,9 @@ const (
 )
 
 type interpreter struct {
-	mode   string
-	legacy bool
+	mode              string
+	legacy            bool
+	historicalCurrent bool
 }
 
 // NewInterpreter returns an OpenCode JSONL interpreter. With no argument it
@@ -39,37 +41,79 @@ func newLegacyInterpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, legacy: true}
 }
 
+func newHistoricalCurrentInterpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, historicalCurrent: true}
+}
+
 func (v interpreter) Reference() task.PredicateRef {
 	if v.legacy {
 		return LegacyReferenceForMode(v.mode)
+	}
+	if v.historicalCurrent {
+		return historicalReferenceForMode(v.mode)
 	}
 	return ReferenceForMode(v.mode)
 }
 
 func (v interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
+	return v.evaluateAgainst(input, raw, out, v.Reference())
+}
+
+func (v interpreter) evaluateAgainst(input predicate.Input, raw predicate.Evidence, out io.Writer, reference task.PredicateRef) (task.Interpretation, error) {
 	if v.Reference() == (task.PredicateRef{}) {
 		return task.Interpretation{}, fmt.Errorf("%w: unsupported OpenCode mode", task.ErrIdentityMismatch)
 	}
-	if err := validateEvaluationInput(input, raw, out, v.Reference()); err != nil {
+	if err := validateEvaluationInput(input, raw, out, reference); err != nil {
 		return task.Interpretation{}, err
 	}
-	state, err := readEvidence(raw)
+	state, err := readEvidence(raw, v.legacy || v.historicalCurrent)
 	if err != nil {
 		return task.Interpretation{}, err
 	}
-	usage := usageFromTotals(state.usage, task.UsageReliabilityUnreliable)
 	if refusal := refusalFor(input, state); refusal != "" {
-		return rejectedWithUsage(refusal, usage), nil
+		result := rejectedWithUsage(refusal, currentUsageFromTotals(state, task.UsageReliabilityUnreliable))
+		if state.current {
+			result.Diagnostics = append(result.Diagnostics, openCodeCurrentDiagnostic(refusal))
+			result.Diagnostics = append(result.Diagnostics, openCodeCurrentUsageWarning(state)...)
+		}
+		return result, nil
 	}
-	if err = writeAnswer(out, state.answer); err != nil {
+	if state.current {
+		if err = raw.Read(predicate.Stdout, func(reader io.Reader) error {
+			return copyOpenCodeCurrentAnswer(reader, state.currentTerminalStart, state.currentTerminalEnd, out)
+		}); err != nil {
+			return task.Interpretation{}, err
+		}
+	} else if err = writeAnswer(out, state.answer); err != nil {
 		return task.Interpretation{}, err
 	}
 	session := task.SessionIdentity{Provider: Provider, ConversationID: state.sessionID}
-	return task.Interpretation{
+	result := task.Interpretation{
 		Verdict: task.VerdictCommitted,
 		Session: &session,
-		Usage:   usageFromTotals(state.usage, task.UsageReliabilityReported),
-	}, nil
+		Usage:   currentUsageFromTotals(state, task.UsageReliabilityReported),
+	}
+	if state.current {
+		result.Diagnostics = openCodeCurrentUsageWarning(state)
+	}
+	return result, nil
+}
+
+// Target is the explicit current predicate selected by recovery. Historical
+// interpreter values expose it too so the registry can inspect one catalog.
+func (v interpreter) Target() task.PredicateRef { return v.Reference() }
+
+// CanRecover permits only the same OpenCode wire and permission-mode revision
+// that preceded the corrected offset-streaming parser.
+func (v interpreter) CanRecover(source task.PredicateRef) bool {
+	return !v.legacy && !v.historicalCurrent && source.Equal(historicalReferenceForMode(v.mode))
+}
+
+func (v interpreter) Recover(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
+	if !v.CanRecover(input.Seal.Predicate) {
+		return task.Interpretation{}, task.ErrIncompatiblePredicate
+	}
+	return v.evaluateAgainst(input, raw, out, input.Seal.Predicate)
 }
 
 func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out io.Writer, reference task.PredicateRef) error {
@@ -88,11 +132,15 @@ func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out 
 	return nil
 }
 
-func readEvidence(raw predicate.Evidence) (eventState, error) {
+func readEvidence(raw predicate.Evidence, historical bool) (eventState, error) {
 	var stdout eventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {
 		var err error
-		stdout, err = parseStdout(reader)
+		if historical {
+			stdout, err = parseHistoricalStdout(reader)
+		} else {
+			stdout, err = parseStdout(reader)
+		}
 		return err
 	})
 	stderrErr := raw.Read(predicate.Stderr, commonprovider.DrainReader)
@@ -118,10 +166,62 @@ func refusalFor(input predicate.Input, state eventState) string {
 	if !state.terminal {
 		return refusalIncomplete
 	}
+	if state.current {
+		if !state.currentTerminalText.seen || !state.currentTerminalText.nonblank {
+			return refusalEmpty
+		}
+		return ""
+	}
 	if !state.terminalAnswerSeen || len(bytes.TrimSpace(state.terminalAnswer)) == 0 {
 		return refusalEmpty
 	}
 	return ""
+}
+
+func currentUsageFromTotals(state eventState, reliability string) []task.UsageMetadata {
+	if !state.current {
+		return usageFromTotals(state.usage, reliability)
+	}
+	if !state.currentUsageReliable {
+		reliability = task.UsageReliabilityUnreliable
+	}
+	return usageFromTotals(state.usage, reliability)
+}
+
+func openCodeCurrentUsageWarning(state eventState) []task.OutputDiagnostic {
+	if !state.current || !state.currentUsagePresent || state.currentUsageReliable {
+		return nil
+	}
+	return []task.OutputDiagnostic{{
+		Code:    "optional_usage_unavailable",
+		Message: "Optional OpenCode usage could not be interpreted; the answer was assessed independently.",
+		Field:   "usage",
+	}}
+}
+
+func openCodeCurrentDiagnostic(refusal string) task.OutputDiagnostic {
+	diagnostic := task.OutputDiagnostic{
+		Code:    "provider_output_rejected",
+		Message: "OpenCode output did not satisfy the recorded completion contract.",
+	}
+	switch {
+	case refusal == refusalMalformed:
+		diagnostic.Code = "invalid_output"
+		diagnostic.Message = "OpenCode output contained invalid completion metadata."
+	case refusal == refusalIdentity:
+		diagnostic.Code = "identity_mismatch"
+		diagnostic.Message = "OpenCode session identity did not match the task."
+	case refusal == refusalIncomplete:
+		diagnostic.Code = "incomplete_output"
+		diagnostic.Message = "OpenCode output did not contain a complete stopped step."
+	case refusal == refusalEmpty:
+		diagnostic.Code = "empty_output"
+		diagnostic.Message = "OpenCode output did not contain a nonblank final answer."
+	case strings.HasPrefix(refusal, refusalProviderFailed):
+		diagnostic.Code = "provider_failed"
+		diagnostic.Message = "OpenCode reported a failed or interrupted step."
+	}
+	return diagnostic
 }
 
 func sealRefusal(seal task.ProviderExitRecord) string {

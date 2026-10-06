@@ -40,7 +40,7 @@ func requirePiDescription(t *testing.T, description commonprovider.Description) 
 
 func requirePiInterpreters(t *testing.T, registration commonprovider.Registration) {
 	t.Helper()
-	if registration.Prepare == nil || registration.PrepareExisting == nil || len(registration.Interpreters) != 6 {
+	if registration.Prepare == nil || registration.PrepareExisting == nil || len(registration.Interpreters) != 8 {
 		t.Fatalf("registration=%+v", registration)
 	}
 	if !registration.Interpreters[0].Reference().Equal(ReferenceForMode(ModeReadOnly)) {
@@ -49,16 +49,22 @@ func requirePiInterpreters(t *testing.T, registration commonprovider.Registratio
 	if !registration.Interpreters[1].Reference().Equal(ReferenceForMode(ModeWorkspaceWrite)) {
 		t.Fatalf("interpreter reference does not bind workspace-write mode")
 	}
-	if !registration.Interpreters[2].Reference().Equal(readOnlyV3Reference()) {
+	if !registration.Interpreters[2].Reference().Equal(readOnlyV4Reference()) {
+		t.Fatalf("read-only v4 interpreter reference is not registered")
+	}
+	if !registration.Interpreters[3].Reference().Equal(workspaceWriteV4Reference()) {
+		t.Fatalf("workspace-write v4 interpreter reference is not registered")
+	}
+	if !registration.Interpreters[4].Reference().Equal(readOnlyV3Reference()) {
 		t.Fatalf("read-only v3 interpreter reference is not registered")
 	}
-	if !registration.Interpreters[3].Reference().Equal(workspaceWriteV3Reference()) {
+	if !registration.Interpreters[5].Reference().Equal(workspaceWriteV3Reference()) {
 		t.Fatalf("workspace-write v3 interpreter reference is not registered")
 	}
-	if !registration.Interpreters[4].Reference().Equal(readOnlyV2Reference()) {
+	if !registration.Interpreters[6].Reference().Equal(readOnlyV2Reference()) {
 		t.Fatalf("read-only v2 interpreter reference is not registered")
 	}
-	if !registration.Interpreters[5].Reference().Equal(LegacyReference()) {
+	if !registration.Interpreters[7].Reference().Equal(LegacyReference()) {
 		t.Fatalf("legacy interpreter reference is not registered")
 	}
 }
@@ -76,11 +82,14 @@ func TestReadOnlyPredicateReferencesRemainStable(t *testing.T) {
 	if got := workspaceWriteV3Reference().SHA256; got != "ae54dc7d7985a9a1f4f5f1bf644a6369d88ea4cfda69f7ab310490214fff1a1f" {
 		t.Fatalf("workspace-write v3 digest changed: %s", got)
 	}
-	if got := ContractDigest(ModeReadOnly); got != "dcb001a0874aadb1dddc034f778b62fbcc5146016f3ecd2ff0c9dca0fe6f11bc" {
+	if got := readOnlyV4Reference().SHA256; got != "dcb001a0874aadb1dddc034f778b62fbcc5146016f3ecd2ff0c9dca0fe6f11bc" {
 		t.Fatalf("read-only v4 digest changed: %s", got)
 	}
-	if got := ContractDigest(ModeWorkspaceWrite); got != "48f77734d7dcfb2268e4b3b835d9952779026e57bb2fa2d770539fdf4004535d" {
+	if got := workspaceWriteV4Reference().SHA256; got != "48f77734d7dcfb2268e4b3b835d9952779026e57bb2fa2d770539fdf4004535d" {
 		t.Fatalf("workspace-write v4 digest changed: %s", got)
+	}
+	if ReferenceForMode(ModeReadOnly).Version != currentPredicateVersion || ReferenceForMode(ModeReadOnly).SHA256 != ContractDigest(ModeReadOnly) {
+		t.Fatalf("current read-only reference is not bound to v5 contract: %+v", ReferenceForMode(ModeReadOnly))
 	}
 	if strings.Contains(Contract(ModeReadOnly), "Pi workspace-write is not advertised") {
 		t.Fatal("current read-only contract retains the historical workspace-write limitation")

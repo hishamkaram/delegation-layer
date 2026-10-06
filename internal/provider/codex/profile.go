@@ -49,9 +49,13 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
 	}
-	predicateReference := profilePredicateReference(native, request.Mode, storedPredicate)
+	predicateReference := profilePredicateReference(request.Mode, storedPredicate)
 	if request.RequestedConfig.Interactive {
-		predicateReference = interactionReference(request.Mode)
+		if storedPredicate.Equal(task.PredicateRef{}) {
+			predicateReference = interactionReference(request.Mode)
+		} else {
+			predicateReference = storedPredicate
+		}
 	}
 	return commonprovider.ProfileCandidate{
 		Directory:     request.CanonicalCwd,
@@ -120,7 +124,7 @@ func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments [
 		prepared.Plan.OutputWriterContract = ""
 		prepared.Identity = nil
 		prepared.Interaction = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
-			return newAppServerProtocol(request, expected, record)
+			return newAppServerProtocolWithCapture(request, expected, record, predicateReference.Equal(interactionReference(request.Mode)))
 		}
 	}
 	if err := prepared.Validate(request); err != nil {
@@ -136,9 +140,9 @@ func finalizedEffectiveConfig(request task.TaskRecord, native bool, environment 
 	return legacyEffective, nil
 }
 
-func profilePredicateReference(native bool, mode string, stored task.PredicateRef) task.PredicateRef {
-	if native || stored == (task.PredicateRef{}) {
-		return ReferenceForMode(mode)
+func profilePredicateReference(mode string, stored task.PredicateRef) task.PredicateRef {
+	if !stored.Equal(task.PredicateRef{}) {
+		return stored
 	}
-	return stored
+	return ReferenceForMode(mode)
 }

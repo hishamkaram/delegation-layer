@@ -127,14 +127,14 @@ func assertReadOnlyProfile(t *testing.T, profile commonprovider.PreparedProfile)
 	if profile.Effective.Approval != "plan" {
 		t.Fatalf("read-only approval=%q", profile.Effective.Approval)
 	}
-	if !profile.Plan.Predicate.Equal(NewCurrentPrintInterpreterForMode(ModeReadOnly).Reference()) {
+	if !profile.Plan.Predicate.Equal(NewRecordPrintInterpreter(ModeReadOnly).Reference()) {
 		t.Fatalf("read-only predicate=%+v", profile.Plan.Predicate)
 	}
 }
 
 func assertReadOnlyReconstruction(t *testing.T, request task.TaskRecord, profile commonprovider.PreparedProfile, facts []byte) {
 	t.Helper()
-	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: profile.Effective})
+	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: profile.Plan.Predicate, EffectiveConfig: profile.Effective})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func assertUnattendedNativeApproval(t *testing.T, profile commonprovider.Prepare
 
 func assertNativeReconstruction(t *testing.T, request task.TaskRecord, profile commonprovider.PreparedProfile, facts []byte) {
 	t.Helper()
-	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: profile.Effective})
+	reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: profile.Plan.Predicate, EffectiveConfig: profile.Effective})
 	if err != nil {
 		t.Fatal(err)
 	}

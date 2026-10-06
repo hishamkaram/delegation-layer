@@ -49,7 +49,8 @@ bounded admission, liveness, and publication fields:
 ```
 
 The exact response can also contain `status`, `parent_task_id`, `capability`,
-`continuation`, `supervisor`, `raw`, `pending`, `stops`, `stop`, `error`, and
+`continuation`, `supervisor`, `raw`, `pending`, `stops`, `stop`, `failure`,
+`diagnostics`, `recheck`, `error`, and
 `error_truncated` fields depending on
 the command and observation. Payload and sealed raw output are descriptors, so a client reads
 the named file only after validating that its rooted path, length, and digest
@@ -74,6 +75,26 @@ the supervisor state is uncertain, while reporting that uncertainty in its
 bounded error field. Invalid requests use `2`; storage, supervisor, or output
 faults use `1`. Clients should inspect both the exit code and the JSON authority
 fields.
+
+## Offline answer recovery
+
+For an eligible rejected task, `collect` advertises
+`failure.next_action: "recheck"`. Run `delegate --root ABS recheck TASK_ID --json`
+once. It validates the original records and sealed evidence without invoking
+providers or the supervisor. Source records remain immutable.
+
+Exit `0` with `recheck.status: "recovered"` supplies an `answer` descriptor and
+absolute `answer_path`, plus an absolute `report_path`, assessment ID, source
+hashes, and target predicate. The original `publication` stays `rejected`;
+consume the derived answer, not the original rejection payload. Exit `4` means
+the reassessment still rejects the evidence; `1` is an operational/evidence
+error and `2` an invalid or unsupported request. Cached assessments are
+revalidated. Recovery does not change task lifecycle or continuation rights.
+
+`diagnostics` contain bounded, sanitized interpretation details. Optional usage
+warnings can accompany a committed or recovered answer without setting `error`.
+Original diagnostics remain in `outcome`; a recheck reports its own diagnostics
+separately. Never substitute raw stdout for an accepted answer.
 
 ## Discovery API
 

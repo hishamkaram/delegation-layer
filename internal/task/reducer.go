@@ -56,10 +56,17 @@ func CompareOutcomes(a, b *OutcomeRecord) bool {
 	if a.Payload != b.Payload {
 		return false
 	}
-	return compareUsage(a.Usage, b.Usage)
+	return compareUsage(a.Usage, b.Usage) && compareDiagnostics(a.Diagnostics, b.Diagnostics)
 }
 
 func compareUsage(a, b []UsageMetadata) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	return reflect.DeepEqual(a, b)
+}
+
+func compareDiagnostics(a, b []OutputDiagnostic) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true
 	}

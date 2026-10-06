@@ -33,6 +33,7 @@ type eventState struct {
 	mode             string
 	strict           bool
 	nativeHistorical bool
+	current          bool
 	initSeen         bool
 	init             initState
 
@@ -59,22 +60,29 @@ type initState struct {
 }
 
 type resultState struct {
-	sessionID      string
-	subtype        string
-	isError        bool
-	isErrorSeen    bool
-	answer         string
-	answerSeen     bool
-	stopReason     string
-	stopReasonSeen bool
-	stopReasonNull bool
-	diagnostic     string
-	errorsPresent  bool
-	usage          *usageEnvelope
-	modelUsage     []modelUsageRecord
-	totalCostUSD   *string
-	durationMS     *int64
-	numTurns       *int64
+	sessionID        string
+	subtype          string
+	isError          bool
+	isErrorSeen      bool
+	answer           string
+	answerSeen       bool
+	currentAnswer    claudeTextSummary
+	currentAnswerSet bool
+	stopReason       string
+	stopReasonSeen   bool
+	stopReasonNull   bool
+	diagnostic       string
+	errorsPresent    bool
+	usage            *usageEnvelope
+	modelUsage       []modelUsageRecord
+	totalCostUSD     *string
+	durationMS       *int64
+	numTurns         *int64
+	// currentUsagePresent distinguishes omitted optional accounting from an
+	// observed but unusable usage envelope. Historical parsers leave these
+	// fields at their zero values and retain their original strict behavior.
+	currentUsagePresent  bool
+	currentUsageReliable bool
 }
 
 // parsedEvent deliberately retains only the top-level object fields needed by
@@ -98,11 +106,11 @@ func (s eventState) semanticFault() bool { return s.semanticErr != nil }
 // to reach EOF and seal a finite provider invocation. Only one bounded line and
 // completion-relevant scalar fields are retained by the shared framer and this
 // provider callback.
-func parseStdout(reader io.Reader) (eventState, error) {
-	return parseStdoutForMode(reader, Mode)
+func parseHistoricalStdout(reader io.Reader) (eventState, error) {
+	return parseHistoricalStdoutForMode(reader, Mode)
 }
 
-func parseStdoutForMode(reader io.Reader, mode string) (eventState, error) {
+func parseHistoricalStdoutForMode(reader io.Reader, mode string) (eventState, error) {
 	return parseStdoutForModeWithPolicy(reader, mode, false)
 }
 
@@ -112,6 +120,10 @@ func parseLegacyStdoutForMode(reader io.Reader, mode string) (eventState, error)
 
 func parseHistoricalNativeStdoutForMode(reader io.Reader, mode string) (eventState, error) {
 	return parseStdoutForModeWithOptions(reader, mode, false, true)
+}
+
+func parseHistoricalCurrentStdoutForMode(reader io.Reader, mode string) (eventState, error) {
+	return parseStdoutForModeWithOptions(reader, mode, false, false)
 }
 
 func parseStdoutForModeWithPolicy(reader io.Reader, mode string, strict bool) (eventState, error) {
@@ -771,11 +783,13 @@ func decodeResultText(fields map[string]json.RawMessage) (string, bool, string, 
 }
 
 type resultUsage struct {
-	usage        *usageEnvelope
-	modelUsage   []modelUsageRecord
-	totalCostUSD *string
-	durationMS   *int64
-	numTurns     *int64
+	usage         *usageEnvelope
+	modelUsage    []modelUsageRecord
+	totalCostUSD  *string
+	durationMS    *int64
+	numTurns      *int64
+	usagePresent  bool
+	usageReliable bool
 }
 
 func decodeResultUsage(fields map[string]json.RawMessage) (resultUsage, error) {

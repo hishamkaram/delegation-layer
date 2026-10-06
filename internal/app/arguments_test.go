@@ -128,3 +128,21 @@ func TestNonblockingDefaultsAndHelp(t *testing.T) {
 		t.Fatalf("default watch is not nonblocking: %+v %v", a, err)
 	}
 }
+
+func TestRecheckArgumentsRequireOneTaskIDAndAllowJSONPlacement(t *testing.T) {
+	id := strings.Repeat("d", 32)
+	for _, argv := range [][]string{
+		{"--root", "/state", "recheck", id, "--json"},
+		{"recheck", "--json", id, "--root=/state"},
+	} {
+		a, err := ParseArguments(argv)
+		if err != nil || a.Command != "recheck" || a.TaskID != id || !a.JSON || a.Root != "/state" {
+			t.Fatalf("recheck arguments: %+v %v", a, err)
+		}
+	}
+	for _, argv := range [][]string{{"recheck"}, {"recheck", id, id}, {"recheck", "ABC"}} {
+		if _, err := ParseArguments(argv); err == nil {
+			t.Fatalf("invalid recheck arguments accepted: %v", argv)
+		}
+	}
+}

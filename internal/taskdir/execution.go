@@ -348,3 +348,17 @@ func (td *TaskDir) validateSealedFiles(seal *task.ProviderExitRecord) error {
 	}
 	return nil
 }
+
+// OpenRawObserverReader is a runner-owned read capability for captured stdout.
+// The caller must close it after the observer completes and before publication.
+func (td *TaskDir) OpenRawObserverReader() (*os.File, error) {
+	state, err := td.ownedRunner()
+	if err != nil {
+		return nil, err
+	}
+	defer state.mu.Unlock()
+	if state.sealed || state.poisoned != nil {
+		return nil, task.ErrEvidenceFault
+	}
+	return td.store.openFile(filepath.Join(td.Dir, "raw", "stdout"), os.O_RDONLY)
+}

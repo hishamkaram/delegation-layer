@@ -93,6 +93,23 @@ func testLegacyProfileReconstruction(t *testing.T) {
 	}
 }
 
+func TestProfileReconstructionPreservesPreUpgradePredicate(t *testing.T) {
+	for _, reference := range []task.PredicateRef{readOnlyV4Reference(), workspaceWriteV4Reference()} {
+		t.Run(reference.Mode, func(t *testing.T) {
+			request, now := profileReconstructionFixture(t, reference.Mode)
+			current := finalizeProfile(t, mustPrepareCandidate(t, request), now)
+			candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rebuilt := finalizeProfile(t, candidate, now)
+			if !rebuilt.Plan.Predicate.Equal(reference) || !slices.Equal(rebuilt.Plan.Arguments, current.Plan.Arguments) || !task.CompareEffectiveConfigs(rebuilt.Effective, current.Effective) {
+				t.Fatalf("existing task contract changed: %+v", rebuilt)
+			}
+		})
+	}
+}
+
 func profileReconstructionFixture(t *testing.T, mode string) (task.TaskRecord, time.Time) {
 	t.Helper()
 	home := t.TempDir()

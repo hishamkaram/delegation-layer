@@ -200,6 +200,32 @@
       "split": "validation"
     },
     {
+      "name": "recheck-recoverable",
+      "prompt": "Ask a separate Codex CLI session to review pricing.py against README.md without editing. If the terminal result is rejected with failure.next_action=recheck, recheck the same task once and report only the verified recovered answer.",
+      "external": true,
+      "provider": "codex:exec",
+      "fixture_scenario": "recoverable-rejection",
+      "holdout": true,
+      "split": "validation"
+    },
+    {
+      "name": "recheck-still-rejected",
+      "prompt": "Ask a separate Codex CLI session to review pricing.py against README.md without editing. If the terminal result is rejected with failure.next_action=recheck, recheck the same task once and report the rejection without using raw output as an answer.",
+      "external": true,
+      "provider": "codex:exec",
+      "fixture_scenario": "still-rejected-recheck",
+      "holdout": true,
+      "split": "validation"
+    },
+    {
+      "name": "external-collaboration-holdout",
+      "prompt": "Ask a separate Codex CLI session to review pricing.py against README.md and report its finding without editing.",
+      "external": true,
+      "provider": "codex:exec",
+      "holdout": true,
+      "split": "validation"
+    },
+    {
       "name": "requested-model-effort",
       "prompt": "Ask a separate Codex CLI session to review pricing.py without edits. Use model gpt-5.6-luna and effort max, preserving both choices.",
       "external": true,

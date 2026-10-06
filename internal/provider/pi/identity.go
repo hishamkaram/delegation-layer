@@ -9,6 +9,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -52,6 +53,39 @@ func (o *identityObserver) Observe(data []byte) {
 		return
 	}
 	o.framer.Feed(data)
+}
+
+// ObserveRecord is the current record-aware identity path. It inspects only
+// the session header and keeps all provider payloads out of live state.
+func (o *identityObserver) ObserveRecord(value providerjson.Value) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.done {
+		return o.completeErr
+	}
+	event, err := decodePiCurrentEvent(value)
+	if err != nil {
+		return err
+	}
+	if event.typeName != eventSession {
+		return nil
+	}
+	if o.seen {
+		return errors.New("multiple Pi session events")
+	}
+	sessionID, err := piCurrentRequiredString(event.fields, "id", 128)
+	if err != nil || !validSessionID(sessionID) {
+		return errors.New("pi session id is invalid")
+	}
+	o.seen = true
+	o.sessionID = sessionID
+	if identityMatchesExpectation(o.expected, sessionID) {
+		o.callbackErr = o.record(task.SessionIdentity{Provider: Provider, ConversationID: sessionID})
+		if o.callbackErr != nil {
+			o.callbackErr = fmt.Errorf("recording Pi session identity: %w", o.callbackErr)
+		}
+	}
+	return o.callbackErr
 }
 
 // Complete flushes a final unterminated line and freezes observation. Parser
@@ -108,4 +142,7 @@ func identityMatchesExpectation(expected task.SessionExpectation, sessionID stri
 	return expected.ID == ""
 }
 
-var _ execution.IdentityObserver = (*identityObserver)(nil)
+var (
+	_ execution.IdentityObserver       = (*identityObserver)(nil)
+	_ execution.RecordIdentityObserver = (*identityObserver)(nil)
+)

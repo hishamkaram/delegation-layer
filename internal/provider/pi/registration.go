@@ -33,6 +33,8 @@ func Registration() commonprovider.Registration {
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(ModeReadOnly),
 			NewInterpreter(ModeWorkspaceWrite),
+			newHistoricalV4Interpreter(ModeReadOnly),
+			newHistoricalV4Interpreter(ModeWorkspaceWrite),
 			newHistoricalV3Interpreter(ModeReadOnly),
 			newHistoricalV3Interpreter(ModeWorkspaceWrite),
 			newReadOnlyV2Interpreter(),

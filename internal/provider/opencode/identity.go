@@ -9,6 +9,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -51,6 +52,39 @@ func (o *identityObserver) Observe(data []byte) {
 		return
 	}
 	o.framer.Feed(data)
+}
+
+// ObserveRecord is the current record-aware identity path. OpenCode binds
+// every event to one exact sessionID; no event payload is retained.
+func (o *identityObserver) ObserveRecord(value providerjson.Value) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.done {
+		return o.callback
+	}
+	event, err := decodeOpenCodeCurrentEvent(value)
+	if err != nil {
+		return err
+	}
+	sessionID, err := openCodeCurrentRequiredString(event.fields, "sessionID", 128)
+	if err != nil || !validSessionID(sessionID) {
+		return errors.New("opencode event sessionID is invalid")
+	}
+	if o.seen && o.session != sessionID {
+		return errors.New("conflicting OpenCode sessionID values")
+	}
+	if o.seen {
+		return nil
+	}
+	o.seen = true
+	o.session = sessionID
+	if sessionMatchesExpectation(o.expected, sessionID) {
+		o.callback = o.record(task.SessionIdentity{Provider: Provider, ConversationID: sessionID})
+		if o.callback != nil {
+			o.callback = fmt.Errorf("recording OpenCode session identity: %w", o.callback)
+		}
+	}
+	return o.callback
 }
 
 func (o *identityObserver) Complete() error {
@@ -106,4 +140,7 @@ func sessionMatchesExpectation(expected task.SessionExpectation, sessionID strin
 	return expected.ID == ""
 }
 
-var _ execution.IdentityObserver = (*identityObserver)(nil)
+var (
+	_ execution.IdentityObserver       = (*identityObserver)(nil)
+	_ execution.RecordIdentityObserver = (*identityObserver)(nil)
+)

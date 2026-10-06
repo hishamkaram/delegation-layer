@@ -417,16 +417,17 @@ type PayloadDescriptor struct {
 
 // OutcomeRecord is stored in outcome.json (the sole publication authority).
 type OutcomeRecord struct {
-	SchemaVersion  int               `json:"schema_version"`
-	RootID         string            `json:"root_id"`
-	TaskID         string            `json:"task_id"`
-	SpecSHA256     string            `json:"spec_sha256"`
-	MetaSHA256     string            `json:"meta_sha256"`
-	Verdict        string            `json:"verdict"`
-	EvidenceSHA256 string            `json:"evidence_sha256"`
-	Predicate      PredicateRef      `json:"predicate"`
-	Payload        PayloadDescriptor `json:"payload"`
-	Usage          []UsageMetadata   `json:"usage,omitempty"`
+	SchemaVersion  int                `json:"schema_version"`
+	RootID         string             `json:"root_id"`
+	TaskID         string             `json:"task_id"`
+	SpecSHA256     string             `json:"spec_sha256"`
+	MetaSHA256     string             `json:"meta_sha256"`
+	Verdict        string             `json:"verdict"`
+	EvidenceSHA256 string             `json:"evidence_sha256"`
+	Predicate      PredicateRef       `json:"predicate"`
+	Payload        PayloadDescriptor  `json:"payload"`
+	Usage          []UsageMetadata    `json:"usage,omitempty"`
+	Diagnostics    []OutputDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // PublishExitRecord is stored in publish.exit.
@@ -782,11 +783,8 @@ func validateExitObservation(r *ProviderExitRecord) error {
 }
 
 func validateOutcomePayload(r *OutcomeRecord) error {
-	if err := ValidateSHA256(r.Payload.SHA256); err != nil {
-		return fmt.Errorf("outcome.json payload sha256: %w", err)
-	}
-	if r.Payload.Length <= 0 {
-		return fmt.Errorf("%w: terminal payload must be nonempty", ErrInvariantFault)
+	if err := ValidatePayloadDescriptor(r.Payload); err != nil {
+		return fmt.Errorf("outcome.json payload: %w", err)
 	}
 	if r.Verdict == VerdictCommitted && r.Payload.Basename != "result.txt" {
 		return fmt.Errorf("%w: committed outcome must have payload basename result.txt, got %q", ErrInvariantFault, r.Payload.Basename)
@@ -827,6 +825,9 @@ func ValidateOutcomeRecord(r *OutcomeRecord) error {
 		return err
 	}
 	if err := ValidateUsageMetadataList(r.Usage); err != nil {
+		return err
+	}
+	if err := ValidateOutputDiagnostics(r.Diagnostics); err != nil {
 		return err
 	}
 	return validateOutcomePayload(r)

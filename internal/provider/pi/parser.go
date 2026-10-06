@@ -36,6 +36,7 @@ type parserOptions struct {
 }
 
 type eventState struct {
+	current            bool
 	sessionID          string
 	sessionSeen        bool
 	agentStarted       bool
@@ -55,14 +56,22 @@ type eventState struct {
 	requireAgentEndErrorMatch bool
 	retryPending              bool
 
-	lastMessageText       []byte
-	lastMessageSeen       bool
-	lastMessageStopReason string
-	messageUsage          *usageTotals
-	turnText              []byte
-	agentText             []byte
-	agentSettled          bool
-	usage                 []*usageTotals
+	lastMessageText         []byte
+	lastMessageSeen         bool
+	lastMessageStopReason   string
+	messageUsage            *usageTotals
+	messageUsageReliable    bool
+	turnText                []byte
+	agentText               []byte
+	agentSettled            bool
+	usage                   []*usageTotals
+	currentLastMessage      piTextSummary
+	currentTurnText         piTextSummary
+	currentAgentText        piTextSummary
+	currentTurnMessageStart int64
+	currentTurnMessageEnd   int64
+	currentUsagePresent     bool
+	currentUsageReliable    bool
 }
 
 type parsedEvent struct {
@@ -81,7 +90,7 @@ func (s eventState) semanticFault() bool { return s.semanticErr != nil }
 // parseStdout drains the complete bounded stream. A semantic fault freezes
 // parser state but never stops reads, allowing the execution core to close
 // pipes and seal the invocation deterministically.
-func parseStdout(reader io.Reader, options ...parserOptions) (eventState, error) {
+func parseHistoricalStdout(reader io.Reader, options ...parserOptions) (eventState, error) {
 	parserOptionsValue := parserOptions{}
 	if len(options) > 0 {
 		parserOptionsValue = options[0]

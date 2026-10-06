@@ -11,6 +11,7 @@ type (
 	entry struct {
 		ref         task.PredicateRef
 		interpreter Interpreter
+		recovery    RecoveryInterpreter
 	}
 	// Registry is immutable; constructor snapshots keys and no mutation API is exposed.
 	Registry struct{ entries []entry }
@@ -31,7 +32,17 @@ func New(interpreters ...Interpreter) (Registry, error) {
 				return Registry{}, fmt.Errorf("duplicate predicate reference")
 			}
 		}
-		r.entries = append(r.entries, entry{ref: ref, interpreter: v})
+		var recovery RecoveryInterpreter
+		if candidate, ok := v.(RecoveryInterpreter); ok {
+			recovery = candidate
+			if !candidate.Target().Equal(ref) {
+				return Registry{}, fmt.Errorf("recovery target must match registered interpreter")
+			}
+			if err := task.ValidatePredicateRef(candidate.Target()); err != nil {
+				return Registry{}, fmt.Errorf("invalid recovery target: %w", err)
+			}
+		}
+		r.entries = append(r.entries, entry{ref: ref, interpreter: v, recovery: recovery})
 	}
 	return r, nil
 }
@@ -43,6 +54,30 @@ func (r Registry) Resolve(ref task.PredicateRef) (Interpreter, error) {
 		}
 	}
 	return nil, task.ErrIncompatiblePredicate
+}
+
+// ResolveRecovery returns the one registered interpreter that explicitly
+// accepts source for offline recovery. Selection is independent of catalog
+// registration order so equal catalogs produce equal answers. A target equal
+// to source is ignored to prevent an endless recheck loop.
+func (r Registry) ResolveRecovery(source task.PredicateRef) (RecoveryInterpreter, error) {
+	if err := task.ValidatePredicateRef(source); err != nil {
+		return nil, err
+	}
+	candidates := make([]RecoveryInterpreter, 0)
+	for _, candidate := range r.entries {
+		if candidate.recovery == nil || candidate.recovery.Target().Equal(source) || !candidate.recovery.CanRecover(source) {
+			continue
+		}
+		candidates = append(candidates, candidate.recovery)
+	}
+	if len(candidates) == 0 {
+		return nil, ErrRecoveryUnsupported
+	}
+	if len(candidates) != 1 {
+		return nil, ErrRecoveryAmbiguous
+	}
+	return candidates[0], nil
 }
 
 // Default retains exactly the built-in fixture contract.

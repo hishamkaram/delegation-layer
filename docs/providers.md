@@ -175,6 +175,12 @@ question batches are exposed through `collect`/`events`; `reply` answers them an
 The native sandbox and never-ask approval policy remain selected by the requested
 permission. No global settings are changed.
 
+Codex tool and web-search payloads are not completion authority. Their unused
+metadata, including flattened duplicate tool IDs, is skipped. Thread identity,
+turn completion, and the selected agent answer remain validated. The optional
+last-message artifact is compared to the selected answer without buffering the
+whole answer.
+
 ## Claude
 
 `claude:print` uses print mode and structured streaming output. `read-only` maps

@@ -17,18 +17,18 @@ import (
 )
 
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepare(request, os.Environ(), nil)
+	return prepare(request, os.Environ(), nil, Reference(request.Mode))
 }
 
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	if !meta.Predicate.Equal(Reference(request.Mode)) || !meta.EnvironmentRecorded {
+	if (!meta.Predicate.Equal(Reference(request.Mode)) && !meta.Predicate.Equal(HistoricalReference(request.Mode))) || !meta.EnvironmentRecorded {
 		return commonprovider.ProfileCandidate{}, task.ErrIdentityMismatch
 	}
 	var roots []string
 	if meta.EffectiveConfig.Policy != nil {
 		roots = meta.EffectiveConfig.Policy.WritableRoots
 	}
-	return prepare(request, meta.Environment, roots)
+	return prepare(request, meta.Environment, roots, meta.Predicate)
 }
 
 func arguments(request task.TaskRecord) ([]string, string, error) {
@@ -63,7 +63,7 @@ func arguments(request task.TaskRecord) ([]string, string, error) {
 	return args, permission, nil
 }
 
-func prepare(request task.TaskRecord, values, recordedRoots []string) (commonprovider.ProfileCandidate, error) {
+func prepare(request task.TaskRecord, values, recordedRoots []string, reference task.PredicateRef) (commonprovider.ProfileCandidate, error) {
 	environment, roots, err := nativeEnvironment(values)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -92,7 +92,7 @@ func prepare(request task.TaskRecord, values, recordedRoots []string) (commonpro
 			if argumentErr != nil {
 				return commonprovider.PreparedProfile{}, argumentErr
 			}
-			return finalize(request, args, permission, cli, environment, roots, data)
+			return finalize(request, args, permission, cli, environment, roots, reference, data)
 		},
 	}, nil
 }
@@ -112,7 +112,7 @@ func helpProjector(request task.TaskRecord) func([]byte) (json.RawMessage, error
 	}
 }
 
-func finalize(request task.TaskRecord, args []string, permission string, cli commonprovider.CLIInfo, environment, roots []string, data json.RawMessage) (commonprovider.PreparedProfile, error) {
+func finalize(request task.TaskRecord, args []string, permission string, cli commonprovider.CLIInfo, environment, roots []string, reference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
 	facts, err := commonprovider.DecodeInspectionFacts(data)
 	if err != nil || facts.Runtime == nil || facts.Runtime.Executable != cli.Path || facts.Runtime.SHA256 != cli.SHA256 {
 		return commonprovider.PreparedProfile{}, commonprovider.ErrProfileUnavailable
@@ -128,7 +128,7 @@ func finalize(request task.TaskRecord, args []string, permission string, cli com
 		return commonprovider.PreparedProfile{}, err
 	}
 	profile := commonprovider.PreparedProfile{
-		Plan:            execution.Plan{Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(args), Directory: request.CanonicalCwd, Environment: slices.Clone(environment), Predicate: Reference(request.Mode)},
+		Plan:            execution.Plan{Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(args), Directory: request.CanonicalCwd, Environment: slices.Clone(environment), Predicate: reference},
 		ObservedVersion: facts.Runtime.Version, Effective: effective, WritableRoots: slices.Clone(roots),
 		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 			return claude.NewStreamIdentityObserver(Provider, request.RootID, request.TaskID, expected, record)

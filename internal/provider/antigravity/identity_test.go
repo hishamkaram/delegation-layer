@@ -2,6 +2,7 @@ package antigravity
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -216,5 +217,29 @@ func TestIdentityObserverRejectsInvalidConstruction(t *testing.T) {
 	}
 	if _, err := NewIdentityObserver(testTaskID, task.SessionExpectation{}, nil); err == nil {
 		t.Fatal("nil identity recorder was accepted")
+	}
+}
+
+func TestIdentityObserverSkipsLargeUnknownKeysAndPayloads(t *testing.T) {
+	count := 0
+	observer, err := NewIdentityObserver(testTaskID, task.SessionExpectation{}, func(identity task.SessionIdentity) error {
+		count++
+		if identity.ConversationID != testConversation {
+			t.Fatalf("identity=%+v", identity)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := `{"` + strings.Repeat("x", 1<<20) + `":{"id":1,"id":2,"body":"` + strings.Repeat("y", 1<<20) + `"},"conversation_id":"` + testConversation + `","response":"answer","status":"SUCCESS"}`
+	for start := 0; start < len(data); start += 32 << 10 {
+		observer.Observe([]byte(data[start:min(start+32<<10, len(data))]))
+	}
+	if err = observer.Complete(); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("large opaque field hid identity: callback count=%d", count)
 	}
 }

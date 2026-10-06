@@ -1,6 +1,6 @@
 ---
 name: agent-integration
-description: Coordinate external agent, model, and separate harness tasks through Delegate, including research, implementation, tests, reviews, consultations, comparisons, and debates. Use before choosing an external integration; ordinary native subagents and questions about tools remain local.
+description: Use Delegate for work assigned to another agent, model, or separate harness CLI session. Load this before a provider-specific skill or plugin, including when a user names a CLI for research, implementation, tests, reviews, consultations, comparisons, or debates. A named destination still routes through Delegate. Ordinary same-harness subagents and questions about tools remain local; respect an explicit choice of another integration.
 ---
 
 # Delegation Layer
@@ -13,6 +13,8 @@ external harness to do work. Requests such as “ask Codex to review this”,
 collaboration even when the user never mentions Delegate. The same applies
 when you decide external expertise is useful to fulfill the user's task.
 These names are examples; discover supported destinations through the CLI.
+A destination name identifies who should do the work; it does not by itself
+select a provider-specific skill, plugin, or direct CLI integration.
 “Claude Code Router” and “CCR” mean `ccr:print`, not ordinary Claude Code.
 For that request, use Delegate with a CCR model alias; a Claude-specific skill
 or subscription model does not fulfill the requested route.
@@ -36,8 +38,10 @@ not turn that request into an environment-repair task. When a response says
 `failure.next_action: "stop_and_report"`, that attempt is finished. Include its
 failure in your final response without opening a clarification dialog to choose
 a fallback. For `task_record: not_created`, identify the requested destination
-and quote the returned `task_id` (if present), `task_record`, `failure`, and
-`error`. Do not append inferred state paths or provider-setup diagnoses. Do not run diagnostic commands, retry it, or use another integration.
+and include the saved JSON failure response verbatim. A `task_id` can be returned
+even when no task record was created. Do not infer that an unavailable provider
+is uninstalled or unauthenticated. Do not append inferred state paths or
+provider-setup diagnoses, run diagnostic commands, retry it, or use another integration.
 Troubleshooting requires a separate user request. Other independently requested
 tasks may proceed; the failed attempt must remain reported as failed or blocked.
 
@@ -79,18 +83,23 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
    Collection may recover the
    saved supervisor only to observe an already-requested budget stop; it never
    launches a provider or retries a task.
-6. If a task is timed out and its JSON says `continuation.resumable: true`, use
+6. If `failure.next_action` is `recheck`, follow
+   [offline recovery](references/result-handling.md#offline-recovery) once for
+   that task. Rechecking saved evidence does not run the provider again.
+   Otherwise, report a rejected result without redispatching or reading raw
+   output as an answer.
+7. If a task is timed out and its JSON says `continuation.resumable: true`, use
    `continue --task TASK_ID`, optionally with a new `--brief`. Do not create a
    fresh unrelated dispatch to replace a resumable task.
-7. Treat `blocked` authentication as unresolved. Do not call it compatible,
+8. Treat `blocked` authentication as unresolved. Do not call it compatible,
    successful, or failed provider behavior, and do not invent login commands.
-8. Never put credentials, tokens, or unrestricted provider output in a brief,
+9. Never put credentials, tokens, or unrestricted provider output in a brief,
    option, receipt, or agent message.
-9. Permission modes select provider-native behavior, not an independent sandbox.
+10. Permission modes select provider-native behavior, not an independent sandbox.
    Providers load their own configuration and extensions. If a task is rejected,
    report delegate's evidence; do not assume the user's configuration is faulty
    or remove MCP servers, plugins, settings, or credentials to make it pass.
-10. The model chooses ordinary-task fan-out by issuing independent `dispatch`
+11. The model chooses ordinary-task fan-out by issuing independent `dispatch`
     commands concurrently. The private supervisor does not impose a task-count
     or CPU-based limit. Use this for independent investigation, debate, review,
     or provider comparison. Concurrent write tasks must use separate workspaces
@@ -162,6 +171,8 @@ Use an existing task brief when one is supplied. Otherwise create a bounded
 brief file that contains the requested work and its acceptance criteria. Keep
 the state root outside the workspace and provider-writable trees (which can
 include the system temporary directory). Use `DELEGATE_ROOT` when supplied.
+Pass a regular file path for `--brief`, not shell process substitution such as
+`<(...)` or an ephemeral `/dev/fd/...` path.
 
 Run path preparation and dispatch in **one shell/tool invocation**, as shown
 below. Shell variables may disappear between tool calls. For later commands,
@@ -190,7 +201,10 @@ when waiting, replying, steering, or continuing.
 
 Use automatic selection unless the user named a destination.
 For a named harness or provider resolved in step 2, replace `--auto` with `--provider PROVIDER_ID`; never
-combine the two:
+combine the two.
+
+Capture the dispatch exit code with `if`, as below. This prints the response
+even when dispatch fails and the surrounding shell has `set -e` enabled.
 
 ```sh
 WORKSPACE="$PWD"
@@ -200,13 +214,17 @@ cat >"$BRIEF" <<'EOF'
 Describe the delegated task, the files or behavior to change, and the checks
 that must pass. Keep the response concise and report validation evidence.
 EOF
-delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
+printf 'Saved response: %s\n' "$RESPONSE"
+if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
   --brief "$BRIEF" \
   --cwd "$WORKSPACE" \
   --permission read-only \
   --budget 30m \
-  --json >"$RESPONSE"
-dispatch_exit=$?
+  --json >"$RESPONSE"; then
+  dispatch_exit=0
+else
+  dispatch_exit=$?
+fi
 cat "$RESPONSE"
 printf '\nDispatch exit: %s; saved response: %s\n' "$dispatch_exit" "$RESPONSE"
 ```

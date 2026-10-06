@@ -28,10 +28,12 @@ type (
 		failure       error
 	}
 	scopedReader struct {
-		mu      sync.Mutex
-		reader  io.Reader
-		active  bool
-		failure error
+		mu        sync.Mutex
+		reader    io.Reader
+		size      int64
+		remaining int64
+		active    bool
+		failure   error
 	}
 )
 
@@ -42,6 +44,31 @@ func (r *scopedReader) Read(p []byte) (int, error) {
 		return 0, os.ErrClosed
 	}
 	n, err := r.reader.Read(p)
+	r.remaining -= int64(n)
+	if errors.Is(err, io.EOF) && r.remaining > 0 {
+		err = io.ErrUnexpectedEOF
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		r.failure = errors.Join(r.failure, err)
+	}
+	return n, err
+}
+
+// ReadAt keeps record views inside the same callback lifetime as sequential reads.
+func (r *scopedReader) ReadAt(p []byte, offset int64) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.active {
+		return 0, os.ErrClosed
+	}
+	at, ok := r.reader.(io.ReaderAt)
+	if !ok {
+		return 0, task.ErrEvidenceFault
+	}
+	n, err := at.ReadAt(p, offset)
+	if errors.Is(err, io.EOF) && offset >= 0 && int64(n) < min(int64(len(p)), max(r.size-offset, 0)) {
+		err = io.ErrUnexpectedEOF
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		r.failure = errors.Join(r.failure, err)
 	}
@@ -82,7 +109,7 @@ func (e *sealedEvidence) readLocked(stream sealedStream, ok bool, consume func(i
 	}
 	e.activeReaders++
 	e.mu.Unlock()
-	reader := &scopedReader{reader: io.NewSectionReader(stream.file, 0, stream.size), active: true}
+	reader := &scopedReader{reader: io.NewSectionReader(stream.file, 0, stream.size), size: stream.size, remaining: stream.size, active: true}
 	err := consume(reader)
 	reader.mu.Lock()
 	reader.active = false

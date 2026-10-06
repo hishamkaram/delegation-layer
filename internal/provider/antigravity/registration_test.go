@@ -11,7 +11,7 @@ func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 		t.Fatalf("runtime flag requirements are missing: %+v", description)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 3 {
+	if registration.Prepare == nil || len(registration.Interpreters) != 5 {
 		t.Fatalf("registration did not expose preparation and interpreters: %+v", registration)
 	}
 	if registration.Interpreters[2].Reference().Mode != ModeReadOnly {

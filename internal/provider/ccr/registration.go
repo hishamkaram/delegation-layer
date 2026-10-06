@@ -11,11 +11,37 @@ import (
 
 const Provider = "ccr:print"
 
-// Reference binds CCR foreground completion to the shared native Claude stream
-// contract, including CCR's own exit status and adapter/session identity.
+const (
+	currentPredicateVersion    = "ccr-foreground-v2"
+	historicalPredicateVersion = "ccr-foreground-v1"
+)
+
+// Reference binds fresh CCR foreground completion to the corrected native
+// Claude stream contract, including CCR's own exit status and adapter/session
+// identity.
 func Reference(mode string) task.PredicateRef {
-	contract := "ccr-foreground-v1\nprovider-only; explicit alias; foreground exit must succeed; session provider is ccr:print\n" + claude.ContractForMode(mode)
-	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "ccr-foreground-v1", SHA256: task.ComputeSHA256([]byte(contract))}
+	contract := ccrContract(currentPredicateVersion, claude.ContractForMode(mode))
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: currentPredicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+// HistoricalReference identifies CCR evidence sealed under the pre-issue47
+// Claude parser. It remains registered solely so sealed tasks can replay.
+func HistoricalReference(mode string) task.PredicateRef {
+	contract := ccrContract(historicalPredicateVersion, claude.HistoricalNativeContractForMode(mode))
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: historicalPredicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+func ccrContract(version, claudeContract string) string {
+	if claudeContract == "" {
+		return ""
+	}
+	return version + "\nprovider-only; explicit alias; foreground exit must succeed; session provider is ccr:print\n" + claudeContract
 }
 
 func RuntimeRequirements() commonprovider.RuntimeCapability {
@@ -23,9 +49,16 @@ func RuntimeRequirements() commonprovider.RuntimeCapability {
 }
 
 func Registration() commonprovider.Registration {
-	interpreters := make([]predicate.Interpreter, 0, 2)
+	interpreters := make([]predicate.Interpreter, 0, 4)
 	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		interpreter, err := claude.NewStreamInterpreter(Reference(mode))
+		interpreter, err := claude.NewStreamInterpreterWithRecovery(Reference(mode), HistoricalReference(mode))
+		if err != nil {
+			panic(err)
+		} // Immutable compiled contract.
+		interpreters = append(interpreters, interpreter)
+	}
+	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
+		interpreter, err := claude.NewHistoricalStreamInterpreter(HistoricalReference(mode))
 		if err != nil {
 			panic(err)
 		} // Immutable compiled contract.

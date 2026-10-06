@@ -9,14 +9,21 @@ import (
 )
 
 const (
-	Provider                       = "claude:print"
-	Mode                           = config.ModeReadOnly
-	WorkspaceWriteMode             = config.ModeWorkspaceWrite
-	Version                        = "runtime-reported"
-	ProfileRevision                = "claude-read-only-v1"
-	WorkspaceWriteProfileRevision  = "claude-workspace-write-v1"
-	predicateVersion               = "native-permissions-v1"
-	workspaceWritePredicateVersion = "native-permissions-v2"
+	Provider                      = "claude:print"
+	Mode                          = config.ModeReadOnly
+	WorkspaceWriteMode            = config.ModeWorkspaceWrite
+	Version                       = "runtime-reported"
+	ProfileRevision               = "claude-read-only-v1"
+	WorkspaceWriteProfileRevision = "claude-workspace-write-v1"
+	// The v1 read-only and v2 workspace-write native predicates are retained
+	// for sealed pre-issue47 evidence. Fresh tasks use the corrected revisions
+	// below; their wire is the same Claude stream, but their parser no longer
+	// buffers opaque payloads or imposes a one-megabyte record ceiling.
+	historicalNativePredicateVersion               = "native-permissions-v1"
+	historicalNativeWorkspaceWritePredicateVersion = "native-permissions-v2"
+	legacyNativeWorkspaceWritePredicateVersion     = "native-permissions-v1"
+	predicateVersion                               = "native-permissions-v2"
+	workspaceWritePredicateVersion                 = "native-permissions-v3"
 
 	// The legacy reference keeps already-sealed read-only evidence collectible
 	// after release-version gates were removed. It is never used for admission.
@@ -28,10 +35,13 @@ const (
 	// registered so pending tasks admitted with dontAsk can be replayed exactly.
 	legacyNativePredicateSHA256 = "c69794753071f23db76e4b5b00cd0c054c0b9f00d30c4fcae093e29f6989ef2c"
 
-	maxEventLineBytes = task.MaxControlRecordSize
-	answerChunkBytes  = 32 * 1024
-	maxModelRecords   = 128
-	maxModelNameBytes = 256
+	maxEventLineBytes        = task.MaxControlRecordSize
+	answerChunkBytes         = 32 * 1024
+	maxModelRecords          = 128
+	maxModelNameBytes        = 256
+	maxCurrentToolCount      = 4096
+	maxInteractionInputBytes = 256 * 1024
+	maxInteractionTextBytes  = 16 * 1024
 )
 
 // nativeContractV1 is the current evidence policy for Claude's stream-json
@@ -57,12 +67,29 @@ const contractV1 = `{"adapter":"claude:print","mode":"read-only","version":"runt
 
 const workspaceWriteContractV1 = `{"adapter":"claude:print","mode":"workspace-write","version":"runtime-reported","native":"Claude Code print stream-json producer","init":"permissionMode=acceptEdits and tools contain Read, Edit, Write, Glob, and Grep, with no other tool except EndConversation; mcp_servers is empty and apiKeySource is none","events":"the same strict UTF-8 JSONL, identity, message, result, usage, and bounded-output rules as the read-only interpreter","success":"invocation started, exit_code=0, exact expected and recorded session identity, valid write-mode init, one successful non-whitespace result","failure":"malformed, truncated, conflicting, identity-mismatched, provider-failed, or non-terminal output never publishes"}` + "\n"
 
+func correctedNativeContractForMode(mode string) string {
+	if mode == Mode {
+		contract := strings.Replace(nativeContractV1, `"version":"native-permissions-v1"`, `"version":"native-permissions-v2"`, 1)
+		contract = strings.Replace(contract, "provider-owned apiKeySource, tools, and mcp_servers fields are accepted when structurally valid", "provider-owned apiKeySource, tools (at most 4096 names), and mcp_servers fields are accepted when structurally valid", 1)
+		contract = strings.Replace(contract, "one UTF-8 JSON object per line, each line at most 1048576 bytes;", "one UTF-8 JSON object per line;", 1)
+		contract = strings.Replace(contract, "the parser retains one bounded line and bounded scalar fields only; modelUsage has at most 128 model records", "the parser retains offsets, hashes, and bounded scalar fields only; final result text is replayed from sealed offsets; modelUsage remains optional accounting", 1)
+		return contract
+	}
+	if mode == WorkspaceWriteMode {
+		contract := strings.Replace(nativeWorkspaceWriteContractV2, `"version":"native-permissions-v2"`, `"version":"native-permissions-v3"`, 1)
+		contract = strings.Replace(contract, "provider-owned apiKeySource, tools, and mcp_servers fields are accepted when structurally valid", "provider-owned apiKeySource, tools (at most 4096 names), and mcp_servers fields are accepted when structurally valid", 1)
+		contract = strings.Replace(contract, "the same strict UTF-8 JSONL, identity, message, result, usage, and bounded-output rules", "the same strict UTF-8 JSONL, identity, message, result, usage, and offset-streamed answer rules", 1)
+		return contract
+	}
+	return ""
+}
+
 // Contract returns the current native canonical bytes whose digest identifies
 // the interpreter.
-func Contract() string { return nativeContractV1 }
+func Contract() string { return correctedNativeContractForMode(Mode) }
 
 // ContractDigest returns the lowercase SHA-256 digest bound into Reference.
-func ContractDigest() string { return task.ComputeSHA256([]byte(nativeContractV1)) }
+func ContractDigest() string { return task.ComputeSHA256([]byte(Contract())) }
 
 // Reference returns the exact predicate reference for Claude print output.
 func Reference() task.PredicateRef {
@@ -70,7 +97,7 @@ func Reference() task.PredicateRef {
 }
 
 // WorkspaceWriteContract returns the current native workspace-write contract.
-func WorkspaceWriteContract() string { return nativeWorkspaceWriteContractV2 }
+func WorkspaceWriteContract() string { return correctedNativeContractForMode(WorkspaceWriteMode) }
 
 // WorkspaceWriteReference returns a predicate reference bound to the native
 // bypassPermissions profile. Keeping a distinct reference prevents a read-only
@@ -81,13 +108,22 @@ func WorkspaceWriteReference() task.PredicateRef {
 
 // ContractForMode returns the immutable output contract for mode.
 func ContractForMode(mode string) string {
-	if mode == Mode {
+	return correctedNativeContractForMode(mode)
+}
+
+// HistoricalNativeContractForMode returns the pre-issue47 native contract
+// bytes for adapters that reuse Claude's stream interpreter under their own
+// predicate identity. Fresh tasks must use ContractForMode; this helper is
+// only for replaying sealed evidence whose parser retained native payloads.
+func HistoricalNativeContractForMode(mode string) string {
+	switch mode {
+	case Mode:
 		return nativeContractV1
-	}
-	if mode == WorkspaceWriteMode {
+	case WorkspaceWriteMode:
 		return nativeWorkspaceWriteContractV2
+	default:
+		return ""
 	}
-	return ""
 }
 
 // ReferenceForMode returns the predicate reference bound to mode.
@@ -106,9 +142,23 @@ func ReferenceForMode(mode string) task.PredicateRef {
 func legacyNativeReferenceForMode(mode string) task.PredicateRef {
 	switch mode {
 	case Mode:
-		return task.PredicateRef{Adapter: Provider, Mode: mode, Version: predicateVersion, SHA256: legacyNativePredicateSHA256}
+		return task.PredicateRef{Adapter: Provider, Mode: mode, Version: historicalNativePredicateVersion, SHA256: legacyNativePredicateSHA256}
 	case WorkspaceWriteMode:
-		return task.PredicateRef{Adapter: Provider, Mode: mode, Version: predicateVersion, SHA256: task.ComputeSHA256([]byte(nativeWorkspaceWriteContractV1))}
+		return task.PredicateRef{Adapter: Provider, Mode: mode, Version: legacyNativeWorkspaceWritePredicateVersion, SHA256: task.ComputeSHA256([]byte(nativeWorkspaceWriteContractV1))}
+	default:
+		return task.PredicateRef{}
+	}
+}
+
+// historicalNativeReferenceForMode identifies the pre-issue47 current native
+// parser. It is distinct from legacyNativeReferenceForMode, whose policy was
+// dontAsk/acceptEdits and whose read-only digest predates native policy.
+func historicalNativeReferenceForMode(mode string) task.PredicateRef {
+	switch mode {
+	case Mode:
+		return task.PredicateRef{Adapter: Provider, Mode: mode, Version: historicalNativePredicateVersion, SHA256: task.ComputeSHA256([]byte(nativeContractV1))}
+	case WorkspaceWriteMode:
+		return task.PredicateRef{Adapter: Provider, Mode: mode, Version: historicalNativeWorkspaceWritePredicateVersion, SHA256: task.ComputeSHA256([]byte(nativeWorkspaceWriteContractV2))}
 	default:
 		return task.PredicateRef{}
 	}

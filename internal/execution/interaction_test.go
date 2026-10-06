@@ -2,12 +2,14 @@ package execution
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -35,6 +37,52 @@ func (p *interactionFixtureProtocol) Complete() error {
 		return task.ErrEvidenceFault
 	}
 	return nil
+}
+
+type recordCaptureFixtureProtocol struct {
+	useRecord    bool
+	recordCalls  int
+	receiveCalls int
+}
+
+func (p *recordCaptureFixtureProtocol) Start([]byte) ([][]byte, error) { return nil, nil }
+func (p *recordCaptureFixtureProtocol) Receive([]byte) (InteractionUpdate, error) {
+	p.receiveCalls++
+	return InteractionUpdate{}, nil
+}
+
+func (p *recordCaptureFixtureProtocol) ReceiveRecord(providerjson.Value) (InteractionUpdate, error) {
+	p.recordCalls++
+	return InteractionUpdate{}, nil
+}
+func (p *recordCaptureFixtureProtocol) UseRecordCapture() bool { return p.useRecord }
+func (p *recordCaptureFixtureProtocol) Encode(task.InteractionMessage) ([]byte, error) {
+	return nil, nil
+}
+func (p *recordCaptureFixtureProtocol) Complete() error { return nil }
+
+func TestConsumeRecordUsesCurrentCaptureOnlyWhenProtocolOptsIn(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		useRecord bool
+		records   int
+		receives  int
+	}{
+		{name: "historical", useRecord: false, records: 0, receives: 1},
+		{name: "current", useRecord: true, records: 1, receives: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			protocol := &recordCaptureFixtureProtocol{useRecord: testCase.useRecord}
+			invocation := &interactiveInvocation{protocol: protocol}
+			data := []byte(`{"type":"event"}`)
+			if err := invocation.consumeRecord(providerjson.Value{Reader: bytes.NewReader(data), End: int64(len(data))}); err != nil {
+				t.Fatal(err)
+			}
+			if protocol.recordCalls != testCase.records || protocol.receiveCalls != testCase.receives {
+				t.Fatalf("record calls=%d receive calls=%d", protocol.recordCalls, protocol.receiveCalls)
+			}
+		})
+	}
 }
 
 func preparedInteraction(t *testing.T) (*invocation, *interactiveInvocation) {

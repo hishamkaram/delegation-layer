@@ -13,6 +13,7 @@ All paths passed to `--root`, `--cwd`, and `--brief` must be absolute. Add
 | `delegate dispatch --auto ... --json` | Select and admit one bounded turn | Yes, at most once |
 | `delegate status TASK --json` | Reconcile and observe task state | No provider launch |
 | `delegate collect TASK --watch 5s --json` | Read or wait for publication | No provider launch |
+| `delegate recheck TASK --json` | Reassess eligible rejected evidence offline | No provider launch; original outcome unchanged |
 | `delegate continue --task TASK ... --json` | Create an exact-session successor | Yes, at most once for the successor |
 | `delegate reply TASK --request ID --answers FILE --id MESSAGE_ID --json` | Answer a pending native question | No new launch |
 | `delegate steer TASK --brief FILE --id MESSAGE_ID --json` | Guide a supported active turn | No new launch |

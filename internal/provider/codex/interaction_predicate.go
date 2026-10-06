@@ -13,15 +13,44 @@ import (
 
 const interactionContract = "codex app-server stdio v1: one root thread and turn; exact session identity; final root agent message; completed root turn; zero exit; fatal native errors remain fatal, explicit transient retries require successful completion; duplicate JSON keys and incomplete streams reject; clarification never authorizes tools; steering acknowledgement is not compliance; interaction journal sealed alongside stdout and stderr\n"
 
-type interactionInterpreter struct{ mode string }
+const currentInteractionContract = "codex app-server stdio v2: one root thread and turn; exact session identity; final root agent message selected by offset and streamed from sealed evidence; completed root turn; zero exit; fatal native errors remain fatal, explicit transient retries require successful completion; selected control duplicates reject while opaque tool payloads are discarded; clarification input is bounded and never authorizes tools; steering acknowledgement is not compliance; unknown lifecycle/control requests cannot imply completion or approval; interaction journal sealed alongside stdout and stderr\n"
+
+type interactionInterpreter struct {
+	mode       string
+	historical bool
+}
 
 func interactionReference(mode string) task.PredicateRef {
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v2", SHA256: task.ComputeSHA256([]byte(currentInteractionContract + mode + "\n"))}
+}
+
+func historicalInteractionReference(mode string) task.PredicateRef {
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v1", SHA256: task.ComputeSHA256([]byte(interactionContract + mode + "\n"))}
 }
 
-func (v interactionInterpreter) Reference() task.PredicateRef { return interactionReference(v.mode) }
+func newInteractionInterpreter(mode string) predicate.Interpreter {
+	return interactionInterpreter{mode: mode}
+}
+
+func newHistoricalInteractionInterpreter(mode string) predicate.Interpreter {
+	return interactionInterpreter{mode: mode, historical: true}
+}
+
+func (v interactionInterpreter) Reference() task.PredicateRef {
+	if v.historical {
+		return historicalInteractionReference(v.mode)
+	}
+	return interactionReference(v.mode)
+}
 
 func (v interactionInterpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
+	if !v.historical {
+		return evaluateCurrentInteraction(v, input, raw, out)
+	}
+	return v.evaluateHistorical(input, raw, out)
+}
+
+func (v interactionInterpreter) evaluateHistorical(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
 	if !input.Seal.Predicate.Equal(v.Reference()) {
 		return task.Interpretation{}, task.ErrIdentityMismatch
 	}

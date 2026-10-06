@@ -137,6 +137,7 @@ func finishInvocation(i *invocation, plan Plan, startErr error, opts Options) (r
 	if opts.Identity != nil {
 		result.ReceiptError = errors.Join(result.ReceiptError, opts.Identity.Complete())
 	}
+	result.Error = errors.Join(result.Error, i.stdout.closeObserver())
 	i.budget.complete(opts)
 	if i.interaction != nil {
 		result.Error = errors.Join(result.Error, i.td.SealInteraction())
