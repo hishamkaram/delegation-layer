@@ -16,6 +16,9 @@ run_case() {
     if [ "$case_provider" = ccr:print ]; then
         set -- --model "${CCR_LIVE_MODEL:-}"
     fi
+    if [ "$case_provider" = opencode:run ] && [ -n "${OPENCODE_LIVE_MODEL:-}" ]; then
+        set -- "$@" --model "$OPENCODE_LIVE_MODEL"
+    fi
     if [ -n "${DELEGATE_ACCEPTANCE_BIN_DIR:-}" ]; then
         set -- "$@" --pueue "$artifact_bin/pueue" --pueued "$artifact_bin/pueued"
     fi

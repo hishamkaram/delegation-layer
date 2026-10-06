@@ -83,10 +83,13 @@ jobs:
       actions: read
       attestations: read
     steps:
-      - name: Checkout the exact release source
+      - name: Checkout the current acceptance harness
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ inputs.tag }}
+          # The release artifact is verified and executed below. Keep the
+          # harness on protected main so acceptance fixes apply to existing
+          # draft tags as well as newly created releases.
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -138,10 +141,12 @@ jobs:
       - name: Configure OpenCode tool-capable acceptance model
         shell: bash
         run: |
+          model='openrouter/~openai/gpt-luna-latest'
           config="${RUNNER_TEMP}/opencode-acceptance.json"
-          printf '%s\n' '{"model":"openrouter/~openai/gpt-luna-latest"}' >"${config}"
+          printf '%s\n' "{\"model\":\"${model}\"}" >"${config}"
           chmod 0600 "${config}"
           printf 'OPENCODE_CONFIG=%s\n' "${config}" >>"${GITHUB_ENV}"
+          printf 'OPENCODE_LIVE_MODEL=%s\n' "${model}" >>"${GITHUB_ENV}"
 
       - name: Prove the released CLI with authenticated native providers
         env:
