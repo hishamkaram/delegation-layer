@@ -36,6 +36,62 @@ func TestExecArgumentsUseNativePermissionsBeforeResume(t *testing.T) {
 	}
 }
 
+func TestReviewArgumentsUseExplicitTargetAndReadOnlyMode(t *testing.T) {
+	request := profileRequest()
+	request.Provider = ReviewProvider
+	request.RequestedConfig.ReviewTarget = &task.ReviewTarget{Kind: task.ReviewTargetUncommitted}
+	want := []string{
+		"exec", "--json", "--ephemeral", "-c", `approval_policy="never"`,
+		"review", "--uncommitted",
+	}
+	args, output, err := reviewArguments(request)
+	if err != nil || !slices.Equal(args, want) || output != -1 {
+		t.Fatalf("review argv=%q output=%d err=%v", args, output, err)
+	}
+	for _, target := range []*task.ReviewTarget{
+		{Kind: task.ReviewTargetBase, Value: "main"},
+		{Kind: task.ReviewTargetCommit, Value: "0123456789abcdef"},
+	} {
+		request.RequestedConfig.ReviewTarget = target
+		args, _, err = reviewArguments(request)
+		if err != nil || !slices.Contains(args, "--"+target.Kind) || !slices.Contains(args, target.Value) {
+			t.Fatalf("review target=%+v argv=%q err=%v", target, args, err)
+		}
+	}
+	request.RequestedConfig.Model = "gpt-5.6"
+	request.RequestedConfig.Effort = "high"
+	args, output, err = reviewArguments(request)
+	if err != nil || output != -1 || !slices.Contains(args, "--model") ||
+		!slices.Contains(args, "gpt-5.6") || !slices.Contains(args, `model_reasoning_effort="high"`) {
+		t.Fatalf("review model/effort argv=%q output=%d err=%v", args, output, err)
+	}
+}
+
+func TestReviewArgumentsRejectUnsupportedRequests(t *testing.T) {
+	request := profileRequest()
+	request.Provider = ReviewProvider
+	request.RequestedConfig.ReviewTarget = &task.ReviewTarget{Kind: task.ReviewTargetUncommitted}
+	for name, mutate := range map[string]func(*task.TaskRecord){
+		"missing target": func(r *task.TaskRecord) { r.RequestedConfig.ReviewTarget = nil },
+		"workspace write": func(r *task.TaskRecord) {
+			r.Mode = WorkspaceWriteMode
+			r.RequestedConfig.Permission = WorkspaceWriteMode
+		},
+		"interactive": func(r *task.TaskRecord) { r.RequestedConfig.Interactive = true },
+		"continuation": func(r *task.TaskRecord) {
+			r.PriorSession = &task.PriorSession{Provider: ReviewProvider, ConversationID: testThreadID, PredecessorTaskID: testTaskID}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := request
+			mutate(&candidate)
+			if _, _, err := reviewArguments(candidate); !errors.Is(err, ErrUnsupportedProfile) {
+				t.Fatalf("got %v, want unsupported profile", err)
+			}
+		})
+	}
+}
+
 func TestExecArgumentsPassModelAndEffortWithNativeEncoding(t *testing.T) {
 	request := profileRequest()
 	request.RequestedConfig.Model = "gpt-5.6"
@@ -106,6 +162,23 @@ func TestRuntimeRequirementsOmitRemovedCodexControls(t *testing.T) {
 	for _, removed := range []string{"--ignore-user-config", "--ignore-rules", "--strict-config"} {
 		if slices.Contains(requirements.RequiredFlags, removed) {
 			t.Fatalf("runtime requirements retain removed flag %q", removed)
+		}
+	}
+}
+
+func TestReviewRuntimeRequirementsMatchReviewHelpSurface(t *testing.T) {
+	request := profileRequest()
+	request.Provider = ReviewProvider
+	request.RequestedConfig.ReviewTarget = &task.ReviewTarget{Kind: task.ReviewTargetUncommitted}
+	requirements := reviewRuntimeRequirementsForRequest(request)
+	for _, required := range []string{"-c", "--json", "--ephemeral", "--uncommitted"} {
+		if !slices.Contains(requirements.RequiredFlags, required) {
+			t.Fatalf("review requirements omit %q: %q", required, requirements.RequiredFlags)
+		}
+	}
+	for _, removed := range []string{"--sandbox", "--cd", "--color", "--output-last-message"} {
+		if slices.Contains(requirements.RequiredFlags, removed) {
+			t.Fatalf("review requirements retain unsupported %q: %q", removed, requirements.RequiredFlags)
 		}
 	}
 }

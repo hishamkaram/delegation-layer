@@ -262,6 +262,13 @@ jobs:
             echo "Tag-triggered release and archive smoke checks are not complete and successful for ${TAG}." >&2
             exit 1
           fi
+          native_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-native-acceptance.yml/runs?event=workflow_dispatch&per_page=100" \
+            --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | [.id, .head_sha] | @tsv' | \
+            awk -v commit="${release_commit}" '$2 == commit { print $1; exit }')"
+          if [[ -z "${native_run}" ]]; then
+            echo "No successful authenticated native acceptance run exists for ${TAG}. Run release-native-acceptance.yml from the exact tag ref before promotion." >&2
+            exit 1
+          fi
           if [[ "${PUBLISH_HOMEBREW}" == "true" ]]; then
             publisher="${RUNNER_TEMP}/publish-homebrew-formula.sh"
             git show refs/remotes/origin/workflow:scripts/publish-homebrew-formula.sh >"${publisher}"

@@ -102,7 +102,40 @@ func validateRequestedConfig(request TaskConfig, mode string, budget int64) erro
 			return errors.New("model and effort must be nonblank literal values when supplied")
 		}
 	}
+	return ValidateReviewTarget(request.ReviewTarget)
+}
+
+// ValidateReviewTarget checks the persisted shape without deciding which
+// provider supports it. Provider catalogs apply that capability decision.
+func ValidateReviewTarget(target *ReviewTarget) error {
+	if target == nil {
+		return nil
+	}
+	switch target.Kind {
+	case ReviewTargetUncommitted:
+		if target.Value != "" {
+			return errors.New("uncommitted review target cannot have a value")
+		}
+	case ReviewTargetBase, ReviewTargetCommit:
+		if !validReviewTargetValue(target.Value) {
+			return errors.New("review target value must be a nonblank literal")
+		}
+	default:
+		return fmt.Errorf("unknown review target %q", target.Kind)
+	}
 	return nil
+}
+
+func validReviewTargetValue(value string) bool {
+	if !nonblank(value) || len(value) > MaxControlRecordSize || strings.TrimSpace(value) != value || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f || character >= 0x80 && character <= 0x9f {
+			return false
+		}
+	}
+	return true
 }
 
 func validateTaskConfiguration(r *TaskRecord) error {

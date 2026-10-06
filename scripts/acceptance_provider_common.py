@@ -67,7 +67,8 @@ _TASK_REQUIRED_KEYS = {
     "requested_config", "budget_nanos", "brief_sha256", "brief_length",
 }
 _TASK_OPTIONAL_KEYS = {"prior_session"}
-_TASK_CONFIG_KEYS = {"model", "effort", "permission", "budget", "native_timeout"}
+_TASK_CONFIG_KEYS = {"model", "effort", "permission", "budget", "native_timeout",
+                     "review_target"}
 _PRIOR_SESSION_KEYS = {"provider", "conversation_id", "predecessor_task_id"}
 _INSPECTION_BINDING_KEYS = {
     "definition_revision", "definition_sha256", "helper_executable", "helper_sha256",
@@ -181,6 +182,10 @@ def _canonical_task_bytes(value: dict[str, object]) -> bytes:
         key: config[key] for key in ("model", "effort", "permission", "budget", "native_timeout")
         if config.get(key) not in (None, "")
     }
+    review_target = config.get("review_target")
+    if review_target is not None:
+        canonical_config["review_target"] = _canonical_review_target(
+            review_target, "inspection task requested_config review_target")
     prior = value.get("prior_session")
     canonical_prior = None
     if prior is not None:
@@ -240,8 +245,12 @@ def _validate_task_record(value: object, root: str, task: str, label: str) -> st
     config = value.get("requested_config")
     require(isinstance(config, dict), f"{label} requested_config is invalid")
     _exact_keys(config, set(), _TASK_CONFIG_KEYS, f"{label} requested_config")
-    require(all(isinstance(item, str) and item != "" for item in config.values()),
-            f"{label} requested_config has invalid fields")
+    for key, item in config.items():
+        if key == "review_target":
+            _canonical_review_target(item, f"{label} requested_config review_target")
+        else:
+            require(isinstance(item, str) and item != "",
+                    f"{label} requested_config has invalid fields")
     prior = value.get("prior_session")
     if prior is not None:
         require(isinstance(prior, dict), f"{label} prior_session is invalid")
@@ -249,6 +258,26 @@ def _validate_task_record(value: object, root: str, task: str, label: str) -> st
         require(all(isinstance(item, str) and item for item in prior.values()),
                 f"{label} prior_session has invalid fields")
     return sha(_canonical_task_bytes(value))
+
+
+def _canonical_review_target(value: object, label: str) -> dict[str, str]:
+    """Validate and normalize the persisted ReviewTarget JSON shape."""
+    require(isinstance(value, dict), f"{label} is not an object")
+    _exact_keys(value, {"kind"}, {"value"}, label)
+    kind = value.get("kind")
+    target_value = value.get("value", "")
+    require(isinstance(kind, str) and kind in {"uncommitted", "base", "commit"},
+            f"{label} kind is invalid")
+    require(isinstance(target_value, str), f"{label} value is invalid")
+    if kind == "uncommitted":
+        require(target_value == "", f"{label} uncommitted target has a value")
+        return {"kind": kind}
+    require(target_value != "" and target_value == target_value.strip() and
+            len(target_value) <= MAX_CONTROL_BYTES and
+            all(0x20 <= ord(character) < 0x7f or ord(character) > 0x9f
+                for character in target_value),
+            f"{label} value is invalid")
+    return {"kind": kind, "value": target_value}
 
 
 def require(condition: object, message: str) -> None:

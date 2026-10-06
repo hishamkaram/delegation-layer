@@ -94,6 +94,7 @@ func normalizeRegistration(supplied Registration) (Registration, error) {
 	registration.Description.Interaction.SupportedModes = slices.Clone(registration.Description.Interaction.SupportedModes)
 	registration.Description.SupportedModes = slices.Clone(registration.Description.SupportedModes)
 	slices.Sort(registration.Description.SupportedModes)
+	registration.Description.Runtime.VersionArgs = slices.Clone(registration.Description.Runtime.VersionArgs)
 	registration.Description.Runtime.HelpArgs = slices.Clone(registration.Description.Runtime.HelpArgs)
 	registration.Description.Runtime.RequiredFlags = slices.Clone(registration.Description.Runtime.RequiredFlags)
 	slices.Sort(registration.Description.Runtime.RequiredFlags)
@@ -246,6 +247,16 @@ func validateModes(modes []string) error {
 }
 
 func validateRuntimeCapability(capability RuntimeCapability) error {
+	seenVersionArgs := make(map[string]struct{}, len(capability.VersionArgs))
+	for _, arg := range capability.VersionArgs {
+		if arg == "" || strings.ContainsAny(arg, "\x00 \t\r\n") {
+			return fmt.Errorf("invalid runtime version argument %q", arg)
+		}
+		if _, exists := seenVersionArgs[arg]; exists {
+			return fmt.Errorf("duplicate runtime version argument %q", arg)
+		}
+		seenVersionArgs[arg] = struct{}{}
+	}
 	seenHelpArgs := make(map[string]struct{}, len(capability.HelpArgs))
 	for _, arg := range capability.HelpArgs {
 		if arg == "" || strings.ContainsAny(arg, "\x00 \t\r\n") {
@@ -271,7 +282,7 @@ func validateRuntimeCapability(capability RuntimeCapability) error {
 
 func validOption(option string) bool {
 	switch option {
-	case OptionContinuation, OptionEffort, OptionModel, OptionNativeTimeout, OptionInteractive:
+	case OptionContinuation, OptionEffort, OptionModel, OptionNativeTimeout, OptionInteractive, OptionReviewTarget:
 		return true
 	default:
 		return false
@@ -319,6 +330,7 @@ func cloneRegistration(registration Registration) Registration {
 	registration.Description.SupportedOptions = slices.Clone(registration.Description.SupportedOptions)
 	registration.Description.Interaction.SupportedModes = slices.Clone(registration.Description.Interaction.SupportedModes)
 	registration.Description.SupportedModes = slices.Clone(registration.Description.SupportedModes)
+	registration.Description.Runtime.VersionArgs = slices.Clone(registration.Description.Runtime.VersionArgs)
 	registration.Description.Runtime.HelpArgs = slices.Clone(registration.Description.Runtime.HelpArgs)
 	registration.Description.Runtime.RequiredFlags = slices.Clone(registration.Description.Runtime.RequiredFlags)
 	registration.Interpreters = slices.Clone(registration.Interpreters)
@@ -386,6 +398,7 @@ func validateRequestOptions(request task.TaskRecord, description Description) er
 		{name: OptionEffort, present: request.RequestedConfig.Effort != "" && request.RequestedConfig.Effort != "default"},
 		{name: OptionModel, present: request.RequestedConfig.Model != ""},
 		{name: OptionNativeTimeout, present: request.RequestedConfig.NativeTimeout != ""},
+		{name: OptionReviewTarget, present: request.RequestedConfig.ReviewTarget != nil},
 	}
 	for _, option := range options {
 		if !option.present && slices.Contains(description.RequiredOptions, option.name) {

@@ -11,6 +11,7 @@ import (
 
 const (
 	Provider                      = "codex:exec"
+	ReviewProvider                = "codex:review"
 	Mode                          = config.ModeReadOnly
 	WorkspaceWriteMode            = config.ModeWorkspaceWrite
 	OutputName                    = "codex-last-message.txt"
@@ -20,10 +21,13 @@ const (
 
 	// predicateVersion identifies this interpreter's output contract. It is
 	// independent of the installed Codex CLI release.
-	predicateVersion = "runtime-reported-v2"
-	// historicalPredicateVersion identifies the previous current-runtime
-	// contract. It remains registered for already sealed tasks; it is not used
-	// for new preparation.
+	predicateVersion = "runtime-reported-v3"
+	// historicalCurrentPredicateVersion identifies the v0.1.22 current-runtime
+	// contract. It remains registered for already sealed tasks and recovery.
+	historicalCurrentPredicateVersion = "runtime-reported-v2"
+	// historicalPredicateVersion identifies the older current-runtime contract.
+	// It remains registered for already sealed tasks; it is not used for new
+	// preparation.
 	historicalPredicateVersion = "runtime-reported"
 
 	// legacyPredicateVersion and legacyPredicateSHA256 keep already-sealed
@@ -66,12 +70,19 @@ const contractV2 = `{"adapter":"codex:exec","mode":"read-only","version":"runtim
 
 const workspaceWriteContractV2 = `{"adapter":"codex:exec","mode":"workspace-write","version":"runtime-reported-v2","native":"Codex exec JSONL producer","sandbox":"workspace-write","events":"the same selected-field JSONL thread, turn, item, identity, usage, and terminal-result rules as the read-only interpreter; no provider record or answer size cap","output":"codex-last-message.txt is optional evidence; present empty or conflicting bytes reject; final text is compared by streamed length and SHA-256; no newline is synthesized","failure":"malformed JSONL, conflicting identities, terminal failure/interruption, missing final, nonzero exit, seal error, or exceeded relevant item-state bound rejects"}` + "\n"
 
+// contractV3 is the corrected native evidence policy. It preserves the v2
+// contract above for replay while accepting Codex streams that complete an
+// agent_message without emitting a preceding item.started event.
+const contractV3 = `{"adapter":"codex:exec","mode":"read-only","version":"runtime-reported-v3","native":"Codex exec JSONL producer","events":{"line":"one UTF-8 JSON object per line; final line may omit newline; no provider record or answer size cap","duplicates":"duplicate keys, including case-folded aliases, reject for selected authority, identity, lifecycle, failure, usage, and answer fields; unrelated opaque fields are structurally validated without retention","thread":"exactly one thread.started with a UUID-shaped thread_id","turn":"one turn.started followed by one successful turn.completed; turn.failed, interruption, duplicate completion, and missing terminal reject","items":"only relevant agent_message identities and the last top-level item.completed agent_message text are retained; an agent_message may complete without item.started, item.updated still requires item.started, duplicate completion rejects, and reasoning, plan, command, tool, web_search, and nested collaboration payloads are ignored; at most 1024 agent-message identities are retained","unknown":"unknown telemetry and item types are tolerated; unknown thread./turn. lifecycle names reject as terminally ambiguous","errors":"earlier error events are diagnostics and may be followed by a successful completion"},"success":"exit_code=0, sealed error empty, exact expected and recorded thread identity, successful turn.completed, final agent message non-whitespace, and exact optional output-file bytes when present","output":"codex-last-message.txt is optional evidence; ErrEvidenceAbsent falls back to stdout; final text is compared by streamed length and SHA-256; no newline is synthesized","failure":"malformed JSONL, invalid UTF-8, conflicting identities, terminal failure/interruption, missing final, nonzero exit, seal error, or an exceeded relevant item-state bound rejects","usage":"turn.completed usage copies provider thread totals when reliable; malformed, duplicate, null, or unknown usage is retained as unreliable nullable metadata; no total is synthesized"}` + "\n"
+
+const workspaceWriteContractV3 = `{"adapter":"codex:exec","mode":"workspace-write","version":"runtime-reported-v3","native":"Codex exec JSONL producer","sandbox":"workspace-write","events":"the same completion-tolerant selected-field JSONL thread, turn, item, identity, usage, and terminal-result rules as the read-only interpreter; no provider record or answer size cap","output":"codex-last-message.txt is optional evidence; present empty or conflicting bytes reject; final text is compared by streamed length and SHA-256; no newline is synthesized","failure":"malformed JSONL, conflicting identities, terminal failure/interruption, missing final, nonzero exit, seal error, or exceeded relevant item-state bound rejects"}` + "\n"
+
 // Contract returns the canonical bytes whose digest identifies this
 // interpreter.
-func Contract() string { return contractV2 }
+func Contract() string { return contractV3 }
 
 // ContractDigest returns the lowercase SHA-256 digest bound into Reference.
-func ContractDigest() string { return task.ComputeSHA256([]byte(contractV2)) }
+func ContractDigest() string { return task.ComputeSHA256([]byte(contractV3)) }
 
 // Reference returns the exact predicate reference for Codex exec JSONL.
 func Reference() task.PredicateRef {
@@ -93,10 +104,10 @@ func WorkspaceWriteReference() task.PredicateRef {
 // ContractForMode returns the immutable output contract for mode.
 func ContractForMode(mode string) string {
 	if mode == Mode {
-		return contractV2
+		return contractV3
 	}
 	if mode == WorkspaceWriteMode {
-		return workspaceWriteContractV2
+		return workspaceWriteContractV3
 	}
 	return ""
 }
@@ -108,6 +119,30 @@ func ReferenceForMode(mode string) task.PredicateRef {
 		return task.PredicateRef{}
 	}
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: predicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+const reviewContract = `{"adapter":"codex:review","mode":"read-only","version":"review-runtime-v1","native":"Codex exec review JSONL producer","events":"the same completion-tolerant selected-field JSONL thread, turn, item, identity, usage, and terminal-result rules as Codex exec runtime-reported-v3","output":"the native review target supplies the review scope; the final answer is selected from stdout and no output-file artifact is declared","success":"exit_code=0, sealed error empty, exact expected and recorded thread identity, successful turn.completed, and final agent message non-whitespace","failure":"malformed JSONL, conflicting identities, terminal failure/interruption, missing final, nonzero exit, seal error, or an exceeded relevant item-state bound rejects"}` + "\n"
+
+func reviewReference() task.PredicateRef {
+	return task.PredicateRef{Adapter: ReviewProvider, Mode: Mode, Version: "review-runtime-v1", SHA256: task.ComputeSHA256([]byte(reviewContract))}
+}
+
+func historicalCurrentRuntimeContractForMode(mode string) string {
+	if mode == Mode {
+		return contractV2
+	}
+	if mode == WorkspaceWriteMode {
+		return workspaceWriteContractV2
+	}
+	return ""
+}
+
+func historicalCurrentRuntimeReferenceForMode(mode string) task.PredicateRef {
+	contract := historicalCurrentRuntimeContractForMode(mode)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: historicalCurrentPredicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
 }
 
 func historicalRuntimeContractForMode(mode string) string {
@@ -137,7 +172,7 @@ func LegacyReference() task.PredicateRef {
 
 // WorkspaceWriteContract returns the canonical workspace-write output
 // contract bytes for callers that need to inspect the registered predicate.
-func WorkspaceWriteContract() string { return workspaceWriteContractV2 }
+func WorkspaceWriteContract() string { return workspaceWriteContractV3 }
 
 // validThreadID accepts the canonical UUID-shaped identifiers emitted by
 // Codex. Matching against expected and recorded identities remains exact.

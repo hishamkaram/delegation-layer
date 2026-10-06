@@ -25,6 +25,10 @@ func inspectModels(scope execution.PreflightScope, definition provider.Inspectio
 	}
 	probe.Directory = definition.Directory
 	probe.Environment = append([]string(nil), definition.Environment...)
+	probe.VersionArgs = append([]string(nil), definition.Models.Capability.VersionArgs...)
+	if len(probe.VersionArgs) == 0 && definition.Runtime != nil {
+		probe.VersionArgs = append([]string(nil), definition.Runtime.VersionArgs...)
+	}
 	probe.HelpArgs = append([]string(nil), definition.Models.Capability.HelpArgs...)
 	probe.RequiredFlags = append([]string(nil), definition.Models.Capability.RequiredFlags...)
 	if err := verifyRuntimeExecutable(probe); err != nil {

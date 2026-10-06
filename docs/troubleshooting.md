@@ -57,7 +57,7 @@ If an explicit choice is needed, run:
 
 `delegate models --provider PROFILE [--cwd ABS] --json`
 
-The command is implemented for all six profiles and
+The command is implemented for the six profiles that expose model discovery and
 returns advisory model facts through the state-rooted supervisor with a
 `model-discovery-v1` five-minute inspection bound. The longer bound covers
 first-run provider model/cache initialization. `complete` describes model
@@ -103,6 +103,16 @@ when delegate resolves a matching executable pair and verifies the saved
 private config and endpoint. If no pair can be resolved, delegate fails closed.
 Preserve the state root and report the setup failure; do not edit or remove its
 supervisor records.
+
+An older inspection-group journal whose supervisor config or endpoint differs
+from the current private supervisor is migrated automatically under the
+state-root bootstrap lock. Delegate first checks the old group through its
+saved binding and creates a successor journal only when no queued or running
+inspection work remains; the legacy journal is retained for audit. If that
+check cannot read the old binding, dispatch reports
+`supervisor_upgrade_required`; if active inspection work is present, it reports
+`supervisor_migration_blocked`. In either case, preserve the state root and
+wait for the old inspection work to reach a terminal state before retrying.
 
 New queued model inspections record whether their worker is managed or custom.
 An older inspection request without that ownership field is ambiguous, so an
@@ -150,6 +160,14 @@ skip unconsumed payloads while validating JSON syntax; duplicate fields that
 control identity, completion, or the selected answer still reject the result.
 Native event and answer text do not inherit the 1 MiB control-response limit.
 Invalid optional usage metadata is reported separately from answer validity.
+
+Current Codex output may publish `item.completed` for an `agent_message`
+without a preceding `item.started`. The current interpreter accepts that
+completion-only form while retaining strict lifecycle checks for updates,
+duplicates, identities, and terminal events. Tasks sealed by the previous
+Codex runtime-reported-v2 interpreter remain replayable; if their collection
+response offers `failure.next_action: "recheck"`, use the offline recheck below
+before spending another provider turn.
 
 For an older rejected task, run `collect TASK_ID --json` with its original root.
 If it offers `failure.next_action: "recheck"`, run:

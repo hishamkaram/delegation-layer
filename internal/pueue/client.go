@@ -59,6 +59,21 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 	return c, nil
 }
 
+// BindSaved reopens a previously recorded supervisor for bounded, read-only
+// reconciliation. Its saved path-resolution context is pinned before the
+// executable is inspected, so migration does not silently bind a different
+// user configuration.
+func BindSaved(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, error) {
+	if err := task.ValidateFreshSupervisorRef(saved); err != nil {
+		return nil, err
+	}
+	resolved, err := optionsForSavedBinding(saved, options)
+	if err != nil {
+		return nil, err
+	}
+	return Bind(ctx, saved.ClientExecutable, saved.ConfigPath, resolved)
+}
+
 // NewClient constructs from saved identity without consulting external files.
 // Each operation performs its own fresh validation before execution.
 func NewClient(saved task.SupervisorRef, options Options) (*Client, error) {

@@ -1,8 +1,8 @@
 # Adapter Contract and Runtime Capability Checks
 
 This document defines the normative requirements for provider adapters
-(`antigravity:print`, `codex:exec`, `claude:print`, `ccr:print`, `pi:json`, and
-`opencode:run`).
+(`antigravity:print`, `codex:exec`, `codex:review`, `claude:print`,
+`ccr:print`, `pi:json`, and `opencode:run`).
 
 ## 1. Supported Runtime Profiles
 
@@ -10,6 +10,7 @@ This document defines the normative requirements for provider adapters
 |---|---|---|---|---|
 | `antigravity:print` | `read-only`, `workspace-write` | native `plan` for read-only; native automatic approval (`always-proceed`) for writes | read-only: `agy --sandbox --mode plan --add-dir <canonical-workspace> ...`; write: `agy --sandbox --mode accept-edits --dangerously-skip-permissions --add-dir <canonical-workspace> ...` | extra writable roots |
 | `codex:exec` | `read-only`, `workspace-write` | native sandbox | `codex exec ... --sandbox <mode> ...` | unrestricted execution, ephemeral sessions |
+| `codex:review` | `read-only` | native review operation | `codex exec review --uncommitted|--base <branch>|--commit <sha> ...` | no continuation or workspace-write |
 | `claude:print` | `read-only`, `workspace-write` | native `plan` for read-only; `bypassPermissions` for unattended writes | `claude --print ... --permission-mode <mode> ...` | independent containment |
 | `ccr:print` | `read-only`, `workspace-write` | Claude native `plan` for read-only; `bypassPermissions` for unattended writes | `ccr launch --model <alias> --auth-mode provider-only --print --permission-mode <mode> -- ...` | subscription pools, independent containment |
 | `pi:json` | `read-only`, `workspace-write` | read-only uses read,grep,find,ls; write uses provider-native tools and approval | `pi --mode json ...`; read-only adds `--tools read,grep,find,ls` | independent containment |
@@ -45,6 +46,11 @@ digest is compared with a checked-in value.
   for interaction. Native completion closes stdin; only the supervisor stops
   processes. No PTY or terminal scraping is permitted.
 - **Argv Construction**: Built strictly as Go string slices (`[]string`), executed directly via `exec.Command` without shell wrapper or reparsing.
+- **Native Review Scope**: `codex:review` persists one explicit Git target
+  (`uncommitted`, a base branch, or a commit) with the request and translates
+  it into the Codex review subcommand. Its required brief remains task
+  evidence; Codex does not accept that prompt alongside the native target
+  flag.
 - **Model and Effort Selection**: `--model` and `--effort` are explicit bounded
   request fields for Codex, Claude, and AGY, in addition to profiles that
   already advertise them. They pass only through the selected adapter. Codex

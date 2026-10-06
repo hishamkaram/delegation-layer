@@ -27,12 +27,15 @@ provider’s own responsibility and is never performed by this skill.
 
 Dispatch flags:
 
-- `--brief FILE`: bounded task instructions;
+- `--brief FILE`: bounded task instructions; for `codex:review`, the brief is
+  retained as task evidence and the explicit review target supplies Codex's
+  native scope;
 - `--cwd ABS`: workspace for the delegated turn;
 - `--permission read-only|workspace-write`: read-only investigation or authorized unattended write execution, including commands (not independent containment);
 - `--budget DURATION`: finite turn budget;
 - `--auto`: let the CLI select a ready provider;
 - `--provider ID`: preserve the caller’s named harness or provider, resolved through the catalog;
+- `--review-target uncommitted|base:BRANCH|commit:SHA`: select the explicit Git state for `codex:review`; it is required for that read-only profile and unsupported by other profiles;
 - `--model MODEL` and `--effort VALUE`: provider-advertised choices (CCR requires a model alias);
   Codex maps effort to TOML `model_reasoning_effort` for ordinary turns or a native
   turn parameter for interactive turns, while Claude and AGY

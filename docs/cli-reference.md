@@ -11,7 +11,7 @@ delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
   (--auto | --provider PROFILE) --brief FILE --cwd ABS [--id TASK_ID] \
   [--permission MODE] [--budget DURATION] [--model MODEL] \
   [--effort EFFORT] [--native-timeout DURATION] [--interactive] \
-  [--resume-task PREDECESSOR_ID] [--json]
+  [--resume-task PREDECESSOR_ID] [--review-target TARGET] [--json]
 
 delegate [--root ABS] providers [--json]
 delegate [--root ABS] capabilities --provider PROFILE [--json]
@@ -60,7 +60,7 @@ paths must remain disjoint.
 
 | Flag | Meaning |
 | --- | --- |
-| `--provider PROFILE` | Provider profile from `delegate providers`, such as `codex:exec`. |
+| `--provider PROFILE` | Provider profile from `delegate providers`, such as `codex:exec` or `codex:review`. |
 | `--brief FILE` | Finite task brief, no larger than 8 MiB. |
 | `--cwd ABS` | Canonical workspace directory. |
 | `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID. Omit to allocate one. |
@@ -71,10 +71,15 @@ paths must remain disjoint.
 | `--native-timeout DURATION` | Antigravity's native print timeout, no greater than `--budget`. |
 | `--resume-task TASK_ID` | Exact predecessor for a continuation; creates a new task. |
 | `--interactive` | Enable native clarification and supported active-turn steering. Unsupported providers reject this option before admission. |
+| `--review-target TARGET` | Codex review target: `uncommitted`, `base:BRANCH`, or `commit:SHA`. Required by `codex:review`; rejected by other profiles. |
 | `--json` | Emit the versioned control response. |
 
 Raw provider arguments, token ceilings, and dollar ceilings are deliberately not
 part of this interface. Unsupported options fail before supervisor admission.
+
+For `codex:review`, `--brief` remains required and is persisted as task
+evidence. The native review scope comes from `--review-target`; Codex does not
+accept a prompt together with its native target flags.
 
 Every task ID is single-use for the requested turn. Repeating a dispatch with
 the same ID requires the same immutable request and cannot grant another

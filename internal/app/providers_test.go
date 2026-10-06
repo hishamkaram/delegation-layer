@@ -45,12 +45,13 @@ func TestProvidersJSONIsBoundedDeterministicAndDoesNotUseTaskFields(t *testing.T
 
 func assertNativeProviderMetadata(t *testing.T, response ProviderResponse) {
 	t.Helper()
-	expectedIDs := []string{"antigravity:print", "ccr:print", "claude:print", "codex:exec", "opencode:run", "pi:json"}
+	expectedIDs := []string{"antigravity:print", "ccr:print", "claude:print", "codex:exec", "codex:review", "opencode:run", "pi:json"}
 	expectedReadOnly := map[string]commonprovider.ReadOnlyCapability{
 		"antigravity:print": {Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
 		"ccr:print":         {Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
 		"claude:print":      {Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
 		"codex:exec":        {Supported: true, Mechanism: commonprovider.ReadOnlyNativeSandbox, Containment: commonprovider.ReadOnlyProviderOwned},
+		"codex:review":      {Supported: true, Mechanism: commonprovider.ReadOnlyNativeSandbox, Containment: commonprovider.ReadOnlyProviderOwned},
 		"opencode:run":      {Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
 		"pi:json":           {Supported: true, Mechanism: commonprovider.ReadOnlyToolAllowlist, Containment: commonprovider.ReadOnlyProviderOwned},
 	}
@@ -68,8 +69,11 @@ func assertNativeProviderMetadata(t *testing.T, response ProviderResponse) {
 		if len(description.Runtime.RequiredFlags) == 0 {
 			t.Fatalf("runtime capability metadata missing: %+v", description)
 		}
-		if description.Continuation != commonprovider.ContinuationNative {
+		if description.ID != "codex:review" && description.Continuation != commonprovider.ContinuationNative {
 			t.Fatalf("continuation metadata missing: %+v", description)
+		}
+		if description.ID == "codex:review" && description.Continuation != commonprovider.ContinuationUnsupported {
+			t.Fatalf("review continuation metadata incorrect: %+v", description)
 		}
 		if got, want := description.ReadOnly, expectedReadOnly[expectedID]; got != want {
 			t.Fatalf("read-only metadata for %s=%+v, want %+v", expectedID, got, want)

@@ -186,14 +186,28 @@ func (p PredicateRef) Equal(other PredicateRef) bool {
 		p.SHA256 == other.SHA256
 }
 
+// ReviewTarget identifies the repository state a native code review examines.
+// Value is empty only for uncommitted changes.
+type ReviewTarget struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value,omitempty"`
+}
+
+const (
+	ReviewTargetUncommitted = "uncommitted"
+	ReviewTargetBase        = "base"
+	ReviewTargetCommit      = "commit"
+)
+
 // TaskConfig captures requested configuration parameters.
 type TaskConfig struct {
-	Interactive   bool   `json:"interactive,omitempty"`
-	Model         string `json:"model,omitempty"`
-	Effort        string `json:"effort,omitempty"`
-	Permission    string `json:"permission,omitempty"`
-	Budget        string `json:"budget,omitempty"`
-	NativeTimeout string `json:"native_timeout,omitempty"`
+	Interactive   bool          `json:"interactive,omitempty"`
+	Model         string        `json:"model,omitempty"`
+	Effort        string        `json:"effort,omitempty"`
+	Permission    string        `json:"permission,omitempty"`
+	Budget        string        `json:"budget,omitempty"`
+	NativeTimeout string        `json:"native_timeout,omitempty"`
+	ReviewTarget  *ReviewTarget `json:"review_target,omitempty"`
 }
 
 // EffectiveConfig captures resolved non-secret effective configuration.

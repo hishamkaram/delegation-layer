@@ -45,7 +45,7 @@ func ccrContract(version, claudeContract string) string {
 }
 
 func RuntimeRequirements() commonprovider.RuntimeCapability {
-	return commonprovider.RuntimeCapability{HelpArgs: []string{"launch"}, RequiredFlags: []string{"--model", "--auth-mode", "--print", "--permission-mode"}}
+	return commonprovider.RuntimeCapability{VersionArgs: []string{"version"}, HelpArgs: []string{"launch"}, RequiredFlags: []string{"--model", "--auth-mode", "--print", "--permission-mode"}}
 }
 
 func Registration() commonprovider.Registration {

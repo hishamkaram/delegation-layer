@@ -20,20 +20,24 @@ func evaluateCurrentInterpreterAgainst(v interpreter, input predicate.Input, raw
 	if err := validateCurrentEvaluationInput(input, raw, out, reference); err != nil {
 		return task.Interpretation{}, err
 	}
-	state, err := readCurrentEvidence(raw)
+	state, err := readCurrentEvidence(raw, v.historicalCurrent)
 	if err != nil {
 		return task.Interpretation{}, err
 	}
 	usage := currentUsageMetadata(state, task.UsageReliabilityUnreliable)
-	if refusal := currentRefusalFor(input, state); refusal != "" {
+	if refusal := currentRefusalFor(input, state, v.provider()); refusal != "" {
 		result := rejectedWithUsage(refusal, usage)
 		result.Diagnostics = append(result.Diagnostics, currentDiagnostic(state.semantic, refusal))
 		result.Diagnostics = append(result.Diagnostics, currentUsageWarning(state)...)
 		return result, nil
 	}
-	artifact, present, err := readCurrentArtifact(raw)
-	if err != nil {
-		return task.Interpretation{}, err
+	var artifact currentDigest
+	var present bool
+	if v.provider() == Provider {
+		artifact, present, err = readCurrentArtifact(raw)
+		if err != nil {
+			return task.Interpretation{}, err
+		}
 	}
 	finalDigest, err := streamCurrentFinal(raw, state.final, io.Discard)
 	if err != nil {
@@ -48,7 +52,7 @@ func evaluateCurrentInterpreterAgainst(v interpreter, input predicate.Input, raw
 	if _, err = streamCurrentFinal(raw, state.final, out); err != nil {
 		return task.Interpretation{}, err
 	}
-	session := task.SessionIdentity{Provider: Provider, ConversationID: state.threadID}
+	session := task.SessionIdentity{Provider: v.provider(), ConversationID: state.threadID}
 	result := task.Interpretation{
 		Verdict: task.VerdictCommitted,
 		Session: &session,
@@ -128,8 +132,11 @@ func validateCurrentEvaluationInput(input predicate.Input, raw predicate.Evidenc
 // CanRecover reports the same-wire revisions that the corrected current
 // interpreter can re-evaluate without changing the original sealed input.
 func (v interpreter) CanRecover(source task.PredicateRef) bool {
-	if v.legacy || v.historicalRuntime || v.mode != Mode && v.mode != WorkspaceWriteMode {
+	if v.legacy || v.historicalCurrent || v.historicalRuntime || v.mode != Mode && v.mode != WorkspaceWriteMode {
 		return false
+	}
+	if source.Equal(historicalCurrentRuntimeReferenceForMode(v.mode)) {
+		return true
 	}
 	if source.Equal(historicalRuntimeReferenceForMode(v.mode)) {
 		return true
@@ -152,11 +159,11 @@ func (v interpreter) Recover(input predicate.Input, raw predicate.Evidence, out 
 	return evaluateCurrentInterpreterAgainst(v, input, raw, out, input.Seal.Predicate)
 }
 
-func readCurrentEvidence(raw predicate.Evidence) (currentEventState, error) {
+func readCurrentEvidence(raw predicate.Evidence, requireItemStart bool) (currentEventState, error) {
 	var state currentEventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {
 		var err error
-		state, err = parseCurrentStdout(reader)
+		state, err = parseCurrentStdout(reader, requireItemStart)
 		return err
 	})
 	stderrErr := raw.Read(predicate.Stderr, commonprovider.DrainReader)

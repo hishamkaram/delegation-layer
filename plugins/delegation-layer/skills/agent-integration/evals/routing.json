@@ -5,7 +5,7 @@
       "name": "codex-review",
       "prompt": "Ask Codex to review pricing.py for correctness. Return the finding without editing files.",
       "external": true,
-      "provider": "codex:exec",
+      "provider": "codex:review",
       "split": "development",
       "native_alternative_for": "codex"
     },

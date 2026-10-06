@@ -28,6 +28,30 @@ func runtimeRequirementsForRequest(request task.TaskRecord, requirements commonp
 	return requirements
 }
 
+func reviewRuntimeRequirementsForRequest(request task.TaskRecord) commonprovider.RuntimeCapability {
+	requirements := commonprovider.RuntimeCapability{
+		HelpArgs: []string{"exec", "review"},
+		RequiredFlags: []string{
+			"-c", "--json", "--ephemeral",
+		},
+	}
+	target := request.RequestedConfig.ReviewTarget
+	if target != nil {
+		switch target.Kind {
+		case task.ReviewTargetUncommitted:
+			requirements.RequiredFlags = append(requirements.RequiredFlags, "--uncommitted")
+		case task.ReviewTargetBase:
+			requirements.RequiredFlags = append(requirements.RequiredFlags, "--base")
+		case task.ReviewTargetCommit:
+			requirements.RequiredFlags = append(requirements.RequiredFlags, "--commit")
+		}
+	}
+	if request.RequestedConfig.Model != "" {
+		requirements.RequiredFlags = append(requirements.RequiredFlags, "--model")
+	}
+	return requirements
+}
+
 func legacyRuntimeRequirements() commonprovider.RuntimeCapability {
 	return commonprovider.RuntimeCapability{
 		HelpArgs: []string{"exec"},

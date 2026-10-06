@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills skill-package-check plugin-package-check test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-agy codex-acceptance-tools acceptance-codex claude-acceptance-tools acceptance-claude acceptance-pi acceptance-opencode acceptance-native
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills skill-package-check plugin-package-check test-race test-native-harness build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-pi acceptance-opencode acceptance-native
 
 tools:
 	./scripts/install-tools.sh
@@ -122,6 +122,9 @@ codex-acceptance-tools: tool-versions
 
 acceptance-codex: build test-native-harness
 	./scripts/acceptance_native.sh codex:exec
+
+acceptance-codex-review: build test-native-harness
+	./scripts/acceptance_native.sh codex:review
 
 claude-acceptance-tools: tool-versions
 	@mkdir -p bin/claude-acceptance

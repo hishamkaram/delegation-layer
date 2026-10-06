@@ -26,6 +26,7 @@ func NativeCatalog() commonprovider.Catalog {
 		ccr.Registration(),
 		withModels(antigravity.Registration(), antigravity.ModelDiscovery),
 		withModels(codex.Registration(), codex.ModelDiscovery),
+		codex.ReviewRegistration(),
 		withModels(claude.Registration(), claude.ModelDiscovery),
 		withModels(pi.Registration(), pi.ModelDiscovery),
 		withModels(opencode.Registration(), opencode.ModelDiscovery),

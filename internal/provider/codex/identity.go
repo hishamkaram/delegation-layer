@@ -18,6 +18,7 @@ import (
 // Complete flushes a final unterminated line and freezes further observation.
 type identityObserver struct {
 	mu       sync.Mutex
+	provider string
 	expected task.SessionExpectation
 	record   func(task.SessionIdentity) error
 	framer   *commonprovider.JSONLFramer
@@ -31,6 +32,10 @@ type identityObserver struct {
 // The task ID binds construction to the task that owns the observer; it is not
 // sent to Codex and does not influence the observed thread ID.
 func NewIdentityObserver(taskID string, expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
+	return newIdentityObserver(Provider, taskID, expected, record)
+}
+
+func newIdentityObserver(provider, taskID string, expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 	if err := task.ValidateTaskID(taskID); err != nil {
 		return nil, err
 	}
@@ -43,7 +48,7 @@ func NewIdentityObserver(taskID string, expected task.SessionExpectation, record
 	if record == nil {
 		return nil, errors.New("nil codex identity recorder")
 	}
-	observer := &identityObserver{expected: expected, record: record}
+	observer := &identityObserver{provider: provider, expected: expected, record: record}
 	observer.framer = commonprovider.NewJSONLFramer(maxEventLineBytes, observer.processLine)
 	return observer, nil
 }
@@ -89,7 +94,7 @@ func (o *identityObserver) processLine(line []byte) error {
 	o.threadID = threadID
 	o.seen = true
 	if identityMatchesExpectation(o.expected, threadID) {
-		o.callback = o.record(task.SessionIdentity{Provider: Provider, ConversationID: threadID})
+		o.callback = o.record(task.SessionIdentity{Provider: o.provider, ConversationID: threadID})
 	}
 	return nil
 }

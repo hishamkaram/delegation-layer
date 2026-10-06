@@ -126,6 +126,85 @@ func TestSuccessSelectsLastTopLevelAgentMessageAndPreservesBytes(t *testing.T) {
 	}
 }
 
+func TestCurrentInterpreterAcceptsCompletionWithoutStart(t *testing.T) {
+	stdout := jsonl(
+		threadStarted(),
+		`{"type":"turn.started"}`,
+		itemCompletedWithoutStart("answer", itemAgentMessage, "completion-only answer"),
+		turnCompleted(`{}`),
+	)
+	var answer bytes.Buffer
+	interpretation, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, nil)}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "completion-only answer" {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+}
+
+func TestReviewInterpreterAcceptsReviewSessionIdentity(t *testing.T) {
+	stdout := jsonl(
+		threadStarted(),
+		`{"type":"turn.started"}`,
+		itemCompletedWithoutStart("answer", itemAgentMessage, "review answer"),
+		turnCompleted(`{}`),
+	)
+	seal := validSeal(stdout, nil)
+	seal.Predicate = newReviewInterpreter().Reference()
+	var answer bytes.Buffer
+	interpretation, err := newReviewInterpreter().Evaluate(predicate.Input{
+		Seal:            seal,
+		RecordedSession: &task.SessionIdentity{Provider: ReviewProvider, ConversationID: testThreadID},
+	}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || interpretation.Session == nil ||
+		interpretation.Session.Provider != ReviewProvider || answer.String() != "review answer" {
+		t.Fatalf("review interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+}
+
+func TestReviewInterpreterDoesNotReadUndeclaredOutputArtifact(t *testing.T) {
+	stdout := jsonl(
+		threadStarted(),
+		`{"type":"turn.started"}`,
+		itemCompletedWithoutStart("answer", itemAgentMessage, "review answer"),
+		turnCompleted(`{}`),
+	)
+	seal := validSeal(stdout, nil)
+	seal.Predicate = newReviewInterpreter().Reference()
+	var answer bytes.Buffer
+	interpretation, err := newReviewInterpreter().Evaluate(predicate.Input{Seal: seal}, undeclaredNamedEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "review answer" {
+		t.Fatalf("review interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+}
+
+func TestHistoricalRuntimeReportedV2RemainsStrictAndRecoverable(t *testing.T) {
+	stdout := jsonl(
+		threadStarted(),
+		`{"type":"turn.started"}`,
+		itemCompletedWithoutStart("answer", itemAgentMessage, "completion-only answer"),
+		turnCompleted(`{}`),
+	)
+	old := newHistoricalCurrentInterpreter(Mode)
+	seal := validSeal(stdout, nil)
+	seal.Predicate = old.Reference()
+	var answer bytes.Buffer
+	interpretation, err := old.Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictRejected || answer.Len() != 0 {
+		t.Fatalf("historical interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+	recoverable, ok := NewInterpreter().(interface {
+		CanRecover(task.PredicateRef) bool
+		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
+	})
+	if !ok || !recoverable.CanRecover(old.Reference()) {
+		t.Fatal("current interpreter did not declare v2 recovery")
+	}
+	answer.Reset()
+	interpretation, err = recoverable.Recover(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "completion-only answer" {
+		t.Fatalf("recovered interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
+	}
+}
+
 func TestEarlierErrorMayRecoverBeforeSuccessfulCompletion(t *testing.T) {
 	stdout := jsonl(
 		threadStarted(),
@@ -267,10 +346,13 @@ func TestItemCompletionUpdatesStartedCandidateByID(t *testing.T) {
 	}
 }
 
-func TestCurrentInterpreterRejectsUnstartedAgentMessageCompletion(t *testing.T) {
-	stdout := jsonl(threadStarted(), `{"type":"turn.started"}`, itemCompletedRecord("answer", itemAgentMessage, "answer"), turnCompleted(`{}`))
+func TestHistoricalCurrentInterpreterRejectsUnstartedAgentMessageCompletion(t *testing.T) {
+	stdout := jsonl(threadStarted(), `{"type":"turn.started"}`, itemCompletedWithoutStart("answer", itemAgentMessage, "answer"), turnCompleted(`{}`))
+	historical := newHistoricalCurrentInterpreter(Mode)
+	seal := validSeal(stdout, nil)
+	seal.Predicate = historical.Reference()
 	var answer bytes.Buffer
-	interpretation, err := NewInterpreter().Evaluate(predicate.Input{Seal: validSeal(stdout, nil)}, &testEvidence{stdout: stdout}, &answer)
+	interpretation, err := historical.Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
 	if err != nil || interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != refusalMalformed || answer.Len() != 0 {
 		t.Fatalf("unstarted completion interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
 	}
@@ -548,6 +630,10 @@ func itemCompleted(id, typeName, text string) string {
 	return itemStarted(id) + "\n" + completed
 }
 
+func itemCompletedWithoutStart(id, typeName, text string) string {
+	return itemCompletedRecord(id, typeName, text)
+}
+
 func itemStarted(id string) string {
 	return fmt.Sprintf(`{"type":"item.started","item":{"id":%q,"type":%q}}`, id, itemAgentMessage)
 }
@@ -632,6 +718,21 @@ type testEvidence struct {
 	stdoutReader io.Reader
 	stderrReader io.Reader
 	artifactErr  error
+}
+
+type undeclaredNamedEvidence struct {
+	stdout []byte
+}
+
+func (e undeclaredNamedEvidence) Read(stream predicate.Stream, consume func(io.Reader) error) error {
+	if stream != predicate.Stdout {
+		return consume(bytes.NewReader(nil))
+	}
+	return consume(bytes.NewReader(e.stdout))
+}
+
+func (undeclaredNamedEvidence) ReadNamed(string, func(io.Reader) error) error {
+	return task.ErrEvidenceFault
 }
 
 func (e *testEvidence) Read(stream predicate.Stream, consume func(io.Reader) error) error {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -186,6 +187,27 @@ func TestDispatchFailureCodeCoversPreparationStages(t *testing.T) {
 	predecessor := dispatchFailure(withDispatchStage("resolve-predecessor", errors.New("predecessor could not be resolved")), "not_created")
 	if predecessor.Code != "continuation_unavailable" || predecessor.NextAction != "stop_and_report" {
 		t.Fatalf("predecessor resolution failure was not classified: %+v", predecessor)
+	}
+}
+
+func TestInspectionSupervisorMigrationFailuresAreActionable(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "active work", err: inspection.ErrGroupMigrationBusy, code: "supervisor_migration_blocked"},
+		{name: "unreadable binding", err: inspection.ErrGroupMigrationRequired, code: "supervisor_upgrade_required"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			failure := dispatchFailure(withDispatchStage("inspect-provider", test.err), "not_created")
+			if failure.Code != test.code || failure.NextAction != "stop_and_report" {
+				t.Fatalf("migration failure was not classified safely: %+v", failure)
+			}
+			if message := dispatchFailureMessage(failure.Code); message == "Delegate could not complete dispatch." {
+				t.Fatalf("migration failure code has no actionable message: %q", failure.Code)
+			}
+		})
 	}
 }
 

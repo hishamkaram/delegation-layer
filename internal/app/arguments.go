@@ -16,24 +16,25 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
-	MessageID   string
-	RequestID   string
-	Answers     string
-	After       uint64
-	Command     string
-	Root        string
-	PueueConfig string
-	Runner      string
-	TaskID      string
-	Auto        bool
-	Provider    string
-	Brief       string
-	BriefBytes  []byte
-	Cwd         string
-	Config      task.TaskConfig
-	ResumeTask  string
-	JSON        bool
-	Watch       time.Duration
+	MessageID    string
+	RequestID    string
+	Answers      string
+	After        uint64
+	Command      string
+	Root         string
+	PueueConfig  string
+	Runner       string
+	TaskID       string
+	Auto         bool
+	Provider     string
+	Brief        string
+	BriefBytes   []byte
+	Cwd          string
+	Config       task.TaskConfig
+	ReviewTarget string
+	ResumeTask   string
+	JSON         bool
+	Watch        time.Duration
 
 	// savedSupervisor is populated only by the continuation command after the
 	// predecessor binding has been loaded and validated. It never comes from
@@ -154,6 +155,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "optional agy timeout within the task budget")
 	fs.StringVar(&a.Config.Model, "model", "", "requested model")
 	fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
+	fs.StringVar(&a.ReviewTarget, "review-target", "", "Codex review target: uncommitted, base:BRANCH, or commit:SHA")
 	fs.StringVar(&a.ResumeTask, "resume-task", "", "exact predecessor task ID")
 }
 
@@ -317,7 +319,31 @@ func (a *Arguments) validateDispatch(positional []string) error {
 	if _, err := config.ParseBudget(a.Config.Budget); err != nil {
 		return err
 	}
+	if a.ReviewTarget != "" {
+		target, err := parseReviewTarget(a.ReviewTarget)
+		if err != nil {
+			return err
+		}
+		a.Config.ReviewTarget = &target
+	}
 	return a.validateDispatchIDs()
+}
+
+func parseReviewTarget(value string) (task.ReviewTarget, error) {
+	if value == task.ReviewTargetUncommitted {
+		return task.ReviewTarget{Kind: task.ReviewTargetUncommitted}, nil
+	}
+	for _, kind := range []string{task.ReviewTargetBase, task.ReviewTargetCommit} {
+		prefix := kind + ":"
+		if strings.HasPrefix(value, prefix) {
+			target := task.ReviewTarget{Kind: kind, Value: strings.TrimPrefix(value, prefix)}
+			if err := task.ValidateReviewTarget(&target); err != nil {
+				return task.ReviewTarget{}, err
+			}
+			return target, nil
+		}
+	}
+	return task.ReviewTarget{}, errors.New("review target must be uncommitted, base:BRANCH, or commit:SHA")
 }
 
 func (a *Arguments) validateDispatchProvider() error {

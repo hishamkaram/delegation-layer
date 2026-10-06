@@ -24,6 +24,7 @@ type RuntimeProbeDefinition struct {
 	ExecutableSHA256 string   `json:"executable_sha256"`
 	Directory        string   `json:"directory"`
 	Environment      []string `json:"environment"`
+	VersionArgs      []string `json:"version_args,omitempty"`
 	HelpArgs         []string `json:"help_args"`
 	RequiredFlags    []string `json:"required_flags"`
 }
@@ -33,6 +34,7 @@ type runtimeCapabilityContract struct {
 	Directory     string   `json:"directory"`
 	Environment   []string `json:"environment"`
 	OutputLimit   int64    `json:"output_limit"`
+	VersionArgs   []string `json:"version_args,omitempty"`
 	HelpArgs      []string `json:"help_args"`
 	RequiredFlags []string `json:"required_flags"`
 }
@@ -40,6 +42,7 @@ type runtimeCapabilityContract struct {
 type runtimeIndependentProbeContract struct {
 	Directory     string   `json:"directory"`
 	Environment   []string `json:"environment"`
+	VersionArgs   []string `json:"version_args,omitempty"`
 	HelpArgs      []string `json:"help_args"`
 	RequiredFlags []string `json:"required_flags"`
 }
@@ -68,7 +71,7 @@ func RuntimeCapabilityDigest(definition InspectionDefinition) (string, error) {
 	}
 	contract := runtimeCapabilityContract{
 		Revision: snapshot.Revision, Directory: snapshot.Directory, Environment: append([]string(nil), snapshot.Environment...),
-		OutputLimit: snapshot.OutputLimit, HelpArgs: append([]string(nil), snapshot.Runtime.HelpArgs...), RequiredFlags: append([]string(nil), snapshot.Runtime.RequiredFlags...),
+		OutputLimit: snapshot.OutputLimit, VersionArgs: append([]string(nil), snapshot.Runtime.VersionArgs...), HelpArgs: append([]string(nil), snapshot.Runtime.HelpArgs...), RequiredFlags: append([]string(nil), snapshot.Runtime.RequiredFlags...),
 	}
 	data, err := task.MarshalCanonical(contract)
 	if err != nil {
@@ -95,7 +98,7 @@ func RuntimeInspectionContractDigest(definition InspectionDefinition) (string, e
 		Environment: append([]string(nil), snapshot.Environment...), OutputLimit: snapshot.OutputLimit,
 		Runtime: &runtimeIndependentProbeContract{
 			Directory: snapshot.Runtime.Directory, Environment: append([]string(nil), snapshot.Runtime.Environment...),
-			HelpArgs: append([]string(nil), snapshot.Runtime.HelpArgs...), RequiredFlags: append([]string(nil), snapshot.Runtime.RequiredFlags...),
+			VersionArgs: append([]string(nil), snapshot.Runtime.VersionArgs...), HelpArgs: append([]string(nil), snapshot.Runtime.HelpArgs...), RequiredFlags: append([]string(nil), snapshot.Runtime.RequiredFlags...),
 		},
 		Remote: snapshot.Remote,
 	}
@@ -130,6 +133,7 @@ func NewRuntimeInspectionDefinition(info CLIInfo, directory string, environment 
 			ExecutableSHA256: info.SHA256,
 			Directory:        directory,
 			Environment:      append([]string(nil), environment...),
+			VersionArgs:      append([]string(nil), capability.VersionArgs...),
 			HelpArgs:         append([]string(nil), capability.HelpArgs...),
 			RequiredFlags:    append([]string(nil), capability.RequiredFlags...),
 		},

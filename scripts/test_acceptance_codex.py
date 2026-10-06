@@ -235,6 +235,20 @@ class CodexOracleTests(unittest.TestCase):
             "updated": False, "completed": True,
         }])
 
+    def test_agent_message_completion_without_start_is_valid_but_update_requires_start(self):
+        values = [
+            {"type": "thread.started", "thread_id": THREAD},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": item("answer", "agent_message", text="answer")},
+            {"type": "turn.completed", "status": "completed"},
+        ]
+        parsed = gate.parse_codex_events(b"\n".join(event(value) for value in values))
+        self.assertEqual(parsed["final_message"], b"answer")
+
+        values.insert(2, {"type": "item.updated", "item": item("updated", "agent_message", text="answer")})
+        with self.assertRaisesRegex(RuntimeError, "item.updated precedes item.started"):
+            gate.parse_codex_events(b"\n".join(event(value) for value in values))
+
     def test_pre_turn_completed_error_item_requires_a_message(self):
         values = [
             {"type": "thread.started", "thread_id": THREAD},

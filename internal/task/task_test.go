@@ -133,6 +133,17 @@ func TestCompareRequests(t *testing.T) {
 		t.Errorf("expected identical requests to compare equal")
 	}
 
+	reviewTarget := &ReviewTarget{Kind: ReviewTargetBase, Value: "main"}
+	reqA.RequestedConfig.ReviewTarget = reviewTarget
+	reqB.RequestedConfig.ReviewTarget = &ReviewTarget{Kind: ReviewTargetBase, Value: "main"}
+	if !CompareRequests(reqA, reqB) {
+		t.Errorf("expected equal review targets to compare equal")
+	}
+	reqB.RequestedConfig.ReviewTarget.Value = "release"
+	if CompareRequests(reqA, reqB) {
+		t.Errorf("expected different review targets to compare unequal")
+	}
+
 	reqDifferentBudget := *reqB
 	reqDifferentBudget.BudgetNanos = 120000000000
 	if CompareRequests(reqA, &reqDifferentBudget) {

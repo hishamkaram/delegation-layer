@@ -60,7 +60,29 @@ func (s *Store) OpenInspectionContext(ctx context.Context, taskID string, create
 // OpenInspectionGroup opens the root-scoped supervisor group journal. Its
 // records, rather than its directory name, bind the selected daemon identity.
 func (s *Store) OpenInspectionGroup(create bool) (*ControlDir, error) {
-	return s.openControlDir(filepath.Join(s.Root, "inspection-group"), create)
+	return s.OpenInspectionGroupContext(context.Background(), create)
+}
+
+// OpenInspectionGroupContext preserves the caller deadline while opening the
+// root-scoped supervisor group journal.
+func (s *Store) OpenInspectionGroupContext(ctx context.Context, create bool) (*ControlDir, error) {
+	return s.openControlDirContext(ctx, filepath.Join(s.Root, "inspection-group"), create)
+}
+
+// OpenInspectionGroupGeneration opens an immutable successor journal for a
+// changed supervisor identity. The legacy inspection-group directory remains
+// untouched so its evidence can still be audited or recovered independently.
+func (s *Store) OpenInspectionGroupGeneration(generation string, create bool) (*ControlDir, error) {
+	return s.OpenInspectionGroupGenerationContext(context.Background(), generation, create)
+}
+
+// OpenInspectionGroupGenerationContext preserves the caller deadline while
+// opening a supervisor-identity successor journal.
+func (s *Store) OpenInspectionGroupGenerationContext(ctx context.Context, generation string, create bool) (*ControlDir, error) {
+	if !validInspectionGroupGeneration(generation) {
+		return nil, fmt.Errorf("%w: invalid inspection group generation", task.ErrEvidenceFault)
+	}
+	return s.openControlDirContext(ctx, filepath.Join(s.Root, "inspection-group-"+generation), create)
 }
 
 func (s *Store) openControlDir(path string, create bool) (*ControlDir, error) {
@@ -255,6 +277,18 @@ func validateControlName(name string) error {
 		}
 	}
 	return nil
+}
+
+func validInspectionGroupGeneration(generation string) bool {
+	if len(generation) != 16 {
+		return false
+	}
+	for _, char := range generation {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *ControlDir) begin() error {
