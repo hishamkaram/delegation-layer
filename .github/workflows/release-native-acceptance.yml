@@ -141,7 +141,7 @@ jobs:
       - name: Configure OpenCode tool-capable acceptance model
         shell: bash
         run: |
-          model='openrouter/~openai/gpt-luna-latest'
+          model='openrouter/~anthropic/claude-sonnet-latest'
           config="${RUNNER_TEMP}/opencode-acceptance.json"
           printf '%s\n' "{\"model\":\"${model}\"}" >"${config}"
           chmod 0600 "${config}"
