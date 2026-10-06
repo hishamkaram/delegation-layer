@@ -104,11 +104,12 @@ func TestDescriptionAdvertisesDirectRuntimeCapabilities(t *testing.T) {
 		t.Fatalf("runtime=%+v", description.Runtime)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 6 {
+	if registration.Prepare == nil || len(registration.Interpreters) != 8 {
 		t.Fatalf("registration=%+v", registration)
 	}
-	if !registration.Interpreters[2].Reference().Equal(historicalReferenceForMode(ModeReadOnly)) || !registration.Interpreters[3].Reference().Equal(historicalReferenceForMode(ModeWorkspaceWrite)) ||
-		!registration.Interpreters[4].Reference().Equal(LegacyReferenceForMode(ModeReadOnly)) || !registration.Interpreters[5].Reference().Equal(LegacyReferenceForMode(ModeWorkspaceWrite)) {
+	if !registration.Interpreters[2].Reference().Equal(historicalCurrentReferenceForMode(ModeReadOnly)) || !registration.Interpreters[3].Reference().Equal(historicalCurrentReferenceForMode(ModeWorkspaceWrite)) ||
+		!registration.Interpreters[4].Reference().Equal(historicalReferenceForMode(ModeReadOnly)) || !registration.Interpreters[5].Reference().Equal(historicalReferenceForMode(ModeWorkspaceWrite)) ||
+		!registration.Interpreters[6].Reference().Equal(LegacyReferenceForMode(ModeReadOnly)) || !registration.Interpreters[7].Reference().Equal(LegacyReferenceForMode(ModeWorkspaceWrite)) {
 		t.Fatalf("legacy interpreter references are not registered: %+v", registration.Interpreters)
 	}
 }
