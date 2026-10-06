@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -38,7 +39,10 @@ func TestNativeReadOnlyProfilePinsSettingsSessionDirectory(t *testing.T) {
 	t.Setenv("PATH", cliDir)
 	request := planRequest(ModeReadOnly)
 	request.CanonicalCwd = workspace
-	firstSession := filepath.Join(home, ".pi", "agent", "sessions", "first")
+	firstSession, err := config.CanonicalizePath(filepath.Join(home, ".pi", "agent", "sessions", "first"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if writeErr := os.WriteFile(filepath.Join(workspace, ".pi", "settings.json"), []byte(`{"sessionDir":"`+firstSession+`"}`), 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}

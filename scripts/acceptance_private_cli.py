@@ -35,8 +35,8 @@ if (args[0] === "--version") {
   process.stdout.write("pi fixture 1.0.0\n");
   process.exit(0);
 }
-if (args[0] === "--help") {
-  process.stdout.write("Options: --mode --tools --model --thinking --session --list-models\n");
+if (args.includes("--help")) {
+  process.stdout.write("Options: --mode --tools --model --thinking --session --session-dir --no-extensions --list-models\n");
   process.exit(0);
 }
 

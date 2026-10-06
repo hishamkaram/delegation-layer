@@ -83,6 +83,14 @@ func TestNativeEnvironmentTreatsEmptyDirectorySelectorsAsUnset(t *testing.T) {
 	}
 	wantAgent := filepath.Join(home, ".pi", "agent")
 	wantSession := filepath.Join(wantAgent, "sessions")
+	wantAgent, err = config.CanonicalizePath(wantAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSession, err = config.CanonicalizePath(wantSession)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if environment.AgentDir != wantAgent || environment.SessionDir != wantSession || environment.SessionDirExplicit {
 		t.Fatalf("empty native selectors were not treated as unset: %+v", environment)
 	}
