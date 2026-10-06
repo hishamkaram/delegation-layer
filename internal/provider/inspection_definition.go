@@ -24,6 +24,7 @@ func (d InspectionDefinition) Snapshot() (InspectionDefinition, string, error) {
 	if d.Models != nil {
 		models := *d.Models
 		models.Arguments = slices.Clone(models.Arguments)
+		models.Capability.VersionArgs = slices.Clone(models.Capability.VersionArgs)
 		models.Capability.HelpArgs = slices.Clone(models.Capability.HelpArgs)
 		models.Capability.RequiredFlags = slices.Clone(models.Capability.RequiredFlags)
 		d.Models = &models
@@ -31,6 +32,7 @@ func (d InspectionDefinition) Snapshot() (InspectionDefinition, string, error) {
 	if d.Runtime != nil {
 		runtime := *d.Runtime
 		runtime.Environment = slices.Clone(runtime.Environment)
+		runtime.VersionArgs = slices.Clone(runtime.VersionArgs)
 		runtime.HelpArgs = slices.Clone(runtime.HelpArgs)
 		runtime.RequiredFlags = slices.Clone(runtime.RequiredFlags)
 		d.Runtime = &runtime
@@ -124,7 +126,7 @@ func validateRuntimeProbe(probe RuntimeProbeDefinition) error {
 	if err := validateInspectionEnvironment(probe.Environment); err != nil {
 		return err
 	}
-	for _, arg := range probe.HelpArgs {
+	for _, arg := range append(slices.Clone(probe.VersionArgs), probe.HelpArgs...) {
 		if !inspectionText(arg) || strings.ContainsAny(arg, " \t\r\n") {
 			return fmt.Errorf("%w: invalid runtime help argument", ErrProfileUnavailable)
 		}

@@ -45,6 +45,34 @@ func TestDispatchDefaultsAndLiteralValues(t *testing.T) {
 	}
 }
 
+func TestDispatchReviewTargetArguments(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		kind  string
+		ref   string
+	}{
+		{value: "uncommitted", kind: "uncommitted"},
+		{value: "base:main", kind: "base", ref: "main"},
+		{value: "commit:0123456789abcdef", kind: "commit", ref: "0123456789abcdef"},
+	} {
+		a, err := ParseArguments([]string{
+			"dispatch", "--provider", "codex:review", "--brief", "/brief", "--cwd", "/workspace",
+			"--review-target", test.value,
+		})
+		if err != nil || a.Config.ReviewTarget == nil || a.Config.ReviewTarget.Kind != test.kind || a.Config.ReviewTarget.Value != test.ref {
+			t.Fatalf("review target %q parsed as %+v: %v", test.value, a.Config.ReviewTarget, err)
+		}
+	}
+	for _, value := range []string{"base:", "commit:", "uncommitted:value", "branch:main", "main"} {
+		if _, err := ParseArguments([]string{
+			"dispatch", "--provider", "codex:review", "--brief", "/brief", "--cwd", "/workspace",
+			"--review-target", value,
+		}); err == nil {
+			t.Fatalf("invalid review target %q was accepted", value)
+		}
+	}
+}
+
 func TestAutoPreflightAndContinueArguments(t *testing.T) {
 	auto, err := ParseArguments([]string{
 		"dispatch", "--auto", "--brief", "/brief", "--cwd", "/workspace", "--json",

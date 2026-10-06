@@ -59,8 +59,8 @@ APPROVAL = "never"
 # The predicate revision describes the adapter's output contract. It is
 # deliberately independent of the installed Codex CLI release, which is
 # admitted through the runtime capability probe.
-PREDICATE_VERSION = "runtime-reported"
-PREDICATE_SHA256 = "3c5bdc1866330d2e7280422f9ad865c9ad29b16ceea16c19796c991ba7e1cb67"
+PREDICATE_VERSION = "runtime-reported-v3"
+PREDICATE_SHA256 = "2d549451e555032a58bdd46fbb48a31fd0b57d17df0a6aa267c1d7d8ee3a6d18"
 OUTPUT_NAME = "codex-last-message.txt"
 OUTPUT_WRITER_CONTRACT = "process-exit-eof-v1"
 TASK_BUDGET = "120s"
@@ -396,7 +396,9 @@ def parse_codex_events(raw: bytes) -> dict[str, object]:
                 else:
                     state["started"] = True
             elif event_type == "item.updated":
-                if state["completed"]:
+                if not state["started"]:
+                    fault("item.updated precedes item.started")
+                elif state["completed"]:
                     fault("item.updated follows completion")
                 else:
                     state["updated"] = True

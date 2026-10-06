@@ -69,6 +69,10 @@ PROFILES = {
         "executable": "codex", "modes": ("read-only", "workspace-write"),
         "default_mode": "read-only",
     },
+    "codex:review": {
+        "executable": "codex", "modes": ("read-only",),
+        "default_mode": "read-only",
+    },
     "opencode:run": {
         "executable": "opencode", "modes": ("read-only", "workspace-write"),
         "default_mode": "read-only",
@@ -386,6 +390,14 @@ def verify_read_only_answer(payload: bytes, expected: str, label: str) -> None:
             f"{label} did not return the exact marker-derived answer")
 
 
+def verify_review_answer(payload: bytes, label: str) -> None:
+    try:
+        answer = payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AcceptanceFailure(f"{label} review answer is not valid UTF-8") from error
+    require(bool(answer.strip()), f"{label} returned an empty review")
+
+
 def verify_shell_digest_artifact(target: Path, artifact: Path, label: str) -> None:
     """Require an actual shell-produced digest bound to the final target bytes."""
     require(target.is_file() and not target.is_symlink(), f"{label} target is not a regular file")
@@ -499,7 +511,7 @@ class NativeAcceptance:
             args.provider_executable, Path(discovered_provider or profile["executable"]), profile["executable"])
         require_discovery(profile["executable"], self.provider_executable, self.environment)
         self.git: Path | None = None
-        if self.provider == "codex:exec":
+        if self.provider in {"codex:exec", "codex:review"}:
             discovered_git = shutil.which("git", path=self.environment.get("PATH"))
             try:
                 self.git = resolve_executable(discovered_git, Path("/usr/bin/git"), "git")
@@ -537,6 +549,10 @@ class NativeAcceptance:
         self.model_discovery_task_id: str | None = None
         self.root_id: str | None = None
         self.provider_version: str | None = None
+        # A provider may update between turns.  Validate each task's admitted
+        # runtime identity independently and retain the observed versions for
+        # the acceptance receipt.
+        self.provider_versions: dict[str, str] = {}
         self.provider_sha256: str | None = None
         self.pueue_version: str | None = None
         self.pueued_version: str | None = None
@@ -640,6 +656,7 @@ class NativeAcceptance:
             "provider_executable": str(self.provider_executable),
             "provider_sha256": self.provider_sha256,
             "provider_version": self.provider_version,
+            "provider_versions": dict(sorted(getattr(self, "provider_versions", {}).items())),
             "delegate_sha256": digest(self.delegate),
             "runner_sha256": digest(self.runner),
             "pueue_sha256": digest(self.pueue),
@@ -657,7 +674,7 @@ class NativeAcceptance:
         return {"sandbox": "--sandbox", "mode": "accept-edits", "bypass": True}
 
     def _prepare_codex_workspace(self) -> None:
-        if self.provider != "codex:exec":
+        if self.provider not in {"codex:exec", "codex:review"}:
             return
         require(self.git is not None, "Codex git prerequisite is unavailable")
         process = self.processes.run(
@@ -669,6 +686,33 @@ class NativeAcceptance:
         require((self.workspace / ".git").is_dir() and not (self.workspace / ".git").is_symlink() and
                 process.result.get("exit_code") == 0,
                 "Codex disposable workspace is not a git repository")
+        if self.provider == "codex:review":
+            for key, value in (("user.email", "delegation-acceptance@example.invalid"),
+                               ("user.name", "Delegation Acceptance")):
+                configured = self.processes.run(
+                    "codex-review-git-config-" + key.replace(".", "-"),
+                    [self.git, "-C", self.workspace, "config", key, value],
+                    self.workspace.parent, timeout=20)
+                require(configured.result.get("exit_code") == 0,
+                        "Codex review workspace Git identity could not be configured")
+            staged = self.processes.run(
+                "codex-review-git-add",
+                [self.git, "-C", self.workspace, "add", "acceptance-marker.txt"],
+                self.workspace.parent, timeout=20)
+            require(staged.result.get("exit_code") == 0,
+                    "Codex review workspace target could not be staged")
+            committed = self.processes.run(
+                "codex-review-git-commit",
+                [self.git, "-C", self.workspace, "commit", "--quiet", "-m", "baseline"],
+                self.workspace.parent, timeout=20)
+            require(committed.result.get("exit_code") == 0,
+                    "Codex review workspace baseline could not be committed")
+            require(self.workspace_marker.is_file() and not self.workspace_marker.is_symlink(),
+                    "Codex review marker is not a regular file")
+            with self.workspace_marker.open("wb") as stream:
+                stream.write(self.marker_bytes + b"review-change\n")
+                stream.flush()
+                os.fsync(stream.fileno())
 
     def discover_models(self) -> None:
         """Record advisory model facts through the already-running supervisor."""
@@ -832,6 +876,13 @@ class NativeAcceptance:
                     "results from prose.\n"
                 )
         else:
+            if getattr(self, "provider", None) == "codex:review":
+                text = (
+                    "Review the current uncommitted changes in this Git workspace. Return a concise review "
+                    "of the change and do not modify files, use network, or access paths outside the workspace.\n"
+                )
+                write_bytes(path, text.encode())
+                return path
             prefix = "DELEGATION_LIVE_CONTINUED:" if continuation else "DELEGATION_LIVE_OK:"
             text = "Continue the exact previous conversation. " if continuation else ""
             text += (f"Read the actual file `{self.workspace_marker}` using a file-read tool or a read-only "
@@ -854,6 +905,8 @@ class NativeAcceptance:
             argv.extend(["--model", model])
         if effort:
             argv.extend(["--effort", effort])
+        if self.provider == "codex:review":
+            argv.extend(["--review-target", "uncommitted"])
         if predecessor:
             argv.extend(["--resume-task", predecessor])
         return argv
@@ -1053,8 +1106,11 @@ class NativeAcceptance:
         outcome, published_payload = verify_collected_outcome(response, directory, "committed")
         require(published_payload, f"{name} committed an empty response")
         if self.mode == "read-only":
-            verify_read_only_answer(
-                published_payload, marker_answer(self.marker_text, continuation="resume" in name), name)
+            if self.provider == "codex:review":
+                verify_review_answer(published_payload, name)
+            else:
+                verify_read_only_answer(
+                    published_payload, marker_answer(self.marker_text, continuation="resume" in name), name)
         provider_exit = read_json(directory / "provider.exit")
         require(provider_exit.get("root_id") == self.root_id and
                 provider_exit.get("task_id") == task_id and
@@ -1102,12 +1158,10 @@ class NativeAcceptance:
         observed_version = meta.get("provider_version")
         require(isinstance(observed_version, str) and bool(observed_version),
                 f"task {task_id} has no admitted provider version")
+        self.provider_versions[task_id] = observed_version
         if self.provider_version is None:
             self.provider_version = observed_version
             self.write_binding()
-        else:
-            require(observed_version == self.provider_version,
-                    f"task {task_id} provider version drifted")
         return directory, record, meta, meta_digest, spec_digest, brief
 
     def _workspace_write_snapshot(self, continuation: bool) -> dict[str, dict[str, object]]:
@@ -1159,9 +1213,12 @@ class NativeAcceptance:
                 ((requested_effort and requested.get("effort") == requested_effort) or
                  (not requested_effort and requested.get("effort") in (None, ""))),
                 f"task {task_id} model or effort selection changed")
+        if self.provider == "codex:review":
+            require(requested.get("review_target") == {"kind": "uncommitted"},
+                    f"task {task_id} Codex review target is not persisted")
         require(meta.get("root_id") == self.root_id and meta.get("task_id") == task_id and
                 meta.get("provider_executable") == str(self.provider_executable) and
-                meta.get("provider_version") == self.provider_version and
+                meta.get("provider_version") == self.provider_versions.get(task_id) and
                 meta.get("containment") == self.mode and
                 isinstance(spec_digest, str) and len(spec_digest) == 64 and
                 all(character in "0123456789abcdef" for character in spec_digest),
@@ -1245,17 +1302,22 @@ class NativeAcceptance:
                 f"task {task_id} has no provider session identity")
         return session
 
-    def replay(self) -> None:
-        records: dict[str, dict[str, object]] = {}
-        for name, record_name in (("fresh", "fresh-collect"), ("resume", "resume-collect")):
-            record = self.records[record_name]
-            records[name] = {
-                "directory": record["directory"],
-                "outcome": record["outcome"],
-                "payload": record["payload"],
-            }
+    def replay(self, records: dict[str, dict[str, object]] | None = None,
+               names: tuple[str, ...] = ("fresh", "resume")) -> None:
+        if records is None:
+            records = {}
+            for name, record_name in (("fresh", "fresh-collect"), ("resume", "resume-collect")):
+                record = self.records[record_name]
+                records[name] = {
+                    "directory": record["directory"],
+                    "outcome": record["outcome"],
+                    "payload": record["payload"],
+                }
         self.ops.root_id = self.root_id
-        self.ops.replay(records)
+        if names == ("fresh", "resume"):
+            self.ops.replay(records)
+        else:
+            self.ops.replay(records, names=names)
 
     def shutdown(self) -> None:
         require(self.daemon is not None, "private daemon was not started")
@@ -1319,6 +1381,30 @@ class NativeAcceptance:
                     "model discovery exit code is unavailable")
             return self.model_discovery_exit_code
         before = workspace_snapshot(self.workspace)
+        if self.provider == "codex:review":
+            first = self.dispatch("fresh", self.brief("fresh"))
+            self.wait_done("fresh", first)
+            self.collect("fresh-collect", first)
+            self.task_binding(first)
+            require(workspace_snapshot(self.workspace) == before,
+                    "Codex review changed the workspace")
+            self.replay({"fresh": self.records["fresh-collect"]}, names=("fresh",))
+            self.shutdown()
+            write_json(self.output / "success.json", {
+                "gate": "acceptance-native", "status": "passed", "provider": self.provider,
+                "mode": self.mode, "task_budget": TASK_BUDGET,
+                "canonical_task_budget": CANONICAL_TASK_BUDGET,
+                "requested_model": getattr(self.args, "model", None),
+                "requested_effort": getattr(self.args, "effort", None),
+                "model_discovery": self.model_discovery_summary,
+                "native_mode": self.native_mode_receipt(),
+                "provider_versions": dict(sorted(self.provider_versions.items())),
+                "tasks": {"fresh": self.tasks["fresh"]},
+                "scenario": self.scenario, "provider_launches": 1, "replay_launches": 0,
+                "credentials_in_receipt": False,
+                "natural_daemon_shutdown": self.closed,
+            })
+            return 0
         first = self.dispatch("fresh", self.brief("fresh"))
         self.wait_done("fresh", first)
         self.collect("fresh-collect", first)
@@ -1361,6 +1447,7 @@ class NativeAcceptance:
             "requested_effort": getattr(self.args, "effort", None),
             "model_discovery": self.model_discovery_summary,
             "native_mode": self.native_mode_receipt(),
+            "provider_versions": dict(sorted(self.provider_versions.items())),
             "tasks": {
                 "fresh": self.tasks["fresh"],
                 "resume": self.tasks["resume"],

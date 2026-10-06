@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -36,6 +37,34 @@ func TestIdentityObserverReportsOneThreadDuringChunkedCapture(t *testing.T) {
 	observer.Observe([]byte(`{"type":"thread.started","thread_id":"123e4567-e89b-12d3-a456-426614174001"}`))
 	if err = observer.Complete(); err != nil || len(got) != 1 {
 		t.Fatalf("late observation changed identity=%+v err=%v", got, err)
+	}
+}
+
+func TestReviewIdentityObserverRecordsReviewProvider(t *testing.T) {
+	var got []task.SessionIdentity
+	observer, err := newIdentityObserver(ReviewProvider, testTaskID, task.SessionExpectation{}, func(identity task.SessionIdentity) error {
+		got = append(got, identity)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := []byte(threadStarted() + "\n")
+	current, ok := observer.(execution.RecordIdentityObserver)
+	if !ok {
+		t.Fatal("identity observer does not support current record capture")
+	}
+	semanticErr, readErr := providerjson.ReadRecords(bytes.NewReader(record), func(value providerjson.Value, _ uint64) error {
+		return current.ObserveRecord(value)
+	})
+	if err = errors.Join(semanticErr, readErr); err != nil {
+		t.Fatal(err)
+	}
+	if err = observer.Complete(); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Provider != ReviewProvider || got[0].ConversationID != testThreadID {
+		t.Fatalf("identity=%+v", got)
 	}
 }
 

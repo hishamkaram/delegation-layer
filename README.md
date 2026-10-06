@@ -225,6 +225,26 @@ choices. Per-model effort metadata is independent of the harness-wide list.
 Discovery exits `0` for `available` or `partial`, `2` for `blocked` or
 `unavailable`, and `1` for `failed`.
 
+For Codex's native read-only review command, select `codex:review` and make
+the Git state explicit:
+
+```sh
+delegate --root "$HOME/delegation-state" dispatch \
+  --provider codex:review \
+  --review-target uncommitted \
+  --brief "$PWD/review-brief.txt" \
+  --cwd "$HOME/delegation-workspace" \
+  --permission read-only \
+  --budget 30m \
+  --json
+```
+
+Use `base:BRANCH` or `commit:SHA` for a different review target. Review tasks
+are persisted as read-only tasks and do not support continuation or active-turn
+interaction. The brief is retained in the task evidence; Codex's explicit
+review target supplies the native review scope because the Codex CLI does not
+accept a prompt together with these target flags.
+
 If a task reports `status: "timed_out"` and
 `continuation.resumable: true`, continue the exact session:
 

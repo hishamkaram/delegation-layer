@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,6 +25,31 @@ func TestParseCLIVersionRejectsInvalidOutput(t *testing.T) {
 		if _, err := ParseCLIVersion(output); err == nil {
 			t.Fatalf("invalid version output %q was accepted", output)
 		}
+	}
+}
+
+func TestRuntimeVersionArgsAreCopiedAndBoundToTheCapabilityDigest(t *testing.T) {
+	definition, err := NewRuntimeInspectionDefinition(CLIInfo{Path: "/usr/bin/provider", SHA256: strings.Repeat("a", 64)}, "/workspace", []string{"LANG=C"}, RuntimeCapability{VersionArgs: []string{"version"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(definition.Runtime.VersionArgs, []string{"version"}) {
+		t.Fatalf("version args=%q", definition.Runtime.VersionArgs)
+	}
+	changed := definition
+	runtime := *definition.Runtime
+	runtime.VersionArgs = []string{"--version"}
+	changed.Runtime = &runtime
+	oldDigest, err := RuntimeCapabilityDigest(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newDigest, err := RuntimeCapabilityDigest(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldDigest == newDigest {
+		t.Fatal("version command drift was omitted from capability digest")
 	}
 }
 

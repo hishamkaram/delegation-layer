@@ -47,7 +47,7 @@ func (o *identityObserver) ObserveRecord(value providerjson.Value) error {
 	if !identityMatchesExpectation(o.expected, threadID) {
 		return nil
 	}
-	o.callback = o.record(task.SessionIdentity{Provider: Provider, ConversationID: threadID})
+	o.callback = o.record(task.SessionIdentity{Provider: o.provider, ConversationID: threadID})
 	return o.callback
 }
 

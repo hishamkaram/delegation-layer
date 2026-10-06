@@ -297,13 +297,15 @@ func admissionRuntimeCapability(deps Dependencies, req task.TaskRecord, candidat
 }
 
 func ensureInspectionGroup(store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration) (resultErr error) {
-	group, err := inspection.OpenGroup(store, supervisor.Binding())
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	group, err := inspection.OpenGroupWithMigration(ctx, store, supervisor.Binding(), func(checkCtx context.Context, legacy inspection.GroupRequestRecord) error {
+		return checkLegacyInspectionGroup(checkCtx, legacy, timeout)
+	})
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, group.Close()) }()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 	snapshot, err := supervisor.Snapshot(ctx)
 	if err != nil {
 		joinInspectionPending(inFlightInspectionError(err))
@@ -341,6 +343,26 @@ func ensureInspectionGroup(store *taskdir.Store, supervisor *pueue.Client, timeo
 	}
 	if observeErr = group.Observe(snapshot); observeErr != nil {
 		return errors.Join(createErr, observeErr)
+	}
+	return nil
+}
+
+func checkLegacyInspectionGroup(ctx context.Context, legacy inspection.GroupRequestRecord, timeout time.Duration) error {
+	oldSupervisor, err := pueue.BindSaved(ctx, legacy.Supervisor, pueue.Options{ObservationTimeout: timeout})
+	if err != nil {
+		return fmt.Errorf("%w: cannot inspect the previous supervisor: %w", inspection.ErrGroupMigrationRequired, err)
+	}
+	oldSnapshot, err := oldSupervisor.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: cannot inspect the previous supervisor: %w", inspection.ErrGroupMigrationRequired, err)
+	}
+	for _, job := range oldSnapshot.Jobs {
+		if job.Group != legacy.Name {
+			continue
+		}
+		if job.State == pueue.StateQueued || job.State == pueue.StateRunning {
+			return fmt.Errorf("%w: previous inspection group still has active work", inspection.ErrGroupMigrationBusy)
+		}
 	}
 	return nil
 }

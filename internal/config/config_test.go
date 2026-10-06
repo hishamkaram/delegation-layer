@@ -52,6 +52,7 @@ func TestValidateProvider(t *testing.T) {
 	valid := []string{
 		ProviderAntigravityPrint,
 		ProviderCodexExec,
+		ProviderCodexReview,
 		ProviderClaudePrint,
 		ProviderPiJSON,
 		ProviderOpenCodeRun,

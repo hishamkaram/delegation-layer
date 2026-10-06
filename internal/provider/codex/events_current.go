@@ -20,17 +20,18 @@ import (
 // agent-message identities, and offsets for the selected final record. The
 // sealed reader is reopened for hashing and output after semantic evaluation.
 type currentEventState struct {
-	threadID       string
-	threadSeen     bool
-	turnStarted    bool
-	turnCompleted  bool
-	terminalFailed bool
-	interrupted    bool
-	semantic       error
-	final          currentFinal
-	usage          *usageTotals
-	usageReliable  bool
-	items          map[string]currentItemState
+	threadID         string
+	threadSeen       bool
+	turnStarted      bool
+	turnCompleted    bool
+	terminalFailed   bool
+	interrupted      bool
+	semantic         error
+	final            currentFinal
+	usage            *usageTotals
+	usageReliable    bool
+	requireItemStart bool
+	items            map[string]currentItemState
 }
 
 type currentFinal struct {
@@ -47,8 +48,8 @@ type currentItemState struct {
 	completed bool
 }
 
-func newCurrentEventState() currentEventState {
-	return currentEventState{items: make(map[string]currentItemState)}
+func newCurrentEventState(requireItemStart bool) currentEventState {
+	return currentEventState{requireItemStart: requireItemStart, items: make(map[string]currentItemState)}
 }
 
 func (s *currentEventState) markCurrentSemantic(reason string) {
@@ -65,8 +66,8 @@ func (s *currentEventState) markCurrentFault(err error) {
 
 func (s currentEventState) semanticFault() bool { return s.semantic != nil }
 
-func parseCurrentStdout(reader io.Reader) (currentEventState, error) {
-	state := newCurrentEventState()
+func parseCurrentStdout(reader io.Reader, requireItemStart bool) (currentEventState, error) {
+	state := newCurrentEventState(requireItemStart)
 	semanticErr, readErr := providerjson.ReadRecords(reader, func(value providerjson.Value, _ uint64) error {
 		return processCurrentRecord(&state, value)
 	})
@@ -332,7 +333,7 @@ func currentAgentMessageEvent(state *currentEventState, itemValue providerjson.V
 		state.markCurrentSemantic("agent_message identity state exceeds bounded count")
 		return state.semantic
 	}
-	if err = transitionCurrentItem(&itemState, eventType); err != nil {
+	if err = transitionCurrentItem(&itemState, eventType, state.requireItemStart); err != nil {
 		state.markCurrentFault(err)
 		return state.semantic
 	}
@@ -354,7 +355,7 @@ func currentAgentMessageEvent(state *currentEventState, itemValue providerjson.V
 	return nil
 }
 
-func transitionCurrentItem(item *currentItemState, eventType string) error {
+func transitionCurrentItem(item *currentItemState, eventType string, requireStart bool) error {
 	switch eventType {
 	case eventItemStarted:
 		if item.started || item.completed {
@@ -370,7 +371,7 @@ func transitionCurrentItem(item *currentItemState, eventType string) error {
 		}
 		item.updated = true
 	case eventItemCompleted:
-		if !item.started {
+		if requireStart && !item.started {
 			return errors.New("agent_message item.completed precedes item.started")
 		}
 		if item.completed {
@@ -395,7 +396,7 @@ func currentRequiredString(fields map[string]providerjson.Value, name string, li
 	return decoded, nil
 }
 
-func currentRefusalFor(input predicate.Input, state currentEventState) string {
+func currentRefusalFor(input predicate.Input, state currentEventState, provider string) string {
 	if refusal := sealRefusal(input.Seal); refusal != "" {
 		return refusal
 	}
@@ -408,7 +409,7 @@ func currentRefusalFor(input predicate.Input, state currentEventState) string {
 	if !state.threadSeen || !state.turnStarted {
 		return refusalMalformed
 	}
-	if !identityMatches(input, state.threadID) {
+	if !identityMatchesForProvider(input, state.threadID, provider) {
 		return refusalIdentity
 	}
 	if !state.turnCompleted {

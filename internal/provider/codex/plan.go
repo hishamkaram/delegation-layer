@@ -49,6 +49,65 @@ func execArgumentsForProfile(request task.TaskRecord, native bool) ([]string, in
 	return append(arguments, "-"), outputIndex, nil
 }
 
+func reviewArguments(request task.TaskRecord) ([]string, int, error) {
+	if err := validateReviewRequest(request); err != nil {
+		return nil, 0, err
+	}
+	// Codex review is a provider-owned read-only subcommand. Its CLI surface
+	// does not accept the ordinary exec sandbox, cwd, color, or output-file
+	// flags; Delegate supplies cwd through exec.Cmd.Dir and consumes JSONL
+	// stdout directly. The explicit target selects Codex's built-in review
+	// request, so no prompt argument is appended: Codex rejects a prompt when
+	// --uncommitted, --base, or --commit is present.
+	arguments := []string{"exec", "--json", "--ephemeral", "-c", `approval_policy="never"`}
+	arguments = appendModelArguments(arguments, request)
+	arguments = append(arguments, "review")
+	switch request.RequestedConfig.ReviewTarget.Kind {
+	case task.ReviewTargetUncommitted:
+		arguments = append(arguments, "--uncommitted")
+	case task.ReviewTargetBase:
+		arguments = append(arguments, "--base", request.RequestedConfig.ReviewTarget.Value)
+	case task.ReviewTargetCommit:
+		arguments = append(arguments, "--commit", request.RequestedConfig.ReviewTarget.Value)
+	}
+	return arguments, -1, nil
+}
+
+func validateReviewRequest(request task.TaskRecord) error {
+	if request.Provider != ReviewProvider || request.Mode != Mode || request.RequestedConfig.Permission != Mode {
+		return fmt.Errorf("%w: Codex review is read-only", ErrUnsupportedProfile)
+	}
+	if request.RequestedConfig.Interactive || request.PriorSession != nil {
+		return fmt.Errorf("%w: Codex review does not support interaction or continuation", ErrUnsupportedProfile)
+	}
+	if request.RequestedConfig.NativeTimeout != "" {
+		return fmt.Errorf("%w: Codex review has no native timeout option", ErrUnsupportedProfile)
+	}
+	if err := task.ValidateReviewTarget(request.RequestedConfig.ReviewTarget); err != nil {
+		return fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
+	}
+	if request.RequestedConfig.ReviewTarget == nil {
+		return fmt.Errorf("%w: a review target is required", ErrUnsupportedProfile)
+	}
+	if model := request.RequestedConfig.Model; model != "" && !validNativeOptionText(model) {
+		return fmt.Errorf("%w: model contains invalid bounded text", ErrUnsupportedProfile)
+	}
+	if effort := request.RequestedConfig.Effort; effort != "" && effort != "default" && !validNativeOptionText(effort) {
+		return fmt.Errorf("%w: effort contains invalid bounded text", ErrUnsupportedProfile)
+	}
+	return validateRequestBoundsAndWorkspace(request)
+}
+
+func validateRequestBoundsAndWorkspace(request task.TaskRecord) error {
+	if request.BudgetNanos <= 0 || request.BriefLength <= 0 || request.BriefLength > task.MaxBriefSize {
+		return fmt.Errorf("%w: finite brief and positive budget are required", ErrUnsupportedProfile)
+	}
+	if !filepath.IsAbs(request.CanonicalCwd) || filepath.Clean(request.CanonicalCwd) != request.CanonicalCwd {
+		return fmt.Errorf("%w: workspace must be an absolute canonical path", ErrUnsupportedProfile)
+	}
+	return task.ValidateTaskID(request.TaskID)
+}
+
 func validateRequest(request task.TaskRecord) error {
 	validators := []func(task.TaskRecord) error{
 		validateRequestIdentity,

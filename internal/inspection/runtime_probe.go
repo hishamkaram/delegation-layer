@@ -55,7 +55,11 @@ func inspectRuntimeVersion(scope execution.PreflightScope, definition provider.R
 	if err := verifyRuntimeExecutable(definition); err != nil {
 		return provider.RuntimeFacts{}, err
 	}
-	version, err := runCapabilityCommand(scope, definition, outputLimit, "--version")
+	versionArgs := definition.VersionArgs
+	if len(versionArgs) == 0 {
+		versionArgs = []string{"--version"}
+	}
+	version, err := runCapabilityCommand(scope, definition, outputLimit, versionArgs...)
 	if err != nil {
 		return provider.RuntimeFacts{}, fmt.Errorf("%w: version-command", errRuntimeProbe)
 	}

@@ -130,6 +130,85 @@ func TestOpenGroupRejectsChangedBindingBeforeDirectory(t *testing.T) {
 	}
 }
 
+func TestOpenGroupWithMigrationCreatesSuccessorWithoutRewritingLegacyEvidence(t *testing.T) {
+	store := groupTestStore(t)
+	legacyBinding := groupTestBinding()
+	legacy, err := OpenGroup(store, legacyBinding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyRequest := legacy.Request()
+	legacyBytes, err := os.ReadFile(filepath.Join(store.Root, "inspection-group", groupRequestRecordName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeErr := legacy.Close()
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	currentBinding := legacyBinding
+	currentBinding.ConfigPath = "/private/delegation/pueue.yml"
+	currentBinding.ConfigDigest = task.ComputeSHA256([]byte("private-config"))
+	currentBinding.ResolvedConfigSHA256 = task.ComputeSHA256([]byte("private-resolved-config"))
+	currentBinding.Endpoint = "unix:///private/delegation/pueue.sock"
+	checked := false
+	group, err := OpenGroupWithMigration(context.Background(), store, currentBinding, func(_ context.Context, existing GroupRequestRecord) error {
+		checked = true
+		if existing != legacyRequest {
+			t.Fatalf("migration checked the wrong legacy request: %+v / %+v", existing, legacyRequest)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { mustGroup(t, group.Close()) }()
+	if !checked {
+		t.Fatal("migration did not inspect the legacy supervisor")
+	}
+	if group.Name() != groupForRoot(store.RootID) || group.Request().Supervisor != currentBinding {
+		t.Fatalf("successor group lost current identity: %+v", group.Request())
+	}
+
+	gotLegacy, err := os.ReadFile(filepath.Join(store.Root, "inspection-group", groupRequestRecordName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotLegacy, legacyBytes) {
+		t.Fatalf("migration rewrote legacy request: before=%q after=%q", legacyBytes, gotLegacy)
+	}
+	variantPath := filepath.Join(store.Root, "inspection-group-"+groupGeneration(currentBinding), groupRequestRecordName)
+	if _, err := os.Stat(variantPath); err != nil {
+		t.Fatalf("successor request was not persisted: %v", err)
+	}
+}
+
+func TestOpenGroupWithMigrationRefusesActiveLegacyWork(t *testing.T) {
+	store := groupTestStore(t)
+	legacyBinding := groupTestBinding()
+	legacy, err := OpenGroup(store, legacyBinding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeErr := legacy.Close()
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	currentBinding := legacyBinding
+	currentBinding.ConfigDigest = task.ComputeSHA256([]byte("different-config"))
+	currentBinding.Endpoint = "unix:///private/delegation/pueue.sock"
+	_, err = OpenGroupWithMigration(context.Background(), store, currentBinding, func(context.Context, GroupRequestRecord) error {
+		return ErrGroupMigrationBusy
+	})
+	if !errors.Is(err, ErrGroupMigrationBusy) {
+		t.Fatalf("active legacy work was not refused: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(store.Root, "inspection-group-"+groupGeneration(currentBinding))); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("migration created successor after refusal: %v", statErr)
+	}
+}
+
 func TestGroupCreateClaimIsSingleUseAndConcurrentReplayNeverGrants(t *testing.T) {
 	_, group := openTestGroup(t)
 	now := groupTestTime()

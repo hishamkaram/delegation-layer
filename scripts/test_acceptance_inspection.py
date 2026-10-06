@@ -88,6 +88,31 @@ class InspectionHarnessTests(unittest.TestCase):
         }))
         self.assertEqual(provider_common.runtime_capability_sha(definition), expected)
 
+    def test_review_target_is_part_of_the_canonical_task_record(self):
+        task = {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "provider": "codex:review", "mode": "read-only",
+            "canonical_cwd": "/workspace",
+            "requested_config": {
+                "permission": "read-only", "budget": "2m0s",
+                "review_target": {"kind": "uncommitted"},
+            },
+            "budget_nanos": 120_000_000_000,
+            "brief_sha256": "c" * 64, "brief_length": 31,
+        }
+        encoded = provider_common._canonical_task_bytes(task)
+        self.assertIn(b'"review_target":{"kind":"uncommitted"}', encoded)
+        self.assertEqual(
+            provider_common._validate_task_record(task, ROOT, TASK, "review task"),
+            provider_common.sha(encoded),
+        )
+        invalid = deepcopy(task)
+        invalid["requested_config"]["review_target"] = {
+            "kind": "uncommitted", "value": "main",
+        }
+        with self.assertRaises(AcceptanceFailure):
+            provider_common._validate_task_record(invalid, ROOT, TASK, "review task")
+
     def test_bounded_text_rejects_raw_output_before_trimming(self):
         path = self.base / "version"
         path.write_bytes(b" " * provider_common.MAX_CONTROL_BYTES + b"version")

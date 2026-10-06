@@ -91,6 +91,31 @@ func TestTaskConfigurationBoundary(t *testing.T) {
 	}
 }
 
+func TestReviewTargetValidation(t *testing.T) {
+	valid := []ReviewTarget{
+		{Kind: ReviewTargetUncommitted},
+		{Kind: ReviewTargetBase, Value: "main"},
+		{Kind: ReviewTargetCommit, Value: "0123456789abcdef"},
+	}
+	for _, target := range valid {
+		if err := ValidateReviewTarget(&target); err != nil {
+			t.Fatalf("valid review target %+v rejected: %v", target, err)
+		}
+	}
+	for _, target := range []ReviewTarget{
+		{Kind: ReviewTargetUncommitted, Value: "main"},
+		{Kind: ReviewTargetBase},
+		{Kind: ReviewTargetCommit, Value: " commit"},
+		{Kind: ReviewTargetBase, Value: "main\nreview"},
+		{Kind: ReviewTargetCommit, Value: strings.Repeat("a", MaxControlRecordSize+1)},
+		{Kind: "branch", Value: "main"},
+	} {
+		if err := ValidateReviewTarget(&target); err == nil {
+			t.Fatalf("invalid review target %+v was accepted", target)
+		}
+	}
+}
+
 func TestProviderRuntimeIdentityVersionHasNoReleaseBound(t *testing.T) {
 	identity := ProviderRuntimeIdentity{Executable: "/provider", Version: "provider-v1", SHA256: ComputeSHA256([]byte("provider"))}
 	if err := ValidateProviderRuntimeIdentity(identity); err != nil {

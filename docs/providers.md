@@ -1,6 +1,6 @@
 # Provider guide
 
-Delegation Layer ships six launchable provider profiles. The profile name is
+Delegation Layer ships seven launchable provider profiles. The profile name is
 part of the task request and determines the command, environment, policy,
 identity observer, input transport, output interpreter, and supported options.
 
@@ -8,6 +8,7 @@ identity observer, input transport, output interpreter, and supported options.
 | --- | --- | --- | --- | --- |
 | `antigravity:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort`, `native-timeout` | `agy` |
 | `codex:exec` | `read-only`, `workspace-write` | `native-sandbox` | `continuation`, `model`, `effort` | `codex exec` |
+| `codex:review` | `read-only` | `native-sandbox` | `review-target`, `model`, `effort` | `codex exec review` |
 | `ccr:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model` (required alias), `effort` | CCR foreground launch |
 | `claude:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `claude` print mode |
 | `pi:json` | `read-only`, `workspace-write` | `tool-allowlist` | `continuation`, `model`, `effort` | `pi --mode json` |
@@ -56,7 +57,8 @@ provider results still prevent successful delegation.
 Before a task is admitted, the selected adapter resolves a canonical regular
 executable and records its observed identity. A supervised runtime probe then:
 
-1. invokes the executable's version command and accepts any nonempty, valid
+1. invokes the provider-declared version command (defaulting to `--version`)
+   and accepts any nonempty, valid
    reported version that fits the bounded durable evidence record;
 2. invokes the provider help command, including any profile-specific subcommand;
 3. checks the public flags required by the adapter; and
@@ -181,6 +183,15 @@ turn completion, and the selected agent answer remain validated. The optional
 last-message artifact is compared to the selected answer without buffering the
 whole answer.
 
+`codex:review` uses the same supervised executable and completion predicate for
+Codex's native `exec review` operation. It is always read-only and requires an
+explicit `--review-target`: `uncommitted`, `base:BRANCH`, or `commit:SHA`.
+The target is persisted with the immutable task request and is translated only
+by the adapter into the corresponding native review flag. Review tasks do not
+support continuation or active-turn interaction. The required brief remains
+task evidence; Codex's target flag supplies the review scope because its native
+review command does not accept a prompt alongside that flag.
+
 ## Claude
 
 `claude:print` uses print mode and structured streaming output. `read-only` maps
@@ -256,9 +267,10 @@ Both `ccr` and `claude` must be installed. Configure providers and credentials i
 CCR beforehand. Delegate manages task execution; it does not configure CCR.
 
 Supply `--model` with a configured CCR alias. To choose one, use
-`delegate models --provider ccr:print --json`; this reads CCR's public
-`model list --json` interface. Listing does not prove authentication or model
-availability. Explicit aliases remain valid inputs even if discovery is unavailable.
+`delegate models --provider ccr:print --json`; Delegate reads the tab-separated
+output of CCR's `model list` command. Listing does not prove authentication or
+model availability. Explicit aliases remain valid inputs even if discovery is
+unavailable.
 Unknown effort choices remain null; an explicit `--effort` is forwarded to Claude.
 
 Read-only selects `plan`; workspace-write selects `bypassPermissions`. These are

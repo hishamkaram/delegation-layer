@@ -22,7 +22,9 @@ const (
 
 type interpreter struct {
 	mode              string
+	adapter           string
 	legacy            bool
+	historicalCurrent bool
 	historicalRuntime bool
 }
 
@@ -33,7 +35,11 @@ func NewInterpreter(modes ...string) predicate.Interpreter {
 	if len(modes) > 0 {
 		mode = modes[0]
 	}
-	return interpreter{mode: mode}
+	return interpreter{mode: mode, adapter: Provider}
+}
+
+func newReviewInterpreter() predicate.Interpreter {
+	return interpreter{mode: Mode, adapter: ReviewProvider}
 }
 
 func newLegacyInterpreter() predicate.Interpreter {
@@ -41,7 +47,11 @@ func newLegacyInterpreter() predicate.Interpreter {
 }
 
 func newHistoricalRuntimeInterpreter(mode string) predicate.Interpreter {
-	return interpreter{mode: mode, historicalRuntime: true}
+	return interpreter{mode: mode, adapter: Provider, historicalRuntime: true}
+}
+
+func newHistoricalCurrentInterpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, adapter: Provider, historicalCurrent: true}
 }
 
 // NewWorkspaceWriteInterpreter returns the Codex interpreter bound to the
@@ -51,8 +61,14 @@ func NewWorkspaceWriteInterpreter() predicate.Interpreter {
 }
 
 func (v interpreter) Reference() task.PredicateRef {
+	if v.adapter == ReviewProvider {
+		return reviewReference()
+	}
 	if v.legacy {
 		return LegacyReference()
+	}
+	if v.historicalCurrent {
+		return historicalCurrentRuntimeReferenceForMode(v.mode)
 	}
 	if v.historicalRuntime {
 		return historicalRuntimeReferenceForMode(v.mode)
@@ -102,6 +118,13 @@ func (v interpreter) evaluateHistorical(input predicate.Input, raw predicate.Evi
 		Session: &session,
 		Usage:   usageFromLastTotal(stdout.usage, task.UsageReliabilityReported),
 	}, nil
+}
+
+func (v interpreter) provider() string {
+	if v.adapter == "" {
+		return Provider
+	}
+	return v.adapter
 }
 
 func readEvidence(raw predicate.Evidence) (eventState, error) {
@@ -174,6 +197,10 @@ func sealRefusal(seal task.ProviderExitRecord) string {
 }
 
 func identityMatches(input predicate.Input, threadID string) bool {
+	return identityMatchesForProvider(input, threadID, Provider)
+}
+
+func identityMatchesForProvider(input predicate.Input, threadID, provider string) bool {
 	if !validThreadID(threadID) {
 		return false
 	}
@@ -184,7 +211,7 @@ func identityMatches(input predicate.Input, threadID string) bool {
 	} else if input.ExpectedSession.ID != "" {
 		return false
 	}
-	if input.RecordedSession != nil && (input.RecordedSession.Provider != Provider || input.RecordedSession.ConversationID != threadID) {
+	if input.RecordedSession != nil && (input.RecordedSession.Provider != provider || input.RecordedSession.ConversationID != threadID) {
 		return false
 	}
 	return true

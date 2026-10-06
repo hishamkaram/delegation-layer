@@ -465,7 +465,7 @@ if isinstance(normal, dict) and normal.get("command") == "models" \
         and normal.get("reason_code") == "discovery_unavailable" \
         and result.returncode == 2:
     normal.update(status="available", reason_code="ok", complete=True,
-                  source="ccr model list --json", efforts=None,
+                  source="ccr model list", efforts=None,
                   models=[{"id": "local-review", "name": "Local review model", "efforts": None}])
     print(json.dumps(normal))
     sys.exit(0)

@@ -18,6 +18,15 @@ const (
 	groupObservationRecordName = "observation.json"
 )
 
+var (
+	// ErrGroupMigrationRequired means an existing inspection journal belongs
+	// to another supervisor and cannot be safely rebound automatically.
+	ErrGroupMigrationRequired = errors.New("inspection group migration required")
+	// ErrGroupMigrationBusy means the old supervisor still owns queued or
+	// running inspection work, so a new generation must not be opened.
+	ErrGroupMigrationBusy = errors.New("inspection group migration has active work")
+)
+
 // GroupRequestRecord is the immutable root-scoped group binding. The group
 // name and parallelism are derived by this package; callers cannot select a
 // broader group or change its scheduling width through this record.
@@ -103,14 +112,83 @@ func (p *GroupPermit) Consume() error {
 // config and endpoint. Static validation happens before the journal directory
 // is opened or created.
 func OpenGroup(store *taskdir.Store, binding task.SupervisorRef) (journal *GroupJournal, resultErr error) {
+	return openGroup(context.Background(), store, binding)
+}
+
+func openGroup(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef) (journal *GroupJournal, resultErr error) {
+	expected, err := expectedGroupRequest(store, binding)
+	if err != nil {
+		return nil, err
+	}
+	control, err := store.OpenInspectionGroupContext(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	return openGroupControl(ctx, control, store.RootID, binding, expected)
+}
+
+// OpenGroupWithMigration rebinds a stale inspection journal without changing
+// its immutable records. A changed supervisor gets a deterministic successor
+// directory only after check confirms that the old derived group has no active
+// work. The check must perform a bounded read-only observation and must not
+// mutate either supervisor.
+func OpenGroupWithMigration(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, check func(context.Context, GroupRequestRecord) error) (*GroupJournal, error) {
+	if ctx == nil {
+		return nil, errors.New("nil migration context")
+	}
+	expected, err := expectedGroupRequest(store, binding)
+	if err != nil {
+		return nil, err
+	}
+
+	legacy, err := store.OpenInspectionGroupContext(ctx, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return openGroup(ctx, store, binding)
+	}
+	if err != nil {
+		return nil, err
+	}
+	existing, readErr := readGroupRequest(ctx, legacy)
+	closeErr := legacy.Close()
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			return openGroup(ctx, store, binding)
+		}
+		return nil, errors.Join(readErr, closeErr)
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if validateErr := validateStoredGroupRequest(existing, store.RootID); validateErr != nil {
+		return nil, fmt.Errorf("%w: invalid group request: %w", task.ErrEvidenceFault, validateErr)
+	}
+	if sameGroupRequest(existing, expected) {
+		return openGroup(ctx, store, binding)
+	}
+	if check == nil {
+		return nil, fmt.Errorf("%w: changed supervisor identity", ErrGroupMigrationRequired)
+	}
+	checkErr := check(ctx, existing)
+	if checkErr != nil {
+		return nil, checkErr
+	}
+	generation := groupGeneration(binding)
+	control, err := store.OpenInspectionGroupGenerationContext(ctx, generation, true)
+	if err != nil {
+		return nil, err
+	}
+	return openGroupControl(ctx, control, store.RootID, binding, expected)
+}
+
+func expectedGroupRequest(store *taskdir.Store, binding task.SupervisorRef) (GroupRequestRecord, error) {
 	if store == nil {
-		return nil, errors.New("nil inspection store")
+		return GroupRequestRecord{}, errors.New("nil inspection store")
 	}
 	if rootErr := task.ValidateRootID(store.RootID); rootErr != nil {
-		return nil, rootErr
+		return GroupRequestRecord{}, rootErr
 	}
 	if bindingErr := task.ValidateFreshSupervisorRef(binding); bindingErr != nil {
-		return nil, bindingErr
+		return GroupRequestRecord{}, bindingErr
 	}
 	expected := GroupRequestRecord{
 		SchemaVersion: task.SchemaVersion,
@@ -120,12 +198,14 @@ func OpenGroup(store *taskdir.Store, binding task.SupervisorRef) (journal *Group
 		ParallelTasks: 1,
 	}
 	if requestErr := validateGroupRequest(expected, store.RootID, binding); requestErr != nil {
-		return nil, fmt.Errorf("%w: constructed group request: %w", task.ErrInvariantFault, requestErr)
+		return GroupRequestRecord{}, fmt.Errorf("%w: constructed group request: %w", task.ErrInvariantFault, requestErr)
 	}
+	return expected, nil
+}
 
-	control, openErr := store.OpenInspectionGroup(true)
-	if openErr != nil {
-		return nil, openErr
+func openGroupControl(ctx context.Context, control *taskdir.ControlDir, rootID string, binding task.SupervisorRef, expected GroupRequestRecord) (journal *GroupJournal, resultErr error) {
+	if control == nil {
+		return nil, errors.New("nil inspection group control")
 	}
 	closeOnError := true
 	defer func() {
@@ -134,7 +214,7 @@ func OpenGroup(store *taskdir.Store, binding task.SupervisorRef) (journal *Group
 		}
 	}()
 
-	winner, establishErr := establishGroupRequest(control, store.RootID, binding, expected)
+	winner, establishErr := establishGroupRequest(ctx, control, rootID, binding, expected)
 	if establishErr != nil {
 		return nil, establishErr
 	}
@@ -149,8 +229,37 @@ func OpenGroup(store *taskdir.Store, binding task.SupervisorRef) (journal *Group
 	return journal, nil
 }
 
-func establishGroupRequest(control *taskdir.ControlDir, rootID string, binding task.SupervisorRef, expected GroupRequestRecord) (record GroupRequestRecord, resultErr error) {
-	resultErr = withControlTransaction(control, func(tx *taskdir.ControlTransaction) error {
+func readGroupRequest(ctx context.Context, control *taskdir.ControlDir) (record GroupRequestRecord, resultErr error) {
+	if control == nil {
+		return GroupRequestRecord{}, os.ErrClosed
+	}
+	resultErr = control.WithLock(ctx, func(tx *taskdir.ControlTransaction) error {
+		return tx.Read(groupRequestRecordName, &record)
+	})
+	return record, resultErr
+}
+
+func groupGeneration(binding task.SupervisorRef) string {
+	identity := struct {
+		ConfigPath           string `json:"config_path"`
+		ConfigDigest         string `json:"config_digest"`
+		ResolvedConfigSHA256 string `json:"resolved_config_sha256"`
+		Endpoint             string `json:"endpoint"`
+	}{
+		ConfigPath:           binding.ConfigPath,
+		ConfigDigest:         binding.ConfigDigest,
+		ResolvedConfigSHA256: binding.ResolvedConfigSHA256,
+		Endpoint:             binding.Endpoint,
+	}
+	bytes, err := task.MarshalCanonical(identity)
+	if err != nil {
+		return "0000000000000000"
+	}
+	return task.ComputeSHA256(bytes)[:16]
+}
+
+func establishGroupRequest(ctx context.Context, control *taskdir.ControlDir, rootID string, binding task.SupervisorRef, expected GroupRequestRecord) (record GroupRequestRecord, resultErr error) {
+	resultErr = withControlTransactionContext(ctx, control, func(tx *taskdir.ControlTransaction) error {
 		var existing GroupRequestRecord
 		readErr := tx.Read(groupRequestRecordName, &existing)
 		if readErr == nil {
@@ -211,6 +320,16 @@ func createGroupRequest(tx *taskdir.ControlTransaction, rootID string, binding t
 }
 
 func validateGroupRequest(record GroupRequestRecord, rootID string, binding task.SupervisorRef) error {
+	if err := validateStoredGroupRequest(record, rootID); err != nil {
+		return err
+	}
+	if !task.SameSupervisorIdentity(record.Supervisor, binding) {
+		return task.ErrEvidenceFault
+	}
+	return nil
+}
+
+func validateStoredGroupRequest(record GroupRequestRecord, rootID string) error {
 	if record.SchemaVersion != task.SchemaVersion {
 		return fmt.Errorf("%w: group request schema %d", task.ErrUnsupportedSchema, record.SchemaVersion)
 	}
@@ -228,9 +347,6 @@ func validateGroupRequest(record GroupRequestRecord, rootID string, binding task
 	}
 	if record.ParallelTasks != 1 {
 		return task.ErrInvalidEnum
-	}
-	if !task.SameSupervisorIdentity(record.Supervisor, binding) {
-		return task.ErrEvidenceFault
 	}
 	return nil
 }

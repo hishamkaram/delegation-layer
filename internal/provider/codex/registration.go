@@ -31,10 +31,37 @@ func Registration() commonprovider.Registration {
 		PrepareExisting: PrepareExistingCandidate,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(Mode), NewInterpreter(WorkspaceWriteMode),
+			newHistoricalCurrentInterpreter(Mode), newHistoricalCurrentInterpreter(WorkspaceWriteMode),
 			newHistoricalRuntimeInterpreter(Mode), newHistoricalRuntimeInterpreter(WorkspaceWriteMode),
 			newLegacyInterpreter(),
 			newInteractionInterpreter(Mode), newInteractionInterpreter(WorkspaceWriteMode),
 			newHistoricalInteractionInterpreter(Mode), newHistoricalInteractionInterpreter(WorkspaceWriteMode),
 		},
+	}
+}
+
+// ReviewDescription returns Codex's explicit read-only review capability.
+func ReviewDescription() commonprovider.Description {
+	return commonprovider.Description{
+		ID:               ReviewProvider,
+		SupportedModes:   []string{Mode},
+		SupportedOptions: []string{commonprovider.OptionEffort, commonprovider.OptionModel, commonprovider.OptionReviewTarget},
+		RequiredOptions:  []string{commonprovider.OptionReviewTarget},
+		Continuation:     commonprovider.ContinuationUnsupported,
+		ReadOnly:         commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativeSandbox, Containment: commonprovider.ReadOnlyProviderOwned},
+		Runtime:          reviewRuntimeRequirementsForRequest(task.TaskRecord{}),
+		Discoverable:     true,
+	}
+}
+
+// ReviewRegistration returns the bounded Codex review operation. It shares
+// executable discovery and the supervisor lifecycle with codex:exec while
+// retaining a distinct request and output predicate identity.
+func ReviewRegistration() commonprovider.Registration {
+	return commonprovider.Registration{
+		Description:     ReviewDescription(),
+		Prepare:         PrepareReviewCandidate,
+		PrepareExisting: PrepareExistingReviewCandidate,
+		Interpreters:    []predicate.Interpreter{newReviewInterpreter()},
 	}
 }

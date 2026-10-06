@@ -42,6 +42,7 @@ const (
 	OptionEffort        = "effort"
 	OptionModel         = "model"
 	OptionNativeTimeout = "native-timeout"
+	OptionReviewTarget  = "review-target"
 )
 
 // ContinuationMode describes how a provider resumes a predecessor session.
@@ -269,10 +270,13 @@ func validatePlanBindings(plan execution.Plan) error {
 type PrepareProfile func(task.TaskRecord) (PreparedProfile, error)
 
 // RuntimeCapability describes the command-level checks performed when a
-// launch profile is prepared. HelpArgs are prepended before --help (for
-// example, Codex uses ["exec"]); RequiredFlags are the flags the adapter puts
-// in its argv. These are requirements, not a release manifest.
+// launch profile is prepared. VersionArgs selects the provider's version
+// command and defaults to ["--version"] when empty; HelpArgs are prepended
+// before --help (for example, Codex uses ["exec"]); RequiredFlags are the
+// flags the adapter puts in its argv. These are requirements, not a release
+// manifest.
 type RuntimeCapability struct {
+	VersionArgs   []string `json:"version_args,omitempty"`
 	HelpArgs      []string `json:"help_args,omitempty"`
 	RequiredFlags []string `json:"required_flags"`
 }

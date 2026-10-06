@@ -797,13 +797,15 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             gate.require_replay_unchanged(before, {"outcome.json": {"sha256": "b"}})
 
     def test_profiles_and_parser_expose_normal_permission_matrix(self):
-        expected = {"antigravity:print", "ccr:print", "claude:print", "codex:exec", "pi:json", "opencode:run"}
+        expected = {"antigravity:print", "ccr:print", "claude:print", "codex:exec", "codex:review", "pi:json", "opencode:run"}
         self.assertEqual(set(gate.PROFILES), expected)
         self.assertEqual(gate.PROFILES["antigravity:print"]["default_mode"], "workspace-write")
         for profile in gate.PROFILES.values():
-            self.assertIn("workspace-write", profile["modes"])
+            if profile is not gate.PROFILES["codex:review"]:
+                self.assertIn("workspace-write", profile["modes"])
         self.assertEqual(gate.PROFILES["claude:print"]["default_mode"], "read-only")
         self.assertEqual(gate.PROFILES["codex:exec"]["default_mode"], "read-only")
+        self.assertEqual(gate.PROFILES["codex:review"]["modes"], ("read-only",))
         self.assertEqual(gate.PROFILES["pi:json"]["default_mode"], "read-only")
         self.assertEqual(gate.PROFILES["opencode:run"]["default_mode"], "read-only")
 
@@ -829,12 +831,13 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_aggregate_wrapper_runs_write_and_read_profiles(self):
         wrapper = Path(__file__).with_name("acceptance_native_all.sh").read_text()
-        for provider in ("antigravity:print", "claude:print", "ccr:print", "codex:exec", "pi:json", "opencode:run"):
+        for provider in ("antigravity:print", "claude:print", "ccr:print", "codex:exec", "codex:review", "pi:json", "opencode:run"):
             self.assertIn(provider, wrapper)
         self.assertIn('--permission "$case_permission"', wrapper)
         self.assertIn('--scenario "$case_scenario"', wrapper)
         self.assertIn('run_case "$provider" workspace-write write', wrapper)
         self.assertIn('run_case "$provider" read-only read-only', wrapper)
+        self.assertIn('run_case codex:review read-only read-only', wrapper)
         self.assertIn('for provider in antigravity:print claude:print ccr:print codex:exec pi:json opencode:run; do', wrapper)
         self.assertIn("2) # User-authorized authentication/prerequisite blocks remain neutral.", wrapper)
         self.assertIn("passed=%s blocked=%s failed=%s", wrapper)
@@ -852,8 +855,16 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
                 capture_output=True, text=True, check=False, timeout=10)
             self.assertEqual(blocked.returncode, 0)
-            self.assertIn("status=BLOCKED passed=0 blocked=12 failed=0", blocked.stdout)
+            self.assertIn("status=BLOCKED passed=0 blocked=13 failed=0", blocked.stdout)
             self.assertIn("auth_blocks_neutral=true", blocked.stdout)
+
+            environment["DELEGATION_REQUIRE_LIVE_ACCEPTANCE"] = "1"
+            required = subprocess.run(
+                ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
+                capture_output=True, text=True, check=False, timeout=10)
+            self.assertEqual(required.returncode, 2)
+            self.assertIn("status=BLOCKED passed=0 blocked=13 failed=0", required.stdout)
+            environment.pop("DELEGATION_REQUIRE_LIVE_ACCEPTANCE")
 
             fake_python.write_text(
                 "#!/bin/sh\n"
@@ -867,7 +878,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
                 capture_output=True, text=True, check=False, timeout=10)
             self.assertEqual(mixed.returncode, 1)
-            self.assertIn("status=failed passed=2 blocked=8 failed=2", mixed.stdout)
+            self.assertIn("status=failed passed=2 blocked=9 failed=2", mixed.stdout)
 
     def test_normal_setup_does_not_probe_provider_version_directly(self):
         source = Path(__file__).with_name("acceptance_native.py").read_text()

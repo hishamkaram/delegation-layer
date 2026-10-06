@@ -190,8 +190,8 @@ claims. The package version must stay aligned with the release tag used by the
 release workflow.
 
 When native provider credentials are available, run the relevant live gate with
-a disposable workspace. `make acceptance-native` covers each supported mode
-across all six providers, including AGY read-only, positive unattended writes,
+a disposable workspace. `make acceptance-native` covers the shipped native
+profiles, including `codex:review`, AGY read-only, positive unattended writes,
 continuation, and replay. Set `CCR_LIVE_MODEL` to a configured CCR alias for
 the aggregate; without it, CCR is explicitly blocked. `make acceptance-agy`, `make acceptance-codex`,
 `make acceptance-claude`, `make acceptance-pi`, and `make acceptance-opencode`
@@ -201,6 +201,8 @@ gate returns `0` for a pass, `1` for a real behavior or evidence failure, and
 blocked profiles neutral so an unavailable login does not block unrelated
 development. Report its status and counts alongside the exit code; an aggregate
 `BLOCKED` result is not authenticated live proof.
+Use `make acceptance-codex-review` for the native read-only review profile by
+itself.
 
 Model discovery is a separate acceptance entry so the task matrix does not
 repeat native discovery for every mode. Run it once per provider when validating
@@ -231,9 +233,19 @@ account availability; keep authenticated acceptance receipts separate.
 
 ## Release promotion
 
-The tag workflow creates and verifies a draft release. Promotion is a separate
-manual workflow dispatch from protected `main` so npm, GitHub Releases, and the Homebrew tap are
-published only after the archive smoke checks pass. Keep `publish_homebrew`
+The tag workflow creates and verifies a draft release. Before promotion, run
+`release-native-acceptance.yml` from the exact draft tag on a project-owned
+runner labeled `delegation-native`. That runner must already have the provider
+CLIs and their native authentication; the workflow downloads and verifies the
+draft archive, then runs the released `delegate`, `delegate-run`, `pueue`, and
+`pueued` binaries. Its live gate requires at least one authenticated provider
+pass and fails on behavior or evidence failures. Promotion checks the matching
+successful run by release commit, so a source checkout or a locally built CLI
+cannot satisfy the release gate.
+
+Promotion is a separate manual workflow dispatch from protected `main` so npm,
+GitHub Releases, and the Homebrew tap are published only after the archive
+smoke checks and exact-artifact native acceptance pass. Keep `publish_homebrew`
 enabled for normal releases and configure the `HOMEBREW_TAP_TOKEN` repository
 secret with write access to `hishamkaram/homebrew-tap`. The promotion script
 revalidates every platform archive, checksum, and GitHub attestation before it

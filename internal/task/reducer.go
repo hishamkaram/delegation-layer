@@ -20,7 +20,7 @@ func CompareRequests(a, b *TaskRecord) bool {
 		a.BriefLength != b.BriefLength {
 		return false
 	}
-	if a.RequestedConfig != b.RequestedConfig {
+	if !reflect.DeepEqual(a.RequestedConfig, b.RequestedConfig) {
 		return false
 	}
 	if (a.PriorSession == nil) != (b.PriorSession == nil) {

@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 
+	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -53,6 +54,10 @@ func dispatchFailureCode(err error, stage, taskRecord string) string {
 		return "task_request_conflict"
 	case errors.Is(err, task.ErrIdentityMismatch):
 		return "task_identity_mismatch"
+	case errors.Is(err, inspection.ErrGroupMigrationBusy):
+		return "supervisor_migration_blocked"
+	case errors.Is(err, inspection.ErrGroupMigrationRequired):
+		return "supervisor_upgrade_required"
 	case errors.Is(err, ErrProfileUnavailable):
 		return "provider_unavailable"
 	}
@@ -102,37 +107,28 @@ func dispatchFailureNextAction(code, taskRecord string) string {
 	return "stop_and_report"
 }
 
+var dispatchFailureMessages = map[string]string{
+	"invalid_request":                    "Delegate could not accept the dispatch request.",
+	"unsupported_option":                 "The selected provider does not support one of the requested options.",
+	"task_request_conflict":              "The dispatch request conflicts with an existing immutable task.",
+	"task_identity_mismatch":             "Delegate could not verify the saved task identity.",
+	"supervisor_migration_blocked":       "Delegate found active inspection work on an older supervisor and could not migrate it safely.",
+	"supervisor_upgrade_required":        "Delegate found an older inspection supervisor binding that requires safe migration before dispatch.",
+	"supervisor_setup_failed":            "Delegate could not prepare its private task supervisor.",
+	"provider_preflight_failed":          "Delegate could not complete provider preflight.",
+	"delegate_installation_incomplete":   "The Delegation Layer installation is incomplete.",
+	"provider_unavailable":               "The selected provider is not available in this environment.",
+	"task_submission_uncertain":          "Delegate created the task record but could not confirm submission. Check its status before taking further action.",
+	"task_submission_preparation_failed": "Delegate created the task record but could not prepare it for submission. Check its status before taking further action.",
+	"task_operation_failed":              "Delegate could not safely inspect or reuse the saved task. Check its status before taking further action.",
+	"state_root_unavailable":             "Delegate could not access the saved task state. Stop and report this failure.",
+	"continuation_unavailable":           "Delegate could not load or validate the predecessor for continuation. Stop and report this failure.",
+	"unsupported_continuation":           "The selected provider does not support resumable continuation. Stop and report this limitation.",
+}
+
 func dispatchFailureMessage(code string) string {
-	switch code {
-	case "invalid_request":
-		return "Delegate could not accept the dispatch request."
-	case "unsupported_option":
-		return "The selected provider does not support one of the requested options."
-	case "task_request_conflict":
-		return "The dispatch request conflicts with an existing immutable task."
-	case "task_identity_mismatch":
-		return "Delegate could not verify the saved task identity."
-	case "supervisor_setup_failed":
-		return "Delegate could not prepare its private task supervisor."
-	case "provider_preflight_failed":
-		return "Delegate could not complete provider preflight."
-	case "delegate_installation_incomplete":
-		return "The Delegation Layer installation is incomplete."
-	case "provider_unavailable":
-		return "The selected provider is not available in this environment."
-	case "task_submission_uncertain":
-		return "Delegate created the task record but could not confirm submission. Check its status before taking further action."
-	case "task_submission_preparation_failed":
-		return "Delegate created the task record but could not prepare it for submission. Check its status before taking further action."
-	case "task_operation_failed":
-		return "Delegate could not safely inspect or reuse the saved task. Check its status before taking further action."
-	case "state_root_unavailable":
-		return "Delegate could not access the saved task state. Stop and report this failure."
-	case "continuation_unavailable":
-		return "Delegate could not load or validate the predecessor for continuation. Stop and report this failure."
-	case "unsupported_continuation":
-		return "The selected provider does not support resumable continuation. Stop and report this limitation."
-	default:
-		return "Delegate could not complete dispatch."
+	if message, ok := dispatchFailureMessages[code]; ok {
+		return message
 	}
+	return "Delegate could not complete dispatch."
 }

@@ -96,14 +96,24 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
 9. Never put credentials, tokens, or unrestricted provider output in a brief,
    option, receipt, or agent message.
 10. Permission modes select provider-native behavior, not an independent sandbox.
-   Providers load their own configuration and extensions. If a task is rejected,
-   report delegate's evidence; do not assume the user's configuration is faulty
-   or remove MCP servers, plugins, settings, or credentials to make it pass.
+    Providers load their own configuration and extensions. If a task is rejected,
+    report delegate's evidence; do not assume the user's configuration is faulty
+    or remove MCP servers, plugins, settings, or credentials to make it pass.
 11. The model chooses ordinary-task fan-out by issuing independent `dispatch`
     commands concurrently. The private supervisor does not impose a task-count
     or CPU-based limit. Use this for independent investigation, debate, review,
     or provider comparison. Concurrent write tasks must use separate workspaces
     or explicit coordination to avoid file conflicts.
+
+For an explicit Codex code review, use the discoverable `codex:review` profile
+with one persisted target: `--review-target uncommitted`,
+`--review-target base:BRANCH`, or `--review-target commit:SHA`. It is read-only
+and does not support `--interactive`, continuation, or workspace-write. Use
+ordinary `codex:exec` when the request is a general investigation or asks the
+provider to edit files; the review profile is for Codex's native review
+operation and keeps the reviewed Git state explicit. The brief is retained as
+task evidence; the review target supplies Codex's review scope because its
+native command does not accept a prompt with the target flag.
 
 ## Operating procedure
 

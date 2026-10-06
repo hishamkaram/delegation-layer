@@ -16,7 +16,12 @@ import (
 // worker owns the provider CLI capability probe before the finalizer receives
 // its nonsecret runtime facts.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, true, task.PredicateRef{})
+	return prepareCandidate(request, true, task.PredicateRef{}, Provider, false)
+}
+
+// PrepareReviewCandidate prepares the read-only native Codex review operation.
+func PrepareReviewCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	return prepareCandidate(request, true, task.PredicateRef{}, ReviewProvider, true)
 }
 
 // PrepareExistingCandidate retains the launch and policy contract recorded by
@@ -24,11 +29,16 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 // records continue through the legacy isolated preparation path.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
 	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
-	return prepareCandidate(request, native, meta.Predicate)
+	return prepareCandidate(request, native, meta.Predicate, Provider, false)
 }
 
-func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task.PredicateRef) (commonprovider.ProfileCandidate, error) {
-	arguments, output, err := profileArguments(request, native)
+// PrepareExistingReviewCandidate reconstructs a previously admitted review.
+func PrepareExistingReviewCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+	return prepareCandidate(request, true, meta.Predicate, ReviewProvider, true)
+}
+
+func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task.PredicateRef, providerID string, review bool) (commonprovider.ProfileCandidate, error) {
+	arguments, output, err := profileArguments(request, native, review)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -44,12 +54,12 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	requirements := profileRuntimeRequirements(request, native)
+	requirements := profileRuntimeRequirements(request, native, review)
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, requirements)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
 	}
-	predicateReference := profilePredicateReference(request.Mode, storedPredicate)
+	predicateReference := profilePredicateReference(request.Mode, storedPredicate, providerID)
 	if request.RequestedConfig.Interactive {
 		if storedPredicate.Equal(task.PredicateRef{}) {
 			predicateReference = interactionReference(request.Mode)
@@ -62,12 +72,15 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
 		Finalize: func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
-			return finalizePreparedCandidate(request, native, arguments, output, environment, cli, legacyEffective, predicateReference, data)
+			return finalizePreparedCandidate(request, native, arguments, output, environment, cli, legacyEffective, predicateReference, providerID, review, data)
 		},
 	}, nil
 }
 
-func profileArguments(request task.TaskRecord, native bool) ([]string, int, error) {
+func profileArguments(request task.TaskRecord, native, review bool) ([]string, int, error) {
+	if review {
+		return reviewArguments(request)
+	}
 	if request.RequestedConfig.Interactive {
 		return []string{"app-server", "--listen", "stdio://", "--enable", "default_mode_request_user_input"}, -1, nil
 	}
@@ -84,7 +97,10 @@ func historicalEffectiveConfig(request task.TaskRecord, environment profileEnvir
 	return effectivePolicy(request, environment, time.Now(), managedSources, runtimeSHA256)
 }
 
-func profileRuntimeRequirements(request task.TaskRecord, native bool) commonprovider.RuntimeCapability {
+func profileRuntimeRequirements(request task.TaskRecord, native, review bool) commonprovider.RuntimeCapability {
+	if review {
+		return reviewRuntimeRequirementsForRequest(request)
+	}
 	if request.RequestedConfig.Interactive {
 		return commonprovider.RuntimeCapability{HelpArgs: []string{"app-server"}, RequiredFlags: []string{"--listen", "--enable"}}
 	}
@@ -94,7 +110,7 @@ func profileRuntimeRequirements(request task.TaskRecord, native bool) commonprov
 	return runtimeRequirementsForRequest(request, legacyRuntimeRequirements())
 }
 
-func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments []string, output int, environment profileEnvironment, cli commonprovider.CLIInfo, legacyEffective task.EffectiveConfig, predicateReference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
+func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments []string, output int, environment profileEnvironment, cli commonprovider.CLIInfo, legacyEffective task.EffectiveConfig, predicateReference task.PredicateRef, providerID string, review bool, data json.RawMessage) (commonprovider.PreparedProfile, error) {
 	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
 	if decodeErr != nil || facts.Runtime == nil || facts.Native != nil {
 		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
@@ -107,19 +123,25 @@ func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments [
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
+	plan := execution.Plan{
+		Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
+		Environment: slices.Clone(environment.Values), Predicate: predicateReference,
+		OutputWriterContract: OutputWriterContract,
+	}
+	if output >= 0 {
+		plan.OutputArtifacts = []task.OutputArtifact{{Name: OutputName, ArgumentIndex: output}}
+	}
+	if review {
+		plan.OutputWriterContract = ""
+	}
 	prepared := commonprovider.PreparedProfile{
-		Plan: execution.Plan{
-			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
-			Environment: slices.Clone(environment.Values), Predicate: predicateReference,
-			OutputArtifacts:      []task.OutputArtifact{{Name: OutputName, ArgumentIndex: output}},
-			OutputWriterContract: OutputWriterContract,
-		},
+		Plan:            plan,
 		ObservedVersion: runtime.Version, Effective: task.CloneEffectiveConfig(effective), WritableRoots: slices.Clone(environment.WritableRoots),
 		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
-			return NewIdentityObserver(request.TaskID, expected, record)
+			return newIdentityObserver(providerID, request.TaskID, expected, record)
 		},
 	}
-	if request.RequestedConfig.Interactive {
+	if request.RequestedConfig.Interactive && !review {
 		prepared.Plan.OutputArtifacts = nil
 		prepared.Plan.OutputWriterContract = ""
 		prepared.Identity = nil
@@ -140,9 +162,12 @@ func finalizedEffectiveConfig(request task.TaskRecord, native bool, environment 
 	return legacyEffective, nil
 }
 
-func profilePredicateReference(mode string, stored task.PredicateRef) task.PredicateRef {
+func profilePredicateReference(mode string, stored task.PredicateRef, providerID string) task.PredicateRef {
 	if !stored.Equal(task.PredicateRef{}) {
 		return stored
+	}
+	if providerID == ReviewProvider {
+		return reviewReference()
 	}
 	return ReferenceForMode(mode)
 }
