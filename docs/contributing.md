@@ -234,14 +234,15 @@ account availability; keep authenticated acceptance receipts separate.
 ## Release promotion
 
 The tag workflow creates and verifies a draft release. Before promotion, run
-`release-native-acceptance.yml` from the exact draft tag on a project-owned
-runner labeled `delegation-native`. That runner must already have the provider
-CLIs and their native authentication; the workflow downloads and verifies the
-draft archive, then runs the released `delegate`, `delegate-run`, `pueue`, and
-`pueued` binaries. Its live gate requires at least one authenticated provider
-pass and fails on behavior or evidence failures. Promotion checks the matching
-successful run by release commit, so a source checkout or a locally built CLI
-cannot satisfy the release gate.
+`release-native-acceptance.yml` from protected `main`, passing the exact draft
+tag as its input, on a project-owned runner labeled `delegation-native`. That
+runner must already have the provider CLIs and their native authentication; the
+workflow checks out the requested tag, downloads and verifies its draft archive,
+then runs the released `delegate`, `delegate-run`, `pueue`, and `pueued`
+binaries. Its live gate requires at least one authenticated provider pass and
+fails on behavior or evidence failures. Promotion checks the successful run's
+tag input and current protected-main commit, so a source checkout or a locally
+built CLI cannot satisfy the release gate.
 
 Promotion is a separate manual workflow dispatch from protected `main` so npm,
 GitHub Releases, and the Homebrew tap are published only after the archive

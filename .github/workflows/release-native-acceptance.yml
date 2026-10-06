@@ -1,5 +1,7 @@
 name: Release native acceptance
 
+run-name: Native acceptance ${{ inputs.tag }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -10,24 +12,22 @@ on:
 
 permissions:
   contents: read
+  actions: read
   attestations: read
 
 jobs:
-  native:
-    name: Authenticated native acceptance
-    # This runner is intentionally managed by the project owner. Provider
-    # CLIs and their native login state must never be copied into GitHub data.
-    runs-on: [self-hosted, delegation-native]
-    timeout-minutes: 90
+  retrieve:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    name: Retrieve draft release assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      # GitHub only lists draft releases to callers with push access. This
+      # short hosted job does not check out or execute repository code.
+      contents: write
+      attestations: read
     steps:
-      - name: Checkout the exact release source
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          ref: ${{ inputs.tag }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Download and verify the exact release artifact
+      - name: Download the exact draft release assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -40,11 +40,70 @@ jobs:
           fi
           release_dir="${RUNNER_TEMP}/delegation-layer-release"
           mkdir -p "${release_dir}"
-          gh release download "${TAG}" \
-            --repo "${GH_REPO}" \
-            --pattern 'delegation-layer_*.tar.gz' \
-            --pattern checksums.txt \
-            --dir "${release_dir}"
+          release_id="$(gh api "repos/${GH_REPO}/releases?per_page=100" \
+            --paginate \
+            --jq '.[] | select(.draft == true and .tag_name == "'"${TAG}"'") | .id')"
+          if [[ ! "${release_id}" =~ ^[0-9]+$ ]]; then
+            echo "Draft release ${TAG} was not found." >&2
+            exit 1
+          fi
+          asset_count=0
+          while IFS=$'\t' read -r asset asset_id; do
+            [[ -n "${asset}" && -n "${asset_id}" ]] || continue
+            gh api \
+              -H 'Accept: application/octet-stream' \
+              "repos/${GH_REPO}/releases/assets/${asset_id}" >"${release_dir}/${asset}"
+            asset_count=$((asset_count + 1))
+          done < <(gh api "repos/${GH_REPO}/releases/${release_id}/assets?per_page=100" \
+            --paginate \
+            --jq '.[] | select(.name == "checksums.txt" or (.name | (startswith("delegation-layer_") and endswith(".tar.gz")))) | [.name, (.id | tostring)] | @tsv')
+          if (( asset_count < 2 )) || [[ ! -s "${release_dir}/checksums.txt" ]]; then
+            echo "Draft release ${TAG} did not provide checksums and release archives." >&2
+            exit 1
+          fi
+
+      - name: Transfer exact release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-assets-${{ inputs.tag }}
+          path: ${{ runner.temp }}/delegation-layer-release
+          if-no-files-found: error
+          retention-days: 7
+
+  native:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    name: Authenticated native acceptance
+    needs: retrieve
+    # This runner is intentionally managed by the project owner. Provider
+    # CLIs and their native login state must never be copied into GitHub data.
+    runs-on: [self-hosted, delegation-native]
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - name: Checkout the exact release source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download the exact release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-assets-${{ inputs.tag }}
+          path: ${{ runner.temp }}/delegation-layer-release
+
+      - name: Verify the exact release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          release_dir="${RUNNER_TEMP}/delegation-layer-release"
           cd "${release_dir}"
           case "$(uname -s)" in
             Linux) os=Linux ;;
