@@ -877,6 +877,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertIn(provider, wrapper)
         self.assertIn('--permission "$case_permission"', wrapper)
         self.assertIn('--scenario "$case_scenario"', wrapper)
+        self.assertIn('if [ "$case_provider" = opencode:run ] && [ -n "${OPENCODE_LIVE_MODEL:-}" ]; then', wrapper)
+        self.assertIn('set -- "$@" --model "$OPENCODE_LIVE_MODEL"', wrapper)
         self.assertIn('run_case "$provider" workspace-write write', wrapper)
         self.assertIn('run_case "$provider" read-only read-only', wrapper)
         self.assertIn('run_case codex:review read-only read-only', wrapper)
