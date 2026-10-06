@@ -135,6 +135,14 @@ jobs:
           test -x "${artifact_dir}/pueued"
           printf '%s\n' "${artifact_dir}" > "${RUNNER_TEMP}/delegation-layer-artifact-dir"
 
+      - name: Configure OpenCode tool-capable acceptance model
+        shell: bash
+        run: |
+          config="${RUNNER_TEMP}/opencode-acceptance.json"
+          printf '%s\n' '{"model":"openrouter/~openai/gpt-luna-latest"}' >"${config}"
+          chmod 0600 "${config}"
+          printf 'OPENCODE_CONFIG=%s\n' "${config}" >>"${GITHUB_ENV}"
+
       - name: Prove the released CLI with authenticated native providers
         env:
           DELEGATE_ACCEPTANCE_BIN_DIR: ${{ runner.temp }}/delegation-layer-release/extracted
