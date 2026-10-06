@@ -133,7 +133,15 @@ func decodeOpenCodeCurrentEvent(value providerjson.Value) (openCodeCurrentEvent,
 }
 
 func parseStdout(reader io.Reader) (eventState, error) {
-	state := eventState{current: true, currentUsageReliable: true}
+	return parseStdoutWithPostTerminal(reader, true)
+}
+
+func parseStrictCurrentStdout(reader io.Reader) (eventState, error) {
+	return parseStdoutWithPostTerminal(reader, false)
+}
+
+func parseStdoutWithPostTerminal(reader io.Reader, allowPostTerminal bool) (eventState, error) {
+	state := eventState{current: true, currentUsageReliable: true, allowPostTerminal: allowPostTerminal}
 	semanticErr, readErr := providerjson.ReadRecords(reader, func(value providerjson.Value, _ uint64) error {
 		if state.semanticErr != nil {
 			return state.semanticErr
@@ -163,7 +171,7 @@ func processOpenCodeCurrentRecord(state *eventState, value providerjson.Value) e
 		state.currentStepStart = value.Start
 	}
 	applyOpenCodeCurrentEvent(state, event)
-	if event.typeName == eventStepFinish && state.terminal {
+	if event.typeName == eventStepFinish && state.currentStepTerminal {
 		state.currentTerminalStart = state.currentStepStart
 		state.currentTerminalEnd = value.End
 	}
@@ -174,7 +182,7 @@ func applyOpenCodeCurrentEvent(state *eventState, event openCodeCurrentEvent) {
 	if state.semanticErr != nil {
 		return
 	}
-	if state.terminal {
+	if state.terminal && !state.allowPostTerminal {
 		state.markSemantic("event follows terminal step_finish")
 		return
 	}
@@ -237,6 +245,8 @@ func applyOpenCodeCurrentStepStart(state *eventState, fields map[string]provider
 	}
 	state.stepStarted = true
 	state.stepActive = true
+	state.terminal = false
+	state.currentStepTerminal = false
 	state.currentStepText = opencodeTextSummary{}
 	_ = part
 }
@@ -354,6 +364,7 @@ func applyOpenCodeCurrentStepFinish(state *eventState, fields map[string]provide
 		appendOpenCodeCurrentUsage(state, usage, reliable)
 	}
 	state.stepActive = false
+	state.currentStepTerminal = reason == "stop"
 	if reason == "stop" {
 		state.terminal = true
 		state.currentTerminalText = state.currentStepText

@@ -21,9 +21,10 @@ const (
 )
 
 type interpreter struct {
-	mode              string
-	legacy            bool
-	historicalCurrent bool
+	mode                string
+	legacy              bool
+	historicalCurrent   bool
+	historicalCurrentV3 bool
 }
 
 // NewInterpreter returns an OpenCode JSONL interpreter. With no argument it
@@ -45,9 +46,16 @@ func newHistoricalCurrentInterpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, historicalCurrent: true}
 }
 
+func newHistoricalCurrentV3Interpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, historicalCurrentV3: true}
+}
+
 func (v interpreter) Reference() task.PredicateRef {
 	if v.legacy {
 		return LegacyReferenceForMode(v.mode)
+	}
+	if v.historicalCurrentV3 {
+		return historicalCurrentReferenceForMode(v.mode)
 	}
 	if v.historicalCurrent {
 		return historicalReferenceForMode(v.mode)
@@ -66,7 +74,7 @@ func (v interpreter) evaluateAgainst(input predicate.Input, raw predicate.Eviden
 	if err := validateEvaluationInput(input, raw, out, reference); err != nil {
 		return task.Interpretation{}, err
 	}
-	state, err := readEvidence(raw, v.legacy || v.historicalCurrent)
+	state, err := readEvidence(raw, v.legacy || v.historicalCurrent, v.historicalCurrentV3)
 	if err != nil {
 		return task.Interpretation{}, err
 	}
@@ -103,10 +111,13 @@ func (v interpreter) evaluateAgainst(input predicate.Input, raw predicate.Eviden
 // interpreter values expose it too so the registry can inspect one catalog.
 func (v interpreter) Target() task.PredicateRef { return v.Reference() }
 
-// CanRecover permits only the same OpenCode wire and permission-mode revision
-// that preceded the corrected offset-streaming parser.
+// CanRecover permits only the same OpenCode wire and permission-mode
+// revisions that preceded the current multi-step parser.
 func (v interpreter) CanRecover(source task.PredicateRef) bool {
-	return !v.legacy && !v.historicalCurrent && source.Equal(historicalReferenceForMode(v.mode))
+	if v.legacy || v.historicalCurrent || v.historicalCurrentV3 {
+		return false
+	}
+	return source.Equal(historicalReferenceForMode(v.mode)) || source.Equal(historicalCurrentReferenceForMode(v.mode))
 }
 
 func (v interpreter) Recover(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
@@ -132,12 +143,14 @@ func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out 
 	return nil
 }
 
-func readEvidence(raw predicate.Evidence, historical bool) (eventState, error) {
+func readEvidence(raw predicate.Evidence, historical, strictCurrent bool) (eventState, error) {
 	var stdout eventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {
 		var err error
 		if historical {
 			stdout, err = parseHistoricalStdout(reader)
+		} else if strictCurrent {
+			stdout, err = parseStrictCurrentStdout(reader)
 		} else {
 			stdout, err = parseStdout(reader)
 		}

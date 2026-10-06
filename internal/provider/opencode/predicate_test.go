@@ -144,23 +144,77 @@ func TestCurrentInterpreterStreamsFragmentedOpenCodeAnswer(t *testing.T) {
 
 func TestCurrentInterpreterRecoversHistoricalWireWithoutChangingSeal(t *testing.T) {
 	stdout := jsonl(stepStart(testSession), textEvent(testSession, "recovered"), stepFinish(testSession, "stop", `{}`, "0"))
-	historical := newHistoricalCurrentInterpreter(ModeReadOnly)
-	seal := validSeal(stdout, ModeReadOnly)
-	seal.Predicate = historical.Reference()
-	input := predicate.Input{Seal: seal}
 	current := NewInterpreter(ModeReadOnly)
 	recoverable, ok := current.(interface {
 		Target() task.PredicateRef
 		CanRecover(task.PredicateRef) bool
 		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
 	})
-	if !ok || !recoverable.CanRecover(historical.Reference()) || recoverable.CanRecover(current.Reference()) {
+	if !ok || recoverable.CanRecover(current.Reference()) {
 		t.Fatal("current OpenCode interpreter recovery mapping is incorrect")
 	}
+	for _, historical := range []predicate.Interpreter{
+		newHistoricalCurrentInterpreter(ModeReadOnly),
+		newHistoricalCurrentV3Interpreter(ModeReadOnly),
+	} {
+		t.Run(historical.Reference().Version, func(t *testing.T) {
+			seal := validSeal(stdout, ModeReadOnly)
+			seal.Predicate = historical.Reference()
+			input := predicate.Input{Seal: seal}
+			if !recoverable.CanRecover(historical.Reference()) {
+				t.Fatal("current OpenCode interpreter does not recover historical predicate")
+			}
+			var answer bytes.Buffer
+			interpretation, err := recoverable.Recover(input, &testEvidence{stdout: stdout}, &answer)
+			if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "recovered" || !input.Seal.Predicate.Equal(historical.Reference()) {
+				t.Fatalf("recovery interpretation=%+v answer=%q err=%v seal=%+v", interpretation, answer.String(), err, input.Seal.Predicate)
+			}
+		})
+	}
+}
+
+func TestCurrentInterpreterAllowsLaterStepsAfterIntermediateStop(t *testing.T) {
+	stdout := jsonl(
+		stepStart(testSession),
+		toolEvent(testSession, "read"),
+		stepFinish(testSession, "stop", `{}`, "0"),
+		stepStart(testSession),
+		textEvent(testSession, "final answer"),
+		stepFinish(testSession, "stop", `{}`, "0"),
+	)
 	var answer bytes.Buffer
-	interpretation, err := recoverable.Recover(input, &testEvidence{stdout: stdout}, &answer)
-	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "recovered" || !input.Seal.Predicate.Equal(historical.Reference()) {
-		t.Fatalf("recovery interpretation=%+v answer=%q err=%v seal=%+v", interpretation, answer.String(), err, input.Seal.Predicate)
+	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
+	)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "final answer" {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+
+	strictSeal := validSeal(stdout, ModeReadOnly)
+	strictSeal.Predicate = historicalCurrentReferenceForMode(ModeReadOnly)
+	answer.Reset()
+	interp, err = newHistoricalCurrentV3Interpreter(ModeReadOnly).Evaluate(
+		predicate.Input{Seal: strictSeal}, &testEvidence{stdout: stdout}, &answer,
+	)
+	if err != nil || interp.Verdict != task.VerdictRejected || answer.Len() != 0 || interp.Refusal != refusalMalformed {
+		t.Fatalf("historical interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestCurrentInterpreterRequiresTheLatestStepToStop(t *testing.T) {
+	stdout := jsonl(
+		stepStart(testSession),
+		textEvent(testSession, "intermediate"),
+		stepFinish(testSession, "stop", `{}`, "0"),
+		stepStart(testSession),
+		textEvent(testSession, "unfinished"),
+	)
+	var answer bytes.Buffer
+	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
+	)
+	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalIncomplete || answer.Len() != 0 {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 	}
 }
 

@@ -115,7 +115,7 @@ func validateLegacyPreparation(request task.TaskRecord, environment profileEnvir
 
 func candidatePredicateReference(mode string, native bool, meta *task.MetaRecord) task.PredicateRef {
 	if native {
-		if meta != nil && meta.Predicate.Equal(historicalReferenceForMode(mode)) {
+		if meta != nil && (meta.Predicate.Equal(historicalReferenceForMode(mode)) || meta.Predicate.Equal(historicalCurrentReferenceForMode(mode))) {
 			return meta.Predicate
 		}
 		return ReferenceForMode(mode)

@@ -11,15 +11,25 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func TestExistingNativeProfilePreservesPreUpgradePredicate(t *testing.T) {
+func TestExistingNativeProfilePreservesPersistedPredicate(t *testing.T) {
 	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
 		t.Run(mode, func(t *testing.T) {
-			testPreUpgradeProfile(t, mode)
+			for _, revision := range []struct {
+				name string
+				ref  task.PredicateRef
+			}{
+				{name: "v2", ref: historicalReferenceForMode(mode)},
+				{name: "v3", ref: historicalCurrentReferenceForMode(mode)},
+			} {
+				t.Run(revision.name, func(t *testing.T) {
+					testPersistedProfile(t, mode, revision.ref)
+				})
+			}
 		})
 	}
 }
 
-func testPreUpgradeProfile(t *testing.T, mode string) {
+func testPersistedProfile(t *testing.T, mode string, reference task.PredicateRef) {
 	t.Helper()
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -44,7 +54,6 @@ func testPreUpgradeProfile(t *testing.T, mode string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reference := historicalReferenceForMode(mode)
 	existing, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective})
 	if err != nil {
 		t.Fatal(err)
