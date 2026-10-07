@@ -141,7 +141,9 @@ jobs:
       - name: Configure OpenCode tool-capable acceptance model
         shell: bash
         run: |
-          model='openrouter/~anthropic/claude-sonnet-latest'
+          # Use OpenCode's own tool-capable model so acceptance does not depend
+          # on an account-specific OpenRouter endpoint policy.
+          model='opencode/big-pickle'
           config="${RUNNER_TEMP}/opencode-acceptance.json"
           printf '%s\n' "{\"model\":\"${model}\"}" >"${config}"
           chmod 0600 "${config}"
