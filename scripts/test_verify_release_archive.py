@@ -32,7 +32,7 @@ SECRET = "release-test-secret-must-not-be-recorded"
 class ReleaseArchiveVerificationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="release-archive-test-")
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve(strict=True)
         self.runner_temp = self.root / "runner-temp"
         self.runner_temp.mkdir()
         self.assets = self.runner_temp / "delegation-layer-release"

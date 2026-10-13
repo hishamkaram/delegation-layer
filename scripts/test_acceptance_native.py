@@ -21,6 +21,10 @@ import acceptance_supervisor_common as supervisor_common
 AGGREGATE_WRAPPER_TEST_TIMEOUT = 60
 
 
+def physical_test_root(directory: str) -> Path:
+    return Path(directory).resolve(strict=True)
+
+
 def fake_native_python_script() -> str:
     return '''#!/bin/sh
 if [ "$1" = -c ]; then
@@ -1672,7 +1676,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_choose_output_accepts_only_the_exact_prepared_aggregate_case(self):
         with tempfile.TemporaryDirectory(prefix="native-prepared-output-") as directory:
-            root = Path(directory) / "aggregate"
+            root = physical_test_root(directory) / "aggregate"
             (root / native_evidence.CASE_ROOT_NAME).mkdir(parents=True)
             definition = native_evidence.EXPECTED_CASES[0]
             prepared = native_evidence.prepare_case_directory(root, definition.case_id)
@@ -1690,7 +1694,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_main_accepts_prepared_case_before_the_provider_prerequisite_gate(self):
         with tempfile.TemporaryDirectory(prefix="native-prepared-main-") as directory:
-            root = Path(directory) / "aggregate"
+            root = physical_test_root(directory) / "aggregate"
             (root / native_evidence.CASE_ROOT_NAME).mkdir(parents=True)
             definition = native_evidence.EXPECTED_CASES[2]
             prepared = native_evidence.prepare_case_directory(root, definition.case_id)
@@ -1713,7 +1717,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_main_rejects_an_unowned_preexisting_case_directory(self):
         with tempfile.TemporaryDirectory(prefix="native-unowned-main-") as directory:
-            root = Path(directory) / "aggregate"
+            root = physical_test_root(directory) / "aggregate"
             definition = native_evidence.EXPECTED_CASES[0]
             unowned = root / native_evidence.CASE_ROOT_NAME / definition.case_id
             unowned.mkdir(parents=True)
@@ -2712,7 +2716,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             fake_python.chmod(0o700)
             environment = os.environ.copy()
             environment["PATH"] = str(fake_python.parent) + os.pathsep + environment["PATH"]
-            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(Path(directory) / "aggregate")
+            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(
+                physical_test_root(directory) / "aggregate")
             environment["REAL_PYTHON"] = sys.executable
             environment["FAKE_NATIVE_RESULT"] = "blocked"
             environment.pop("DELEGATION_REQUIRE_LIVE_ACCEPTANCE", None)
@@ -2725,7 +2730,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertIn("auth_blocks_neutral=true", blocked.stdout)
 
             environment["DELEGATION_REQUIRE_LIVE_ACCEPTANCE"] = "1"
-            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(Path(directory) / "aggregate-required")
+            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(
+                physical_test_root(directory) / "aggregate-required")
             required = subprocess.run(
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
                 capture_output=True, text=True, check=False,
@@ -2736,7 +2742,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
             fake_python.write_text(fake_native_python_script())
             environment["FAKE_NATIVE_RESULT"] = "mixed"
-            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(Path(directory) / "aggregate-mixed")
+            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(
+                physical_test_root(directory) / "aggregate-mixed")
             mixed = subprocess.run(
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
                 capture_output=True, text=True, check=False,
@@ -2746,7 +2753,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
             fake_python.write_text(fake_native_python_script())
             environment["FAKE_NATIVE_RESULT"] = "timeout"
-            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(Path(directory) / "aggregate-timeout")
+            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(
+                physical_test_root(directory) / "aggregate-timeout")
             successful_timeout = subprocess.run(
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
                 capture_output=True, text=True, check=False,
@@ -2762,7 +2770,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             fake_python.chmod(0o700)
             environment = os.environ.copy()
             environment["PATH"] = str(fake_python.parent) + os.pathsep + environment["PATH"]
-            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(Path(directory) / "aggregate")
+            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(
+                physical_test_root(directory) / "aggregate")
             environment["REAL_PYTHON"] = sys.executable
             environment["FAKE_NATIVE_RESULT"] = "only-timeout"
 
@@ -2782,7 +2791,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             fake_python.chmod(0o700)
             environment = os.environ.copy()
             environment["PATH"] = str(fake_python.parent) + os.pathsep + environment["PATH"]
-            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(Path(directory) / "aggregate")
+            environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(
+                physical_test_root(directory) / "aggregate")
             environment["REAL_PYTHON"] = sys.executable
             environment["FAKE_NATIVE_RESULT"] = "blocked"
             environment["FAKE_HELPER_EXIT"] = "7"

@@ -20,7 +20,7 @@ except ModuleNotFoundError:
 class NativeAcceptanceEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="native-evidence-test-")
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve(strict=True)
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -41,6 +41,17 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(evidence.EvidenceError, "prepared_case_directory_not_empty"):
             evidence.validate_prepared_case_directory(
                 case_directory, definition.provider, definition.permission, definition.scenario)
+
+    def test_prepared_case_directory_rejects_symlinked_parent(self):
+        physical_parent = self.root / "physical-parent"
+        physical_parent.mkdir()
+        alias = self.root / "parent-alias"
+        alias.symlink_to(physical_parent, target_is_directory=True)
+        root = alias / "aggregate"
+        (root / evidence.CASE_ROOT_NAME).mkdir(parents=True)
+
+        with self.assertRaisesRegex(evidence.EvidenceError, "evidence_path_symlink"):
+            evidence.prepare_case_directory(root, evidence.EXPECTED_CASES[0].case_id)
 
     def test_prepared_case_directory_rejects_definition_or_identity_drift(self):
         root = self.root / "prepared-case-drift"

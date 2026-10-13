@@ -258,6 +258,13 @@ behavior from Linux, infer Linux behavior from Darwin, or use a cross-compiled
 binary, container, fixture on another kernel, or dependency claim as native
 runtime evidence.
 
+macOS temporary directories can be exposed through logical `/var` or `/tmp`
+aliases whose physical paths live under `/private`. A test that exercises a
+strict no-symlink path boundary must canonicalize its test-owned temporary root
+before constructing evidence paths, and must separately prove that a deliberate
+symlinked parent is rejected. Do not weaken the production path check to accept
+the platform alias.
+
 Private supervisor launch is a native boundary owned by the Pueue client. The
 Pueue client owns the launch decision and waiter; `internal/lifetime` owns the
 shared Unix-session primitive. A new daemon inherits the descriptor limit
