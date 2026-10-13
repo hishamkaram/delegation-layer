@@ -228,6 +228,23 @@ func TestCurrentPiDiagnosticDoesNotExposeProviderText(t *testing.T) {
 	}
 }
 
+func TestCurrentPiInterpreterReportsNonzeroProviderExit(t *testing.T) {
+	stdout := piStream(testUUID, "untrusted answer", true)
+	seal := validSeal(ReferenceForMode(ModeReadOnly), stdout, nil)
+	seal.ExitCode = 1
+	var answer bytes.Buffer
+	result, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: seal}, evidence{stdout: stdout}, &answer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Verdict != task.VerdictRejected || result.Refusal != "provider-failed: exit_code=1" || answer.Len() != 0 {
+		t.Fatalf("result=%+v answer=%q", result, answer.String())
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != "provider_failed" || result.Diagnostics[0].Message != "Pi reported a failed or interrupted completion." {
+		t.Fatalf("diagnostics=%+v", result.Diagnostics)
+	}
+}
+
 func TestCurrentInterpreterSkipsLargeOpaqueToolArguments(t *testing.T) {
 	opaque := strings.Repeat("x", task.MaxControlRecordSize+4096)
 	toolMessage := fmt.Sprintf(`{"role":"assistant","content":[{"type":"toolCall","id":"call-large","name":"read","text":1,"text":2,"arguments":{"opaque":%q,"metadata":{"same":1,"same":2}}}],"stopReason":"toolUse"}`, opaque)
@@ -305,14 +322,20 @@ func fragmentedPiMessage(fragments int) string {
 	return message.String()
 }
 
-func TestCurrentInterpreterRecoversHistoricalV5WithoutChangingSeal(t *testing.T) {
-	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
-		t.Run(mode, func(t *testing.T) {
+func TestCurrentInterpreterRecoversImmediatelyPreviousContractWithoutChangingSeal(t *testing.T) {
+	for _, fixture := range []struct {
+		mode       string
+		historical predicate.Interpreter
+	}{
+		{mode: ModeReadOnly, historical: newHistoricalV5Interpreter(ModeReadOnly)},
+		{mode: ModeWorkspaceWrite, historical: newHistoricalV7Interpreter(ModeWorkspaceWrite)},
+	} {
+		t.Run(fixture.mode, func(t *testing.T) {
 			stdout := piStream(testUUID, "recovered", true)
-			historical := newHistoricalV5Interpreter(mode)
+			historical := fixture.historical
 			seal := validSeal(historical.Reference(), stdout, nil)
 			input := predicate.Input{Seal: seal}
-			current := NewInterpreter(mode)
+			current := NewInterpreter(fixture.mode)
 			recoverable, ok := current.(interface {
 				Target() task.PredicateRef
 				CanRecover(task.PredicateRef) bool

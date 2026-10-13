@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,6 +12,17 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+// SubmissionGate lets the application validate its own generation evidence
+// while the private supervisor's shared generation lease is still held.
+type SubmissionGate func(context.Context, task.SupervisorRef) error
+
+func (c *Client) checkSubmissionGate(ctx context.Context, gate SubmissionGate) error {
+	if gate == nil {
+		return nil
+	}
+	return gate(ctx, c.runtimeBinding)
+}
 
 // Receipt constructs a record only from a positive full-binding observation.
 func (o Observation) Receipt() (*task.SupervisorReceipt, error) {
@@ -41,9 +51,109 @@ func (o Observation) Receipt() (*task.SupervisorReceipt, error) {
 	}, nil
 }
 
-// Submit consumes only a real newly-created submission permit. A completed add
-// response is followed by status reconciliation; no response alone proves admission.
+// Submit consumes only a real newly-created submission permit. Pueue publishes
+// the assigned numeric ID only after add has accepted the task; that completed
+// response is the admission receipt. A queue-wide status scan here would add
+// no authority and would make concurrent submissions contend quadratically.
 func (c *Client) Submit(ctx context.Context, permit *taskdir.SubmissionPermit, launch Launch) (Observation, error) {
+	return c.SubmitWithGate(ctx, permit, launch, nil)
+}
+
+// SubmitWithGate runs the application-owned admission gate immediately before
+// add while holding the same generation lease.
+func (c *Client) SubmitWithGate(ctx context.Context, permit *taskdir.SubmissionPermit, launch Launch, gate SubmissionGate) (Observation, error) {
+	if c == nil {
+		return Observation{}, ErrConfiguration
+	}
+	controlContext, cancel, err := c.privateControlContext(ctx)
+	if err != nil {
+		return Observation{}, err
+	}
+	defer cancel()
+	unknown := Observation{State: StateUnknown, Binding: c.binding}
+	var observation Observation
+	err = c.withPrivateSupervisorLease(controlContext, func(lockedContext context.Context) error {
+		observation, err = c.submitLocked(lockedContext, permit, launch, gate)
+		return err
+	})
+	if observation.Binding.ConfigPath == "" {
+		observation = unknown
+	}
+	return observation, err
+}
+
+// RemoveCompletedTask removes one exact terminal task row from the private
+// supervisor. Delegate task records remain the durable history; the Pueue row
+// is only an operational handle and must not be retained indefinitely.
+//
+// The caller must have already published a terminal outcome and provide the
+// complete task identity from that task's supervisor receipt. A failed or
+// uncertain removal is returned to the caller so it can retain the task for a
+// later bounded cleanup attempt.
+func (c *Client) RemoveCompletedTask(ctx context.Context, identity Identity) error {
+	identity = snapshotIdentity(identity)
+	if c == nil {
+		return ErrConfiguration
+	}
+	if !isPrivateClient(c) {
+		return ErrConfiguration
+	}
+	if identity.NumericTaskID == nil || *identity.NumericTaskID < 0 {
+		return ErrUnknown
+	}
+	controlContext, cancel, err := c.privateControlContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	// Pueue can reuse numeric IDs after removal. Exclude submission and other
+	// removers from the identity observation through completion of removal.
+	return c.withPrivateBootstrapLock(controlContext, func(lockedContext context.Context) error {
+		if err := c.verify(lockedContext); err != nil {
+			return err
+		}
+		observation, reconcileErr := c.Reconcile(lockedContext, identity)
+		if reconcileErr != nil {
+			return reconcileErr
+		}
+		if err := validateCompletedTaskRemoval(observation, *identity.NumericTaskID); err != nil {
+			return err
+		}
+		numericTaskID := *identity.NumericTaskID
+		result, commandErr := c.command(lockedContext, nil, "remove", strconv.FormatInt(numericTaskID, 10))
+		if pending := pendingFrom(commandErr); pending != nil {
+			settled, waitErr := awaitPending(lockedContext, pending)
+			result = settled
+			commandErr = errors.Join(commandErr, waitErr)
+		}
+		if commandErr != nil {
+			return errors.Join(commandErr, result.Err)
+		}
+		if result.ExitCode != 0 {
+			return fmt.Errorf("%w: remove completed supervisor task %d exited with %d", ErrBinding, numericTaskID, result.ExitCode)
+		}
+		return nil
+	})
+}
+
+func validateCompletedTaskRemoval(observation Observation, numericTaskID int64) error {
+	if !observation.Matched || observation.NumericTaskID != numericTaskID {
+		return ErrUnknown
+	}
+	// The runner writes Delegate's terminal outcome before it exits. The
+	// authoritative outcome can therefore be available while Pueue still
+	// reports this exact row as running. Do not remove a live row; later
+	// private maintenance will retry after the row reaches its terminal state.
+	if observation.State == StateRunning {
+		return ErrCleanupDeferred
+	}
+	if observation.State != StateEnded {
+		return ErrUnknown
+	}
+	return nil
+}
+
+func (c *Client) submitLocked(ctx context.Context, permit *taskdir.SubmissionPermit, launch Launch, gate SubmissionGate) (Observation, error) {
 	unknown := Observation{State: StateUnknown, Binding: c.binding}
 	if permit == nil {
 		return unknown, task.ErrInvalidPermit
@@ -64,7 +174,16 @@ func (c *Client) Submit(ctx context.Context, permit *taskdir.SubmissionPermit, l
 		unknown.Pending = pendingFrom(verifyErr)
 		return unknown, verifyErr
 	}
-	result, err := c.command(ctx, permit.Consume, "add", "--escape", "--label", record.Label, "--print-task-id", "--", launch.RunnerExecutable, "--root", launch.RootPath, record.TaskID)
+	if gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
+		return unknown, gateErr
+	}
+	runnerArguments := []string{launch.RunnerExecutable}
+	if launch.Supervised {
+		runnerArguments = append(runnerArguments, "--guardian", "--supervised")
+	}
+	runnerArguments = append(runnerArguments, "--root", launch.RootPath, record.TaskID)
+	arguments := []string{"add", "--escape", "--label", record.Label, "--print-task-id", "--"}
+	result, err := c.command(ctx, permit.Consume, append(arguments, runnerArguments...)...)
 	if err != nil {
 		unknown.Pending = pendingFrom(err)
 		if !result.Started && !errors.Is(err, ErrInFlight) {
@@ -77,14 +196,10 @@ func (c *Client) Submit(ctx context.Context, permit *taskdir.SubmissionPermit, l
 		return unknown, errors.Join(ErrUnknown, ErrSubmissionUncertain, err)
 	}
 	identity.NumericTaskID = &id
-	observation, err := c.Reconcile(ctx, identity)
-	if err != nil && !observation.Matched {
-		return observation, errors.Join(ErrUnknown, ErrSubmissionUncertain, err)
-	}
-	if !observation.Matched {
-		return observation, errors.Join(ErrUnknown, ErrSubmissionUncertain)
-	}
-	return observation, err
+	return Observation{
+		Matched: true, State: StateQueued, Identity: identity,
+		Binding: c.binding, NumericTaskID: id,
+	}, nil
 }
 
 func validateLaunch(launch Launch, rootID string) error {
@@ -123,6 +238,30 @@ func validateLaunch(launch Launch, rootID string) error {
 // A request without an already-bound numeric target remains unknown forever;
 // discovering a later target requires a separately authorized new request.
 func (c *Client) Stop(ctx context.Context, permit *taskdir.StopPermit) (StopResult, error) {
+	return c.withPrivateStop(ctx, func(controlContext context.Context) (StopResult, error) {
+		return c.stopLocked(controlContext, permit)
+	})
+}
+
+// withPrivateStop keeps exact identity observation and a numeric mutation in
+// one exclusive scope. Pueue reuses removed IDs; submissions and cleanup must
+// not change the target between those two operations. Pending errors retain
+// the same lock until the command settles.
+func (c *Client) withPrivateStop(ctx context.Context, stop func(context.Context) (StopResult, error)) (StopResult, error) {
+	result := StopResult{ObservedState: StateUnknown}
+	controlContext, cancel, err := c.privateControlContext(ctx)
+	if err != nil {
+		return result, err
+	}
+	defer cancel()
+	err = c.withPrivateBootstrapLock(controlContext, func(lockedContext context.Context) error {
+		result, err = stop(lockedContext)
+		return err
+	})
+	return result, err
+}
+
+func (c *Client) stopLocked(ctx context.Context, permit *taskdir.StopPermit) (StopResult, error) {
 	result := StopResult{ObservedState: StateUnknown}
 	if permit == nil {
 		return result, task.ErrInvalidPermit
@@ -141,8 +280,10 @@ func (c *Client) Stop(ctx context.Context, permit *taskdir.StopPermit) (StopResu
 	id := *request.NumericTaskID
 	result.NumericTaskID = &id
 	identity := Identity{RootID: request.RootID, TaskID: request.TaskID, SpecSHA256: request.SpecSHA256, MetaSHA256: request.MetaSHA256, NumericTaskID: &id}
-	observation, err := c.Reconcile(ctx, identity)
-	result.Pending = observation.Pending
+	observation, err := settlePendingControlObservation(c, ctx, func(controlContext context.Context) (Observation, error) {
+		return c.Reconcile(controlContext, identity)
+	})
+	result.Pending = pendingFrom(err)
 	result.InFlight = result.Pending != nil
 	if err != nil {
 		return result, err
@@ -156,7 +297,7 @@ func (c *Client) Stop(ctx context.Context, permit *taskdir.StopPermit) (StopResu
 
 func (c *Client) stopMatched(ctx context.Context, permit *taskdir.StopPermit, result StopResult) (StopResult, error) {
 	switch result.ObservedState {
-	case StateQueued:
+	case StateStashed, StateQueued:
 		result.Action = "remove"
 	case StateRunning:
 		result.Action = "kill"
@@ -205,8 +346,7 @@ func commandAcknowledgment(result CommandResult, err error) *bool {
 		acknowledged := true
 		return &acknowledged
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ProcessState != nil && exitErr.Exited() {
+	if completedExit(err) {
 		acknowledged := false
 		return &acknowledged
 	}

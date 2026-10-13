@@ -1,6 +1,7 @@
 package antigravity
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -11,17 +12,31 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-const recordPrintContract = `{"version":"print-record-v1","base":"1.2.2-auth2","rules":"validate full JSON syntax; select exact unique status,conversation_id,response,error; skip unknown extensions; stream response; optional invalid usage is unavailable; preserve identity,exit,timeout and ERROR predicates"}` + "\n"
+const recordPrintV1Contract = `{"version":"print-record-v1","base":"1.2.2-auth2","rules":"validate full JSON syntax; select exact unique status,conversation_id,response,error; skip unknown extensions; stream response; optional invalid usage is unavailable; preserve identity,exit,timeout and ERROR predicates"}` + "\n"
 
-type recordPrintInterpreter struct{ mode string }
+const recordPrintV2Contract = `{"version":"print-record-v2","base":"1.2.2-auth3","rules":"validate full JSON syntax; select exact unique status,conversation_id,response,error; skip unknown extensions; stream response; optional invalid usage is unavailable; exact authentication envelope is authentication-unavailable without retaining native error text; stderr never classifies authentication; preserve identity,exit,timeout and other ERROR predicates"}` + "\n"
+
+type recordPrintInterpreter struct {
+	mode            string
+	current         bool
+	disableRecovery bool
+}
 
 // NewRecordPrintInterpreter selects bounded evidence views for new tasks.
 func NewRecordPrintInterpreter(mode string) predicate.Interpreter {
-	return recordPrintInterpreter{mode: mode}
+	return recordPrintInterpreter{mode: mode, current: true}
+}
+
+func newHistoricalRecordPrintInterpreter(mode string) predicate.Interpreter {
+	return recordPrintInterpreter{mode: mode, disableRecovery: true}
 }
 
 func (v recordPrintInterpreter) Reference() task.PredicateRef {
-	return task.PredicateRef{Adapter: Provider, Mode: v.mode, Version: "print-record-v1", SHA256: task.ComputeSHA256([]byte(recordPrintContract))}
+	contract, version := recordPrintV2Contract, "print-record-v2"
+	if !v.current {
+		contract, version = recordPrintV1Contract, "print-record-v1"
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: v.mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
 }
 
 func (v recordPrintInterpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
@@ -62,7 +77,7 @@ func (v recordPrintInterpreter) evaluate(input predicate.Input, raw predicate.Ev
 	if err := errors.Join(readErr, stderrErr); err != nil {
 		return task.Interpretation{}, err
 	}
-	result := interpretEnvelope(input, stdout, timeout, true)
+	result := interpretEnvelopeWithOptions(input, stdout, timeout, true, v.current)
 	if result.Verdict == task.VerdictRejected {
 		result.Diagnostics = append(result.Diagnostics, recordDiagnostic(stdout.semantic, result.Refusal))
 	}
@@ -97,13 +112,17 @@ func recordEnvelope(document providerjson.Value) (envelope, providerjson.Value, 
 		return env, providerjson.Value{}, nil, err
 	}
 	env.responseSeen = true
+	env.responseEmpty = response.End-response.Start == 2
+	authenticationError := false
 	if value, ok := fields["error"]; ok {
 		// Native error text is private evidence, not a public diagnostic excerpt.
-		if err = value.CopyString(io.Discard); err != nil {
+		authenticationError, err = matchesExactString(value, authenticationErrorText)
+		if err != nil {
 			return env, providerjson.Value{}, nil, err
 		}
 		env.errorSeen = true
 	}
+	env.authenticationUnavailable = env.status == StatusError && env.conversationID == "" && env.responseEmpty && authenticationError
 	var warnings []task.OutputDiagnostic
 	// Optional accounting cannot overrule valid task output. Parse known members
 	// independently from authority fields so extensions and large metadata are skipped.
@@ -223,7 +242,13 @@ func recordCounter(value providerjson.Value) (*int64, error) {
 
 func (v recordPrintInterpreter) Target() task.PredicateRef { return v.Reference() }
 func (v recordPrintInterpreter) CanRecover(source task.PredicateRef) bool {
-	if source.Equal(NewCurrentPrintInterpreterForMode(v.mode).Reference()) {
+	if v.disableRecovery {
+		return false
+	}
+	if !v.current {
+		return source.Equal(newHistoricalCurrentPrintInterpreterForMode(v.mode).Reference()) || v.mode == ModeWorkspaceWrite && source.Equal(NewPrintInterpreter().Reference())
+	}
+	if source.Equal(NewCurrentPrintInterpreterForMode(v.mode).Reference()) || source.Equal(newHistoricalCurrentPrintInterpreterForMode(v.mode).Reference()) {
 		return true
 	}
 	return v.mode == ModeWorkspaceWrite && source.Equal(NewPrintInterpreter().Reference())
@@ -246,6 +271,9 @@ func recordDiagnostic(parseErr error, refusal string) task.OutputDiagnostic {
 		return diagnostic
 	}
 	switch refusal {
+	case refusalAuthenticationUnavailable:
+		diagnostic.Code = refusalAuthenticationUnavailable
+		diagnostic.Message = "Provider authentication was unavailable."
 	case refusalIdentityMismatch:
 		diagnostic.Code = "identity_mismatch"
 		diagnostic.Message = "Provider conversation identity did not match the task."
@@ -257,4 +285,27 @@ func recordDiagnostic(parseErr error, refusal string) task.OutputDiagnostic {
 		diagnostic.Message = "Provider output contained invalid completion metadata."
 	}
 	return diagnostic
+}
+
+type exactStringMatcher struct {
+	expected []byte
+	offset   int
+	equal    bool
+}
+
+func matchesExactString(value providerjson.Value, expected string) (bool, error) {
+	matcher := exactStringMatcher{expected: []byte(expected), equal: true}
+	if err := value.CopyString(&matcher); err != nil {
+		return false, err
+	}
+	return matcher.equal && matcher.offset == len(matcher.expected), nil
+}
+
+func (m *exactStringMatcher) Write(data []byte) (int, error) {
+	end := m.offset + len(data)
+	if end > len(m.expected) || !bytes.Equal(data, m.expected[m.offset:end]) {
+		m.equal = false
+	}
+	m.offset = end
+	return len(data), nil
 }

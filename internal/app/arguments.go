@@ -16,25 +16,26 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
-	MessageID    string
-	RequestID    string
-	Answers      string
-	After        uint64
-	Command      string
-	Root         string
-	PueueConfig  string
-	Runner       string
-	TaskID       string
-	Auto         bool
-	Provider     string
-	Brief        string
-	BriefBytes   []byte
-	Cwd          string
-	Config       task.TaskConfig
-	ReviewTarget string
-	ResumeTask   string
-	JSON         bool
-	Watch        time.Duration
+	MessageID        string
+	RequestID        string
+	Answers          string
+	After            uint64
+	Command          string
+	SupervisorAction string
+	Root             string
+	PueueConfig      string
+	Runner           string
+	TaskID           string
+	Auto             bool
+	Provider         string
+	Brief            string
+	BriefBytes       []byte
+	Cwd              string
+	Config           task.TaskConfig
+	ReviewTarget     string
+	ResumeTask       string
+	JSON             bool
+	Watch            time.Duration
 
 	// savedSupervisor is populated only by the continuation command after the
 	// predecessor binding has been loaded and validated. It never comes from
@@ -43,6 +44,13 @@ type Arguments struct {
 	// runnerOwnership is set only when continuation reuses recorded ownership.
 	// A public --runner value remains custom even when it matches a managed path.
 	runnerOwnership string
+	// generatedTaskID is allocated by continue after its successor has passed
+	// compatibility validation. It is never populated from public argv.
+	generatedTaskID string
+	// These flags are tracked separately from their values so an explicitly
+	// empty unsupported supervisor option is rejected too.
+	supervisorPueueConfigSet bool
+	supervisorRunnerSet      bool
 }
 
 func ParseArguments(args []string) (Arguments, error) {
@@ -51,6 +59,14 @@ func ParseArguments(args []string) (Arguments, error) {
 		return Arguments{}, err
 	}
 	a := Arguments{Command: command}
+	if command == "supervisor" {
+		var action string
+		action, rest, err = parseSupervisorAction(rest)
+		if err != nil {
+			return Arguments{}, err
+		}
+		a.SupervisorAction = action
+	}
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&a.Root, "root", "", "absolute state root")
@@ -65,10 +81,35 @@ func ParseArguments(args []string) (Arguments, error) {
 	if err := fs.Parse(ordered); err != nil {
 		return Arguments{}, err
 	}
+	if command == "supervisor" {
+		fs.Visit(func(flag *flag.Flag) {
+			switch flag.Name {
+			case "pueue-config":
+				a.supervisorPueueConfigSet = true
+			case "runner":
+				a.supervisorRunnerSet = true
+			}
+		})
+	}
 	if err := a.validate(fs.Args(), watch); err != nil {
 		return Arguments{}, err
 	}
 	return a, nil
+}
+
+func parseSupervisorAction(rest []string) (string, []string, error) {
+	for i := 0; i < len(rest); i++ {
+		if strings.HasPrefix(rest[i], "-") {
+			name, _, assigned := strings.Cut(strings.TrimLeft(rest[i], "-"), "=")
+			if isGlobal(name) && !assigned {
+				i++
+			}
+			continue
+		}
+		remaining := append(append([]string(nil), rest[:i]...), rest[i+1:]...)
+		return rest[i], remaining, nil
+	}
+	return "", nil, errors.New("supervisor requires status or migrate")
 }
 
 func separateCommand(args []string) (string, []string, error) {
@@ -90,7 +131,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -109,6 +150,9 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		return
 	}
 	fs.BoolVar(&a.JSON, "json", false, "emit versioned JSON")
+	if a.Command == "supervisor" {
+		return
+	}
 	if a.Command == "collect" || a.Command == "events" {
 		fs.StringVar(watch, "watch", "0s", "finite observation bound")
 	}
@@ -132,6 +176,7 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 		fs.StringVar(&a.Config.NativeTimeout, "native-timeout", "", "optional provider-native timeout")
 		fs.StringVar(&a.Config.Model, "model", "", "requested model")
 		fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
+		fs.StringVar(&a.ReviewTarget, "review-target", "", "Codex review target: uncommitted, base:BRANCH, or commit:SHA")
 		return
 	}
 	if a.Command == "continue" {
@@ -204,31 +249,64 @@ func (a *Arguments) validate(positional []string, watch string) error {
 			return errors.New("root, pueue-config and runner must be absolute paths")
 		}
 	}
+	return a.validateCommand(positional, watch)
+}
+
+func (a *Arguments) validateCommand(positional []string, watch string) error {
 	switch a.Command {
 	case "help", "version", "providers":
 		return validateNoPositional(a.Command, positional)
+	case "supervisor":
+		return a.validateSupervisor(positional)
 	case "models":
-		if a.Cwd != "" && !filepath.IsAbs(a.Cwd) {
-			return errors.New("models --cwd must be absolute")
-		}
-		return validateCapabilities(positional, a.Provider)
+		return a.validateModels(positional)
 	case "capabilities":
 		return validateCapabilities(positional, a.Provider)
+	case "preflight", "continue", "dispatch":
+		return a.validatePreparationCommand(positional)
+	case "status", "collect", "cancel", "logs", "reply", "steer", "events":
+		return a.validateTaskInteraction(positional, watch)
+	case "recheck":
+		return a.validateRecheck(positional)
+	}
+	return nil
+}
+
+func (a *Arguments) validateSupervisor(positional []string) error {
+	if a.SupervisorAction != "status" && a.SupervisorAction != "migrate" {
+		return errors.New("supervisor requires status or migrate")
+	}
+	if a.supervisorPueueConfigSet || a.supervisorRunnerSet {
+		return errors.New("supervisor does not accept --pueue-config or --runner")
+	}
+	return validateNoPositional("supervisor", positional)
+}
+
+func (a *Arguments) validateModels(positional []string) error {
+	if a.Cwd != "" && !filepath.IsAbs(a.Cwd) {
+		return errors.New("models --cwd must be absolute")
+	}
+	return validateCapabilities(positional, a.Provider)
+}
+
+func (a *Arguments) validatePreparationCommand(positional []string) error {
+	switch a.Command {
 	case "preflight":
 		return a.validatePreflight(positional)
 	case "continue":
 		return a.validateContinue(positional)
 	case "dispatch":
 		return a.validateDispatch(positional)
-	case "status", "collect", "cancel", "logs", "reply", "steer", "events":
-		if err := a.validateTaskCommand(positional, watch); err != nil {
-			return err
-		}
-		return a.validateInteractionArguments()
-	case "recheck":
-		return a.validateRecheck(positional)
+	default:
+		return nil
 	}
-	return nil
+}
+
+func (a *Arguments) validateTaskInteraction(positional []string, watch string) error {
+	if err := a.validateTaskCommand(positional, watch); err != nil {
+		return err
+	}
+	return a.validateInteractionArguments()
 }
 
 func (a *Arguments) validateRecheck(positional []string) error {
@@ -266,8 +344,10 @@ func (a *Arguments) validatePreflight(positional []string) error {
 	if err := config.ValidateMode(a.Config.Permission); err != nil {
 		return err
 	}
-	_, err := config.ParseBudget(a.Config.Budget)
-	return err
+	if _, err := config.ParseBudget(a.Config.Budget); err != nil {
+		return err
+	}
+	return a.applyReviewTarget()
 }
 
 func (a *Arguments) validateContinue(positional []string) error {
@@ -319,14 +399,22 @@ func (a *Arguments) validateDispatch(positional []string) error {
 	if _, err := config.ParseBudget(a.Config.Budget); err != nil {
 		return err
 	}
-	if a.ReviewTarget != "" {
-		target, err := parseReviewTarget(a.ReviewTarget)
-		if err != nil {
-			return err
-		}
-		a.Config.ReviewTarget = &target
+	if err := a.applyReviewTarget(); err != nil {
+		return err
 	}
 	return a.validateDispatchIDs()
+}
+
+func (a *Arguments) applyReviewTarget() error {
+	if a.ReviewTarget == "" {
+		return nil
+	}
+	target, err := parseReviewTarget(a.ReviewTarget)
+	if err != nil {
+		return err
+	}
+	a.Config.ReviewTarget = &target
+	return nil
 }
 
 func parseReviewTarget(value string) (task.ReviewTarget, error) {

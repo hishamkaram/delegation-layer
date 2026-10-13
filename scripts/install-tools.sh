@@ -14,9 +14,9 @@ export GOTOOLCHAIN=local
 # Verify Go version
 GO_VERSION_OUTPUT="$(go version)"
 GO_VERSION_TOKEN="$(echo "${GO_VERSION_OUTPUT}" | awk '{print $3}')"
-if [[ "${GO_VERSION_TOKEN}" != "go1.27.1" ]]; then
-    echo "ERROR: Go version mismatch. Required: go1.27.1. Found: ${GO_VERSION_TOKEN}" >&2
-    echo "Action: Install Go 1.27.1 and ensure GOTOOLCHAIN=local is respected." >&2
+if [[ "${GO_VERSION_TOKEN}" != "go1.27.2" ]]; then
+    echo "ERROR: Go version mismatch. Required: go1.27.2. Found: ${GO_VERSION_TOKEN}" >&2
+    echo "Action: Install Go 1.27.2 and ensure GOTOOLCHAIN=local is respected." >&2
     exit 1
 fi
 
@@ -54,17 +54,17 @@ case "${ARCH}" in
 esac
 
 # Pinned SHA256 checksums from official release checksum manifests
-# golangci-lint v2.13.2
-GOLANGCI_VERSION="2.13.2"
+# golangci-lint v2.14.0
+GOLANGCI_VERSION="2.14.0"
 GOLANGCI_TAR="golangci-lint-${GOLANGCI_VERSION}-${GOLANGCI_OS}-${GOLANGCI_ARCH}.tar.gz"
 GOLANGCI_URL="https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_VERSION}/${GOLANGCI_TAR}"
 
 get_golangci_sha256() {
     case "$1" in
-        darwin-amd64) echo "8a13aaf9cbbb1dee52824e862cf0d0720e5bb97c1f4260d1e51623a09492b57b" ;;
-        darwin-arm64) echo "f4bf83f0b64f055c42b28fc9a38861839f69c096e61c788e72dfaae412011789" ;;
-        linux-amd64)  echo "2277d43b98ec0054280f2ac26b53268bae97682444678a59a657dd565da021d6" ;;
-        linux-arm64)  echo "a2a4e0065aa41be71f7c5ac90f271b61751331e5d04314e62afe4027855f0893" ;;
+        darwin-amd64) echo "a5667c1c3536be1740133213e1e822bfb8f0d98ea12903174d6d5f635e4ed68d" ;;
+        darwin-arm64) echo "5ef5f36a7147e91dc58ef9ef4d11bb7bad5ead0c76eb6c01327a73c641d1dcc3" ;;
+        linux-amd64)  echo "ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab" ;;
+        linux-arm64)  echo "ee7ec5f3453d15ddf106fae5a4d6c71737712348a979d1fe9cd52ec7ea299bae" ;;
         *)
             echo "ERROR: Unknown golangci-lint target key: $1" >&2
             return 1
@@ -109,7 +109,7 @@ echo "Installing tools into ${BIN_DIR}..."
 # existing pinned checksum checks still run before extraction or installation.
 TOOL_DOWNLOAD_OPTIONS=(--retry 3 --retry-all-errors --retry-delay 2 --retry-max-time 180 --connect-timeout 15 --max-time 120)
 
-# 1. golangci-lint 2.13.2
+# 1. golangci-lint 2.14.0
 GOLANGCI_KEY="${GOLANGCI_OS}-${GOLANGCI_ARCH}"
 EXPECTED_GOLANGCI_SHA="$(get_golangci_sha256 "${GOLANGCI_KEY}")"
 echo "Downloading golangci-lint v${GOLANGCI_VERSION} (${GOLANGCI_KEY})..."

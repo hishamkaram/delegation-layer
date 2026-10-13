@@ -132,7 +132,8 @@ func newFakeSupervisorPaths(t *testing.T, mode, version string) *fakeSupervisor 
 		t.Fatal(err)
 	}
 	writeFakeConfig(t, fake.configPath, base)
-	fake.environment = append(os.Environ(),
+	fake.environment = append(
+		os.Environ(),
 		"FAKE_LOG="+fake.logPath,
 		"FAKE_STATUS="+fake.statusPath,
 		"FAKE_MODE="+mode,
@@ -186,11 +187,34 @@ case "${3-}" in
     printf '%s\n' "${FAKE_VERSION:-pueue 4.0.4}"
     ;;
   status)
-    if [ "${FAKE_STATUS_DELAY:-}" != "" ]; then sleep "$FAKE_STATUS_DELAY"; elif [ "$mode" = "delay-status" ]; then sleep 0.08; elif [ "$mode" = "delay-status-fail" ]; then sleep 0.08; [ -f "${FAKE_READY:?}" ] || exit 1; fi
-    cat "$FAKE_STATUS"
+    if [ "${FAKE_STATUS_GATE:-}" != "" ]; then while [ ! -f "$FAKE_STATUS_GATE" ]; do sleep 0.01; done; elif [ "${FAKE_STATUS_DELAY:-}" != "" ]; then sleep "$FAKE_STATUS_DELAY"; elif [ "$mode" = "delay-status" ]; then sleep 0.08; elif [ "$mode" = "delay-status-fail" ]; then sleep 0.08; [ -f "${FAKE_READY:?}" ] || exit 1; fi
+    if [ "${FAKE_READY:-}" != "" ] && [ ! -f "$FAKE_READY" ]; then exit 1; fi
+    if [ "${FAKE_SHUTDOWN_MARKER:-}" != "" ] && [ -f "$FAKE_SHUTDOWN_MARKER" ]; then exit 1; fi
+    if [ "${5-}" != "" ] && [ "${FAKE_FILTERED_STATUS:-}" != "" ]; then cat "$FAKE_FILTERED_STATUS"; else cat "$FAKE_STATUS"; fi
+    ;;
+  group)
+    printf '%s\n' '{"default":{"status":"Running","parallel_tasks":0}}'
     ;;
   add)
-    printf '%s\n' "${FAKE_ADD_ID:-7}"
+    if [ "${4-}" = "--help" ]; then
+      printf '%s\n' 'Usage: pueue add [OPTIONS] <COMMAND>...'
+      printf '%s\n' '  -s, --stashed    Create the task in Stashed state.'
+      printf '%s\n' '  -p, --print-task-id    Only return the task id.'
+    else
+      if [ "${FAKE_ADD_DELAY:-}" != "" ]; then sleep "$FAKE_ADD_DELAY"; fi
+      printf '%s\n' "${FAKE_ADD_ID:-7}"
+    fi
+    ;;
+  enqueue)
+    if [ "${4-}" = "--help" ]; then
+      printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...'
+    else
+      if [ "${FAKE_ENQUEUE_DELAY:-}" != "" ]; then sleep "$FAKE_ENQUEUE_DELAY"; fi
+      case "$mode" in
+        enqueue-refuse) printf '%s\n' 'refused' >&2; exit 7 ;;
+        *) exit 0 ;;
+      esac
+    fi
     ;;
   kill|remove)
     case "$mode" in
@@ -198,6 +222,9 @@ case "${3-}" in
       stop-overflow) dd if=/dev/zero bs=1048577 count=1 2>/dev/null ;;
       *) exit 0 ;;
     esac
+    ;;
+  shutdown)
+    if [ "${FAKE_SHUTDOWN_MARKER:-}" != "" ]; then touch "$FAKE_SHUTDOWN_MARKER"; fi
     ;;
   *)
     printf '%s\n' 'unexpected command' >&2
@@ -231,6 +258,8 @@ func writeStatusFor(t *testing.T, fake *fakeSupervisor, rootID, taskID string, i
 	t.Helper()
 	var status map[string]any
 	switch state {
+	case StateStashed:
+		status = map[string]any{"Stashed": map[string]any{"enqueue_at": nil}}
 	case StateQueued:
 		status = map[string]any{"Queued": map[string]any{"enqueued_at": statusTestTime}}
 	case StateRunning:
@@ -406,6 +435,42 @@ func TestBindReconcileAndReceiptUseCompleteBinding(t *testing.T) {
 	if err := task.ValidateSupervisorReceipt(receipt); err != nil {
 		t.Fatal(err)
 	}
+	var status []string
+	for _, invocation := range readInvocations(t, fake.logPath) {
+		if len(invocation) > 2 && invocation[2] == "status" {
+			status = invocation
+		}
+	}
+	want := []string{"-c", fake.configPath, "status", "--json", "label=" + identity.Label()}
+	if !slices.Equal(status, want) {
+		t.Fatalf("wrong exact task status argv: got=%q want=%q", status, want)
+	}
+}
+
+func TestReconcileDoesNotParseTheRetainedQueue(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	rootID, taskID := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	identity := Identity{RootID: rootID, TaskID: taskID, SpecSHA256: strings.Repeat("c", 64), MetaSHA256: strings.Repeat("d", 64)}
+	large, _ := statusStreamTestLargeQueue(t, 0)
+	filtered := statusTestPayload(t, map[string]any{
+		"7": statusTestJob(7, identity.Label(), statusStreamTestRunningState()),
+	}, map[string]any{"default": map[string]any{"status": "Running", "parallel_tasks": 0}})
+	if len(large) <= MaxControlBytes {
+		t.Fatalf("retained queue fixture has only %d bytes", len(large))
+	}
+	filteredPath := filepath.Join(filepath.Dir(fake.statusPath), "filtered-status.json")
+	if err := os.WriteFile(fake.statusPath, large, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filteredPath, filtered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake.client.options.Environment = append(fake.client.options.Environment, "FAKE_FILTERED_STATUS="+filteredPath)
+
+	observation, err := fake.client.Reconcile(context.Background(), identity)
+	if err != nil || !observation.Matched || observation.NumericTaskID != 7 || observation.State != StateRunning {
+		t.Fatalf("reconciliation did not use bounded exact status: observation=%+v err=%v", observation, err)
+	}
 }
 
 func TestSnapshotIdentityCopiesMutableNumericTarget(t *testing.T) {
@@ -428,8 +493,7 @@ func TestSubmitConsumesOnePermitAndUsesLiteralArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeStatusFor(t, fake, record.RootID, record.TaskID, 7, StateQueued)
-	observation, err := fake.client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root})
+	observation, err := fake.client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root, Supervised: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,16 +510,60 @@ func TestSubmitConsumesOnePermitAndUsesLiteralArguments(t *testing.T) {
 			add = args
 		}
 	}
-	want := []string{"-c", fake.configPath, "add", "--escape", "--label", record.Label, "--print-task-id", "--", fake.executable, "--root", fixture.store.Root, record.TaskID}
+	want := []string{"-c", fake.configPath, "add", "--escape", "--label", record.Label, "--print-task-id", "--", fake.executable, "--guardian", "--supervised", "--root", fixture.store.Root, record.TaskID}
 	if !slices.Equal(add, want) {
 		t.Fatalf("literal add argv changed: got=%q want=%q", add, want)
 	}
 	if countCommand(invocations, "add") != 1 {
 		t.Fatalf("expected exactly one add: %+v", invocations)
 	}
+	if countCommand(invocations, "status") != 0 {
+		t.Fatalf("successful add triggered a queue-wide status scan: %+v", invocations)
+	}
 }
 
-func TestSubmitNeverRetriesAfterUncertainAdmission(t *testing.T) {
+func TestSubmitWithGateRejectsBeforePueueAdd(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	saved := fake.client.Binding()
+	saved.ResolutionCwd = filepath.Join(t.TempDir(), "predecessor")
+	fake.client.binding = saved
+	fixture := newTaskFixture(t, fake.client.Binding())
+	prepared, err := fixture.taskDir.PrepareSubmission(fake.client.Binding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateErr := errors.New("submission generation drift")
+	gateCalls := 0
+	observation, err := fake.client.SubmitWithGate(
+		context.Background(),
+		prepared,
+		Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root},
+		func(_ context.Context, binding task.SupervisorRef) error {
+			gateCalls++
+			if binding != fake.client.RuntimeBinding() || binding == fake.client.Binding() {
+				t.Fatalf("submission gate received durable binding instead of active runtime: got=%+v durable=%+v runtime=%+v", binding, fake.client.Binding(), fake.client.RuntimeBinding())
+			}
+			return gateErr
+		},
+	)
+	if !errors.Is(err, gateErr) || observation.Matched {
+		t.Fatalf("gate refusal was not returned before admission: observation=%+v err=%v", observation, err)
+	}
+	if gateCalls != 1 {
+		t.Fatalf("submission gate calls=%d, want one", gateCalls)
+	}
+	if prepared.IsConsumed() {
+		t.Fatal("submission gate consumed the permit before pueue add")
+	}
+	if countCommand(readInvocations(t, fake.logPath), "add") != 0 {
+		t.Fatal("gate refusal reached the pueue add command")
+	}
+	if err := prepared.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSubmitCustomRunnerOmitsSupervisedMarker(t *testing.T) {
 	fake := newFakeSupervisor(t, "ok")
 	fixture := newTaskFixture(t, fake.client.Binding())
 	prepared, err := fixture.taskDir.PrepareSubmission(fake.client.Binding())
@@ -466,12 +574,42 @@ func TestSubmitNeverRetriesAfterUncertainAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeStatusFor(t, fake, record.RootID, record.TaskID, 8, StateQueued)
-	observation, err := fake.client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root})
+	if _, err = fake.client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root}); err != nil {
+		t.Fatal(err)
+	}
+	if err = prepared.Release(); err != nil {
+		t.Fatal(err)
+	}
+	var add []string
+	for _, arguments := range readInvocations(t, fake.logPath) {
+		if len(arguments) > 2 && arguments[2] == "add" {
+			add = arguments
+		}
+	}
+	want := []string{"-c", fake.configPath, "add", "--escape", "--label", record.Label, "--print-task-id", "--", fake.executable, "--root", fixture.store.Root, record.TaskID}
+	if !slices.Equal(add, want) {
+		t.Fatalf("custom runner add argv changed: got=%q want=%q", add, want)
+	}
+}
+
+func TestSubmitNeverRetriesAfterUncertainAdmission(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	fixture := newTaskFixture(t, fake.client.Binding())
+	client, err := NewClient(fake.client.Binding(), Options{
+		Environment: append(append([]string{}, fake.environment...), "FAKE_ADD_ID=not-a-task-id"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := fixture.taskDir.PrepareSubmission(fake.client.Binding())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root})
 	if !errors.Is(err, ErrUnknown) || !errors.Is(err, ErrSubmissionUncertain) || observation.Matched {
 		t.Fatalf("lost admission was treated as success: %+v %v", observation, err)
 	}
-	if _, err := fake.client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root}); !errors.Is(err, task.ErrPermitAlreadyUsed) {
+	if _, err := client.Submit(context.Background(), prepared, Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root}); !errors.Is(err, task.ErrPermitAlreadyUsed) {
 		t.Fatalf("second add did not stop at consumed permit: %v", err)
 	}
 	if err := prepared.Release(); err != nil {
@@ -755,11 +893,18 @@ func TestSavedBindingDoesNotPinWorkingDirectory(t *testing.T) {
 			t.Errorf("restore working directory: %v", chdirErr)
 		}
 	})
-	if err := os.Chdir(removed); err != nil {
+	if err = os.Chdir(removed); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(removed); err != nil {
+	if err = os.Remove(removed); err != nil {
 		t.Fatal(err)
+	}
+	command, err := client.prepareCommand("status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Dir(client.RuntimeBinding().ConfigPath); command.Dir != want {
+		t.Fatalf("saved supervisor command directory=%q, want config directory %q", command.Dir, want)
 	}
 	if err := client.Ready(context.Background()); err != nil {
 		t.Fatalf("saved supervisor binding depended on a removed working directory: %v", err)

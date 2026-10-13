@@ -72,7 +72,50 @@ func TestParseStatusAcceptsEverySupportedLifecycleState(t *testing.T) {
 			if name == "Locked" && parsed[0].State != StateUnknown {
 				t.Fatalf("locked state should remain conservative: %+v", parsed[0])
 			}
+			if name == "Stashed" && parsed[0].State != StateStashed {
+				t.Fatalf("stashed state was collapsed into queued: %+v", parsed[0])
+			}
 		})
+	}
+}
+
+func TestParseStatusPreservesStashedWithFutureFields(t *testing.T) {
+	job := statusTestJob(7, "label", map[string]any{
+		"Stashed": map[string]any{"enqueue_at": nil, "future_state_field": "ignored"},
+	})
+	data := statusTestPayload(t, map[string]any{"7": job}, map[string]any{
+		"default": map[string]any{"status": "Running", "parallel_tasks": 0, "future_group_field": true},
+	})
+	parsed, err := ParseStatus(data, "pueue future")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed) != 1 || parsed[0].State != StateStashed {
+		t.Fatalf("stashed row was not retained: %+v", parsed)
+	}
+}
+
+func TestParseStatusTreatsScheduledStashedAsUnknown(t *testing.T) {
+	job := statusTestJob(7, "label", map[string]any{
+		"Stashed": map[string]any{"enqueue_at": statusTestTime},
+	})
+	data := statusTestPayload(t, map[string]any{"7": job}, map[string]any{})
+	parsed, err := ParseStatus(data, FixtureVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed) != 1 || parsed[0].State != StateUnknown {
+		t.Fatalf("scheduled Stashed row was treated as inert: %+v", parsed)
+	}
+}
+
+func TestParseStatusRejectsInvalidScheduledStashedTimestamp(t *testing.T) {
+	job := statusTestJob(7, "label", map[string]any{
+		"Stashed": map[string]any{"enqueue_at": "not-a-timestamp"},
+	})
+	data := statusTestPayload(t, map[string]any{"7": job}, map[string]any{})
+	if _, err := ParseStatus(data, FixtureVersion); !errors.Is(err, ErrUnknown) {
+		t.Fatalf("invalid scheduled Stashed timestamp was accepted: %v", err)
 	}
 }
 

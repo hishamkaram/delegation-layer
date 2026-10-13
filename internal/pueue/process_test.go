@@ -3,6 +3,7 @@ package pueue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,6 +96,22 @@ func TestObserveCommandReportsStartFailureWithoutInFlight(t *testing.T) {
 	}
 }
 
+func TestStatusObservationErrorMarksOnlyTransientCommandFailures(t *testing.T) {
+	executable := finiteExecutable(t, "exit 23")
+	_, exitErr := observeCommand(context.Background(), startOwned(exec.Command(executable)), time.Second)
+	if classified := statusObservationError(exitErr); !errors.Is(classified, ErrStatusOperational) || !errors.Is(classified, ErrStatusTransient) {
+		t.Fatalf("nonzero status was not transient: %v", classified)
+	}
+	malformed := errors.Join(ErrUnknown, errors.New("invalid status schema"))
+	if classified := statusObservationError(malformed); !errors.Is(classified, ErrStatusOperational) || errors.Is(classified, ErrStatusTransient) {
+		t.Fatalf("malformed status became transient: %v", classified)
+	}
+	limited := errors.Join(exitErr, ErrControlLimit)
+	if classified := statusObservationError(limited); errors.Is(classified, ErrStatusTransient) {
+		t.Fatalf("status output limit became transient: %v", classified)
+	}
+}
+
 func TestCommandAcknowledgmentAcceptsOnlyNormalCompletedRefusal(t *testing.T) {
 	executable := finiteExecutable(t, "exit 7")
 	result, err := observeCommand(context.Background(), startOwned(exec.Command(executable)), time.Second)
@@ -118,5 +135,53 @@ func TestPendingResultIsCopiedAfterNaturalCompletion(t *testing.T) {
 	again, done := pending.Result()
 	if !done || string(again.Stdout) != "immutable" {
 		t.Fatalf("pending output alias escaped: %+v", again)
+	}
+}
+
+func TestPendingHandlesTraversesWrappedNestedJoins(t *testing.T) {
+	first, second := &Pending{}, &Pending{}
+	firstError := &InFlightError{Pending: first}
+	secondError := &InFlightError{Pending: second}
+	tests := []struct {
+		name string
+		err  error
+		want []*Pending
+	}{
+		{name: "nil"},
+		{
+			name: "single wrapped error",
+			err:  fmt.Errorf("observe: %w", firstError),
+			want: []*Pending{first},
+		},
+		{
+			name: "joined errors",
+			err:  errors.Join(firstError, secondError),
+			want: []*Pending{first, second},
+		},
+		{
+			name: "wrapped nested joins deduplicate pending pointers",
+			err: fmt.Errorf("outer: %w", errors.Join(
+				fmt.Errorf("first: %w", firstError),
+				errors.Join(
+					fmt.Errorf("second: %w", secondError),
+					fmt.Errorf("duplicate: %w", firstError),
+				),
+			)),
+			want: []*Pending{first, second},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := pendingHandles(test.err)
+			if len(got) != len(test.want) {
+				t.Fatalf("pending handle count = %d, want %d: %v", len(got), len(test.want), got)
+			}
+			for index, pending := range test.want {
+				if got[index] != pending {
+					t.Fatalf("pending handle %d = %p, want %p", index, got[index], pending)
+				}
+			}
+		})
 	}
 }

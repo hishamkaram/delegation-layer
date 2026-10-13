@@ -35,7 +35,7 @@ EOF
 create_valid_stubs() {
     cat << 'EOF' > "${DISPOSABLE_REPO}/bin/go"
 #!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.1 darwin/arm64"; exit 0; fi
+if [[ "$*" == "version" ]]; then echo "go version go1.27.2 darwin/arm64"; exit 0; fi
 if [[ "$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
 exit 0
 EOF
@@ -44,7 +44,7 @@ EOF
     cat << 'EOF' > "${DISPOSABLE_REPO}/bin/golangci-lint"
 #!/usr/bin/env bash
 if [[ "$*" == *"-version"* || "$*" == *"version"* ]]; then
-    echo "golangci-lint has version 2.13.2 built with go1.27.0 from 27774aaf on 2026-08-27T23:01:12Z"
+    echo "golangci-lint has version 2.14.0 built with go1.27.0 from 27774aaf on 2026-08-27T23:01:12Z"
     exit 0
 fi
 exit 0
@@ -54,7 +54,7 @@ EOF
     cat << 'EOF' > "${DISPOSABLE_REPO}/bin/gofumpt"
 #!/usr/bin/env bash
 if [[ "$*" == *"-version"* ]]; then
-    echo "v0.12.0 (go1.27.1)"
+    echo "v0.12.0 (go1.27.2)"
     exit 0
 fi
 exit 0
@@ -101,7 +101,7 @@ fi
 # 2a. Near/suffix version
 cat << 'EOF' > "${DISPOSABLE_REPO}/bin/go"
 #!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.10 darwin/arm64"; exit 0; fi
+if [[ "$*" == "version" ]]; then echo "go version go1.27.20 darwin/arm64"; exit 0; fi
 if [[ "$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
 exit 0
 EOF
@@ -111,9 +111,9 @@ output="$(PATH="${DISPOSABLE_REPO}/bin:${PATH}" "${DISPOSABLE_REPO}/scripts/chec
 status=$?
 set -e
 if [[ "${status}" -ne 0 && "${output}" == *"Go version mismatch"* ]]; then
-    assert_pass "check-tool-versions rejects near-version Go (go1.27.10)"
+    assert_pass "check-tool-versions rejects near-version Go (go1.27.20)"
 else
-    echo "FAIL: Expected rejection of go1.27.10, got exit ${status}: ${output}" >&2
+    echo "FAIL: Expected rejection of go1.27.20, got exit ${status}: ${output}" >&2
     exit 1
 fi
 
@@ -139,7 +139,7 @@ fi
 # 2c. Nonzero exit with valid-looking text
 cat << 'EOF' > "${DISPOSABLE_REPO}/bin/go"
 #!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.1 darwin/arm64"; exit 42; fi
+if [[ "$*" == "version" ]]; then echo "go version go1.27.2 darwin/arm64"; exit 42; fi
 if [[ "$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
 exit 0
 EOF
@@ -160,7 +160,7 @@ create_valid_stubs
 # 3a. Near/suffix version
 cat << 'EOF' > "${DISPOSABLE_REPO}/bin/golangci-lint"
 #!/usr/bin/env bash
-echo "golangci-lint has version 2.13.20 built with go1.27.0 from 27774aaf on 2026-08-27T23:01:12Z"
+echo "golangci-lint has version 2.14.00 built with go1.27.0 from 27774aaf on 2026-08-27T23:01:12Z"
 exit 0
 EOF
 set +e
@@ -168,9 +168,9 @@ output="$(PATH="${DISPOSABLE_REPO}/bin:${PATH}" "${DISPOSABLE_REPO}/scripts/chec
 status=$?
 set -e
 if [[ "${status}" -ne 0 && "${output}" == *"golangci-lint version mismatch"* ]]; then
-    assert_pass "check-tool-versions rejects near-version golangci-lint (2.13.20)"
+    assert_pass "check-tool-versions rejects near-version golangci-lint (2.14.00)"
 else
-    echo "FAIL: Expected rejection of golangci-lint 2.13.20, got exit ${status}: ${output}" >&2
+    echo "FAIL: Expected rejection of golangci-lint 2.14.00, got exit ${status}: ${output}" >&2
     exit 1
 fi
 
@@ -194,7 +194,7 @@ fi
 # 3c. Nonzero exit with valid-looking text
 cat << 'EOF' > "${DISPOSABLE_REPO}/bin/golangci-lint"
 #!/usr/bin/env bash
-echo "golangci-lint has version 2.13.2 built with go1.27.0 from 27774aaf on 2026-08-27T23:01:12Z"
+echo "golangci-lint has version 2.14.0 built with go1.27.0 from 27774aaf on 2026-08-27T23:01:12Z"
 exit 42
 EOF
 set +e
@@ -213,7 +213,7 @@ create_valid_stubs
 # 4a. Near/suffix version
 cat << 'EOF' > "${DISPOSABLE_REPO}/bin/gofumpt"
 #!/usr/bin/env bash
-echo "v0.12.00 (go1.27.1)"
+echo "v0.12.00 (go1.27.2)"
 exit 0
 EOF
 set +e
@@ -247,7 +247,7 @@ fi
 # 4c. Nonzero exit with valid-looking text
 cat << 'EOF' > "${DISPOSABLE_REPO}/bin/gofumpt"
 #!/usr/bin/env bash
-echo "v0.12.0 (go1.27.1)"
+echo "v0.12.0 (go1.27.2)"
 exit 42
 EOF
 set +e
@@ -452,7 +452,7 @@ chmod +x "${INSTALL_BIN}/curl"
 # 7a. Bad version rejected before download
 cat << 'EOF' > "${INSTALL_BIN}/go"
 #!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.10 darwin/arm64"; exit 0; fi
+if [[ "$*" == "version" ]]; then echo "go version go1.27.20 darwin/arm64"; exit 0; fi
 exit 0
 EOF
 chmod +x "${INSTALL_BIN}/go"
@@ -464,7 +464,7 @@ set -e
 if [[ "${status}" -ne 0 && "${output}" == *"Go version mismatch"* && ! -f "${DOWNLOAD_RECORD}" ]]; then
     assert_pass "install-tools rejects near-version Go before initiating any download"
 else
-    echo "FAIL: Expected install-tools to reject go1.27.10 without downloading, got exit ${status}: ${output}" >&2
+    echo "FAIL: Expected install-tools to reject go1.27.20 without downloading, got exit ${status}: ${output}" >&2
     exit 1
 fi
 
@@ -490,7 +490,7 @@ fi
 # 7c. Valid Go control reaches the harmless recorded boundary
 cat << 'EOF' > "${INSTALL_BIN}/go"
 #!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.1 darwin/arm64"; exit 0; fi
+if [[ "$*" == "version" ]]; then echo "go version go1.27.2 darwin/arm64"; exit 0; fi
 exit 0
 EOF
 chmod +x "${INSTALL_BIN}/go"
@@ -520,6 +520,8 @@ elif grep -q "Process.Kill" fixture.go 2>/dev/null; then
     echo "fixture.go:5:2: cmd.Process.Kill: Direct process signals are prohibited"
 elif grep -q "syscall.Kill" fixture.go 2>/dev/null; then
     echo "fixture.go:5:2: syscall.Kill: Direct syscall signals and setsid are prohibited"
+elif grep -q "unix.Kill" fixture.go 2>/dev/null; then
+    echo "fixture.go:5:2: unix.Kill: Direct process signals are prohibited"
 elif grep -q "syscall.Setsid" fixture.go 2>/dev/null; then
     echo "fixture.go:5:2: syscall.Setsid: Direct syscall signals and setsid are prohibited"
 elif grep -q "CommandContext" fixture.go 2>/dev/null; then
@@ -660,7 +662,7 @@ fi
 cat << 'EOF' > "${DISPOSABLE_REPO}/bin/gofumpt"
 #!/usr/bin/env bash
 if [[ "$*" == *"-version"* ]]; then
-    echo "v0.12.0 (go1.27.1)"
+    echo "v0.12.0 (go1.27.2)"
     exit 0
 fi
 # Simulate formatter crash or parse failure without stdout
@@ -684,7 +686,7 @@ fi
 cat << 'EOF' > "${DISPOSABLE_REPO}/bin/gofumpt"
 #!/usr/bin/env bash
 if [[ "$*" == *"-version"* ]]; then
-    echo "v0.12.0 (go1.27.1)"
+    echo "v0.12.0 (go1.27.2)"
     exit 0
 fi
 echo "cmd/dummy.go"

@@ -300,9 +300,18 @@ type Description struct {
 // authority.
 type Registration struct {
 	// Models describes optional advisory discovery. It grants no task admission.
-	Models          func() ModelDiscoveryDefinition
-	Description     Description
-	Prepare         PrepareCandidate
-	PrepareExisting PrepareExistingCandidate
-	Interpreters    []predicate.Interpreter
+	Models               func() ModelDiscoveryDefinition
+	Description          Description
+	Prepare              PrepareCandidate
+	PrepareExisting      PrepareExistingCandidate
+	ValidateContinuation ContinuationValidator
+	Interpreters         []predicate.Interpreter
 }
+
+// ContinuationValidator checks provider-owned compatibility between a
+// predecessor request and its proposed successor. predecessorMeta is the
+// predecessor's immutable prepared record, including the sealed predicate
+// version that can affect provider continuation semantics. The catalog
+// performs the shared provider and permission identity checks before invoking
+// it.
+type ContinuationValidator func(predecessor task.TaskRecord, predecessorMeta task.MetaRecord, successor task.TaskRecord) error

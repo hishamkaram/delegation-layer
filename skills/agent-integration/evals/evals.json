@@ -28,6 +28,11 @@
       "expected": ["delegate continue --task", "new task id", "collect successor", "no fresh unrelated dispatch"]
     },
     {
+      "name": "continue-supervisor-migration",
+      "prompt": "An exact-session delegate continue command returned task_record not_created with failure.code supervisor_upgrade_required and failure.next_action run_supervisor_migrate. Migration then returned supervisor_control.state migrated and supervisor_control.next_action retry_dispatch.",
+      "expected": ["run same-root supervisor migrate exactly once", "retry the argv-equivalent continue exactly once", "one linked successor", "zero fresh dispatch commands", "zero direct provider calls"]
+    },
+    {
       "name": "blocked-auth",
       "prompt": "Capability output says live_acceptance.status is blocked.",
       "expected": ["preserve blocked", "do not call a provider login command", "do not claim success"]

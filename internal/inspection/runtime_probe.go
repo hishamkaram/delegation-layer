@@ -136,7 +136,7 @@ func runCapabilityCommand(scope execution.PreflightScope, definition provider.Ru
 	cmd.Stdout, cmd.Stderr = stdout.writer, stderr.writer
 	go stdout.drain()
 	go stderr.drain()
-	startErr := scope.Start(cmd.Start)
+	startErr := scope.StartCommand(cmd, cmd.Start)
 	closeErr := errors.Join(stdout.writer.Close(), stderr.writer.Close())
 	if startErr == nil {
 		closeErr = errors.Join(closeErr, verified.ReleaseDescriptors())
@@ -144,6 +144,7 @@ func runCapabilityCommand(scope execution.PreflightScope, definition provider.Ru
 	var waitErr error
 	if startErr == nil {
 		waitErr = cmd.Wait()
+		waitErr = errors.Join(waitErr, scope.FinishCommand(cmd))
 		if cmd.ProcessState == nil || !cmd.ProcessState.Success() {
 			waitErr = errors.Join(waitErr, errRuntimeProbe)
 		}

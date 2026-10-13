@@ -133,15 +133,19 @@ func decodeOpenCodeCurrentEvent(value providerjson.Value) (openCodeCurrentEvent,
 }
 
 func parseStdout(reader io.Reader) (eventState, error) {
-	return parseStdoutWithPostTerminal(reader, true)
+	return parseStdoutWithPostTerminal(reader, true, true)
 }
 
 func parseStrictCurrentStdout(reader io.Reader) (eventState, error) {
-	return parseStdoutWithPostTerminal(reader, false)
+	return parseStdoutWithPostTerminal(reader, false, false)
 }
 
-func parseStdoutWithPostTerminal(reader io.Reader, allowPostTerminal bool) (eventState, error) {
-	state := eventState{current: true, currentUsageReliable: true, allowPostTerminal: allowPostTerminal}
+func parseHistoricalCurrentV4Stdout(reader io.Reader) (eventState, error) {
+	return parseStdoutWithPostTerminal(reader, true, false)
+}
+
+func parseStdoutWithPostTerminal(reader io.Reader, allowPostTerminal, allowEmptyStepStart bool) (eventState, error) {
+	state := eventState{current: true, currentUsageReliable: true, allowPostTerminal: allowPostTerminal, allowEmptyStepStart: allowEmptyStepStart}
 	semanticErr, readErr := providerjson.ReadRecords(reader, func(value providerjson.Value, _ uint64) error {
 		if state.semanticErr != nil {
 			return state.semanticErr
@@ -235,8 +239,14 @@ func openCodeCurrentPart(fields map[string]providerjson.Value, expected string, 
 
 func applyOpenCodeCurrentStepStart(state *eventState, fields map[string]providerjson.Value) {
 	if state.stepActive {
-		state.markSemantic("duplicate step_start while a step is active")
-		return
+		if state.currentStepHadEvent || !state.allowEmptyStepStart {
+			state.markSemantic("duplicate step_start after step content")
+			return
+		}
+		// OpenCode can emit an empty step_start while replacing a
+		// provider-internal step. Treat the repeated empty marker as the
+		// start of the same logical step; any meaningful event keeps the
+		// stricter duplicate-start rejection above.
 	}
 	part, err := openCodeCurrentPart(fields, "step-start")
 	if err != nil {
@@ -247,6 +257,7 @@ func applyOpenCodeCurrentStepStart(state *eventState, fields map[string]provider
 	state.stepActive = true
 	state.terminal = false
 	state.currentStepTerminal = false
+	state.currentStepHadEvent = false
 	state.currentStepText = opencodeTextSummary{}
 	_ = part
 }
@@ -256,6 +267,7 @@ func applyOpenCodeCurrentText(state *eventState, fields map[string]providerjson.
 		state.markSemantic("text event is outside an active step")
 		return
 	}
+	state.currentStepHadEvent = true
 	part, err := openCodeCurrentPart(fields, "text", "text")
 	if err != nil {
 		state.markSemantic("text event: " + err.Error())
@@ -279,6 +291,7 @@ func applyOpenCodeCurrentReasoning(state *eventState, fields map[string]provider
 		state.markSemantic("reasoning event is outside an active step")
 		return
 	}
+	state.currentStepHadEvent = true
 	part, err := openCodeCurrentPart(fields, "reasoning", "text")
 	if err != nil {
 		state.markSemantic("reasoning event: " + err.Error())
@@ -299,6 +312,7 @@ func applyOpenCodeCurrentToolUse(state *eventState, fields map[string]providerjs
 		state.markSemantic("tool_use event is outside an active step")
 		return
 	}
+	state.currentStepHadEvent = true
 	part, err := openCodeCurrentPart(fields, "tool", "tool", "state")
 	if err != nil {
 		state.markSemantic("tool_use event: " + err.Error())

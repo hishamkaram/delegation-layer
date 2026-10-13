@@ -40,6 +40,12 @@ run_fixture_test() {
 module fixturetest
 
 go 1.27.0
+
+require golang.org/x/sys v0.48.0
+EOF
+    cat << 'EOF' > "${fixture_dir}/go.sum"
+golang.org/x/sys v0.48.0 h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=
+golang.org/x/sys v0.48.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
 EOF
     echo "${neg_source}" > "${fixture_dir}/fixture.go"
 
@@ -144,7 +150,20 @@ func Bad() {
     'package fixture
 func Good() {}'
 
-# 5. exec.CommandContext
+# 5. unix.Kill
+run_fixture_test \
+    "unix-kill" \
+    "forbidigo" \
+    "unix.Kill.*Direct process signals are prohibited" \
+    'package fixture
+import "golang.org/x/sys/unix"
+func Bad() {
+	_ = unix.Kill(1, 0)
+}' \
+    'package fixture
+func Good() {}'
+
+# 6. exec.CommandContext
 run_fixture_test \
     "exec-command-context" \
     "forbidigo" \
@@ -164,7 +183,7 @@ func Good() {
 	_ = exec.Command("echo", "hi")
 }'
 
-# 6. nonzero Cmd.WaitDelay assignment
+# 7. nonzero Cmd.WaitDelay assignment
 run_fixture_test \
     "cmd-waitdelay" \
     "forbidigo" \
@@ -184,7 +203,7 @@ func Good() {
 	_ = &exec.Cmd{}
 }'
 
-# 7. ignored bare filesystem error
+# 8. ignored bare filesystem error
 run_fixture_test \
     "bare-fs-error" \
     "errcheck" \
@@ -203,7 +222,7 @@ func Good() error {
 	return nil
 }'
 
-# 8. _ = f.Sync()
+# 9. _ = f.Sync()
 run_fixture_test \
     "ignored-sync-blank" \
     "errcheck" \
@@ -230,7 +249,7 @@ func Good() error {
 	return nil
 }'
 
-# 9. numeric tri-state switch missing Unknown while carrying default
+# 10. numeric tri-state switch missing Unknown while carrying default
 run_fixture_test \
     "exhaustive-unknown" \
     "exhaustive" \

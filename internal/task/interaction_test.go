@@ -70,6 +70,9 @@ func TestInteractionCloseRejectsQueuedButPreservesUncertainDelivery(t *testing.T
 	if !state.Closed || len(state.PendingRequests) != 0 || state.Deliveries[0].State != "unknown" || state.Deliveries[1].State != "rejected" {
 		t.Fatalf("bad closure: %+v", state)
 	}
+	if state.PendingRequests == nil {
+		t.Fatal("closed interaction encoded pending_requests as null")
+	}
 	if err := ApplyInteractionEvent(&state, InteractionEvent{Sequence: 7, Kind: "ready"}); !errors.Is(err, ErrInteractionClosed) {
 		t.Fatalf("reopened closed interaction: %v", err)
 	}

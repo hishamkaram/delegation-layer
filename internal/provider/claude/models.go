@@ -29,9 +29,10 @@ func ModelDiscovery() commonprovider.ModelDiscoveryDefinition {
 			"--verbose",
 		},
 		Source: modelDiscoverySource,
-		Capability: commonprovider.RuntimeCapability{RequiredFlags: []string{
-			"--print", "--input-format", "--output-format", "--verbose",
-		}},
+		// The CLI truncates help written to a pipe before the stream-json
+		// options on current releases. The supervised exchange below remains
+		// the authoritative check for those options.
+		Capability:  commonprovider.RuntimeCapability{RequiredFlags: []string{"--print"}},
 		NewExchange: func() commonprovider.ModelExchange { return &claudeModelExchange{} },
 		Project:     projectModels,
 	}

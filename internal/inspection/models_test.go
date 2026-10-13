@@ -247,9 +247,9 @@ func TestModelCatalogSurvivesInspectionJournalAndProof(t *testing.T) {
 	}
 }
 
-func TestModelDiscoveryDeadlinePreservesOrdinaryAdmission(t *testing.T) {
+func TestInspectionDeadlinesPreserveHistoricalJournals(t *testing.T) {
 	created := time.Unix(100, 0).UTC()
-	for _, revision := range []string{provider.ModelsRevision, "legacy"} {
+	for _, revision := range []string{provider.ModelsRevision, provider.RuntimeInspectionRevision, "legacy"} {
 		binding := Binding{DefinitionRevision: revision}
 		want := AdmissionTimeout
 		if revision == provider.ModelsRevision {
@@ -263,9 +263,14 @@ func TestModelDiscoveryDeadlinePreservesOrdinaryAdmission(t *testing.T) {
 			t.Fatal(err)
 		}
 		if revision == provider.ModelsRevision {
-			record.Deadline = created.Add(time.Minute).Format(time.RFC3339Nano)
+			record.Deadline = created.Add(legacyModelDiscoveryTimeout).Format(time.RFC3339Nano)
 			if _, err := validateRequestTiming(record); err != nil {
 				t.Fatalf("legacy model discovery deadline rejected: %v", err)
+			}
+		} else {
+			record.Deadline = created.Add(legacyAdmissionTimeout).Format(time.RFC3339Nano)
+			if _, err := validateRequestTiming(record); err != nil {
+				t.Fatalf("legacy admission deadline rejected: %v", err)
 			}
 		}
 		record.Deadline = created.Add(want + time.Second).Format(time.RFC3339Nano)

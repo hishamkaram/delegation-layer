@@ -75,12 +75,15 @@ class RoutingTests(unittest.TestCase):
 
     def test_fresh_workspace_contains_candidate_and_no_routing_instructions(self):
         workspace = self.root / "workspace"
+        owner = gate.DirectoryOwner()
+        owner.create("test workspace", workspace, self.root)
         gate.prepare_workspace(workspace, "claude")
         self.assertEqual((workspace / ".claude/skills/agent-integration/SKILL.md").read_bytes(),
                          (gate.SKILL / "SKILL.md").read_bytes())
         self.assertFalse((workspace / "CLAUDE.md").exists())
         self.assertFalse((workspace / "AGENTS.md").exists())
         self.assertFalse((workspace / ".claude/settings.json").exists())
+        owner.rollback()
 
     def test_missing_executable_produces_blocked_receipt(self):
         with patch.object(gate.shutil, "which", return_value=None):
@@ -88,6 +91,38 @@ class RoutingTests(unittest.TestCase):
         receipt = gate.read_json(self.root / "review-1/receipt.json")
         self.assertEqual(receipt["status"], "blocked")
         self.assertEqual(receipt["reason"], "required_executable_missing")
+        self.assertFalse(Path(receipt["state_root"]).exists())
+        self.assertFalse((self.root / "review-1/workspace").exists())
+        cleanup = gate.read_json(self.root / "review-1/cleanup.json")
+        self.assertEqual(cleanup["status"], "removed")
+
+    def test_missing_supervisor_does_not_create_a_private_queue_directory(self):
+        with patch.object(gate.shutil, "which", return_value=None), \
+                patch.object(gate.tempfile, "mkdtemp") as make_directory:
+            with self.assertRaisesRegex(FileNotFoundError, "private test supervisor unavailable"):
+                gate.AttemptSupervisor(self.root / "run", {}, gate.DirectoryOwner())
+        make_directory.assert_not_called()
+
+    def test_closed_attempt_removes_private_supervisor_and_disposable_workspace(self):
+        queue_parent = self.root / "queues"
+        queue = queue_parent / "skill-queue-run"
+        queue.mkdir(parents=True)
+        with patch.object(gate, "AttemptSupervisor") as supervisor, \
+                patch.object(gate.shutil, "which", return_value="/mock/bin/tool"):
+            owner = supervisor.return_value
+            owner.base = queue
+            owner.config = self.root / "queue.yml"
+            owner.processes.environment = {}
+            owner.capture.side_effect = ValueError("stop after setup")
+            gate.run_case(self.root, "codex", None, self.case, 1)
+
+        receipt = gate.read_json(self.root / "review-1/receipt.json")
+        self.assertEqual(receipt["status"], "blocked")
+        self.assertFalse(Path(receipt["state_root"]).exists())
+        self.assertFalse((self.root / "review-1/workspace").exists())
+        self.assertTrue(queue.exists())
+        cleanup = gate.read_json(self.root / "review-1/cleanup.json")
+        self.assertEqual(cleanup["status"], "removed")
 
     def test_personal_claude_skill_cannot_masquerade_as_candidate(self):
         profile = self.root / "claude-profile"
@@ -161,10 +196,10 @@ class RoutingTests(unittest.TestCase):
             owner.return_value.capture.side_effect = ValueError("stop after setup")
             gate.run_case(self.root, "codex", None, self.case, 1, delegate_bin=binary)
         private = self.root / "review-1/candidate-bin/delegate"
-        self.assertEqual(private.resolve(), binary)
         env = owner.call_args.args[1]
         self.assertEqual(env["PATH"].split(gate.os.pathsep)[0], str(private.parent))
         self.assertIn(str(private.parent), Path(env["BASH_ENV"]).read_text())
+        self.assertFalse(private.exists())
 
     def test_hook_mode_is_explicit_and_uses_the_candidate_helper(self):
         workspace = self.root / "workspace with ' quote"
@@ -283,6 +318,91 @@ class RoutingTests(unittest.TestCase):
             with self.subTest(argv=argv):
                 result = Mock(returncode=code, stdout=stdout, stderr=stderr)
                 self.assertEqual(self.run_fixture(argv, result), (code, stdout, stderr))
+
+    def test_composed_skill_migration_retry_preserves_continue_intent(self):
+        original_continue = [
+            "delegate", "--root", "/state", "continue", "--task", "a" * 32,
+            "--brief", "/brief", "--budget", "30m", "--json",
+        ]
+        failed_continue = {
+            "task_record": "not_created",
+            "failure": {
+                "code": "supervisor_upgrade_required",
+                "next_action": "run_supervisor_migrate",
+            },
+        }
+        migrated = {
+            "supervisor_control": {
+                "state": "migrated",
+                "next_action": "retry_dispatch",
+            },
+        }
+        successor = {
+            "command": "continue",
+            "task_record": "created",
+            "task_id": "b" * 32,
+            "parent_task_id": "a" * 32,
+        }
+        mismatched_continue = dict(failed_continue, failure={
+            "code": "supervisor_upgrade_required", "next_action": "stop_and_report"})
+        mismatched_migration = {"state": "migrated", "next_action": "retry_dispatch"}
+
+        def may_retry(admission, migration):
+            return (admission.get("task_record") == "not_created"
+                    and admission.get("failure", {}).get("code") == "supervisor_upgrade_required"
+                    and admission.get("failure", {}).get("next_action") == "run_supervisor_migrate"
+                    and migration.get("supervisor_control", {}).get("state") == "migrated"
+                    and migration.get("supervisor_control", {}).get("next_action") == "retry_dispatch")
+
+        self.assertTrue(may_retry(failed_continue, migrated))
+        self.assertFalse(may_retry(mismatched_continue, migrated))
+        self.assertFalse(may_retry(failed_continue, mismatched_migration))
+
+        calls = [original_continue.copy()]
+        if may_retry(failed_continue, migrated):
+            calls.append(["delegate", "--root", "/state", "supervisor", "migrate", "--json"])
+            calls.append(original_continue.copy())
+        responses = [failed_continue, migrated, successor]
+        continue_calls = [argv for argv in calls if "continue" in argv]
+        dispatch_calls = [argv for argv in calls if "dispatch" in argv]
+        direct_provider_calls = [argv for argv in calls if argv[0] != "delegate"]
+        linked = [response for response in responses
+                  if response.get("task_record") == "created"
+                  and response.get("parent_task_id") == "a" * 32]
+        self.assertEqual(continue_calls, [original_continue, original_continue])
+        self.assertEqual(calls.count(["delegate", "--root", "/state", "supervisor", "migrate", "--json"]), 1)
+        self.assertEqual(len(linked), 1)
+        self.assertEqual(dispatch_calls, [])
+        self.assertEqual(direct_provider_calls, [])
+
+        roots = (
+            gate.SKILL,
+            gate.REPO / "plugins/delegation-layer/skills/agent-integration",
+        )
+        for root in roots:
+            skill = (root / "SKILL.md").read_text(encoding="utf-8")
+            skill_flat = " ".join(skill.split())
+            result_handling = (root / "references/result-handling.md").read_text(encoding="utf-8")
+            continuation = (root / "references/continuation.md").read_text(encoding="utf-8")
+            routing_rule = json.loads((root / "references/routing-rule.json").read_text(encoding="utf-8"))
+            self.assertLess(skill.index("supervisor_upgrade_required"),
+                            skill.index("task_record: not_created` with any other next action"))
+            self.assertLess(result_handling.index("sole migration exception"),
+                            result_handling.index("For every\n   other `not_created` response"))
+            self.assertIn("`continue` remains `continue`", skill_flat)
+            self.assertIn("argv-equivalent `continue`", continuation)
+            self.assertIn("continue remains continue", routing_rule)
+
+        evaluations = json.loads((gate.SKILL / "evals/evals.json").read_text(encoding="utf-8"))
+        migration_case = next(case for case in evaluations["cases"]
+                              if case["name"] == "continue-supervisor-migration")
+        self.assertEqual(migration_case["expected"], [
+            "run same-root supervisor migrate exactly once",
+            "retry the argv-equivalent continue exactly once",
+            "one linked successor",
+            "zero fresh dispatch commands",
+            "zero direct provider calls",
+        ])
 
     def test_fixture_models_override_only_valid_unavailable_ccr_discovery(self):
         response = {"command": "models", "provider": "ccr:print", "reason_code": "discovery_unavailable"}
@@ -414,7 +534,7 @@ class RoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "receipt selection mismatch"):
             gate.summarize(self.root, [changed], 1, "codex", mode="routing")
 
-    def test_supervised_deadline_stops_only_owned_queue(self):
+    def test_supervised_deadline_retains_running_work_without_signaling(self):
         owner = object.__new__(gate.AttemptSupervisor)
         owner.run = self.root
         owner.daemon = Mock()
@@ -422,15 +542,16 @@ class RoutingTests(unittest.TestCase):
         owner.task_id = "7"
         queued = Mock()
         queued.json.return_value = {"tasks": {"7": {"status": "Running"}}}
-        ended = Mock()
-        ended.json.return_value = {"tasks": {"7": {"status": {"Done": {"result": "Killed"}}}}}
-        owner.control = Mock(side_effect=[Mock(), queued, Mock(), ended, Mock()])
-        with patch.object(gate.time, "sleep"):
-            owner.close()
-        self.assertEqual(owner.control.call_args_list[2].args, ("kill", "--all"))
-        self.assertEqual(owner.control.call_args_list[-1].args, ("shutdown",))
-        owner.daemon.wait.assert_called_once_with(30, expected=0)
-        self.assertTrue((self.root / "supervisor-closed.json").is_file())
+        owner.control = Mock(side_effect=[Mock(), queued])
+        with patch.object(gate.time, "sleep"), \
+                patch.object(gate.time, "monotonic", side_effect=[0, 0, 31]):
+            with self.assertRaisesRegex(RuntimeError, "stop not observed"):
+                owner.close()
+        self.assertEqual([call.args for call in owner.control.call_args_list], [
+            ("pause", "--all", "--wait"), ("status", "--json"),
+        ])
+        owner.daemon.wait.assert_not_called()
+        self.assertFalse((self.root / "supervisor-closed.json").exists())
 
     def test_supervisor_config_uses_canonical_temporary_directory(self):
         actual = self.root / "actual"
@@ -439,14 +560,18 @@ class RoutingTests(unittest.TestCase):
         alias.symlink_to(actual, target_is_directory=True)
         run = self.root / "run"
         run.mkdir()
-        with patch.object(gate.tempfile, "mkdtemp", return_value=str(alias)), \
+        created = actual / "created"
+        created.mkdir()
+        ownership = gate.DirectoryOwner()
+        with patch.object(gate.tempfile, "mkdtemp", return_value=str(created)), \
                 patch.object(gate.shutil, "which", return_value="/mock/bin/tool"):
-            owner = gate.AttemptSupervisor(run, {})
-        self.assertEqual(owner.config, actual.resolve() / "pueue.json")
+            owner = gate.AttemptSupervisor(run, {}, ownership)
+        self.assertEqual(owner.config, created / "pueue.json")
         config = gate.read_json(owner.config)
         self.assertEqual(config["shared"]["unix_socket_path"],
-                         str(actual.resolve() / "run/p.sock"))
+                         str(created / "run/p.sock"))
         self.assertEqual(gate.read_json(run / "supervisor.json")["config"], str(owner.config))
+        ownership.rollback()
 
     def test_cleanup_removes_queued_work_before_shutdown(self):
         owner = object.__new__(gate.AttemptSupervisor)
@@ -457,13 +582,58 @@ class RoutingTests(unittest.TestCase):
         queued.json.return_value = {"tasks": {"8": {"status": {"Queued": {}}}}}
         empty = Mock()
         empty.json.return_value = {"tasks": {}}
-        owner.control = Mock(side_effect=[Mock(), queued, Mock(), Mock(), empty, Mock()])
+        owner.control = Mock(side_effect=[Mock(), queued, Mock(), empty, Mock()])
         with patch.object(gate.time, "sleep"):
             owner.close()
         self.assertEqual(owner.control.call_args_list[0].args, ("pause", "--all", "--wait"))
         self.assertEqual(owner.control.call_args_list[2].args, ("remove", "8"))
-        self.assertEqual(owner.control.call_args_list[3].args, ("kill", "--all"))
+        self.assertNotIn(("kill", "--all"),
+                         [call.args for call in owner.control.call_args_list])
+        self.assertEqual(owner.control.call_args_list[-1].args, ("shutdown",))
         owner.daemon.wait.assert_called_once_with(30, expected=0)
+
+    def test_nested_incomplete_lifetime_blocks_outer_shutdown(self):
+        owner = object.__new__(gate.AttemptSupervisor)
+        owner.run = self.root / "run"
+        owner.run.mkdir()
+        owner.daemon = Mock()
+        owner.processes = Mock(entries=[])
+        state = self.root / "nested-state"
+        state.mkdir()
+        gate.write_json(state / "root.json", {
+            "schema_version": 1, "root_id": "a" * 32,
+            "created_at": "2026-10-13T00:00:00Z",
+        })
+        inspection = state / "inspections" / ("b" * 32)
+        inspection.mkdir(parents=True)
+        gate.write_json(inspection / "request.json", {
+            "schema_version": 1, "root_id": "a" * 32, "task_id": "b" * 32,
+            "created_at": "2026-10-13T00:00:01Z",
+            "deadline": "2026-10-13T00:01:00Z",
+            "binding": {
+                "definition_revision": "fixture-v1", "definition_sha256": "c" * 64,
+                "helper_executable": "/fixture/helper", "helper_sha256": "d" * 64,
+                "worker_executable": "/fixture/worker", "worker_sha256": "e" * 64,
+                "runner_ownership": "managed", "worker_exit_proof": "guardian-wait-v1",
+                "supervisor": {
+                    "client_executable": "/fixture/pueue", "client_sha256": "f" * 64,
+                    "resolved_config_sha256": "1" * 64, "endpoint": "unix:/fixture/p.sock",
+                    "config_path": "/fixture/pueue.yml", "config_digest": "2" * 64,
+                    "observed_version": "pueue fixture",
+                },
+            },
+        })
+        owner.delegate_state_roots = {state}
+        empty = Mock()
+        empty.json.return_value = {"tasks": {}}
+        owner.control = Mock(side_effect=[Mock(), empty])
+
+        with self.assertRaisesRegex(RuntimeError, "managed inspection lifetime evidence is absent"):
+            owner.close()
+
+        self.assertNotIn(("shutdown",), [call.args for call in owner.control.call_args_list])
+        self.assertTrue(state.exists())
+        self.assertTrue((owner.run / "nested-lifetime-closure.json").is_file())
 
     def test_unobserved_control_retains_ownership(self):
         owner = object.__new__(gate.AttemptSupervisor)

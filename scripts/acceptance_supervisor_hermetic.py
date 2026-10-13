@@ -24,11 +24,13 @@ import traceback
 import uuid
 
 from acceptance_supervisor_common import (
+    DirectoryOwner,
     Processes,
     digest,
     inherited_environment,
     read_json,
     require,
+    rollback_owned_directories,
     sha,
     wait_until,
     write_json,
@@ -45,6 +47,11 @@ PREDICATE_SHA256 = "8f42ad8ce7677acab2f694c1e014a918edaf8ae8fac7a4bbbdc51603c6ad
 OBSERVATION_BOUND = 5.0
 CASE_TIMEOUT = 20
 MAX_CONTROL_BYTES = 1 << 20
+# The parent-exit budget cases must reach the post-Wait, held-pipe state before
+# expiry. Durable process and lifecycle receipts are intentionally fsynced, so
+# a one-second wall-clock race lets machine load choose the branch under test.
+PARENT_EXIT_BUDGET = "5s"
+PARENT_EXIT_CHILD_LIFETIME_MS = 30_000
 
 
 class HarnessFailure(RuntimeError):
@@ -148,7 +155,9 @@ def private_pueue_yaml(base):
 
 
 def status_job(numeric_id, label, state):
-    if state == "queued":
+    if state == "stashed":
+        status = {"Stashed": {"enqueue_at": None}}
+    elif state == "queued":
         status = {"Queued": {"enqueued_at": FIXTURE_TIME}}
     elif state == "running":
         status = {"Running": {"enqueued_at": FIXTURE_TIME, "start": FIXTURE_TIME}}
@@ -206,8 +215,26 @@ def label_parts(label):
     return root_id, task_id
 
 
+def add_entry_label(entry):
+    argv = entry.get("argv")
+    require_true(entry.get("verb") == "add" and isinstance(argv, list),
+                 "fake add receipt has invalid command identity")
+    positions = [index for index, value in enumerate(argv) if value == "--label"]
+    require_true(len(positions) == 1 and positions[0] + 1 < len(argv),
+                 "fake add receipt has invalid label arguments")
+    label = argv[positions[0] + 1]
+    require_true(isinstance(label, str) and label,
+                 "fake add receipt has an empty label")
+    return label
+
+
 def task_id():
     return uuid.uuid4().hex
+
+
+def owned_directory_path(token):
+    """Return the path carried by one transferred ownership token."""
+    return Path(getattr(token, "directory", token))
 
 
 class Case:
@@ -218,8 +245,20 @@ class Case:
                  provider_kwargs=None):
         self.suite = suite
         self.case_id = case_id
-        self.base = Path(tempfile.mkdtemp(prefix="dl-hermetic-" + case_id + "-", dir="/tmp")).resolve(strict=True)
-        self.base.chmod(0o700)
+        ownership = DirectoryOwner()
+        try:
+            temporary_parent = Path("/tmp").resolve(strict=True)
+            allocated = Path(tempfile.mkdtemp(
+                prefix="dl-hermetic-" + case_id + "-", dir=temporary_parent))
+            allocated_parent = allocated.parent.resolve(strict=True)
+            allocated = allocated_parent / allocated.name
+            self.base_token = ownership.adopt_created(
+                "hermetic case", allocated, allocated_parent)
+            self.base = owned_directory_path(self.base_token).resolve(strict=True)
+            self.base.chmod(0o700)
+        except BaseException:
+            ownership.rollback()
+            raise
         self.outcome = None
         self.root_id = None
         self.helper_completion_observed = None
@@ -245,10 +284,15 @@ class Case:
         )
         self.provider_kwargs = dict(provider_kwargs or {})
         self.add_release_enabled = add_release
-        self._create_layout()
-        self._copy_tools()
-        self._write_configs(scenario, hook)
-        self.processes = Processes(self.base / "processes")
+        try:
+            self._create_layout()
+            self._copy_tools()
+            self._write_configs(scenario, hook)
+            self.processes = Processes(self.base / "processes", owner=ownership)
+        except BaseException:
+            ownership.rollback()
+            raise
+        self.owned_directories = ownership.transfer()
 
     def _create_layout(self):
         self.bin_dir = self.base / "cli space ' ; literal"
@@ -337,6 +381,7 @@ class Case:
                 "release_path": str(self.add_release) if self.add_release_enabled else "",
                 "exit_code": 0,
             },
+            "enqueue": {"delay": 0, "exit_code": 0},
             "kill": {"delay": 0, "exit_code": 0},
             "remove": {"delay": 0, "exit_code": 0},
         }
@@ -454,7 +499,7 @@ class Case:
     def dispatch_dynamic(self, expected=(0,), status="queued"):
         process = self.start_dispatch()
         entry = self.wait_entry("add")
-        self.root_id, observed_task = label_parts(entry["argv"][5])
+        self.root_id, observed_task = label_parts(add_entry_label(entry))
         require_true(observed_task == self.task_id, "add receipt changed task identity")
         self.set_status(status)
         self.release_add()
@@ -530,7 +575,7 @@ class Case:
                     entry = read_json(path, MAX_CONTROL_BYTES)
                 except (FileNotFoundError, json.JSONDecodeError):
                     continue
-                if entry.get("verb") == "add" and len(entry.get("argv", [])) > 5 and entry["argv"][5] == label:
+                if entry.get("verb") == "add" and add_entry_label(entry) == label:
                     return entry
             return None
 
@@ -893,6 +938,30 @@ class Case:
             description="fake supervisor command completion",
         )
 
+    def wait_entry_after(self, verb, previous_invocation_ids, timeout=CASE_TIMEOUT):
+        """Find the one later helper invocation by its immutable ID."""
+        previous = set(previous_invocation_ids)
+
+        def find():
+            candidates = []
+            for path in sorted(self.supervisor_records.glob("*.entry.json")):
+                try:
+                    receipt = read_json(path, MAX_CONTROL_BYTES)
+                except (FileNotFoundError, json.JSONDecodeError):
+                    continue
+                if (receipt.get("verb") == verb and
+                        receipt.get("invocation_id") not in previous):
+                    candidates.append(receipt)
+            require_true(len(candidates) <= 1,
+                         "multiple later fake supervisor invocations for " + verb)
+            return candidates[0] if candidates else None
+
+        return wait_until(
+            find,
+            timeout=timeout,
+            description="later fake supervisor " + verb + " invocation",
+        )
+
     def observe_helper_completion_if_present(self, entry, timeout=1.0):
         self.external_wait_required = True
         # Register the exact helper invocation before waiting.  If the
@@ -906,13 +975,19 @@ class Case:
             if path.exists():
                 self.helper_completion_observed = True
                 completion = read_json(path, MAX_CONTROL_BYTES)
-                self.external_wait_observed = bool(
-                    self.supervisor_observer_completion_for_entry(entry)
+                observer_completion = self.supervisor_observer_completion_for_entry(entry)
+                owner_completion = self.control_owner_completion_for_entry(entry)
+                self.external_wait_observed = (
+                    observer_completion is not None or owner_completion is not None
                 )
                 if self.external_wait_observed:
                     self.external_wait_unknown.pop(entry["invocation_id"], None)
-                return completion
+                    return completion
             time.sleep(0.025)
+
+        if path.exists():
+            self.helper_completion_observed = True
+            return read_json(path, MAX_CONTROL_BYTES)
         self.helper_completion_observed = False
         # The caller's process has already returned, so absence of the helper
         # receipt cannot prove a negative.  Leave external Wait unknown rather
@@ -961,6 +1036,34 @@ class Case:
             None,
         )
 
+    def control_owner_completion_for_entry(self, entry):
+        """Match the one-shot owner that inherited this command's Wait.
+
+        The hidden owner argv carries the immutable command ID. Its natural
+        wrapper completion therefore proves the owner remained alive through
+        the exact child completion even after the invoking CLI exited.
+        """
+        command_ids = {
+            (value.get("command") or {}).get("command_id")
+            for value in self.supervisor_observer_events_for_entry(entry)
+            if (value.get("command") or {}).get("command_id")
+        }
+        require_true(len(command_ids) <= 1,
+                     "supervisor invocation mapped to multiple command IDs")
+        if not command_ids:
+            return None
+        command_id = next(iter(command_ids))
+        candidates = []
+        for value in self.events():
+            argv = value.get("argv") or []
+            if (len(argv) == 5 and argv[1] == "--supervisor-control-owner" and
+                    argv[-1] == command_id and value.get("completed") and
+                    value.get("exit_code") == 0):
+                candidates.append(value)
+        require_true(len(candidates) <= 1,
+                     "multiple control owners matched command " + command_id)
+        return candidates[0] if candidates else None
+
     def wait_supervisor_completion(self, entry, timeout=CASE_TIMEOUT):
         return wait_until(
             lambda: self.supervisor_observer_completion_for_entry(entry),
@@ -998,7 +1101,8 @@ class Case:
                 completion = self.supervisor_observer_completion_for_entry(entry)
                 if completion is None:
                     require_true(
-                        self.external_wait_unknown.get(entry["invocation_id"]) == entry["pid"],
+                        self.external_wait_unknown.get(entry["invocation_id"]) == entry["pid"] or
+                        self.control_owner_completion_for_entry(entry) is not None,
                         "supervisor recorder missed completion for invocation " + entry["invocation_id"],
                     )
                 elif self.external_wait_unknown.get(entry["invocation_id"]) == entry["pid"]:
@@ -1094,6 +1198,7 @@ class Case:
                 provider_entries.append(path)
         return {
             "A": sum(1 for item in entries if item.get("verb") == "add"),
+            "Q": sum(1 for item in entries if item.get("verb") == "enqueue"),
             "K": sum(1 for item in entries if item.get("verb") == "kill"),
             "M": sum(1 for item in entries if item.get("verb") == "remove"),
             "S": names.count("start-entry"),
@@ -1353,22 +1458,39 @@ class Case:
         ):
             if source.exists():
                 shutil.copyfile(source, destination / source.name)
-        write_json(destination / "receipt.json", self.receipt())
         return destination
 
     def finish(self, status="pass", error=None):
         active = self.processes.drain(timeout=0, exclude=())
         require_true(not active, "owned process remained active at case completion")
+        require_true(self.processes.finished_naturally(exclude=()),
+                     "owned process did not complete with a natural wait")
         self.outcome = {"status": status}
         if error is not None:
             self.outcome["error"] = str(error)
-        self.copy_evidence()
-        if status == "pass" and not (
-            self.external_wait_required and self.external_wait_observed is None
-        ):
-            shutil.rmtree(self.base)
+        destination = self.copy_evidence()
+        result = self.receipt()
+        result["status"] = status
+        if error is not None:
+            result["error"] = str(error)
+        if status == "pass":
+            require_true(
+                not self.external_wait_required or
+                (self.external_wait_observed is True and not self.external_wait_unknown),
+                "external supervisor Wait was not proven",
+            )
+            rollback_succeeded = rollback_owned_directories(self.owned_directories)
+            require_true(rollback_succeeded is True,
+                         "owned-directory rollback was not proven")
+        write_json(destination / "receipt.json", result)
+        return result
 
     def retain_failure(self, error):
+        # Cooperatively release any finite provider rendezvous before waiting
+        # for owned processes. This is safe even when no provider reached the
+        # hold and prevents a failed assertion from outliving the drain bound.
+        if getattr(self, "provider_release", None) is not None:
+            self.release_provider()
         active = self.processes.drain(timeout=10, exclude=())
         destination = self.suite.output / "cases" / self.case_id
         destination.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1403,9 +1525,7 @@ class HermeticSuite:
         try:
             case = Case(self, case_id, **kwargs)
             fn(case)
-            result = case.receipt()
-            case.finish("pass")
-            result["status"] = "pass"
+            result = case.finish("pass")
             self.results.append(result)
             return
         except BaseException as error:
@@ -1504,16 +1624,24 @@ class HermeticSuite:
         self.run_case(
             "B04",
             run_b04,
-            provider_kwargs={"scenario": "parent_exit", "provider_hold": True, "child_lifetime_ms": 5000},
-            budget="1s",
+            provider_kwargs={
+                "scenario": "parent_exit",
+                "provider_hold": True,
+                "child_lifetime_ms": PARENT_EXIT_CHILD_LIFETIME_MS,
+            },
+            budget=PARENT_EXIT_BUDGET,
         )
         self.run_case("B05", run_b05, hook="start-delayed", budget="1s")
         self.run_case("B06-complete-first", run_b06_complete_first)
         self.run_case(
             "B06-expire-first",
             run_b06_expire_first,
-            provider_kwargs={"scenario": "parent_exit", "provider_hold": True, "child_lifetime_ms": 5000},
-            budget="1s",
+            provider_kwargs={
+                "scenario": "parent_exit",
+                "provider_hold": True,
+                "child_lifetime_ms": PARENT_EXIT_CHILD_LIFETIME_MS,
+            },
+            budget=PARENT_EXIT_BUDGET,
         )
         self.run_case(
             "B07",
@@ -1775,8 +1903,7 @@ def run_session_chain(case, expect_session_block=False):
         require_true(
             not any(
                 entry.get("verb") == "add" and
-                len(entry.get("argv", [])) > 5 and
-                entry["argv"][5].endswith(":" + record_c["task_id"])
+                add_entry_label(entry).endswith(":" + record_c["task_id"])
                 for entry in case.entries()
             ),
             "baseline session refusal reached supervisor admission",
@@ -1786,7 +1913,7 @@ def run_session_chain(case, expect_session_block=False):
         counts = assert_counts(case, A=2, S=2, E=2, child_E=0, K=0, M=0)
         verbs = [entry.get("verb") for entry in case.entries()]
         require_true(
-            set(verbs).issubset({"add", "parallel", "status", "--version"}) and
+            set(verbs).issubset({"add", "add-help", "enqueue", "enqueue-help", "parallel", "status", "--version"}) and
             verbs.count("add") == 2,
             "baseline session refusal made an unexpected supervisor call",
         )
@@ -1844,7 +1971,7 @@ def run_session_chain(case, expect_session_block=False):
     counts = assert_counts(case, A=3, S=3, E=3, child_E=0, K=0, M=0)
     verbs = [entry.get("verb") for entry in case.entries()]
     require_true(
-        set(verbs).issubset({"add", "parallel", "status", "--version"}) and
+        set(verbs).issubset({"add", "add-help", "enqueue", "enqueue-help", "parallel", "status", "--version"}) and
         verbs.count("add") == 3,
         "continuation chain made an unexpected supervisor call",
     )
@@ -1901,10 +2028,10 @@ def require_live_raw_descriptors(case, response):
 def run_a01(case):
     process = case.start_dispatch()
     entry = case.wait_entry("add")
-    case.root_id, _ = label_parts(entry["argv"][5])
+    case.root_id, _ = label_parts(add_entry_label(entry))
     require_true(not (case.supervisor_records / (entry["invocation_id"] + ".completion.json")).exists(),
                  "withheld add completed before observation bound")
-    process.wait(OBSERVATION_BOUND + 1.0, expected=(1,))
+    process.wait(CASE_TIMEOUT, expected=(1,))
     pending = process.json()
     require_true(pending.get("admission") in ("unknown", "admitted"),
                  "ambiguous add was converted to a different admission")
@@ -1912,8 +2039,7 @@ def run_a01(case):
                  "ambiguous add returned no uncertainty evidence")
     require_true((case.root / "tasks" / case.task_id / "submit.json").exists(),
                  "submit intent was not durable")
-    case.set_status("queued")
-    case.release_add()
+    case.set_status("stashed")
     # The add waiter belongs to the dispatcher process.  Once the bounded
     # caller observation returns, the harness cannot claim ownership of that
     # internal Wait; record whether a completion receipt is eventually visible
@@ -1928,37 +2054,42 @@ def run_a01(case):
     case.set_status("ended")
     case.require_provider_evidence()
     require_true(run_response.get("publication") == "committed", "A01 runner did not commit")
-    assert_counts(case, A=1, S=1, E=1, K=0, M=0)
+    assert_counts(case, A=1, Q=1, S=1, E=1, K=0, M=0)
 
 
 def run_a02_fixture(case, fixture):
+    add_stdout = case.base / ("add-" + fixture + ".stdout")
+    if fixture == "empty":
+        write_bytes(add_stdout, b"")
+    elif fixture == "duplicate":
+        write_bytes(add_stdout, b"7\n7\n")
+    else:
+        write_bytes(add_stdout, b"not-a-task-id\n")
+    case.update_fake("add", stdout_path=str(add_stdout))
     process = case.start_dispatch()
     entry = case.wait_entry("add")
-    case.root_id, _ = label_parts(entry["argv"][5])
-    if fixture == "empty":
-        case.set_empty_status()
-    elif fixture == "duplicate":
-        case.set_status("queued", duplicate=True)
-    else:
-        case.set_malformed_status()
+    case.root_id, _ = label_parts(add_entry_label(entry))
     case.release_add()
     process.wait(CASE_TIMEOUT, expected=(1,))
     first = process.json()
-    require_true(first.get("admission") == "unknown", "ambiguous status established admission")
+    require_true(first.get("admission") == "unknown", "ambiguous add output established admission")
+    failure = first.get("failure") or {}
+    require_true(failure.get("code") == "task_submission_uncertain" and
+                 failure.get("stage") == "submit-task" and
+                 failure.get("next_action") == "check_status",
+                 "ambiguous add output returned the wrong recovery action")
     require_true((case.root / "tasks" / case.task_id / "submit.json").exists(),
-                 "ambiguous status lost submit intent")
-    if fixture == "empty":
-        case.set_empty_status()
-    elif fixture == "duplicate":
-        case.set_status("queued", duplicate=True)
-    else:
-        case.set_malformed_status()
-    _, second = case.retry_dispatch(expected=(1,))
-    require_true(second.get("admission") == "unknown", "repeated ambiguous status changed fact")
-    case.set_status("queued")
-    _, attached = case.retry_dispatch(expected=(0,))
-    require_true(attached.get("admission") == "admitted", "unique observation did not attach")
-    assert_counts(case, A=1, S=0, E=0, K=0, M=0)
+                 "ambiguous add output lost submit intent")
+    require_true(not (case.root / "tasks" / case.task_id / "supervisor.ref.json").exists(),
+                 "ambiguous add output invented a supervisor receipt")
+    case.set_status("stashed")
+    _, attached = case.retry_dispatch()
+    require_true(attached.get("admission") == "admitted", "retry did not recover one staged task")
+    require_true((attached.get("supervisor") or {}).get("numeric_task_id") == case.numeric_id,
+                 "retry did not bind the observed numeric task ID")
+    require_true((case.root / "tasks" / case.task_id / "supervisor.ref.json").exists(),
+                 "staged recovery did not publish a supervisor receipt")
+    assert_counts(case, A=1, Q=1, S=0, E=0, K=0, M=0)
 
 
 def run_a02_empty(case):
@@ -2055,7 +2186,7 @@ def run_a04_saved_binding(case):
 def run_a05_concurrent(case):
     first = case.start_dispatch()
     entry = case.wait_entry("add")
-    case.root_id, _ = label_parts(entry["argv"][5])
+    case.root_id, _ = label_parts(add_entry_label(entry))
     case.set_status("queued")
     # Keep the first add in flight while the second caller reaches the same
     # durable intent.  This proves independent callers do not serialize on a
@@ -2076,22 +2207,42 @@ def run_a05_concurrent(case):
 
 
 def run_a06(case):
-    case.update_fake("add", release_path=str(case.add_release))
+    enqueue_release = case.base / "enqueue.release"
+    case.update_fake("enqueue", release_path=str(enqueue_release))
     process = case.start_dispatch()
     entry = case.wait_entry("add")
-    case.root_id, _ = label_parts(entry["argv"][5])
-    process.wait(OBSERVATION_BOUND + 1.0, expected=(1,))
-    response = process.json()
-    require_true(response.get("pending") is not None or response.get("error"),
-                 "bounded add observation had no in-flight evidence")
-    require_true(not (case.supervisor_records / (entry["invocation_id"] + ".completion.json")).exists(),
-                 "delayed add completed before caller returned")
-    case.set_status("queued")
+    case.root_id, _ = label_parts(add_entry_label(entry))
+    case.set_status("stashed")
     case.release_add()
-    case.observe_helper_completion_if_present(entry)
+    enqueue = case.wait_entry("enqueue")
+    require_true(not (case.supervisor_records / (enqueue["invocation_id"] + ".completion.json")).exists(),
+                 "delayed enqueue completed before its release")
+    process.wait(CASE_TIMEOUT, expected=(1,))
+    response = process.json()
+    failure = response.get("failure") or {}
+    require_true(failure.get("code") == "task_launch_uncertain" and
+                 failure.get("stage") == "enqueue-task" and
+                 failure.get("next_action") == "check_status",
+                 "bounded enqueue observation returned the wrong recovery action")
+    require_true((case.root / "tasks" / case.task_id / "supervisor.ref.json").exists(),
+                 "enqueue uncertainty lost the staged supervisor receipt")
+    completion = case.observe_helper_completion_if_present(
+        enqueue, timeout=CASE_TIMEOUT
+    )
+    require_true(completion is not None,
+                 "surviving control owner did not record natural enqueue completion")
+    require_true(completion.get("exit_code") != 0,
+                 "unreleased enqueue unexpectedly completed successfully")
+    case.release(enqueue_release)
+    case.set_status("stashed")
     _, retry = case.retry_dispatch(expected=(0,))
-    require_true(retry.get("admission") == "admitted", "late add was discarded or replayed")
-    assert_counts(case, A=1, S=0, E=0, K=0, M=0)
+    require_true(retry.get("admission") == "admitted", "failed enqueue was not resumed from its staged receipt")
+    retry_enqueue = case.wait_entry_after("enqueue", {enqueue["invocation_id"]})
+    retry_completion = case.wait_completion(retry_enqueue)
+    require_true(retry_completion.get("exit_code") == 0,
+                 "retry enqueue did not complete successfully")
+    case.wait_supervisor_completion(retry_enqueue)
+    assert_counts(case, A=1, Q=2, S=0, E=0, K=0, M=0)
 
 
 def run_p01(case):
@@ -2420,7 +2571,7 @@ def run_b01_raw_argv(case):
 def run_b01_valid(case):
     process = case.start_dispatch(omit_budget=True)
     entry = case.wait_entry("add")
-    case.root_id, _ = label_parts(entry["argv"][5])
+    case.root_id, _ = label_parts(add_entry_label(entry))
     case.set_status("queued")
     case.release_add()
     process.wait(CASE_TIMEOUT, expected=(0,))
@@ -2443,7 +2594,7 @@ def run_b02(case):
     case.update_fake("add", delay=1_500_000_000)
     process = case.start_dispatch()
     entry = case.wait_entry("add")
-    case.root_id, _ = label_parts(entry["argv"][5])
+    case.root_id, _ = label_parts(add_entry_label(entry))
     case.set_status("queued")
     queued_at = time.monotonic()
     time.sleep(1.1)

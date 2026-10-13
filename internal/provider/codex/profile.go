@@ -38,6 +38,11 @@ func PrepareExistingReviewCandidate(request task.TaskRecord, meta task.MetaRecor
 }
 
 func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task.PredicateRef, providerID string, review bool) (commonprovider.ProfileCandidate, error) {
+	if request.RequestedConfig.Interactive && !storedPredicate.Equal(task.PredicateRef{}) &&
+		!storedPredicate.Equal(interactionReference(request.Mode)) &&
+		!storedPredicate.Equal(historicalInteractionReference(request.Mode)) {
+		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: stored Codex predicate is not interactive", ErrUnsupportedProfile)
+	}
 	arguments, output, err := profileArguments(request, native, review)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err

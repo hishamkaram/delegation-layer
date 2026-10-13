@@ -32,8 +32,13 @@ The follow-up brief is optional. If it is omitted, Delegation Layer reuses the
 validated predecessor brief. A successful continuation returns a new task ID
 and links it to the predecessor. Observe and collect the new ID separately. Always retain the original state
 root, even if a returned command hint omits it. Permission is inherited; do not
-add `--permission` to `continue`. Apply the dispatch `task_record` error rules
-in [result handling](result-handling.md) before retrying or observing.
+add `--permission` to `continue`. If this exact `continue` returns the
+migration-required `not_created` response, run the same-root supervisor
+migration once and then repeat that argv-equivalent `continue` once after the
+successful migration response. The response field is named `retry_dispatch`,
+but it does not authorize a fresh dispatch. Apply the remaining `task_record`
+error rules in [result handling](result-handling.md) before retrying or
+observing.
 
 `mode` describes the provider contract:
 
@@ -44,6 +49,7 @@ in [result handling](result-handling.md) before retrying or observing.
 
 Do not use a guessed session ID, a provider-specific resume command, or a new
 independent dispatch to recover a timeout. The CLI accepts either a validated
-terminal outcome or durable supervisor-ended budget-stop evidence for the
+terminal outcome or a durable Pueue-ended observation backed by a guardian
+lifetime-termination record with independently proven empty scope for the
 session handoff; without one of those proofs it refuses continuation. Inspect
 the predecessor again rather than bypassing that boundary.

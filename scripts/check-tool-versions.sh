@@ -14,7 +14,7 @@ export GOTOOLCHAIN=local
 # 1. Check Go compiler
 if ! command -v go >/dev/null 2>&1; then
     echo "ERROR: 'go' binary not found on PATH." >&2
-    echo "Action: Install Go 1.27.1 and add it to PATH." >&2
+    echo "Action: Install Go 1.27.2 and add it to PATH." >&2
     exit 1
 fi
 
@@ -30,9 +30,9 @@ if ! GO_VERSION_OUTPUT="$(go version 2>&1)"; then
 fi
 
 GO_VERSION_TOKEN="$(echo "${GO_VERSION_OUTPUT}" | awk '{print $3}')"
-if [[ "${GO_VERSION_TOKEN}" != "go1.27.1" ]]; then
-    echo "ERROR: Go version mismatch. Required: go1.27.1. Found: ${GO_VERSION_TOKEN}" >&2
-    echo "Action: Install Go 1.27.1 and ensure GOTOOLCHAIN=local is respected." >&2
+if [[ "${GO_VERSION_TOKEN}" != "go1.27.2" ]]; then
+    echo "ERROR: Go version mismatch. Required: go1.27.2. Found: ${GO_VERSION_TOKEN}" >&2
+    echo "Action: Install Go 1.27.2 and ensure GOTOOLCHAIN=local is respected." >&2
     exit 1
 fi
 echo "Go compiler: ${GO_VERSION_OUTPUT}"
@@ -49,8 +49,8 @@ if ! GOLANGCI_OUT="$("${GOLANGCI_BIN}" version 2>&1)"; then
     exit 1
 fi
 GOLANGCI_TOKEN="$(echo "${GOLANGCI_OUT}" | awk '{print $4}')"
-if [[ "${GOLANGCI_TOKEN}" != "2.13.2" ]]; then
-    echo "ERROR: golangci-lint version mismatch at ${GOLANGCI_BIN}. Required: 2.13.2. Found: ${GOLANGCI_TOKEN}" >&2
+if [[ "${GOLANGCI_TOKEN}" != "2.14.0" ]]; then
+    echo "ERROR: golangci-lint version mismatch at ${GOLANGCI_BIN}. Required: 2.14.0. Found: ${GOLANGCI_TOKEN}" >&2
     echo "Action: Run 'make tools' to re-install pinned tools." >&2
     exit 1
 fi

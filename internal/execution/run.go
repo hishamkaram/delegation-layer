@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -97,7 +98,16 @@ func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options
 			startErr = nil
 		}
 	}
-	i.budget, i.started = armBudget(opts.clock(), time.Duration(budgetNanos), opts)
+	clock := opts.clock()
+	i.started = clock.Now()
+	deadline := i.started.Add(time.Duration(budgetNanos))
+	if !opts.Deadline.IsZero() {
+		if opts.Deadline.After(deadline) {
+			return launchPlan, task.ErrIdentityMismatch
+		}
+		deadline = opts.Deadline
+	}
+	i.budget = armBudgetUntil(clock, deadline, opts)
 	opts.emit("start-entry")
 	if startErr != nil {
 		return launchPlan, startErr
@@ -130,7 +140,7 @@ func finishInvocation(i *invocation, plan Plan, startErr error, opts Options) (r
 	if i.interaction != nil {
 		i.interaction.start(i.budget, opts.clock(), startErr)
 	}
-	result.Error = errors.Join(parentErr, i.finishCaptures(startErr))
+	result.Error = errors.Join(parentErr, i.finishCaptures(startErr, opts))
 	if i.interaction == nil {
 		i.budget.complete(opts)
 	}
@@ -139,15 +149,23 @@ func finishInvocation(i *invocation, plan Plan, startErr error, opts Options) (r
 	}
 	result.Error = errors.Join(result.Error, i.stdout.closeObserver())
 	i.budget.complete(opts)
+	if opts.Lifetime != nil {
+		// A lifetime-backed budget stop must finish its termination handshake
+		// before CloseTask can close the same private control channel.
+		result.StopError = i.budget.await()
+		result.Error = errors.Join(result.Error, opts.Lifetime.CloseTask(context.Background()))
+	}
 	if i.interaction != nil {
 		result.Error = errors.Join(result.Error, i.td.SealInteraction())
 	}
 	if result.Error == nil {
 		result.Outcome, result.CleanupError, result.Error = sealAndPublish(i.td, i, plan, startErr, opts)
 	}
-	// Publication does not wait for a delayed supervisor reply. The callback's
-	// observation context has ended; its independent in-flight client keeps Wait.
-	result.StopError = i.budget.await()
+	if opts.Lifetime == nil {
+		// Historical supervisor-only stopping retains its independent observation
+		// path and does not delay publication.
+		result.StopError = i.budget.await()
+	}
 	return result
 }
 
@@ -384,7 +402,11 @@ func (i *invocation) prepareLaunchFiles(plan Plan) ([]string, error) {
 }
 
 func (i *invocation) start(opts Options) error {
-	err := i.budget.authorizeAndStart(opts, func() error { return opts.start(i.cmd) })
+	start := func() error { return opts.start(i.cmd) }
+	if opts.Lifetime != nil {
+		start = func() error { return opts.Lifetime.StartCommand(i.cmd, func() error { return opts.start(i.cmd) }) }
+	}
+	err := i.budget.authorizeAndStart(opts, start)
 	if err == nil {
 		opts.emit("started")
 		go func() {
@@ -424,17 +446,21 @@ func (i *invocation) closeParents(startErr error, opts Options) error {
 	return errors.Join(diagnosticErr, parentErr)
 }
 
-func (i *invocation) finishCaptures(startErr error) error {
+func (i *invocation) finishCaptures(startErr error, opts Options) error {
 	var waitErr error
 	if startErr == nil {
 		waitErr = <-i.wait
+	}
+	var lifetimeErr error
+	if startErr == nil && opts.Lifetime != nil {
+		lifetimeErr = opts.Lifetime.FinishCommand(context.Background(), i.cmd)
 	}
 	stdoutErr, stderrErr := <-i.stdout.done, <-i.stderr.done
 	var verifiedErr error
 	if startErr == nil && i.verified != nil {
 		verifiedErr = i.verified.Close()
 	}
-	return errors.Join(observedWaitError(waitErr), stdoutErr, stderrErr, verifiedErr)
+	return errors.Join(observedWaitError(waitErr), lifetimeErr, stdoutErr, stderrErr, verifiedErr)
 }
 
 func observedWaitError(err error) error {

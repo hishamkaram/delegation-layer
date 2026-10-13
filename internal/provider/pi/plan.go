@@ -37,6 +37,8 @@ func jsonArgumentsForProfileWithSessionDir(request task.TaskRecord, native, curr
 	arguments := []string{"--mode", "json"}
 	if request.Mode == ModeReadOnly {
 		arguments = append(arguments, "--tools", readOnlyTools)
+	} else if native && currentNative {
+		arguments = append(arguments, "--tools", workspaceWriteTools)
 	}
 	arguments = appendStartupControls(arguments, native, currentNative, request.Mode)
 	var err error

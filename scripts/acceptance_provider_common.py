@@ -16,18 +16,30 @@ from pathlib import Path
 import pwd
 import re
 import shlex
+import stat
 import sys
 import time
 import unicodedata
-from typing import Callable
+from typing import Callable, Iterable
 
-from acceptance_supervisor_common import config_for, digest, read_json, sha, write_json
+from acceptance_supervisor_common import (
+    config_for,
+    digest,
+    failure_cleanup_deadline,
+    read_json,
+    sha,
+    wait_for_failure_cleanup,
+    write_json,
+)
 
 
 MAX_CONTROL_BYTES = 1 << 20
 MAX_PROVIDER_BYTES = 8 << 20
 INSPECTION_GROUP_PREFIX = "delegation-inspection-"
 INSPECTION_FAILURE_RESULTS = {"Killed", "Errored", "DependencyFailed", "Failed", "FailedToSpawn"}
+ADMISSION_INSPECTION_TIMEOUT_SECONDS = (60, 20)
+MODEL_DISCOVERY_TIMEOUT_SECONDS = (300, 60)
+MAX_LIFETIME_LAUNCHES = 64
 PUEUE_STATE_VARIANTS = frozenset({"Queued", "Running", "Paused", "Stashed", "Done", "Locked"})
 STATIC_REFUSAL_ERROR = "unsupported-effective-config"
 AUTHENTICATION_REFUSAL_ERROR = "provider authentication unavailable"
@@ -67,7 +79,7 @@ _TASK_REQUIRED_KEYS = {
     "requested_config", "budget_nanos", "brief_sha256", "brief_length",
 }
 _TASK_OPTIONAL_KEYS = {"prior_session"}
-_TASK_CONFIG_KEYS = {"model", "effort", "permission", "budget", "native_timeout",
+_TASK_CONFIG_KEYS = {"interactive", "model", "effort", "permission", "budget", "native_timeout",
                      "review_target"}
 _PRIOR_SESSION_KEYS = {"provider", "conversation_id", "predecessor_task_id"}
 _INSPECTION_BINDING_KEYS = {
@@ -76,17 +88,33 @@ _INSPECTION_BINDING_KEYS = {
 }
 _INSPECTION_BINDING_OPTIONAL_KEYS = {
     "capability_sha256", "environment", "environment_recorded", "runner_ownership",
+    "worker_exit_proof",
 }
 _SUPERVISOR_BINDING_KEYS = {
     "client_executable", "client_sha256", "resolved_config_sha256", "endpoint",
     "config_path", "config_digest", "observed_version",
 }
-_SUPERVISOR_BINDING_OPTIONAL_KEYS = {
+_SUPERVISOR_RESOLUTION_KEYS = {
     "resolution_os", "resolution_home", "resolution_data_local",
     "resolution_config", "resolution_runtime", "resolution_username",
     # Accepted for records written before recovery stopped using the caller cwd.
     "resolution_cwd",
 }
+_SUPERVISOR_BINDING_OPTIONAL_KEYS = {
+    "daemon_executable", "daemon_sha256", *_SUPERVISOR_RESOLUTION_KEYS,
+}
+_META_REQUIRED_KEYS = {
+    "schema_version", "root_id", "task_id", "spec_sha256", "requested_config",
+    "effective_config", "containment", "approval", "provider_executable",
+    "provider_version", "publisher_build", "publisher_version", "predicate",
+    "supervisor_config", "created_at",
+}
+_META_OPTIONAL_KEYS = {
+    "runner_executable", "runner_ownership", "environment", "environment_recorded",
+    "output_artifacts", "output_writer_contract", "input_files",
+}
+_EFFECTIVE_CONFIG_KEYS = {"containment", "approval", "digest"}
+_PREDICATE_KEYS = {"adapter", "mode", "version", "sha256"}
 _PUEUE_STATUS_KEYS = {"tasks", "groups"}
 _PUEUE_GROUP_KEYS = {"status", "parallel_tasks"}
 _PUEUE_ROW_KEYS = {
@@ -178,10 +206,12 @@ def _canonical_task_bytes(value: dict[str, object]) -> bytes:
     config = value["requested_config"]
     require(isinstance(config, dict), "inspection task requested_config is not an object")
     _exact_keys(config, set(), _TASK_CONFIG_KEYS, "inspection task requested_config")
-    canonical_config = {
-        key: config[key] for key in ("model", "effort", "permission", "budget", "native_timeout")
-        if config.get(key) not in (None, "")
-    }
+    canonical_config: dict[str, object] = {}
+    if config.get("interactive") is True:
+        canonical_config["interactive"] = True
+    for key in ("model", "effort", "permission", "budget", "native_timeout"):
+        if config.get(key) not in (None, ""):
+            canonical_config[key] = config[key]
     review_target = config.get("review_target")
     if review_target is not None:
         canonical_config["review_target"] = _canonical_review_target(
@@ -246,7 +276,9 @@ def _validate_task_record(value: object, root: str, task: str, label: str) -> st
     require(isinstance(config, dict), f"{label} requested_config is invalid")
     _exact_keys(config, set(), _TASK_CONFIG_KEYS, f"{label} requested_config")
     for key, item in config.items():
-        if key == "review_target":
+        if key == "interactive":
+            require(item is True, f"{label} requested_config interactive is invalid")
+        elif key == "review_target":
             _canonical_review_target(item, f"{label} requested_config review_target")
         else:
             require(isinstance(item, str) and item != "",
@@ -694,7 +726,8 @@ def _validate_pueue_status(value: dict[str, object]) -> None:
 
 def validate_queue_row(row: dict[str, object], label: str, runner: Path,
                        state: Path, task: str, numeric: int | None = None,
-                       group: str | None = None) -> None:
+                       group: str | None = None,
+                       supervised: bool = False) -> None:
     """Bind a pueue status row to one exact runner/state/task invocation."""
     require(row.get("label") == label, f"pueue label mismatch for {task}")
     for key in ("original_command", "command", "path"):
@@ -704,7 +737,11 @@ def validate_queue_row(row: dict[str, object], label: str, runner: Path,
                 f"pueue numeric identity mismatch for {task}")
     if group is not None:
         require(row.get("group") == group, f"pueue group mismatch for {task}")
-    expected = [str(runner), "--root", str(state), task]
+    require(type(supervised) is bool, f"runner supervision mode is invalid for {task}")
+    expected = [str(runner)]
+    if supervised:
+        expected.extend(["--guardian", "--supervised"])
+    expected.extend(["--root", str(state), task])
     commands = []
     for key in ("original_command", "command"):
         try:
@@ -743,10 +780,20 @@ def _validate_supervisor_binding(value: object, label: str) -> None:
                 f"{label} {key} is invalid")
     for key in ("client_sha256", "resolved_config_sha256", "config_digest"):
         require(_hex_digest(value.get(key)), f"{label} {key} is invalid")
+    daemon_executable = value.get("daemon_executable")
+    daemon_sha256 = value.get("daemon_sha256")
+    require((daemon_executable is None) == (daemon_sha256 is None),
+            f"{label} daemon provenance is incomplete")
+    if daemon_executable is not None:
+        require(isinstance(daemon_executable, str) and
+                Path(daemon_executable).is_absolute() and
+                Path(daemon_executable) == Path(os.path.normpath(daemon_executable)),
+                f"{label} daemon_executable is invalid")
+        require(_hex_digest(daemon_sha256), f"{label} daemon_sha256 is invalid")
     require(isinstance(value.get("endpoint"), str) and value["endpoint"],
             f"{label} endpoint is invalid")
     observed_pueue_version(value.get("observed_version"), "pueue")
-    resolution_keys = _SUPERVISOR_BINDING_OPTIONAL_KEYS & set(value)
+    resolution_keys = _SUPERVISOR_RESOLUTION_KEYS & set(value)
     if resolution_keys == {"resolution_cwd"}:
         path = value["resolution_cwd"]
         require(isinstance(path, str) and Path(path).is_absolute() and
@@ -784,6 +831,9 @@ def _validate_inspection_binding(value: object, label: str) -> None:
     if "runner_ownership" in value:
         require(value["runner_ownership"] in {"managed", "custom"},
                 f"{label} runner ownership is invalid")
+    if "worker_exit_proof" in value:
+        require(value["worker_exit_proof"] == "guardian-wait-v1",
+                f"{label} worker exit proof is invalid")
     if "environment_recorded" in value:
         require(type(value["environment_recorded"]) is bool,
                 f"{label} environment_recorded is invalid")
@@ -799,6 +849,500 @@ def _validate_inspection_binding(value: object, label: str) -> None:
                     entry.split("=", 1)[0] for entry in environment),
                 f"{label} environment is invalid")
     _validate_supervisor_binding(value.get("supervisor"), label + " supervisor")
+
+
+def _lifetime_token(value: object) -> bool:
+    return (isinstance(value, str) and bool(value) and value == value.strip() and
+            "\x00" not in value and len(value.encode("utf-8")) <= MAX_CONTROL_BYTES)
+
+
+def _lifetime_record_name(owner_kind: str, record: str, sequence: int | None = None) -> str:
+    """Return the persisted filename used by one lifetime record owner."""
+    if owner_kind == "inspection":
+        names = {
+            "intent": "lifetime-intent.json",
+            "registration": "lifetime-registration.json",
+            "worker": "lifetime-worker.json",
+            "worker-wait": "lifetime-worker-wait.json",
+            "termination": "lifetime-termination.json",
+        }
+        if record == "launch":
+            require(sequence is not None, "inspection lifetime launch sequence is absent")
+            return f"lifetime-launch-{sequence:020d}.json"
+    else:
+        require(owner_kind == "task", "lifetime owner kind is invalid")
+        names = {
+            "intent": "intent.json",
+            "registration": "registration.json",
+            "worker": "worker.json",
+            "worker-wait": "worker-wait.json",
+            "termination": "terminated.json",
+        }
+        if record == "launch":
+            require(sequence is not None, "ordinary task lifetime launch sequence is absent")
+            return f"{sequence:020d}.launch.json"
+    require(record in names, "lifetime record kind is invalid")
+    return names[record]
+
+
+def _lifetime_launch_sequence(owner_kind: str, name: str) -> int | None:
+    if owner_kind == "inspection":
+        match = re.fullmatch(r"lifetime-launch-([0-9]{20})\.json", name)
+    else:
+        require(owner_kind == "task", "lifetime owner kind is invalid")
+        match = re.fullmatch(r"([0-9]{20})\.launch\.json", name)
+    if match is None:
+        return None
+    sequence = int(match.group(1))
+    return sequence if sequence > 0 else None
+
+
+def _validate_managed_lifetime(
+        directory: Path, root: str, task: str, owner_kind: str, owner_digest: str,
+        created_floor: tuple[datetime, int] | None = None,
+        expected_deadline: str | None = None,
+        window_deadline: tuple[datetime, int] | None = None) -> dict[str, object]:
+    """Validate one owner's complete managed-worker and empty-scope proof."""
+    evidence = "inspection" if owner_kind == "inspection" else "ordinary task"
+    require(owner_kind in {"inspection", "task"} and _hex_digest(owner_digest),
+            f"{evidence} lifetime owner is invalid for {task}")
+    require(directory.is_dir() and not directory.is_symlink(),
+            f"{evidence} lifetime directory is invalid for {task}")
+
+    intent_path = directory / _lifetime_record_name(owner_kind, "intent")
+    intent = _read_control_record(intent_path, f"{evidence} lifetime intent for {task}")
+    _exact_keys(intent, {
+        "schema_version", "root_id", "task_id", "owner_kind", "owner_sha256",
+        "scope_kind", "assurance", "scope_plan", "boot_id", "deadline", "created_at",
+    }, label=f"{evidence} lifetime intent for {task}")
+    require(type(intent.get("schema_version")) is int and intent["schema_version"] == 1 and
+            intent.get("root_id") == root and intent.get("task_id") == task and
+            intent.get("owner_kind") == owner_kind and
+            intent.get("owner_sha256") == owner_digest,
+            f"{evidence} lifetime intent binding mismatch for {task}")
+    scope_kind = intent.get("scope_kind")
+    assurance = intent.get("assurance")
+    require((scope_kind == "cgroup-v2" and assurance == "exact") or
+            (scope_kind == "process-group" and assurance == "cooperative"),
+            f"{evidence} lifetime intent scope is invalid for {task}")
+    intent_deadline = _canonical_timestamp(
+        intent.get("deadline"), f"{evidence} lifetime intent deadline for {task}")
+    require(_lifetime_token(intent.get("scope_plan")) and
+            _lifetime_token(intent.get("boot_id")) and
+            (expected_deadline is None or intent.get("deadline") == expected_deadline) and
+            (window_deadline is None or intent_deadline == window_deadline),
+            f"{evidence} lifetime intent facts are invalid for {task}")
+    intent_created = _canonical_timestamp(
+        intent.get("created_at"), f"{evidence} lifetime intent created_at for {task}")
+    require((created_floor is None or _timestamp_at_or_after(intent_created, created_floor)) and
+            (window_deadline is None or _timestamp_before(intent_created, window_deadline)),
+            f"{evidence} lifetime intent time is invalid for {task}")
+
+    registration_path = directory / _lifetime_record_name(owner_kind, "registration")
+    registration = _read_control_record(
+        registration_path, f"{evidence} lifetime registration for {task}")
+    _exact_keys(registration, {
+        "schema_version", "root_id", "task_id", "owner_kind", "owner_sha256",
+        "scope_kind", "assurance", "scope_id", "boot_id", "deadline", "created_at",
+    }, label=f"{evidence} lifetime registration for {task}")
+    require(type(registration.get("schema_version")) is int and
+            registration["schema_version"] == 1 and
+            registration.get("root_id") == root and registration.get("task_id") == task and
+            registration.get("owner_kind") == owner_kind and
+            registration.get("owner_sha256") == owner_digest and
+            registration.get("scope_kind") == scope_kind and
+            registration.get("assurance") == assurance and
+            registration.get("boot_id") == intent.get("boot_id") and
+            registration.get("deadline") == intent.get("deadline") and
+            _lifetime_token(registration.get("scope_id")),
+            f"{evidence} lifetime registration binding mismatch for {task}")
+    registration_created = _canonical_timestamp(
+        registration.get("created_at"), f"{evidence} lifetime registration created_at for {task}")
+    require(_timestamp_at_or_after(registration_created, intent_created) and
+            (window_deadline is None or _timestamp_before(registration_created, window_deadline)),
+            f"{evidence} lifetime registration time is invalid for {task}")
+    registration_digest = digest(registration_path)
+
+    worker_path = directory / _lifetime_record_name(owner_kind, "worker")
+    worker = _read_optional_control_record(worker_path, f"{evidence} lifetime worker for {task}")
+    worker_started = registration_created
+    worker_digest = ""
+    if worker is not None:
+        _exact_keys(worker, {
+            "schema_version", "root_id", "task_id", "registration_sha256", "pid",
+            "process_start", "boot_id", "started_at",
+        }, label=f"{evidence} lifetime worker for {task}")
+        worker_pid = worker.get("pid")
+        require(type(worker.get("schema_version")) is int and worker["schema_version"] == 1 and
+                worker.get("root_id") == root and worker.get("task_id") == task and
+                worker.get("registration_sha256") == registration_digest and
+                type(worker_pid) is int and worker_pid > 0 and
+                _lifetime_token(worker.get("process_start")) and
+                worker.get("boot_id") == registration.get("boot_id"),
+                f"{evidence} lifetime worker binding mismatch for {task}")
+        worker_started = _canonical_timestamp(
+            worker.get("started_at"), f"{evidence} lifetime worker started_at for {task}")
+        require(_timestamp_at_or_after(worker_started, registration_created),
+                f"{evidence} lifetime worker time is invalid for {task}")
+        worker_digest = digest(worker_path)
+
+    wait = _read_optional_control_record(
+        directory / _lifetime_record_name(owner_kind, "worker-wait"),
+        f"{evidence} lifetime worker Wait for {task}")
+    if wait is not None:
+        _exact_keys(wait, {
+            "schema_version", "root_id", "task_id", "registration_sha256",
+            "child_pid", "result", "observed_at",
+        }, {"worker_sha256", "exit_code"}, label=f"{evidence} lifetime worker Wait for {task}")
+        wait_result = wait.get("result")
+        exit_code = wait.get("exit_code")
+        worker_sha = wait.get("worker_sha256", "")
+        child_pid = wait.get("child_pid")
+        started_wait = (
+            (wait_result == "success" and type(exit_code) is int and exit_code == 0) or
+            (wait_result == "exit-error" and type(exit_code) is int and exit_code != 0) or
+            (wait_result == "wait-error" and (exit_code is None or type(exit_code) is int)))
+        not_started = (wait_result == "not-started" and worker_sha == "" and
+                       child_pid == 0 and exit_code is None)
+        require(type(wait.get("schema_version")) is int and wait["schema_version"] == 1 and
+                wait.get("root_id") == root and wait.get("task_id") == task and
+                wait.get("registration_sha256") == registration_digest and
+                (worker_sha == "" or _hex_digest(worker_sha)) and
+                type(child_pid) is int and (started_wait or not_started),
+                f"{evidence} lifetime worker Wait binding mismatch for {task}")
+        if worker is None:
+            require(not_started or
+                    (assurance == "exact" and worker_sha == "" and child_pid > 0),
+                    f"{evidence} lifetime worker Wait binding mismatch for {task}")
+        else:
+            require(worker_sha == worker_digest and child_pid == worker["pid"] and started_wait,
+                    f"{evidence} lifetime worker Wait binding mismatch for {task}")
+        wait_observed = _canonical_timestamp(
+            wait.get("observed_at"), f"{evidence} lifetime worker Wait observed_at for {task}")
+        require(_timestamp_at_or_after(wait_observed, worker_started),
+                f"{evidence} lifetime worker Wait time is invalid for {task}")
+
+    launches: list[dict[str, object]] = []
+    try:
+        sequences = sorted(sequence for entry in directory.iterdir()
+                           if (sequence := _lifetime_launch_sequence(
+                               owner_kind, entry.name)) is not None)
+    except OSError as error:
+        raise AcceptanceFailure(
+            f"cannot inspect {evidence} lifetime launches for {task}") from error
+    require(len(sequences) <= MAX_LIFETIME_LAUNCHES and
+            sequences == list(range(1, len(sequences) + 1)),
+            f"{evidence} lifetime launch sequence is invalid for {task}")
+    for sequence in sequences:
+        launch = _read_control_record(
+            directory / _lifetime_record_name(owner_kind, "launch", sequence),
+            f"{evidence} lifetime launch {sequence} for {task}")
+        _exact_keys(launch, {
+            "schema_version", "root_id", "task_id", "registration_sha256", "sequence",
+            "pid", "process_start", "started_at",
+        }, {"pgid"}, label=f"{evidence} lifetime launch {sequence} for {task}")
+        pid = launch.get("pid")
+        pgid = launch.get("pgid", 0)
+        require(type(launch.get("schema_version")) is int and launch["schema_version"] == 1 and
+                launch.get("root_id") == root and launch.get("task_id") == task and
+                launch.get("registration_sha256") == registration_digest and
+                type(launch.get("sequence")) is int and launch["sequence"] == sequence and
+                type(pid) is int and pid > 0 and
+                type(pgid) is int and pgid >= 0 and _lifetime_token(launch.get("process_start")),
+                f"{evidence} lifetime launch binding mismatch for {task}")
+        launched_at = _canonical_timestamp(
+            launch.get("started_at"), f"{evidence} lifetime launch started_at for {task}")
+        require(_timestamp_at_or_after(launched_at, registration_created) and
+                (window_deadline is None or _timestamp_before(launched_at, window_deadline)),
+                f"{evidence} lifetime launch time is invalid for {task}")
+        launches.append(launch)
+
+    termination = _read_control_record(
+        directory / _lifetime_record_name(owner_kind, "termination"),
+        f"{evidence} lifetime termination for {task}")
+    _exact_keys(termination, {
+        "schema_version", "root_id", "task_id", "registration_sha256", "launch_count",
+        "launch_set_sha256", "cause", "scope_empty", "observed_at",
+    }, label=f"{evidence} lifetime termination for {task}")
+    canonical_launches = []
+    for launch in launches:
+        canonical_launch = {
+            "schema_version": launch["schema_version"],
+            "root_id": launch["root_id"],
+            "task_id": launch["task_id"],
+            "registration_sha256": launch["registration_sha256"],
+            "sequence": launch["sequence"],
+            "pid": launch["pid"],
+            "process_start": launch["process_start"],
+        }
+        if launch.get("pgid", 0) != 0:
+            canonical_launch["pgid"] = launch["pgid"]
+        canonical_launch["started_at"] = launch["started_at"]
+        canonical_launches.append(canonical_launch)
+    launch_set_digest = sha(canonical_go_json(canonical_launches))
+    require(type(termination.get("schema_version")) is int and
+            termination["schema_version"] == 1 and
+            termination.get("root_id") == root and termination.get("task_id") == task and
+            termination.get("registration_sha256") == registration_digest and
+            type(termination.get("launch_count")) is int and
+            termination["launch_count"] == len(launches) and
+            termination.get("launch_set_sha256") == launch_set_digest and
+            termination.get("cause") in {
+                "completed", "budget", "requested", "recovery", "previous-boot"} and
+            termination.get("scope_empty") is True,
+            f"{evidence} lifetime termination binding mismatch for {task}")
+    terminated_at = _canonical_timestamp(
+        termination.get("observed_at"), f"{evidence} lifetime termination observed_at for {task}")
+    require(_timestamp_at_or_after(terminated_at, registration_created),
+            f"{evidence} lifetime termination time is invalid for {task}")
+    require(wait is not None or termination.get("cause") == "previous-boot",
+            f"{evidence} lifetime worker Wait is missing for {task}")
+    return {"intent": intent, "registration": registration, "worker": worker,
+            "worker_wait": wait, "launches": launches, "termination": termination}
+
+
+def _validate_managed_inspection_lifetime(directory: Path, root: str, task: str,
+                                          request_digest: str,
+                                          request_created: tuple[datetime, int],
+                                          request_deadline: str,
+                                          deadline: tuple[datetime, int]) -> dict[str, object]:
+    """Validate the guardian-owned Wait and empty-scope proof for one inspection."""
+    return _validate_managed_lifetime(
+        directory, root, task, "inspection", request_digest,
+        created_floor=request_created, expected_deadline=request_deadline,
+        window_deadline=deadline)
+
+
+def ordinary_lifetime_owner_digest(spec_digest: str, meta_digest: str) -> str:
+    """Match task.LifetimeTaskOwnerSHA256's domain-separated owner identity."""
+    require(_hex_digest(spec_digest) and _hex_digest(meta_digest),
+            "ordinary task lifetime owner inputs are invalid")
+    material = ("delegation-layer:lifetime-owner:task:v1\n" + spec_digest +
+                "\n" + meta_digest).encode("ascii")
+    return sha(material)
+
+
+def _validate_managed_ordinary_lifetime(directory: Path, root: str, task: str,
+                                        spec_digest: str,
+                                        meta_digest: str) -> dict[str, object]:
+    """Validate taskdir's managed lifetime records for one ordinary task."""
+    return _validate_managed_lifetime(
+        directory / "lifetime", root, task, "task",
+        ordinary_lifetime_owner_digest(spec_digest, meta_digest))
+
+
+def _ordinary_lifetime_control_started(directory: Path) -> bool:
+    """Return whether durable managed-lifetime evidence was published."""
+    lifetime = directory / "lifetime"
+    try:
+        lifetime.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise AcceptanceFailure("cannot inspect ordinary task lifetime records") from error
+    require(lifetime.is_dir() and not lifetime.is_symlink(),
+            "ordinary task lifetime path is not a regular directory")
+    try:
+        entries = list(lifetime.iterdir())
+    except OSError as error:
+        raise AcceptanceFailure("cannot inspect ordinary task lifetime records") from error
+    for entry in entries:
+        if entry.name == "owner.lock":
+            require(entry.is_file() and not entry.is_symlink(),
+                    "ordinary task lifetime owner lock is not a regular file")
+            continue
+        # intent.json is the first durable authorization record. Any other
+        # entry must also enter full validation so malformed or partial
+        # journals fail closed rather than being mistaken for an unused lock.
+        return True
+    return False
+
+
+def _ordinary_supervisor_handoff_started(directory: Path) -> bool:
+    """Return whether the supervisor durably accepted the staged task."""
+    receipt = directory / "supervisor.ref.json"
+    try:
+        info = receipt.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise AcceptanceFailure("cannot inspect ordinary supervisor receipt") from error
+    require(stat.S_ISREG(info.st_mode) and not receipt.is_symlink(),
+            "ordinary supervisor receipt is not a regular file")
+    return True
+
+
+def _state_root_identity(state: Path, label: str) -> tuple[str, tuple[datetime, int]]:
+    """Read the immutable root identity used by task and inspection records."""
+    root = _read_control_record(state / "root.json", label)
+    _exact_keys(root, {"schema_version", "root_id", "created_at"}, label=label)
+    require(type(root.get("schema_version")) is int and root["schema_version"] == 1,
+            f"{label} schema mismatch")
+    created_at = _canonical_timestamp(root.get("created_at"), f"{label} created_at")
+    root_id = root.get("root_id")
+    require(_task_identity(root_id), f"{label} has no valid root identity")
+    return root_id, created_at
+
+
+def _scan_managed_ordinary_lifetime_closure(
+        state: Path, root: str, task_ids: Iterable[str] = ()) -> dict[str, dict[str, object]]:
+    """Scan ordinary state and reuse the canonical task lifetime validator."""
+    requested = set(task_ids)
+    require(all(isinstance(task, str) and _task_identity(task) for task in requested),
+            "ordinary task lifetime task identity is invalid")
+    tasks_parent = state / "tasks"
+    try:
+        entries = tuple(tasks_parent.iterdir())
+    except FileNotFoundError:
+        require(not requested, "ordinary task state is missing")
+        return {}
+    except OSError as error:
+        raise AcceptanceFailure("cannot inspect ordinary task state") from error
+    require(tasks_parent.is_dir() and not tasks_parent.is_symlink(),
+            "ordinary task state is not a regular directory")
+
+    candidates = set(requested)
+    for entry in entries:
+        require(_task_identity(entry.name),
+                "ordinary task state contains an invalid task identity")
+        require(entry.is_dir() and not entry.is_symlink(),
+                f"ordinary task directory is invalid for {entry.name}")
+        candidates.add(entry.name)
+
+    closures: dict[str, dict[str, object]] = {}
+    for task in sorted(candidates):
+        directory = tasks_parent / task
+        require(directory.is_dir() and not directory.is_symlink(),
+                f"ordinary task directory is missing for {task}")
+        meta_path = directory / "meta.json"
+        meta = _read_control_record(meta_path, f"ordinary task metadata for {task}")
+        ownership = meta.get("runner_ownership")
+        require(ownership is None or ownership in {"managed", "custom"},
+                f"ordinary task runner ownership is invalid for {task}")
+        lifetime_started = _ordinary_lifetime_control_started(directory)
+        handoff_started = _ordinary_supervisor_handoff_started(directory)
+        if ownership == "managed" and not lifetime_started and not handoff_started:
+            # A managed runner recorded in metadata is only a launch plan. The
+            # immutable supervisor receipt is the handoff authority. Without
+            # either that receipt or a lifetime journal, no worker was owned.
+            continue
+        if ownership != "managed" and not lifetime_started:
+            continue
+
+        task_path = directory / "task.json"
+        require(task_path.is_file() and not task_path.is_symlink(),
+                f"ordinary task record is missing for {task}")
+        require(meta_path.is_file() and not meta_path.is_symlink(),
+                f"ordinary task metadata is invalid for {task}")
+        closure = _validate_managed_ordinary_lifetime(
+            directory, root, task, digest(task_path), digest(meta_path))
+        closures[task] = closure
+    return closures
+
+
+def _scan_managed_inspection_lifetime_closure(
+        state: Path, root: str) -> dict[str, dict[str, object]]:
+    """Scan inspection state and reuse the canonical inspection lifetime validator."""
+    inspections_parent = state / "inspections"
+    try:
+        inspections_parent.lstat()
+    except FileNotFoundError:
+        return {}
+    except OSError as error:
+        raise AcceptanceFailure("cannot inspect managed inspection state") from error
+    require(inspections_parent.is_dir() and not inspections_parent.is_symlink(),
+            "managed inspection state is not a regular directory")
+
+    closures: dict[str, dict[str, object]] = {}
+    try:
+        entries = tuple(inspections_parent.iterdir())
+    except OSError as error:
+        raise AcceptanceFailure("cannot inspect managed inspection state") from error
+    for directory in entries:
+        require(_task_identity(directory.name),
+                "managed inspection state contains an invalid task identity")
+        require(directory.is_dir() and not directory.is_symlink(),
+                f"managed inspection directory is invalid for {directory.name}")
+        task = directory.name
+        request_path = directory / "request.json"
+        request = _read_control_record(request_path, f"inspection request for {task}")
+        require(type(request.get("schema_version")) is int and
+                request["schema_version"] == 1 and request.get("root_id") == root and
+                request.get("task_id") == task,
+                f"inspection request identity mismatch for {task}")
+        binding = request.get("binding")
+        _validate_inspection_binding(binding, f"inspection request binding for {task}")
+        created = _canonical_timestamp(
+            request.get("created_at"), f"inspection request created_at for {task}")
+        request_deadline = request.get("deadline")
+        deadline = _canonical_timestamp(
+            request_deadline, f"inspection request deadline for {task}")
+
+        authority = _inspection_exit_authority(
+            directory, root, task, binding, digest(request_path), created,
+            request_deadline, deadline)
+        if authority["mode"] == "queue":
+            # Historical and custom inspections retain their queue-owned
+            # observation contract until a durable managed lifetime marker exists.
+            continue
+        require(authority["mode"] == "guardian" and
+                isinstance(authority.get("managed_lifetime"), dict),
+                f"managed inspection lifetime evidence is absent for {task}")
+        closures[task] = authority["managed_lifetime"]
+    return closures
+
+
+def validate_managed_lifetime_closure(
+        state: Path, task_ids: Iterable[str] = ()) -> dict[str, object]:
+    """Authorize cleanup from every managed lifetime under one state root.
+
+    The state root is authoritative: task and inspection directories are
+    scanned instead of relying on queue rows or dispatch response files.
+    Historical and custom inspections without a durable managed lifetime
+    marker remain under their existing queue-observation contract.
+    """
+    state = Path(state)
+    root, _ = _state_root_identity(state, "managed lifetime root record")
+    return {
+        "root_id": root,
+        "tasks": _scan_managed_ordinary_lifetime_closure(state, root, task_ids),
+        "inspections": _scan_managed_inspection_lifetime_closure(state, root),
+    }
+
+
+def _inspection_lifetime_control_started(directory: Path) -> bool:
+    """Detect any managed lifetime journal before choosing historical fallback."""
+    try:
+        for entry in directory.iterdir():
+            if entry.name.startswith("lifetime-") and entry.name.endswith(".json"):
+                return True
+    except OSError as error:
+        raise AcceptanceFailure("cannot inspect managed inspection lifetime records") from error
+    return False
+
+
+def _inspection_exit_authority(directory: Path, root: str, task: str,
+                               binding: dict[str, object], request_digest: str,
+                               request_created: tuple[datetime, int],
+                               request_deadline: str,
+                               deadline: tuple[datetime, int]) -> dict[str, object]:
+    """Choose the sole durable exit-proof policy for one inspection journal.
+
+    Fresh inspections prove the child Wait and independently empty scope
+    through the guardian. Markerless journals retain the historical queue
+    observation only when no managed lifetime record was ever started. Once any
+    lifetime record exists, incomplete evidence is a managed evidence fault and
+    cannot be replaced by a terminal queue row.
+    """
+    lifetime_started = _inspection_lifetime_control_started(directory)
+    managed = (binding.get("worker_exit_proof") == "guardian-wait-v1" or lifetime_started)
+    if not managed:
+        return {"mode": "queue", "managed_lifetime": None}
+    if not lifetime_started:
+        return {"mode": "guardian-unstarted", "managed_lifetime": None}
+    lifetime = _validate_managed_inspection_lifetime(
+        directory, root, task, request_digest, request_created, request_deadline, deadline)
+    return {"mode": "guardian", "managed_lifetime": lifetime}
 
 
 def _validate_claim_record(value: object, request_digest: str, label: str,
@@ -920,7 +1464,8 @@ class NativeTaskOps:
     def __init__(self, processes: object, delegate: Path, runner: Path,
                  pueue: Path, state_parent: Path, state: Path, output: Path,
                  watch_seconds: float = 150,
-                 expected_inspection_binding_required: bool = True) -> None:
+                 expected_inspection_binding_required: bool = True,
+                 managed_runner: bool = False) -> None:
         self.processes = processes
         self.delegate = Path(delegate)
         self.runner = Path(runner)
@@ -931,7 +1476,9 @@ class NativeTaskOps:
         self.watch_seconds = watch_seconds
         require(type(expected_inspection_binding_required) is bool,
                 "expected inspection binding mode is invalid")
+        require(type(managed_runner) is bool, "managed runner mode is invalid")
         self.expected_inspection_binding_required = expected_inspection_binding_required
+        self.managed_runner = managed_runner
         self.pueue_config: Path | None = None
         self.daemon: object | None = None
         self.root_id: str | None = None
@@ -939,12 +1486,59 @@ class NativeTaskOps:
         self.tasks: dict[str, str] = {}
         self.labels: dict[str, str] = {}
         self.numbers: dict[str, int] = {}
+        self.expected_results: dict[str, str] = {}
         self.dispatch_attempts: set[str] = set()
         self.dispatch_observations: list[dict[str, object]] = []
         self.inspection_attempts: set[str] = set()
         self.inspection_bindings: dict[str, dict[str, object]] = {}
         self.queue_before_replay: dict[str, object] | None = None
         self.closed = False
+
+    def _ordinary_runner_executable(self, task: str) -> Path:
+        if not self.managed_runner:
+            return self.runner
+        meta = _read_control_record(
+            self.state / "tasks" / task / "meta.json",
+            f"ordinary task metadata for {task}")
+        executable = meta.get("runner_executable")
+        require(meta.get("runner_ownership") == "managed" and
+                isinstance(executable, str) and Path(executable).is_absolute() and
+                Path(executable) == Path(os.path.normpath(executable)),
+                f"ordinary task managed runner binding is invalid for {task}")
+        runner = Path(executable)
+        require(runner.is_file() and not runner.is_symlink() and
+                digest(runner) == digest(self.runner),
+                f"ordinary task managed runner executable changed for {task}")
+        return runner
+
+    def _ordinary_lifetime_validation_required(self, task: str) -> bool:
+        """Detect managed ordinary work without changing markerless history."""
+        directory = self.state / "tasks" / task
+        if self.managed_runner or _ordinary_lifetime_control_started(directory):
+            return True
+        meta_path = directory / "meta.json"
+        if not meta_path.exists() and not meta_path.is_symlink():
+            return False
+        meta = _read_control_record(meta_path, f"ordinary task metadata for {task}")
+        ownership = meta.get("runner_ownership")
+        require(ownership is None or ownership in {"managed", "custom"},
+                f"ordinary task runner ownership is invalid for {task}")
+        return ownership == "managed"
+
+    def validate_ordinary_queue_row(
+            self, row: dict[str, object], label: str, task: str,
+            numeric: int | None = None, group: str | None = None) -> None:
+        validate_queue_row(
+            row, label, self._ordinary_runner_executable(task), self.state, task,
+            numeric, group, supervised=self.managed_runner)
+        if done_result(row) is None or not self._ordinary_lifetime_validation_required(task):
+            return
+        durable = self._durable_ordinary_admission(task, None)
+        require(durable is not None and durable.get("task_id") == task and
+                durable.get("label") == label and
+                (numeric is None or durable.get("numeric_task_id") == numeric) and
+                isinstance(durable.get("managed_lifetime"), dict),
+                f"ordinary task lacks authoritative lifetime closure for {task}")
 
     def bind_supervisor(self, config: Path, daemon: object | None = None) -> None:
         self.pueue_config = Path(config)
@@ -1013,7 +1607,8 @@ class NativeTaskOps:
         return self.record_admission(name, task, response)
 
     def _record_dispatch_observation(self, name: str, task: str, process: object,
-                                     response: dict[str, object] | None) -> None:
+                                     response: dict[str, object] | None,
+                                     command: str = "dispatch") -> None:
         result = getattr(process, "result", None)
         observation = {
             "name": name,
@@ -1024,11 +1619,12 @@ class NativeTaskOps:
             "receipt_written": False,
         }
         self.dispatch_observations.append(observation)
-        write_json(self.output / (name + "-dispatch-attempt.json"),
+        write_json(self.output / (name + "-" + command + "-attempt.json"),
                    {**observation, "receipt_written": True})
         observation["receipt_written"] = True
 
-    def record_admission(self, name: str, task: str, response: dict[str, object]) -> dict[str, object]:
+    def record_admission(self, name: str, task: str, response: dict[str, object],
+                         command: str = "dispatch") -> dict[str, object]:
         """Retain a positively observed admission, including concurrent callers."""
         require(task in self.dispatch_attempts, "admission has no declared dispatch attempt")
         require(response.get("admission") == "admitted", f"{name} was not admitted")
@@ -1049,29 +1645,79 @@ class NativeTaskOps:
         self.tasks[name] = task
         self.labels[name] = f"delegate:{root}:{task}"
         self.numbers[name] = numeric
-        write_json(self.output / (name + "-dispatch.json"), response)
+        self.expected_results[name] = "Success"
+        write_json(self.output / (name + "-" + command + ".json"), response)
         return response
 
-    def wait_task(self, name: str, task: str) -> dict[str, object]:
+    def continue_task(self, name: str, argv: list[object]) -> tuple[str, dict[str, object]]:
+        """Admit one public continuation after Delegate assigns its successor ID."""
+        require(not self.closed, "acceptance supervisor is closed")
+        process = self.processes.run(name, argv, self.state_parent,
+                                     expected=None, timeout=45)
+        response = parse_json_output(process, name)
+        task = response.get("task_id")
+        require(isinstance(task, str) and _task_identity(task),
+                f"{name} continuation has no valid successor task identity")
+        require(task not in self.dispatch_attempts,
+                "continuation reused an existing task identity")
+        self.dispatch_attempts.add(task)
+        if response.get("admission") == "admitted":
+            try:
+                admitted = self.record_admission(name, task, response, command="continue")
+            except BaseException:
+                self._record_dispatch_observation(name, task, process, response, command="continue")
+                raise
+            self._record_dispatch_observation(name, task, process, response, command="continue")
+            result = getattr(process, "result", None)
+            require(isinstance(result, dict) and result.get("natural_wait") is True and
+                    type(result.get("exit_code")) is int and result.get("exit_code") == 0,
+                    f"{name} continuation did not exit successfully")
+            return task, admitted
+        self._record_dispatch_observation(name, task, process, response, command="continue")
+        return task, self.record_admission(name, task, response, command="continue")
+
+    def expect_terminal_result(self, name: str, result: str) -> None:
+        require(name in self.tasks, f"terminal result has no admitted task: {name}")
+        require(result in {"Success", "Killed", "Errored", "DependencyFailed", "Failed", "FailedToSpawn"},
+                "expected terminal result is invalid")
+        self.expected_results[name] = result
+
+    def wait_task(self, name: str, task: str,
+                  expected_result: str | frozenset[str] | None = None) -> dict[str, object]:
         require(self.root_id is not None, "root identity is unavailable")
-        row = wait_runner_done(self.client, self.root_id, task,
-                               timeout=self.watch_seconds,
-                               sleep_fn=time.sleep, monotonic_fn=time.monotonic)
+        if expected_result is None:
+            expected_result = self.expected_results.get(name, "Success")
+        row = wait_runner_terminal(self.client, self.root_id, task, expected_result,
+                                   timeout=self.watch_seconds,
+                                   sleep_fn=time.sleep, monotonic_fn=time.monotonic)
         require(isinstance(row, dict), "runner completion row is malformed")
         require(name in self.numbers, f"runner task {task} has no recorded numeric identity")
-        validate_queue_row(row, self.labels[name], self.runner, self.state, task,
-                           self.numbers[name], "default")
+        self.validate_ordinary_queue_row(
+            row, self.labels[name], task, self.numbers[name], "default")
         write_json(self.output / (name + "-done.json"), row)
         return row
 
-    def collect(self, name: str, task: str) -> dict[str, object]:
+    def collect(self, name: str, task: str, expected: int | set[int] = 0) -> dict[str, object]:
         require(self.pueue_config is not None, "pueue is not configured")
         process = self.direct(name, [self.delegate, "--root", self.state,
                                      "--pueue-config", self.pueue_config,
                                      "--runner", self.runner, "collect", task,
-                                     "--watch", "0s", "--json"], timeout=45)
+                                     "--watch", "0s", "--json"], expected=expected, timeout=45)
         response = parse_json_output(process, name)
         require(response.get("task_id") == task, f"{name} collected the wrong task")
+        write_json(self.output / (name + ".json"), response)
+        return response
+
+    def status(self, name: str, task: str,
+               expected: int | set[int] = 0, timeout: float = 45) -> dict[str, object]:
+        require(self.pueue_config is not None, "pueue is not configured")
+        require(timeout > 0, "status observation timeout must be positive")
+        process = self.direct(name, [self.delegate, "--root", self.state,
+                                     "--pueue-config", self.pueue_config,
+                                     "--runner", self.runner, "status", task,
+                                     "--json"], expected=expected, timeout=timeout)
+        response = parse_json_output(process, name)
+        require(response.get("task_id") == task, f"{name} observed the wrong task")
         write_json(self.output / (name + ".json"), response)
         return response
 
@@ -1081,14 +1727,7 @@ class NativeTaskOps:
         return status
 
     def _known_root_id(self) -> str:
-        root = _read_control_record(self.state / "root.json", "inspection root record")
-        _exact_keys(root, {"schema_version", "root_id", "created_at"},
-                    label="inspection root record")
-        require(type(root.get("schema_version")) is int and root["schema_version"] == 1,
-                "inspection root record schema mismatch")
-        root_created = _canonical_timestamp(root.get("created_at"), "inspection root created_at")
-        value = root.get("root_id")
-        require(_task_identity(value), "inspection root record has no valid root identity")
+        value, root_created = _state_root_identity(self.state, "inspection root record")
         if self.root_id is None:
             self.root_id = value
         require(self.root_id == value, "inspection root identity changed")
@@ -1166,7 +1805,8 @@ class NativeTaskOps:
         binding = request.get("binding")
         _validate_inspection_binding(binding, f"inspection request binding for {task}")
         standalone = binding.get("definition_revision") == "model-discovery-v1"
-        timeout_seconds = (300, 60) if standalone else (20,)
+        timeout_seconds = (MODEL_DISCOVERY_TIMEOUT_SECONDS if standalone
+                           else ADMISSION_INSPECTION_TIMEOUT_SECONDS)
         require(deadline[0] - created[0] in {timedelta(seconds=value) for value in timeout_seconds} and
                 deadline[1] == created[1],
                 f"inspection request deadline is not exactly {timeout_seconds[0]} seconds for {task}")
@@ -1203,6 +1843,12 @@ class NativeTaskOps:
                 supervisor.get("config_path") == str(self.pueue_config) and
                 supervisor.get("config_digest") == digest(self.pueue_config),
                 f"inspection request supervisor binding mismatch for {task}")
+        supervisor_base = self.pueue_config.parent
+        require(supervisor.get("resolved_config_sha256") ==
+                resolved_supervisor_config_digest(supervisor_base) and
+                supervisor.get("endpoint") ==
+                "unix:" + str(supervisor_base / "run" / "p.sock"),
+                f"inspection request supervisor generation mismatch for {task}")
         observed_pueue_version(supervisor.get("observed_version"), "pueue")
 
         request_digest = digest(request_path)
@@ -1228,6 +1874,21 @@ class NativeTaskOps:
         observation = _read_optional_control_record(observation_path, f"inspection worker observation for {task}")
         start = _read_optional_control_record(directory / "start.json",
                                               f"inspection start for {task}")
+        authority = _inspection_exit_authority(
+            directory, root, task, binding, request_digest, created,
+            request["deadline"], deadline)
+        managed_lifetime = authority["managed_lifetime"]
+        require(isinstance(managed_lifetime, dict) or managed_lifetime is None,
+                f"inspection exit authority is invalid for {task}")
+        managed_worker_succeeded = False
+        if authority["mode"] in {"guardian", "guardian-unstarted"}:
+            require(observation is None,
+                    f"managed inspection has conflicting queue observation for {task}")
+        if authority["mode"] == "guardian":
+            managed_wait = managed_lifetime["worker_wait"]
+            require(isinstance(managed_wait, dict),
+                    f"inspection lifetime worker Wait is invalid for {task}")
+            managed_worker_succeeded = managed_wait.get("result") == "success"
         if result is not None or completion is not None or observation is not None or ordinary_present:
             require(start is not None, f"inspection start guard is missing for {task}")
         start_created: tuple[datetime, int] | None = None
@@ -1292,26 +1953,43 @@ class NativeTaskOps:
 
         if allow_failure:
             if result is None:
-                require(not ordinary_present and observation is None,
+                require(not ordinary_present and observation is None and
+                        (managed_lifetime is None or not managed_worker_succeeded),
                         f"failed inspection has an ordinary task or observation for {task}")
             elif result.get("reason") == "eligible":
                 require((standalone or ordinary_present) and completion is not None and
-                        completion.get("native_exit") == "successful-exit" and observation is not None,
+                        completion.get("native_exit") == "successful-exit" and
+                        ((managed_lifetime is not None and managed_worker_succeeded) or
+                         observation is not None),
                         f"eligible inspection lacks independent success proof for {task}")
             else:
                 require(not ordinary_present and observation is None and
-                        completion is not None and completion.get("native_exit") == "unavailable",
+                        completion is not None and completion.get("native_exit") == "unavailable" and
+                        (managed_lifetime is None or not managed_worker_succeeded),
                         f"failed inspection has conflicting success proof for {task}")
         else:
             require(result is not None and result.get("reason") == "eligible" and
                     (standalone or ordinary_present) and completion is not None and
-                    completion.get("native_exit") == "successful-exit" and observation is not None,
+                    completion.get("native_exit") == "successful-exit" and
+                    ((managed_lifetime is not None and managed_worker_succeeded) or
+                     observation is not None),
                     f"successful inspection proof is incomplete for {task}")
+            if managed_lifetime is not None:
+                termination = managed_lifetime["termination"]
+                require(isinstance(termination, dict) and
+                        termination.get("cause") == "completed" and
+                        _timestamp_before(_canonical_timestamp(
+                            termination.get("observed_at"),
+                            f"inspection lifetime termination observed_at for {task}"), deadline),
+                        f"successful inspection lifetime proof expired for {task}")
         return {"task_id": task, "root_id": root, "group": group, "label": label,
                 "numeric_task_id": receipt_id, "request": request, "request_digest": request_digest,
                 "receipt": receipt, "submission": submission, "start": start,
                 "result": result, "completion": completion,
-                "worker_observation": observation}
+                "worker_observation": observation,
+                "managed_lifetime": managed_lifetime,
+                "inspection_exit_authority": authority,
+                "ordinary_task_present": ordinary_present}
 
     def validate_inspection_journals(self, allow_failure: bool = False,
                                      expected_binding_required: bool | None = None) -> dict[str, dict[str, object]]:
@@ -1346,25 +2024,41 @@ class NativeTaskOps:
                     f"private queue group {name} is malformed")
 
     def _validate_inspection_queue_row(self, row: dict[str, object], journal: dict[str, object],
-                                       allow_failure: bool) -> None:
+                                       allow_failure: bool,
+                                       terminal_required: bool = True) -> None:
         task = journal["task_id"]
         label = journal["label"]
         require(row.get("label") == label and row.get("group") == journal["group"],
                 f"inspection queue identity mismatch for {task}")
-        require(row.get("id") == journal["numeric_task_id"],
+        require(type(row.get("id")) is int and
+                row.get("id") == journal["numeric_task_id"],
                 f"inspection queue numeric identity mismatch for {task}")
-        require(row_state(row) == "Done", f"inspection worker is not Done for {task}")
+        row_path = row.get("path")
+        require(self.pueue_config is not None,
+                "inspection supervisor config is unavailable")
+        # A fresh client uses the invocation directory. A client reconstructed
+        # from its durable binding intentionally uses the config directory so
+        # recovery cannot depend on an ambient directory that may be gone.
+        expected_paths = {self.state_parent, self.pueue_config.parent}
+        require(isinstance(row_path, str) and Path(row_path) in expected_paths,
+                f"inspection queue working directory mismatch for {task}")
+        require(type(terminal_required) is bool, "inspection queue terminal mode is invalid")
+        state = row_state(row)
+        if terminal_required:
+            require(state == "Done", f"inspection worker is not Done for {task}")
         result = done_result(row)
         inspection_result = journal["result"]
         successful_result = (isinstance(inspection_result, dict) and
                              inspection_result.get("reason") == "eligible")
-        expected_result = "Success" if not allow_failure or successful_result else None
-        if expected_result == "Success":
-            require(result == "Success", f"inspection worker did not succeed for {task}")
-        else:
-            require(result in INSPECTION_FAILURE_RESULTS,
-                    f"inspection worker failure was not positively observed for {task}")
-        expected = [str(self.runner), "--inspection", "--root", str(self.state), str(task)]
+        if terminal_required:
+            expected_result = "Success" if not allow_failure or successful_result else None
+            if expected_result == "Success":
+                require(result == "Success", f"inspection worker did not succeed for {task}")
+            else:
+                require(result in INSPECTION_FAILURE_RESULTS,
+                        f"inspection worker failure was not positively observed for {task}")
+        expected = [str(self.runner), "--inspection", "--guardian", "--supervised",
+                    "--root", str(self.state), str(task)]
         commands = []
         for key in ("original_command", "command"):
             value = row.get(key)
@@ -1376,13 +2070,190 @@ class NativeTaskOps:
         require(all(command == expected for command in commands),
                 f"inspection queue argv mismatch for {task}")
 
+    def _durable_ordinary_admission(
+            self, task: str,
+            journal: dict[str, object] | None) -> dict[str, object] | None:
+        """Read one immutable ordinary submission when its caller response was lost."""
+        directory = self.state / "tasks" / task
+        present = directory.exists() or directory.is_symlink()
+        if not present:
+            return None
+        require(directory.is_dir() and not directory.is_symlink(),
+                f"ordinary task directory is invalid for {task}")
+        root = self._known_root_id()
+
+        task_path = directory / "task.json"
+        task_record = _read_control_record(task_path, f"ordinary task record for {task}")
+        spec_digest = _validate_task_record(
+            task_record, root, task, f"ordinary task record for {task}")
+        require(spec_digest == digest(task_path),
+                f"ordinary task record is not canonical for {task}")
+        brief_path = directory / "brief.md"
+        require(brief_path.is_file() and not brief_path.is_symlink(),
+                f"ordinary task brief is not a regular file for {task}")
+        require(brief_path.stat().st_size == task_record["brief_length"] and
+                brief_path.stat().st_size <= MAX_PROVIDER_BYTES and
+                digest(brief_path) == task_record["brief_sha256"],
+                f"ordinary task brief binding is invalid for {task}")
+
+        journal_binding = None
+        if journal is not None:
+            require(journal.get("ordinary_task_present") is True and
+                    journal.get("task_id") == task and journal.get("root_id") == root,
+                    f"inspection journal does not bind ordinary task {task}")
+            request = journal["request"]
+            require(request.get("task") == task_record and
+                    request.get("task_sha256") == spec_digest,
+                    f"inspection journal task binding changed for {task}")
+            journal_binding = request["binding"]["supervisor"]
+
+        meta_path = directory / "meta.json"
+        meta = _read_control_record(meta_path, f"ordinary task metadata for {task}")
+        _exact_keys(meta, _META_REQUIRED_KEYS, _META_OPTIONAL_KEYS,
+                    label=f"ordinary task metadata for {task}")
+        require(type(meta.get("schema_version")) is int and meta["schema_version"] == 1 and
+                meta.get("root_id") == root and meta.get("task_id") == task and
+                meta.get("spec_sha256") == spec_digest and
+                meta.get("requested_config") == task_record["requested_config"],
+                f"ordinary task metadata identity is invalid for {task}")
+        effective = meta.get("effective_config")
+        require(isinstance(effective, dict),
+                f"ordinary task effective configuration is invalid for {task}")
+        _exact_keys(effective, _EFFECTIVE_CONFIG_KEYS, {"policy"},
+                    label=f"ordinary task effective configuration for {task}")
+        require(isinstance(effective.get("containment"), str) and effective["containment"] and
+                isinstance(effective.get("approval"), str) and effective["approval"] and
+                _hex_digest(effective.get("digest")) and
+                meta.get("containment") == effective["containment"] and
+                meta.get("approval") == effective["approval"],
+                f"ordinary task effective configuration changed for {task}")
+        if "policy" in effective:
+            require(isinstance(effective["policy"], dict),
+                    f"ordinary task policy is invalid for {task}")
+        for key in ("provider_executable", "runner_executable"):
+            if key == "runner_executable" and key not in meta:
+                continue
+            executable = meta.get(key)
+            require(isinstance(executable, str) and Path(executable).is_absolute() and
+                    Path(executable) == Path(os.path.normpath(executable)),
+                    f"ordinary task {key} is invalid for {task}")
+        if "runner_ownership" in meta:
+            require(meta["runner_ownership"] in {"managed", "custom"},
+                    f"ordinary task runner ownership is invalid for {task}")
+        for key in ("provider_version", "publisher_build", "publisher_version"):
+            require(isinstance(meta.get(key), str) and bool(meta[key].strip()),
+                    f"ordinary task {key} is invalid for {task}")
+        if "environment" in meta:
+            environment = meta["environment"]
+            require(isinstance(environment, list) and
+                    all(isinstance(item, str) and "=" in item and item.split("=", 1)[0]
+                        for item in environment),
+                    f"ordinary task environment is invalid for {task}")
+        if "environment_recorded" in meta:
+            require(type(meta["environment_recorded"]) is bool,
+                    f"ordinary task environment marker is invalid for {task}")
+        for key in ("input_files", "output_artifacts"):
+            if key in meta:
+                require(isinstance(meta[key], list),
+                        f"ordinary task {key} is invalid for {task}")
+        if "output_writer_contract" in meta:
+            require(isinstance(meta["output_writer_contract"], str),
+                    f"ordinary task output writer contract is invalid for {task}")
+        predicate = meta.get("predicate")
+        require(isinstance(predicate, dict), f"ordinary task predicate is invalid for {task}")
+        _exact_keys(predicate, _PREDICATE_KEYS, label=f"ordinary task predicate for {task}")
+        require(predicate.get("adapter") == task_record["provider"] and
+                predicate.get("mode") == task_record["mode"] and
+                isinstance(predicate.get("version"), str) and bool(predicate["version"].strip()) and
+                _hex_digest(predicate.get("sha256")),
+                f"ordinary task predicate binding is invalid for {task}")
+        _canonical_timestamp(meta.get("created_at"), f"ordinary task created_at for {task}")
+
+        binding = meta.get("supervisor_config")
+        _validate_supervisor_binding(binding, f"ordinary task supervisor for {task}")
+        require(journal_binding is None or binding == journal_binding,
+                f"ordinary task metadata supervisor changed for {task}")
+
+        expected_label = f"delegate:{root}:{task}"
+        submit = _read_control_record(directory / "submit.json", f"ordinary submit record for {task}")
+        _exact_keys(submit, {"schema_version", "root_id", "task_id", "spec_sha256",
+                             "meta_sha256", "label", "supervisor", "created_at"},
+                    label=f"ordinary submit record for {task}")
+        meta_digest = digest(meta_path)
+        require(type(submit.get("schema_version")) is int and submit["schema_version"] == 1 and
+                submit.get("root_id") == root and submit.get("task_id") == task and
+                submit.get("spec_sha256") == spec_digest and
+                submit.get("meta_sha256") == meta_digest and
+                submit.get("label") == expected_label and submit.get("supervisor") == binding,
+                f"ordinary submit record is not bound to task {task}")
+        _canonical_timestamp(submit.get("created_at"), f"ordinary submit created_at for {task}")
+
+        supervisor = _read_control_record(
+            directory / "supervisor.ref.json", f"ordinary supervisor receipt for {task}")
+        _exact_keys(supervisor, {
+            "schema_version", "root_id", "task_id", "spec_sha256", "meta_sha256",
+            "numeric_task_id", "label", *_SUPERVISOR_BINDING_KEYS,
+        }, _SUPERVISOR_BINDING_OPTIONAL_KEYS,
+                    label=f"ordinary supervisor receipt for {task}")
+        numeric = supervisor.get("numeric_task_id")
+        require(type(supervisor.get("schema_version")) is int and
+                supervisor["schema_version"] == 1 and
+                supervisor.get("root_id") == root and supervisor.get("task_id") == task and
+                supervisor.get("spec_sha256") == spec_digest and
+                supervisor.get("meta_sha256") == meta_digest and
+                supervisor.get("label") == expected_label and
+                type(numeric) is int and numeric >= 0,
+                f"ordinary supervisor receipt identity is invalid for {task}")
+        receipt_binding = {
+            key: supervisor[key]
+            for key in _SUPERVISOR_BINDING_KEYS | _SUPERVISOR_BINDING_OPTIONAL_KEYS
+            if key in supervisor
+        }
+        _validate_supervisor_binding(
+            receipt_binding, f"ordinary supervisor receipt binding for {task}")
+        require(receipt_binding == binding,
+                f"ordinary supervisor receipt binding changed for {task}")
+
+        lifetime_started = _ordinary_lifetime_control_started(directory)
+        managed_lifetime = None
+        if meta.get("runner_ownership") == "managed" or lifetime_started:
+            managed_lifetime = _validate_managed_ordinary_lifetime(
+                directory, root, task, spec_digest, meta_digest)
+        require(not self.managed_runner or meta.get("runner_ownership") == "managed",
+                f"ordinary task managed runner marker is missing for {task}")
+        return {"task_id": task, "label": expected_label, "numeric_task_id": numeric,
+                "expected_result": "Success", "managed_lifetime": managed_lifetime}
+
     def _validate_queue_membership(self, status: dict[str, object], allow_failure: bool) -> None:
         tasks = status.get("tasks")
         require(isinstance(tasks, dict), "private queue tasks object is absent")
         require(self.dispatch_attempts, "no supervisor dispatch attempt was recorded")
         journals = self._inspection_journals(
             allow_failure, self.expected_inspection_binding_required)
-        ordinary_task_ids = set(self.tasks.values())
+        observed: dict[str, dict[str, object]] = {}
+        for name, task in self.tasks.items():
+            require(name in self.labels and name in self.numbers,
+                    f"ordinary task response is incomplete for {task}")
+            observed[task] = {
+                "task_id": task,
+                "label": self.labels[name],
+                "numeric_task_id": self.numbers[name],
+                "expected_result": self.expected_results.get(name, "Success"),
+            }
+        if allow_failure:
+            ordinary: dict[str, dict[str, object]] = {}
+            for task in self.dispatch_attempts:
+                durable = self._durable_ordinary_admission(task, journals.get(task))
+                if durable is None:
+                    continue
+                if task in observed:
+                    require(all(observed[task][key] == durable[key]
+                                for key in ("task_id", "label", "numeric_task_id")),
+                            f"ordinary task response disagrees with durable admission for {task}")
+                ordinary[durable["task_id"]] = durable
+        else:
+            ordinary = observed
+        ordinary_task_ids = set(ordinary)
         require(ordinary_task_ids <= self.dispatch_attempts,
                 "ordinary task response has no matching dispatch attempt")
         inspection_task_ids = set(journals)
@@ -1401,29 +2272,46 @@ class NativeTaskOps:
                     not isinstance(group.get("parallel_tasks"), bool) and
                     group.get("parallel_tasks") == 1,
                     f"inspection group is not running at parallelism one for {journal['task_id']}")
-        ordinary_labels = {self.labels[name] for name in self.tasks}
-        expected_labels = ordinary_labels | {journal["label"] for journal in journals.values()}
-        expected_count = len(self.tasks) + len(journals)
-        require(len(tasks) == expected_count, "unexpected private queue membership")
+        ordinary_labels = {value["label"] for value in ordinary.values()}
+        queue_journals = [journal for journal in journals.values()
+                          if journal["inspection_exit_authority"]["mode"] in
+                          {"queue", "guardian-unstarted"}]
+        guardian_journals = [journal for journal in journals.values()
+                             if journal["inspection_exit_authority"]["mode"] == "guardian"]
+        required_labels = ordinary_labels | {journal["label"] for journal in queue_journals}
+        optional_guardian_labels = {journal["label"] for journal in guardian_journals}
+        allowed_labels = required_labels | optional_guardian_labels
         rows = [row for row in tasks.values() if isinstance(row, dict)]
         require(len(rows) == len(tasks), "private queue contains a malformed row")
         labels = [row.get("label") for row in rows]
         require(all(isinstance(label, str) for label in labels) and len(set(labels)) == len(labels) and
-                set(labels) == expected_labels, "private queue labels are not exact")
-        for name, task in self.tasks.items():
-            row = next((candidate for candidate in rows if candidate.get("label") == self.labels[name]), None)
+                set(labels) <= allowed_labels and required_labels <= set(labels),
+                "private queue labels are not exact")
+        for key, row in tasks.items():
+            require(isinstance(key, str) and key.isdecimal() and str(int(key)) == key and
+                    type(row.get("id")) is int and row["id"] == int(key),
+                    "private queue task numeric identity is not exact")
+        for task, admission in ordinary.items():
+            row = next((candidate for candidate in rows
+                        if candidate.get("label") == admission["label"]), None)
             require(isinstance(row, dict), f"private queue lost ordinary task {task}")
-            require(name in self.numbers, f"ordinary task {task} has no recorded numeric identity")
-            validate_queue_row(row, self.labels[name], self.runner, self.state, task,
-                               self.numbers[name], "default")
+            self.validate_ordinary_queue_row(
+                row, admission["label"], task,
+                admission["numeric_task_id"], "default")
+            expected_result = admission["expected_result"]
             require(row_state(row) == "Done" and
                     (not allow_failure or done_result(row) is not None) and
-                    (allow_failure or done_result(row) == "Success"),
+                    (allow_failure or done_result(row) == expected_result),
                     f"ordinary task is not in an acceptable terminal state: {task}")
-        for journal in journals.values():
+        for journal in queue_journals:
             row = next((candidate for candidate in rows if candidate.get("label") == journal["label"]), None)
             require(isinstance(row, dict), f"private queue lost inspection task {journal['task_id']}")
             self._validate_inspection_queue_row(row, journal, allow_failure)
+        for journal in guardian_journals:
+            row = next((candidate for candidate in rows if candidate.get("label") == journal["label"]), None)
+            if row is not None:
+                self._validate_inspection_queue_row(
+                    row, journal, allow_failure, terminal_required=False)
 
     def _inspection_snapshot(self) -> dict[str, dict[str, object]]:
         parent = self.state / "inspections"
@@ -1605,16 +2493,6 @@ class NativeTaskOps:
             return self._unattempted_queue_finished(status)
         if self._static_refusal_queue_finished(status):
             return True
-        if not self._inspection_control_started():
-            # Providers without an inspection journal retain the established
-            # queue-only failure oracle.
-            try:
-                expected_groups = {"default"} if self.tasks else set()
-                self._validate_group_snapshot(status.get("groups"), expected_groups)
-                return failure_queue_finished(status, self.dispatch_attempts, self.tasks,
-                                              self.labels, self.runner, self.state, self.numbers)
-            except (AcceptanceFailure, KeyError, OSError, TypeError, ValueError, RecursionError):
-                return False
         try:
             self._validate_queue_membership(status, allow_failure=True)
         except (AcceptanceFailure, KeyError, OSError, TypeError, ValueError, RecursionError):
@@ -1664,6 +2542,19 @@ class NativeTaskOps:
         queue_retry_at = 0.0
         queue_retry_delay = 0.25
         observation_retry_delay = 0.25
+        deadline = failure_cleanup_deadline(self.watch_seconds)
+
+        def wait(delay: float, reason: str) -> bool:
+            if wait_for_failure_cleanup(deadline, delay):
+                return True
+            write_json(self.output / "failure-cleanup-expired.json", {
+                "reason": reason,
+                "timeout_seconds": self.watch_seconds,
+                "supervisor_closed": self.closed,
+                "signals_sent": 0,
+            }, replace=(self.output / "failure-cleanup-expired.json").exists())
+            return False
+
         while True:
             excluded = () if self.daemon is None else (self.daemon,)
             try:
@@ -1677,7 +2568,9 @@ class NativeTaskOps:
                     print("Acceptance assertion failed; retaining owned processes until exact cleanup is observed.",
                           flush=True)
                     reported = True
-                time.sleep(observation_retry_delay)
+                if not wait(observation_retry_delay,
+                            "owned process completion could not be observed"):
+                    return False
                 observation_retry_delay = min(observation_retry_delay * 2, 5.0)
                 continue
             observation_retry_delay = 0.25
@@ -1696,7 +2589,10 @@ class NativeTaskOps:
                     queue_retry_delay = min(queue_retry_delay * 2, 5.0)
             if not pending:
                 if self.daemon is None:
-                    return False
+                    if self.dispatch_attempts:
+                        return False
+                    self.closed = True
+                    return True
                 try:
                     daemon_finished = self.daemon.poll() is not None
                 except BaseException:
@@ -1710,7 +2606,50 @@ class NativeTaskOps:
             delay = 0.25
             if not pending and self.daemon is not None:
                 delay = min(delay, max(0.0, queue_retry_at - time.monotonic()))
-            time.sleep(delay)
+            if not wait(delay, "owned processes or private queue did not finish naturally"):
+                return False
+
+
+def wait_runner_terminal(
+    client: Callable[..., object],
+    root_id: str,
+    task_id: str,
+    expected_result: str | frozenset[str],
+    timeout: float = 150,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    monotonic_fn: Callable[[], float] = time.monotonic,
+) -> dict[str, object]:
+    """Observe one exact delegate runner row until it reaches one expected result."""
+    label = "delegate:" + root_id + ":" + task_id
+    deadline = monotonic_fn() + timeout
+    while monotonic_fn() < deadline:
+        remaining = deadline - monotonic_fn()
+        result = client("runner-status", ["status", "--json"], timeout=remaining)
+        value = result.json()
+        require(isinstance(value, dict), "supervisor status response is not an object")
+        rows = value.get("tasks", {})
+        require(isinstance(rows, dict), "supervisor status has no tasks object")
+        matching = [row for row in rows.values()
+                    if isinstance(row, dict) and row.get("label") == label]
+        require(len(matching) == 1, "submitted task has no unique supervisor row")
+        row = matching[0]
+        status = row.get("status")
+        if isinstance(status, dict) and "Done" in status:
+            actual_result = done_result(row)
+            if isinstance(expected_result, str):
+                accepted = actual_result == expected_result
+                expectation = repr(expected_result)
+            else:
+                require(isinstance(expected_result, frozenset) and expected_result and
+                        all(isinstance(item, str) for item in expected_result),
+                        "expected supervisor results are invalid")
+                accepted = actual_result in expected_result
+                expectation = "one of " + repr(sorted(expected_result))
+            require(accepted,
+                    f"supervisor result {actual_result!r}, expected {expectation}")
+            return row
+        sleep_fn(0.1)
+    raise RuntimeError("runner completion was not observed within acceptance deadline")
 
 
 def wait_runner_done(
@@ -1722,26 +2661,7 @@ def wait_runner_done(
     monotonic_fn: Callable[[], float] = time.monotonic,
 ) -> dict[str, object]:
     """Observe one exact delegate runner row until it finishes successfully."""
-    label = "delegate:" + root_id + ":" + task_id
-    deadline = monotonic_fn() + timeout
-    while monotonic_fn() < deadline:
-        result = client("runner-status", ["status", "--json"])
-        value = result.json()
-        require(isinstance(value, dict), "supervisor status response is not an object")
-        rows = value.get("tasks", {})
-        require(isinstance(rows, dict), "supervisor status has no tasks object")
-        matching = [row for row in rows.values()
-                    if isinstance(row, dict) and row.get("label") == label]
-        require(len(matching) == 1, "submitted task has no unique supervisor row")
-        row = matching[0]
-        status = row.get("status")
-        if isinstance(status, dict) and "Done" in status:
-            done = status["Done"]
-            require(isinstance(done, dict) and done.get("result") == "Success",
-                    "supervisor reports a failed runner")
-            return row
-        sleep_fn(0.1)
-    raise RuntimeError("runner completion was not observed within acceptance deadline")
+    return wait_runner_terminal(client, root_id, task_id, "Success", timeout, sleep_fn, monotonic_fn)
 
 
 def snapshot(directory: Path, ignored_prefixes: tuple[str, ...] = (".ack",)) -> dict[str, dict[str, object]]:

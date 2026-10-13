@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -17,8 +19,19 @@ const (
 	workerUpgradeName    = "worker-upgrade.json"
 	groupPrefix          = "delegation-inspection-"
 
-	// AdmissionTimeout includes queue time before the worker starts.
-	AdmissionTimeout = 20 * time.Second
+	// AdmissionTimeout includes queue time before the worker starts. Keep enough
+	// headroom for provider probes while an unlimited private queue is carrying
+	// many already-running tasks.
+	AdmissionTimeout = time.Minute
+
+	// legacyAdmissionTimeout remains valid when recovering an admission journal
+	// written before the high-concurrency allowance was widened.
+	legacyAdmissionTimeout = 20 * time.Second
+
+	// WorkerExitProofGuardianWaitV1 selects the managed guardian's durable
+	// child-Wait record. A missing value retains the historical/custom queue
+	// observation contract saved in older immutable requests.
+	WorkerExitProofGuardianWaitV1 = "guardian-wait-v1"
 )
 
 var (
@@ -40,6 +53,7 @@ type Binding struct {
 	WorkerExecutable    string             `json:"worker_executable"`
 	WorkerSHA256        string             `json:"worker_sha256"`
 	RunnerOwnership     string             `json:"runner_ownership,omitempty"`
+	WorkerExitProof     string             `json:"worker_exit_proof,omitempty"`
 	Environment         []string           `json:"environment,omitempty"`
 	EnvironmentRecorded bool               `json:"environment_recorded,omitempty"`
 	Supervisor          task.SupervisorRef `json:"supervisor"`
@@ -58,6 +72,12 @@ type RequestRecord struct {
 	Label         string          `json:"label"`
 	CreatedAt     string          `json:"created_at"`
 	Deadline      string          `json:"deadline"`
+}
+
+// SupervisorIdentity carries the saved queue group while retaining the
+// root/task-derived label used by historical inspection requests.
+func (record RequestRecord) SupervisorIdentity() pueue.InspectionIdentity {
+	return pueue.InspectionIdentity{RootID: record.RootID, TaskID: record.TaskID, QueueGroup: record.Group}
 }
 
 // SubmissionRecord is the create-once intent for one supervisor admission.
@@ -96,10 +116,8 @@ func validateAbsoluteCleanPath(name, value string) error {
 // admission. The shared supervisor validator permits historical optional
 // fields, so this boundary explicitly requires every fresh binding field.
 func ValidateBinding(binding Binding) error {
-	switch binding.RunnerOwnership {
-	case "", task.RunnerOwnershipManaged, task.RunnerOwnershipCustom:
-	default:
-		return errors.New("invalid inspection runner ownership")
+	if err := validateWorkerAuthority(binding); err != nil {
+		return err
 	}
 	if err := task.ValidateEnvironment(binding.Environment); err != nil {
 		return fmt.Errorf("inspection environment: %w", err)
@@ -133,6 +151,24 @@ func ValidateBinding(binding Binding) error {
 	}
 	if err := task.ValidateFreshSupervisorRef(binding.Supervisor); err != nil {
 		return fmt.Errorf("inspection supervisor binding: %w", err)
+	}
+	return nil
+}
+
+func validateWorkerAuthority(binding Binding) error {
+	switch binding.RunnerOwnership {
+	case "", task.RunnerOwnershipManaged, task.RunnerOwnershipCustom:
+	default:
+		return errors.New("invalid inspection runner ownership")
+	}
+	switch binding.WorkerExitProof {
+	case "":
+	case WorkerExitProofGuardianWaitV1:
+		if binding.RunnerOwnership != task.RunnerOwnershipManaged && binding.RunnerOwnership != task.RunnerOwnershipCustom {
+			return errors.New("guardian Wait proof requires explicit runner ownership")
+		}
+	default:
+		return errors.New("invalid inspection worker exit proof")
 	}
 	return nil
 }
@@ -183,8 +219,21 @@ func validateRequestIdentity(record RequestRecord, expectedRoot string) error {
 	if bindingErr := ValidateBinding(record.Binding); bindingErr != nil {
 		return bindingErr
 	}
-	if record.Group != groupForRoot(record.RootID) || record.Label != labelForIdentity(record.RootID, record.TaskID) {
+	if record.Label != labelForIdentity(record.RootID, record.TaskID) {
 		return task.ErrIdentityMismatch
+	}
+	return validateRequestGroup(record)
+}
+
+func validateRequestGroup(record RequestRecord) error {
+	if record.Group == groupForRoot(record.RootID) {
+		return nil
+	}
+	if record.Group != "default" {
+		return task.ErrIdentityMismatch
+	}
+	if record.Binding.DefinitionRevision != provider.RuntimeInspectionRevision || record.Binding.CapabilitySHA256 == "" {
+		return fmt.Errorf("%w: default inspection group requires a runtime capability binding", task.ErrEvidenceFault)
 	}
 	return nil
 }
@@ -212,7 +261,8 @@ func validateRequestRecord(record RequestRecord, expectedRoot string) (time.Time
 }
 
 // ValidateRequestRecord validates an immutable request and its persisted
-// deadline against the expected store root identity.
+// deadline against the expected store root identity. Open and Load separately
+// validate the private supervisor config against the store's filesystem root.
 func ValidateRequestRecord(record RequestRecord, expectedRoot string) error {
 	_, err := validateRequestRecord(record, expectedRoot)
 	return err

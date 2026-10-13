@@ -112,11 +112,12 @@ func TestExistingNativeReadOnlyReconstructsRecordedLaunchContract(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireRuntimeProbeDefinition(t, candidate.Inspection, []string{
+		"--print", "--input-format", "--output-format", "--verbose",
+		"--permission-mode", "--permission-prompts", "--resume", "--session-id",
+	})
 	if !slices.Contains(candidate.Inspection.Environment, "XDG_CONFIG_HOME=relative") {
 		t.Fatalf("historical environment was not retained: %q", candidate.Inspection.Environment)
-	}
-	if candidate.Inspection.Runtime == nil || !slices.Contains(candidate.Inspection.Runtime.RequiredFlags, "--permission-mode") {
-		t.Fatalf("runtime inspection omitted permission flag: %+v", candidate.Inspection)
 	}
 	if !slices.Contains(candidate.WritableRoots, "/tmp") || !slices.Equal(candidate.WritableRoots, meta.EffectiveConfig.Policy.WritableRoots) {
 		t.Fatalf("recorded roots changed: got=%q want=%q", candidate.WritableRoots, meta.EffectiveConfig.Policy.WritableRoots)
@@ -199,6 +200,10 @@ func TestExistingNativeWorkspaceWriteReconstructsAcceptEditsContract(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireRuntimeProbeDefinition(t, candidate.Inspection, []string{
+		"--print", "--input-format", "--output-format", "--verbose",
+		"--permission-mode", "--permission-prompts", "--resume", "--session-id",
+	})
 	if !slices.Contains(candidate.Inspection.Environment, "XDG_CONFIG_HOME=relative") {
 		t.Fatalf("historical environment was not retained: %q", candidate.Inspection.Environment)
 	}
@@ -207,10 +212,6 @@ func TestExistingNativeWorkspaceWriteReconstructsAcceptEditsContract(t *testing.
 	}
 	if !slices.Contains(candidate.Inspection.Environment, "HOME="+home) {
 		t.Fatalf("recorded HOME was not used: %q", candidate.Inspection.Environment)
-	}
-	args := candidate.Inspection.Runtime
-	if args == nil || !slices.Contains(args.RequiredFlags, "--permission-mode") {
-		t.Fatalf("runtime inspection omitted permission flag: %+v", candidate.Inspection)
 	}
 	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: cli.Path, SHA256: cli.SHA256, Version: "Claude Code 2.1.270"}, nil)
 	if err != nil {
@@ -331,8 +332,8 @@ func TestRuntimeRequirementsAddRequestedModelAndEffort(t *testing.T) {
 	request.RequestedConfig.Model = "claude-sonnet-4"
 	request.RequestedConfig.Effort = "max"
 	got := runtimeRequirementsForRequest(request)
-	if !slices.Contains(got.RequiredFlags, "--model") || !slices.Contains(got.RequiredFlags, "--effort") {
-		t.Fatalf("requested runtime requirements omitted optional flags: %q", got.RequiredFlags)
+	if !slices.Equal(got.RequiredFlags, base.RequiredFlags) {
+		t.Fatalf("optional request fields changed the stable runtime probe: base=%q got=%q", base.RequiredFlags, got.RequiredFlags)
 	}
 }
 

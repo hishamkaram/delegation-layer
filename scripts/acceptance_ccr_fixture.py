@@ -15,7 +15,11 @@ import time
 
 from acceptance_native import NativeAcceptance, build_parser, choose_output
 from acceptance_provider_common import require
-from acceptance_supervisor_common import write_json
+from acceptance_supervisor_common import (
+    DirectoryOwner,
+    rollback_owned_directories,
+    write_json,
+)
 
 
 class Fixture:
@@ -24,6 +28,9 @@ class Fixture:
         self.disconnected = {name: threading.Event() for name in self.seen}
         self.parallel = threading.Barrier(2, timeout=45)
         self.requests = 0
+        self.model_list_requests = 0
+        self.parallel_requests = 0
+        self.blocking_requests = {name: 0 for name in self.seen}
         self.lock = threading.Lock()
         fixture = self
 
@@ -32,6 +39,8 @@ class Fixture:
                 pass
 
             def do_GET(self):
+                with fixture.lock:
+                    fixture.model_list_requests += 1
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -47,10 +56,20 @@ class Fixture:
                 request = json.loads(self.rfile.read(length))
                 with fixture.lock:
                     fixture.requests += 1
-                model = request.get("model")
-                if model == "parallel":
+                    model = request.get("model")
+                    if model == "parallel":
+                        fixture.parallel_requests += 1
+                        parallel_request = fixture.parallel_requests
+                    else:
+                        parallel_request = 0
+                    if model in fixture.seen:
+                        fixture.blocking_requests[model] += 1
+                        blocking_request = fixture.blocking_requests[model]
+                    else:
+                        blocking_request = 0
+                if model == "parallel" and parallel_request <= 2:
                     fixture.parallel.wait()
-                if model in fixture.seen:
+                if model in fixture.seen and blocking_request == 1:
                     fixture.seen[model].set()
                     deadline = time.monotonic() + 150
                     while time.monotonic() < deadline:
@@ -94,8 +113,32 @@ class Fixture:
 
 
 class FixtureAcceptance(NativeAcceptance):
-    def dispatch_argv(self, task_id, brief, predecessor=None):
-        argv = super().dispatch_argv(task_id, brief, predecessor)
+    def __init__(self, args, fixture_directories=()):
+        self.fixture_directories = tuple(fixture_directories)
+        try:
+            super().__init__(args)
+        except BaseException as error:
+            try:
+                rollback_owned_directories(self.fixture_directories)
+            except BaseException as rollback_error:
+                raise RuntimeError(
+                    "CCR fixture constructor rollback failed: " + str(rollback_error)) from error
+            self.fixture_directories = ()
+            raise
+
+    def finalize(self, success):
+        if not super().finalize(success):
+            return False
+        try:
+            rollback_owned_directories(self.fixture_directories)
+        except BaseException:
+            return False
+        self.fixture_directories = ()
+        return True
+
+    def dispatch_argv(self, task_id, brief, predecessor=None, budget=None):
+        argv = super().dispatch_argv(task_id, brief, predecessor,
+                                    budget if budget is not None else "5m")
         if self.args.model == "budget":
             argv[argv.index("--budget") + 1] = "20s"
         return argv
@@ -123,9 +166,13 @@ class FixtureAcceptance(NativeAcceptance):
         first_session = self.published("first", first)
         second_session = self.published("parallel", second)
         require(first_session != second_session, "parallel tasks shared a session")
-        self.args.model = "ok"
+        with fixture.lock:
+            model_lists_before_resume = fixture.model_list_requests
         resumed = self.dispatch("resumed", brief, first)
         require(self.published("resumed", resumed) == first_session, "continuation changed session")
+        with fixture.lock:
+            require(fixture.model_list_requests == model_lists_before_resume,
+                    "CCR continuation repeated remote model discovery")
         self.args.model = "write"
         self.mode = "workspace-write"
         (self.workspace / "fixture-existing.txt").write_text("original")
@@ -166,19 +213,76 @@ class FixtureAcceptance(NativeAcceptance):
             require(not (directory / "result.txt").exists(), "stopped task published a result")
             require(fixture.disconnected[model].wait(15), "CCR gateway retained its upstream request after stop")
         stopped_session = self.session_ref(task_id)
-        self.args.model = "ok"
+        with fixture.lock:
+            model_lists_before_budget_resume = fixture.model_list_requests
         recovered = self.dispatch("budget-resumed", brief, task_id)
         require(self.published("budget-resumed", recovered) == stopped_session, "budget continuation lost its session")
+        with fixture.lock:
+            require(fixture.model_list_requests == model_lists_before_budget_resume,
+                    "budget continuation repeated remote model discovery")
         self.args.model = "missing-alias"
         rejected = self.dispatch("missing", brief)
         self.wait_done("missing", rejected)
         response = self.command("missing-collect", "collect", rejected, "--json", expected=4).json()
         require(response.get("publication") == "rejected", "unknown alias did not produce a rejected outcome")
-        require(self.safe_shutdown(), "private supervisor cleanup was not proven")
-        write_json(self.output / "success.json", {"status": "passed", "platform": os.uname().sysname,
-            "tasks": self.tasks, "sessions_isolated": True, "continuation": True, "budget_continuation": True, "native_write_and_shell": True,
+        return {"status": "passed", "platform": os.uname().sysname,
+            "tasks": self.tasks, "sessions_isolated": True, "continuation": True, "budget_continuation": True, "continuation_reuses_route": True, "native_write_and_shell": True,
             "replay_observational": True, "invalid_alias_rejected": True,
-            "cancel_and_budget_disconnected": True, "real_clis": ["delegate", "ccr", "claude"]})
+            "cancel_and_budget_disconnected": True, "real_clis": ["delegate", "ccr", "claude"]}
+
+
+def cleanup_fixture(run, success):
+    cleanup_errors = []
+    shutdown_completed = False
+    artifact_finalized = False
+    try:
+        if not run.safe_shutdown():
+            cleanup_errors.append(RuntimeError("private supervisor cleanup was not proven"))
+        else:
+            shutdown_completed = True
+    except BaseException as error:
+        cleanup_errors.append(error)
+    try:
+        if not run.finalize(success and not cleanup_errors):
+            cleanup_errors.append(RuntimeError("fixture artifact finalization was not completed"))
+        else:
+            artifact_finalized = True
+    except BaseException as error:
+        cleanup_errors.append(error)
+    if cleanup_errors:
+        output = getattr(run, "output", None)
+        if isinstance(output, Path):
+            try:
+                (output / "success.json").unlink(missing_ok=True)
+                write_json(output / "failure-cleanup.json", {
+                    "status": "failed",
+                    "natural_daemon_shutdown": shutdown_completed,
+                    "artifact_finalization_completed": artifact_finalized,
+                    "passed_receipt_absent": not (output / "success.json").exists(),
+                    "signals_sent": 0,
+                }, replace=True)
+            except BaseException:
+                pass
+        raise RuntimeError("fixture cleanup failed; inspect retained evidence: "
+                           + str(cleanup_errors[0])) from cleanup_errors[0]
+
+
+def prepare_fixture_acceptance(output):
+    ownership = DirectoryOwner()
+    try:
+        isolated = ownership.create("CCR fixture profile", output / "profile", output).directory
+        data = ownership.create("CCR fixture data", isolated / "data", isolated).directory
+        claude = ownership.create("CCR fixture Claude config", isolated / "claude", isolated).directory
+        os.environ["XDG_DATA_HOME"] = str(data)
+        os.environ["CLAUDE_CONFIG_DIR"] = str(claude)
+        args = build_parser().parse_args([
+            "--provider", "ccr:print", "--model", "ok", "--output", str(output),
+        ])
+        directories = ownership.transfer()
+    except BaseException:
+        ownership.rollback()
+        raise
+    return FixtureAcceptance(args, directories)
 
 
 def main():
@@ -186,15 +290,11 @@ def main():
     parser.add_argument("--output")
     options = parser.parse_args()
     output = choose_output("ccr-fixture", options.output)
-    isolated = output / "profile"
-    isolated.mkdir()
-    os.environ["XDG_DATA_HOME"] = str(isolated / "data")
-    os.environ["CLAUDE_CONFIG_DIR"] = str(isolated / "claude")
-    Path(os.environ["XDG_DATA_HOME"]).mkdir()
-    Path(os.environ["CLAUDE_CONFIG_DIR"]).mkdir()
-    args = build_parser().parse_args(["--provider", "ccr:print", "--model", "ok", "--output", str(output)])
-    run = FixtureAcceptance(args)
+    run = None
+    success_receipt = None
+    primary_error = None
     try:
+        run = prepare_fixture_acceptance(output)
         with Fixture() as fixture:
             url = f"http://127.0.0.1:{fixture.server.server_port}"
             run.direct("provider-setup", [run.provider_executable, "provider", "add", "fixture",
@@ -202,11 +302,36 @@ def main():
             for model in ("ok", "parallel", "write", "cancel", "budget"):
                 run.direct("model-setup-" + model, [run.provider_executable, "model", "add", model,
                     "--provider", "fixture", "--model", model, "--compat", "full"])
-            run.exercise(fixture)
-        print(json.dumps({"status": "passed", "evidence": str(output)}))
-    finally:
-        require(run.safe_shutdown(), "fixture cleanup failed; inspect retained evidence")
+            success_receipt = run.exercise(fixture)
+    except BaseException as error:
+        primary_error = error
+    cleanup_error = None
+    if run is not None:
+        try:
+            cleanup_fixture(run, success_receipt is not None and primary_error is None)
+        except BaseException as error:
+            cleanup_error = error
+    if primary_error is not None or cleanup_error is not None:
+        error = cleanup_error or primary_error
+        (output / "success.json").unlink(missing_ok=True)
+        try:
+            write_json(output / "failure.json", {
+                "status": "failed",
+                "error": str(error),
+                "behavior_completed": success_receipt is not None,
+                "passed_receipt_absent": not (output / "success.json").exists(),
+                "signals_sent": 0,
+            }, replace=True)
+        except BaseException:
+            pass
+        if cleanup_error is not None:
+            raise cleanup_error from primary_error
+        raise primary_error
+    require(isinstance(success_receipt, dict), "fixture success receipt is unavailable")
+    write_json(output / "success.json", success_receipt, replace=True)
+    print(json.dumps({"status": "passed", "evidence": str(output)}))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

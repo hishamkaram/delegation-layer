@@ -27,9 +27,13 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
 
 ## Workflow
 
-1. Define the smallest supported profile and reject escalation, arbitrary
-   executable loading, unsupported options, and unrecognized effective policy
-   before admission. Preserve existing IDs and native login flows.
+1. Define the smallest supported profile and validate the controls requested by
+   the task. Reject escalation, arbitrary executable loading, and unsupported
+   or ineffective requested options before admission. Treat native
+   configuration, authentication, MCP servers, hooks, plugins, unrelated
+   provider policy, and OS/version/build identity as provider-owned
+   observations: record or report them, but do not reject them as adapter-owned
+   policy drift. Preserve existing IDs and native login flows.
 2. Implement provider-owned preparation, native argv/configuration and identity
    handling, and a versioned interpreter over sealed evidence. The adapter only
    prepares a plan and interprets evidence: it does not own pipes, capture,
@@ -81,9 +85,12 @@ profile, interpreter, registration, fixture, or acceptance gate. Read the
 6. Match filesystem controls to the advertised native mode. Unattended write
    modes must prove creation, editing, and shell execution from filesystem and
    sealed evidence; they do not promise outside-workspace denial. Preserve
-   applicable native read-only and sandbox controls. A rejected task may have a
-   payload. Missing prerequisites and inconclusive controls are `BLOCKED`,
-   never pass.
+   applicable native read-only and sandbox controls. A rejected task is valid
+   when the canonical `outcome.json` authority publishes its rejected verdict
+   with sealed evidence; its rejection payload may be present and non-empty.
+   This is distinct from rejecting a success-shaped result that fails the
+   success predicate. Missing prerequisites and inconclusive controls are
+   `BLOCKED`, never pass.
 7. Record sanitized platform/version/profile/predicate/configuration, task and
    session identities, timings, commands, observations, and digests. Treat the
    provider version and executable digest as observations bound to that task;

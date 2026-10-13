@@ -15,7 +15,7 @@ import acceptance_inspection as inspection_acceptance
 import acceptance_provider_common as provider_common
 import acceptance_supervisor_common as supervisor_common
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps, _inspection_group
-from acceptance_supervisor_common import digest, read_json, write_json
+from acceptance_supervisor_common import DirectoryOwner, digest, read_json, write_json
 
 
 ROOT = "a" * 32
@@ -23,6 +23,166 @@ TASK = "b" * 32
 
 
 class InspectionHarnessTests(unittest.TestCase):
+    def test_expired_inspection_response_requires_bounded_failure_context(self):
+        response = {
+            "task_id": TASK,
+            "root_id": ROOT,
+            "task_record": "unknown",
+            "admission": "unknown",
+            "liveness": "undetermined",
+            "publication": "unknown",
+            "failure": {
+                "code": "provider_preflight_failed",
+                "stage": "inspect-provider",
+                "next_action": "stop_and_report",
+                "inspection": {
+                    "class": "admission_deadline_expired",
+                    "deadline_state": "expired",
+                    "journal_task_id": TASK,
+                },
+            },
+            "error": "Delegate could not complete provider preflight.",
+        }
+
+        inspection_acceptance.validate_expired_inspection_response(response, 1, ROOT, TASK)
+
+        for field, value in (
+                ("class", "inspection_worker_failed"),
+                ("deadline_state", "open"),
+                ("journal_task_id", "c" * 32)):
+            with self.subTest(field=field):
+                changed = deepcopy(response)
+                changed["failure"]["inspection"][field] = value
+                with self.assertRaisesRegex(
+                        AcceptanceFailure, "stable provider-preflight failure envelope"):
+                    inspection_acceptance.validate_expired_inspection_response(
+                        changed, 1, ROOT, TASK)
+
+    def test_blocker_failure_cleanup_stops_at_finite_observation_deadline(self):
+        acceptance = inspection_acceptance.InspectionAcceptance.__new__(
+            inspection_acceptance.InspectionAcceptance)
+        acceptance.blocker = (7, "bounded-blocker")
+        acceptance.ops = SimpleNamespace(root_id=ROOT)
+        acceptance.daemon = SimpleNamespace(poll=lambda: None)
+        acceptance.queue = lambda: {"tasks": {
+            "7": {"label": "bounded-blocker", "status": {"Running": {}}},
+        }}
+        with patch.object(inspection_acceptance, "failure_cleanup_deadline",
+                          return_value=10.0), \
+                patch.object(inspection_acceptance, "wait_for_failure_cleanup",
+                             return_value=False):
+            self.assertFalse(acceptance.cleanup_blocker_after_failure())
+
+    def test_expiry_fixtures_outlast_the_fresh_inspection_deadline(self):
+        timeout = inspection_acceptance.FRESH_INSPECTION_TIMEOUT_SECONDS
+        self.assertGreater(inspection_acceptance.RUNNING_EXPIRY_DELAY_MS, timeout * 1000)
+        self.assertGreater(
+            inspection_acceptance.ACCEPTANCE_WATCH_SECONDS,
+            inspection_acceptance.RUNNING_EXPIRY_DELAY_MS / 1000,
+        )
+        self.assertEqual(
+            inspection_acceptance.BLOCKER_ARGV,
+            ["/bin/sleep", str(timeout + inspection_acceptance.EXPIRY_MARGIN_SECONDS)],
+        )
+
+    def test_failed_inspection_retains_unexpected_positive_admission(self):
+        acceptance = object.__new__(inspection_acceptance.InspectionAcceptance)
+        acceptance.base = Path("/workspace")
+        acceptance.configure = Mock(return_value=(TASK, Path("/brief"), Path("/case"), Path("/config")))
+        acceptance.argv = Mock(return_value=["delegate"])
+        acceptance.expected_inspection_binding = Mock(return_value={"binding": "expected"})
+        response = {
+            "task_id": TASK,
+            "root_id": ROOT,
+            "task_record": "created",
+            "admission": "admitted",
+            "liveness": "running",
+            "publication": "unknown",
+            "supervisor": {"matched": True, "numeric_task_id": 7},
+        }
+        process = SimpleNamespace(result={"exit_code": 0})
+        acceptance.ops = SimpleNamespace(
+            dispatch_attempts=set(),
+            direct=Mock(return_value=process),
+            expect_inspection=Mock(),
+            record_admission=Mock(),
+            root_id=ROOT,
+            watch_seconds=150,
+        )
+
+        with patch.object(inspection_acceptance, "parse_json_output", return_value=response):
+            with self.assertRaisesRegex(AcceptanceFailure, "stable provider-preflight failure envelope"):
+                acceptance.failed_inspection("running-expiry", 1)
+
+        acceptance.ops.record_admission.assert_called_once_with("running-expiry", TASK, response)
+
+    def test_failure_cleanup_records_retention_error_and_still_finalizes(self):
+        with tempfile.TemporaryDirectory(prefix="inspection-retention-error-") as directory:
+            output = Path(directory) / "evidence"
+            output.mkdir()
+            acceptance = object.__new__(inspection_acceptance.InspectionAcceptance)
+            acceptance.output = output
+            acceptance.case_records = {}
+            acceptance.state = Path(directory) / "state"
+            acceptance.config = Path(directory) / "config"
+            acceptance.setup = lambda: None
+
+            def fail_success():
+                raise RuntimeError("primary inspection failure")
+
+            acceptance.success = fail_success
+            acceptance.cleanup_blocker_after_failure = Mock(return_value=True)
+            acceptance.finalize = Mock(return_value=True)
+            acceptance.ops = SimpleNamespace(
+                closed=False,
+                retain_failure_ownership=Mock(side_effect=RuntimeError("retention failed")),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "primary inspection failure"):
+                acceptance.run()
+
+            acceptance.finalize.assert_called_once_with(False)
+            cleanup = read_json(output / "failure-cleanup.json")
+            self.assertFalse(cleanup["natural_daemon_shutdown"])
+            self.assertTrue(cleanup["artifact_finalization_completed"])
+            self.assertIn("retention failed", cleanup["failure_ownership_error"])
+            self.assertTrue(cleanup["passed_receipt_absent"])
+
+    def test_finalize_removes_closed_fixture_and_raw_process_captures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "evidence"
+            fixture = output / "fixture"
+            cases = output / "cases"
+            pueue_parent = root / "pueue"
+            pueue = pueue_parent / "inspect-run"
+            for path in (fixture, cases, output / "processes", pueue):
+                path.mkdir(parents=True)
+            owner = DirectoryOwner()
+            owner.adopt_created("raw process captures", output / "processes", output)
+            owner.adopt_created("case evidence", cases, output)
+            owner.adopt_created("fixture", fixture, output)
+            tokens = owner.transfer()
+            acceptance = object.__new__(inspection_acceptance.InspectionAcceptance)
+            acceptance.output = output
+            acceptance.base = fixture
+            acceptance.cases = cases
+            acceptance.owned_directories = tokens
+            acceptance.raw_process_captures_token = next(
+                token for token in tokens if token.directory == output / "processes")
+            pueue_owner = DirectoryOwner()
+            pueue_owner.adopt_created("private pueue", pueue, pueue_parent)
+            acceptance.pueue_directories = pueue_owner.transfer()
+            acceptance.pueue_base = pueue
+            acceptance.ops = SimpleNamespace(closed=True)
+
+            self.assertTrue(acceptance.finalize(True))
+
+            self.assertFalse(fixture.exists())
+            self.assertFalse(cases.exists())
+            self.assertFalse(pueue.exists())
+            self.assertFalse((output / "processes").exists())
+
     def test_concurrent_response_accepts_only_known_admission_races(self):
         creation_race = {
             "task_id": TASK, "root_id": ROOT, "task_record": "unknown",
@@ -121,7 +281,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.base = Path(self.temporary.name)
+        self.base = Path(self.temporary.name).resolve(strict=True)
         self.state = self.base / "state"
         self.state_parent = self.base / "state-parent"
         self.output = self.base / "output"
@@ -156,7 +316,10 @@ class InspectionHarnessTests(unittest.TestCase):
     def inspection_records(self, result: str | None = "eligible",
                            include_ordinary: bool = True,
                            revision: str = "inspection-v1",
-                           legacy_model_discovery: bool = False) -> Path:
+                           legacy_model_discovery: bool = False,
+                           legacy_admission: bool = False,
+                           managed_exit_proof: bool = False,
+                           custom_inspection: bool = False) -> Path:
         # Declare the expectation before restoring the seeded dispatch
         # attempt, matching the production pre-dispatch ordering.
         self.ops.dispatch_attempts.discard(TASK)
@@ -164,6 +327,7 @@ class InspectionHarnessTests(unittest.TestCase):
         directory.mkdir(mode=0o700, parents=True)
         standalone = revision == "model-discovery-v1"
         legacy = standalone and legacy_model_discovery
+        brief = b"x" * 31
         task_record = {
             "schema_version": 1, "root_id": ROOT, "task_id": TASK,
             "provider": "fixture:test", "mode": "read-only",
@@ -171,7 +335,7 @@ class InspectionHarnessTests(unittest.TestCase):
             "requested_config": {"permission": "read-only",
                                   "budget": "1m0s" if legacy else ("5m0s" if standalone else "1m0s")},
             "budget_nanos": 60_000_000_000 if legacy else (300_000_000_000 if standalone else 60_000_000_000),
-            "brief_sha256": "c" * 64, "brief_length": 31,
+            "brief_sha256": provider_common.sha(brief), "brief_length": len(brief),
         }
         if include_ordinary:
             ordinary = self.state / "tasks" / TASK
@@ -179,6 +343,8 @@ class InspectionHarnessTests(unittest.TestCase):
             task_bytes = provider_common._canonical_task_bytes(task_record)
             (ordinary / "task.json").write_bytes(task_bytes)
             (ordinary / "task.json").chmod(0o600)
+            (ordinary / "brief.md").write_bytes(brief)
+            (ordinary / "brief.md").chmod(0o600)
         request = {
             "schema_version": 1, "root_id": ROOT, "task_id": TASK,
             "task": task_record,
@@ -190,22 +356,24 @@ class InspectionHarnessTests(unittest.TestCase):
                 "helper_sha256": "e" * 64,
                 "worker_executable": str(self.runner),
                 "worker_sha256": digest(self.runner),
-                "supervisor": {
-                    "client_executable": str(self.pueue),
-                    "client_sha256": digest(self.pueue),
-                    "resolved_config_sha256": "f" * 64,
-                    "endpoint": str(self.base / "pueue.sock"),
-                    "config_path": str(self.config),
-                    "config_digest": digest(self.config),
-                    "observed_version": "pueue 4.0.4",
-                },
+                "supervisor": provider_common.supervisor_binding(
+                    self.pueue, self.config, self.config.parent, digest(self.config),
+                    "pueue 4.0.4"),
             },
             "group": _inspection_group(ROOT),
             "label": f"{_inspection_group(ROOT)}-{TASK}",
             "created_at": "2026-09-15T00:00:00Z",
             "deadline": (("2026-09-15T00:01:00Z" if legacy else "2026-09-15T00:05:00Z") if standalone
-                         else "2026-09-15T00:00:20Z"),
+                         else ("2026-09-15T00:00:20Z" if legacy_admission
+                               else "2026-09-15T00:01:00Z")),
         }
+        if managed_exit_proof:
+            request["binding"].update({
+                "runner_ownership": "managed",
+                "worker_exit_proof": "guardian-wait-v1",
+            })
+        elif custom_inspection:
+            request["binding"]["runner_ownership"] = "custom"
         write_json(directory / "request.json", request)
         self.ops.expect_inspection(TASK, request["binding"])
         self.ops.dispatch_attempts.add(TASK)
@@ -233,12 +401,199 @@ class InspectionHarnessTests(unittest.TestCase):
                 "completed_at": "2026-09-15T00:00:02Z",
                 "native_exit": "successful-exit" if result == "eligible" else "unavailable",
             })
-            if result == "eligible":
+            if result == "eligible" and not managed_exit_proof:
                 write_json(directory / "worker-observation.json", {
                     "schema_version": 1, "request_sha256": request_sha,
                     "completion_sha256": digest(directory / "completion.json"),
                     "numeric_task_id": 42, "state": "succeeded",
                 })
+            if managed_exit_proof:
+                self.managed_inspection_lifetime(directory, request, request_sha, result)
+        return directory
+
+    @staticmethod
+    def managed_inspection_lifetime(directory: Path, request: dict[str, object],
+                                    request_sha: str, result: str) -> None:
+        registration = {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "owner_kind": "inspection", "owner_sha256": request_sha,
+            "scope_kind": "process-group", "assurance": "cooperative",
+            "scope_id": "pg:fixture", "boot_id": "fixture-boot",
+            "deadline": request["deadline"], "created_at": "2026-09-15T00:00:03Z",
+        }
+        write_json(directory / "lifetime-intent.json", {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "owner_kind": "inspection", "owner_sha256": request_sha,
+            "scope_kind": "process-group", "assurance": "cooperative",
+            "scope_plan": "pg:fixture", "boot_id": "fixture-boot",
+            "deadline": request["deadline"], "created_at": "2026-09-15T00:00:02Z",
+        })
+        write_json(directory / "lifetime-registration.json", registration)
+        registration_sha = digest(directory / "lifetime-registration.json")
+        worker = {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "registration_sha256": registration_sha, "pid": 1001,
+            "process_start": "fixture-worker-start", "boot_id": "fixture-boot",
+            "started_at": "2026-09-15T00:00:04Z",
+        }
+        write_json(directory / "lifetime-worker.json", worker)
+        worker_sha = digest(directory / "lifetime-worker.json")
+        launch = {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "registration_sha256": registration_sha, "sequence": 1,
+            "pid": 1002, "process_start": "fixture-launch-start", "pgid": 1002,
+            "started_at": "2026-09-15T00:00:05Z",
+        }
+        write_json(directory / "lifetime-launch-00000000000000000001.json", launch)
+        launch_set_sha = provider_common.sha(
+            provider_common.canonical_go_json([launch]))
+        write_json(directory / "lifetime-termination.json", {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "registration_sha256": registration_sha, "launch_count": 1,
+            "launch_set_sha256": launch_set_sha, "cause": "completed",
+            "scope_empty": True, "observed_at": "2026-09-15T00:00:06Z",
+        })
+        wait_result = "success" if result == "eligible" else "exit-error"
+        wait_exit = 0 if result == "eligible" else 1
+        write_json(directory / "lifetime-worker-wait.json", {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "registration_sha256": registration_sha, "worker_sha256": worker_sha,
+            "child_pid": 1001, "result": wait_result, "exit_code": wait_exit,
+            "observed_at": "2026-09-15T00:00:07Z",
+        })
+
+    def durable_ordinary_admission(self, numeric_task_id: int = 7,
+                                   runner_ownership: str | None = None) -> Path:
+        directory = self.state / "tasks" / TASK
+        request = read_json(self.state / "inspections" / TASK / "request.json")
+        supervisor = request["binding"]["supervisor"]
+        task_record = read_json(directory / "task.json")
+        spec_sha256 = digest(directory / "task.json")
+        meta_path = directory / "meta.json"
+        meta = {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "spec_sha256": spec_sha256,
+            "requested_config": task_record["requested_config"],
+            "effective_config": {
+                "containment": "fixture-local", "approval": "never", "digest": "b" * 64,
+            },
+            "containment": "fixture-local", "approval": "never",
+            "provider_executable": str(self.base / "provider"),
+            "provider_version": "fixture-v1", "publisher_build": "fixture-build",
+            "publisher_version": "1",
+            "predicate": {
+                "adapter": task_record["provider"], "mode": task_record["mode"],
+                "version": "fixture-v1", "sha256": "d" * 64,
+            },
+            "supervisor_config": supervisor, "created_at": "2026-09-15T00:00:02Z",
+        }
+        if runner_ownership is not None:
+            self.assertIn(runner_ownership, {"managed", "custom"})
+            meta.update({
+                "runner_executable": str(self.runner),
+                "runner_ownership": runner_ownership,
+            })
+        if runner_ownership == "managed":
+            self.ops.managed_runner = True
+        write_json(meta_path, meta)
+        label = f"delegate:{ROOT}:{TASK}"
+        meta_sha256 = digest(meta_path)
+        write_json(directory / "submit.json", {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "spec_sha256": spec_sha256, "meta_sha256": meta_sha256,
+            "label": label, "supervisor": supervisor,
+            "created_at": "2026-09-15T00:00:03Z",
+        })
+        write_json(directory / "supervisor.ref.json", {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "spec_sha256": spec_sha256, "meta_sha256": meta_sha256,
+            "numeric_task_id": numeric_task_id, "label": label, **supervisor,
+        })
+        return directory
+
+    @staticmethod
+    def managed_ordinary_lifetime(
+            directory: Path, wait_result: str = "success", with_worker: bool = True,
+            include_wait: bool = True, termination_cause: str = "completed",
+            scope_kind: str = "process-group") -> Path:
+        lifetime = directory / "lifetime"
+        lifetime.mkdir(mode=0o700)
+        assurance = "exact" if scope_kind == "cgroup-v2" else "cooperative"
+        owner_sha = provider_common.ordinary_lifetime_owner_digest(
+            digest(directory / "task.json"), digest(directory / "meta.json"))
+        registration = {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "owner_kind": "task", "owner_sha256": owner_sha,
+            "scope_kind": scope_kind, "assurance": assurance,
+            "scope_id": "scope:ordinary-fixture", "boot_id": "fixture-boot",
+            "deadline": "2026-09-15T00:01:00Z", "created_at": "2026-09-15T00:00:05Z",
+        }
+        write_json(lifetime / "intent.json", {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "owner_kind": "task", "owner_sha256": owner_sha,
+            "scope_kind": scope_kind, "assurance": assurance,
+            "scope_plan": "plan:ordinary-fixture", "boot_id": "fixture-boot",
+            "deadline": "2026-09-15T00:01:00Z", "created_at": "2026-09-15T00:00:04Z",
+        })
+        write_json(lifetime / "registration.json", registration)
+        registration_sha = digest(lifetime / "registration.json")
+
+        worker = None
+        worker_sha = ""
+        if with_worker:
+            worker = {
+                "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+                "registration_sha256": registration_sha, "pid": 2001,
+                "process_start": "fixture-ordinary-worker", "boot_id": "fixture-boot",
+                "started_at": "2026-09-15T00:00:06Z",
+            }
+            write_json(lifetime / "worker.json", worker)
+            worker_sha = digest(lifetime / "worker.json")
+
+        launches = []
+        if with_worker:
+            launch = {
+                "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+                "registration_sha256": registration_sha, "sequence": 1,
+                "pid": 2002, "process_start": "fixture-ordinary-launch", "pgid": 2002,
+                "started_at": "2026-09-15T00:00:07Z",
+            }
+            write_json(lifetime / "00000000000000000001.launch.json", launch)
+            launches.append(launch)
+        write_json(lifetime / "terminated.json", {
+            "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+            "registration_sha256": registration_sha, "launch_count": len(launches),
+            "launch_set_sha256": provider_common.sha(
+                provider_common.canonical_go_json(launches)),
+            "cause": termination_cause, "scope_empty": True,
+            "observed_at": "2026-09-15T00:00:08Z",
+        })
+
+        if include_wait:
+            wait = {
+                "schema_version": 1, "root_id": ROOT, "task_id": TASK,
+                "registration_sha256": registration_sha,
+                "child_pid": (worker["pid"] if worker is not None else
+                              (0 if wait_result == "not-started" else 2001)),
+                "result": wait_result, "observed_at": "2026-09-15T00:00:09Z",
+            }
+            if worker is not None:
+                wait["worker_sha256"] = worker_sha
+            if wait_result == "success":
+                wait["exit_code"] = 0
+            elif wait_result == "exit-error":
+                wait["exit_code"] = 17
+            elif wait_result == "wait-error":
+                wait["exit_code"] = -1
+            write_json(lifetime / "worker-wait.json", wait)
+        return lifetime
+
+    def ordinary_only_admission(self, runner_ownership: str | None = None) -> Path:
+        self.inspection_records()
+        directory = self.durable_ordinary_admission(runner_ownership=runner_ownership)
+        shutil.rmtree(self.state / "inspections")
+        self.ops.inspection_attempts.clear()
+        self.ops.inspection_bindings.clear()
         return directory
 
     @staticmethod
@@ -251,9 +606,13 @@ class InspectionHarnessTests(unittest.TestCase):
                 record["request_sha256"] = request_sha
                 write_json(path, record, replace=True)
 
-    def ordinary_row(self, result: str = "Success", name: str = "fresh",
+    def ordinary_row(self, result: object = "Success", name: str = "fresh",
                      task: str = TASK, number: int = 7) -> dict[str, object]:
-        command = shlex.join([str(self.runner), "--root", str(self.state), task])
+        argv = [str(self.runner)]
+        if self.ops.managed_runner:
+            argv.extend(["--guardian", "--supervised"])
+        argv.extend(["--root", str(self.state), task])
+        command = shlex.join(argv)
         return {
             "id": number, "label": self.ops.labels[name], "group": "default",
             "original_command": command, "command": command, "path": str(self.state),
@@ -261,11 +620,12 @@ class InspectionHarnessTests(unittest.TestCase):
         }
 
     def inspection_row(self, result: object = "Success") -> dict[str, object]:
-        command = shlex.join([str(self.runner), "--inspection", "--root", str(self.state), TASK])
+        command = shlex.join([str(self.runner), "--inspection", "--guardian", "--supervised",
+                              "--root", str(self.state), TASK])
         return {
             "id": 42, "label": f"{_inspection_group(ROOT)}-{TASK}",
             "group": _inspection_group(ROOT), "original_command": command,
-            "command": command, "path": str(self.state),
+            "command": command, "path": str(self.state_parent),
             "status": {"Done": {"result": result}},
         }
 
@@ -281,6 +641,12 @@ class InspectionHarnessTests(unittest.TestCase):
             "default": {"status": "Running", "parallel_tasks": 1},
             _inspection_group(ROOT): {"status": "Running", "parallel_tasks": 1},
         }}
+
+    def ordinary_only_status(self, result: object = "Success") -> dict[str, object]:
+        return {
+            "tasks": {"7": self.ordinary_row(result)},
+            "groups": {"default": {"status": "Running", "parallel_tasks": 1}},
+        }
 
     def static_refusal(self, exit_code: int = 2,
                        response: dict[str, object] | None = None) -> None:
@@ -642,6 +1008,194 @@ class InspectionHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "binding is required"):
             self.ops.expect_inspection(TASK)
 
+    def test_inspection_binding_accepts_only_the_guardian_exit_proof(self):
+        directory = self.inspection_records()
+        binding = read_json(directory / "request.json")["binding"]
+        binding["worker_exit_proof"] = "guardian-wait-v1"
+
+        provider_common._validate_inspection_binding(binding, "inspection binding")
+
+        binding["worker_exit_proof"] = "untrusted-wait"
+        with self.assertRaisesRegex(AcceptanceFailure, "worker exit proof is invalid"):
+            provider_common._validate_inspection_binding(binding, "inspection binding")
+
+    def test_inspection_binding_validates_paired_daemon_provenance(self):
+        directory = self.inspection_records()
+        binding = read_json(directory / "request.json")["binding"]
+        supervisor = binding["supervisor"]
+        supervisor["daemon_executable"] = "/fixture/pueued"
+        supervisor["daemon_sha256"] = "a" * 64
+
+        provider_common._validate_inspection_binding(binding, "inspection binding")
+
+        del supervisor["daemon_sha256"]
+        with self.assertRaisesRegex(AcceptanceFailure, "daemon provenance is incomplete"):
+            provider_common._validate_inspection_binding(binding, "inspection binding")
+
+    def test_managed_guardian_wait_replaces_queue_worker_observation(self):
+        directory = self.inspection_records(managed_exit_proof=True)
+
+        records = self.ops.validate_inspection_journals()
+
+        self.assertFalse((directory / "worker-observation.json").exists())
+        proof = records[TASK]["managed_lifetime"]
+        self.assertEqual(proof["worker_wait"]["result"], "success")
+        self.assertTrue(proof["termination"]["scope_empty"])
+
+    def test_root_lifetime_closure_rejects_inspection_only_unfinished_state(self):
+        directory = self.inspection_records(include_ordinary=False, managed_exit_proof=True)
+        (directory / "lifetime-worker-wait.json").unlink()
+
+        with self.assertRaisesRegex(AcceptanceFailure, "inspection lifetime worker Wait"):
+            provider_common.validate_managed_lifetime_closure(self.state)
+
+    def test_root_lifetime_closure_rejects_complete_task_with_incomplete_inspection(self):
+        self.inspection_records(managed_exit_proof=True)
+        ordinary = self.durable_ordinary_admission(runner_ownership="managed")
+        self.managed_ordinary_lifetime(ordinary)
+        (self.state / "inspections" / TASK / "lifetime-termination.json").unlink()
+
+        with self.assertRaisesRegex(AcceptanceFailure, "inspection lifetime termination"):
+            provider_common.validate_managed_lifetime_closure(self.state)
+
+    def test_root_lifetime_closure_accepts_complete_mixed_state(self):
+        self.inspection_records(managed_exit_proof=True)
+        ordinary = self.durable_ordinary_admission(runner_ownership="managed")
+        self.managed_ordinary_lifetime(ordinary)
+
+        closure = provider_common.validate_managed_lifetime_closure(self.state)
+
+        self.assertEqual(set(closure["tasks"]), {TASK})
+        self.assertEqual(set(closure["inspections"]), {TASK})
+        self.assertEqual(closure["tasks"][TASK]["worker_wait"]["result"], "success")
+        self.assertEqual(closure["inspections"][TASK]["worker_wait"]["result"], "success")
+
+    def test_root_lifetime_closure_ignores_managed_plan_without_supervisor_handoff(self):
+        self.inspection_records()
+        ordinary = self.durable_ordinary_admission(runner_ownership="managed")
+        (ordinary / "supervisor.ref.json").unlink()
+        shutil.rmtree(self.state / "inspections")
+
+        closure = provider_common.validate_managed_lifetime_closure(self.state)
+
+        self.assertEqual(closure["tasks"], {})
+        self.assertEqual(closure["inspections"], {})
+
+    def test_root_lifetime_closure_rejects_handoff_without_managed_lifetime(self):
+        self.inspection_records()
+        self.durable_ordinary_admission(runner_ownership="managed")
+        shutil.rmtree(self.state / "inspections")
+
+        with self.assertRaisesRegex(AcceptanceFailure, "ordinary task lifetime"):
+            provider_common.validate_managed_lifetime_closure(self.state)
+
+    def test_root_lifetime_closure_preserves_custom_and_historical_inspections(self):
+        for index, options in enumerate((
+                {"custom_inspection": True, "include_ordinary": False},
+                {"legacy_admission": True, "include_ordinary": False})):
+            with self.subTest(options=options):
+                if index:
+                    shutil.rmtree(self.state / "inspections")
+                    self.ops.inspection_attempts.clear()
+                    self.ops.inspection_bindings.clear()
+                self.inspection_records(**options)
+                closure = provider_common.validate_managed_lifetime_closure(self.state)
+                self.assertEqual(closure["tasks"], {})
+                self.assertEqual(closure["inspections"], {})
+
+    def test_unstarted_guardian_requires_a_failed_terminal_queue_row(self):
+        self.inspection_records(result=None, include_ordinary=False,
+                                managed_exit_proof=True)
+        self.ops.tasks = {}
+        self.ops.labels = {}
+        self.ops.numbers = {}
+
+        failed = self.status(self.inspection_row({"Failed": 1}), include_ordinary=False)
+        self.assertTrue(self.ops.failure_queue_finished(failed))
+
+        succeeded = self.status(self.inspection_row(), include_ordinary=False)
+        self.assertFalse(self.ops.failure_queue_finished(succeeded))
+
+    def test_inspection_queue_row_requires_the_control_working_directory(self):
+        self.inspection_records(result=None, include_ordinary=False,
+                                managed_exit_proof=True)
+        self.ops.tasks = {}
+        self.ops.labels = {}
+        self.ops.numbers = {}
+        row = self.inspection_row({"Failed": 1})
+        row["path"] = str(self.state)
+
+        self.assertFalse(self.ops.failure_queue_finished(
+            self.status(row, include_ordinary=False)))
+
+    def test_managed_guardian_wait_rejects_changed_worker_identity(self):
+        directory = self.inspection_records(managed_exit_proof=True)
+        wait_path = directory / "lifetime-worker-wait.json"
+        wait = read_json(wait_path)
+        wait["worker_sha256"] = "0" * 64
+        write_json(wait_path, wait, replace=True)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "worker Wait binding mismatch"):
+            self.ops.validate_inspection_journals()
+
+    def test_managed_guardian_proof_survives_failed_or_removed_queue_row(self):
+        self.inspection_records(managed_exit_proof=True)
+        self.durable_ordinary_admission()
+        ordinary = self.ordinary_row()
+        self.ops.tasks = {}
+        self.ops.labels = {}
+        self.ops.numbers = {}
+
+        failed_row = self.status(self.inspection_row({"Failed": 17}), ordinary=ordinary)
+        self.assertTrue(self.ops.failure_queue_finished(failed_row))
+
+        removed_row = self.status(None, ordinary=ordinary)
+        self.assertTrue(self.ops.failure_queue_finished(removed_row))
+
+    def test_partial_managed_guardian_evidence_cannot_fallback_to_queue(self):
+        directory = self.inspection_records(managed_exit_proof=True)
+        (directory / "lifetime-worker-wait.json").unlink()
+
+        self.assertFalse(self.ops.failure_queue_finished(self.status(self.inspection_row())))
+
+    def test_custom_inspection_uses_exact_terminal_queue_fallback(self):
+        self.inspection_records(custom_inspection=True)
+        self.durable_ordinary_admission()
+        ordinary = self.ordinary_row()
+        self.ops.tasks = {}
+        self.ops.labels = {}
+        self.ops.numbers = {}
+
+        self.assertTrue(self.ops.failure_queue_finished(
+            self.status(self.inspection_row(), ordinary=ordinary)))
+
+    def test_historical_inspection_uses_exact_terminal_queue_fallback(self):
+        self.inspection_records(legacy_admission=True)
+        self.durable_ordinary_admission()
+        ordinary = self.ordinary_row()
+        self.ops.tasks = {}
+        self.ops.labels = {}
+        self.ops.numbers = {}
+
+        self.assertTrue(self.ops.failure_queue_finished(
+            self.status(self.inspection_row(), ordinary=ordinary)))
+
+    def test_queue_fallback_rejects_wrong_supervisor_state_identity(self):
+        self.inspection_records()
+        status = self.status(self.inspection_row())
+        status["tasks"]["42"]["path"] = str(self.base / "foreign-state")
+
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
+    def test_queue_fallback_rejects_duplicate_terminal_rows(self):
+        self.inspection_records()
+        status = self.status(self.inspection_row())
+        duplicate = deepcopy(status["tasks"]["42"])
+        duplicate["id"] = 43
+        status["tasks"]["43"] = duplicate
+
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
     def test_inspection_expectation_rejects_late_and_conflicting_registration(self):
         directory = self.inspection_records()
         binding = read_json(directory / "request.json")["binding"]
@@ -707,6 +1261,11 @@ class InspectionHarnessTests(unittest.TestCase):
         status = self.status(self.inspection_row({"Failed": 17}), include_ordinary=False)
         self.assertFalse(self.ops.failure_queue_finished(status))
 
+    def test_inspection_request_accepts_legacy_twenty_second_deadline(self):
+        self.inspection_records(legacy_admission=True)
+        records = self.ops.validate_inspection_journals()
+        self.assertEqual(set(records), {TASK})
+
     def test_inspection_request_cannot_predate_root_creation(self):
         self.inspection_records()
         root = read_json(self.state / "root.json")
@@ -717,6 +1276,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
     def test_root_creation_timestamp_remains_pinned_across_observations(self):
         self.inspection_records()
+        self.durable_ordinary_admission()
         status = self.status(self.inspection_row())
         self.assertTrue(self.ops.failure_queue_finished(status))
         root = read_json(self.state / "root.json")
@@ -772,6 +1332,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
     def test_native_binding_mode_reaches_failure_cleanup_and_replay(self):
         self.inspection_records()
+        self.durable_ordinary_admission()
         self.ops.inspection_bindings.clear()
         status = self.status(self.inspection_row())
         self.assertFalse(self.ops.failure_queue_finished(status))
@@ -952,6 +1513,11 @@ class InspectionHarnessTests(unittest.TestCase):
             self.ops._validate_queue_membership(status, False)
 
     def test_ordinary_failure_cleanup_binds_exact_id_label_and_default_group(self):
+        self.inspection_records()
+        self.durable_ordinary_admission()
+        shutil.rmtree(self.state / "inspections")
+        self.ops.inspection_attempts.clear()
+        self.ops.inspection_bindings.clear()
         status = {
             "tasks": {"7": self.ordinary_row()},
             "groups": {"default": {"status": "Running", "parallel_tasks": 1}},
@@ -970,6 +1536,127 @@ class InspectionHarnessTests(unittest.TestCase):
         duplicate_label["tasks"]["8"] = deepcopy(duplicate_label["tasks"]["7"])
         duplicate_label["tasks"]["8"]["id"] = 8
         self.assertFalse(self.ops.failure_queue_finished(duplicate_label))
+
+    def test_managed_ordinary_done_failures_without_lifetime_closure_are_retained(self):
+        self.ordinary_only_admission("managed")
+
+        for result in ({"Failed": 17}, "Killed"):
+            with self.subTest(result=result):
+                self.assertFalse(
+                    self.ops.failure_queue_finished(self.ordinary_only_status(result)))
+
+    def test_managed_ordinary_missing_mismatched_or_unreadable_wait_is_retained(self):
+        directory = self.ordinary_only_admission("managed")
+        lifetime = self.managed_ordinary_lifetime(directory, wait_result="exit-error")
+        wait_path = lifetime / "worker-wait.json"
+        valid_wait = read_json(wait_path)
+        status = self.ordinary_only_status({"Failed": 17})
+
+        wait_path.unlink()
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
+        write_json(wait_path, valid_wait)
+        mismatched = deepcopy(valid_wait)
+        mismatched["worker_sha256"] = "0" * 64
+        write_json(wait_path, mismatched, replace=True)
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
+        wait_path.write_text("{", encoding="utf-8")
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
+    def test_managed_ordinary_valid_closure_allows_failed_cleanup(self):
+        directory = self.ordinary_only_admission("managed")
+        self.managed_ordinary_lifetime(directory, wait_result="exit-error")
+
+        self.assertTrue(self.ops.failure_queue_finished(
+            self.ordinary_only_status({"Failed": 17})))
+
+    def test_managed_ordinary_valid_closure_allows_successful_shutdown(self):
+        directory = self.ordinary_only_admission("managed")
+        self.managed_ordinary_lifetime(directory)
+        status = self.ordinary_only_status()
+        calls = []
+        self.ops.queue_status = lambda _name: status
+        self.ops.processes = SimpleNamespace(drain=lambda **_kwargs: [])
+        self.ops.client = lambda name, operation, **_kwargs: calls.append((name, operation))
+        self.ops.daemon = SimpleNamespace(wait=lambda **_kwargs: None)
+
+        self.ops.shutdown()
+
+        self.assertTrue(self.ops.closed)
+        self.assertEqual(calls, [("private-shutdown", ["shutdown"])])
+
+    def test_managed_ordinary_successful_shutdown_without_closure_is_rejected(self):
+        self.ordinary_only_admission("managed")
+        self.ops.queue_status = lambda _name: self.ordinary_only_status()
+
+        with self.assertRaisesRegex(AcceptanceFailure, "lifetime"):
+            self.ops.shutdown()
+
+        self.assertFalse(self.ops.closed)
+
+    def test_managed_ordinary_not_started_proof_allows_failed_cleanup(self):
+        directory = self.ordinary_only_admission("managed")
+        self.managed_ordinary_lifetime(
+            directory, wait_result="not-started", with_worker=False)
+
+        self.assertTrue(self.ops.failure_queue_finished(
+            self.ordinary_only_status({"FailedToSpawn": "fixture start failure"})))
+
+    def test_managed_ordinary_exact_unqualified_failure_is_valid(self):
+        directory = self.ordinary_only_admission("managed")
+        self.managed_ordinary_lifetime(
+            directory, wait_result="exit-error", with_worker=False,
+            scope_kind="cgroup-v2")
+
+        self.assertTrue(self.ops.failure_queue_finished(
+            self.ordinary_only_status({"Failed": 17})))
+
+    def test_managed_ordinary_previous_boot_termination_does_not_require_wait(self):
+        directory = self.ordinary_only_admission("managed")
+        self.managed_ordinary_lifetime(
+            directory, include_wait=False, termination_cause="previous-boot")
+
+        self.assertTrue(
+            self.ops.failure_queue_finished(self.ordinary_only_status("Killed")))
+
+    def test_managed_ordinary_lifetime_requires_domain_separated_owner_digest(self):
+        directory = self.ordinary_only_admission("managed")
+        spec_sha = digest(directory / "task.json")
+        meta_sha = digest(directory / "meta.json")
+        self.assertEqual(
+            provider_common.ordinary_lifetime_owner_digest(spec_sha, meta_sha),
+            provider_common.sha(
+                ("delegation-layer:lifetime-owner:task:v1\n" + spec_sha +
+                 "\n" + meta_sha).encode("ascii")),
+        )
+        lifetime = self.managed_ordinary_lifetime(directory, wait_result="exit-error")
+        for name in ("intent.json", "registration.json"):
+            path = lifetime / name
+            record = read_json(path)
+            record["owner_sha256"] = spec_sha
+            write_json(path, record, replace=True)
+
+        self.assertFalse(self.ops.failure_queue_finished(
+            self.ordinary_only_status({"Failed": 17})))
+
+    def test_managed_ordinary_lifetime_requires_exact_launch_set(self):
+        directory = self.ordinary_only_admission("managed")
+        lifetime = self.managed_ordinary_lifetime(directory, wait_result="exit-error")
+        termination_path = lifetime / "terminated.json"
+        termination = read_json(termination_path)
+        termination["launch_set_sha256"] = provider_common.sha(
+            provider_common.canonical_go_json([]))
+        write_json(termination_path, termination, replace=True)
+
+        self.assertFalse(self.ops.failure_queue_finished(
+            self.ordinary_only_status({"Failed": 17})))
+
+    def test_custom_ordinary_task_without_lifetime_keeps_queue_fallback(self):
+        self.ordinary_only_admission("custom")
+
+        self.assertTrue(
+            self.ops.failure_queue_finished(self.ordinary_only_status("Killed")))
 
     def test_status_observation_requires_successful_natural_exit_and_strict_schema(self):
         directory = self.base / "status-strict"
@@ -1055,6 +1742,70 @@ class InspectionHarnessTests(unittest.TestCase):
         shutil.rmtree(self.state / "inspections" / TASK)
         self.assertFalse(self.ops.failure_queue_finished(lost_response))
 
+    def test_failure_cleanup_recovers_durable_admission_after_response_loss(self):
+        self.inspection_records()
+        self.durable_ordinary_admission()
+        status = self.status(self.inspection_row(), ordinary=self.ordinary_row())
+        self.ops.tasks = {}
+        self.ops.labels = {}
+        self.ops.numbers = {}
+
+        self.assertTrue(self.ops.failure_queue_finished(status))
+
+    def test_failure_cleanup_requires_exact_durable_supervisor_receipt(self):
+        self.inspection_records()
+        self.durable_ordinary_admission()
+        status = self.status(self.inspection_row(), ordinary=self.ordinary_row())
+
+        self.assertTrue(self.ops.failure_queue_finished(status))
+        receipt = self.state / "tasks" / TASK / "supervisor.ref.json"
+        receipt_record = read_json(receipt)
+        receipt_record["resolution_cwd"] = str(self.base)
+        write_json(receipt, receipt_record, replace=True)
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
+        del receipt_record["resolution_cwd"]
+        write_json(receipt, receipt_record, replace=True)
+        self.assertTrue(self.ops.failure_queue_finished(status))
+        receipt.unlink()
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
+    def test_failure_cleanup_rejects_task_hash_drift(self):
+        self.inspection_records()
+        self.durable_ordinary_admission()
+        status = self.status(self.inspection_row(), ordinary=self.ordinary_row())
+        self.ops.tasks = {}
+        self.ops.labels = {}
+        self.ops.numbers = {}
+        task_path = self.state / "tasks" / TASK / "task.json"
+        task_record = read_json(task_path)
+        task_record["requested_config"]["budget"] = "2m0s"
+        task_path.write_bytes(provider_common._canonical_task_bytes(task_record))
+
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
+    def test_failure_cleanup_recovers_durable_admission_without_inspection(self):
+        self.inspection_records()
+        self.durable_ordinary_admission()
+        shutil.rmtree(self.state / "inspections")
+        self.ops.inspection_attempts.clear()
+        self.ops.inspection_bindings.clear()
+        status = {
+            "tasks": {"7": self.ordinary_row()},
+            "groups": {"default": {"status": "Running", "parallel_tasks": 1}},
+        }
+        self.ops.tasks = {}
+        self.ops.labels = {}
+        self.ops.numbers = {}
+
+        self.assertTrue(self.ops.failure_queue_finished(status))
+
+        task_path = self.state / "tasks" / TASK / "task.json"
+        task_record = read_json(task_path)
+        task_record["requested_config"]["budget"] = "2m0s"
+        task_path.write_bytes(provider_common._canonical_task_bytes(task_record))
+        self.assertFalse(self.ops.failure_queue_finished(status))
+
     def test_failure_cleanup_rejects_unrecognized_inspection_result(self):
         self.inspection_records(result="unavailable")
         status = self.status(self.inspection_row("Success"),
@@ -1109,6 +1860,20 @@ class InspectionHarnessTests(unittest.TestCase):
         self.assertEqual(shutdown_calls, [True])
         sleep.assert_called_once_with(0.25)
 
+    def test_retain_failure_ownership_stops_at_finite_observation_deadline(self):
+        pending = [{"pid": 17, "argv": ["caller"], "directory": "/owned/caller"}]
+        self.ops.processes = SimpleNamespace(drain=lambda **_kwargs: pending)
+        self.ops.daemon = SimpleNamespace(poll=lambda: None)
+
+        with patch.object(provider_common, "failure_cleanup_deadline", return_value=10.0), \
+                patch.object(provider_common, "wait_for_failure_cleanup", return_value=False):
+            self.assertFalse(self.ops.retain_failure_ownership())
+
+        receipt = read_json(self.output / "failure-cleanup-expired.json")
+        self.assertEqual(receipt["reason"],
+                         "owned processes or private queue did not finish naturally")
+        self.assertEqual(receipt["signals_sent"], 0)
+
     def test_retain_failure_ownership_does_not_pass_unknown_queue(self):
         self.ops.processes = SimpleNamespace(drain=lambda **_kwargs: [])
         states = iter((None, 0))
@@ -1117,7 +1882,7 @@ class InspectionHarnessTests(unittest.TestCase):
 
         with patch("acceptance_provider_common.time.sleep") as sleep, \
                 patch("acceptance_provider_common.time.monotonic",
-                      side_effect=(10.0, 10.1, 10.2)):
+                      side_effect=(10.0, 10.1, 10.2, 10.3, 10.4)):
             self.assertFalse(self.ops.retain_failure_ownership())
 
         self.assertEqual(sleep.call_count, 1)

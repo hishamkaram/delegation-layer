@@ -20,6 +20,7 @@ func TestExistingNativeProfilePreservesPersistedPredicate(t *testing.T) {
 			}{
 				{name: "v2", ref: historicalReferenceForMode(mode)},
 				{name: "v3", ref: historicalCurrentReferenceForMode(mode)},
+				{name: "v4", ref: historicalCurrentV4ReferenceForMode(mode)},
 			} {
 				t.Run(revision.name, func(t *testing.T) {
 					testPersistedProfile(t, mode, revision.ref)

@@ -42,6 +42,7 @@ type Config struct {
 	Status             VerbConfig `json:"status"`
 	Parallel           VerbConfig `json:"parallel"`
 	Add                VerbConfig `json:"add"`
+	Enqueue            VerbConfig `json:"enqueue"`
 	Kill               VerbConfig `json:"kill"`
 	Remove             VerbConfig `json:"remove"`
 }

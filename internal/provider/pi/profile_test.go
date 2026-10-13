@@ -151,7 +151,7 @@ func testLegacyProfileReconstruction(t *testing.T) {
 }
 
 func TestProfileReconstructionPreservesPreUpgradePredicate(t *testing.T) {
-	for _, reference := range []task.PredicateRef{readOnlyV5Reference(), readOnlyV4Reference(), workspaceWriteV5Reference(), workspaceWriteV4Reference()} {
+	for _, reference := range []task.PredicateRef{readOnlyV5Reference(), readOnlyV4Reference(), workspaceWriteV7Reference(), workspaceWriteV5Reference(), workspaceWriteV4Reference()} {
 		t.Run(reference.Mode, func(t *testing.T) {
 			request, now := profileReconstructionFixture(t, reference.Mode)
 			current := finalizeProfile(t, mustPrepareCandidate(t, request), now)
@@ -166,6 +166,102 @@ func TestProfileReconstructionPreservesPreUpgradePredicate(t *testing.T) {
 			}
 			if !rebuilt.Plan.Predicate.Equal(reference) || !slices.Equal(rebuilt.Plan.Arguments, historicalArguments) || !task.CompareEffectiveConfigs(rebuilt.Effective, current.Effective) {
 				t.Fatalf("existing task contract changed: %+v", rebuilt)
+			}
+		})
+	}
+}
+
+func TestWorkspaceWriteV7ReconstructionRetainsRuntimeCapability(t *testing.T) {
+	request, now := profileReconstructionFixture(t, ModeWorkspaceWrite)
+	current := finalizeProfile(t, mustPrepareCandidate(t, request), now)
+	candidate, err := PrepareExistingCandidate(request, task.MetaRecord{
+		Predicate:       workspaceWriteV7Reference(),
+		EffectiveConfig: current.Effective,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Inspection == nil || candidate.Inspection.Runtime == nil {
+		t.Fatalf("workspace-write v7 inspection=%+v", candidate.Inspection)
+	}
+	wantFlags := []string{"--mode", "--model", "--thinking", "--session"}
+	if !slices.Equal(candidate.Inspection.Runtime.RequiredFlags, wantFlags) || slices.Contains(candidate.Inspection.Runtime.RequiredFlags, "--tools") {
+		t.Fatalf("workspace-write v7 requirements=%q", candidate.Inspection.Runtime.RequiredFlags)
+	}
+	rebuilt := finalizeProfile(t, candidate, now)
+	if !rebuilt.Plan.Predicate.Equal(workspaceWriteV7Reference()) || slices.Contains(rebuilt.Plan.Arguments, "--tools") {
+		t.Fatalf("workspace-write v7 reconstruction changed launch contract: %+v", rebuilt.Plan)
+	}
+}
+
+func TestWorkspaceHistoricalRuntimeRequirementsMatchReconstructedArguments(t *testing.T) {
+	request, now := profileReconstructionFixture(t, ModeWorkspaceWrite)
+	currentCandidate := mustPrepareCandidate(t, request)
+	current := finalizeProfile(t, currentCandidate, now)
+	currentFlags := []string{"--mode", "--tools", "--model", "--thinking", "--session"}
+	currentDigest := requireRuntimeProbeDefinition(t, currentCandidate.Inspection, currentFlags)
+	cases := []struct {
+		name                   string
+		reference              task.PredicateRef
+		wantFlags              []string
+		wantToolsFlag          bool
+		wantCurrentProbeDigest bool
+	}{
+		{
+			name:                   "v3",
+			reference:              workspaceWriteV3Reference(),
+			wantFlags:              currentFlags,
+			wantToolsFlag:          false,
+			wantCurrentProbeDigest: true,
+		},
+		{
+			name:                   "v4",
+			reference:              workspaceWriteV4Reference(),
+			wantFlags:              currentFlags,
+			wantToolsFlag:          false,
+			wantCurrentProbeDigest: true,
+		},
+		{
+			name:                   "v5",
+			reference:              workspaceWriteV5Reference(),
+			wantFlags:              currentFlags,
+			wantToolsFlag:          false,
+			wantCurrentProbeDigest: true,
+		},
+		{
+			name:          "v7",
+			reference:     workspaceWriteV7Reference(),
+			wantFlags:     []string{"--mode", "--model", "--thinking", "--session"},
+			wantToolsFlag: false,
+		},
+		{
+			name:                   "current",
+			reference:              ReferenceForMode(ModeWorkspaceWrite),
+			wantFlags:              currentFlags,
+			wantToolsFlag:          true,
+			wantCurrentProbeDigest: true,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			candidate, err := PrepareExistingCandidate(request, task.MetaRecord{
+				EffectiveConfig: current.Effective,
+				Predicate:       testCase.reference,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotDigest := requireRuntimeProbeDefinition(t, candidate.Inspection, testCase.wantFlags)
+			if (gotDigest == currentDigest) != testCase.wantCurrentProbeDigest {
+				t.Fatalf("runtime definition digest=%s matches current=%t want match=%t", gotDigest, gotDigest == currentDigest, testCase.wantCurrentProbeDigest)
+			}
+
+			rebuilt := finalizeProfile(t, candidate, now)
+			if !rebuilt.Plan.Predicate.Equal(testCase.reference) {
+				t.Fatalf("reconstructed predicate=%+v want=%+v", rebuilt.Plan.Predicate, testCase.reference)
+			}
+			if got := slices.Contains(rebuilt.Plan.Arguments, "--tools"); got != testCase.wantToolsFlag {
+				t.Fatalf("reconstructed argv=%q contains --tools=%t want=%t", rebuilt.Plan.Arguments, got, testCase.wantToolsFlag)
 			}
 		})
 	}

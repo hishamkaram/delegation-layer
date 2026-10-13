@@ -14,7 +14,14 @@ import shlex
 import tempfile
 import time
 
-from acceptance_supervisor_common import Processes, config_for
+from acceptance_provider_common import validate_managed_lifetime_closure
+from acceptance_supervisor_common import (
+    DirectoryOwner,
+    OwnedDirectory,
+    Processes,
+    config_for,
+    finalize_acceptance_artifacts,
+)
 import sys
 
 REPO = Path(__file__).resolve().parents[1]
@@ -56,7 +63,6 @@ def command(harness, model, prompt):
 
 
 def prepare_workspace(path, harness):
-    path.mkdir()
     location = {"codex": ".agents", "claude": ".claude", "hermes": ".hermes"}[harness]
     shutil.copytree(SKILL, path / location / "skills/agent-integration")
     (path / "pricing.py").write_text(
@@ -74,20 +80,30 @@ def candidate_digests(root=SKILL):
 class AttemptSupervisor:
     """Own only this attempt's private daemon; stopping always goes through Pueue."""
 
-    def __init__(self, run, environment):
-        self.base = Path(tempfile.mkdtemp(prefix="skill-queue-")).resolve()
-        self.config = self.base / "pueue.json"
-        for name in ("state", "run"):
-            (self.base / name).mkdir()
-        write_json(self.config, config_for(self.base))
-        self.processes = Processes(run / "processes", environment)
+    def __init__(self, run, environment, ownership):
         self.client = shutil.which("pueue")
         self.daemon_path = shutil.which("pueued")
         if not self.client or not self.daemon_path:
             raise FileNotFoundError("private test supervisor unavailable")
+        base = Path(tempfile.mkdtemp(prefix="skill-queue-")).resolve(strict=True)
+        self.base = ownership.adopt_created(
+            "private skill supervisor", base, base.parent).directory
+        self.config = self.base / "pueue.json"
+        ownership.create("private skill supervisor state", self.base / "state", self.base)
+        ownership.create("private skill supervisor runtime", self.base / "run", self.base)
+        write_json(self.config, config_for(self.base))
+        self.processes = Processes(run / "processes", environment, owner=ownership)
         self.daemon = None
         self.task_id = None
         self.run = run
+        self.delegate_state_roots = set()
+        configured_root = self.processes.environment.get("DELEGATE_ROOT")
+        if configured_root:
+            configured_path = Path(configured_root)
+            if not configured_path.is_absolute():
+                raise RuntimeError("nested Delegate state root is not absolute")
+            self.delegate_state_roots.add(configured_path.resolve(strict=False))
+        self.nested_lifetime_closure = None
         write_json(run / "supervisor.json", {"config": str(self.config), "owned": True})
 
     def direct(self, name, argv, expected=0):
@@ -142,13 +158,56 @@ class AttemptSupervisor:
             raise RuntimeError(f"supervised {name} prerequisite failed")
         return self.run / name / "stdout.txt"
 
+    def authorize_nested_lifetime_closure(self):
+        """Close every nested Delegate root before stopping this fixture queue."""
+        roots = set(getattr(self, "delegate_state_roots", ()))
+        for process in getattr(self.processes, "entries", ()):
+            argv = getattr(process, "argv", ())
+            for index, value in enumerate(argv[:-1]):
+                if value == "--root":
+                    candidate = Path(argv[index + 1])
+                    if not candidate.is_absolute():
+                        raise RuntimeError("nested Delegate state root is not absolute")
+                    roots.add(candidate.resolve(strict=False))
+
+        closure = {"status": "closed", "roots": []}
+        try:
+            for root in sorted(roots, key=str):
+                root_record = root / "root.json"
+                if not root_record.exists() and not root_record.is_symlink():
+                    if root.is_dir() and not any(root.iterdir()):
+                        continue
+                    raise RuntimeError("nested Delegate state root has no root record: " + str(root))
+                result = validate_managed_lifetime_closure(root)
+                closure["roots"].append({
+                    "path": str(root),
+                    "task_count": len(result["tasks"]),
+                    "inspection_count": len(result["inspections"]),
+                })
+        except BaseException as error:
+            failure = {
+                "status": "failed",
+                "roots": [{"path": str(root)} for root in sorted(roots, key=str)],
+                "error_type": type(error).__name__,
+            }
+            failure_path = self.run / "nested-lifetime-closure.json"
+            if not failure_path.exists():
+                write_json(failure_path, failure)
+            raise
+        self.nested_lifetime_closure = closure
+        write_json(self.run / "nested-lifetime-closure.json", closure)
+        return closure
+
     def close(self):
         for process in self.processes.entries:
             if process is not self.daemon and process.poll() is None:
                 process.wait(1)  # An unobservable control retains ownership; stop the suite.
         if self.daemon is None:
+            self.authorize_nested_lifetime_closure()
             return
-        # Stop scheduling without suspending processes, then drain this owned queue.
+        # Stop scheduling, remove only work that never started, and wait for
+        # running fixture or Delegate tasks to end through their own lifecycle.
+        # This acceptance owner never signals a provider or managed worker.
         self.control("pause", "--all", "--wait")
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
@@ -161,10 +220,12 @@ class AttemptSupervisor:
                 kind = next(iter(status)) if isinstance(status, dict) else status
                 if kind in ("Queued", "Stashed", "Locked"):
                     self.control("remove", key, expected={0, 1})
-            self.control("kill", "--all")
             time.sleep(0.2)
         else:
             raise RuntimeError("private supervisor stop not observed; ownership retained")
+        # The outer fixture queue is independently complete at this point.
+        # Nested Delegate records still require the shared lifetime authority.
+        self.authorize_nested_lifetime_closure()
         self.control("shutdown")
         self.daemon.wait(30, expected=0)
         write_json(self.run / "supervisor-closed.json", {"termination_observed": True})
@@ -201,7 +262,9 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
              routing_context=False, delegate_bin=None):
     run = output / f"{case['name']}-{repetition}"
     run.mkdir(mode=0o700)
+    ownership = DirectoryOwner()
     workspace = run / "workspace"
+    workspace = ownership.create("disposable workspace", workspace, run).directory
     prepare_workspace(workspace, harness)
     prompt = case["prompt"]
     (run / "prompt.txt").write_text(prompt, encoding="utf-8")
@@ -210,13 +273,16 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
         argv += routing_hook_arguments(harness, workspace)
     # Keep supervisor state beside the captured evidence. This makes the
     # acceptance run self-contained and works when the user's home is read-only.
-    state = Path(tempfile.mkdtemp(prefix="state-", dir=output))
+    state_path = Path(tempfile.mkdtemp(prefix="state-", dir=output))
+    state = ownership.adopt_created("Delegate state", state_path, output).directory
     env = dict(os.environ, DELEGATE_ROOT=str(state))
     env.pop("DELEGATE_PUEUE_CONFIG", None)
+    candidate_path = None
     if delegate_bin is not None:
         delegate_bin = Path(delegate_bin).resolve()
         candidate_path = run / "candidate-bin"
-        candidate_path.mkdir()
+        candidate_path = ownership.create(
+            "candidate Delegate path", candidate_path, run).directory
         (candidate_path / "delegate").symlink_to(delegate_bin)
         env["PATH"] = str(candidate_path) + os.pathsep + env.get("PATH", "")
         candidate_env = run / "candidate-env.sh"
@@ -255,7 +321,7 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
         if not executable:
             raise FileNotFoundError("initiating harness missing")
         argv[0] = executable
-        owner = AttemptSupervisor(run, env)
+        owner = AttemptSupervisor(run, env, ownership)
         # Nested Delegate tasks share only this attempt's queue. This both avoids
         # caller-owned queues and makes outer cleanup observe paid child work.
         owner.processes.environment["DELEGATE_PUEUE_CONFIG"] = str(owner.config)
@@ -310,11 +376,29 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
         receipt.update(status="blocked", reason="prerequisite_or_supervisor_failed",
                        error_type=type(error).__name__)
     finally:
+        supervisor_closed = owner is None
         if owner is not None:
             try:
                 owner.close()
+                supervisor_closed = True
             except (OSError, ValueError, RuntimeError, KeyError):
                 receipt.update(status="failed", reason="supervisor_cleanup_unproven")
+        owned_directories = ownership.transfer()
+        candidate_raw_token = None if owner is None else getattr(owner.processes, "capture_root", None)
+        raw_token = candidate_raw_token if isinstance(candidate_raw_token, OwnedDirectory) else None
+        try:
+            cleaned = finalize_acceptance_artifacts(
+                run,
+                supervisor_closed,
+                owned_directories,
+                receipt["status"] not in ("failed", "blocked"),
+                raw_process_captures_token=raw_token,
+            )
+            if not cleaned and supervisor_closed:
+                receipt.update(status="failed", reason="acceptance_artifact_cleanup_failed")
+        except (OSError, RuntimeError, ValueError) as error:
+            receipt.update(status="failed", reason="acceptance_artifact_cleanup_failed",
+                           error_type=type(error).__name__)
         for name in ("stdout.txt", "stderr.txt", "fixture/calls.jsonl",
                      "fixture/routing-events.jsonl", "fixture/routing-state.json"):
             if (run / name).exists():

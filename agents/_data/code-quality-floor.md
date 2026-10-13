@@ -4,10 +4,10 @@ This document specifies the non-negotiable engineering floor for the repository.
 
 ## 1. Toolchain & Environment
 - **Go Version**: `go 1.27.0` declared in `go.mod`.
-- **Compiler Pin**: Exactly `go1.27.1` in development and CI.
+- **Compiler Pin**: Exactly `go1.27.2` in development and CI.
 - **Local Toolchain Guard**: `GOTOOLCHAIN=local` is strictly enforced to prevent ambient, untracked compiler downloads.
 - **Project Tools Pinning**:
-  - `golangci-lint`: `v2.13.2`
+  - `golangci-lint`: `v2.14.0`
   - `gofumpt`: `v0.12.0`
   - `govulncheck`: `v1.8.0`
   - `goreleaser`: `v2.18.1`
@@ -25,14 +25,24 @@ This document specifies the non-negotiable engineering floor for the repository.
   - `forbidigo`: Anchored patterns matching selector AST nodes:
     - `^os\.Process\.(Signal|Kill)$`
     - `^syscall\.(Kill|Setsid)$`
+    - `^unix\.Kill$`, with one path-and-message-scoped exclusion for the
+      guardian implementation under `internal/lifetime/`
     - `^exec\.CommandContext$`
     - `^exec\.Cmd\.WaitDelay$`
 - **Standalone Formatter**: Pinned `gofumpt 0.12.0` runs standalone via `make fmt` and `make fmt-check`. It is not duplicated inside golangci-lint.
 
 ## 3. Testing and Verification Discipline
-- **Sequential Gate (`make check`)**:
-  `tool-versions → verify-skills → fmt-check → config-check → vet → lint → verify-gates → test-race → test-native-harness → build → smoke-cli → vuln`.
+- **Sequential Gate:** The root [Makefile](../../Makefile) `check` target is
+  authoritative. Keep this contract aligned by referring to that recipe
+  rather than copying its command sequence here.
 - **Race Detection**: All unit and integration tests run under `-race -count=1`.
-- **Unit Testing**: Unit tests exercise error branches, writer failures, and boundaries using injected in-memory mocks without spawning background or external subprocesses.
+- **Unit Testing**: Pure unit tests exercise local error branches, writer
+  failures, and boundaries with injected in-memory mocks and no background or
+  external subprocesses.
+- **Lifecycle Composition**: Durable lifecycle changes must satisfy the
+  [canonical transition-matrix and composed-test
+  contract](maintainability-contract.md#durable-transition-matrix-and-composed-tests).
+  Fake-only coverage establishes isolated protocol ordering, not durable
+  recovery or a real consumer verdict.
 - **Gate Rejection Fixtures**: `scripts/verify-gates.sh` proves linter enforcement against isolated temporary modules for each forbidden pattern and verifies that corrected counterparts pass.
 - **No Test Weakening**: Tests must never be loosened, assertions must not be bypassed, and linters must never be suppressed to force green status.

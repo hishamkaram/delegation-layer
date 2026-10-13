@@ -140,6 +140,11 @@ func TestNewMainKeepsRecoveryIndependentFromMissingConfig(t *testing.T) {
 	if _, err := m.Dependencies().PrepareProfile(request); err == nil {
 		t.Fatal("missing sibling config unexpectedly prepared a profile")
 	}
+	predecessor := task.TaskRecord{Provider: fakeprovider.Provider, Mode: fakeprovider.Mode}
+	successor := task.TaskRecord{Provider: fakeprovider.Provider, Mode: fakeprovider.Mode}
+	if err := m.Dependencies().Catalog.ValidateContinuation(predecessor, task.MetaRecord{}, successor); err != nil {
+		t.Fatalf("fixture continuation disappeared from acceptance catalog: %v", err)
+	}
 }
 
 type harnessFixture struct {

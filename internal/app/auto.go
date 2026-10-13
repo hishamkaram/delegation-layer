@@ -44,7 +44,7 @@ func selectAutoProvider(deps Dependencies, root, rootID, taskID, cwd string, req
 		if err != nil {
 			return "", err
 		}
-		err = staticAutoProviderError(deps, root, request)
+		err = validateStaticAdmission(deps, root, request)
 		if err != nil {
 			if !errors.Is(err, commonprovider.ErrAuthenticationBlocked) {
 				authenticationBlocked = false
@@ -63,7 +63,11 @@ func selectAutoProvider(deps Dependencies, root, rootID, taskID, cwd string, req
 	return "", fmt.Errorf("%w: %s", errNoReadyProvider, strings.Join(reasons, "; "))
 }
 
-func staticAutoProviderError(deps Dependencies, root string, request task.TaskRecord) error {
+// validateStaticAdmission runs every deterministic provider check that is safe
+// before a task record or supervisor authority is created. It is shared by
+// automatic selection and continuation so both paths reject the same invalid
+// request before touching durable supervisor state.
+func validateStaticAdmission(deps Dependencies, root string, request task.TaskRecord) error {
 	normalized := deps.normalized()
 	if err := normalized.Catalog.ValidateRequest(request); err != nil {
 		return err

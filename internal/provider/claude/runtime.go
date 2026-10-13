@@ -12,15 +12,35 @@ import (
 // plan. It returns a fresh slice so package metadata remains immutable.
 func RuntimeRequirements() commonprovider.RuntimeCapability {
 	return commonprovider.RuntimeCapability{
+		// Claude's non-TTY help output is intentionally truncated by recent
+		// releases. Probe the stable print entry point here; the complete
+		// launch argv remains validated by the provider process itself.
+		RequiredFlags: []string{"--print"},
+	}
+}
+
+func runtimeRequirementsForRequest(request task.TaskRecord) commonprovider.RuntimeCapability {
+	return RuntimeRequirements()
+}
+
+// runtimeRequirementsForPredicate keeps the admitted probe attached to its
+// native predicate. Only references created with the relaxed probe use the
+// current stable flag set; older references retain their original check.
+func runtimeRequirementsForPredicate(request task.TaskRecord, reference task.PredicateRef) commonprovider.RuntimeCapability {
+	if reference.Equal(ReferenceForMode(request.Mode)) || reference.Equal(interactionReference(request.Mode)) {
+		return runtimeRequirementsForRequest(request)
+	}
+	return historicalNativeRuntimeRequirementsForRequest(request)
+}
+
+func historicalNativeRuntimeRequirementsForRequest(request task.TaskRecord) commonprovider.RuntimeCapability {
+	requirements := commonprovider.RuntimeCapability{
 		RequiredFlags: []string{
 			"--print", "--input-format", "--output-format", "--verbose", "--permission-mode",
 			"--permission-prompts", "--resume", "--session-id",
 		},
 	}
-}
-
-func runtimeRequirementsForRequest(request task.TaskRecord) commonprovider.RuntimeCapability {
-	return appendModelRuntimeFlags(RuntimeRequirements(), request)
+	return appendModelRuntimeFlags(requirements, request)
 }
 
 // legacyRuntimeRequirements preserves the exact capability probe used by

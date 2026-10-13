@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -41,6 +44,20 @@ func TestRunInspectionWorkerNeverCreatesMissingStore(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("worker created or changed missing store %q: %v", root, err)
+	}
+}
+
+func TestInspectionWorkerFailureExposesOnlySafeStage(t *testing.T) {
+	err := inspectionWorkerFailure("prepare-environment")
+	if !errors.Is(err, errInspectionWorkerUnavailable) {
+		t.Fatalf("staged failure lost worker classification: %v", err)
+	}
+	public := inspectionWorkerPublicError(err)
+	if got, want := public.Error(), "native inspection unavailable: stage=prepare-environment"; got != want {
+		t.Fatalf("public failure = %q, want %q", got, want)
+	}
+	if got := inspectionWorkerPublicError(errors.New("provider secret detail")).Error(); got != errInspectionWorkerUnavailable.Error() {
+		t.Fatalf("unclassified failure leaked detail: %q", got)
 	}
 }
 
@@ -117,6 +134,153 @@ func TestInspectionBudgetStopperRejectsClosedOperation(t *testing.T) {
 	}
 }
 
+type inspectionLifetimeStub struct {
+	terminated bool
+}
+
+func (*inspectionLifetimeStub) StartCommand(*exec.Cmd, func() error) error { return nil }
+func (*inspectionLifetimeStub) FinishCommand(context.Context, *exec.Cmd) error {
+	return nil
+}
+
+func (s *inspectionLifetimeStub) Terminate(context.Context) error {
+	s.terminated = true
+	return nil
+}
+func (*inspectionLifetimeStub) CloseTask(context.Context) error { return nil }
+
+func TestInspectionBudgetStopperUsesGuardianWithoutClaimingQueueEnded(t *testing.T) {
+	store, operation := newInspectionWorkerOperation(t, time.Unix(100, 0).UTC())
+	if err := operation.RecordReceipt(42); err != nil {
+		t.Fatal(err)
+	}
+	lifetime := &inspectionLifetimeStub{}
+	stopper := &inspectionBudgetStopper{operation: operation, client: &pueue.Client{}, lifetime: lifetime}
+	request, err := stopper.PrepareBudget(operation.Deadline())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = request(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !lifetime.terminated {
+		t.Fatal("inspection deadline did not use the guardian lifetime")
+	}
+	var reply inspection.StopReplyRecord
+	readInspectionWorkerRecord(t, store, operation.Request().TaskID, "stop-reply.json", &reply)
+	if reply.NumericTaskID != 42 || reply.Action != "terminate" || !reply.Acknowledged {
+		t.Fatalf("unexpected lifetime stop reply: %+v", reply)
+	}
+	control, err := store.OpenInspection(operation.Request().TaskID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := control.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	var observation inspection.StopObservationRecord
+	if err = control.Read("stop-observation.json", &observation); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("guardian acknowledgment fabricated queue-ended observation: %v", err)
+	}
+}
+
+type inspectionExpiryTimer struct {
+	ch chan time.Time
+}
+
+func (t *inspectionExpiryTimer) C() <-chan time.Time { return t.ch }
+func (*inspectionExpiryTimer) Stop() bool            { return true }
+
+type inspectionExpiryClock struct {
+	mu    sync.Mutex
+	now   time.Time
+	timer *inspectionExpiryTimer
+}
+
+func (c *inspectionExpiryClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *inspectionExpiryClock) NewTimer(time.Duration) execution.Timer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.timer = &inspectionExpiryTimer{ch: make(chan time.Time, 1)}
+	return c.timer
+}
+
+func (c *inspectionExpiryClock) expire(deadline time.Time) {
+	c.mu.Lock()
+	c.now = deadline
+	timer := c.timer
+	c.mu.Unlock()
+	timer.ch <- deadline
+}
+
+type inspectionExpiryLifetime struct {
+	terminated chan struct{}
+	closed     chan struct{}
+}
+
+func (*inspectionExpiryLifetime) StartCommand(*exec.Cmd, func() error) error { return nil }
+func (*inspectionExpiryLifetime) FinishCommand(context.Context, *exec.Cmd) error {
+	return nil
+}
+
+func (l *inspectionExpiryLifetime) Terminate(context.Context) error {
+	close(l.terminated)
+	return nil
+}
+
+func (l *inspectionExpiryLifetime) CloseTask(context.Context) error {
+	close(l.closed)
+	return nil
+}
+
+func TestInspectionExpiryPersistsTerminationReplyBeforeLifetimeClose(t *testing.T) {
+	created := time.Unix(100, 0).UTC()
+	store, operation := newInspectionWorkerOperation(t, created)
+	if err := operation.RecordReceipt(42); err != nil {
+		t.Fatal(err)
+	}
+	clock := &inspectionExpiryClock{now: created}
+	lifetime := &inspectionExpiryLifetime{terminated: make(chan struct{}), closed: make(chan struct{})}
+	stopper := &inspectionBudgetStopper{operation: operation, client: &pueue.Client{}, lifetime: lifetime}
+	entered := make(chan struct{})
+	type result struct{ workErr, stopErr error }
+	done := make(chan result, 1)
+	go func() {
+		workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{
+			Clock: clock, Stopper: stopper, Lifetime: lifetime,
+		}, func(scope execution.PreflightScope) error {
+			close(entered)
+			<-scope.Context().Done()
+			return nil
+		})
+		done <- result{workErr: workErr, stopErr: stopErr}
+	}()
+	<-entered
+	clock.expire(operation.Deadline())
+	<-lifetime.terminated
+	got := <-done
+	if got.workErr == nil || got.stopErr != nil {
+		t.Fatalf("expiry result work=%v stop=%v", got.workErr, got.stopErr)
+	}
+	select {
+	case <-lifetime.closed:
+	default:
+		t.Fatal("supervised expiry returned before lifetime close")
+	}
+	var reply inspection.StopReplyRecord
+	readInspectionWorkerRecord(t, store, operation.Request().TaskID, "stop-reply.json", &reply)
+	if reply.NumericTaskID != 42 || reply.Action != "terminate" || !reply.Acknowledged {
+		t.Fatalf("expiry did not persist guardian termination acknowledgment: %+v", reply)
+	}
+}
+
 func TestCompleteInspectionFailureSealsExpiredResult(t *testing.T) {
 	_, operation := newInspectionWorkerOperation(t, time.Unix(100, 0).UTC())
 	permit, err := operation.ClaimStart(time.Unix(101, 0).UTC())
@@ -187,6 +351,10 @@ func newInspectionWorkerOperation(t *testing.T, created time.Time) (*taskdir.Sto
 }
 
 func newInspectionWorkerOperationWithRunnerOwnership(t *testing.T, created time.Time, runnerOwnership string) (*taskdir.Store, *inspection.Operation) {
+	return newInspectionWorkerOperationWithExitProof(t, created, runnerOwnership, "")
+}
+
+func newInspectionWorkerOperationWithExitProof(t *testing.T, created time.Time, runnerOwnership, workerExitProof string) (*taskdir.Store, *inspection.Operation) {
 	t.Helper()
 	stateRoot := filepath.Join(canonicalAppTestTempDir(t), "state")
 	store, err := taskdir.InitStore(stateRoot)
@@ -224,6 +392,7 @@ func newInspectionWorkerOperationWithRunnerOwnership(t *testing.T, created time.
 		WorkerExecutable:   "/bin/sh",
 		WorkerSHA256:       digest,
 		RunnerOwnership:    runnerOwnership,
+		WorkerExitProof:    workerExitProof,
 		Supervisor: task.SupervisorRef{
 			ClientExecutable:     "/bin/sh",
 			ClientSHA256:         digest,

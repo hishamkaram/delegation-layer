@@ -51,8 +51,9 @@ Workspace-write requests unattended native execution. Antigravity read-only
 uses exactly `--sandbox --mode plan` without a bypass; its authorized
 workspace-write path retains `--sandbox --mode accept-edits` with the existing
 native bypass. Claude uses permission bypass, Pi read-only uses its native tool
-allowlist with extensions disabled, Pi workspace-write uses native configured
-tools, and OpenCode uses its automatic build mode. These modes can permit
+allowlist with extensions disabled, Pi workspace-write explicitly selects its
+built-in `read`, `bash`, `edit`, and `write` tools, and OpenCode uses its
+automatic build mode. These modes can permit
 access beyond the selected workspace; configured native restrictions still
 belong to each provider. Previously admitted tasks retain their recorded
 preparation contract.
@@ -65,11 +66,36 @@ apply to every model.
 
 ## Process and output safety
 
-The supervisor owns process lifetime and the runner uses bounded capture. The
+Pueue owns scheduling and worker-row state. The application lifetime state
+machine owns native stopping and empty-scope termination proof for live and
+recovery paths. Durable storage owns its intent, registration, exact worker,
+launch, termination, and managed-worker completion records. The execution runner
+owns bounded capture and provider `Start`/`Wait`. The live guardian retains its
+native scope handle and lifetime-owner lease through finalization. Native scope
+disposal occurs only after termination and either the exact managed-worker
+`Wait` or an explicit `not-started` disposition is durable. The
 brief, control JSON, and raw streams have size limits. Declared output artifacts
 must remain inside their approved roots and match the recorded integrity data.
 Only a validated predicate interpreter can turn provider output into a
 published result.
+
+Linux cgroup v2 scopes are identity-bound and provide exact containment when
+the current delegated cgroup permits them. Darwin and Linux fallback private
+sessions are cooperative. The Linux guardian binds itself as the sole child
+subreaper before worker start. Its exact identity and the worker identity are
+observer-only topology anchors, never signal targets. It reaps only adopted
+task zombies by exact PID, leaving the worker's single `Wait` to the execution
+runner. A live Linux guardian proves emptiness through two fresh topology
+observations under its exact subreaper identity; it does not inspect unrelated
+process environments. Darwin combines live topology with an inherited per-task
+marker because it has no subreaper primitive. New Darwin tasks use a private
+session and signal each matched process through its current audit-token identity
+after checking the stable unique identity; a reused numeric PID is never
+sufficient authority. Immutable legacy tasks keep their historical group pin
+until they drain. After either cooperative owner is lost, recovery may terminate
+durable identities and connected descendants but cannot prove the scope empty.
+Delegate reports that uncertainty and never publishes false termination
+evidence.
 
 ## Operational limits
 

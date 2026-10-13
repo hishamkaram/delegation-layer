@@ -379,6 +379,9 @@ func prepareInspectionWorkerCandidate(deps Dependencies, root string, req task.T
 }
 
 func (d Dependencies) useCatalogExistingFor(request task.TaskRecord) bool {
+	if request.RequestedConfig.Interactive && request.PriorSession != nil {
+		return false
+	}
 	if d.useCatalogExisting {
 		return true
 	}

@@ -575,26 +575,15 @@ func (td *TaskDir) RecordStopObservation(id string, facts task.StopObservationFa
 	if !facts.Terminated || facts.State != "ended" {
 		return task.ErrIdentityMismatch
 	}
-	if err := td.store.maintLock.LockSHNonblocking(); err != nil {
-		return err
+	owner, err := td.TryAcquireLifetimeOwner()
+	if errors.Is(err, task.ErrLockBusy) {
+		return task.ErrSessionBusy
 	}
-	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
-	request, digest, receipt, err := td.stopEvidence(id)
 	if err != nil {
 		return err
 	}
-	r, err := newStopObservationRecord(request, digest, receipt, id, facts)
-	if err != nil {
-		return err
-	}
-	return td.recordSame(filepath.Join("stop", id+".observed.json"), r, func() (bool, error) {
-		old, e := td.ReadStopObservation(id)
-		if e != nil {
-			return false, e
-		}
-		r.ObservedAt = old.ObservedAt
-		return reflect.DeepEqual(old, &r), nil
-	})
+	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
+	return td.recordStopObservationOwned(context.Background(), id, facts)
 }
 
 // RecordStopObservationContext records independently observed termination with
@@ -607,10 +596,25 @@ func (td *TaskDir) RecordStopObservationContext(ctx context.Context, id string, 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := td.store.maintLock.LockSH(ctx); err != nil {
+	owner, err := td.AcquireLifetimeOwner(ctx)
+	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, td.store.maintLock.Unlock()) }()
+	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
+	return td.recordStopObservationOwned(ctx, id, facts)
+}
+
+// recordStopObservationOwned evaluates lifetime readiness and commits the
+// observation under the same exclusive lifetime-owner lease. This closes the
+// race where a guardian could publish a registration after a readiness check.
+func (td *TaskDir) recordStopObservationOwned(ctx context.Context, id string, facts task.StopObservationFacts) error {
+	ready, err := td.StopTerminationReady()
+	if err != nil {
+		return err
+	}
+	if !ready {
+		return task.ErrSessionBusy
+	}
 	request, digest, receipt, err := td.stopEvidenceContext(ctx, id)
 	if err != nil {
 		return err

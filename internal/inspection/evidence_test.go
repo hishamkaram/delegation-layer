@@ -5,11 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+var errInjectedCompletionStage = errors.New("injected completion stage failure")
+
+type completionStageFault struct {
+	taskdir.BaseFaultInjector
+	failed bool
+}
+
+func (f *completionStageFault) OnBeforeStageCreate(_, destination string) error {
+	if filepath.Base(destination) == completionRecordName && !f.failed {
+		f.failed = true
+		return errInjectedCompletionStage
+	}
+	return nil
+}
 
 func evidenceOperation(t *testing.T) *Operation {
 	return evidenceOperationWithRunnerOwnership(t, "")
@@ -52,6 +69,49 @@ func TestInspectionCompletionRequiresStartAndMatchingResult(t *testing.T) {
 	}
 }
 
+func TestInspectionCompletionContextRepairsTransientCompletionFailure(t *testing.T) {
+	store, request, binding := inspectionFixture(t)
+	op, err := OpenOperation(store, request, binding, time.Unix(100, 0))
+	mustInspection(t, err)
+	t.Cleanup(func() { mustInspection(t, op.Close()) })
+	permit, err := op.ClaimStart(time.Unix(101, 0))
+	mustInspection(t, err)
+	mustInspection(t, permit.Consume())
+
+	fault := &completionStageFault{}
+	store.SetFaultInjector(fault)
+	facts := json.RawMessage(`{"eligible":true}`)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute))
+	defer cancel()
+	if err = op.CompleteContext(ctx, ResultEligible, facts, time.Unix(102, 0)); err != nil {
+		t.Fatalf("completion recovery failed: %v", err)
+	}
+	if !fault.failed {
+		t.Fatal("completion stage fault did not run")
+	}
+	completedResult, completed, err := op.ReadCompletedContext(ctx)
+	mustInspection(t, err)
+	if completedResult.Reason != ResultEligible || completed.RequestSHA256 != op.Digest() {
+		t.Fatalf("repaired completion lost identity: result=%+v completion=%+v", completedResult, completed)
+	}
+}
+
+func TestCanceledCompletionContextPublishesNoResult(t *testing.T) {
+	op := evidenceOperation(t)
+	permit, err := op.ClaimStart(time.Unix(101, 0))
+	mustInspection(t, err)
+	mustInspection(t, permit.Consume())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err = op.CompleteContext(ctx, ResultEligible, json.RawMessage(`{"eligible":true}`), time.Unix(102, 0)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled completion returned %v", err)
+	}
+	var result ResultRecord
+	if err = op.control.Read(resultRecordName, &result); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled completion published result: record=%+v err=%v", result, err)
+	}
+}
+
 func TestInspectionResultWithoutCompletionIsIneligible(t *testing.T) {
 	op := evidenceOperation(t)
 	_, err := op.control.Put(resultRecordName, ResultRecord{SchemaVersion: task.SchemaVersion, RequestSHA256: op.Digest(), Reason: ResultEligible, Facts: map[string]json.RawMessage{"eligible": json.RawMessage(`true`)}})
@@ -65,12 +125,13 @@ func TestInspectionCompletionRejectsLateOrSecretDiagnosticFacts(t *testing.T) {
 	op := evidenceOperation(t)
 	_, err := op.ClaimStart(time.Unix(101, 0))
 	mustInspection(t, err)
+	deadline := op.Deadline()
 	for _, test := range []struct {
 		reason ResultReason
 		facts  json.RawMessage
 		now    time.Time
 	}{
-		{ResultEligible, json.RawMessage(`{}`), time.Unix(120, 0)},
+		{ResultEligible, json.RawMessage(`{}`), deadline.Add(time.Nanosecond)},
 		{ResultEligible, json.RawMessage(`null`), time.Unix(102, 0)},
 		{ResultUnavailable, json.RawMessage(`{"error":"synthetic-secret"}`), time.Unix(102, 0)},
 		{ResultReason("synthetic-secret"), nil, time.Unix(102, 0)},
@@ -80,7 +141,7 @@ func TestInspectionCompletionRejectsLateOrSecretDiagnosticFacts(t *testing.T) {
 			t.Fatal("invalid completion accepted")
 		}
 	}
-	mustInspection(t, op.Complete(ResultExpired, nil, time.Unix(121, 0)))
+	mustInspection(t, op.Complete(ResultExpired, nil, deadline.Add(time.Second)))
 	result, _, err := op.ReadCompleted()
 	mustInspection(t, err)
 	if result.Reason != ResultExpired || len(result.Facts) != 0 {

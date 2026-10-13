@@ -2,11 +2,7 @@
   "schema_version": 1,
   "diagram_type": "sequence",
   "meta": {
-    "title": "Delegation Layer — One Task Lifecycle",
-    "viewBox": [
-      1600,
-      840
-    ],
+    "title": "Delegation Layer \u2014 One Task Lifecycle",
     "column_fit": "spread",
     "quality_profile": "showcase",
     "views": [
@@ -27,12 +23,13 @@
         "label": "Run and publish",
         "focus": [
           "pueue",
+          "guardian",
           "runner",
           "provider",
           "predicate",
           "store"
         ],
-        "note": "The supervisor owns delegate-run, which seals provider evidence before the predicate can commit an outcome."
+        "note": "Delegate stages, receipts, then enqueues the row. The guardian owns lifetime; delegate-run owns execution, capture, and publication."
       },
       {
         "id": "observe",
@@ -41,10 +38,16 @@
           "caller",
           "delegate",
           "store",
-          "pueue"
+          "pueue",
+          "guardian"
         ],
-        "note": "Collection reads durable evidence without launching work; a timed-out native session continues through a linked successor."
+        "note": "Collection reads durable evidence; cancellation persists one request, and the lifetime lease selects the sole stopping owner."
       }
+    ],
+    "output": "diagrams/lead-interface.html",
+    "viewBox": [
+      1680,
+      1080
     ]
   },
   "participants": [
@@ -74,6 +77,11 @@
       "label": "pueued"
     },
     {
+      "id": "guardian",
+      "type": "security",
+      "label": "Lifetime guardian"
+    },
+    {
       "id": "runner",
       "type": "backend",
       "label": "delegate-run"
@@ -97,13 +105,13 @@
     },
     {
       "from": 330,
-      "to": 535,
-      "label": "Supervised run and publication"
+      "to": 735,
+      "label": "Guardian-owned run and publication"
     },
     {
-      "from": 535,
-      "to": 735,
-      "label": "Observation, cancellation, and continuation"
+      "from": 735,
+      "to": 980,
+      "label": "Observation, stop request, and continuation"
     }
   ],
   "messages": [
@@ -136,16 +144,17 @@
       "from": "delegate",
       "to": "store",
       "y": 254,
-      "label": "brief, task.json, meta.json",
+      "label": "persist brief, request, metadata",
       "variant": "emphasis",
-      "note": "The immutable request and metadata are durably recorded before supervisor admission."
+      "note": "The immutable request and metadata are durable before supervisor admission."
     },
     {
       "id": "enqueue",
       "from": "delegate",
       "to": "pueue",
       "y": 282,
-      "label": "submit one delegate-run job"
+      "label": "stage row \u00b7 persist exact receipt \u00b7 enqueue exact ID",
+      "note": "A managed row cannot launch before Delegate durably owns its exact supervisor identity."
     },
     {
       "id": "accepted",
@@ -156,25 +165,62 @@
       "variant": "return"
     },
     {
-      "id": "spawn",
+      "id": "schedule",
       "from": "pueue",
-      "to": "runner",
+      "to": "guardian",
       "y": 350,
-      "label": "spawn and supervise delegate-run",
+      "label": "schedule guardian row",
+      "variant": "emphasis"
+    },
+    {
+      "id": "scope-intent",
+      "from": "guardian",
+      "to": "store",
+      "y": 378,
+      "label": "persist scope intent + registration"
+    },
+    {
+      "id": "spawn",
+      "from": "guardian",
+      "to": "runner",
+      "y": 406,
+      "label": "start exact managed child",
       "variant": "emphasis"
     },
     {
       "id": "reconstruct",
       "from": "runner",
       "to": "store",
-      "y": 378,
-      "label": "read recorded profile and recheck bindings"
+      "y": 434,
+      "label": "read receipt and recheck recorded profile"
+    },
+    {
+      "id": "hello",
+      "from": "runner",
+      "to": "guardian",
+      "y": 462,
+      "label": "hello + provider launch request"
+    },
+    {
+      "id": "launch-record",
+      "from": "guardian",
+      "to": "store",
+      "y": 490,
+      "label": "persist worker and launch identity"
+    },
+    {
+      "id": "launch-ack",
+      "from": "guardian",
+      "to": "runner",
+      "y": 518,
+      "label": "authorize recorded launch",
+      "variant": "return"
     },
     {
       "id": "invoke",
       "from": "runner",
       "to": "provider",
-      "y": 406,
+      "y": 546,
       "label": "invoke one bounded provider turn",
       "variant": "emphasis"
     },
@@ -182,7 +228,7 @@
       "id": "capture",
       "from": "provider",
       "to": "runner",
-      "y": 434,
+      "y": 574,
       "label": "stdout, stderr, identity, exit",
       "variant": "return"
     },
@@ -190,7 +236,7 @@
       "id": "seal",
       "from": "runner",
       "to": "store",
-      "y": 462,
+      "y": 602,
       "label": "provider.exit seals raw evidence",
       "variant": "emphasis"
     },
@@ -198,37 +244,54 @@
       "id": "interpret",
       "from": "runner",
       "to": "predicate",
-      "y": 490,
+      "y": 630,
       "label": "validate sealed behavior"
     },
     {
       "id": "outcome",
       "from": "predicate",
       "to": "store",
-      "y": 518,
+      "y": 658,
       "label": "commit outcome.json: committed or rejected",
       "variant": "emphasis",
       "note": "outcome.json is the terminal authority; result.txt and publish.reject are payload evidence."
     },
     {
+      "id": "worker-close",
+      "from": "runner",
+      "to": "guardian",
+      "y": 686,
+      "label": "persist exact child Wait after capture",
+      "variant": "return"
+    },
+    {
+      "id": "lifetime-proof",
+      "from": "guardian",
+      "to": "store",
+      "y": 714,
+      "label": "durable child Wait \u00b7 empty scope \u00b7 termination",
+      "variant": "emphasis",
+      "note": "Pueue row completion alone is not native termination or provider-result authority."
+    },
+    {
       "id": "observe",
       "from": "caller",
       "to": "delegate",
-      "y": 558,
+      "y": 739,
       "label": "status / logs / collect"
     },
     {
       "id": "read",
       "from": "delegate",
       "to": "store",
-      "y": 586,
+      "y": 767,
       "label": "read durable state; never relaunch"
     },
     {
       "id": "observed",
       "from": "store",
       "to": "delegate",
-      "y": 614,
+      "y": 795,
       "label": "state, descriptors, outcome, continuation",
       "variant": "return"
     },
@@ -236,7 +299,7 @@
       "id": "returned",
       "from": "delegate",
       "to": "caller",
-      "y": 642,
+      "y": 823,
       "label": "bounded control response",
       "variant": "return"
     },
@@ -244,23 +307,41 @@
       "id": "cancel",
       "from": "caller",
       "to": "delegate",
-      "y": 670,
+      "y": 851,
       "label": "cancel TASK_ID",
+      "variant": "dashed"
+    },
+    {
+      "id": "cancel-request",
+      "from": "delegate",
+      "to": "store",
+      "y": 879,
+      "label": "persist immutable user stop request",
+      "variant": "emphasis",
+      "note": "The durable request is the single cancellation intent; a queue row is never native lifetime authority."
+    },
+    {
+      "id": "guardian-cancel",
+      "from": "guardian",
+      "to": "store",
+      "y": 907,
+      "label": "active owner: terminate scope + record empty proof",
       "variant": "dashed"
     },
     {
       "id": "stop",
       "from": "delegate",
       "to": "pueue",
-      "y": 698,
-      "label": "request supervisor stop",
-      "variant": "dashed"
+      "y": 935,
+      "label": "otherwise: stop row while holding lifetime lease",
+      "variant": "dashed",
+      "note": "Direct row mutation is allowed only when cancellation owns the lease, so no guardian can launch or own a provider concurrently."
     },
     {
       "id": "continue",
       "from": "caller",
       "to": "delegate",
-      "y": 726,
+      "y": 963,
       "label": "continue --task TASK_ID [--brief FILE]",
       "variant": "emphasis"
     }
@@ -281,7 +362,7 @@
     {
       "participant": "store",
       "from": 246,
-      "to": 540,
+      "to": 730,
       "type": "database"
     },
     {
@@ -291,33 +372,39 @@
       "type": "messagebus"
     },
     {
-      "participant": "runner",
+      "participant": "guardian",
       "from": 343,
-      "to": 530,
+      "to": 730,
+      "type": "security"
+    },
+    {
+      "participant": "runner",
+      "from": 399,
+      "to": 700,
       "type": "backend"
     },
     {
       "participant": "provider",
-      "from": 399,
-      "to": 444,
+      "from": 539,
+      "to": 582,
       "type": "external"
     },
     {
       "participant": "predicate",
-      "from": 483,
-      "to": 528,
+      "from": 623,
+      "to": 668,
       "type": "security"
     },
     {
       "participant": "delegate",
-      "from": 550,
-      "to": 675,
+      "from": 755,
+      "to": 920,
       "type": "backend"
     },
     {
       "participant": "pueue",
-      "from": 690,
-      "to": 703,
+      "from": 905,
+      "to": 920,
       "type": "messagebus"
     }
   ],
@@ -327,6 +414,7 @@
       "title": "Admission",
       "items": [
         "The request is persisted before supervisor submission",
+        "A stashed row is receipted durably before its exact ID is enqueued",
         "Runtime capability evidence is checked before launch",
         "The caller receives a task id and separate admission/liveness fields"
       ]
@@ -335,8 +423,9 @@
       "dot": "emerald",
       "title": "Publication",
       "items": [
-        "Pueue owns process lifetime and stopping",
-        "Raw streams are sealed before result interpretation",
+        "Pueue owns queueing and guardian-row state",
+        "The guardian owns native stopping and durable exact child-Wait proof",
+        "delegate-run owns provider Start/Wait, capture, and sealing",
         "Only outcome.json establishes a terminal verdict"
       ]
     },
@@ -345,7 +434,7 @@
       "title": "Observation",
       "items": [
         "Collection reads committed evidence without launching work",
-        "Cancellation requests a supervisor stop and observes its effect",
+        "Cancellation persists one request; the lifetime lease selects its sole stopping owner",
         "Continuation creates a new task with an exact predecessor"
       ]
     }

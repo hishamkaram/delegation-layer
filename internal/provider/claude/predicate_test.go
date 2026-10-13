@@ -38,6 +38,49 @@ func TestReferenceBindsImmutableContract(t *testing.T) {
 	}
 }
 
+func TestRelaxedRuntimeProbeGetsNewPredicateRevisions(t *testing.T) {
+	tests := []struct {
+		mode            string
+		previousVersion string
+		previousSHA256  string
+		currentVersion  string
+	}{
+		{Mode, "native-permissions-v2", "c1695bb7e8d224016dc9a135fe4ef45fe1336ea4febced170a68c288b2bb4726", "native-permissions-v3"},
+		{WorkspaceWriteMode, "native-permissions-v3", "a565a29f2ffec20b751bcd2433ad14fcacbd96e564b00f02fadbecb0bbf31d71", "native-permissions-v4"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.mode, func(t *testing.T) {
+			previous := previousNativeProbeReferenceForMode(testCase.mode)
+			current := ReferenceForMode(testCase.mode)
+			if previous.Version != testCase.previousVersion || previous.SHA256 != testCase.previousSHA256 {
+				t.Fatalf("previous predicate changed: %+v", previous)
+			}
+			if current.Version != testCase.currentVersion || current.Equal(previous) {
+				t.Fatalf("relaxed probe was not versioned: previous=%+v current=%+v", previous, current)
+			}
+			if !strings.Contains(ContractForMode(testCase.mode), `"runtime_probe":{"required_flags":["--print"]}`) {
+				t.Fatalf("current predicate does not bind its runtime probe: %s", ContractForMode(testCase.mode))
+			}
+		})
+	}
+
+	for _, testCase := range []struct {
+		mode           string
+		previousSHA256 string
+	}{
+		{Mode, "acb9e1cbfbb87d8f53ae29ab76bee5932336a8a9bbe1a2ba46308dd5d2e078de"},
+		{WorkspaceWriteMode, "1fb4b8fc9543c937c91c7fa5035799204e263627dbc5689114e42e9021750e48"},
+	} {
+		t.Run("interactive/"+testCase.mode, func(t *testing.T) {
+			previous := previousInteractionReference(testCase.mode)
+			current := interactionReference(testCase.mode)
+			if previous.Version != "interactive-v2" || previous.SHA256 != testCase.previousSHA256 || current.Version != "interactive-v3" || current.Equal(previous) {
+				t.Fatalf("interactive runtime probe was not versioned: previous=%+v current=%+v", previous, current)
+			}
+		})
+	}
+}
+
 func TestWorkspaceWriteReferenceRevisionsPreserveAcceptEditsContract(t *testing.T) {
 	current := WorkspaceWriteReference()
 	historical := legacyNativeReferenceForMode(WorkspaceWriteMode)

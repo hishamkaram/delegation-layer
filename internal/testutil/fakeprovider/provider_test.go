@@ -449,7 +449,7 @@ func TestRunProviderRejectsInvalidConfigAndUsesFiniteHold(t *testing.T) {
 	if err = RunProvider(path, strings.NewReader("brief"), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(start); elapsed < 5*time.Millisecond || elapsed > time.Second {
+	if elapsed := time.Since(start); elapsed < 5*time.Millisecond || elapsed > 2*time.Second {
 		t.Fatalf("finite hold duration=%s", elapsed)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,21 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+type runnerBudgetLifetime struct {
+	terminateCalls atomic.Int32
+}
+
+func (*runnerBudgetLifetime) StartCommand(*exec.Cmd, func() error) error { return nil }
+
+func (*runnerBudgetLifetime) FinishCommand(context.Context, *exec.Cmd) error { return nil }
+
+func (l *runnerBudgetLifetime) Terminate(context.Context) error {
+	l.terminateCalls.Add(1)
+	return nil
+}
+
+func (*runnerBudgetLifetime) CloseTask(context.Context) error { return nil }
 
 func TestApplySavedEnvironmentClearsRecordedEmptyEnvironment(t *testing.T) {
 	const key = "DELEGATE_RECORDED_EMPTY_ENV_TEST"
@@ -77,15 +93,14 @@ func TestRunnerStartStateErrorRefusesUnknownBeforeProviderStart(t *testing.T) {
 	}
 }
 
-func TestStopResponseFromResultPreservesOnlyProvenTermination(t *testing.T) {
+func TestStopResponseFromResultDoesNotInferNativeTermination(t *testing.T) {
 	id := int64(7)
 	cases := []struct {
-		name       string
-		state      pueue.State
-		numericID  *int64
-		terminated bool
+		name      string
+		state     pueue.State
+		numericID *int64
 	}{
-		{name: "ended with target", state: pueue.StateEnded, numericID: &id, terminated: true},
+		{name: "ended with target", state: pueue.StateEnded, numericID: &id},
 		{name: "ended without target", state: pueue.StateEnded},
 		{name: "unknown with target", state: pueue.StateUnknown, numericID: &id},
 		{name: "running with target", state: pueue.StateRunning, numericID: &id},
@@ -93,8 +108,8 @@ func TestStopResponseFromResultPreservesOnlyProvenTermination(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			response := stopResponseFromResult("request", "budget", pueue.StopResult{ObservedState: tc.state, NumericTaskID: tc.numericID})
-			if response.Terminated != tc.terminated {
-				t.Fatalf("response terminated=%t, want %t: %+v", response.Terminated, tc.terminated, response)
+			if response.Terminated {
+				t.Fatalf("queue state inferred native termination: %+v", response)
 			}
 		})
 	}
@@ -116,6 +131,35 @@ func TestBudgetPreparePersistsBeforeCanceledCallbackAndReleasesPermit(t *testing
 	assertNoSupervisorEvents(t, &supervisorEvents)
 	assertBudgetRequestPreserved(t, td, saved)
 	assertBudgetCallbackReleased(t, request, ctx)
+	assertNoSupervisorEvents(t, &supervisorEvents)
+}
+
+func TestBudgetLifetimeAcknowledgesWithoutClaimingTerminationObservation(t *testing.T) {
+	store, td, _ := newAppTestTask(t, false)
+	defer closeAppTestTask(t, store, td)
+	meta := prepareAppBudgetRecords(t, td)
+
+	var supervisorEvents atomic.Int32
+	lifetimeOwner := &runnerBudgetLifetime{}
+	stopper := newAppBudgetStopper(t, td, meta, &supervisorEvents)
+	stopper.lifetime = lifetimeOwner
+	request := prepareBudgetRequest(t, stopper, time.Now().Add(time.Minute))
+	if err := request(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := lifetimeOwner.terminateCalls.Load(); calls != 1 {
+		t.Fatalf("lifetime termination calls = %d, want 1", calls)
+	}
+	records, err := td.ReadStopRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Reply == nil || !records[0].Reply.Acknowledged {
+		t.Fatalf("budget stop reply = %+v, want one acknowledged reply", records)
+	}
+	if records[0].Observation != nil {
+		t.Fatalf("worker published guardian-owned termination observation: %+v", records[0].Observation)
+	}
 	assertNoSupervisorEvents(t, &supervisorEvents)
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
@@ -80,6 +81,40 @@ func TestNewCatalogRejectsDuplicateExactPredicateReferences(t *testing.T) {
 	_, err := NewCatalog(registration)
 	if !errors.Is(err, ErrDuplicatePredicate) {
 		t.Fatalf("duplicate predicate was accepted: %v", err)
+	}
+}
+
+func TestCatalogValidatesProviderContinuationAfterSharedIdentity(t *testing.T) {
+	registration := testRegistration("alpha:print", config.ModeReadOnly, OptionContinuation)
+	registration.Description.Continuation = ContinuationNative
+	want := errors.New("model changed")
+	calls := 0
+	registration.ValidateContinuation = func(predecessor task.TaskRecord, predecessorMeta task.MetaRecord, successor task.TaskRecord) error {
+		calls++
+		if predecessor.Provider != "alpha:print" || predecessorMeta.Predicate.Adapter != "alpha:print" || successor.Provider != "alpha:print" {
+			t.Fatalf("validator received unexpected records: predecessor=%+v meta=%+v successor=%+v", predecessor, predecessorMeta, successor)
+		}
+		return want
+	}
+	catalog, err := NewCatalog(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor := task.TaskRecord{Provider: "alpha:print", Mode: config.ModeReadOnly}
+	predecessorMeta := task.MetaRecord{Predicate: task.PredicateRef{Adapter: "alpha:print", Mode: config.ModeReadOnly, Version: "fixture", SHA256: strings.Repeat("a", 64)}}
+	successor := task.TaskRecord{Provider: "alpha:print", Mode: config.ModeReadOnly}
+	if err = catalog.ValidateContinuation(predecessor, predecessorMeta, successor); !errors.Is(err, want) {
+		t.Fatalf("continuation validation error = %v, want %v", err, want)
+	}
+	if calls != 1 {
+		t.Fatalf("validator calls=%d want=1", calls)
+	}
+	successor.Mode = config.ModeWorkspaceWrite
+	if err = catalog.ValidateContinuation(predecessor, predecessorMeta, successor); !errors.Is(err, task.ErrIdentityMismatch) {
+		t.Fatalf("cross-mode continuation error = %v, want identity mismatch", err)
+	}
+	if calls != 1 {
+		t.Fatalf("identity mismatch called provider validator %d times", calls)
 	}
 }
 

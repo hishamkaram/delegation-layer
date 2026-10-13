@@ -70,6 +70,19 @@ func TestLoadOperationContextHonorsCanceledCaller(t *testing.T) {
 	}
 }
 
+func TestOpenOperationContextHonorsCanceledCallerBeforeJournalCreation(t *testing.T) {
+	store, request, binding := inspectionFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	operation, err := OpenOperationContext(ctx, store, request, binding, time.Now().UTC())
+	if operation != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled open returned operation=%v err=%v", operation, err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(store.Root, "inspections", request.TaskID)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("canceled open created inspection journal: %v", statErr)
+	}
+}
+
 func TestOpenOperationReplayRetainsOriginalDeadline(t *testing.T) {
 	store, request, binding := inspectionFixture(t)
 	first, err := OpenOperation(store, request, binding, time.Unix(100, 222000000).UTC())
@@ -150,6 +163,86 @@ func TestOpenOperationExpiredReplayRefusesClaims(t *testing.T) {
 	}
 }
 
+func TestInspectionStartClaimDoesNotCrossOperationDeadlineWithBackgroundWhileControlLockHeld(t *testing.T) {
+	assertInspectionStartClaimCannotCrossDeadline(t, func(op *Operation, claimAt, _ time.Time) (*StartPermit, error) {
+		return op.ClaimStart(claimAt)
+	})
+}
+
+func TestInspectionStartClaimDoesNotCrossOperationDeadlineWithLaterCallerDeadlineWhileControlLockHeld(t *testing.T) {
+	assertInspectionStartClaimCannotCrossDeadline(t, func(op *Operation, claimAt, operationDeadline time.Time) (*StartPermit, error) {
+		ctx, cancel := context.WithDeadline(context.Background(), operationDeadline.Add(time.Second))
+		defer cancel()
+		return op.ClaimStartContext(ctx, claimAt)
+	})
+}
+
+func assertInspectionStartClaimCannotCrossDeadline(t *testing.T, claim func(*Operation, time.Time, time.Time) (*StartPermit, error)) {
+	t.Helper()
+	store, request, binding := inspectionFixture(t)
+	const deadlineWindow = 5 * time.Second
+	openedAt := time.Now().UTC().Add(-(AdmissionTimeout - deadlineWindow))
+	op, err := OpenOperation(store, request, binding, openedAt)
+	mustInspection(t, err)
+	t.Cleanup(func() { mustInspection(t, op.Close()) })
+
+	deadline := op.Deadline()
+	if !deadline.After(time.Now()) {
+		t.Fatalf("fixture deadline already expired: %s", deadline)
+	}
+	lockHeld := make(chan struct{})
+	releaseLock := make(chan struct{})
+	lockDone := make(chan error, 1)
+	go func() {
+		lockDone <- op.control.WithLock(context.Background(), func(*taskdir.ControlTransaction) error {
+			close(lockHeld)
+			<-releaseLock
+			return nil
+		})
+	}()
+	<-lockHeld
+
+	claimDone := make(chan struct {
+		permit *StartPermit
+		err    error
+	}, 1)
+	go func() {
+		permit, claimErr := claim(op, deadline.Add(-time.Millisecond), deadline)
+		claimDone <- struct {
+			permit *StartPermit
+			err    error
+		}{permit: permit, err: claimErr}
+	}()
+
+	var claimResult struct {
+		permit *StartPermit
+		err    error
+	}
+	timer := time.NewTimer(time.Until(deadline) + time.Second)
+	select {
+	case claimResult = <-claimDone:
+		timer.Stop()
+	case <-timer.C:
+		close(releaseLock)
+		if err := <-lockDone; err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("start claim did not stop at the persisted deadline")
+	}
+	close(releaseLock)
+	if err := <-lockDone; err != nil {
+		t.Fatal(err)
+	}
+	if claimResult.permit != nil || !errors.Is(claimResult.err, context.DeadlineExceeded) {
+		t.Fatalf("deadline-crossing start claim returned permit=%v err=%v", claimResult.permit, claimResult.err)
+	}
+
+	var start StartRecord
+	if readErr := op.control.Read(startRecordName, &start); !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatalf("deadline-crossing claim persisted start record=%+v err=%v", start, readErr)
+	}
+}
+
 func TestOpenOperationRejectsChangedRequestAndBinding(t *testing.T) {
 	store, request, binding := inspectionFixture(t)
 	op, err := OpenOperation(store, request, binding, time.Unix(100, 0).UTC())
@@ -173,6 +266,29 @@ func TestOpenOperationRejectsInvalidRunnerOwnership(t *testing.T) {
 	binding.RunnerOwnership = "implicit-managed"
 	if operation, err := OpenOperation(store, request, binding, time.Unix(100, 0).UTC()); operation != nil || err == nil {
 		t.Fatalf("invalid runner ownership was accepted: operation=%v err=%v", operation, err)
+	}
+}
+
+func TestOpenOperationAcceptsGuardianWaitForExplicitRunnerOwnership(t *testing.T) {
+	for _, ownership := range []string{task.RunnerOwnershipManaged, task.RunnerOwnershipCustom} {
+		t.Run(ownership, func(t *testing.T) {
+			store, request, binding := inspectionFixture(t)
+			binding.RunnerOwnership = ownership
+			binding.WorkerExitProof = WorkerExitProofGuardianWaitV1
+			operation, err := OpenOperation(store, request, binding, time.Unix(100, 0).UTC())
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustInspection(t, operation.Close())
+		})
+	}
+}
+
+func TestOpenOperationRejectsGuardianWaitWithoutRunnerOwnership(t *testing.T) {
+	store, request, binding := inspectionFixture(t)
+	binding.WorkerExitProof = WorkerExitProofGuardianWaitV1
+	if operation, err := OpenOperation(store, request, binding, time.Unix(100, 0).UTC()); operation != nil || err == nil {
+		t.Fatalf("guardian Wait without runner ownership was accepted: operation=%v err=%v", operation, err)
 	}
 }
 

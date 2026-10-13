@@ -3,6 +3,7 @@ package pi
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,12 +52,12 @@ func TestJSONArgumentsMapCallerPermissionAndContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = []string{"--mode", "json", "--model", "openai/gpt-5", "--thinking", "high", "--session", testUUID}
+	want = []string{"--mode", "json", "--tools", workspaceWriteTools, "--model", "openai/gpt-5", "--thinking", "high", "--session", testUUID}
 	if !slices.Equal(args, want) {
 		t.Fatalf("workspace-write argv=%q want=%q", args, want)
 	}
-	if slices.Contains(args, "--tools") {
-		t.Fatalf("workspace-write argv restored a read-only tool allowlist: %q", args)
+	if !slices.Contains(args, "--tools") || slices.Contains(args, readOnlyTools) {
+		t.Fatalf("workspace-write argv=%q", args)
 	}
 	if slices.Contains(args, "--no-extensions") {
 		t.Fatalf("workspace-write argv disabled native extensions: %q", args)
@@ -123,7 +124,7 @@ func TestRuntimeRequirementsCoverAllLaunchFlags(t *testing.T) {
 
 func TestWorkspaceRuntimeRequirementsMatchWorkspaceLaunch(t *testing.T) {
 	requirements := RuntimeRequirements(ModeWorkspaceWrite)
-	want := []string{"--mode", "--model", "--thinking", "--session"}
+	want := []string{"--mode", "--tools", "--model", "--thinking", "--session"}
 	if !slices.Equal(requirements.RequiredFlags, want) {
 		t.Fatalf("workspace-write runtime requirements=%q want=%q", requirements.RequiredFlags, want)
 	}
@@ -132,11 +133,38 @@ func TestWorkspaceRuntimeRequirementsMatchWorkspaceLaunch(t *testing.T) {
 	}
 }
 
+func TestWorkspaceWriteContractBindsExactToolSet(t *testing.T) {
+	contract := Contract(ModeWorkspaceWrite)
+	if !strings.Contains(contract, `"tools":"`+workspaceWriteTools+`"`) {
+		t.Fatalf("workspace-write contract does not document built-in tools %q: %s", workspaceWriteTools, contract)
+	}
+	request := planRequest(ModeWorkspaceWrite)
+	arguments, err := jsonArguments(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(arguments, []string{"--mode", "json", "--tools", workspaceWriteTools}) {
+		t.Fatalf("workspace-write plan=%q", arguments)
+	}
+	requirements := RuntimeRequirements(ModeWorkspaceWrite)
+	if !slices.Contains(requirements.RequiredFlags, "--tools") {
+		t.Fatalf("workspace-write runtime capability omits --tools: %+v", requirements)
+	}
+}
+
 func TestHistoricalNativeRuntimeRequirementsPreserveSnapshot(t *testing.T) {
 	requirements := historicalNativeRuntimeRequirements()
 	want := []string{"--mode", "--tools", "--model", "--thinking", "--session"}
 	if len(requirements.HelpArgs) != 0 || !slices.Equal(requirements.RequiredFlags, want) {
 		t.Fatalf("historical native runtime requirements=%+v", requirements)
+	}
+}
+
+func TestWorkspaceWriteV7RuntimeRequirementsPreserveSnapshot(t *testing.T) {
+	requirements := workspaceWriteV7RuntimeRequirements()
+	want := []string{"--mode", "--model", "--thinking", "--session"}
+	if len(requirements.HelpArgs) != 0 || !slices.Equal(requirements.RequiredFlags, want) {
+		t.Fatalf("workspace-write v7 runtime requirements=%+v", requirements)
 	}
 }
 

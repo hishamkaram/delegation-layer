@@ -164,7 +164,10 @@ Dispatching a task requires:
 
 The release contains the supervisor client and daemon and starts a private
 instance under the state root, recovering it when a control command finds it
-stopped. An explicit `--pueue-config` or
+stopped. A reachable compatible daemon is adopted across CLI upgrades without
+stopping it or rewriting its launch record. An explicit supervisor repair
+command is available for a real logical/configuration migration; it preserves
+active work and the legacy journal. An explicit `--pueue-config` or
 `DELEGATE_PUEUE_CONFIG` can still select an existing compatible supervisor for
 advanced integrations. Node.js 18 or newer is needed only for the npm-based
 installers; it is not a runtime requirement for the released Go CLI. Provider

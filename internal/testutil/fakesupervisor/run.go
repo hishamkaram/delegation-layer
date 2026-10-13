@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -137,6 +138,8 @@ func configForVerb(cfg Config, verb string) VerbConfig {
 		return cfg.Parallel
 	case "add":
 		return cfg.Add
+	case "enqueue":
+		return cfg.Enqueue
 	case "kill":
 		return cfg.Kill
 	case "remove":
@@ -154,6 +157,10 @@ func defaultOutput(cfg Config, verb string) ([]byte, error) {
 		return readConfiguredOutput(cfg.StatusPath)
 	case "add":
 		return []byte(strconv.FormatInt(cfg.AddID, 10) + "\n"), nil
+	case "add-help":
+		return []byte("Usage: pueue add --stashed --print-task-id\n"), nil
+	case "enqueue-help":
+		return []byte("Usage: pueue enqueue <TASK_IDS>...\n"), nil
 	default:
 		return nil, nil
 	}
@@ -175,17 +182,32 @@ func parseCommand(fixedConfig string, argv []string) (parsedCommand, error) {
 		}
 		return parsedCommand{verb: "--version"}, nil
 	case "status":
-		if len(argv) != 4 || argv[3] != "--json" {
-			return parsedCommand{}, ErrInvalidArguments
-		}
-		return parsedCommand{verb: "status"}, nil
+		return parseStatus(argv)
 	case "add":
+		if len(argv) == 4 && argv[3] == "--help" {
+			return parsedCommand{verb: "add-help"}, nil
+		}
 		return parseAdd(argv)
+	case "enqueue":
+		if len(argv) == 4 && argv[3] == "--help" {
+			return parsedCommand{verb: "enqueue-help"}, nil
+		}
+		return parseNumericCommand(argv)
 	case "parallel", "kill", "remove":
 		return parseNumericCommand(argv)
 	default:
 		return parsedCommand{}, ErrInvalidArguments
 	}
+}
+
+func parseStatus(argv []string) (parsedCommand, error) {
+	if (len(argv) != 4 && len(argv) != 5) || argv[3] != "--json" {
+		return parsedCommand{}, ErrInvalidArguments
+	}
+	if len(argv) == 5 && (!strings.HasPrefix(argv[4], "label=") || strings.TrimPrefix(argv[4], "label=") == "") {
+		return parsedCommand{}, ErrInvalidArguments
+	}
+	return parsedCommand{verb: "status"}, nil
 }
 
 func parseNumericCommand(argv []string) (parsedCommand, error) {
@@ -196,16 +218,50 @@ func parseNumericCommand(argv []string) (parsedCommand, error) {
 }
 
 func parseAdd(argv []string) (parsedCommand, error) {
-	if len(argv) != 12 || argv[3] != "--escape" || argv[4] != "--label" || argv[5] == "" || argv[6] != "--print-task-id" || argv[7] != "--" || argv[8] == "" || argv[9] != "--root" || argv[10] == "" {
+	if len(argv) < 13 || argv[3] != "--escape" || argv[4] != "--stashed" {
 		return parsedCommand{}, ErrInvalidArguments
 	}
-	if !cleanAbsoluteArgument(argv[8]) || !cleanAbsoluteArgument(argv[10]) {
+	index := 5
+	hasGroup := false
+	if index < len(argv) && argv[index] == "--group" {
+		if index+1 >= len(argv) || argv[index+1] == "" {
+			return parsedCommand{}, ErrInvalidArguments
+		}
+		hasGroup = true
+		index += 2
+	}
+	if index+3 >= len(argv) || argv[index] != "--label" || argv[index+1] == "" || argv[index+2] != "--print-task-id" || argv[index+3] != "--" {
 		return parsedCommand{}, ErrInvalidArguments
 	}
-	if err := task.ValidateTaskID(argv[11]); err != nil {
+	if !validRunnerArguments(argv[index+4:], hasGroup) {
 		return parsedCommand{}, ErrInvalidArguments
 	}
 	return parsedCommand{verb: "add"}, nil
+}
+
+func validRunnerArguments(argv []string, inspection bool) bool {
+	if len(argv) < 4 || !cleanAbsoluteArgument(argv[0]) {
+		return false
+	}
+	index := 1
+	if inspection {
+		if index >= len(argv) || argv[index] != "--inspection" {
+			return false
+		}
+		index++
+	} else if index < len(argv) && argv[index] == "--inspection" {
+		return false
+	}
+	if index < len(argv) && argv[index] == "--guardian" {
+		if index+1 >= len(argv) || argv[index+1] != "--supervised" {
+			return false
+		}
+		index += 2
+	}
+	if len(argv)-index != 3 || argv[index] != "--root" || !cleanAbsoluteArgument(argv[index+1]) {
+		return false
+	}
+	return task.ValidateTaskID(argv[index+2]) == nil
 }
 
 func cleanAbsoluteArgument(path string) bool {
@@ -219,6 +275,9 @@ func validNumericID(value string) bool {
 
 func invocationVerb(argv []string) string {
 	if len(argv) >= 3 {
+		if len(argv) == 4 && argv[3] == "--help" && (argv[2] == "add" || argv[2] == "enqueue") {
+			return argv[2] + "-help"
+		}
 		return argv[2]
 	}
 	return "invalid"

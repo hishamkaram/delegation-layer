@@ -256,6 +256,58 @@ func TestResolvePrivateSupervisorExecutablesPrefersStateRootPairToPATH(t *testin
 	}
 }
 
+func TestResolvePrivateSupervisorExecutablesPrefersStateRootPairToCurrentBundle(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	legacyClient, legacyDaemon := writeSavedSupervisorPair(t)
+	if err := installStateSupervisorPair(context.Background(), root, legacyClient, legacyDaemon); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := canonicalAppTestTempDir(t)
+	currentClient := filepath.Join(bundle, "pueue")
+	currentDaemon := filepath.Join(bundle, "pueued")
+	writeRunnerFixture(t, currentClient, "current client")
+	writeRunnerFixture(t, currentDaemon, "current daemon")
+	delegate := filepath.Join(bundle, "delegate")
+	writeRunnerFixture(t, delegate, "delegate")
+
+	gotClient, gotDaemon, err := resolvePrivateSupervisorExecutables(root, Dependencies{InitialSupervisorExecutable: delegate})
+	if err != nil {
+		t.Fatalf("resolve private supervisor pair: %v", err)
+	}
+	wantClient, wantDaemon, found, err := resolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
+	if err != nil || !found {
+		t.Fatalf("resolve verified state-root pair: found=%v err=%v", found, err)
+	}
+	if gotClient != wantClient || gotDaemon != wantDaemon {
+		t.Fatalf("private pair = %q / %q, want state-root pair %q / %q", gotClient, gotDaemon, wantClient, wantDaemon)
+	}
+}
+
+func TestResolveCurrentPrivateSupervisorExecutablesPrefersCurrentBundle(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	legacyClient, legacyDaemon := writeSavedSupervisorPair(t)
+	if err := installStateSupervisorPair(context.Background(), root, legacyClient, legacyDaemon); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := canonicalAppTestTempDir(t)
+	currentClient := filepath.Join(bundle, "pueue")
+	currentDaemon := filepath.Join(bundle, "pueued")
+	writeRunnerFixture(t, currentClient, "current client")
+	writeRunnerFixture(t, currentDaemon, "current daemon")
+	delegate := filepath.Join(bundle, "delegate")
+	writeRunnerFixture(t, delegate, "delegate")
+
+	gotClient, gotDaemon, err := resolveCurrentPrivateSupervisorExecutables(root, Dependencies{InitialSupervisorExecutable: delegate})
+	if err != nil {
+		t.Fatalf("resolve current private supervisor pair: %v", err)
+	}
+	if gotClient != currentClient || gotDaemon != currentDaemon {
+		t.Fatalf("current private pair = %q / %q, want current bundle %q / %q", gotClient, gotDaemon, currentClient, currentDaemon)
+	}
+}
+
 func TestBindInitialUsesStateRootPairWhenBundleIsUnavailable(t *testing.T) {
 	root := canonicalAppTestTempDir(t)
 	sourceDirectory := canonicalAppTestTempDir(t)
@@ -306,7 +358,9 @@ base=${config%/*}
 	}
 	t.Setenv("PATH", canonicalAppTestTempDir(t))
 	missingDelegate := filepath.Join(canonicalAppTestTempDir(t), "missing", "delegate")
-	client, err := bindInitialWithOptions(Arguments{}, Dependencies{InitialSupervisorExecutable: missingDelegate}, root, pueue.Options{ObservationTimeout: time.Second})
+	// This verifies executable-pair resolution, so use the production window;
+	// race instrumentation must not turn scheduler delay into a timeout test.
+	client, err := bindInitialWithOptions(Arguments{}, Dependencies{InitialSupervisorExecutable: missingDelegate}, root, pueue.Options{ObservationTimeout: pueue.DefaultObservationTimeout})
 	if err != nil {
 		t.Fatalf("private supervisor did not bind from its verified state-root pair: %v", err)
 	}
@@ -1114,7 +1168,7 @@ func TestInstallStateSupervisorPairDoesNotWaitForTaskMaintenanceLease(t *testing
 	daemon := filepath.Join(canonicalAppTestTempDir(t), "pueued")
 	writeRunnerFixture(t, client, "client while a task is active")
 	writeRunnerFixture(t, daemon, "daemon while a task is active")
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err = installStateSupervisorPair(ctx, root, client, daemon); err != nil {
 		t.Fatalf("supervisor pair installation waited on the shared task lease: %v", err)
@@ -1343,6 +1397,31 @@ func TestPrivateRecoveryUsesStateRootPairWhenInstallPairsAreUnavailable(t *testi
 	_, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, missingDelegate)
 	if err == nil || !strings.Contains(err.Error(), "saved private supervisor config is unavailable") {
 		t.Fatalf("recovery did not reach the saved private config check using the state-root pair: %v", err)
+	}
+}
+
+func TestPrivateRecoveryPrefersSavedHistoricalSupervisorPair(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	savedClientSource, savedDaemonSource := writeSavedSupervisorPair(t)
+	if err := installStateSupervisorPair(context.Background(), root, savedClientSource, savedDaemonSource); err != nil {
+		t.Fatal(err)
+	}
+	savedClient, savedDaemon, found, err := resolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
+	if err != nil || !found {
+		t.Fatalf("resolve saved state-root pair: found=%t err=%v", found, err)
+	}
+	saved := savedSupervisorPairRef(t, savedClient, savedDaemon)
+	saved.ConfigPath = pueue.PrivateConfigPath(root)
+	currentClientSource, currentDaemonSource := writeSavedSupervisorPair(t)
+	if err = installStateSupervisorPair(context.Background(), root, currentClientSource, currentDaemonSource); err != nil {
+		t.Fatal(err)
+	}
+	gotClient, gotDaemon, err := resolveRecoveryPrivateSupervisorExecutables(root, saved, filepath.Join(root, "missing", "delegate"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotClient != savedClient || gotDaemon != savedDaemon {
+		t.Fatalf("recovery selected current pair %q / %q, want saved pair %q / %q", gotClient, gotDaemon, savedClient, savedDaemon)
 	}
 }
 

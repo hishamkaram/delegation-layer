@@ -2,16 +2,11 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Delegation Layer — System Components",
+    "title": "Delegation Layer \u2014 System Components",
     "quality_profile": "showcase",
-    "repository": {
-      "url": "https://github.com/hishamkaram/delegation-layer",
-      "revision": "e78e470aaf090dd94ed5973adcdb523f7523e9f2",
-      "provider": "github"
-    },
     "viewBox": [
-      1390,
-      680
+      1200,
+      780
     ],
     "views": [
       {
@@ -33,13 +28,14 @@
         "label": "Execution and publication",
         "focus": [
           "pueue",
+          "guardian",
           "runner",
           "providers",
           "predicate",
           "store",
           "acceptance"
         ],
-        "note": "delegate-run rechecks the profile, captures evidence, and publishes a validated outcome; behavior and identity establish compatibility."
+        "note": "Delegate stages, receipts, then enqueues the row. The guardian owns lifetime; delegate-run owns execution, capture, and publication."
       },
       {
         "id": "recovery",
@@ -49,11 +45,13 @@
           "delegate",
           "store",
           "pueue",
+          "guardian",
           "runner"
         ],
-        "note": "Observation is read-only; a timed-out native session can create a linked successor through the public continuation command."
+        "note": "Observation reads durable state; guardian recovery resumes the same lifetime policy and continuation creates a linked successor."
       }
-    ]
+    ],
+    "output": "diagrams/components.html"
   },
   "components": [
     {
@@ -69,11 +67,11 @@
         }
       ],
       "pos": [
-        40,
-        165
+        30,
+        80
       ],
       "size": [
-        200,
+        180,
         78
       ]
     },
@@ -81,7 +79,7 @@
       "id": "delegate",
       "type": "backend",
       "label": "delegate CLI",
-      "sublabel": "preflight · auto · observe · continue",
+      "sublabel": "preflight \u00b7 auto \u00b7 observe \u00b7 continue",
       "sources": [
         {
           "path": "internal/app/commands.go"
@@ -94,11 +92,11 @@
         }
       ],
       "pos": [
-        300,
-        145
+        30,
+        310
       ],
       "size": [
-        220,
+        190,
         86
       ]
     },
@@ -113,8 +111,8 @@
         }
       ],
       "pos": [
-        580,
-        95
+        240,
+        80
       ],
       "size": [
         255,
@@ -136,8 +134,8 @@
         }
       ],
       "pos": [
-        895,
-        95
+        540,
+        80
       ],
       "size": [
         270,
@@ -147,8 +145,8 @@
     {
       "id": "store",
       "type": "database",
-      "label": "Task store",
-      "sublabel": "task records, successor links, sealed evidence",
+      "label": "Task and inspection store",
+      "sublabel": "requests \u00b7 lifetime records \u00b7 sealed evidence",
       "tag": "outcome.json is terminal authority",
       "sources": [
         {
@@ -162,20 +160,20 @@
         }
       ],
       "pos": [
-        285,
-        300
+        240,
+        560
       ],
       "size": [
-        285,
-        94
+        400,
+        96
       ]
     },
     {
       "id": "pueue",
       "type": "messagebus",
       "label": "Private supervisor",
-      "sublabel": "bundled pueue + pueued",
-      "tag": "auto-start · owns stopping",
+      "sublabel": "bundled Pueue queue and row state",
+      "tag": "auto-start \u00b7 unlimited queue",
       "sources": [
         {
           "path": "internal/pueue/client.go"
@@ -188,11 +186,11 @@
         }
       ],
       "pos": [
-        895,
-        300
+        245,
+        310
       ],
       "size": [
-        245,
+        180,
         86
       ]
     },
@@ -210,19 +208,45 @@
         }
       ],
       "pos": [
-        1148,
+        940,
+        560
+      ],
+      "size": [
+        230,
+        86
+      ]
+    },
+    {
+      "id": "guardian",
+      "type": "security",
+      "label": "Lifetime guardian",
+      "sublabel": "scope owner \u00b7 exact child wait \u00b7 recovery",
+      "tag": "owns native stopping",
+      "sources": [
+        {
+          "path": "internal/app/lifetime_guardian.go"
+        },
+        {
+          "path": "internal/app/lifetime_runner.go"
+        },
+        {
+          "path": "internal/lifetime/lifetime.go"
+        }
+      ],
+      "pos": [
+        470,
         300
       ],
       "size": [
-        205,
-        86
+        200,
+        96
       ]
     },
     {
       "id": "runner",
       "type": "backend",
       "label": "delegate-run",
-      "sublabel": "reconstruct, capture, seal",
+      "sublabel": "provider Start/Wait \u00b7 capture \u00b7 seal",
       "tag": "one provider turn",
       "sources": [
         {
@@ -233,19 +257,19 @@
         }
       ],
       "pos": [
-        600,
-        490
+        710,
+        310
       ],
       "size": [
-        250,
-        88
+        190,
+        86
       ]
     },
     {
       "id": "providers",
       "type": "external",
       "label": "Provider CLIs",
-      "sublabel": "agy · codex · claude · pi · opencode",
+      "sublabel": "agy \u00b7 codex \u00b7 claude \u00b7 pi \u00b7 opencode",
       "tag": "native login and output",
       "sources": [
         {
@@ -259,11 +283,11 @@
         }
       ],
       "pos": [
-        1050,
-        490
+        940,
+        300
       ],
       "size": [
-        300,
+        230,
         96
       ]
     },
@@ -284,11 +308,11 @@
         }
       ],
       "pos": [
-        285,
-        490
+        710,
+        560
       ],
       "size": [
-        255,
+        200,
         88
       ]
     },
@@ -310,11 +334,11 @@
         }
       ],
       "pos": [
-        40,
-        490
+        30,
+        560
       ],
       "size": [
-        215,
+        200,
         88
       ]
     }
@@ -330,6 +354,7 @@
         "store",
         "pueue",
         "workspace",
+        "guardian",
         "runner",
         "providers",
         "predicate",
@@ -343,83 +368,133 @@
       "id": "caller-to-delegate",
       "from": "caller",
       "to": "delegate",
-      "label": "preflight · auto · observe · continue",
+      "label": "preflight \u00b7 auto \u00b7 observe \u00b7 continue",
       "variant": "emphasis",
-      "fromSide": "right",
-      "toSide": "left",
-      "labelAt": [270, 110]
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        240,
+        190
+      ]
     },
     {
       "id": "delegate-to-catalog",
       "from": "delegate",
       "to": "catalog",
-      "label": "resolve profile and selection",
-      "fromSide": "right",
-      "toSide": "left",
-      "labelAt": [550, 50]
+      "label": "resolve profile and options",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          125,
+          230
+        ],
+        [
+          367.5,
+          230
+        ]
+      ],
+      "labelAt": [
+        245,
+        215
+      ]
     },
     {
       "id": "catalog-to-inspection",
       "from": "catalog",
       "to": "inspection",
-      "label": "preflight / runtime capability probe",
+      "label": "bounded runtime capability probe",
       "fromSide": "right",
       "toSide": "left",
-      "labelAt": [865, 50]
+      "labelAt": [
+        517,
+        60
+      ]
     },
     {
       "id": "inspection-to-delegate",
       "from": "inspection",
       "to": "delegate",
-      "label": "capability facts and bounded diagnostics",
+      "label": "capability facts and diagnostics",
       "variant": "dashed",
       "fromSide": "bottom",
-      "toSide": "bottom",
-      "via": [[1030, 270], [410, 270]],
-      "labelAt": [720, 250]
+      "toSide": "top",
+      "via": [
+        [
+          675,
+          260
+        ],
+        [
+          125,
+          260
+        ]
+      ],
+      "labelAt": [
+        475,
+        245
+      ]
     },
     {
       "id": "delegate-to-store",
       "from": "delegate",
       "to": "store",
-      "label": "persist request and predecessor link",
+      "label": "persist immutable request and receipts",
       "variant": "emphasis",
       "fromSide": "bottom",
       "toSide": "top",
-      "labelAt": [250, 265]
+      "via": [
+        [
+          125,
+          500
+        ],
+        [
+          440,
+          500
+        ]
+      ],
+      "labelAt": [
+        280,
+        480
+      ]
     },
     {
       "id": "delegate-to-pueue",
       "from": "delegate",
       "to": "pueue",
-      "label": "bootstrap or bind · enqueue",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "via": [
-        [410, 285],
-        [1017.5, 285]
-      ],
-      "labelAt": [710, 335]
-    },
-    {
-      "id": "pueue-to-runner",
-      "from": "pueue",
-      "to": "runner",
-      "label": "queue, own, stop",
-      "variant": "emphasis",
-      "fromSide": "bottom",
-      "toSide": "top"
+      "label": "stage row \u00b7 persist receipt \u00b7 enqueue exact ID",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        228,
+        285
+      ]
     },
     {
       "id": "runner-to-store",
       "from": "runner",
       "to": "store",
-      "label": "capture and seal raw evidence",
+      "label": "capture and seal provider evidence",
       "variant": "emphasis",
-      "fromSide": "top",
-      "toSide": "bottom",
-      "via": [[725, 435], [427.5, 435]],
-      "labelAt": [575, 410]
+      "fromSide": "bottom",
+      "toSide": "right",
+      "via": [
+        [
+          805,
+          500
+        ],
+        [
+          680,
+          500
+        ],
+        [
+          680,
+          608
+        ]
+      ],
+      "labelAt": [
+        740,
+        480
+      ]
     },
     {
       "id": "runner-to-providers",
@@ -429,40 +504,47 @@
       "variant": "emphasis",
       "fromSide": "right",
       "toSide": "left",
-      "labelAt": [950, 465]
+      "labelAt": [
+        920,
+        420
+      ]
     },
     {
       "id": "providers-to-workspace",
       "from": "providers",
       "to": "workspace",
       "label": "read or native writes by mode",
-      "fromSide": "top",
-      "toSide": "bottom"
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1055,
+        500
+      ]
     },
     {
       "id": "runner-to-predicate",
       "from": "runner",
       "to": "predicate",
       "label": "validate sealed behavior",
-      "fromSide": "left",
-      "toSide": "right",
-      "labelAt": [570, 600]
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        870,
+        535
+      ]
     },
     {
       "id": "acceptance-to-delegate",
       "from": "acceptance",
       "to": "delegate",
-      "label": "authentication evidence · replay · continuation",
+      "label": "auth-gated acceptance and replay evidence",
       "variant": "dashed",
       "fromSide": "top",
-      "toSide": "top",
-      "via": [
-        [147.5, 450],
-        [20, 450],
-        [20, 130],
-        [410, 130]
-      ],
-      "labelAt": [120, 425]
+      "toSide": "bottom",
+      "labelAt": [
+        250,
+        535
+      ]
     },
     {
       "id": "predicate-to-store",
@@ -470,18 +552,107 @@
       "to": "store",
       "label": "commit accepted or rejected outcome",
       "variant": "emphasis",
-      "fromSide": "top",
-      "toSide": "bottom"
+      "fromSide": "left",
+      "toSide": "right",
+      "labelAt": [
+        675,
+        690
+      ]
     },
     {
       "id": "delegate-to-caller",
       "from": "delegate",
       "to": "caller",
-      "label": "task id · admission · status · continuation",
+      "label": "task id \u00b7 admission \u00b7 status \u00b7 continuation",
       "variant": "dashed",
       "fromSide": "left",
-      "toSide": "right",
-      "labelAt": [270, 260]
+      "toSide": "left",
+      "via": [
+        [
+          15,
+          353
+        ],
+        [
+          15,
+          119
+        ]
+      ],
+      "labelAt": [
+        250,
+        245
+      ]
+    },
+    {
+      "id": "pueue-to-guardian",
+      "from": "pueue",
+      "to": "guardian",
+      "label": "schedule guardian row",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        458,
+        420
+      ]
+    },
+    {
+      "id": "guardian-to-runner",
+      "from": "guardian",
+      "to": "runner",
+      "label": "start exact child \u00b7 authorize launches",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        690,
+        420
+      ]
+    },
+    {
+      "id": "runner-to-guardian",
+      "from": "runner",
+      "to": "guardian",
+      "label": "lifecycle events \u00b7 close",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          805,
+          285
+        ],
+        [
+          570,
+          285
+        ]
+      ],
+      "labelAt": [
+        820,
+        265
+      ]
+    },
+    {
+      "id": "guardian-to-store",
+      "from": "guardian",
+      "to": "store",
+      "label": "intent \u00b7 worker \u00b7 launch \u00b7 termination \u00b7 exit proof",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          570,
+          470
+        ],
+        [
+          440,
+          470
+        ]
+      ],
+      "labelAt": [
+        505,
+        450
+      ]
     }
   ],
   "cards": [
@@ -489,9 +660,9 @@
       "dot": "cyan",
       "title": "Ownership",
       "items": [
-        "Core owns preflight through publication",
-        "Adapters own provider arguments and evidence",
-        "Private supervisor owns process lifetime"
+        "Pueue owns scheduling and worker-row state",
+        "The guardian owns native scope, stopping, and durable exact child Wait",
+        "delegate-run owns provider Start/Wait, capture, and sealing"
       ]
     },
     {

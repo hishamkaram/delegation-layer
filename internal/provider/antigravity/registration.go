@@ -19,14 +19,24 @@ func Description() commonprovider.Description {
 	}
 }
 
-// Registration returns agy's explicit catalog entry. Both predicate
-// revisions remain available for historical collection; fresh preparation
-// selects the current interpreter and requests a supervised runtime probe.
+// Registration returns agy's explicit catalog entry. Historical envelope and
+// record revisions remain available for replay; fresh preparation selects the
+// current record interpreter and requests a supervised runtime probe.
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
 		Description:     Description(),
 		Prepare:         PrepareCandidate,
 		PrepareExisting: PrepareExistingCandidate,
-		Interpreters:    []predicate.Interpreter{NewPrintInterpreter(), NewCurrentPrintInterpreter(), NewCurrentPrintInterpreterForMode(ModeReadOnly), NewRecordPrintInterpreter(ModeWorkspaceWrite), NewRecordPrintInterpreter(ModeReadOnly)},
+		Interpreters: []predicate.Interpreter{
+			NewPrintInterpreter(),
+			newHistoricalCurrentPrintInterpreter(),
+			newHistoricalCurrentPrintInterpreterForMode(ModeReadOnly),
+			NewCurrentPrintInterpreter(),
+			NewCurrentPrintInterpreterForMode(ModeReadOnly),
+			newHistoricalRecordPrintInterpreter(ModeWorkspaceWrite),
+			newHistoricalRecordPrintInterpreter(ModeReadOnly),
+			NewRecordPrintInterpreter(ModeWorkspaceWrite),
+			NewRecordPrintInterpreter(ModeReadOnly),
+		},
 	}
 }

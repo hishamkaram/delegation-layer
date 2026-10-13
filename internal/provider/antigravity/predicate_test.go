@@ -41,6 +41,14 @@ func TestCurrentPrintReferenceBindsContainmentMode(t *testing.T) {
 	if write.Mode != ModeWorkspaceWrite || readOnly.Mode != ModeReadOnly || write.Version != readOnly.Version || write.SHA256 != readOnly.SHA256 {
 		t.Fatalf("mode-bound references changed contract identity unexpectedly: write=%+v read-only=%+v", write, readOnly)
 	}
+	want := task.PredicateRef{Adapter: Provider, Mode: ModeWorkspaceWrite, Version: "1.2.2-auth3", SHA256: "66f07cc66de3106c3a0869b28c3ce315ecae53062f6a3b76db9b12eaa076a698"}
+	if write != want {
+		t.Fatalf("current reference=%+v want=%+v", write, want)
+	}
+	historical := newHistoricalCurrentPrintInterpreterForMode(ModeWorkspaceWrite).Reference()
+	if historical.Version != "1.2.2-auth2" || historical.SHA256 != "53f1b5368023953447088ecbd4fc36c1b431b0fb376cf76511ed70d943d8138a" {
+		t.Fatalf("historical current reference changed: %+v", historical)
+	}
 }
 
 func TestSuccessPayloadDecodesExactlyAndCopiesUsage(t *testing.T) {
@@ -422,19 +430,27 @@ func evaluateAntigravity(t *testing.T, stdout, stderr []byte, alter func(*task.P
 }
 
 func evaluateAntigravityWithWriter(t *testing.T, stdout, stderr []byte, alter func(*task.ProviderExitRecord), expected task.SessionExpectation, recorded *task.SessionIdentity, chunk int, writer io.Writer) (task.Interpretation, []byte, *trackingReader, *trackingReader, error) {
+	return evaluateInterpreterWithWriter(t, NewPrintInterpreter(), stdout, stderr, alter, expected, recorded, chunk, writer)
+}
+
+func evaluateInterpreter(t *testing.T, interpreter predicate.Interpreter, stdout, stderr []byte, alter func(*task.ProviderExitRecord), expected task.SessionExpectation, recorded *task.SessionIdentity, chunk int) (task.Interpretation, []byte, *trackingReader, *trackingReader, error) {
+	return evaluateInterpreterWithWriter(t, interpreter, stdout, stderr, alter, expected, recorded, chunk, &bytes.Buffer{})
+}
+
+func evaluateInterpreterWithWriter(t *testing.T, interpreter predicate.Interpreter, stdout, stderr []byte, alter func(*task.ProviderExitRecord), expected task.SessionExpectation, recorded *task.SessionIdentity, chunk int, writer io.Writer) (task.Interpretation, []byte, *trackingReader, *trackingReader, error) {
 	t.Helper()
 	stdoutReader := &trackingReader{data: stdout, chunk: chunk}
 	stderrReader := &trackingReader{data: stderr, chunk: chunk}
 	evidence := &testEvidence{readers: map[predicate.Stream]io.Reader{predicate.Stdout: stdoutReader, predicate.Stderr: stderrReader}}
-	seal := validSeal(NewPrintInterpreter().Reference())
+	seal := validSeal(interpreter.Reference())
 	if alter != nil {
 		alter(&seal)
 	}
 	if buffer, ok := writer.(*bytes.Buffer); ok {
-		result, err := NewPrintInterpreter().Evaluate(predicate.Input{Seal: seal, ExpectedSession: expected, RecordedSession: recorded}, evidence, buffer)
+		result, err := interpreter.Evaluate(predicate.Input{Seal: seal, ExpectedSession: expected, RecordedSession: recorded}, evidence, buffer)
 		return result, buffer.Bytes(), stdoutReader, stderrReader, err
 	}
-	result, err := NewPrintInterpreter().Evaluate(predicate.Input{Seal: seal, ExpectedSession: expected, RecordedSession: recorded}, evidence, writer)
+	result, err := interpreter.Evaluate(predicate.Input{Seal: seal, ExpectedSession: expected, RecordedSession: recorded}, evidence, writer)
 	return result, nil, stdoutReader, stderrReader, err
 }
 

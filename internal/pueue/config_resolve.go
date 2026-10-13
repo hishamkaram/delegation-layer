@@ -256,8 +256,11 @@ func (r ResolvedConfig) ValidateIsolation(base string) error {
 			return err
 		}
 	}
-	if r.Client.ShowConfirmationQuestions || r.Daemon.Callback != nil || len(r.Daemon.EnvVars) != 0 {
-		return fmt.Errorf("%w: private fixture must disable confirmation, callbacks and environment overrides", ErrConfiguration)
+	if r.Client.ShowConfirmationQuestions || len(r.Daemon.EnvVars) != 0 {
+		return fmt.Errorf("%w: private fixture must disable confirmation and environment overrides", ErrConfiguration)
+	}
+	if r.Daemon.Callback != nil && !privateTerminalEventsConfigured(base, r.Daemon.Callback) {
+		return fmt.Errorf("%w: private fixture callback differs from Delegate terminal event contract", ErrConfiguration)
 	}
 	if r.Daemon.ShellCommand == nil || !slices.Equal(*r.Daemon.ShellCommand, []string{"/bin/sh", "-c", "{{ pueue_command_string }}"}) {
 		return fmt.Errorf("%w: private fixture requires pinned shell command", ErrConfiguration)

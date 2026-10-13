@@ -2,8 +2,9 @@
 """Run a bounded live acceptance gate for the native provider matrix.
 
 The gate uses the shipped dispatcher and runner for every provider turn.  It
-does not copy credentials, call the provider directly, retry paid work, or
-turn an authentication refusal into a passing result.
+does not copy credentials, invoke a provider task directly, retry paid work,
+or turn an authentication refusal into a passing result. A provider's native,
+non-task authentication-status command may gate the turn when advertised here.
 """
 
 from __future__ import annotations
@@ -15,10 +16,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import secrets
 import shlex
 import shutil
 import stat
+import subprocess
 import sys
 import time
 import traceback
@@ -43,13 +46,16 @@ from acceptance_provider_common import (
     write_bytes,
 )
 from acceptance_supervisor_common import (
-    Processes,
+    DirectoryOwner, Processes,
     config_for,
     digest,
+    finalize_acceptance_artifacts,
     inherited_environment,
     read_json,
     write_json,
+    wait_until,
 )
+from native_acceptance_evidence import EvidenceError, validate_prepared_case_directory
 
 
 PROFILES = {
@@ -64,6 +70,7 @@ PROFILES = {
     "claude:print": {
         "executable": "claude", "modes": ("read-only", "workspace-write"),
         "default_mode": "read-only",
+        "authentication_status": ("auth", "status"),
     },
     "codex:exec": {
         "executable": "codex", "modes": ("read-only", "workspace-write"),
@@ -82,10 +89,26 @@ PROFILES = {
         "default_mode": "read-only",
     },
 }
-TASK_BUDGET = "120s"
-CANONICAL_TASK_BUDGET = "2m0s"
-TASK_BUDGET_NANOS = 120_000_000_000
-WATCH_SECONDS = 180
+# A live provider may need to establish a remote session before it can perform
+# the bounded fixture. Keep the gate finite, while giving that first turn the
+# same ceiling already used by the model-discovery acceptance path.
+TASK_BUDGET = "5m"
+CANONICAL_TASK_BUDGET = "5m0s"
+TASK_BUDGET_NANOS = 300_000_000_000
+WATCH_SECONDS = 330
+TIMEOUT_RESUME_SOURCE_BUDGET = "3m"
+CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET = "3m0s"
+TIMEOUT_RESUME_SOURCE_BUDGET_NANOS = 180_000_000_000
+TIMEOUT_SOURCE_RUNNER_RESULTS = frozenset({"Success", "Failed"})
+# Codex's Linux workspace-write sandbox temporarily materializes these missing
+# protected metadata paths. Own them in the isolated timeout fixture so a
+# forced provider stop cannot turn interrupted sandbox cleanup into test data.
+CODEX_TIMEOUT_BASELINE_DIRECTORIES = (".agents", ".aws", ".codex")
+TIMEOUT_LEASE_SETUP_SECONDS = WATCH_SECONDS
+TIMEOUT_LEASE_STATUS_INTERVAL_SECONDS = 5
+TIMEOUT_LEASE_OBSERVATION_SECONDS = 30
+TIMEOUT_LEASE_MAX_BYTES = 512
+TIMEOUT_LEASE_MODE = 0o600
 # model-discovery-v1 allows provider CLIs to populate a remote model/cache
 # catalog on their first run; this outer wait adds supervisor bootstrap time.
 MODEL_DISCOVERY_TASK_BUDGET = "5m0s"
@@ -93,11 +116,6 @@ MODEL_DISCOVERY_TASK_BUDGET_NANOS = 300_000_000_000
 MODEL_DISCOVERY_TIMEOUT_SECONDS = 330
 MAX_RAW_BYTES = 8 * 1024 * 1024
 MAX_CONTROL_BYTES = 1 << 20
-AUTHENTICATION_MARKERS = (
-    "authentication required", "not authenticated", "please log in", "sign in",
-    "unauthorized", "api key", "credentials", "login required", "no provider",
-    "provider authentication unavailable", "persistent chatgpt authentication is required",
-)
 AUTHENTICATION_STATUS_CODES = frozenset({401, 403})
 MODEL_DISCOVERY_EXIT_CODES = {
     "available": 0,
@@ -113,6 +131,11 @@ MODEL_DISCOVERY_REQUIRED_KEYS = {
 MODEL_DISCOVERY_OPTIONAL_KEYS = frozenset()
 MODEL_INFO_REQUIRED_KEYS = {"id", "efforts"}
 MODEL_INFO_OPTIONAL_KEYS = {"name", "default_effort"}
+FAILURE_DIAGNOSTICS_BYTES = 256 * 1024
+FAILURE_DIAGNOSTICS_MAX_ENTRIES = 4096
+FAILURE_DIAGNOSTICS_MAX_TASKS = 512
+FAILURE_DIAGNOSTICS_MAX_OMISSIONS = 64
+FAILURE_DIAGNOSTICS_TEXT_BYTES = 256
 # Native configuration/session locations, never inline credentials or config.
 # Keep the shared fixture environment isolated; only this live gate opts in.
 NATIVE_DISCOVERY_ENVIRONMENT = frozenset({
@@ -162,14 +185,22 @@ def require_discovery(name: str, selected: Path, environment: dict[str, str]) ->
         raise BlockedFailure(f"{name} discovery does not match the selected executable")
 
 
-def choose_output(provider: str, explicit: str | None) -> Path:
+def choose_output(
+        provider: str, explicit: str | None, permission: str | None = None,
+        scenario: str | None = None) -> Path:
     if explicit:
         path = clean_absolute(explicit, "live acceptance output")
     else:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(6)
         path = Path.home() / ".local" / "state" / "delegation-layer-evidence" / f"{provider.replace(':', '-')}-{stamp}"
     reject_tmp(path, "live acceptance output")
-    if path.exists():
+    if path.exists() or path.is_symlink():
+        if explicit and permission is not None and scenario is not None:
+            try:
+                return validate_prepared_case_directory(path, provider, permission, scenario)
+            except EvidenceError as error:
+                raise AcceptanceFailure(
+                    "prepared live acceptance output is invalid: " + str(error)) from error
         raise AcceptanceFailure(f"live acceptance output already exists: {path}")
     path.mkdir(mode=0o700, parents=True, exist_ok=False)
     return path.resolve()
@@ -185,17 +216,6 @@ def authentication_unavailable(directory: Path) -> bool:
         return False
     if not isinstance(outcome, dict) or outcome.get("verdict") != "rejected":
         return False
-    for relative in ("raw/stderr", "raw/stdout", "publish.reject"):
-        path = directory / relative
-        if not path.is_file() or path.is_symlink():
-            continue
-        try:
-            with path.open("rb") as stream:
-                data = stream.read(MAX_RAW_BYTES).decode("utf-8", errors="replace").lower()
-        except OSError:
-            continue
-        if any(marker in data for marker in AUTHENTICATION_MARKERS):
-            return True
     for relative in ("raw/stdout", "raw/stderr", "publish.reject"):
         path = directory / relative
         if not path.is_file() or path.is_symlink():
@@ -231,9 +251,9 @@ def authentication_blocked_response(response: object) -> bool:
             live.get("reason_code") == "authentication_unavailable")
 
 
-def authentication_blocked(response: object, diagnostic: str) -> bool:
-    return (authentication_blocked_response(response) or
-            any(marker in diagnostic.lower() for marker in AUTHENTICATION_MARKERS))
+def authentication_blocked(response: object, _diagnostic: str) -> bool:
+    """Trust only Delegate's structured pre-admission authentication state."""
+    return authentication_blocked_response(response)
 
 
 def model_discovery_exit_code(status: str) -> int:
@@ -363,6 +383,259 @@ def workspace_snapshot(directory: Path) -> dict[str, dict[str, object]]:
     return result
 
 
+def _diagnostic_text_descriptor(value: object) -> dict[str, object]:
+    """Describe text without persisting the text itself."""
+    if not isinstance(value, str):
+        return {"present": value is not None, "type": type(value).__name__}
+    data = value.encode("utf-8", errors="replace")
+    return {"present": True, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def _delegate_status_summary(value: object) -> str:
+    """Summarize Delegate's bounded public status response for a failed runner."""
+    if not isinstance(value, dict):
+        return "response=malformed"
+    fields: list[str] = []
+    for key in ("admission", "liveness", "publication", "status"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate:
+            fields.append(f"{key}={candidate[:FAILURE_DIAGNOSTICS_TEXT_BYTES]!r}")
+    failure = value.get("failure")
+    if isinstance(failure, dict):
+        for key in ("code", "stage", "next_action"):
+            candidate = failure.get(key)
+            if isinstance(candidate, str) and candidate:
+                fields.append(f"failure.{key}={candidate[:FAILURE_DIAGNOSTICS_TEXT_BYTES]!r}")
+    error = value.get("error")
+    if isinstance(error, str) and error:
+        bounded = " ".join(error.split())[:FAILURE_DIAGNOSTICS_TEXT_BYTES]
+        fields.append(f"error={bounded!r}")
+    return ", ".join(fields) if fields else "response=no-actionable-fields"
+
+
+def _diagnostic_regular_file(path: Path) -> tuple[dict[str, object] | None, str | None]:
+    """Return metadata for one regular file without following unsafe entries."""
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None, "missing"
+    except OSError as error:
+        return None, type(error).__name__
+    if stat.S_ISLNK(metadata.st_mode):
+        return None, "symlink"
+    if not stat.S_ISREG(metadata.st_mode):
+        return None, "special"
+    try:
+        return {
+            "type": "file", "mode": stat.S_IMODE(metadata.st_mode),
+            "bytes": metadata.st_size, "sha256": digest(path),
+        }, None
+    except OSError as error:
+        return None, type(error).__name__
+
+
+def _diagnostic_relative_path(value: object) -> str | None:
+    if not isinstance(value, str) or not value or len(value) > FAILURE_DIAGNOSTICS_TEXT_BYTES:
+        return None
+    if any(ord(character) < 32 for character in value):
+        return None
+    path = Path(value)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        return None
+    return str(path)
+
+
+def _diagnostic_payload(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, object] = {}
+    basename = value.get("basename")
+    if isinstance(basename, str) and basename and Path(basename).name == basename and \
+            len(basename) <= FAILURE_DIAGNOSTICS_TEXT_BYTES:
+        result["basename"] = basename
+    length = value.get("length")
+    if type(length) is int and length >= 0:
+        result["length"] = length
+    checksum = value.get("sha256")
+    if isinstance(checksum, str) and len(checksum) == 64 and \
+            all(character in "0123456789abcdef" for character in checksum):
+        result["sha256"] = checksum
+    return result or None
+
+
+def _diagnostic_predicate(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, object] = {}
+    for key in ("adapter", "mode", "version"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and len(candidate) <= FAILURE_DIAGNOSTICS_TEXT_BYTES and \
+                not any(ord(character) < 32 for character in candidate):
+            result[key] = candidate
+    checksum = value.get("sha256")
+    if isinstance(checksum, str) and len(checksum) == 64 and \
+            all(character in "0123456789abcdef" for character in checksum):
+        result["sha256"] = checksum
+    return result or None
+
+
+def _diagnostic_output_diagnostics(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, object]] = []
+    for item in value[:FAILURE_DIAGNOSTICS_MAX_ENTRIES]:
+        if not isinstance(item, dict):
+            continue
+        diagnostic: dict[str, object] = {}
+        for key in ("code", "message", "field"):
+            candidate = item.get(key)
+            if isinstance(candidate, str) and candidate and \
+                    len(candidate) <= FAILURE_DIAGNOSTICS_TEXT_BYTES and \
+                    not any(ord(character) < 32 for character in candidate):
+                diagnostic[key] = candidate
+        for key in ("event", "offset"):
+            candidate = item.get(key)
+            if type(candidate) is int and candidate >= 0:
+                diagnostic[key] = candidate
+        if "code" in diagnostic and "message" in diagnostic:
+            result.append(diagnostic)
+    return result
+
+
+def _diagnostic_outcome(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, object] = {}
+    verdict = value.get("verdict")
+    if isinstance(verdict, str) and len(verdict) <= FAILURE_DIAGNOSTICS_TEXT_BYTES:
+        result["verdict"] = verdict
+    predicate = _diagnostic_predicate(value.get("predicate"))
+    if predicate is not None:
+        result["predicate"] = predicate
+    payload = _diagnostic_payload(value.get("payload"))
+    if payload is not None:
+        result["payload"] = payload
+    evidence = value.get("evidence_sha256")
+    if isinstance(evidence, str) and len(evidence) == 64 and \
+            all(character in "0123456789abcdef" for character in evidence):
+        result["evidence_sha256"] = evidence
+    diagnostics = _diagnostic_output_diagnostics(value.get("diagnostics"))
+    if diagnostics:
+        result["diagnostics"] = diagnostics
+    return result or None
+
+
+def _rejection_diagnostic_summary(outcome: dict[str, object]) -> str:
+    diagnostics = _diagnostic_output_diagnostics(outcome.get("diagnostics"))
+    if not diagnostics:
+        return "verified rejection has no structured diagnostic"
+    first = diagnostics[0]
+    fields = [f"code={first['code']!r}"]
+    if "field" in first:
+        fields.append(f"field={first['field']!r}")
+    fields.append(f"message={first['message']!r}")
+    return ", ".join(fields)
+
+
+def _diagnostic_provider_exit(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, object] = {}
+    for key in ("invocation_state", "exit_code"):
+        candidate = value.get(key)
+        if (key == "invocation_state" and isinstance(candidate, str) and
+                len(candidate) <= FAILURE_DIAGNOSTICS_TEXT_BYTES) or \
+                (key == "exit_code" and type(candidate) is int):
+            result[key] = candidate
+    if "error" in value:
+        result["error"] = _diagnostic_text_descriptor(value.get("error"))
+    manifest = value.get("raw_manifest")
+    if isinstance(manifest, list):
+        result["raw_manifest_count"] = len(manifest)
+        entries: list[dict[str, object]] = []
+        for item in manifest[:FAILURE_DIAGNOSTICS_MAX_ENTRIES]:
+            if not isinstance(item, dict):
+                continue
+            entry: dict[str, object] = {}
+            relative = _diagnostic_relative_path(item.get("path"))
+            if relative is not None:
+                entry["path"] = relative
+            for key in ("bytes", "length"):
+                candidate = item.get(key)
+                if type(candidate) is int and candidate >= 0:
+                    entry[key] = candidate
+            checksum = item.get("sha256")
+            if isinstance(checksum, str) and len(checksum) == 64 and \
+                    all(character in "0123456789abcdef" for character in checksum):
+                entry["sha256"] = checksum
+            if entry:
+                entries.append(entry)
+        result["raw_manifest"] = entries
+        if len(manifest) > FAILURE_DIAGNOSTICS_MAX_ENTRIES:
+            result["raw_manifest_truncated"] = True
+    manifest_checksum = value.get("manifest_sha256")
+    if isinstance(manifest_checksum, str) and len(manifest_checksum) == 64 and \
+            all(character in "0123456789abcdef" for character in manifest_checksum):
+        result["manifest_sha256"] = manifest_checksum
+    return result or None
+
+
+def _diagnostic_workspace(directory: Path) -> dict[str, object]:
+    """Capture only metadata and hashes from the test-owned workspace."""
+    result: dict[str, object] = {"entries": {}, "omitted": [], "truncated": False}
+    omitted: list[str] = []
+    entries: dict[str, dict[str, object]] = {}
+    try:
+        root = directory.lstat()
+    except OSError as error:
+        result["omitted"] = [type(error).__name__]
+        return result
+    if stat.S_ISLNK(root.st_mode) or not stat.S_ISDIR(root.st_mode):
+        result["omitted"] = ["workspace-root"]
+        return result
+    try:
+        paths = sorted(directory.rglob("*"))
+    except OSError as error:
+        result["omitted"] = [type(error).__name__]
+        return result
+    for path in paths:
+        relative = str(path.relative_to(directory))
+        if len(entries) >= FAILURE_DIAGNOSTICS_MAX_ENTRIES:
+            result["truncated"] = True
+            break
+        try:
+            metadata = path.lstat()
+        except OSError as error:
+            omitted.append(relative + ":" + type(error).__name__)
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            omitted.append(relative + ":symlink")
+            continue
+        if stat.S_ISDIR(metadata.st_mode):
+            entries[relative] = {"type": "directory", "mode": stat.S_IMODE(metadata.st_mode)}
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            omitted.append(relative + ":special")
+            continue
+        try:
+            entries[relative] = {
+                "type": "file", "mode": stat.S_IMODE(metadata.st_mode),
+                "bytes": metadata.st_size, "sha256": digest(path),
+            }
+        except OSError as error:
+            omitted.append(relative + ":" + type(error).__name__)
+    result["entries"] = entries
+    result["omitted"] = omitted[:FAILURE_DIAGNOSTICS_MAX_OMISSIONS]
+    result["omitted_count"] = len(omitted)
+    if len(omitted) > FAILURE_DIAGNOSTICS_MAX_OMISSIONS:
+        result["omitted_truncated"] = True
+    return result
+
+
+def _diagnostic_json_bytes(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+
+
 def bounded_text(path: Path, label: str, bound: int = MAX_RAW_BYTES) -> str:
     with path.open("rb") as stream:
         data = stream.read(bound + 1)
@@ -381,6 +654,98 @@ def random_marker() -> bytes:
     return ("DELEGATION-LIVE-" + secrets.token_hex(24) + "\n").encode()
 
 
+class TimeoutFifoLease:
+    """One harness-created FIFO whose writer lifetime is the liveness lease."""
+
+    def __init__(self, path: Path, label: str, ready_marker: str) -> None:
+        if not sys.platform.startswith(("linux", "darwin")):
+            raise BlockedFailure("timeout liveness leases require Linux or Darwin")
+        self.path = path
+        self.label = label
+        self.expected = (ready_marker + "\n").encode()
+        self.device: int | None = None
+        self.inode: int | None = None
+        self.fd: int | None = None
+        self.buffer = bytearray()
+        self.writer_observed = False
+        self.ready = False
+        self.eof = False
+        try:
+            os.mkfifo(self.path, mode=TIMEOUT_LEASE_MODE)
+            self._verify_path()
+            flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+            self.fd = os.open(self.path, flags)
+        except (AttributeError, NotImplementedError, OSError) as error:
+            self.close()
+            try:
+                if self.path.is_fifo() and not self.path.is_symlink():
+                    self.path.unlink()
+            except OSError:
+                pass
+            raise BlockedFailure("timeout liveness FIFO is unavailable on this filesystem") from error
+
+    def _verify_path(self) -> None:
+        try:
+            metadata = self.path.lstat()
+        except FileNotFoundError as error:
+            raise AcceptanceFailure(f"{self.label} FIFO disappeared") from error
+        except OSError as error:
+            raise AcceptanceFailure(f"{self.label} FIFO cannot be inspected") from error
+        require(not stat.S_ISLNK(metadata.st_mode) and stat.S_ISFIFO(metadata.st_mode),
+                f"{self.label} FIFO was replaced or has the wrong type")
+        if self.device is None or self.inode is None:
+            self.device = metadata.st_dev
+            self.inode = metadata.st_ino
+            return
+        require(metadata.st_dev == self.device and metadata.st_ino == self.inode,
+                f"{self.label} FIFO was replaced")
+
+    def observe(self) -> None:
+        self._verify_path()
+        require(self.fd is not None, f"{self.label} FIFO reader is unavailable")
+        if self.eof:
+            return
+        poller = select.poll()
+        poller.register(self.fd, select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL)
+        events = poller.poll(0)
+        if not events and not self.writer_observed:
+            return
+        flags = events[0][1] if events else 0
+        require(not flags & (select.POLLERR | select.POLLNVAL),
+                f"{self.label} FIFO observation failed")
+        while True:
+            try:
+                chunk = os.read(self.fd, TIMEOUT_LEASE_MAX_BYTES)
+            except BlockingIOError:
+                return
+            except OSError as error:
+                raise AcceptanceFailure(f"{self.label} FIFO could not be read") from error
+            if not chunk:
+                if self.writer_observed:
+                    self.eof = True
+                    require(self.ready,
+                            f"{self.label} FIFO closed before exact readiness")
+                return
+            self.writer_observed = True
+            self.buffer.extend(chunk)
+            require(len(self.buffer) <= len(self.expected),
+                    f"{self.label} FIFO has extra or malformed evidence")
+            if self.buffer == self.expected:
+                self.ready = True
+            else:
+                require(self.expected.startswith(self.buffer),
+                        f"{self.label} FIFO has malformed readiness evidence")
+
+    def close(self) -> None:
+        if self.fd is None:
+            return
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        self.fd = None
+
+
 def verify_read_only_answer(payload: bytes, expected: str, label: str) -> None:
     try:
         answer = payload.decode("utf-8")
@@ -388,6 +753,10 @@ def verify_read_only_answer(payload: bytes, expected: str, label: str) -> None:
         raise AcceptanceFailure(f"{label} answer is not valid UTF-8") from error
     require(answer.strip() == expected,
             f"{label} did not return the exact marker-derived answer")
+
+
+def verify_interactive_answer(payload: bytes, label: str) -> None:
+    verify_read_only_answer(payload, "DELEGATION_LIVE_INTERACTIVE_OK: Blue", label)
 
 
 def verify_review_answer(payload: bytes, label: str) -> None:
@@ -484,12 +853,18 @@ class NativeAcceptance:
         scenario = getattr(args, "scenario", None)
         if scenario is None:
             scenario = "write" if requested_mode == "workspace-write" else "read-only"
-        if scenario not in {"read-only", "write"}:
+        if scenario not in {"read-only", "write", "timeout-resume", "interactive"}:
             raise AcceptanceFailure(f"unsupported native acceptance scenario: {scenario}")
         if scenario == "read-only" and requested_mode != "read-only":
             raise AcceptanceFailure("read-only scenario requires --permission read-only")
         if scenario == "write" and requested_mode != "workspace-write":
             raise AcceptanceFailure("write scenario requires --permission workspace-write")
+        if scenario == "timeout-resume" and (args.provider != "codex:exec" or
+                                                requested_mode != "workspace-write"):
+            raise AcceptanceFailure("timeout-resume scenario requires codex:exec workspace-write")
+        if scenario == "interactive" and (args.provider != "claude:print" or
+                                            requested_mode != "read-only"):
+            raise AcceptanceFailure("interactive scenario requires claude:print read-only")
         discover_models = bool(getattr(args, "discover_models", False))
         self.args = args
         self.provider = args.provider
@@ -518,28 +893,80 @@ class NativeAcceptance:
             except BlockedFailure as error:
                 raise BlockedFailure("Codex git prerequisite is unavailable") from error
 
+        self._constructor_ownership = DirectoryOwner()
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(6)
         # Provider identity is recorded in the receipt; keep the disposable path
         # short enough for Darwin's Unix socket address limit.
-        self.base = Path.home() / "delegation-layer-live" / stamp
-        reject_tmp(self.base, "live acceptance base")
-        self.base.mkdir(mode=0o700, parents=True, exist_ok=False)
+        self.base_parent = Path.home() / "delegation-layer-live"
+        self.base = self.base_parent / stamp
+        try:
+            reject_tmp(self.base, "live acceptance base")
+            if self.base_parent.exists() or self.base_parent.is_symlink():
+                require(self.base_parent.is_dir() and not self.base_parent.is_symlink(),
+                        "live acceptance base parent is unsafe")
+            else:
+                self.base_parent = self._constructor_ownership.create(
+                    "acceptance base parent", self.base_parent,
+                    self.base_parent.parent, mode=0o700, parents=True).directory
+            self.base = self._constructor_ownership.create(
+                "acceptance base", self.base, self.base_parent).directory
+            self._initialize_runtime_roots()
+        except BaseException as error:
+            try:
+                self._constructor_ownership.rollback()
+            except BaseException as rollback_error:
+                raise RuntimeError(
+                    "native acceptance constructor rollback failed: " + str(rollback_error)) from error
+            raise
+        self.owned_directories = self._constructor_ownership.transfer()
+
+    def _initialize_runtime_roots(self) -> None:
         self.state = self.base / "state"
         self.workspace = self.base / "workspace"
         self.briefs = self.base / "briefs"
         self.pueue_base = self.base / "pueue"
         self.models_state = self.base / "models-state"
-        for path in (self.state, self.workspace, self.briefs, self.pueue_base,
-                     self.pueue_base / "state", self.pueue_base / "run",
-                     self.models_state,):
-            path.mkdir(mode=0o700, parents=False)
+        for label, path, parent in (
+            ("acceptance state", self.state, self.base),
+            ("acceptance workspace", self.workspace, self.base),
+            ("acceptance briefs", self.briefs, self.base),
+            ("private pueue", self.pueue_base, self.base),
+            ("private pueue state", self.pueue_base / "state", self.pueue_base),
+            ("private pueue runtime", self.pueue_base / "run", self.pueue_base),
+            ("model discovery state", self.models_state, self.base),
+        ):
+            self._constructor_ownership.create(label, path, parent)
+        self.timeout_marker_file = self.workspace / "acceptance-timeout-marker.txt"
+        self.timeout_resume_file = self.workspace / "acceptance-timeout-resumed.txt"
+        self.timeout_marker = "timeout-marker:" + secrets.token_hex(24)
+        self.timeout_resume_marker = "timeout-resumed:" + secrets.token_hex(24)
+        # The provider must open these leases from inside its native
+        # workspace-write boundary on every supported platform.
+        self.timeout_lease_directory = self.workspace / "acceptance-timeout-leases"
+        self.timeout_parent_fifo = self.timeout_lease_directory / "parent.fifo"
+        self.timeout_child_fifo = self.timeout_lease_directory / "child.fifo"
+        self.timeout_parent_ready_marker = "timeout-parent-ready:" + secrets.token_hex(24)
+        self.timeout_child_ready_marker = "timeout-child-ready:" + secrets.token_hex(24)
+        self.timeout_leases: dict[str, TimeoutFifoLease] = {}
+        if self.scenario == "timeout-resume":
+            self._constructor_ownership.create(
+                "timeout liveness leases", self.timeout_lease_directory, self.workspace)
+            self.timeout_leases = {
+                "parent": TimeoutFifoLease(
+                    self.timeout_parent_fifo, "timeout parent", self.timeout_parent_ready_marker),
+                "child": TimeoutFifoLease(
+                    self.timeout_child_fifo, "timeout child", self.timeout_child_ready_marker),
+            }
         self.config = self.pueue_base / "pueue.yml"
         write_json(self.config, config_for(self.pueue_base))
-        self.processes = Processes(self.output / "processes", self.environment)
+        self.processes = Processes(
+            self.output / "processes", self.environment,
+            owner=self._constructor_ownership)
         self.ops = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
                                  self.base, self.state, self.output,
                                  watch_seconds=WATCH_SECONDS,
-                                 expected_inspection_binding_required=False)
+                                 expected_inspection_binding_required=False,
+                                 managed_runner=self.scenario == "timeout-resume")
         self.daemon = None
         self.closed = False
         self.model_discovery: dict[str, object] | None = None
@@ -549,13 +976,13 @@ class NativeAcceptance:
         self.model_discovery_task_id: str | None = None
         self.root_id: str | None = None
         self.provider_version: str | None = None
-        # A provider may update between turns.  Validate each task's admitted
-        # runtime identity independently and retain the observed versions for
-        # the acceptance receipt.
-        self.provider_versions: dict[str, str] = {}
-        self.provider_sha256: str | None = None
+        # A provider may update or be relinked between turns.  Immutable task
+        # metadata owns each admitted runtime identity; this append-only map is
+        # derived from those records for the terminal acceptance receipt.
+        self.provider_runtime_identities: dict[str, dict[str, str]] = {}
         self.pueue_version: str | None = None
         self.pueued_version: str | None = None
+        self.interaction_observation_number = 0
         self.tasks: dict[str, str] = {}
         self.numeric_ids: dict[str, int] = {}
         self.records: dict[str, dict[str, object]] = {}
@@ -576,6 +1003,338 @@ class NativeAcceptance:
             self.nonce = secrets.token_hex(24)
             write_bytes(self.nonce_file, (self.nonce + "\n").encode())
             write_bytes(self.fixture_file, (f"preexisting:{self.nonce}\n").encode())
+
+    @staticmethod
+    def _fit_failure_diagnostics(value: dict[str, object]) -> dict[str, object]:
+        """Keep the persisted diagnostic bounded while retaining structure."""
+        status = value["status"]
+        require(isinstance(status, dict), "failure diagnostic status is malformed")
+
+        def mark_truncated(reason: str) -> None:
+            status["partial"] = True
+            truncated = status.setdefault("truncated", [])
+            require(isinstance(truncated, list), "failure diagnostic truncation state is malformed")
+            if reason not in truncated:
+                truncated.append(reason)
+
+        if len(_diagnostic_json_bytes(value)) <= FAILURE_DIAGNOSTICS_BYTES:
+            return value
+
+        workspace = value.get("workspace")
+        entries = workspace.get("entries") if isinstance(workspace, dict) else None
+        if isinstance(entries, dict):
+            while entries and len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES:
+                keep = max(0, len(entries) // 2)
+                workspace["entries"] = dict(list(entries.items())[:keep])
+                entries = workspace["entries"]
+            mark_truncated("workspace.entries")
+
+        if len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES:
+            tasks = value.get("tasks")
+            if isinstance(tasks, list):
+                for task in tasks:
+                    if not isinstance(task, dict):
+                        continue
+                    provider_exit = task.get("provider_exit")
+                    if isinstance(provider_exit, dict) and provider_exit.get("raw_manifest"):
+                        provider_exit["raw_manifest"] = []
+                        provider_exit["raw_manifest_omitted"] = True
+                        mark_truncated("provider_exit.raw_manifest")
+                    if "files" in task:
+                        task.pop("files")
+                        task["files_omitted"] = True
+                mark_truncated("task.files")
+
+        if len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES and isinstance(workspace, dict):
+            workspace["entries"] = {}
+            mark_truncated("workspace.entries.all")
+
+        if len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES:
+            tasks = value.get("tasks")
+            if isinstance(tasks, list):
+                value["tasks"] = [
+                    {"name": task.get("name"), "task_id": task.get("task_id")}
+                    for task in tasks if isinstance(task, dict)
+                ]
+                mark_truncated("task.details")
+
+        if len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES:
+            task_ids = value.get("task_ids")
+            if isinstance(task_ids, list):
+                while task_ids and len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES:
+                    task_ids[:] = task_ids[:max(0, len(task_ids) // 2)]
+                mark_truncated("task_ids")
+
+        require(len(_diagnostic_json_bytes(value)) <= FAILURE_DIAGNOSTICS_BYTES,
+                "failure diagnostic could not be bounded")
+        status["partial"] = True
+        return value
+
+    @staticmethod
+    def _diagnostic_task(state: Path, task_id: str, omitted: list[str]) -> dict[str, object]:
+        task_directory = state / "tasks" / task_id
+        result: dict[str, object] = {"task_id": task_id, "files": {}}
+        try:
+            state_metadata = state.lstat()
+            tasks_metadata = (state / "tasks").lstat()
+            metadata = task_directory.lstat()
+        except OSError as error:
+            omitted.append(f"task:{task_id}:{type(error).__name__}")
+            return result
+        if (stat.S_ISLNK(state_metadata.st_mode) or not stat.S_ISDIR(state_metadata.st_mode) or
+                stat.S_ISLNK(tasks_metadata.st_mode) or not stat.S_ISDIR(tasks_metadata.st_mode) or
+                stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode)):
+            omitted.append(f"task:{task_id}:unsafe-directory")
+            return result
+
+        files: dict[str, dict[str, object]] = {}
+        decoded: dict[str, object] = {}
+        for name in ("task.json", "meta.json", "provider.exit", "outcome.json",
+                     "provider.ref.json", "result.txt", "publish.reject"):
+            descriptor, reason = _diagnostic_regular_file(task_directory / name)
+            if descriptor is not None:
+                files[name] = descriptor
+            elif reason not in (None, "missing"):
+                omitted.append(f"task:{task_id}:{name}:{reason}")
+                continue
+            if name in {"provider.exit", "outcome.json"} and descriptor is not None:
+                try:
+                    decoded[name] = read_json(task_directory / name, bound=MAX_CONTROL_BYTES)
+                except (OSError, ValueError, TypeError, RecursionError, RuntimeError):
+                    omitted.append(f"task:{task_id}:{name}:unreadable")
+
+        outcome = _diagnostic_outcome(decoded.get("outcome.json"))
+        if outcome is not None:
+            result["outcome"] = outcome
+        provider_exit = _diagnostic_provider_exit(decoded.get("provider.exit"))
+        if provider_exit is not None:
+            result["provider_exit"] = provider_exit
+        result["files"] = files
+        return result
+
+    def _failure_diagnostics(self) -> dict[str, object]:
+        omitted: list[str] = []
+        status: dict[str, object] = {
+            "partial": False, "omitted": [], "omitted_count": 0, "truncated": [],
+        }
+
+        def record_omissions(values: list[str]) -> None:
+            if not values:
+                return
+            status["partial"] = True
+            status["omitted_count"] = int(status["omitted_count"]) + len(values)
+            current = status["omitted"]
+            require(isinstance(current, list), "failure diagnostic omission state is malformed")
+            remaining = max(0, FAILURE_DIAGNOSTICS_MAX_OMISSIONS - len(current))
+            current.extend(str(value)[:FAILURE_DIAGNOSTICS_TEXT_BYTES] for value in values[:remaining])
+
+        failure: dict[str, object] = {}
+        failure_path = self.output / "failure.json"
+        try:
+            raw_failure = read_json(failure_path, bound=MAX_CONTROL_BYTES)
+        except (OSError, ValueError, TypeError, RecursionError, RuntimeError):
+            raw_failure = None
+            omitted.append("failure.json")
+        if isinstance(raw_failure, dict):
+            for key in ("gate", "status", "provider", "mode", "scenario", "task_budget"):
+                value = raw_failure.get(key)
+                if isinstance(value, str) and len(value) <= FAILURE_DIAGNOSTICS_TEXT_BYTES and \
+                        not any(ord(character) < 32 for character in value):
+                    failure[key] = value
+            for key in ("requested_model", "requested_effort"):
+                value = raw_failure.get(key)
+                if value is None or (isinstance(value, str) and
+                                     len(value) <= FAILURE_DIAGNOSTICS_TEXT_BYTES and
+                                     not any(ord(character) < 32 for character in value)):
+                    failure[key] = value
+            for key in ("discover_models", "no_retry", "credentials_in_receipt"):
+                value = raw_failure.get(key)
+                if type(value) is bool:
+                    failure[key] = value
+            if "error" in raw_failure:
+                failure["error"] = _diagnostic_text_descriptor(raw_failure.get("error"))
+        else:
+            record_omissions(omitted)
+
+        task_specs: list[tuple[str, str, Path]] = []
+        seen: set[str] = set()
+        for name, task_id in sorted(getattr(self, "tasks", {}).items()):
+            if not isinstance(name, str) or not _task_identity(task_id) or task_id in seen:
+                omitted.append("admitted-task")
+                continue
+            seen.add(task_id)
+            task_specs.append((name, task_id, self.state))
+        model_task = getattr(self, "model_discovery_task_id", None)
+        models_state = getattr(self, "models_state", None)
+        if _task_identity(model_task) and model_task not in seen and isinstance(models_state, Path):
+            task_specs.append(("model-discovery", model_task, models_state))
+            seen.add(model_task)
+        if len(task_specs) > FAILURE_DIAGNOSTICS_MAX_TASKS:
+            omitted.append("admitted-task-list")
+            task_specs = task_specs[:FAILURE_DIAGNOSTICS_MAX_TASKS]
+
+        tasks = []
+        numeric_ids = getattr(self, "numeric_ids", {})
+        for name, task_id, state_root in task_specs:
+            task = self._diagnostic_task(state_root, task_id, omitted)
+            task["name"] = name[:FAILURE_DIAGNOSTICS_TEXT_BYTES]
+            numeric_id = numeric_ids.get(task_id)
+            if type(numeric_id) is int and numeric_id >= 0:
+                task["numeric_id"] = numeric_id
+            tasks.append(task)
+
+        workspace_path = getattr(self, "workspace", None)
+        if isinstance(workspace_path, Path):
+            workspace = _diagnostic_workspace(workspace_path)
+            workspace_omitted = workspace.pop("omitted", [])
+            if isinstance(workspace_omitted, list):
+                omitted.extend(str(value) for value in workspace_omitted)
+            if workspace.pop("omitted_count", 0):
+                status["partial"] = True
+            if workspace.pop("omitted_truncated", False):
+                status["truncated"].append("workspace.omitted")
+            if workspace.pop("truncated", False):
+                status["truncated"].append("workspace.entries")
+                status["partial"] = True
+        else:
+            workspace = {"entries": {}}
+            omitted.append("workspace")
+
+        record_omissions(omitted)
+        result: dict[str, object] = {
+            "schema_version": 1,
+            "provider": getattr(self, "provider", None),
+            "mode": getattr(self, "mode", None),
+            "scenario": getattr(self, "scenario", None),
+            "failure": failure,
+            "task_ids": [task_id for _name, task_id, _state in task_specs],
+            "tasks": tasks,
+            "workspace": workspace,
+            "status": status,
+        }
+        status["partial"] = bool(status["partial"] or status["omitted_count"] or status["truncated"])
+        return self._fit_failure_diagnostics(result)
+
+    def _write_failure_diagnostics(self) -> bool:
+        path = self.output / "failure-diagnostics.json"
+        try:
+            try:
+                metadata = path.lstat()
+            except FileNotFoundError:
+                metadata = None
+            if metadata is not None:
+                require(stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode),
+                        "failure diagnostic path is unsafe")
+                data = path.read_bytes()
+                require(len(data) <= FAILURE_DIAGNOSTICS_BYTES,
+                        "existing failure diagnostic exceeds its bound")
+                value = json.loads(data)
+                require(isinstance(value, dict) and value.get("schema_version") == 1,
+                        "existing failure diagnostic is malformed")
+                return True
+            value = self._failure_diagnostics()
+            data = _diagnostic_json_bytes(value)
+            require(len(data) <= FAILURE_DIAGNOSTICS_BYTES,
+                    "failure diagnostic exceeds its bound")
+            write_json(path, value, replace=True)
+            require(path.is_file() and not path.is_symlink() and
+                    path.stat().st_size <= FAILURE_DIAGNOSTICS_BYTES,
+                    "persisted failure diagnostic exceeds its bound")
+            return True
+        except BaseException:
+            staging = path.with_name(path.name + ".staging")
+            try:
+                if staging.is_file() and not staging.is_symlink():
+                    staging.unlink()
+            except OSError:
+                pass
+            return False
+
+    def _cleanup_timeout_leases(self) -> bool:
+        leases = getattr(self, "timeout_leases", None)
+        if not isinstance(leases, dict):
+            return True
+        failures: list[BaseException] = []
+        for lease in leases.values():
+            if not isinstance(lease, TimeoutFifoLease):
+                failures.append(AcceptanceFailure("timeout liveness lease is malformed"))
+                continue
+            lease.close()
+            try:
+                try:
+                    lease.path.lstat()
+                except FileNotFoundError:
+                    continue
+                lease._verify_path()
+                lease.path.unlink()
+            except BaseException as error:
+                failures.append(error)
+
+        for path in (getattr(self, "timeout_marker_file", None),
+                     getattr(self, "timeout_resume_file", None)):
+            if not isinstance(path, Path):
+                continue
+            try:
+                metadata = path.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                failures.append(error)
+                continue
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                failures.append(AcceptanceFailure("timeout artifact has an unsafe type"))
+                continue
+            try:
+                path.unlink()
+            except OSError as error:
+                failures.append(error)
+
+        directory = getattr(self, "timeout_lease_directory", None)
+        if isinstance(directory, Path):
+            try:
+                metadata = directory.lstat()
+            except FileNotFoundError:
+                metadata = None
+            except OSError as error:
+                failures.append(error)
+                metadata = None
+            if metadata is not None:
+                if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                    failures.append(AcceptanceFailure("timeout liveness lease directory is unsafe"))
+                elif any(directory.iterdir()):
+                    failures.append(AcceptanceFailure(
+                        "timeout liveness lease directory retained unexpected entries"))
+        return not failures
+
+    def finalize(self, success: bool) -> bool:
+        """Complete natural cleanup, then remove only this test's private root."""
+        failure_diagnostics_written = False
+        if not success:
+            # Diagnostics are independent evidence.  Persist them even when
+            # supervisor shutdown cannot complete; cleanup must still run.
+            failure_diagnostics_written = self._write_failure_diagnostics()
+        if not self.closed:
+            try:
+                self.safe_shutdown()
+            except BaseException:
+                pass
+        leases_clean = True
+        if self.closed:
+            leases_clean = self._cleanup_timeout_leases()
+        artifacts_clean = finalize_acceptance_artifacts(
+            self.output,
+            self.closed,
+            self.owned_directories,
+            success,
+            remove_failed_process_captures=failure_diagnostics_written,
+            raw_process_captures_token=self.processes.capture_root,
+        )
+        return leases_clean and artifacts_clean
+
+    def publish_success(self) -> None:
+        receipt = getattr(self, "success_receipt", None)
+        require(isinstance(receipt, dict), "acceptance success receipt is unavailable")
+        write_json(self.output / "success.json", receipt)
 
     def direct(self, name: str, argv: list[object], expected=0, timeout=30):
         return self.ops.direct(name, argv, expected=expected, timeout=timeout)
@@ -636,12 +1395,16 @@ class NativeAcceptance:
         ops.dispatch_attempts = {task_id}
         ops.inspection_attempts = {task_id}
 
-    def write_binding(self) -> None:
+    def write_binding(self, task_id: str, provider_identity: dict[str, str]) -> None:
         binding = self.output / "binding.json"
         require(not binding.exists() and not binding.is_symlink(),
                 "runtime binding was already persisted")
-        require(isinstance(self.provider_version, str) and bool(self.provider_version),
-                "runtime provider version is unavailable")
+        require(_task_identity(task_id) and
+                set(provider_identity) == {"executable", "version", "sha256"} and
+                provider_identity.get("executable") == str(self.provider_executable) and
+                provider_identity.get("version") == self.provider_version and
+                _hex_digest(provider_identity.get("sha256")),
+                "first admitted provider identity is unavailable")
         args = getattr(self, "args", None)
         write_json(binding, {
             "provider": self.provider,
@@ -653,10 +1416,11 @@ class NativeAcceptance:
             "requested_effort": getattr(args, "effort", None),
             "model_discovery": getattr(self, "model_discovery_summary", None),
             "native_mode": self.native_mode_receipt(),
-            "provider_executable": str(self.provider_executable),
-            "provider_sha256": self.provider_sha256,
-            "provider_version": self.provider_version,
-            "provider_versions": dict(sorted(getattr(self, "provider_versions", {}).items())),
+            "provider_identity_scope": "first-admitted-task",
+            "provider_task_id": task_id,
+            "provider_executable": provider_identity["executable"],
+            "provider_sha256": provider_identity["sha256"],
+            "provider_version": provider_identity["version"],
             "delegate_sha256": digest(self.delegate),
             "runner_sha256": digest(self.runner),
             "pueue_sha256": digest(self.pueue),
@@ -665,6 +1429,45 @@ class NativeAcceptance:
             "pueued_version": self.pueued_version,
             "credentials_in_receipt": False,
         })
+
+    def _record_provider_runtime_identity(
+            self, task_id: str, meta: dict[str, object]) -> dict[str, str]:
+        """Record the immutable runtime identity admitted for one task."""
+        executable = meta.get("provider_executable")
+        version = meta.get("provider_version")
+        effective = meta.get("effective_config")
+        policy = effective.get("policy") if isinstance(effective, dict) else None
+        runtime_sha256 = policy.get("runtime_sha256") if isinstance(policy, dict) else None
+        require(_task_identity(task_id) and isinstance(executable, str) and
+                executable == str(self.provider_executable) and
+                isinstance(version, str) and bool(version) and
+                _hex_digest(runtime_sha256),
+                f"task {task_id} has no admitted provider runtime identity")
+        identity = {
+            "executable": executable,
+            "version": version,
+            "sha256": runtime_sha256,
+        }
+        existing = self.provider_runtime_identities.get(task_id)
+        require(existing is None or existing == identity,
+                f"task {task_id} changed its admitted provider runtime identity")
+        self.provider_runtime_identities[task_id] = identity
+        return identity
+
+    def provider_runtime_receipt(self) -> dict[str, object]:
+        identities = {
+            task_id: dict(identity)
+            for task_id, identity in sorted(self.provider_runtime_identities.items())
+        }
+        expected_tasks = set(self.tasks.values())
+        require(bool(expected_tasks) and set(identities) == expected_tasks,
+                "provider runtime identity coverage is incomplete")
+        return {
+            "provider_versions": {
+                task_id: identity["version"] for task_id, identity in identities.items()
+            },
+            "provider_runtime_identities": identities,
+        }
 
     def native_mode_receipt(self) -> dict[str, object] | None:
         if self.provider != "antigravity:print":
@@ -686,6 +1489,9 @@ class NativeAcceptance:
         require((self.workspace / ".git").is_dir() and not (self.workspace / ".git").is_symlink() and
                 process.result.get("exit_code") == 0,
                 "Codex disposable workspace is not a git repository")
+        if self.provider == "codex:exec" and self.scenario == "timeout-resume":
+            for name in CODEX_TIMEOUT_BASELINE_DIRECTORIES:
+                (self.workspace / name).mkdir(mode=0o700)
         if self.provider == "codex:review":
             for key, value in (("user.email", "delegation-acceptance@example.invalid"),
                                ("user.name", "Delegation Acceptance")):
@@ -786,9 +1592,10 @@ class NativeAcceptance:
         journal = journals[task_id]
         request = journal["request"]
         binding = request["binding"]
+        helper_executable = binding.get("helper_executable")
         require(binding.get("definition_revision") == "model-discovery-v1" and
-                binding.get("helper_executable") == str(self.provider_executable) and
-                binding.get("helper_sha256") == self.provider_sha256,
+                helper_executable == str(self.provider_executable) and
+                _hex_digest(binding.get("helper_sha256")),
                 "model discovery provider binding changed")
         task = request["task"]
         discovery_mode = PROFILES[self.provider]["modes"][0]
@@ -817,7 +1624,7 @@ class NativeAcceptance:
         validator._validate_inspection_queue_row(row, journal, allow_failure=True)
 
     def setup(self) -> None:
-        self.provider_sha256 = digest(self.provider_executable)
+        self.require_authentication_prerequisite()
         pueue_version = self.direct("pueue-version", pueue_command(self.pueue, self.config, "--version"), timeout=20)
         pueued_version = self.direct("pueued-version", [self.pueued, "-c", self.config, "--version"], timeout=20)
         self.pueue_version = observed_pueue_version(
@@ -835,18 +1642,50 @@ class NativeAcceptance:
         require(isinstance(advertised, list) and self.mode in advertised,
                 f"compiled discovery does not advertise {self.provider} {self.mode}")
         self._prepare_codex_workspace()
-        self.daemon = self.processes.start("pueued", [self.pueued, "-c", self.config], self.base)
+        self.daemon = self.processes.start("pueued", [self.pueued, "-c", self.config], self.base,
+                                           on_spawned=self._adopt_daemon)
         self.ops.bind_supervisor(self.config, self.daemon)
         deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            process = self.ops.client("daemon-status", ["status", "--json"], expected={0, 1}, timeout=20)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            process = self.ops.client("daemon-status", ["status", "--json"], expected={0, 1},
+                                      timeout=min(20, remaining))
             if process.result.get("exit_code") == 0:
                 status = status_jobs(process)
                 if not status.get("tasks"):
                     self.workspace_baseline = workspace_snapshot(self.workspace)
                     return
-            time.sleep(0.2)
+            delay = min(0.2, max(0.0, deadline - time.monotonic()))
+            if delay <= 0:
+                break
+            time.sleep(delay)
         raise AcceptanceFailure("private pueue readiness observation expired")
+
+    def require_authentication_prerequisite(self) -> None:
+        """Turn an explicit native signed-out status into a neutral live gate."""
+        arguments = self.profile.get("authentication_status")
+        if arguments is None:
+            return
+        require(isinstance(arguments, tuple) and arguments and
+                all(isinstance(value, str) and value for value in arguments),
+                f"{self.provider} authentication status command is invalid")
+        process = self.direct(
+            "provider-authentication-status", [self.provider_executable, *arguments],
+            expected={0, 1}, timeout=20)
+        response = parse_json_output(process, f"{self.provider} authentication status")
+        logged_in = response.get("loggedIn")
+        require(type(logged_in) is bool,
+                f"{self.provider} authentication status has no loggedIn boolean")
+        if not logged_in:
+            raise BlockedFailure(f"{self.provider} authentication is unavailable")
+        require(process.result.get("exit_code") == 0,
+                f"{self.provider} authenticated status exited unsuccessfully")
+
+    def _adopt_daemon(self, process: object) -> None:
+        require(self.daemon is None, "private daemon handle was assigned twice")
+        self.daemon = process
 
     def brief(self, name: str, continuation: bool = False) -> Path:
         path = self.briefs / f"{name}.txt"
@@ -899,27 +1738,187 @@ class NativeAcceptance:
         write_bytes(path, text.encode())
         return path
 
+    def interactive_brief(self, name: str) -> Path:
+        path = self.briefs / f"{name}.txt"
+        text = (
+            "You MUST call the root AskUserQuestion tool before producing any final answer. "
+            "Ask exactly one question with the text `Choose a color` and exactly two options, "
+            "`Blue` and `Green`; make it single-select, then wait for my answer. "
+            "After I answer Blue, return exactly `DELEGATION_LIVE_INTERACTIVE_OK: Blue` as your final answer. "
+            "Do not modify files, use shell, use network, or access paths outside the current workspace.\n"
+        )
+        write_bytes(path, text.encode())
+        return path
+
+    def timeout_brief(self, name: str, resume: bool = False) -> Path:
+        path = self.briefs / f"{name}.txt"
+        if resume:
+            text = (
+                "Continue the exact previous Codex session. The prior turn intentionally timed out after "
+                "creating its marker. Verify acceptance-timeout-marker.txt, then create "
+                "acceptance-timeout-resumed.txt containing exactly "
+                f"`{self.timeout_resume_marker}` followed by one newline. Reply exactly "
+                "`DELEGATION_TIMEOUT_RESUMED` after the file is written. Do not modify any other file, "
+                "configuration, or path outside the current workspace.\n"
+            )
+        else:
+            command = (
+                "set -eu; "
+                f"exec 3>{shlex.quote(str(self.timeout_parent_fifo))}; "
+                f"printf '%s\\n' {shlex.quote(self.timeout_parent_ready_marker)} >&3; "
+                f"(exec 3>&-; exec 4>{shlex.quote(str(self.timeout_child_fifo))}; "
+                f"printf '%s\\n' {shlex.quote(self.timeout_child_ready_marker)} >&4; "
+                "exec sleep 600) & "
+                f"printf '%s\\n' {shlex.quote(self.timeout_marker)} > "
+                f"{shlex.quote(self.timeout_marker_file.name)}; wait")
+            text = (
+                "This is a timeout-recovery integration test. Use the native shell tool to run exactly this "
+                f"command: `{command}`. The long sleep is intentional: do not stop it, do not reply before "
+                "the supervisor budget ends the turn, and do not modify any other file, configuration, or "
+                "path outside the current workspace.\n"
+            )
+        write_bytes(path, text.encode())
+        return path
+
+    def _observe_timeout_leases(self) -> None:
+        leases = getattr(self, "timeout_leases", None)
+        require(isinstance(leases, dict) and set(leases) == {"parent", "child"},
+                "timeout liveness leases are unavailable")
+        for lease in leases.values():
+            require(isinstance(lease, TimeoutFifoLease),
+                    "timeout liveness lease is malformed")
+            lease.observe()
+
+    def _timeout_liveness_ready(self) -> bool:
+        self._observe_timeout_leases()
+        for lease in self.timeout_leases.values():
+            require(not lease.eof,
+                    f"{lease.label} FIFO closed before the task was observed running")
+        return all(lease.ready and not lease.eof for lease in self.timeout_leases.values())
+
+    def _timeout_liveness_receipt(self, closed: bool) -> dict[str, object]:
+        resources: dict[str, dict[str, object]] = {}
+        for name in ("parent", "child"):
+            lease = self.timeout_leases.get(name)
+            require(isinstance(lease, TimeoutFifoLease) and
+                    type(lease.device) is int and type(lease.inode) is int,
+                    f"timeout {name} FIFO identity is unavailable")
+            resources[name] = {
+                "path": str(lease.path),
+                "device": lease.device,
+                "inode": lease.inode,
+                "type": "fifo",
+                "ready": lease.ready,
+                "closed": lease.eof,
+            }
+        return {
+            "schema_version": 1,
+            "resources": resources,
+            "ready": all(resource["ready"] is True for resource in resources.values()),
+            "closed": closed,
+        }
+
+    def _capture_timeout_liveness(self) -> bool:
+        if not self._timeout_liveness_ready():
+            return False
+        receipt = self._timeout_liveness_receipt(closed=False)
+        self.timeout_liveness = receipt
+        write_json(self.output / "timeout-liveness.json", receipt)
+        return True
+
+    def record_timeout_liveness(
+            self, task_id: str, timeout: float = TIMEOUT_LEASE_SETUP_SECONDS,
+            sleep_fn=time.sleep, monotonic_fn=time.monotonic) -> None:
+        require(self.root_id is not None, "timeout source has no root identity")
+        require(timeout > 0, "timeout liveness setup deadline must be positive")
+        self.ops.root_id = self.root_id
+        deadline = monotonic_fn() + timeout
+        next_status = monotonic_fn()
+        attempt = 0
+        last_status: dict[str, object] | None = None
+        while True:
+            remaining = deadline - monotonic_fn()
+            if remaining <= 0:
+                break
+            if monotonic_fn() >= next_status:
+                last_status = self.ops.status(
+                    f"timeout-liveness-status-{attempt}", task_id,
+                    expected={0, 1}, timeout=min(45, remaining))
+                attempt += 1
+                remaining = deadline - monotonic_fn()
+                if remaining <= 0:
+                    break
+                failure = last_status.get("failure")
+                terminal_failure = (isinstance(failure, dict) and
+                                    failure.get("next_action") == "stop_and_report")
+                if (last_status.get("liveness") == "ended" or
+                        last_status.get("publication") in {"committed", "rejected"} or
+                        last_status.get("status") == "timed_out" or
+                        terminal_failure):
+                    raise AcceptanceFailure(
+                        "timeout source ended before both liveness leases were ready; Delegate " +
+                        _delegate_status_summary(last_status))
+                if last_status.get("liveness") == "running" and self._capture_timeout_liveness():
+                    return
+                next_status = monotonic_fn() + TIMEOUT_LEASE_STATUS_INTERVAL_SECONDS
+                remaining = deadline - monotonic_fn()
+                if remaining <= 0:
+                    break
+            sleep_fn(min(0.25, remaining))
+        detail = (_delegate_status_summary(last_status) if last_status is not None
+                  else "status=unavailable")
+        raise AcceptanceFailure(
+            "timeout source liveness leases were not ready before the bounded deadline; Delegate " +
+            detail)
+
+    def _timeout_liveness_closed(self) -> bool:
+        self._observe_timeout_leases()
+        return all(lease.ready and lease.eof for lease in self.timeout_leases.values())
+
+    def wait_timeout_leases_closed(self) -> None:
+        require(isinstance(getattr(self, "timeout_liveness", None), dict),
+                "timeout liveness readiness was not recorded")
+        wait_until(self._timeout_liveness_closed,
+                   timeout=TIMEOUT_LEASE_OBSERVATION_SECONDS,
+                   description="both timeout liveness FIFO leases to close")
+        receipt = self._timeout_liveness_receipt(closed=True)
+        receipt["closed_observed_ns"] = time.time_ns()
+        write_json(self.output / "timeout-liveness.json", receipt, replace=True)
+        self.timeout_liveness = receipt
+
+    def task_command_prefix(self) -> list[object]:
+        argv: list[object] = [
+            self.delegate, "--root", self.state, "--pueue-config", self.config,
+        ]
+        if getattr(self, "scenario", None) != "timeout-resume":
+            argv.extend(["--runner", self.runner])
+        return argv
+
     def dispatch_argv(self, task_id: str, brief: Path,
-                      predecessor: str | None = None) -> list[object]:
-        argv: list[object] = [self.delegate, "--root", self.state, "--pueue-config", self.config,
-                              "--runner", self.runner, "dispatch", "--provider", self.provider,
-                              "--brief", brief, "--cwd", self.workspace, "--id", task_id,
-                              "--permission", self.mode, "--budget", TASK_BUDGET, "--json"]
+                      predecessor: str | None = None,
+                      budget: str = TASK_BUDGET) -> list[object]:
+        argv = self.task_command_prefix()
+        argv.extend(["dispatch", "--provider", self.provider,
+                     "--brief", brief, "--cwd", self.workspace, "--id", task_id,
+                     "--permission", self.mode, "--budget", budget, "--json"])
         model = getattr(self.args, "model", None)
         effort = getattr(self.args, "effort", None)
         if model:
             argv.extend(["--model", model])
         if effort:
             argv.extend(["--effort", effort])
+        if getattr(self, "scenario", None) == "interactive":
+            argv.append("--interactive")
         if self.provider == "codex:review":
             argv.extend(["--review-target", "uncommitted"])
         if predecessor:
             argv.extend(["--resume-task", predecessor])
         return argv
 
-    def dispatch(self, name: str, brief: Path, predecessor: str | None = None) -> str:
+    def dispatch(self, name: str, brief: Path, predecessor: str | None = None,
+                 budget: str = TASK_BUDGET) -> str:
         task_id = secrets.token_hex(16)
-        argv = self.dispatch_argv(task_id, brief, predecessor)
+        argv = self.dispatch_argv(task_id, brief, predecessor, budget)
         self.ops.root_id = self.root_id
         try:
             response = self.ops.dispatch(name, task_id, argv)
@@ -943,16 +1942,181 @@ class NativeAcceptance:
     def continue_task(self, name: str, brief: Path, predecessor: str) -> str:
         return self.dispatch(name, brief, predecessor=predecessor)
 
-    def wait_done(self, name: str, task_id: str) -> None:
+    def _interaction_events(self, name: str, task_id: str, after: int,
+                            watch_seconds: int) -> dict[str, object]:
+        argv: list[object] = [
+            self.delegate, "--root", self.state, "--pueue-config", self.config,
+            "--runner", self.runner, "events", task_id, "--after", str(after),
+            "--watch", f"{watch_seconds}s", "--json",
+        ]
+        process = self.direct(name, argv, expected={0, 3},
+                              timeout=watch_seconds + 20)
+        response = parse_json_output(process, name)
+        require(response.get("task_id") == task_id,
+                f"{name} observed the wrong interactive task")
+        state = response.get("interaction")
+        require(isinstance(state, dict), f"{name} returned no interaction state")
+        events = response.get("events", [])
+        require(isinstance(events, list) and all(isinstance(event, dict) for event in events),
+                f"{name} returned malformed interaction events")
+        cursor = response.get("cursor")
+        require(type(cursor) is int and cursor >= after,
+                f"{name} returned an invalid interaction cursor")
+        write_json(self.output / (name + ".json"), response)
+        return response
+
+    def wait_for_interaction(self, task_id: str, after: int = 0,
+                             pending: bool = False) -> tuple[dict[str, object], int, list[dict[str, object]]]:
+        deadline = time.monotonic() + WATCH_SECONDS
+        observed: list[dict[str, object]] = []
+        cursor = after
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AcceptanceFailure("interactive event observation expired")
+            self.interaction_observation_number += 1
+            response = self._interaction_events(
+                f"interactive-events-{self.interaction_observation_number}", task_id, cursor,
+                max(1, min(5, int(remaining))))
+            state = response["interaction"]
+            events = response.get("events", [])
+            require(isinstance(state, dict) and isinstance(events, list),
+                    "interactive event response changed shape")
+            observed.extend(event for event in events if isinstance(event, dict))
+            next_cursor = response.get("cursor")
+            require(type(next_cursor) is int and next_cursor >= cursor,
+                    "interactive event cursor moved backwards")
+            cursor = next_cursor
+            requests = state.get("pending_requests")
+            require(isinstance(requests, list), "interactive pending request state is malformed")
+            if pending and requests:
+                return state, cursor, observed
+            if not pending and state.get("closed") is True:
+                return state, cursor, observed
+
+    @staticmethod
+    def interactive_request(state: dict[str, object]) -> tuple[str, str]:
+        requests = state.get("pending_requests")
+        require(isinstance(requests, list) and len(requests) == 1,
+                "interactive acceptance did not expose one pending question")
+        request = requests[0]
+        require(isinstance(request, dict), "interactive pending question is malformed")
+        request_id = request.get("id")
+        turn_id = request.get("turn_id")
+        require(_task_identity(request_id) and isinstance(turn_id, str) and bool(turn_id) and
+                request.get("blocking") is True,
+                "interactive pending question identity is invalid")
+        questions = request.get("questions")
+        require(isinstance(questions, list) and len(questions) == 1,
+                "interactive acceptance did not expose one question")
+        question = questions[0]
+        require(isinstance(question, dict) and question.get("id") == "1" and
+                question.get("text") == "Choose a color" and
+                question.get("options") == ["Blue", "Green"] and
+                question.get("multiple") is False,
+                "interactive question contract changed")
+        return request_id, turn_id
+
+    def reply_interaction(self, task_id: str, request_id: str, turn_id: str) -> tuple[str, dict[str, object]]:
+        message_id = secrets.token_hex(16)
+        answers = self.briefs / "interactive-answer.json"
+        write_json(answers, {"1": ["Blue"]})
+        argv: list[object] = [
+            self.delegate, "--root", self.state, "--pueue-config", self.config,
+            "--runner", self.runner, "reply", task_id, "--request", request_id,
+            "--answers", answers, "--id", message_id, "--json",
+        ]
+        response = parse_json_output(
+            self.direct("interactive-reply", argv, expected=0, timeout=45),
+            "interactive-reply")
+        require(response.get("task_id") == task_id,
+                "interactive reply targeted the wrong task")
+        delivery = response.get("delivery")
+        require(isinstance(delivery, dict) and delivery.get("message_id") == message_id and
+                delivery.get("state") == "queued",
+                "interactive reply was not durably queued")
+        state = response.get("interaction")
+        require(isinstance(state, dict) and state.get("turn_id") == turn_id,
+                "interactive reply changed the interaction turn")
+        write_json(self.output / "interactive-reply.json", response)
+        return message_id, delivery
+
+    def continue_timed_out_task(self, name: str, brief: Path, predecessor: str) -> str:
+        argv = self.task_command_prefix()
+        argv.extend(["continue", "--task", predecessor,
+                     "--brief", brief, "--budget", TASK_BUDGET, "--json"])
+        self.ops.root_id = self.root_id
+        try:
+            task_id, response = self.ops.continue_task(name, argv)
+            root_id, numeric_id = dispatch_binding(response, task_id, name)
+            require(response.get("command") == "continue" and
+                    response.get("parent_task_id") == predecessor,
+                    "continuation response did not retain its predecessor")
+            require(self.root_id is not None and root_id == self.root_id,
+                    "continuation changed root identity")
+            self.numeric_ids[task_id] = numeric_id
+            self.tasks[name] = task_id
+            return task_id
+        except AcceptanceFailure:
+            self._sync_ops_owned_tasks()
+            observation = self.ops.dispatch_observations[-1] if self.ops.dispatch_observations else {}
+            refused = observation.get("response") if isinstance(observation, dict) else None
+            message = str(refused.get("error", "")) if isinstance(refused, dict) else ""
+            if authentication_blocked(refused, message):
+                raise BlockedFailure(f"{self.provider} authentication is unavailable")
+            raise
+
+    def wait_done(self, name: str, task_id: str,
+                  expected_result: str | frozenset[str] | None = None) -> dict[str, object]:
         require(self.root_id is not None, "root identity is unavailable")
         self.ops.root_id = self.root_id
         try:
-            self.ops.wait_task(name, task_id)
+            return self.ops.wait_task(name, task_id, expected_result)
         except (AcceptanceFailure, RuntimeError) as error:
             directory = self.state / "tasks" / task_id
+            status_detail = "status=unavailable"
+            try:
+                status = self.ops.status(f"{name}-runner-failure-status", task_id,
+                                         expected={0, 1})
+                status_detail = _delegate_status_summary(status)
+            except (AcceptanceFailure, RuntimeError, OSError, ValueError) as status_error:
+                status_detail = f"status=unavailable ({type(status_error).__name__})"
             if authentication_unavailable(directory):
                 raise BlockedFailure(f"{self.provider} authentication is unavailable") from error
-            raise AcceptanceFailure(f"{name} runner completion failed: {error}") from error
+            raise AcceptanceFailure(
+                f"{name} runner completion failed: {error}; Delegate {status_detail}") from error
+
+    def wait_timed_out(self, task_id: str, timeout: float = WATCH_SECONDS,
+                       sleep_fn=time.sleep, monotonic_fn=time.monotonic) -> dict[str, object]:
+        require(self.root_id is not None, "timeout source has no root identity")
+        require(timeout > 0, "timeout observation deadline must be positive")
+        self.ops.root_id = self.root_id
+        deadline = monotonic_fn() + timeout
+        attempt = 0
+        while True:
+            remaining = deadline - monotonic_fn()
+            if remaining <= 0:
+                break
+            response = self.ops.status(f"timeout-status-{attempt}", task_id,
+                                       expected={0, 1}, timeout=min(45, remaining))
+            attempt += 1
+            if monotonic_fn() >= deadline:
+                break
+            if response.get("status") != "timed_out":
+                delay = min(0.25, max(0.0, deadline - monotonic_fn()))
+                if delay <= 0:
+                    break
+                sleep_fn(delay)
+                continue
+            continuation = response.get("continuation")
+            require(isinstance(continuation, dict) and continuation.get("resumable") is True and
+                    continuation.get("mode") == "native" and
+                    continuation.get("predecessor_task_id") == task_id and
+                    isinstance(continuation.get("continue_command"), str) and
+                    "continue --task " + task_id in continuation["continue_command"],
+                    "timed-out task is not resumable through Delegate")
+            return response
+        raise AcceptanceFailure("timed-out task never published resumable continuation evidence")
 
     def terminal_private_queue(self, status: dict[str, object]) -> bool:
         try:
@@ -1025,16 +2189,16 @@ class NativeAcceptance:
             allow_failure=False, expected_binding_required=False)
         require(set(records) == task_ids,
                 "inspection journal coverage is incomplete for admitted tasks")
-        require(isinstance(self.provider_sha256, str) and self.provider_sha256,
-                "provider executable digest is unavailable")
         for task_id, record in records.items():
+            meta = read_json(self.state / "tasks" / task_id / "meta.json")
+            identity = self._record_provider_runtime_identity(task_id, meta)
             request = record.get("request")
             require(isinstance(request, dict), f"inspection request is absent for {task_id}")
             binding = request.get("binding")
             require(isinstance(binding, dict) and
-                    binding.get("helper_executable") == str(self.provider_executable) and
-                    binding.get("helper_sha256") == self.provider_sha256,
-                    f"inspection helper binding is not the selected provider for {task_id}")
+                    binding.get("helper_executable") == identity["executable"] and
+                    binding.get("helper_sha256") == identity["sha256"],
+                    f"inspection helper binding does not match admitted runtime for {task_id}")
         return records
 
     def _terminal_private_queue(self, status: dict[str, object]) -> bool:
@@ -1058,11 +2222,14 @@ class NativeAcceptance:
                     f"private queue group is not running at parallelism one: {name}")
 
         expected: dict[str, tuple[str, str]] = {}
-        for task_id in self.tasks.values():
+        ordinary_names: dict[str, str] = {}
+        for name, task_id in self.tasks.items():
             require(task_id in self.numeric_ids, f"ordinary task has no numeric supervisor identity: {task_id}")
             label = f"delegate:{self.root_id}:{task_id}"
             require(label not in expected, "ordinary task labels are not unique")
+            require(task_id not in ordinary_names, "ordinary task identities are not unique")
             expected[label] = ("ordinary", task_id)
+            ordinary_names[task_id] = name
         for task_id, record in inspection_records.items():
             label = record["label"]
             require(isinstance(label, str) and label not in expected,
@@ -1079,15 +2246,16 @@ class NativeAcceptance:
             seen.add(label)
             kind, task_id = expected[label]
             if kind == "ordinary":
-                validate_queue_row(row, label, self.runner, self.state, task_id,
-                                   self.numeric_ids[task_id], "default")
+                self.ops.validate_ordinary_queue_row(
+                    row, label, task_id, self.numeric_ids[task_id], "default")
+                expected_result = self.ops.expected_results.get(ordinary_names[task_id], "Success")
             else:
                 record = inspection_records[task_id]
                 require(row.get("group") == record["group"] and
                         row.get("id") == record["numeric_task_id"],
                         f"inspection queue identity is invalid for {task_id}")
-                expected_command = [str(self.runner), "--inspection", "--root",
-                                    str(self.state), task_id]
+                expected_command = [str(self.runner), "--inspection", "--guardian", "--supervised",
+                                    "--root", str(self.state), task_id]
                 commands = []
                 for key in ("original_command", "command"):
                     value = row.get(key)
@@ -1095,49 +2263,90 @@ class NativeAcceptance:
                     commands.append(shlex.split(value))
                 require(commands == [expected_command, expected_command],
                         f"inspection queue argv is invalid for {task_id}")
-            require(done_result(row) == "Success", f"private queue task is not successful: {task_id}")
+                expected_result = "Success"
+            require(done_result(row) == expected_result,
+                    f"private queue task result changed for {task_id}")
         return seen == set(expected)
 
     def collect(self, name: str, task_id: str) -> dict[str, object]:
         self.ops.root_id = self.root_id
         directory = self.state / "tasks" / task_id
         try:
-            response = self.ops.collect(name, task_id)
+            response = self.ops.collect(name, task_id, expected={0, 4})
         except (AcceptanceFailure, RuntimeError) as error:
-            if authentication_unavailable(directory):
-                raise BlockedFailure(f"{self.provider} authentication is unavailable") from error
             raise AcceptanceFailure(f"{name} collection failed: {error}") from error
-        if authentication_unavailable(directory):
-            raise BlockedFailure(f"{self.provider} authentication is unavailable")
-        outcome, published_payload = verify_collected_outcome(response, directory, "committed")
-        require(published_payload, f"{name} committed an empty response")
-        if self.mode == "read-only":
-            if self.provider == "codex:review":
-                verify_review_answer(published_payload, name)
-            else:
-                verify_read_only_answer(
-                    published_payload, marker_answer(self.marker_text, continuation="resume" in name), name)
-        provider_exit = read_json(directory / "provider.exit")
+        rejected = response.get("publication") == "rejected"
+        try:
+            outcome, published_payload = verify_collected_outcome(
+                response, directory, "rejected" if rejected else "committed")
+        except AcceptanceFailure:
+            raise
+        except (OSError, ValueError, TypeError, RecursionError, RuntimeError) as error:
+            raise AcceptanceFailure(f"{name} collection evidence is malformed") from error
+
+        try:
+            provider_exit = read_json(directory / "provider.exit")
+        except (OSError, ValueError, TypeError, RecursionError, RuntimeError) as error:
+            raise AcceptanceFailure(f"{name} provider evidence is malformed") from error
+        require(isinstance(provider_exit, dict), f"{name} provider evidence is malformed")
         require(provider_exit.get("root_id") == self.root_id and
                 provider_exit.get("task_id") == task_id and
                 provider_exit.get("invocation_state") == "started" and
-                provider_exit.get("exit_code") == 0 and provider_exit.get("error") == "" and
+                isinstance(provider_exit.get("error"), str) and
+                type(provider_exit.get("exit_code")) is int and
                 isinstance(provider_exit.get("raw_manifest"), list) and
                 isinstance(provider_exit.get("manifest_sha256"), str) and
+                len(provider_exit["manifest_sha256"]) == 64 and
+                all(character in "0123456789abcdef"
+                    for character in provider_exit["manifest_sha256"]) and
                 outcome.get("evidence_sha256") == provider_exit.get("manifest_sha256"),
                 f"{name} lacks sealed provider evidence")
+        if not rejected:
+            require(provider_exit.get("exit_code") == 0 and provider_exit.get("error") == "",
+                    f"{name} lacks sealed provider evidence")
         collection_payload = response.get("payload")
         require(isinstance(collection_payload, dict) and
                 collection_payload == outcome.get("payload") and
                 response.get("evidence_sha256") == outcome.get("evidence_sha256"),
                 f"{name} collection receipt descriptors are inconsistent")
+        if authentication_unavailable(directory):
+            raise BlockedFailure(f"{self.provider} authentication is unavailable")
+        if rejected:
+            raise AcceptanceFailure(
+                f"{name} provider result rejected: {_rejection_diagnostic_summary(outcome)}")
+        require(published_payload, f"{name} committed an empty response")
+        if self.scenario == "interactive":
+            verify_interactive_answer(published_payload, name)
+        elif self.mode == "read-only":
+            if self.provider == "codex:review":
+                verify_review_answer(published_payload, name)
+            else:
+                verify_read_only_answer(
+                    published_payload, marker_answer(self.marker_text, continuation="resume" in name), name)
         self.records[name] = {"task_id": task_id, "directory": directory,
                               "outcome": deepcopy(outcome),
                               "payload": deepcopy(collection_payload),
                               "snapshot": task_digest_snapshot(directory)}
         return response
 
-    def _request_binding(self, task_id: str) -> tuple[
+    def collect_timed_out_source(self, task_id: str) -> dict[str, object]:
+        self.ops.root_id = self.root_id
+        directory = self.state / "tasks" / task_id
+        response = self.ops.collect("timeout-source-collect", task_id, expected={3, 4})
+        if response.get("publication") == "rejected":
+            verify_collected_outcome(response, directory, "rejected")
+        else:
+            require(response.get("publication") != "committed" and
+                    response.get("outcome") is None and
+                    not (directory / "outcome.json").exists(),
+                    "timed-out source fabricated a terminal outcome")
+        require(not (directory / "result.txt").exists(),
+                "timed-out source published answer evidence")
+        return response
+
+    def _request_binding(self, task_id: str,
+                         budget: str = CANONICAL_TASK_BUDGET,
+                         budget_nanos: int = TASK_BUDGET_NANOS) -> tuple[
             Path, dict[str, object], dict[str, object], str, str, Path]:
         directory = self.state / "tasks" / task_id
         require(directory.is_dir() and not directory.is_symlink(),
@@ -1150,25 +2359,67 @@ class NativeAcceptance:
         requested = record.get("requested_config")
         brief = directory / "brief.md"
         require(isinstance(requested, dict) and requested.get("permission") == self.mode and
-                requested.get("budget") == CANONICAL_TASK_BUDGET and
-                record.get("budget_nanos") == TASK_BUDGET_NANOS and
+                requested.get("budget") == budget and
+                record.get("budget_nanos") == budget_nanos and
                 brief.is_file() and not brief.is_symlink() and
                 record.get("brief_length") == brief.stat().st_size and
                 record.get("brief_sha256") == digest(brief),
                 f"task {task_id} request binding is invalid")
-        require(self.provider_sha256 is not None,
-                "provider executable prerequisite evidence is unavailable")
+        if self.scenario == "interactive":
+            require(requested.get("interactive") is True,
+                    f"task {task_id} did not persist interactive mode")
         meta = read_json(directory / "meta.json")
         meta_digest = digest(directory / "meta.json")
         spec_digest = meta.get("spec_sha256")
-        observed_version = meta.get("provider_version")
-        require(isinstance(observed_version, str) and bool(observed_version),
-                f"task {task_id} has no admitted provider version")
-        self.provider_versions[task_id] = observed_version
+        identity = self._record_provider_runtime_identity(task_id, meta)
         if self.provider_version is None:
-            self.provider_version = observed_version
-            self.write_binding()
+            self.provider_version = identity["version"]
+            self.write_binding(task_id, identity)
         return directory, record, meta, meta_digest, spec_digest, brief
+
+    def timeout_source_binding(self, task_id: str) -> Path:
+        directory, record, _meta, _meta_digest, _spec_digest, _brief = self._request_binding(
+            task_id, CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
+            TIMEOUT_RESUME_SOURCE_BUDGET_NANOS)
+        requested = record.get("requested_config")
+        args = getattr(self, "args", None)
+        requested_model = getattr(args, "model", None)
+        requested_effort = getattr(args, "effort", None)
+        require(isinstance(requested, dict) and requested.get("permission") == self.mode and
+                ((requested_model and requested.get("model") == requested_model) or
+                 (not requested_model and requested.get("model") in (None, ""))) and
+                ((requested_effort and requested.get("effort") == requested_effort) or
+                 (not requested_effort and requested.get("effort") in (None, ""))) and
+                record.get("prior_session") is None,
+                "timed-out source request binding changed")
+        reference = read_json(directory / "provider.ref.json")
+        require(reference.get("root_id") == self.root_id and reference.get("task_id") == task_id and
+                reference.get("provider") == self.provider and
+                isinstance(reference.get("conversation_id"), str) and bool(reference["conversation_id"]),
+                "timed-out source has no resumable provider session")
+        require(not (directory / "outcome.json").exists() and not (directory / "result.txt").exists(),
+                "timed-out source published terminal artifacts")
+        return directory
+
+    def _timeout_workspace_snapshot(self, resumed: bool) -> dict[str, dict[str, object]]:
+        require(self.workspace_baseline is not None,
+                "timeout-recovery workspace baseline is unavailable")
+        expected = set(self.workspace_baseline)
+        expected.add(self.timeout_marker_file.name)
+        if resumed:
+            expected.add(self.timeout_resume_file.name)
+        actual = workspace_snapshot(self.workspace)
+        require(set(actual) == expected,
+                "timeout-recovery workspace contains an unexpected file")
+        for name, snapshot_record in self.workspace_baseline.items():
+            require(actual.get(name) == snapshot_record,
+                    "timeout-recovery changed a harness-controlled workspace file")
+        require(self.timeout_marker_file.read_bytes() == (self.timeout_marker + "\n").encode(),
+                "timeout source did not create its exact marker")
+        if resumed:
+            require(self.timeout_resume_file.read_bytes() == (self.timeout_resume_marker + "\n").encode(),
+                    "resumed timeout task did not create its exact marker")
+        return actual
 
     def _workspace_write_snapshot(self, continuation: bool) -> dict[str, dict[str, object]]:
         require(self.nonce is not None, "write acceptance nonce is unavailable")
@@ -1239,9 +2490,12 @@ class NativeAcceptance:
         if self.provider == "codex:review":
             require(requested.get("review_target") == {"kind": "uncommitted"},
                     f"task {task_id} Codex review target is not persisted")
+        identity = self.provider_runtime_identities.get(task_id)
+        require(isinstance(identity, dict),
+                f"task {task_id} admitted provider runtime identity is unavailable")
         require(meta.get("root_id") == self.root_id and meta.get("task_id") == task_id and
-                meta.get("provider_executable") == str(self.provider_executable) and
-                meta.get("provider_version") == self.provider_versions.get(task_id) and
+                meta.get("provider_executable") == identity["executable"] and
+                meta.get("provider_version") == identity["version"] and
                 meta.get("containment") == self.mode and
                 isinstance(spec_digest, str) and len(spec_digest) == 64 and
                 all(character in "0123456789abcdef" for character in spec_digest),
@@ -1251,7 +2505,7 @@ class NativeAcceptance:
         require(isinstance(effective, dict) and effective.get("containment") == self.mode and
                 isinstance(effective.get("digest"), str) and
                 isinstance(policy, dict) and policy.get("workspace") == str(self.workspace) and
-                policy.get("runtime_sha256") == self.provider_sha256,
+                policy.get("runtime_sha256") == identity["sha256"],
                 f"task {task_id} effective policy binding is invalid")
         if self.provider == "antigravity:print":
             expected_approval = "plan" if self.mode == "read-only" else "always-proceed"
@@ -1344,13 +2598,23 @@ class NativeAcceptance:
 
     def shutdown(self) -> None:
         require(self.daemon is not None, "private daemon was not started")
-        for _ in range(30):
-            process = self.direct("final-status", pueue_command(self.pueue, self.config, "status", "--json"), timeout=20)
+        deadline = time.monotonic() + 30
+        terminal = False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            process = self.direct("final-status", pueue_command(self.pueue, self.config, "status", "--json"),
+                                  timeout=min(20, remaining))
             status = status_jobs(process)
             if self.terminal_private_queue(status):
+                terminal = True
                 break
-            time.sleep(0.2)
-        else:
+            delay = min(0.2, max(0.0, deadline - time.monotonic()))
+            if delay <= 0:
+                break
+            time.sleep(delay)
+        if not terminal:
             raise AcceptanceFailure("private queue did not reach a terminal state")
         self.direct("private-shutdown", pueue_command(self.pueue, self.config, "shutdown"), timeout=30)
         self.daemon.wait(30, expected=0)
@@ -1360,6 +2624,15 @@ class NativeAcceptance:
         if self.closed:
             return True
         if self.daemon is None:
+            processes = getattr(self, "processes", None)
+            if processes is None:
+                self.closed = True
+                return True
+            try:
+                if not processes.finished_naturally():
+                    return False
+            except BaseException:
+                return False
             self.closed = True
             return True
         try:
@@ -1380,12 +2653,139 @@ class NativeAcceptance:
             self.closed = True
         return retained
 
+    def run_interactive(self) -> int:
+        before = workspace_snapshot(self.workspace)
+        task_id = self.dispatch("interactive", self.interactive_brief("interactive"))
+        pending_state, cursor, pending_events = self.wait_for_interaction(task_id, pending=True)
+        request_id, turn_id = self.interactive_request(pending_state)
+        message_id, queued_delivery = self.reply_interaction(task_id, request_id, turn_id)
+        final_state, final_cursor, final_events = self.wait_for_interaction(task_id, cursor)
+        deliveries = final_state.get("deliveries")
+        require(isinstance(deliveries, list), "interactive final delivery state is malformed")
+        delivery = next((item for item in deliveries
+                         if isinstance(item, dict) and item.get("message_id") == message_id), None)
+        require(isinstance(delivery, dict) and delivery.get("state") == "acknowledged",
+                "interactive reply was not acknowledged by the provider")
+        self.wait_done("interactive", task_id)
+        self.collect("interactive-collect", task_id)
+        self.task_binding(task_id)
+        provider_session = self.session_ref(task_id)
+        require(workspace_snapshot(self.workspace) == before,
+                "Claude interactive acceptance changed the workspace")
+
+        interaction_path = self.state / "tasks" / task_id / "raw" / "interaction"
+        metadata = interaction_path.lstat()
+        require(stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode) and
+                0 < metadata.st_size <= MAX_RAW_BYTES,
+                "interactive task has no bounded sealed interaction receipt")
+        interaction_receipt = {
+            "schema_version": 1,
+            "task_id": task_id,
+            "request_id": request_id,
+            "turn_id": turn_id,
+            "message_id": message_id,
+            "answer": "Blue",
+            "queued_delivery": queued_delivery,
+            "delivery": delivery,
+            "initial_cursor": cursor,
+            "final_cursor": final_cursor,
+            "event_kinds": [event.get("kind") for event in pending_events + final_events
+                            if isinstance(event.get("kind"), str)],
+            "closed": final_state.get("closed") is True,
+            "raw_interaction_sha256": digest(interaction_path),
+        }
+        require(interaction_receipt["closed"] is True,
+                "interactive task did not publish a closed interaction state")
+        write_json(self.output / "interaction.json", interaction_receipt)
+        self.replay({"interactive": self.records["interactive-collect"]}, names=("interactive",))
+        self.shutdown()
+        self.success_receipt = {
+            "gate": "acceptance-native", "status": "passed", "provider": self.provider,
+            "mode": self.mode, "scenario": self.scenario,
+            "task_budget": TASK_BUDGET,
+            "canonical_task_budget": CANONICAL_TASK_BUDGET,
+            "requested_model": getattr(self.args, "model", None),
+            "requested_effort": getattr(self.args, "effort", None),
+            "model_discovery": self.model_discovery_summary,
+            "native_mode": self.native_mode_receipt(),
+            **self.provider_runtime_receipt(),
+            "tasks": {"interactive": task_id},
+            "provider_sessions": {"interactive": provider_session},
+            "interaction": interaction_receipt,
+            "provider_launches": 1, "replay_launches": 0,
+            "credentials_in_receipt": False,
+            "natural_daemon_shutdown": self.closed,
+        }
+        return 0
+
+    def run_timeout_resume(self) -> int:
+        source = self.dispatch("timeout-source", self.timeout_brief("timeout-source"),
+                               budget=TIMEOUT_RESUME_SOURCE_BUDGET)
+        self.record_timeout_liveness(source)
+        source_row = self.wait_done(
+            "timeout-source", source, expected_result=TIMEOUT_SOURCE_RUNNER_RESULTS)
+        source_runner_result = done_result(source_row)
+        require(isinstance(source_runner_result, str) and
+                source_runner_result in TIMEOUT_SOURCE_RUNNER_RESULTS,
+                "timeout source has no accepted runner result")
+        self.ops.expect_terminal_result("timeout-source", source_runner_result)
+        timed_out = self.wait_timed_out(source)
+        self.wait_timeout_leases_closed()
+        source_collect = self.collect_timed_out_source(source)
+        source_directory = self.timeout_source_binding(source)
+        source_session = self.session_ref(source)
+        self._timeout_workspace_snapshot(resumed=False)
+        source_snapshot = task_digest_snapshot(source_directory)
+
+        successor = self.continue_timed_out_task(
+            "timeout-resume", self.timeout_brief("timeout-resume", resume=True), source)
+        self.wait_done("timeout-resume", successor)
+        self.collect("timeout-resume-collect", successor)
+        self.task_binding(successor, source, source_session)
+        successor_session = self.session_ref(successor)
+        require_same_session(source_session, successor_session)
+        require_replay_unchanged(source_snapshot, task_digest_snapshot(source_directory))
+        require(not (source_directory / "result.txt").exists(),
+                "continuation changed its timed-out predecessor into an answer")
+        self._timeout_workspace_snapshot(resumed=True)
+        self.replay({"timeout-resume": self.records["timeout-resume-collect"]},
+                    names=("timeout-resume",))
+        self.shutdown()
+        continuation = timed_out.get("continuation")
+        require(isinstance(continuation, dict), "timed-out continuation receipt is unavailable")
+        self.success_receipt = {
+            "gate": "acceptance-native", "status": "passed", "provider": self.provider,
+            "mode": self.mode, "scenario": self.scenario,
+            "task_budget": TASK_BUDGET,
+            "timeout_source_budget": TIMEOUT_RESUME_SOURCE_BUDGET,
+            "canonical_timeout_source_budget": CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
+            "requested_model": getattr(self.args, "model", None),
+            "requested_effort": getattr(self.args, "effort", None),
+            **self.provider_runtime_receipt(),
+            "tasks": {"timeout_source": source, "timeout_resume": successor},
+            "provider_sessions": {
+                "timeout_source": source_session,
+                "timeout_resume": successor_session,
+            },
+            "source_runner_result": source_runner_result,
+            "source_publication": source_collect.get("publication"),
+            "continuation": continuation,
+            "timeout_liveness": self.timeout_liveness,
+            "same_session": True,
+            "source_immutable": True,
+            "replay_launches": 0,
+            "credentials_in_receipt": False,
+            "natural_daemon_shutdown": self.closed,
+        }
+        return 0
+
     def run(self) -> int:
+        self.success_receipt = None
         self.setup()
         if self.discover_models_only:
             self.discover_models()
             self.shutdown()
-            write_json(self.output / "success.json", {
+            self.success_receipt = {
                 "gate": "acceptance-native", "status":
                 "passed" if self.model_discovery_exit_code == 0 else
                 "BLOCKED" if self.model_discovery_exit_code == 2 else "failed",
@@ -1399,21 +2799,26 @@ class NativeAcceptance:
                 "native_mode": self.native_mode_receipt(),
                 "credentials_in_receipt": False,
                 "natural_daemon_shutdown": self.closed,
-            })
+            }
             require(isinstance(self.model_discovery_exit_code, int),
                     "model discovery exit code is unavailable")
             return self.model_discovery_exit_code
+        if self.scenario == "timeout-resume":
+            return self.run_timeout_resume()
+        if self.scenario == "interactive":
+            return self.run_interactive()
         before = workspace_snapshot(self.workspace)
         if self.provider == "codex:review":
             first = self.dispatch("fresh", self.brief("fresh"))
             self.wait_done("fresh", first)
             self.collect("fresh-collect", first)
             self.task_binding(first)
+            first_session = self.session_ref(first)
             require(workspace_snapshot(self.workspace) == before,
                     "Codex review changed the workspace")
             self.replay({"fresh": self.records["fresh-collect"]}, names=("fresh",))
             self.shutdown()
-            write_json(self.output / "success.json", {
+            self.success_receipt = {
                 "gate": "acceptance-native", "status": "passed", "provider": self.provider,
                 "mode": self.mode, "task_budget": TASK_BUDGET,
                 "canonical_task_budget": CANONICAL_TASK_BUDGET,
@@ -1421,12 +2826,13 @@ class NativeAcceptance:
                 "requested_effort": getattr(self.args, "effort", None),
                 "model_discovery": self.model_discovery_summary,
                 "native_mode": self.native_mode_receipt(),
-                "provider_versions": dict(sorted(self.provider_versions.items())),
+                **self.provider_runtime_receipt(),
                 "tasks": {"fresh": self.tasks["fresh"]},
+                "provider_sessions": {"fresh": first_session},
                 "scenario": self.scenario, "provider_launches": 1, "replay_launches": 0,
                 "credentials_in_receipt": False,
                 "natural_daemon_shutdown": self.closed,
-            })
+            }
             return 0
         first = self.dispatch("fresh", self.brief("fresh"))
         self.wait_done("fresh", first)
@@ -1462,7 +2868,7 @@ class NativeAcceptance:
                     "read-only live acceptance changed the workspace")
         self.replay()
         self.shutdown()
-        write_json(self.output / "success.json", {
+        self.success_receipt = {
             "gate": "acceptance-native", "status": "passed", "provider": self.provider,
             "mode": self.mode, "task_budget": TASK_BUDGET,
             "canonical_task_budget": CANONICAL_TASK_BUDGET,
@@ -1470,15 +2876,16 @@ class NativeAcceptance:
             "requested_effort": getattr(self.args, "effort", None),
             "model_discovery": self.model_discovery_summary,
             "native_mode": self.native_mode_receipt(),
-            "provider_versions": dict(sorted(self.provider_versions.items())),
+            **self.provider_runtime_receipt(),
             "tasks": {
                 "fresh": self.tasks["fresh"],
                 "resume": self.tasks["resume"],
             },
+            "provider_sessions": {"fresh": first_session, "resume": second_session},
             "scenario": self.scenario, "provider_launches": 2, "replay_launches": 0,
             "credentials_in_receipt": False,
             "natural_daemon_shutdown": self.closed,
-        })
+        }
         return 0
 
 
@@ -1487,7 +2894,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider", required=True, choices=sorted(PROFILES))
     parser.add_argument("--permission", "--mode", dest="mode",
                         choices=("read-only", "workspace-write"), default=None)
-    parser.add_argument("--scenario", choices=("read-only", "write"))
+    parser.add_argument("--scenario", choices=("read-only", "write", "timeout-resume", "interactive"))
     parser.add_argument("--output")
     parser.add_argument("--delegate")
     parser.add_argument("--runner")
@@ -1501,61 +2908,132 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _persist_failure_receipt(output: Path | None, value: dict[str, object]) -> bool:
+    if output is None:
+        return True
+    try:
+        write_json(output / "failure.json", value)
+        return True
+    except BaseException as error:
+        print("FAIL acceptance-native: failure diagnostics could not be persisted: " + str(error),
+              file=sys.stderr, flush=True)
+        return False
+
+
+def _finalize_run(run: NativeAcceptance | None, success: bool) -> bool:
+    if run is None:
+        return True
+    try:
+        finalized = run.finalize(success)
+    except BaseException as error:
+        print("FAIL acceptance-native: test-owned runtime cleanup raised: " + str(error),
+              file=sys.stderr, flush=True)
+        return False
+    if not finalized:
+        print("FAIL acceptance-native: test-owned runtime cleanup was not completed",
+              file=sys.stderr, flush=True)
+    return finalized
+
+
+def _model_discovery_failure_receipt(args: argparse.Namespace, run: NativeAcceptance,
+                                     code: int) -> dict[str, object]:
+    summary = getattr(run, "model_discovery_summary", None)
+    sanitized: dict[str, object] = {}
+    if isinstance(summary, dict):
+        for key in ("status", "reason_code", "complete", "model_count", "effort_count"):
+            value = summary.get(key)
+            if key in {"status", "reason_code"} and isinstance(value, str):
+                sanitized[key] = value
+            elif key == "complete" and type(value) is bool:
+                sanitized[key] = value
+            elif key in {"model_count", "effort_count"} and (value is None or type(value) is int):
+                sanitized[key] = value
+    return {
+        "gate": "acceptance-native",
+        "status": "BLOCKED" if code == 2 else "failed",
+        "provider": args.provider,
+        "mode": args.mode,
+        "scenario": args.scenario,
+        "task_budget": TASK_BUDGET,
+        "requested_model": args.model,
+        "requested_effort": args.effort,
+        "discover_models": True,
+        "discovery_exit_code": code,
+        "model_discovery": sanitized or None,
+        "no_retry": True,
+        "credentials_in_receipt": False,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     run: NativeAcceptance | None = None
     output: Path | None = None
     try:
-        output = choose_output(args.provider, args.output)
+        output = choose_output(args.provider, args.output, args.mode, args.scenario)
         if args.provider == "ccr:print" and not args.model and not args.discover_models:
             raise BlockedFailure("CCR acceptance requires --model with a configured alias")
+        if args.provider == "opencode:run" and not args.model and not args.discover_models:
+            raise BlockedFailure("OpenCode acceptance requires --model with a tool-capable configured route")
         run = NativeAcceptance(argparse.Namespace(**{**vars(args), "output": str(output)}))
         code = run.run()
+        if not _finalize_run(run, code == 0):
+            return 1
+        if code != 0:
+            if args.discover_models:
+                if not _persist_failure_receipt(output, _model_discovery_failure_receipt(args, run, code)):
+                    return 1
+            else:
+                if not _persist_failure_receipt(output, {
+                        "gate": "acceptance-native", "status": "BLOCKED" if code == 2 else "failed",
+                        "provider": args.provider, "mode": args.mode, "scenario": args.scenario,
+                        "task_budget": TASK_BUDGET, "requested_model": args.model,
+                        "requested_effort": args.effort, "no_retry": True,
+                        "credentials_in_receipt": False}):
+                    return 1
+        else:
+            run.publish_success()
         status = "passed" if code == 0 else "BLOCKED" if code == 2 else "failed"
         print(json.dumps({"gate": "acceptance-native", "status": status, "provider": args.provider,
                           "evidence": str(output)}, sort_keys=True))
         return code
     except BlockedFailure as error:
-        if output is not None:
-            write_json(output / "failure.json", {"gate": "acceptance-native", "status": "BLOCKED",
-                                                  "provider": args.provider, "mode": args.mode,
-                                                  "scenario": args.scenario, "task_budget": TASK_BUDGET,
-                                                  "requested_model": args.model,
-                                                  "requested_effort": args.effort,
-                                                  "discover_models": args.discover_models,
-                                                  "error": str(error),
-                                                  "no_retry": True, "credentials_in_receipt": False})
-        if run is not None:
-            run.safe_shutdown()
+        receipt_ok = _persist_failure_receipt(output, {"gate": "acceptance-native", "status": "BLOCKED",
+                                                       "provider": args.provider, "mode": args.mode,
+                                                       "scenario": args.scenario, "task_budget": TASK_BUDGET,
+                                                       "requested_model": args.model,
+                                                       "requested_effort": args.effort,
+                                                       "discover_models": args.discover_models,
+                                                       "error": str(error),
+                                                       "no_retry": True, "credentials_in_receipt": False})
+        cleanup_ok = _finalize_run(run, False)
+        if not receipt_ok or not cleanup_ok:
+            return 1
         print(f"BLOCKED acceptance-native: {error}", file=sys.stderr, flush=True)
         return 2
     except (AcceptanceFailure, OSError, ValueError, json.JSONDecodeError) as error:
-        if output is not None:
-            write_json(output / "failure.json", {"gate": "acceptance-native", "status": "failed",
-                                                  "provider": args.provider, "mode": args.mode,
-                                                  "scenario": args.scenario, "task_budget": TASK_BUDGET,
-                                                  "requested_model": args.model,
-                                                  "requested_effort": args.effort,
-                                                  "discover_models": args.discover_models,
-                                                  "error": str(error),
-                                                  "no_retry": True, "credentials_in_receipt": False})
-        if run is not None:
-            run.safe_shutdown()
+        _persist_failure_receipt(output, {"gate": "acceptance-native", "status": "failed",
+                                          "provider": args.provider, "mode": args.mode,
+                                          "scenario": args.scenario, "task_budget": TASK_BUDGET,
+                                          "requested_model": args.model,
+                                          "requested_effort": args.effort,
+                                          "discover_models": args.discover_models,
+                                          "error": str(error),
+                                          "no_retry": True, "credentials_in_receipt": False})
+        _finalize_run(run, False)
         print(f"FAIL acceptance-native: {error}", file=sys.stderr, flush=True)
         return 1
     except BaseException as error:
-        if output is not None:
-            write_json(output / "failure.json", {"gate": "acceptance-native", "status": "failed",
-                                                  "provider": args.provider, "mode": args.mode,
-                                                  "scenario": args.scenario, "task_budget": TASK_BUDGET,
-                                                  "requested_model": args.model,
-                                                  "requested_effort": args.effort,
-                                                  "discover_models": args.discover_models,
-                                                  "error": str(error),
-                                                  "traceback": traceback.format_exc(), "no_retry": True,
-                                                  "credentials_in_receipt": False})
-        if run is not None:
-            run.safe_shutdown()
+        _persist_failure_receipt(output, {"gate": "acceptance-native", "status": "failed",
+                                          "provider": args.provider, "mode": args.mode,
+                                          "scenario": args.scenario, "task_budget": TASK_BUDGET,
+                                          "requested_model": args.model,
+                                          "requested_effort": args.effort,
+                                          "discover_models": args.discover_models,
+                                          "error": str(error),
+                                          "traceback": traceback.format_exc(), "no_retry": True,
+                                          "credentials_in_receipt": False})
+        _finalize_run(run, False)
         print(f"FAIL acceptance-native: unexpected {error}", file=sys.stderr, flush=True)
         return 1
 

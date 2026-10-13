@@ -13,14 +13,17 @@ This document defines the normative requirements for provider adapters
 | `codex:review` | `read-only` | native review operation | `codex exec review --uncommitted|--base <branch>|--commit <sha> ...` | no continuation or workspace-write |
 | `claude:print` | `read-only`, `workspace-write` | native `plan` for read-only; `bypassPermissions` for unattended writes | `claude --print ... --permission-mode <mode> ...` | independent containment |
 | `ccr:print` | `read-only`, `workspace-write` | Claude native `plan` for read-only; `bypassPermissions` for unattended writes | `ccr launch --model <alias> --auth-mode provider-only --print --permission-mode <mode> -- ...` | subscription pools, independent containment |
-| `pi:json` | `read-only`, `workspace-write` | read-only uses read,grep,find,ls with extensions disabled; write uses provider-native tools and approval | `pi --mode json ...`; read-only adds `--tools read,grep,find,ls --no-extensions` | independent containment |
+| `pi:json` | `read-only`, `workspace-write` | read-only uses read,grep,find,ls with extensions disabled; workspace-write uses Pi's built-in read,bash,edit,write tools and provider-native approval | `pi --mode json ...`; read-only adds `--tools read,grep,find,ls --no-extensions`; workspace-write adds `--tools read,bash,edit,write` | independent containment |
 | `opencode:run` | `read-only`, `workspace-write` | native plan/build agent; native `--auto` for workspace-write | `opencode run --format json --dir <workspace> ...` | unrestricted execution |
 
 Each native adapter locates its executable during static preparation and records
 the executable identity in the immutable candidate. The already-supervised
 inspection worker then verifies that the file is still executable, runs its
-version and help commands, and checks that public flags used in its command shape
-are advertised in help output before finalization and provider launch.
+version and help commands, and checks the stable public entrypoint flags that
+the profile can observe reliably before finalization and provider launch. A
+provider's complete launch argv remains subject to the provider process and its
+result predicate; rapidly changing or pipe-truncated forwarded options are not
+turned into a stale admission allowlist.
 Documented SDK protocol options that are absent from public help (Claude
 `--permission-prompt-tool stdio`) additionally require protocol fixtures and
 live handshake acceptance; public help alone does not prove native interaction. Any
@@ -46,8 +49,8 @@ digest is compared with a checked-in value.
   pipe carrying one initial brief and bounded native clarification/steering
   frames. Adapters only encode and interpret frames. Brief text is never passed
   in argv; its size limit remains 8 MiB. The original budget includes waiting
-  for interaction. Native completion closes stdin; only the supervisor stops
-  processes. No PTY or terminal scraping is permitted.
+  for interaction. Native completion closes stdin; only the per-task guardian
+  may stop the provider scope. No PTY or terminal scraping is permitted.
 - **Argv Construction**: Built strictly as Go string slices (`[]string`), executed directly via `exec.Command` without shell wrapper or reparsing.
 - **Native Review Scope**: `codex:review` persists one explicit Git target
   (`uncommitted`, a base branch, or a commit) with the request and translates
@@ -90,9 +93,11 @@ inspection bound, which is five minutes to allow first-run provider model/cache
 initialization. It may contact the provider CLI and creates
 inspection evidence, but it does not admit a provider task or launch a
 delegated turn.
-This revision applies the five-minute bound only to model discovery; historical
-admission probes retain their 20-second bounds. Existing model-discovery-v1
-journals with the former one-minute deadline remain recoverable.
+This revision applies the five-minute bound only to model discovery. Fresh
+admission probes use a one-minute queue-inclusive bound so provider checks can
+start under high task concurrency. Existing 20-second admission journals and
+model-discovery-v1 journals with the former one-minute deadline remain
+recoverable with their recorded deadlines.
 
 The JSON response contains `schema_version`, `command`, `provider`,
 `observed_at`, `status`, `reason_code`, `complete`, `source`, `efforts`, and
@@ -115,10 +120,15 @@ can execute it; dispatch remains the admission boundary.
   - Absence of timeout markers (e.g. `[agy] print timeout`), refusal envelopes, or fatal error payloads. A documented native transient retry (such as Codex `willRetry: true`) still requires a later successful root completion; a non-retrying error cannot be erased by later success.
   - Nonzero exit code with a success-shaped body is treated as a conflicting completion and rejected.
 - **Continuation**:
-  - Continuation tasks reference layer-recorded session handles from a predecessor with either a validated terminal outcome or durable supervisor-ended budget-stop evidence.
+  - Continuation tasks reference layer-recorded session handles from a predecessor with either a validated terminal outcome or a durable Pueue-ended observation backed by an application-owned lifetime-termination record with independently proven empty scope.
   - Budget-stop evidence authorizes session handoff only; `outcome.json` remains the sole task-completion authority.
   - Active sessions are protected by durable session claims under `.session.lock`.
   - Continuation invokes the provider using explicit session resumption flags (e.g. `--conversation <id>`, `resume <uuid> -`, `--resume <uuid>`).
+  - Provider continuation validation receives the immutable predecessor plan as
+    well as its request. A versioned predicate is authoritative when native
+    continuation behavior changed: CCR route-preserving v3 sessions reject a
+    model override, while v1/v2 modeled sessions retain their recorded
+    historical behavior.
 
 ## 5. Usage Accounting
 - Usage metrics are recorded with explicit scope: `task`, `conversation-cumulative`, `main-agent`, `whole-tree`, or `unknown`.

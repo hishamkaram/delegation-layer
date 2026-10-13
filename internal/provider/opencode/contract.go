@@ -23,13 +23,14 @@ const (
 	ProfileRevision      = "opencode-direct-cli-v1"
 	OutputWriterContract = ""
 
-	// v2 and v3 remain registered for sealed evidence produced by the earlier
-	// current interpreters. Fresh tasks use v4 and replay the final stop step
-	// by offset after OpenCode has completed its full multi-step stream.
-	predicateVersion                  = "4"
-	historicalCurrentPredicateVersion = "3"
-	historicalPredicateVersion        = "2"
-	legacyPredicateVersion            = "1"
+	// v2, v3, and v4 remain registered for sealed evidence produced by earlier
+	// interpreters. Fresh tasks use v5, whose parser additionally tolerates an
+	// empty repeated step marker emitted by current OpenCode builds.
+	predicateVersion                    = "5"
+	historicalCurrentV4PredicateVersion = "4"
+	historicalCurrentPredicateVersion   = "3"
+	historicalPredicateVersion          = "2"
+	legacyPredicateVersion              = "1"
 
 	maxEventLineBytes = task.MaxControlRecordSize
 	maxAnswerBytes    = task.MaxBriefSize
@@ -49,17 +50,25 @@ const nativeContractReadOnly = `{"adapter":"opencode:run","mode":"read-only","ve
 const nativeContractWorkspaceWrite = `{"adapter":"opencode:run","mode":"workspace-write","version":"2","native":"OpenCode run JSONL producer","permissions":"workspace-write selects the native build agent and passes native --auto approval; OpenCode owns configuration, MCP servers, hooks, plugins, skills, authentication, permissions, and Git settings; the adapter does not impose an independent workspace boundary","events":"the current interpreter preserves the legacy JSONL identity, step lifecycle, text selection, tool-state, malformed-event, and bounded-output rules","success":"exit_code=0, sealed error empty, one matching session identity, at least one step_start, a terminal step_finish with reason stop, and non-whitespace text","failure":"malformed or oversized JSONL, invalid UTF-8, missing or conflicting identity, missing terminal step_finish, empty answer, provider error, nonzero exit, start failure, seal error, or usage row bound exceeded rejects","usage":"each completed step's part.tokens and part.cost are copied as an independent provider-event record with unknown scope; no conversation total is synthesized"}` + "\n"
 
 func correctedContractForMode(mode string) string {
+	return currentContractForMode(mode, predicateVersion, "the current interpreter validates bounded JSONL identity and event shapes; an empty repeated step_start before meaningful step content is ignored, each step_start opens a step, each step_finish closes it, reason=tool-calls permits another step, and reason=stop selects that step as the current final answer until a later step supersedes it")
+}
+
+func currentContractForMode(mode, version, stepDescription string) string {
 	contract := nativeContractWorkspaceWrite
 	if mode == ModeReadOnly {
 		contract = nativeContractReadOnly
 	} else if mode != ModeWorkspaceWrite {
 		return ""
 	}
-	contract = strings.Replace(contract, `"version":"2"`, `"version":"4"`, 1)
-	contract = strings.Replace(contract, "the current interpreter preserves the legacy JSONL identity, step lifecycle, text selection, tool-state, malformed-event, and bounded-output rules", "the current interpreter validates bounded JSONL identity and event shapes; each step_start opens a step, each step_finish closes it, reason=tool-calls permits another step, and reason=stop selects that step as the current final answer until a later step supersedes it", 1)
+	contract = strings.Replace(contract, `"version":"2"`, `"version":"`+version+`"`, 1)
+	contract = strings.Replace(contract, "the current interpreter preserves the legacy JSONL identity, step lifecycle, text selection, tool-state, malformed-event, and bounded-output rules", stepDescription, 1)
 	contract = strings.Replace(contract, "malformed or oversized JSONL", "malformed JSONL or invalid relevant control values", 1)
 	contract = strings.Replace(contract, "or usage row bound exceeded", "; malformed optional usage is ignored", 1)
 	return contract
+}
+
+func historicalCurrentV4ContractForMode(mode string) string {
+	return currentContractForMode(mode, historicalCurrentV4PredicateVersion, "the current interpreter validates bounded JSONL identity and event shapes; each step_start opens a step, each step_finish closes it, reason=tool-calls permits another step, and reason=stop selects that step as the current final answer until a later step supersedes it")
 }
 
 func historicalCurrentContractForMode(mode string) string {
@@ -131,6 +140,14 @@ func historicalCurrentReferenceForMode(mode string) task.PredicateRef {
 		return task.PredicateRef{}
 	}
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: historicalCurrentPredicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+func historicalCurrentV4ReferenceForMode(mode string) task.PredicateRef {
+	contract := historicalCurrentV4ContractForMode(mode)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: historicalCurrentV4PredicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
 }
 
 func nativeContractForMode(mode string) string {

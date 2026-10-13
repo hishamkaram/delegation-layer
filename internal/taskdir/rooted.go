@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -160,6 +161,16 @@ func (s *Store) link(from, to string) error {
 // Retry flushes every directory in the state-root chain, including preexisting
 // entries: their existence cannot establish that an earlier parent sync succeeded.
 func (s *Store) mkdir(path string, inj FaultInjector) error {
+	return s.mkdirContext(context.Background(), path, inj)
+}
+
+func (s *Store) mkdirContext(ctx context.Context, path string, inj FaultInjector) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	rel, err := s.relative(path)
 	if err != nil {
 		return err
@@ -169,6 +180,9 @@ func (s *Store) mkdir(path string, inj FaultInjector) error {
 		return s.barrierDir(current)
 	}
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		parent, e := s.openDir(current)
 		if e != nil {
 			return e
@@ -180,6 +194,9 @@ func (s *Store) mkdir(path string, inj FaultInjector) error {
 		}
 		next := filepath.Join(current, part)
 		if e = s.barrierDirectoryEntry(next, current, inj); e != nil {
+			return e
+		}
+		if e = ctx.Err(); e != nil {
 			return e
 		}
 		current = next

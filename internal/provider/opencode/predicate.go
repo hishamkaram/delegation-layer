@@ -24,6 +24,7 @@ type interpreter struct {
 	mode                string
 	legacy              bool
 	historicalCurrent   bool
+	historicalCurrentV4 bool
 	historicalCurrentV3 bool
 }
 
@@ -50,12 +51,19 @@ func newHistoricalCurrentV3Interpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, historicalCurrentV3: true}
 }
 
+func newHistoricalCurrentV4Interpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, historicalCurrentV4: true}
+}
+
 func (v interpreter) Reference() task.PredicateRef {
 	if v.legacy {
 		return LegacyReferenceForMode(v.mode)
 	}
 	if v.historicalCurrentV3 {
 		return historicalCurrentReferenceForMode(v.mode)
+	}
+	if v.historicalCurrentV4 {
+		return historicalCurrentV4ReferenceForMode(v.mode)
 	}
 	if v.historicalCurrent {
 		return historicalReferenceForMode(v.mode)
@@ -74,7 +82,7 @@ func (v interpreter) evaluateAgainst(input predicate.Input, raw predicate.Eviden
 	if err := validateEvaluationInput(input, raw, out, reference); err != nil {
 		return task.Interpretation{}, err
 	}
-	state, err := readEvidence(raw, v.legacy || v.historicalCurrent, v.historicalCurrentV3)
+	state, err := readEvidence(raw, v.legacy || v.historicalCurrent, v.historicalCurrentV3, v.historicalCurrentV4)
 	if err != nil {
 		return task.Interpretation{}, err
 	}
@@ -114,10 +122,10 @@ func (v interpreter) Target() task.PredicateRef { return v.Reference() }
 // CanRecover permits only the same OpenCode wire and permission-mode
 // revisions that preceded the current multi-step parser.
 func (v interpreter) CanRecover(source task.PredicateRef) bool {
-	if v.legacy || v.historicalCurrent || v.historicalCurrentV3 {
+	if v.legacy || v.historicalCurrent || v.historicalCurrentV3 || v.historicalCurrentV4 {
 		return false
 	}
-	return source.Equal(historicalReferenceForMode(v.mode)) || source.Equal(historicalCurrentReferenceForMode(v.mode))
+	return source.Equal(historicalReferenceForMode(v.mode)) || source.Equal(historicalCurrentReferenceForMode(v.mode)) || source.Equal(historicalCurrentV4ReferenceForMode(v.mode))
 }
 
 func (v interpreter) Recover(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
@@ -143,12 +151,14 @@ func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out 
 	return nil
 }
 
-func readEvidence(raw predicate.Evidence, historical, strictCurrent bool) (eventState, error) {
+func readEvidence(raw predicate.Evidence, historical, strictCurrent, historicalCurrentV4 bool) (eventState, error) {
 	var stdout eventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {
 		var err error
 		if historical {
 			stdout, err = parseHistoricalStdout(reader)
+		} else if historicalCurrentV4 {
+			stdout, err = parseHistoricalCurrentV4Stdout(reader)
 		} else if strictCurrent {
 			stdout, err = parseStrictCurrentStdout(reader)
 		} else {

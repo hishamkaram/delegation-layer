@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"time"
-
-	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 type Job struct {
@@ -44,37 +44,35 @@ func ParseStatus(data []byte, version string) ([]Job, error) {
 // ParseQueueSnapshot validates the same bounded status schema as ParseStatus,
 // retaining the group and worker-success facts used by native inspection.
 func ParseQueueSnapshot(data []byte, version string) (QueueSnapshot, error) {
-	if version == "" {
-		return QueueSnapshot{}, ErrBinding
-	}
-	if err := task.ValidateJSONStructure(data); err != nil {
-		return QueueSnapshot{}, fmt.Errorf("%w: malformed status JSON", ErrUnknown)
-	}
-	root, err := statusObject(data, "tasks", "groups")
-	if err != nil {
-		return QueueSnapshot{}, err
-	}
-	groups, err := parseGroups(root["groups"])
-	if err != nil {
-		return QueueSnapshot{}, err
-	}
-	rows, err := rawObject(root["tasks"])
-	if err != nil {
-		return QueueSnapshot{}, err
-	}
-	jobs := make([]Job, 0, len(rows))
-	for key, raw := range rows {
-		id, err := parseID(key)
-		if err != nil {
-			return QueueSnapshot{}, err
+	return parseQueueSnapshotStream(bytes.NewReader(data), version)
+}
+
+func cloneQueueSnapshot(snapshot QueueSnapshot) QueueSnapshot {
+	result := QueueSnapshot{Jobs: slices.Clone(snapshot.Jobs), Groups: maps.Clone(snapshot.Groups)}
+	for i := range result.Jobs {
+		if result.Jobs[i].Label != nil {
+			label := *result.Jobs[i].Label
+			result.Jobs[i].Label = &label
 		}
-		job, err := parseJob(raw, id)
-		if err != nil {
-			return QueueSnapshot{}, err
-		}
-		jobs = append(jobs, job)
 	}
-	return QueueSnapshot{Jobs: jobs, Groups: groups}, nil
+	return result
+}
+
+func snapshotFromResult(result CommandResult, version string) (QueueSnapshot, error) {
+	if result.Err != nil {
+		return QueueSnapshot{}, result.Err
+	}
+	if result.snapshot != nil {
+		return *result.snapshot, nil
+	}
+	return ParseQueueSnapshot(result.Stdout, version)
+}
+
+func groupsFromResult(result CommandResult) (map[string]Group, error) {
+	if result.Err != nil {
+		return nil, result.Err
+	}
+	return parseGroups(result.Stdout)
 }
 
 func parseID(s string) (int64, error) {
@@ -333,12 +331,14 @@ func stashedState(raw []byte) (State, error) {
 	if err != nil {
 		return StateUnknown, err
 	}
-	if !bytes.Equal(bytes.TrimSpace(obj["enqueue_at"]), []byte("null")) {
-		if err := validateTime(obj["enqueue_at"]); err != nil {
-			return StateUnknown, err
-		}
+	if bytes.Equal(bytes.TrimSpace(obj["enqueue_at"]), []byte("null")) {
+		return StateStashed, nil
 	}
-	return StateQueued, nil
+	timestampErr := validateTime(obj["enqueue_at"])
+	if timestampErr != nil {
+		return StateUnknown, timestampErr
+	}
+	return StateUnknown, nil
 }
 
 func doneState(raw []byte) (State, error) {

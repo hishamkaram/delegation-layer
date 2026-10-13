@@ -15,15 +15,16 @@ const (
 	Version                       = "runtime-reported"
 	ProfileRevision               = "claude-read-only-v1"
 	WorkspaceWriteProfileRevision = "claude-workspace-write-v1"
-	// The v1 read-only and v2 workspace-write native predicates are retained
-	// for sealed pre-issue47 evidence. Fresh tasks use the corrected revisions
-	// below; their wire is the same Claude stream, but their parser no longer
-	// buffers opaque payloads or imposes a one-megabyte record ceiling.
+	// The v1 read-only and v2 workspace-write predicates retain the parser
+	// used before issue47. The previous current revisions remain registered
+	// with their original runtime probe; fresh tasks use the relaxed probe.
 	historicalNativePredicateVersion               = "native-permissions-v1"
 	historicalNativeWorkspaceWritePredicateVersion = "native-permissions-v2"
 	legacyNativeWorkspaceWritePredicateVersion     = "native-permissions-v1"
-	predicateVersion                               = "native-permissions-v2"
-	workspaceWritePredicateVersion                 = "native-permissions-v3"
+	previousNativeProbePredicateVersion            = "native-permissions-v2"
+	previousNativeProbeWorkspaceWriteVersion       = "native-permissions-v3"
+	predicateVersion                               = "native-permissions-v3"
+	workspaceWritePredicateVersion                 = "native-permissions-v4"
 
 	// The legacy reference keeps already-sealed read-only evidence collectible
 	// after release-version gates were removed. It is never used for admission.
@@ -67,7 +68,7 @@ const contractV1 = `{"adapter":"claude:print","mode":"read-only","version":"runt
 
 const workspaceWriteContractV1 = `{"adapter":"claude:print","mode":"workspace-write","version":"runtime-reported","native":"Claude Code print stream-json producer","init":"permissionMode=acceptEdits and tools contain Read, Edit, Write, Glob, and Grep, with no other tool except EndConversation; mcp_servers is empty and apiKeySource is none","events":"the same strict UTF-8 JSONL, identity, message, result, usage, and bounded-output rules as the read-only interpreter","success":"invocation started, exit_code=0, exact expected and recorded session identity, valid write-mode init, one successful non-whitespace result","failure":"malformed, truncated, conflicting, identity-mismatched, provider-failed, or non-terminal output never publishes"}` + "\n"
 
-func correctedNativeContractForMode(mode string) string {
+func previousNativeProbeContractForMode(mode string) string {
 	if mode == Mode {
 		contract := strings.Replace(nativeContractV1, `"version":"native-permissions-v1"`, `"version":"native-permissions-v2"`, 1)
 		contract = strings.Replace(contract, "provider-owned apiKeySource, tools, and mcp_servers fields are accepted when structurally valid", "provider-owned apiKeySource, tools (at most 4096 names), and mcp_servers fields are accepted when structurally valid", 1)
@@ -82,6 +83,19 @@ func correctedNativeContractForMode(mode string) string {
 		return contract
 	}
 	return ""
+}
+
+func correctedNativeContractForMode(mode string) string {
+	contract := previousNativeProbeContractForMode(mode)
+	if contract == "" {
+		return ""
+	}
+	if mode == Mode {
+		contract = strings.Replace(contract, `"version":"native-permissions-v2"`, `"version":"native-permissions-v3"`, 1)
+	} else {
+		contract = strings.Replace(contract, `"version":"native-permissions-v3"`, `"version":"native-permissions-v4"`, 1)
+	}
+	return strings.Replace(contract, `,"success":`, `,"runtime_probe":{"required_flags":["--print"]},"success":`, 1)
 }
 
 // Contract returns the current native canonical bytes whose digest identifies
@@ -111,6 +125,14 @@ func ContractForMode(mode string) string {
 	return correctedNativeContractForMode(mode)
 }
 
+// PreviousNativeContractForMode returns the exact native contract exposed by
+// ContractForMode before the current predicate revision. Adapters with a
+// retained predicate that embeds Claude's contract use these frozen bytes for
+// reconstruction.
+func PreviousNativeContractForMode(mode string) string {
+	return previousNativeProbeContractForMode(mode)
+}
+
 // HistoricalNativeContractForMode returns the pre-issue47 native contract
 // bytes for adapters that reuse Claude's stream interpreter under their own
 // predicate identity. Fresh tasks must use ContractForMode; this helper is
@@ -135,6 +157,18 @@ func ReferenceForMode(mode string) task.PredicateRef {
 	version := predicateVersion
 	if mode == WorkspaceWriteMode {
 		version = workspaceWritePredicateVersion
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+func previousNativeProbeReferenceForMode(mode string) task.PredicateRef {
+	contract := previousNativeProbeContractForMode(mode)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	version := previousNativeProbePredicateVersion
+	if mode == WorkspaceWriteMode {
+		version = previousNativeProbeWorkspaceWriteVersion
 	}
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
 }

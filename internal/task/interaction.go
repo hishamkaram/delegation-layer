@@ -116,7 +116,7 @@ func applyInteractionEvent(state *InteractionState, event InteractionEvent) erro
 		return applyInteractionDelivery(state, event.Delivery)
 	case "closed":
 		state.Closed = true
-		state.PendingRequests = nil
+		state.PendingRequests = []InteractionRequest{}
 		for i := range state.Deliveries {
 			if state.Deliveries[i].State == "queued" {
 				state.Deliveries[i].State = "rejected"

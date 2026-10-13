@@ -73,6 +73,22 @@ func TestDispatchReviewTargetArguments(t *testing.T) {
 	}
 }
 
+func TestPreflightReviewTargetArguments(t *testing.T) {
+	a, err := ParseArguments([]string{
+		"preflight", "--provider", "codex:review", "--cwd", "/workspace",
+		"--review-target", "uncommitted",
+	})
+	if err != nil || a.Config.ReviewTarget == nil || a.Config.ReviewTarget.Kind != "uncommitted" {
+		t.Fatalf("preflight review target parsed as %+v: %v", a.Config.ReviewTarget, err)
+	}
+	if _, err := ParseArguments([]string{
+		"preflight", "--provider", "codex:review", "--cwd", "/workspace",
+		"--review-target", "base:",
+	}); err == nil {
+		t.Fatal("invalid preflight review target was accepted")
+	}
+}
+
 func TestAutoPreflightAndContinueArguments(t *testing.T) {
 	auto, err := ParseArguments([]string{
 		"dispatch", "--auto", "--brief", "/brief", "--cwd", "/workspace", "--json",
@@ -154,6 +170,27 @@ func TestNonblockingDefaultsAndHelp(t *testing.T) {
 	a, err := ParseArguments([]string{"collect", strings.Repeat("c", 32), "--json"})
 	if err != nil || a.Watch != 0 {
 		t.Fatalf("default watch is not nonblocking: %+v %v", a, err)
+	}
+}
+
+func TestSupervisorArguments(t *testing.T) {
+	for _, action := range []string{"status", "migrate"} {
+		a, err := ParseArguments([]string{"--root", "/state", "supervisor", action, "--json"})
+		if err != nil || a.Command != "supervisor" || a.SupervisorAction != action || a.Root != "/state" || !a.JSON {
+			t.Fatalf("supervisor %s arguments: %+v %v", action, a, err)
+		}
+	}
+	for _, argv := range [][]string{
+		{"supervisor"},
+		{"supervisor", "repair"},
+		{"supervisor", "status", "extra"},
+		{"supervisor", "status", "--pueue-config", "/other/pueue.yml"},
+		{"supervisor", "migrate", "--runner", "/other/delegate-run"},
+		{"supervisor", "status", "--pueue-config="},
+	} {
+		if _, err := ParseArguments(argv); err == nil {
+			t.Fatalf("invalid supervisor arguments accepted: %v", argv)
+		}
 	}
 }
 

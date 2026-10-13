@@ -57,8 +57,9 @@ func existingNativePreparationOptions(request task.TaskRecord, meta task.MetaRec
 }
 
 func nativePermissionForReference(mode string, reference task.PredicateRef) string {
-	if reference.Equal(ReferenceForMode(mode)) || reference.Equal(historicalNativeReferenceForMode(mode)) ||
-		reference.Equal(interactionReference(mode)) || reference.Equal(historicalInteractionReference(mode)) {
+	if reference.Equal(ReferenceForMode(mode)) || reference.Equal(previousNativeProbeReferenceForMode(mode)) ||
+		reference.Equal(historicalNativeReferenceForMode(mode)) || reference.Equal(interactionReference(mode)) ||
+		reference.Equal(previousInteractionReference(mode)) || reference.Equal(historicalInteractionReference(mode)) {
 		return nativeDefaultPermission(mode)
 	}
 	if reference.Equal(legacyNativeReferenceForMode(mode)) {
@@ -76,17 +77,21 @@ func normalizeNativePreparationOptions(request task.TaskRecord, options nativePr
 	}
 	expected := ReferenceForMode(request.Mode)
 	historical := historicalNativeReferenceForMode(request.Mode)
+	previousProbe := previousNativeProbeReferenceForMode(request.Mode)
 	if options.permissionMode == nativeHistoricalPermission(request.Mode) {
 		expected = legacyNativeReferenceForMode(request.Mode)
 		historical = expected
+		previousProbe = task.PredicateRef{}
 	}
 	if request.RequestedConfig.Interactive {
 		expected = interactionReference(request.Mode)
 		historical = historicalInteractionReference(request.Mode)
+		previousProbe = previousInteractionReference(request.Mode)
 	}
 	if options.predicateReference.Equal(task.PredicateRef{}) {
 		options.predicateReference = expected
-	} else if !options.predicateReference.Equal(expected) && !options.predicateReference.Equal(historical) {
+	} else if !options.predicateReference.Equal(expected) && !options.predicateReference.Equal(historical) &&
+		!options.predicateReference.Equal(previousProbe) {
 		return nativePreparationOptions{}, fmt.Errorf("%w: stored Claude native predicate does not match permission mode", ErrUnsupportedProfile)
 	}
 	return options, nil
@@ -125,7 +130,7 @@ func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnviron
 		return commonprovider.ProfileCandidate{}, err
 	}
 	environment.RuntimeSHA256 = cli.SHA256
-	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, runtimeRequirementsForRequest(request))
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, runtimeRequirementsForPredicate(request, options.predicateReference))
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -362,7 +367,7 @@ func finalizeNativePreparedProfileWithContract(
 	if request.RequestedConfig.Interactive {
 		prepared.Identity = nil
 		prepared.Interaction = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
-			return newClaudeInteractionWithCapture(request, expected, record, options.predicateReference.Equal(interactionReference(request.Mode)))
+			return newClaudeInteractionWithCapture(request, expected, record, !options.predicateReference.Equal(historicalInteractionReference(request.Mode)))
 		}
 	}
 	if err = prepared.Validate(request); err != nil {

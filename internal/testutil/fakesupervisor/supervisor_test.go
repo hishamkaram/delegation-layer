@@ -306,6 +306,28 @@ func TestInvalidInvocationHasCompleteReceipt(t *testing.T) {
 	}
 }
 
+func TestStatusInvocationAcceptsOnlyOptionalLabelFilter(t *testing.T) {
+	config := "/tmp/fixture-pueue.yml"
+	for _, tc := range []struct {
+		name string
+		argv []string
+		want error
+	}{
+		{name: "unfiltered", argv: []string{"-c", config, "status", "--json"}},
+		{name: "label", argv: []string{"-c", config, "status", "--json", "label=delegate:root:task"}},
+		{name: "empty label", argv: []string{"-c", config, "status", "--json", "label="}, want: ErrInvalidArguments},
+		{name: "unsupported filter", argv: []string{"-c", config, "status", "--json", "group=default"}, want: ErrInvalidArguments},
+		{name: "extra argument", argv: []string{"-c", config, "status", "--json", "label=delegate:root:task", "extra"}, want: ErrInvalidArguments},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseCommand(config, tc.argv)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("parseCommand() error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestAddPreservesLiteralOutputAndArguments(t *testing.T) {
 	h := newTestHarness(t)
 	config, err := LoadConfig(h.config)
@@ -321,7 +343,7 @@ func TestAddPreservesLiteralOutputAndArguments(t *testing.T) {
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	addArgs := []string{"-c", h.config, "add", "--escape", "--label", `delegate:literal;$(echo no)`, "--print-task-id", "--", filepath.Join(t.TempDir(), "runner with spaces"), "--root", root, "0123456789abcdef0123456789abcdef"}
+	addArgs := []string{"-c", h.config, "add", "--escape", "--stashed", "--label", `delegate:literal;$(echo no)`, "--print-task-id", "--", filepath.Join(t.TempDir(), "runner with spaces"), "--root", root, "0123456789abcdef0123456789abcdef"}
 	code, stdout, stderr := captureRun(t, func() int { return RunWithExecutable(h.executable, h.config, addArgs) })
 	if code != 0 || !bytes.Equal(stdout, []byte("42\n")) || len(stderr) != 0 {
 		t.Fatalf("add result code=%d stdout=%q stderr=%q", code, stdout, stderr)
@@ -329,6 +351,54 @@ func TestAddPreservesLiteralOutputAndArguments(t *testing.T) {
 	entry, completion := readTestReceipts(t, h.artifact)
 	if !equalStrings(entry.Argv, addArgs) || completion.StdoutSHA256 != hashOutput(stdout) {
 		t.Fatalf("add argv/output receipt mismatch: %+v %+v", entry, completion)
+	}
+}
+
+func TestStagedCapabilityAndEnqueueCommands(t *testing.T) {
+	h := newTestHarness(t)
+	commands := []struct {
+		name       string
+		argv       []string
+		wantVerb   string
+		wantOutput []byte
+	}{
+		{name: "add help", argv: []string{"-c", h.config, "add", "--help"}, wantVerb: "add-help", wantOutput: []byte("--stashed --print-task-id")},
+		{name: "enqueue help", argv: []string{"-c", h.config, "enqueue", "--help"}, wantVerb: "enqueue-help", wantOutput: []byte("TASK_IDS")},
+		{name: "enqueue row", argv: []string{"-c", h.config, "enqueue", "42"}, wantVerb: "enqueue"},
+	}
+	for _, command := range commands {
+		t.Run(command.name, func(t *testing.T) {
+			code, stdout, stderr := captureRun(t, func() int {
+				return RunWithExecutable(h.executable, h.config, command.argv)
+			})
+			if code != 0 || len(stderr) != 0 || !bytes.Contains(stdout, command.wantOutput) {
+				t.Fatalf("command result code=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			entry, completion := readReceiptForArgs(t, h.artifact, command.argv)
+			if entry.Verb != command.wantVerb || completion.Verb != command.wantVerb || completion.ExitCode != 0 {
+				t.Fatalf("command receipt mismatch: %+v %+v", entry, completion)
+			}
+		})
+	}
+}
+
+func TestAddAcceptsExactManagedRunnerShapes(t *testing.T) {
+	config := "/tmp/fixture-pueue.yml"
+	taskID := "0123456789abcdef0123456789abcdef"
+	commands := [][]string{
+		{"-c", config, "add", "--escape", "--stashed", "--label", "delegate:root:task", "--print-task-id", "--", "/tmp/delegate-run", "--root", "/tmp/root", taskID},
+		{"-c", config, "add", "--escape", "--stashed", "--label", "delegate:root:task", "--print-task-id", "--", "/tmp/delegate-run", "--guardian", "--supervised", "--root", "/tmp/root", taskID},
+		{"-c", config, "add", "--escape", "--stashed", "--group", "delegate-inspect-task", "--label", "delegate-inspection:task:nonce", "--print-task-id", "--", "/tmp/delegate-run", "--inspection", "--guardian", "--supervised", "--root", "/tmp/root", taskID},
+	}
+	for _, argv := range commands {
+		command, err := parseCommand(config, argv)
+		if err != nil || command.verb != "add" {
+			t.Fatalf("parseCommand(%q) = %+v, %v", argv, command, err)
+		}
+	}
+	legacy := []string{"-c", config, "add", "--escape", "--label", "label", "--print-task-id", "--", "/tmp/delegate-run", "--root", "/tmp/root", taskID}
+	if _, err := parseCommand(config, legacy); !errors.Is(err, ErrInvalidArguments) {
+		t.Fatalf("legacy immediate add error = %v, want invalid arguments", err)
 	}
 }
 
@@ -451,13 +521,16 @@ func TestReleaseDelayAndOutputFileLimitsAreFinite(t *testing.T) {
 	if err := WriteConfig(h.config, cfg); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"-c", h.config, "add", "--escape", "--label", "label", "--print-task-id", "--", "/tmp/runner", "--root", "/tmp/root", "0123456789abcdef0123456789abcdef"}
+	args := []string{"-c", h.config, "add", "--escape", "--stashed", "--label", "label", "--print-task-id", "--", "/tmp/runner", "--root", "/tmp/root", "0123456789abcdef0123456789abcdef"}
 	started := time.Now()
 	code, stdout, stderr := captureRun(t, func() int { return RunWithExecutable(h.executable, h.config, args) })
 	if code != 3 || !bytes.Equal(stdout, []byte("raw add output\n")) || len(stderr) != 0 {
 		t.Fatalf("configured add result code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	if elapsed := time.Since(started); elapsed < 20*time.Millisecond || elapsed >= time.Second {
+	// The fixture's configured maximum is the product bound. Wall-clock setup,
+	// fsync, and receipt publication can exceed one second under a loaded test
+	// runner even though the rendezvous itself remains finite.
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond || elapsed >= MaxRunDuration+time.Second {
 		t.Fatalf("unexpected finite rendezvous duration: %s", elapsed)
 	}
 }

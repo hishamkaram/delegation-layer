@@ -105,3 +105,136 @@ func TestCanceledProofContextDoesNotReadProof(t *testing.T) {
 		t.Fatalf("canceled proof context returned %v", err)
 	}
 }
+
+func TestFailedWorkerObservationNeverGrantsAdmission(t *testing.T) {
+	for _, reason := range []ResultReason{ResultEligible, ResultUnavailable} {
+		t.Run(string(reason), func(t *testing.T) {
+			op := evidenceOperation(t)
+			_, err := op.ClaimStart(time.Unix(101, 0))
+			mustInspection(t, err)
+			mustInspection(t, op.RecordReceipt(42))
+			var facts []byte
+			if reason == ResultEligible {
+				facts = []byte(`{"eligible":true}`)
+			}
+			mustInspection(t, op.Complete(reason, facts, time.Unix(102, 0)))
+			if _, _, err = op.ReadWorkerResultContext(t.Context()); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("local completion supplied independent exit evidence: %v", err)
+			}
+			if err = op.RecordWorkerExitContext(t.Context(), 43, false); !errors.Is(err, task.ErrEvidenceFault) {
+				t.Fatalf("wrong worker supplied terminal evidence: %v", err)
+			}
+			mustInspection(t, op.RecordWorkerExitContext(t.Context(), 42, false))
+			mustInspection(t, op.RecordWorkerExitContext(t.Context(), 42, false))
+			result, succeeded, readErr := op.ReadWorkerResultContext(t.Context())
+			mustInspection(t, readErr)
+			if succeeded || result.Reason != reason {
+				t.Fatalf("terminal result changed: reason=%s succeeded=%t", result.Reason, succeeded)
+			}
+			if _, err = op.ReadProofContext(t.Context()); !errors.Is(err, task.ErrEvidenceFault) {
+				t.Fatalf("failed worker granted admission: %v", err)
+			}
+			if err = op.RecordWorkerSuccessContext(t.Context(), 42); !errors.Is(err, task.ErrEvidenceFault) {
+				t.Fatalf("failed observation was replaced by success: %v", err)
+			}
+		})
+	}
+}
+
+func TestFailedWorkerObservationDoesNotRequireLocalCompletion(t *testing.T) {
+	op := evidenceOperation(t)
+	permit, err := op.ClaimStart(time.Unix(101, 0))
+	mustInspection(t, err)
+	mustInspection(t, permit.Consume())
+	mustInspection(t, op.RecordReceipt(42))
+	mustInspection(t, op.RecordWorkerExitContext(t.Context(), 42, false))
+	mustInspection(t, op.RecordWorkerExitContext(t.Context(), 42, false))
+
+	result, succeeded, err := op.ReadWorkerResultContext(t.Context())
+	mustInspection(t, err)
+	if succeeded || result != nil {
+		t.Fatalf("failed worker result = %#v, succeeded=%t; want exact failure without fabricated completion", result, succeeded)
+	}
+	if _, err = op.ReadProofContext(t.Context()); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("failed worker without completion granted admission: %v", err)
+	}
+	if err = op.RecordWorkerExitContext(t.Context(), 42, true); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful worker without completion error = %v, want missing completion", err)
+	}
+}
+
+func TestSuccessfulWorkerObservationRequiresLocalCompletion(t *testing.T) {
+	op := evidenceOperation(t)
+	permit, err := op.ClaimStart(time.Unix(101, 0))
+	mustInspection(t, err)
+	mustInspection(t, permit.Consume())
+	mustInspection(t, op.RecordReceipt(42))
+
+	if err = op.RecordWorkerExitContext(t.Context(), 42, true); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful worker without completion error = %v, want missing completion", err)
+	}
+	var observation WorkerObservationRecord
+	if err = op.control.Read(workerObservationRecordName, &observation); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful worker without completion published observation: %v", err)
+	}
+}
+
+func TestMalformedWorkerObservationsFailClosed(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		observation WorkerObservationRecord
+	}{
+		{name: "success without completion digest", observation: WorkerObservationRecord{SchemaVersion: task.SchemaVersion, State: "succeeded", NumericTaskID: 42}},
+		{name: "failed with invalid completion digest", observation: WorkerObservationRecord{SchemaVersion: task.SchemaVersion, State: "failed", NumericTaskID: 42, CompletionSHA256: "invalid"}},
+		{name: "unknown state", observation: WorkerObservationRecord{SchemaVersion: task.SchemaVersion, State: "unknown", NumericTaskID: 42}},
+		{name: "wrong receipt", observation: WorkerObservationRecord{SchemaVersion: task.SchemaVersion, State: "failed", NumericTaskID: 43}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			op := evidenceOperation(t)
+			permit, err := op.ClaimStart(time.Unix(101, 0))
+			mustInspection(t, err)
+			mustInspection(t, permit.Consume())
+			mustInspection(t, op.RecordReceipt(42))
+			test.observation.RequestSHA256 = op.Digest()
+			if _, err = op.control.Put(workerObservationRecordName, test.observation); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err = op.ReadWorkerResultContext(t.Context()); !errors.Is(err, task.ErrEvidenceFault) {
+				t.Fatalf("malformed observation error = %v, want evidence fault", err)
+			}
+		})
+	}
+
+	t.Run("wrong request", func(t *testing.T) {
+		op := evidenceOperation(t)
+		permit, err := op.ClaimStart(time.Unix(101, 0))
+		mustInspection(t, err)
+		mustInspection(t, permit.Consume())
+		mustInspection(t, op.RecordReceipt(42))
+		_, err = op.control.Put(workerObservationRecordName, WorkerObservationRecord{
+			SchemaVersion: task.SchemaVersion,
+			RequestSHA256: strings.Repeat("a", 64),
+			NumericTaskID: 42,
+			State:         "failed",
+		})
+		mustInspection(t, err)
+		if _, _, err = op.ReadWorkerResultContext(t.Context()); !errors.Is(err, task.ErrEvidenceFault) {
+			t.Fatalf("wrong request observation error = %v, want evidence fault", err)
+		}
+	})
+}
+
+func TestWorkerObservationRequiresReceiptIdentity(t *testing.T) {
+	op := evidenceOperation(t)
+	permit, err := op.ClaimStart(time.Unix(101, 0))
+	mustInspection(t, err)
+	mustInspection(t, permit.Consume())
+
+	if err = op.RecordWorkerExitContext(t.Context(), 42, false); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed worker without receipt error = %v, want missing receipt", err)
+	}
+	var observation WorkerObservationRecord
+	if err = op.control.Read(workerObservationRecordName, &observation); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing receipt published worker observation: %v", err)
+	}
+}

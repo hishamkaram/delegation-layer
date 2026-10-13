@@ -24,13 +24,14 @@ type nativeHooks struct {
 // interface here prevents inspection from owning task or process lifetimes.
 type nativeScope interface {
 	Context() context.Context
-	Start(func() error) error
+	StartCommand(*exec.Cmd, func() error) error
+	FinishCommand(*exec.Cmd) error
 }
 
 // runNative is private to the supervised inspection lifetime. The scope owns
-// the final start gate. Cancellation refuses a new start, but never abandons a
-// started command or its pipes. On success the caller owns the returned
-// sensitive buffer and must clear it after projection.
+// the final start gate and guardian registration. Cancellation refuses a new
+// start, but never abandons a started command or its pipes. On success the
+// caller owns the returned sensitive buffer and must clear it after projection.
 func runNative(scope nativeScope, definition provider.InspectionDefinition, hooks nativeHooks) ([]byte, error) {
 	if scope == nil {
 		return nil, errNativeInspection
@@ -64,7 +65,7 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 	cmd.Stdout, cmd.Stderr = stdout.writer, stderr.writer
 	go stdout.drain()
 	go stderr.drain()
-	startErr := scope.Start(func() error { return hooks.startCommand(cmd) })
+	startErr := scope.StartCommand(cmd, func() error { return hooks.startCommand(cmd) })
 	closeErr := errors.Join(stdout.writer.Close(), stderr.writer.Close())
 	if startErr == nil {
 		closeErr = errors.Join(closeErr, verified.ReleaseDescriptors())
@@ -72,6 +73,7 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 	var waitErr error
 	if startErr == nil {
 		waitErr = hooks.waitCommand(cmd)
+		waitErr = errors.Join(waitErr, scope.FinishCommand(cmd))
 	}
 	stdoutErr, stderrErr := <-stdout.done, <-stderr.done
 	closeErr = errors.Join(closeErr, verified.Close())

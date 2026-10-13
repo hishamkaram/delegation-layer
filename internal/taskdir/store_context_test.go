@@ -31,6 +31,16 @@ func TestCanceledStoreOpenDoesNotInitializeOrProbe(t *testing.T) {
 	}
 }
 
+func TestCanceledExistingStoreOpenStopsBeforeMetadataRead(t *testing.T) {
+	store := testStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	opened, err := OpenStoreWithPredicatesContext(ctx, store.Root, predicate.Default())
+	if opened != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled existing open returned store=%v error=%v", opened, err)
+	}
+}
+
 func TestStoreProbeDeadlineLeavesNoProbeAndAllowsRetry(t *testing.T) {
 	store := testStore(t)
 	if err := store.maintLock.LockEXNonblocking(); err != nil {

@@ -12,22 +12,37 @@ import (
 
 const historicalInteractionContract = "Claude stream-json host clarification v1: one initial user input; exact native session; repeated same-session initialization permitted before completion; AskUserQuestion answers only; never authorize other tools; native result plus idle and settled tracked agents; fresh root result after background completion; earlier provider errors remain fatal; latest successful nonempty root result; zero exit; malformed, incomplete or conflicting evidence rejects; control journal sealed with raw streams\n"
 
-const interactionContract = "Claude stream-json host clarification v2: one initial user input; exact native session; repeated same-session initialization permitted before completion; AskUserQuestion answers only; never authorize other tools; native result plus idle and settled tracked agents; fresh root result after background completion; earlier provider errors remain fatal; latest successful nonempty root result; offset-streamed sealed records without a native event-size ceiling; malformed, incomplete or conflicting evidence rejects; control journal sealed with raw streams\n"
+const previousInteractionContract = "Claude stream-json host clarification v2: one initial user input; exact native session; repeated same-session initialization permitted before completion; AskUserQuestion answers only; never authorize other tools; native result plus idle and settled tracked agents; fresh root result after background completion; earlier provider errors remain fatal; latest successful nonempty root result; offset-streamed sealed records without a native event-size ceiling; malformed, incomplete or conflicting evidence rejects; control journal sealed with raw streams\n"
+
+const interactionContract = "Claude stream-json host clarification v3: one initial user input; exact native session; repeated same-session initialization permitted before completion; AskUserQuestion answers only; never authorize other tools; native result plus idle and settled tracked agents; fresh root result after background completion; earlier provider errors remain fatal; latest successful nonempty root result; offset-streamed sealed records without a native event-size ceiling; stable runtime probe requires only --print; malformed, incomplete or conflicting evidence rejects; control journal sealed with raw streams\n"
 
 type interactionInterpreter struct {
 	mode       string
 	historical bool
+	reference  *task.PredicateRef
 }
 
 func interactionReference(mode string) task.PredicateRef {
-	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v2", SHA256: task.ComputeSHA256([]byte(interactionContract + mode + "\n"))}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v3", SHA256: task.ComputeSHA256([]byte(interactionContract + mode + "\n"))}
+}
+
+func previousInteractionReference(mode string) task.PredicateRef {
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v2", SHA256: task.ComputeSHA256([]byte(previousInteractionContract + mode + "\n"))}
 }
 
 func historicalInteractionReference(mode string) task.PredicateRef {
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v1", SHA256: task.ComputeSHA256([]byte(historicalInteractionContract + mode + "\n"))}
 }
 
+func newPreviousInteractionInterpreter(mode string) predicate.Interpreter {
+	reference := previousInteractionReference(mode)
+	return interactionInterpreter{mode: mode, reference: &reference}
+}
+
 func (v interactionInterpreter) Reference() task.PredicateRef {
+	if v.reference != nil {
+		return *v.reference
+	}
 	if v.historical {
 		return historicalInteractionReference(v.mode)
 	}
@@ -158,7 +173,10 @@ func (v interactionInterpreter) Target() task.PredicateRef { return v.Reference(
 // CanRecover permits the corrected interactive parser to reassess only the
 // immediately preceding same-wire interactive revision for this mode.
 func (v interactionInterpreter) CanRecover(source task.PredicateRef) bool {
-	return !v.historical && source.Equal(historicalInteractionReference(v.mode))
+	if v.historical || v.reference != nil {
+		return false
+	}
+	return source.Equal(historicalInteractionReference(v.mode)) || source.Equal(previousInteractionReference(v.mode))
 }
 
 func (v interactionInterpreter) Recover(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {

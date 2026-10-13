@@ -14,8 +14,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-const journalLockTimeout = 5 * time.Second
-
 // Operation owns one task-bound inspection journal and its immutable request.
 // Its control directory is always outside ordinary task records.
 type Operation struct {
@@ -67,6 +65,9 @@ func LoadOperationContext(ctx context.Context, store *taskdir.Store, taskID stri
 		if validationErr != nil || request.TaskID != taskID {
 			return task.ErrEvidenceFault
 		}
+		if groupErr := validateOperationGroup(store, request); groupErr != nil {
+			return groupErr
+		}
 		if canonicalErr := verifyCanonicalRequest(tx, request); canonicalErr != nil {
 			return canonicalErr
 		}
@@ -83,7 +84,36 @@ func LoadOperationContext(ctx context.Context, store *taskdir.Store, taskID stri
 // OpenOperation opens or creates the inspection journal for request. Static
 // validation occurs before any journal directory is created. A replay reads
 // request.json under the operation lock before constructing any new deadline.
-func OpenOperation(store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time) (operation *Operation, resultErr error) {
+func OpenOperation(store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time) (*Operation, error) {
+	return OpenOperationContext(context.Background(), store, request, binding, now)
+}
+
+// OpenOperationContext opens or creates an inspection journal while preserving
+// the caller's finite setup lifetime.
+func OpenOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time) (*Operation, error) {
+	return openOperationContext(ctx, store, request, binding, now, groupForRoot(request.RootID))
+}
+
+// OpenConcurrentOperation opens a runtime capability inspection in the private
+// supervisor's ordinary default group. Saved requests keep their group and
+// deadline; this entrypoint never migrates a historical inspection journal.
+func OpenConcurrentOperation(store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time) (*Operation, error) {
+	return OpenConcurrentOperationContext(context.Background(), store, request, binding, now)
+}
+
+// OpenConcurrentOperationContext opens or creates a concurrent inspection
+// journal while preserving the caller's finite setup lifetime.
+func OpenConcurrentOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time) (*Operation, error) {
+	return openOperationContext(ctx, store, request, binding, now, "default")
+}
+
+func openOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time, group string) (operation *Operation, resultErr error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if store == nil {
 		return nil, errors.New("nil inspection store")
 	}
@@ -97,7 +127,11 @@ func OpenOperation(store *taskdir.Store, request task.TaskRecord, binding Bindin
 	if err != nil {
 		return nil, err
 	}
-	control, err := store.OpenInspection(request.TaskID, true)
+	expected.Group = group
+	if err = validateOperationGroup(store, expected); err != nil {
+		return nil, err
+	}
+	control, err := store.OpenInspectionContext(ctx, request.TaskID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -108,13 +142,23 @@ func OpenOperation(store *taskdir.Store, request task.TaskRecord, binding Bindin
 		}
 	}()
 
-	record, digest, deadline, err := establishRequest(control, store.RootID, expected, now)
+	record, digest, deadline, err := establishRequestContext(ctx, control, store.RootID, expected, now)
 	if err != nil {
 		return nil, err
 	}
 	op := &Operation{control: control, request: cloneRequestRecord(record), digest: digest, deadline: deadline}
 	closeOnError = false
 	return op, nil
+}
+
+func validateOperationGroup(store *taskdir.Store, record RequestRecord) error {
+	if err := validateRequestGroup(record); err != nil {
+		return err
+	}
+	if record.Group == "default" && !pueue.IsPrivateConfig(store.Root, record.Binding.Supervisor.ConfigPath) {
+		return fmt.Errorf("%w: default inspection group requires the store's private supervisor config", task.ErrEvidenceFault)
+	}
+	return nil
 }
 
 func expectedRequest(request task.TaskRecord, binding Binding) (RequestRecord, error) {
@@ -134,8 +178,8 @@ func expectedRequest(request task.TaskRecord, binding Binding) (RequestRecord, e
 	}, nil
 }
 
-func establishRequest(control *taskdir.ControlDir, rootID string, expected RequestRecord, now time.Time) (record RequestRecord, digest string, deadline time.Time, resultErr error) {
-	resultErr = withControlTransaction(control, func(tx *taskdir.ControlTransaction) error {
+func establishRequestContext(ctx context.Context, control *taskdir.ControlDir, rootID string, expected RequestRecord, now time.Time) (record RequestRecord, digest string, deadline time.Time, resultErr error) {
+	resultErr = withControlTransactionContext(ctx, control, func(tx *taskdir.ControlTransaction) error {
 		var existing RequestRecord
 		readErr := tx.Read(requestRecordName, &existing)
 		if readErr == nil {
@@ -159,7 +203,7 @@ func acceptExistingRequest(tx *taskdir.ControlTransaction, existing RequestRecor
 	if !sameImmutableRequest(existing, expected) {
 		return RequestRecord{}, "", time.Time{}, fmt.Errorf("%w: inspection request or binding changed", task.ErrEvidenceFault)
 	}
-	// Put performs the rooted byte-for-byte winner check. Semantic equality is
+	// Verify performs the rooted byte-for-byte winner check. Semantic equality is
 	// insufficient here: whitespace, field order, or another encoding change
 	// would otherwise be accepted while requestDigest silently canonicalized it.
 	canonical := expected
@@ -172,14 +216,7 @@ func acceptExistingRequest(tx *taskdir.ControlTransaction, existing RequestRecor
 }
 
 func verifyCanonicalRequest(tx *taskdir.ControlTransaction, request RequestRecord) error {
-	created, err := tx.Put(requestRecordName, request)
-	if err != nil {
-		return err
-	}
-	if created {
-		return fmt.Errorf("%w: inspection request changed during replay", task.ErrEvidenceFault)
-	}
-	return nil
+	return tx.Verify(requestRecordName, request)
 }
 
 func createRequest(tx *taskdir.ControlTransaction, rootID string, expected RequestRecord, now time.Time, record *RequestRecord, digest *string, deadline *time.Time) error {
@@ -253,10 +290,10 @@ func withControlTransaction(control *taskdir.ControlDir, fn func(*taskdir.Contro
 	return withControlTransactionContext(context.Background(), control, fn)
 }
 
-// withControlTransactionContext bounds journal locking by both the caller's
-// lifetime and the fixed local lock ceiling. The explicit precheck matters for
-// a free/refcounted lock: WithLock may otherwise acquire it despite an already
-// canceled caller and publish evidence after its deadline.
+// withControlTransactionContext preserves the caller's authoritative lifetime;
+// taskdir supplies the finite fallback when no deadline exists. The explicit
+// precheck matters for a free/refcounted lock: WithLock may otherwise acquire it
+// despite an already canceled caller and publish evidence after its deadline.
 func withControlTransactionContext(ctx context.Context, control *taskdir.ControlDir, fn func(*taskdir.ControlTransaction) error) error {
 	if ctx == nil {
 		return context.Canceled
@@ -264,12 +301,7 @@ func withControlTransactionContext(ctx context.Context, control *taskdir.Control
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	bounded, cancel := context.WithTimeout(ctx, journalLockTimeout)
-	defer cancel()
-	if err := bounded.Err(); err != nil {
-		return err
-	}
-	return control.WithLock(bounded, fn)
+	return control.WithLock(ctx, fn)
 }
 
 // Request returns a deep copy of the immutable request record.
@@ -337,6 +369,7 @@ func (o *Operation) ClaimSubmissionContext(ctx context.Context, now time.Time) (
 		state:      newOneShot(),
 		rootID:     o.request.RootID,
 		taskID:     o.request.TaskID,
+		queueGroup: o.request.Group,
 		supervisor: o.request.Binding.Supervisor,
 	}, nil
 }
@@ -344,10 +377,16 @@ func (o *Operation) ClaimSubmissionContext(ctx context.Context, now time.Time) (
 // ClaimStart creates the single-use worker start permit. An existing guard
 // never yields authority, even when its bytes match.
 func (o *Operation) ClaimStart(now time.Time) (*StartPermit, error) {
+	return o.ClaimStartContext(context.Background(), now)
+}
+
+// ClaimStartContext creates the single-use worker start permit while honoring
+// the caller's lifetime for the durable claim transaction.
+func (o *Operation) ClaimStartContext(ctx context.Context, now time.Time) (*StartPermit, error) {
 	if err := o.checkClaimTime(now); err != nil {
 		return nil, err
 	}
-	created, err := o.claimGuard(startRecordName, now, func(createdAt string) any {
+	created, err := o.claimGuardContext(ctx, startRecordName, now, func(createdAt string) any {
 		return StartRecord{SchemaVersion: task.SchemaVersion, RequestSHA256: o.Digest(), CreatedAt: createdAt}
 	})
 	if err != nil {
@@ -383,10 +422,6 @@ func (o *Operation) checkClaimTime(now time.Time) error {
 	return nil
 }
 
-func (o *Operation) claimGuard(name string, now time.Time, makeRecord func(string) any) (bool, error) {
-	return o.claimGuardContext(context.Background(), name, now, makeRecord)
-}
-
 func (o *Operation) claimGuardContext(ctx context.Context, name string, now time.Time, makeRecord func(string) any) (bool, error) {
 	if o == nil || o.control == nil {
 		return false, os.ErrClosed
@@ -402,11 +437,24 @@ func (o *Operation) claimGuardContext(ctx context.Context, name string, now time
 	if !createdFloor.Before(o.deadline) {
 		return false, task.ErrEvidenceFault
 	}
+	// The persisted deadline and caller-supplied claim timestamp share the
+	// caller's admission clock. Translate their remaining interval onto this
+	// transaction's wall clock so lock wait consumes the same authority window.
+	claimStarted := time.Now()
+	claimDeadline := claimStarted.Add(o.deadline.Sub(now))
+	claimCtx, cancel, contextErr := claimTransactionContext(ctx, claimDeadline)
+	if contextErr != nil {
+		return false, contextErr
+	}
+	defer cancel()
 	var created bool
-	err := withControlTransactionContext(ctx, o.control, func(tx *taskdir.ControlTransaction) error {
+	err := withControlTransactionContext(claimCtx, o.control, func(tx *taskdir.ControlTransaction) error {
 		exists, readErr := readExistingClaim(tx, name, o.digest, createdFloor, o.deadline)
 		if readErr != nil {
 			return readErr
+		}
+		if err := claimContextErr(claimCtx); err != nil {
+			return err
 		}
 		if exists {
 			return nil
@@ -415,11 +463,44 @@ func (o *Operation) claimGuardContext(ctx context.Context, name string, now time
 		if validateErr := validateOperationClaim(record, o.digest, createdFloor, o.deadline); validateErr != nil {
 			return validateErr
 		}
+		if !time.Now().Before(claimDeadline) {
+			return ErrAdmissionExpired
+		}
+		if err := claimContextErr(claimCtx); err != nil {
+			return err
+		}
 		var putErr error
 		created, putErr = tx.Put(name, record)
 		return putErr
 	})
 	return created, err
+}
+
+func claimTransactionContext(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc, error) {
+	if ctx == nil {
+		return nil, nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if !time.Now().Before(deadline) {
+		return nil, nil, ErrAdmissionExpired
+	}
+	claimCtx, cancel := context.WithDeadline(ctx, deadline)
+	return claimCtx, cancel, nil
+}
+
+func claimContextErr(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 func readExistingClaim(tx *taskdir.ControlTransaction, name, requestSHA string, createdFloor, deadline time.Time) (bool, error) {
@@ -539,6 +620,7 @@ type SubmissionPermit struct {
 	state      *oneShot
 	rootID     string
 	taskID     string
+	queueGroup string
 	supervisor task.SupervisorRef
 }
 
@@ -566,6 +648,14 @@ func (p *SubmissionPermit) InspectionSubmissionTaskID() string {
 		return ""
 	}
 	return p.taskID
+}
+
+// InspectionQueueGroup returns the queue group saved in the request.
+func (p *SubmissionPermit) InspectionQueueGroup() string {
+	if p == nil {
+		return ""
+	}
+	return p.queueGroup
 }
 
 // InspectionSubmissionSupervisor returns the supervisor binding saved in the

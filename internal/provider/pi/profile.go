@@ -92,7 +92,7 @@ func prepareCandidate(request task.TaskRecord, profile profileKind, storedPredic
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	requirements := profileRuntimeRequirements(profile, request.Mode)
+	requirements := profileRuntimeRequirements(profile, request.Mode, storedPredicate)
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, requirements)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
@@ -146,11 +146,14 @@ func historicalEffectiveConfig(request task.TaskRecord, environment profileEnvir
 	return effectivePolicy(request, environment, runtimeSHA256, sources)
 }
 
-func profileRuntimeRequirements(profile profileKind, mode string) commonprovider.RuntimeCapability {
+func profileRuntimeRequirements(profile profileKind, mode string, storedPredicate task.PredicateRef) commonprovider.RuntimeCapability {
 	switch profile {
 	case nativeCurrentProfile:
 		return RuntimeRequirements(mode)
 	case nativeHistoricalProfile:
+		if storedPredicate.Equal(workspaceWriteV7Reference()) {
+			return workspaceWriteV7RuntimeRequirements()
+		}
 		return historicalNativeRuntimeRequirements()
 	case legacyProfile:
 		return legacyRuntimeRequirements()
@@ -219,7 +222,7 @@ func profilePredicateReference(native bool, mode string, stored task.PredicateRe
 	switch {
 	case mode == ModeReadOnly && (stored.Equal(readOnlyV2Reference()) || stored.Equal(readOnlyV3Reference()) || stored.Equal(readOnlyV4Reference()) || stored.Equal(readOnlyV5Reference())):
 		return stored
-	case mode == ModeWorkspaceWrite && (stored.Equal(workspaceWriteV3Reference()) || stored.Equal(workspaceWriteV4Reference()) || stored.Equal(workspaceWriteV5Reference())):
+	case mode == ModeWorkspaceWrite && (stored.Equal(workspaceWriteV3Reference()) || stored.Equal(workspaceWriteV4Reference()) || stored.Equal(workspaceWriteV5Reference()) || stored.Equal(workspaceWriteV7Reference())):
 		return stored
 	}
 	return ReferenceForMode(mode)
@@ -232,5 +235,6 @@ func historicalNativePredicate(reference task.PredicateRef) bool {
 		reference.Equal(readOnlyV5Reference()) ||
 		reference.Equal(workspaceWriteV3Reference()) ||
 		reference.Equal(workspaceWriteV4Reference()) ||
-		reference.Equal(workspaceWriteV5Reference())
+		reference.Equal(workspaceWriteV5Reference()) ||
+		reference.Equal(workspaceWriteV7Reference())
 }

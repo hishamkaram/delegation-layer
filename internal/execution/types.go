@@ -72,6 +72,16 @@ type Stopper interface {
 // BudgetRequest observes a prepared stop through the bound supervisor.
 type BudgetRequest func(context.Context) error
 
+// Lifetime is the worker-side control surface for the task guardian. It owns
+// native process containment and independently observed scope emptiness; the
+// execution package retains exactly one Wait and all stream ownership.
+type Lifetime interface {
+	StartCommand(*exec.Cmd, func() error) error
+	FinishCommand(context.Context, *exec.Cmd) error
+	Terminate(context.Context) error
+	CloseTask(context.Context) error
+}
+
 type budgetRequestContextKey struct{}
 
 var budgetRequestContextMarker budgetRequestContextKey
@@ -139,8 +149,13 @@ type Options struct {
 	PreflightPlan func(PreflightScope, Plan) (Plan, error)
 	Clock         Clock
 	Stopper       Stopper
-	Identity      IdentityObserver
-	Hooks         Hooks
+	Lifetime      Lifetime
+	// Deadline is the immutable outer guardian deadline. A zero value retains
+	// the legacy duration-relative clock. A supplied deadline may shorten but
+	// never extend the admitted task budget.
+	Deadline time.Time
+	Identity IdentityObserver
+	Hooks    Hooks
 }
 
 type Result struct {

@@ -210,26 +210,80 @@ func TestPlanQueuedRunnerCommandsAcceptsRepeatedManagedUpgrade(t *testing.T) {
 	}
 	job := Job{
 		ID: 9, Label: &label, Group: "default", State: StateQueued,
-		originalCommand: runnerCommand(prior, replacement),
+		originalCommand: runnerCommand(prior, replacement, false),
 	}
 	plans, err := planQueuedRunnerCommands(QueueSnapshot{Jobs: []Job{job}}, map[int64]RunnerCommandReplacement{job.ID: replacement})
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan, ok := plans[job.ID]
-	if !ok || plan.expected != job.originalCommand || plan.replacement != runnerCommand(next, replacement) {
+	if !ok || plan.expected != job.originalCommand || plan.replacement != runnerCommand(next, replacement, false) {
 		t.Fatalf("repeated upgrade plan = %+v, found=%v", plan, ok)
 	}
 
-	job.originalCommand = runnerCommand(next, replacement)
+	job.originalCommand = runnerCommand(next, replacement, false)
 	plans, err = planQueuedRunnerCommands(QueueSnapshot{Jobs: []Job{job}}, map[int64]RunnerCommandReplacement{job.ID: replacement})
 	if err != nil || len(plans) != 0 {
 		t.Fatalf("already-upgraded command was not idempotent: plans=%v err=%v", plans, err)
 	}
 
-	job.originalCommand = runnerCommand(filepath.Join(canonicalTemp(t), "custom-runner"), replacement)
+	job.originalCommand = runnerCommand(filepath.Join(canonicalTemp(t), "custom-runner"), replacement, false)
 	if _, err = planQueuedRunnerCommands(QueueSnapshot{Jobs: []Job{job}}, map[int64]RunnerCommandReplacement{job.ID: replacement}); err == nil {
 		t.Fatal("unknown queued runner command was accepted for migration")
+	}
+}
+
+func TestPlanQueuedRunnerCommandsPreservesSupervisedLaunchMarker(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		inspection bool
+	}{
+		{name: "ordinary"},
+		{name: "inspection", inspection: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := canonicalTemp(t)
+			rootID, taskID := strings.Repeat("c", 32), strings.Repeat("d", 32)
+			identity := InspectionIdentity{RootID: rootID, TaskID: taskID, QueueGroup: "default"}
+			label := "delegate:" + rootID + ":" + taskID
+			if test.inspection {
+				label = identity.Label()
+			}
+			oldRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("1", 64))
+			newRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("2", 64))
+			replacement := RunnerCommandReplacement{
+				NumericID: 13, RootID: rootID, TaskID: taskID, Label: label, RootPath: root,
+				OldRunner: oldRunner, NewRunner: newRunner, Inspection: test.inspection,
+			}
+			if test.inspection {
+				replacement.InspectionGroup = "default"
+			}
+			job := Job{
+				ID: replacement.NumericID, Label: &label, Group: "default", State: StateQueued,
+				originalCommand: runnerCommand(oldRunner, replacement, true),
+			}
+
+			plans, err := planQueuedRunnerCommands(
+				QueueSnapshot{Jobs: []Job{job}},
+				map[int64]RunnerCommandReplacement{job.ID: replacement},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, found := plans[job.ID]
+			if !found || plan.expected != job.originalCommand || plan.replacement != runnerCommand(newRunner, replacement, true) {
+				t.Fatalf("supervised runner plan = %+v, found=%v", plan, found)
+			}
+
+			job.originalCommand = runnerCommand(newRunner, replacement, true)
+			plans, err = planQueuedRunnerCommands(
+				QueueSnapshot{Jobs: []Job{job}},
+				map[int64]RunnerCommandReplacement{job.ID: replacement},
+			)
+			if err != nil || len(plans) != 0 {
+				t.Fatalf("current supervised command was not idempotent: plans=%v err=%v", plans, err)
+			}
+		})
 	}
 }
 
@@ -243,7 +297,7 @@ func TestRunnerCommandPlanCompleteReconcilesConcurrentQueueChanges(t *testing.T)
 		NumericID: 12, RootID: rootID, TaskID: taskID, Label: label, RootPath: root,
 		OldRunner: filepath.Join(canonicalTemp(t), "delegate-run"), PreviousManagedRunners: []string{oldRunner}, NewRunner: newRunner,
 	}
-	queued := Job{ID: replacement.NumericID, Label: &label, Group: "default", State: StateQueued, originalCommand: runnerCommand(oldRunner, replacement)}
+	queued := Job{ID: replacement.NumericID, Label: &label, Group: "default", State: StateQueued, originalCommand: runnerCommand(oldRunner, replacement, false)}
 	plans, err := planQueuedRunnerCommands(QueueSnapshot{Jobs: []Job{queued}}, map[int64]RunnerCommandReplacement{queued.ID: replacement})
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +305,7 @@ func TestRunnerCommandPlanCompleteReconcilesConcurrentQueueChanges(t *testing.T)
 	plan := plans[queued.ID]
 
 	alreadyReplaced := queued
-	alreadyReplaced.originalCommand = runnerCommand(newRunner, replacement)
+	alreadyReplaced.originalCommand = runnerCommand(newRunner, replacement, false)
 	if complete, completeErr := runnerCommandPlanComplete(QueueSnapshot{Jobs: []Job{alreadyReplaced}}, plan); completeErr != nil || !complete {
 		t.Fatalf("concurrent successful replacement was not reconciled: complete=%t err=%v", complete, completeErr)
 	}
@@ -264,6 +318,47 @@ func TestRunnerCommandPlanCompleteReconcilesConcurrentQueueChanges(t *testing.T)
 
 	if complete, completeErr := runnerCommandPlanComplete(QueueSnapshot{Jobs: []Job{queued}}, plan); complete || completeErr != nil {
 		t.Fatalf("unchanged queued task was treated as repaired: complete=%t err=%v", complete, completeErr)
+	}
+}
+
+func TestRunnerCommandRepairTreatsStashedAsEditable(t *testing.T) {
+	root := canonicalTemp(t)
+	rootID, taskID := strings.Repeat("1", 32), strings.Repeat("2", 32)
+	label := "delegate:" + rootID + ":" + taskID
+	oldRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("3", 64))
+	newRunner := filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("4", 64))
+	replacement := RunnerCommandReplacement{
+		NumericID: 17, RootID: rootID, TaskID: taskID, Label: label, RootPath: root,
+		OldRunner: oldRunner, NewRunner: newRunner,
+	}
+	stashed := Job{
+		ID: replacement.NumericID, Label: &label, Group: "default", State: StateStashed,
+		originalCommand: runnerCommand(oldRunner, replacement, true),
+	}
+	plans, err := planQueuedRunnerCommands(
+		QueueSnapshot{Jobs: []Job{stashed}},
+		map[int64]RunnerCommandReplacement{stashed.ID: replacement},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, found := plans[stashed.ID]
+	if !found || plan.expected != stashed.originalCommand || plan.replacement != runnerCommand(newRunner, replacement, true) {
+		t.Fatalf("stashed runner repair plan = %+v, found=%t", plan, found)
+	}
+	if complete, completeErr := runnerCommandPlanComplete(QueueSnapshot{Jobs: []Job{stashed}}, plan); complete || completeErr != nil {
+		t.Fatalf("unchanged stashed row was treated as repaired: complete=%t err=%v", complete, completeErr)
+	}
+	if verifyErr := verifyQueuedRunnerCommandPlans(QueueSnapshot{Jobs: []Job{stashed}}, plans); !errors.Is(verifyErr, ErrBinding) {
+		t.Fatalf("unrepaired stashed row verification = %v, want binding failure", verifyErr)
+	}
+	repaired := stashed
+	repaired.originalCommand = plan.replacement
+	if complete, completeErr := runnerCommandPlanComplete(QueueSnapshot{Jobs: []Job{repaired}}, plan); !complete || completeErr != nil {
+		t.Fatalf("repaired stashed row was not complete: complete=%t err=%v", complete, completeErr)
+	}
+	if verifyErr := verifyQueuedRunnerCommandPlans(QueueSnapshot{Jobs: []Job{repaired}}, plans); verifyErr != nil {
+		t.Fatalf("repaired stashed row verification: %v", verifyErr)
 	}
 }
 
@@ -321,7 +416,7 @@ func TestPlanQueuedRunnerCommandsRejectsUnexpectedOrdinaryGroup(t *testing.T) {
 		NumericID: 9, RootID: rootID, TaskID: taskID, Label: label, RootPath: root,
 		OldRunner: oldRunner, NewRunner: filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("2", 64)),
 	}
-	job := Job{ID: replacement.NumericID, Label: &label, Group: "other", State: StateQueued, originalCommand: runnerCommand(oldRunner, replacement)}
+	job := Job{ID: replacement.NumericID, Label: &label, Group: "other", State: StateQueued, originalCommand: runnerCommand(oldRunner, replacement, false)}
 	if _, err := planQueuedRunnerCommands(QueueSnapshot{Jobs: []Job{job}}, map[int64]RunnerCommandReplacement{job.ID: replacement}); !errors.Is(err, ErrBinding) {
 		t.Fatalf("ordinary migration accepted job from another group: %v", err)
 	}
@@ -338,13 +433,13 @@ func TestPlanQueuedInspectionRunnerCommandPreservesWorkerArguments(t *testing.T)
 		RootPath: root, OldRunner: filepath.Join(canonicalTemp(t), "delegate-run"),
 		PreviousManagedRunners: []string{prior}, NewRunner: next, Inspection: true,
 	}
-	job := Job{ID: 11, Label: &label, Group: identity.Group(), State: StateQueued, originalCommand: runnerCommand(prior, replacement)}
+	job := Job{ID: 11, Label: &label, Group: identity.Group(), State: StateQueued, originalCommand: runnerCommand(prior, replacement, false)}
 	plans, err := planQueuedRunnerCommands(QueueSnapshot{Jobs: []Job{job}}, map[int64]RunnerCommandReplacement{job.ID: replacement})
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan, ok := plans[job.ID]
-	if !ok || !strings.Contains(plan.expected, "--inspection") || plan.replacement != runnerCommand(next, replacement) {
+	if !ok || !strings.Contains(plan.expected, "--inspection") || plan.replacement != runnerCommand(next, replacement, false) {
 		t.Fatalf("inspection migration plan = %+v, found=%v", plan, ok)
 	}
 }
@@ -359,7 +454,7 @@ func TestPlanQueuedInspectionRunnerCommandRejectsUnexpectedGroup(t *testing.T) {
 		RootPath: root, OldRunner: filepath.Join(canonicalTemp(t), "delegate-run"),
 		NewRunner: filepath.Join(root, ".supervisor", "delegate-run-"+strings.Repeat("4", 64)), Inspection: true,
 	}
-	job := Job{ID: 11, Label: &label, Group: "default", State: StateQueued, originalCommand: runnerCommand(prior, replacement)}
+	job := Job{ID: 11, Label: &label, Group: "default", State: StateQueued, originalCommand: runnerCommand(prior, replacement, false)}
 	if _, err := planQueuedRunnerCommands(QueueSnapshot{Jobs: []Job{job}}, map[int64]RunnerCommandReplacement{job.ID: replacement}); !errors.Is(err, ErrBinding) {
 		t.Fatalf("inspection migration accepted unexpected group: %v", err)
 	}

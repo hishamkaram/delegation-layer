@@ -43,7 +43,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.1'
+          go-version: '1.27.2'
           cache: false
 
       - name: Set up Node.js
@@ -63,6 +63,20 @@ jobs:
       - name: Run gate checks
         run: make check
 
+      - name: Prove selected native lifetime backend
+        env:
+          DELEGATE_NATIVE_LIFETIME_RECEIPT: bin/native-lifetime-proof/receipt.json
+        run: make acceptance-native-lifetime
+
+      - name: Retain native lifetime proof receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-lifetime-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/native-lifetime-proof/receipt.json
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Run protocol acceptance
         run: make acceptance-protocol
 
@@ -74,6 +88,15 @@ jobs:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-private-cli
+
+      - name: Retain allowlisted private CLI acceptance receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: private-cli-receipts-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/private-cli-acceptance.*/receipt.json
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Run supervisor acceptance
         id: supervisor
@@ -108,7 +131,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.1'
+          go-version: '1.27.2'
           cache: false
 
       - name: Set up Node.js
@@ -128,6 +151,20 @@ jobs:
       - name: Run gate checks
         run: make check
 
+      - name: Prove selected native lifetime backend
+        env:
+          DELEGATE_NATIVE_LIFETIME_RECEIPT: bin/native-lifetime-proof/receipt.json
+        run: make acceptance-native-lifetime
+
+      - name: Retain native lifetime proof receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-lifetime-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/native-lifetime-proof/receipt.json
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Run protocol acceptance
         run: make acceptance-protocol
 
@@ -139,6 +176,15 @@ jobs:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-private-cli
+
+      - name: Retain allowlisted private CLI acceptance receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: private-cli-receipts-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/private-cli-acceptance.*/receipt.json
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Run supervisor acceptance
         id: supervisor

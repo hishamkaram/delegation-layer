@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -54,6 +55,13 @@ func (s *Store) FaultInjector() FaultInjector {
 }
 
 func (s *Store) createNewRoot(cleanRoot string) error {
+	return s.createNewRootContext(context.Background(), cleanRoot)
+}
+
+func (s *Store) createNewRootContext(ctx context.Context, cleanRoot string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	rootID, idErr := task.NewRootID()
 	if idErr != nil {
 		return fmt.Errorf("generating root ID: %w", idErr)
@@ -67,7 +75,7 @@ func (s *Store) createNewRoot(cleanRoot string) error {
 	if mErr != nil {
 		return fmt.Errorf("marshaling root.json: %w", mErr)
 	}
-	committed, cleanupErr, cErr := s.stageAndCommit(cleanRoot, "root.json", data, nil)
+	committed, cleanupErr, cErr := s.stageReaderContext(ctx, cleanRoot, "root.json", bytes.NewReader(data), nil)
 	if cErr != nil && !committed && !errors.Is(cErr, os.ErrExist) {
 		return fmt.Errorf("committing root.json: %w", cErr)
 	}
@@ -77,13 +85,20 @@ func (s *Store) createNewRoot(cleanRoot string) error {
 	if !committed && errors.Is(cErr, os.ErrExist) {
 		// Another initializer chose the root identity. Stage cleanup has
 		// synchronized the directory; validate and reuse that immutable winner.
-		return s.loadExistingRoot(filepath.Join(cleanRoot, "root.json"))
+		return s.loadExistingRootContext(ctx, filepath.Join(cleanRoot, "root.json"))
 	}
 	s.RootID = rootID
 	return nil
 }
 
 func (s *Store) loadExistingRoot(rootJSONPath string) error {
+	return s.loadExistingRootContext(context.Background(), rootJSONPath)
+}
+
+func (s *Store) loadExistingRootContext(ctx context.Context, rootJSONPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f, oErr := s.openFile(rootJSONPath, os.O_RDONLY)
 	if oErr != nil {
 		return fmt.Errorf("opening root.json: %w", oErr)
@@ -92,6 +107,9 @@ func (s *Store) loadExistingRoot(rootJSONPath string) error {
 	closeFileQuietly(f)
 	if rErr != nil {
 		return fmt.Errorf("reading root.json: %w", rErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	var rootRec task.RootRecord
 	if dErr := task.DecodeStrict(content, &rootRec); dErr != nil {
@@ -110,13 +128,25 @@ func InitStore(rootPath string) (*Store, error) {
 }
 
 func InitStoreWithPredicates(rootPath string, registry predicate.Registry) (*Store, error) {
+	return InitStoreWithPredicatesContext(context.Background(), rootPath, registry)
+}
+
+// InitStoreWithPredicatesContext initializes a state store while preserving
+// the caller's bounded setup context at every filesystem phase.
+func InitStoreWithPredicatesContext(ctx context.Context, rootPath string, registry predicate.Registry) (*Store, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !filepath.IsAbs(rootPath) {
 		return nil, fmt.Errorf("state root must be an absolute path: %s", rootPath)
 	}
 	cleanRoot := filepath.Clean(rootPath)
 
 	// Persist missing parents up to already existing ancestor
-	if err := createDirectoriesWithAncestorBarrier(cleanRoot, nil); err != nil {
+	if err := createDirectoriesWithAncestorBarrierContext(ctx, cleanRoot, nil); err != nil {
 		return nil, fmt.Errorf("creating state root %s: %w", cleanRoot, err)
 	}
 
@@ -125,66 +155,85 @@ func InitStoreWithPredicates(rootPath string, registry predicate.Registry) (*Sto
 		return nil, canonicalErr
 	}
 	cleanRoot = canonicalRoot
-	rootHandle, err := os.OpenRoot(cleanRoot)
+	s, rootExists, err := openStoreForInitializationContext(ctx, cleanRoot, registry)
 	if err != nil {
-		return nil, fmt.Errorf("opening root handle for %s: %w", cleanRoot, err)
+		return nil, err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			discardInitializedStore(s)
+		}
+	}()
+
+	// Mandatory filesystem support and policy check before authority
+	if pErr := s.ProbeFilesystemSupportContext(ctx); pErr != nil {
+		return nil, fmt.Errorf("filesystem support check failed: %w", pErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
-	maintLockPath := filepath.Join(cleanRoot, ".maintenance.lock")
+	rootJSONPath := filepath.Join(cleanRoot, "root.json")
+	if !rootExists {
+		if err := s.createNewRootContext(ctx, cleanRoot); err != nil {
+			return nil, err
+		}
+	} else if err := s.loadExistingRootContext(ctx, rootJSONPath); err != nil {
+		return nil, err
+	}
+	keep = true
+	return s, nil
+}
+
+func openStoreForInitialization(cleanRoot string, registry predicate.Registry) (*Store, bool, error) {
+	return openStoreForInitializationContext(context.Background(), cleanRoot, registry)
+}
+
+func openStoreForInitializationContext(ctx context.Context, cleanRoot string, registry predicate.Registry) (*Store, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	rootHandle, err := os.OpenRoot(cleanRoot)
+	if err != nil {
+		return nil, false, fmt.Errorf("opening root handle for %s: %w", cleanRoot, err)
+	}
+	if err = ctx.Err(); err != nil {
+		closeRootHandleQuietly(rootHandle)
+		return nil, false, err
+	}
 	tempStore := &Store{Root: cleanRoot, rootHandle: rootHandle}
 	rootExists, rootErr := tempStore.entryExists(filepath.Join(cleanRoot, "root.json"))
 	if rootErr != nil {
 		closeRootHandleQuietly(rootHandle)
-		return nil, rootErr
+		return nil, false, rootErr
+	}
+	if err = ctx.Err(); err != nil {
+		closeRootHandleQuietly(rootHandle)
+		return nil, false, err
 	}
 	openLock := tempStore.openLock
 	if rootExists {
 		openLock = tempStore.openExistingLock
 	}
-	mLock, err := openLock(maintLockPath, LockLevelMaintenance)
+	mLock, err := openLock(filepath.Join(cleanRoot, ".maintenance.lock"), LockLevelMaintenance)
 	if err != nil {
 		closeRootHandleQuietly(rootHandle)
-		return nil, fmt.Errorf("initializing maintenance lock: %w", err)
+		return nil, false, fmt.Errorf("initializing maintenance lock: %w", err)
 	}
-
-	s := &Store{
-		predicates: registry,
-		Root:       cleanRoot,
-		rootHandle: rootHandle,
-		maintLock:  mLock,
+	if err = ctx.Err(); err != nil {
+		closeLockQuietly(mLock)
+		closeRootHandleQuietly(rootHandle)
+		return nil, false, err
 	}
-
+	s := &Store{predicates: registry, Root: cleanRoot, rootHandle: rootHandle, maintLock: mLock}
 	s.maintLock.faultSource = s.FaultInjector
+	return s, rootExists, nil
+}
 
-	// Mandatory filesystem support and policy check before authority
-	if pErr := s.ProbeFilesystemSupport(); pErr != nil {
-		closeLockQuietly(mLock)
-		closeRootHandleQuietly(rootHandle)
-		return nil, fmt.Errorf("filesystem support check failed: %w", pErr)
-	}
-
-	rootJSONPath := filepath.Join(cleanRoot, "root.json")
-	exists, statErr := s.exists(rootJSONPath)
-	if statErr != nil {
-		closeLockQuietly(mLock)
-		closeRootHandleQuietly(rootHandle)
-		return nil, statErr
-	}
-	if !exists {
-		if err := s.createNewRoot(cleanRoot); err != nil {
-			closeLockQuietly(mLock)
-			closeRootHandleQuietly(rootHandle)
-			return nil, err
-		}
-	} else {
-		if err := s.loadExistingRoot(rootJSONPath); err != nil {
-			closeLockQuietly(mLock)
-			closeRootHandleQuietly(rootHandle)
-			return nil, err
-		}
-	}
-
-	return s, nil
+func discardInitializedStore(s *Store) {
+	closeLockQuietly(s.maintLock)
+	closeRootHandleQuietly(s.rootHandle)
 }
 
 // OpenStore opens an existing store at rootPath.
@@ -206,10 +255,13 @@ func OpenStoreWithPredicates(rootPath string, registry predicate.Registry) (*Sto
 // OpenStoreWithPredicatesContext opens an existing store and bounds its probe
 // by the caller's observation lifetime. It never initializes a missing store.
 func OpenStoreWithPredicatesContext(ctx context.Context, rootPath string, registry predicate.Registry) (*Store, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s, err := openStoreMetadata(rootPath, registry)
+	s, err := openStoreMetadataContext(ctx, rootPath, registry)
 	if err != nil {
 		return nil, err
 	}
@@ -220,50 +272,28 @@ func OpenStoreWithPredicatesContext(ctx context.Context, rootPath string, regist
 }
 
 func openStoreMetadata(rootPath string, registry predicate.Registry) (*Store, error) {
-	if !filepath.IsAbs(rootPath) {
-		return nil, fmt.Errorf("state root must be an absolute path: %s", rootPath)
-	}
-	cleanRoot := filepath.Clean(rootPath)
+	return openStoreMetadataContext(context.Background(), rootPath, registry)
+}
 
-	canonicalRoot, canonicalErr := filepath.EvalSymlinks(cleanRoot)
-	if canonicalErr != nil {
-		return nil, canonicalErr
-	}
-	cleanRoot = canonicalRoot
-	rootHandle, err := os.OpenRoot(cleanRoot)
+func openStoreMetadataContext(ctx context.Context, rootPath string, registry predicate.Registry) (*Store, error) {
+	cleanRoot, err := resolveExistingStoreRoot(ctx, rootPath)
 	if err != nil {
-		return nil, fmt.Errorf("opening root handle for %s: %w", cleanRoot, err)
+		return nil, err
 	}
-
-	rootJSONPath := filepath.Join(cleanRoot, "root.json")
+	rootHandle, err := openExistingStoreRoot(ctx, cleanRoot)
+	if err != nil {
+		return nil, err
+	}
 	tempStore := &Store{Root: cleanRoot, rootHandle: rootHandle}
-	f, oErr := tempStore.openFile(rootJSONPath, os.O_RDONLY)
-	if oErr != nil {
+	rootRec, err := readStoreRootRecord(ctx, tempStore)
+	if err != nil {
 		closeRootHandleQuietly(rootHandle)
-		return nil, fmt.Errorf("opening root.json: %w", oErr)
+		return nil, err
 	}
-	content, rErr := task.ReadControlRecord(f)
-	closeFileQuietly(f)
-	if rErr != nil {
+	mLock, err := openExistingStoreMaintenanceLock(ctx, tempStore)
+	if err != nil {
 		closeRootHandleQuietly(rootHandle)
-		return nil, fmt.Errorf("reading root.json: %w", rErr)
-	}
-
-	var rootRec task.RootRecord
-	if dErr := task.DecodeStrict(content, &rootRec); dErr != nil {
-		closeRootHandleQuietly(rootHandle)
-		return nil, fmt.Errorf("decoding root.json: %w", dErr)
-	}
-	if vErr := task.ValidateRootRecord(&rootRec); vErr != nil {
-		closeRootHandleQuietly(rootHandle)
-		return nil, fmt.Errorf("validating root record: %w", vErr)
-	}
-
-	maintLockPath := filepath.Join(cleanRoot, ".maintenance.lock")
-	mLock, lErr := tempStore.openExistingLock(maintLockPath, LockLevelMaintenance)
-	if lErr != nil {
-		closeRootHandleQuietly(rootHandle)
-		return nil, fmt.Errorf("opening maintenance lock: %w", lErr)
+		return nil, err
 	}
 
 	s := &Store{
@@ -277,6 +307,77 @@ func openStoreMetadata(rootPath string, registry predicate.Registry) (*Store, er
 	s.maintLock.faultSource = s.FaultInjector
 
 	return s, nil
+}
+
+func resolveExistingStoreRoot(ctx context.Context, rootPath string) (string, error) {
+	if ctx == nil {
+		return "", context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(rootPath) {
+		return "", fmt.Errorf("state root must be an absolute path: %s", rootPath)
+	}
+	cleanRoot := filepath.Clean(rootPath)
+	canonicalRoot, err := filepath.EvalSymlinks(cleanRoot)
+	if err != nil {
+		return "", err
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return canonicalRoot, nil
+}
+
+func openExistingStoreRoot(ctx context.Context, cleanRoot string) (*os.Root, error) {
+	rootHandle, err := os.OpenRoot(cleanRoot)
+	if err != nil {
+		return nil, fmt.Errorf("opening root handle for %s: %w", cleanRoot, err)
+	}
+	if err = ctx.Err(); err != nil {
+		closeRootHandleQuietly(rootHandle)
+		return nil, err
+	}
+	return rootHandle, nil
+}
+
+func readStoreRootRecord(ctx context.Context, store *Store) (*task.RootRecord, error) {
+	f, err := store.openFile(filepath.Join(store.Root, "root.json"), os.O_RDONLY)
+	if err != nil {
+		return nil, fmt.Errorf("opening root.json: %w", err)
+	}
+	content, readErr := task.ReadControlRecord(f)
+	closeFileQuietly(f)
+	if readErr != nil {
+		return nil, fmt.Errorf("reading root.json: %w", readErr)
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	var rootRec task.RootRecord
+	if err = task.DecodeStrict(content, &rootRec); err != nil {
+		return nil, fmt.Errorf("decoding root.json: %w", err)
+	}
+	if err = task.ValidateRootRecord(&rootRec); err != nil {
+		return nil, fmt.Errorf("validating root record: %w", err)
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &rootRec, nil
+}
+
+func openExistingStoreMaintenanceLock(ctx context.Context, store *Store) (*LockFile, error) {
+	mLock, err := store.openExistingLock(filepath.Join(store.Root, ".maintenance.lock"), LockLevelMaintenance)
+	if err != nil {
+		return nil, fmt.Errorf("opening maintenance lock: %w", err)
+	}
+	if err = ctx.Err(); err != nil {
+		closeLockQuietly(mLock)
+		return nil, err
+	}
+	return mLock, nil
 }
 
 // Close closes the store's lock files and root handle.
@@ -332,7 +433,7 @@ func (s *Store) probeFilesystemSupport(ctx context.Context) (resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := s.mkdir(probeDir, nil); err != nil {
+	if err := s.mkdirContext(ctx, probeDir, nil); err != nil {
 		return fmt.Errorf("filesystem probe mkdir: %w", err)
 	}
 	defer func() {

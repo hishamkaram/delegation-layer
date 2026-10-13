@@ -22,13 +22,15 @@ type RunnerCommandReplacement struct {
 	PreviousManagedRunners []string
 	NewRunner              string
 	Inspection             bool
+	InspectionGroup        string
 }
 
 const privateManagedRunnerPrefix = "delegate-run-"
 
 // ReplaceQueuedRunnerCommands updates matching queued private tasks. Pueue's
 // editor locks each task while the exact command comparison and replacement
-// run, and running tasks are never stopped or rewritten.
+// run, and running tasks are never stopped or rewritten. Already-current
+// commands only require a shared supervisor lease.
 func (c *Client) ReplaceQueuedRunnerCommands(ctx context.Context, replacements []RunnerCommandReplacement) (resultErr error) {
 	if len(replacements) == 0 {
 		return nil
@@ -45,11 +47,18 @@ func (c *Client) ReplaceQueuedRunnerCommands(ctx context.Context, replacements [
 	if err != nil {
 		return err
 	}
+	current, err := c.queuedRunnerCommandsCurrent(ctx, replacements[0].RootPath, byID)
+	if err != nil || current {
+		return err
+	}
 	lock, err := acquireBootstrapLock(ctx, filepath.Join(replacements[0].RootPath, ".supervisor", "bootstrap.lock"))
 	if err != nil {
 		return err
 	}
 	defer func() { finishPrivateBootstrap(&lock, &resultErr) }()
+	ctx = withGenerationControlLease(ctx, lock)
+	// The shared observation only chose whether to take this lock. Replan from
+	// a fresh exclusive snapshot before authorizing any numeric-ID mutation.
 	snapshot, err := c.Snapshot(ctx)
 	if err != nil {
 		return err
@@ -69,6 +78,23 @@ func (c *Client) ReplaceQueuedRunnerCommands(ctx context.Context, replacements [
 		return err
 	}
 	return verifyQueuedRunnerCommandPlans(snapshot, plans)
+}
+
+func (c *Client) queuedRunnerCommandsCurrent(ctx context.Context, root string, replacements map[int64]RunnerCommandReplacement) (bool, error) {
+	current := false
+	err := WithSupervisorLeaseContext(ctx, root, func(lockedContext context.Context) error {
+		snapshot, err := c.Snapshot(lockedContext)
+		if err != nil {
+			return err
+		}
+		plans, err := planQueuedRunnerCommands(snapshot, replacements)
+		if err != nil {
+			return err
+		}
+		current = len(plans) == 0
+		return nil
+	})
+	return current, err
 }
 
 func indexRunnerCommandReplacements(c *Client, replacements []RunnerCommandReplacement) (map[int64]RunnerCommandReplacement, error) {
@@ -91,7 +117,13 @@ func validateRunnerCommandReplacement(c *Client, replacement RunnerCommandReplac
 	}
 	expectedLabel := "delegate:" + replacement.RootID + ":" + replacement.TaskID
 	if replacement.Inspection {
-		expectedLabel = (InspectionIdentity{RootID: replacement.RootID, TaskID: replacement.TaskID}).Label()
+		identity := InspectionIdentity{RootID: replacement.RootID, TaskID: replacement.TaskID, QueueGroup: replacement.InspectionGroup}
+		if err := validateInspectionIdentity(identity); err != nil {
+			return err
+		}
+		expectedLabel = identity.Label()
+	} else if replacement.InspectionGroup != "" {
+		return ErrConfiguration
 	}
 	if !IsPrivateConfig(replacement.RootPath, c.binding.ConfigPath) || replacement.Label != expectedLabel {
 		return ErrBinding
@@ -118,52 +150,73 @@ func isPrivateManagedRunnerPath(root, runner string) bool {
 func runnerCommandGroupMatches(job Job, replacement RunnerCommandReplacement) bool {
 	expectedGroup := "default"
 	if replacement.Inspection {
-		expectedGroup = (InspectionIdentity{RootID: replacement.RootID}).Group()
+		expectedGroup = (InspectionIdentity{RootID: replacement.RootID, QueueGroup: replacement.InspectionGroup}).Group()
 	}
 	return job.Group == expectedGroup
 }
 
+func runnerCommandEditableState(state State) bool {
+	return state == StateQueued || state == StateStashed
+}
+
 func planQueuedRunnerCommands(snapshot QueueSnapshot, replacements map[int64]RunnerCommandReplacement) (map[int64]runnerCommandPlan, error) {
 	plans := make(map[int64]runnerCommandPlan, len(replacements))
-	for numericID, replacement := range replacements {
-		job, found := queueJob(snapshot, numericID)
-		if !found || job.State != StateQueued {
+	for _, job := range snapshot.Jobs {
+		replacement, found := replacements[job.ID]
+		if !found || !runnerCommandEditableState(job.State) {
 			continue
 		}
 		if job.Label == nil || *job.Label != replacement.Label || !runnerCommandGroupMatches(job, replacement) {
 			return nil, ErrBinding
 		}
+		if _, current := runnerCommandSupervision(job.originalCommand, replacement.NewRunner, replacement); current {
+			continue
+		}
 		plan := runnerCommandPlan{
 			RunnerCommandReplacement: replacement,
 			group:                    job.Group,
-			expected:                 runnerCommand(replacement.OldRunner, replacement),
-			replacement:              runnerCommand(replacement.NewRunner, replacement),
 		}
-		if job.originalCommand == plan.replacement {
-			continue
-		}
-		if job.originalCommand != plan.expected {
-			for _, runner := range replacement.PreviousManagedRunners {
-				candidate := runnerCommand(runner, replacement)
-				if job.originalCommand == candidate {
-					plan.expected = candidate
-					break
-				}
+		sourceRunners := make([]string, 0, len(replacement.PreviousManagedRunners)+1)
+		sourceRunners = append(sourceRunners, replacement.OldRunner)
+		sourceRunners = append(sourceRunners, replacement.PreviousManagedRunners...)
+		matched := false
+		for _, runner := range sourceRunners {
+			supervised, found := runnerCommandSupervision(job.originalCommand, runner, replacement)
+			if found {
+				plan.expected = job.originalCommand
+				plan.replacement = runnerCommand(replacement.NewRunner, replacement, supervised)
+				matched = true
+				break
 			}
 		}
-		if job.originalCommand != plan.expected {
+		if !matched {
 			return nil, fmt.Errorf("%w: queued task command differs from its saved runner identity", ErrBinding)
 		}
-		plans[numericID] = plan
+		plans[job.ID] = plan
 	}
 	return plans, nil
 }
 
-func runnerCommand(runner string, replacement RunnerCommandReplacement) string {
-	if replacement.Inspection {
-		return escapedCommand(runner, "--inspection", "--root", replacement.RootPath, replacement.TaskID)
+func runnerCommandSupervision(command, runner string, replacement RunnerCommandReplacement) (bool, bool) {
+	for _, supervised := range []bool{false, true} {
+		if command == runnerCommand(runner, replacement, supervised) {
+			return supervised, true
+		}
 	}
-	return escapedCommand(runner, "--root", replacement.RootPath, replacement.TaskID)
+	return false, false
+}
+
+func runnerCommand(runner string, replacement RunnerCommandReplacement, supervised bool) string {
+	arguments := make([]string, 0, 6)
+	arguments = append(arguments, runner)
+	if replacement.Inspection {
+		arguments = append(arguments, "--inspection")
+	}
+	if supervised {
+		arguments = append(arguments, "--guardian", "--supervised")
+	}
+	arguments = append(arguments, "--root", replacement.RootPath, replacement.TaskID)
+	return escapedCommand(arguments...)
 }
 
 func applyQueuedRunnerCommandPlans(ctx context.Context, c *Client, snapshot QueueSnapshot, plans map[int64]runnerCommandPlan) error {
@@ -193,7 +246,7 @@ func applyQueuedRunnerCommandPlans(ctx context.Context, c *Client, snapshot Queu
 
 func runnerCommandPlanComplete(snapshot QueueSnapshot, plan runnerCommandPlan) (bool, error) {
 	job, found := queueJob(snapshot, plan.NumericID)
-	if !found || job.State != StateQueued {
+	if !found || !runnerCommandEditableState(job.State) {
 		return true, nil
 	}
 	if job.Label == nil || *job.Label != plan.Label || job.Group != plan.group {
@@ -213,7 +266,7 @@ func sortedRunnerCommandIDs(plans map[int64]runnerCommandPlan) []int64 {
 
 func applyQueuedRunnerCommandPlan(ctx context.Context, c *Client, snapshot QueueSnapshot, numericID int64, plan runnerCommandPlan) error {
 	job, found := queueJob(snapshot, numericID)
-	if !found || job.State != StateQueued {
+	if !found || !runnerCommandEditableState(job.State) {
 		return nil
 	}
 	if job.Label == nil || *job.Label != plan.Label || job.Group != plan.group {
@@ -231,7 +284,7 @@ func applyQueuedRunnerCommandPlan(ctx context.Context, c *Client, snapshot Queue
 func verifyQueuedRunnerCommandPlans(snapshot QueueSnapshot, plans map[int64]runnerCommandPlan) error {
 	for numericID, plan := range plans {
 		job, found := queueJob(snapshot, numericID)
-		if found && job.State == StateQueued {
+		if found && runnerCommandEditableState(job.State) {
 			if job.Label == nil || *job.Label != plan.Label || job.Group != plan.group || job.originalCommand != plan.replacement {
 				return fmt.Errorf("%w: queued runner command replacement was not observed", ErrBinding)
 			}

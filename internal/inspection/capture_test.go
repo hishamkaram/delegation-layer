@@ -16,20 +16,32 @@ import (
 )
 
 type nativeTestScope struct {
-	ctx       context.Context
-	authorize func() error
+	ctx           context.Context
+	authorize     func() error
+	startCommand  func(*exec.Cmd, func() error) error
+	finishCommand func(*exec.Cmd) error
 }
 
 func (s nativeTestScope) Context() context.Context { return s.ctx }
 
-func (s nativeTestScope) Start(start func() error) error {
-	if s.ctx == nil || s.ctx.Err() != nil || s.authorize == nil {
+func (s nativeTestScope) StartCommand(cmd *exec.Cmd, start func() error) error {
+	if s.ctx == nil || s.ctx.Err() != nil || s.authorize == nil || cmd == nil || start == nil {
 		return errNativeInspection
 	}
 	if err := s.authorize(); err != nil {
 		return err
 	}
+	if s.startCommand != nil {
+		return s.startCommand(cmd, start)
+	}
 	return start()
+}
+
+func (s nativeTestScope) FinishCommand(cmd *exec.Cmd) error {
+	if s.finishCommand != nil {
+		return s.finishCommand(cmd)
+	}
+	return nil
 }
 
 func captureDefinition(t *testing.T) provider.InspectionDefinition {
@@ -71,6 +83,95 @@ func TestNativeCaptureOwnsCommandAndMasksDiagnostics(t *testing.T) {
 	defer clear(data)
 	if err != nil || string(data) != "private-native-value" || starts != 1 || waits != 1 || gates != 1 {
 		t.Fatalf("capture result: error=%v starts=%d waits=%d gates=%d", err, starts, waits, gates)
+	}
+}
+
+type nativeCaptureLifetimeCase struct {
+	name       string
+	startErr   error
+	waitErr    error
+	finishErr  error
+	wantError  bool
+	wantEvents string
+}
+
+func TestNativeCaptureUsesLifetimeForExactCommand(t *testing.T) {
+	for _, test := range []nativeCaptureLifetimeCase{
+		{name: "success", wantEvents: "scope-start,start,wait,scope-finish"},
+		{name: "start-failure", startErr: errors.New("private-start-failure"), wantError: true, wantEvents: "scope-start,start"},
+		{name: "wait-failure", waitErr: errors.New("private-wait-failure"), wantError: true, wantEvents: "scope-start,start,wait,scope-finish"},
+		{name: "finish-failure", finishErr: errors.New("private-finish-failure"), wantError: true, wantEvents: "scope-start,start,wait,scope-finish"},
+	} {
+		t.Run(test.name, func(t *testing.T) { runNativeCaptureLifetimeCase(t, test) })
+	}
+}
+
+func runNativeCaptureLifetimeCase(t *testing.T, test nativeCaptureLifetimeCase) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	var scopeCommand, startedCommand, waitedCommand, finishedCommand *exec.Cmd
+	var events []string
+	scope := nativeTestScope{
+		ctx:       ctx,
+		authorize: func() error { return nil },
+		startCommand: func(cmd *exec.Cmd, start func() error) error {
+			events = append(events, "scope-start")
+			scopeCommand = cmd
+			return start()
+		},
+		finishCommand: func(cmd *exec.Cmd) error {
+			events = append(events, "scope-finish")
+			finishedCommand = cmd
+			return test.finishErr
+		},
+	}
+	data, err := runNative(scope, captureDefinition(t), nativeHooks{
+		start: func(cmd *exec.Cmd) error {
+			events = append(events, "start")
+			startedCommand = cmd
+			return test.startErr
+		},
+		wait: func(cmd *exec.Cmd) error {
+			events = append(events, "wait")
+			waitedCommand = cmd
+			return test.waitErr
+		},
+	})
+	defer clear(data)
+	assertNativeCaptureLifetimeCommands(t, test, events, scopeCommand, startedCommand, waitedCommand, finishedCommand)
+	assertNativeCaptureLifetimeResult(t, test, data, err)
+}
+
+func assertNativeCaptureLifetimeCommands(t *testing.T, test nativeCaptureLifetimeCase, events []string, scopeCommand, startedCommand, waitedCommand, finishedCommand *exec.Cmd) {
+	t.Helper()
+	if got := strings.Join(events, ","); got != test.wantEvents {
+		t.Fatalf("command lifetime order = %q, want %q", got, test.wantEvents)
+	}
+	if scopeCommand == nil || scopeCommand != startedCommand {
+		t.Fatal("StartCommand did not wrap the exact started command")
+	}
+	if test.startErr != nil {
+		if waitedCommand != nil || finishedCommand != nil {
+			t.Fatal("failed start was waited or finished")
+		}
+		return
+	}
+	if waitedCommand != scopeCommand || finishedCommand != scopeCommand {
+		t.Fatal("Wait and FinishCommand did not receive the exact started command")
+	}
+}
+
+func assertNativeCaptureLifetimeResult(t *testing.T, test nativeCaptureLifetimeCase, data []byte, err error) {
+	t.Helper()
+	if !test.wantError {
+		if err != nil {
+			t.Fatalf("successful command lifetime failed: %v", err)
+		}
+		return
+	}
+	if data != nil || !errors.Is(err, errNativeInspection) || strings.Contains(err.Error(), "private-") {
+		t.Fatal("lifetime failure exposed diagnostics or bytes")
 	}
 }
 

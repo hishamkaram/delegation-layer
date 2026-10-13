@@ -23,17 +23,17 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: hishamkaram/claude-code-router
-          ref: 32002113221056b3ecbec3f115b2e3fad2e646b4
+          ref: 51ca1381f954162aced231d58176783c610fc882
           path: .local/ccr
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.25.13'
+          go-version: '1.26.9'
           cache: false
       - name: Build CCR
         run: go build -C .local/ccr -o "$GITHUB_WORKSPACE/bin/ccr" ./cmd/ccr
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.1'
+          go-version: '1.27.2'
           cache: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:

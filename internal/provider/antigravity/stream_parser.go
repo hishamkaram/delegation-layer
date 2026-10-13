@@ -37,17 +37,19 @@ type usageRecord struct {
 }
 
 type envelope struct {
-	status           string
-	statusSeen       bool
-	conversationID   string
-	conversationSeen bool
-	responseSeen     bool
-	responseNonWS    bool
-	errorSeen        bool
-	errorText        string
-	durationSeconds  *string
-	numTurns         *int64
-	usage            *usageRecord
+	status                    string
+	statusSeen                bool
+	conversationID            string
+	conversationSeen          bool
+	responseSeen              bool
+	responseEmpty             bool
+	responseNonWS             bool
+	errorSeen                 bool
+	errorText                 string
+	authenticationUnavailable bool
+	durationSeconds           *string
+	numTurns                  *int64
+	usage                     *usageRecord
 }
 
 type stdoutResult struct {
@@ -156,6 +158,7 @@ type responseSink struct {
 	out       io.Writer
 	buffer    []byte
 	writerErr error
+	hasData   bool
 	nonWS     bool
 }
 
@@ -164,6 +167,7 @@ func newResponseSink(out io.Writer) *responseSink {
 }
 
 func (s *responseSink) emit(data []byte, r rune) error {
+	s.hasData = true
 	if !unicode.IsSpace(r) {
 		s.nonWS = true
 	}
@@ -372,6 +376,7 @@ func (p *jsonParser) parseTopField(key string) error {
 		if err := p.readJSONString(p.sink.emit); err != nil {
 			return p.parseFieldError(err)
 		}
+		p.env.responseEmpty = !p.sink.hasData
 		p.env.responseNonWS = p.sink.nonWS
 	case "error":
 		value, err := p.readSmallString(maxDiagnosticBytes)

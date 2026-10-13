@@ -48,7 +48,15 @@ from acceptance_provider_common import (
     write_bytes,
     write_json,
 )
-from acceptance_supervisor_common import Processes, config_for, digest, read_json, sha
+from acceptance_supervisor_common import (
+    DirectoryOwner,
+    Processes,
+    config_for,
+    digest,
+    finalize_acceptance_artifacts,
+    read_json,
+    sha,
+)
 
 
 PROVIDER = "claude:print"
@@ -131,14 +139,20 @@ def acceptance_temp_parent() -> Path:
     return parent.resolve()
 
 
-def private_mkdtemp(prefix: str, label: str) -> Path:
+def private_mkdtemp(prefix: str, label: str, owner: DirectoryOwner):
     """Allocate one private directory below the platform-specific parent."""
     parent = acceptance_temp_parent()
     try:
         path = Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
     except OSError as error:
         raise BlockedFailure(f"cannot create {label}") from error
-    return ensure_private_directory(path, label)
+    token = owner.adopt_created(label, path, parent)
+    os.chmod(token.directory, 0o700)
+    require(token.directory.is_dir() and not token.directory.is_symlink(),
+            f"{label} is not a private directory: {token.directory}")
+    require(token.directory.stat().st_mode & 0o077 == 0,
+            f"{label} is group/world accessible: {token.directory}")
+    return token
 
 
 def path_validation_environment(inherited: Mapping[str, str]) -> dict[str, str]:
@@ -884,6 +898,18 @@ def validate_record_usage(outcome: dict[str, object], parsed: dict[str, object],
 
 class ClaudeAcceptance:
     def __init__(self, args: argparse.Namespace):
+        self._constructor_ownership = DirectoryOwner()
+        self._pueue_ownership = DirectoryOwner()
+        try:
+            self._initialize(args)
+        except BaseException:
+            self._constructor_ownership.rollback()
+            self._pueue_ownership.rollback()
+            raise
+        self.owned_directories = self._constructor_ownership.transfer()
+        self.pueue_owned_directories = ()
+
+    def _initialize(self, args: argparse.Namespace):
         self.args = args
         self.tools = Path(args.tools).resolve(strict=True)
         require(self.tools.is_dir() and not self.tools.is_symlink(), "--tools must be a directory")
@@ -907,23 +933,34 @@ class ClaudeAcceptance:
         self.output.mkdir(mode=0o700, parents=True, exist_ok=False)
         os.chmod(self.output, 0o700)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(6)
-        self.state_parent = ensure_private_directory(DEFAULT_STATE_PARENT / ("claude-" + stamp),
-                                                      "acceptance state parent", create=True)
-        self.test_tmp = ensure_private_directory(self.state_parent / "tmp", "isolated Claude temporary root", create=True)
+        if not DEFAULT_STATE_PARENT.exists() and not DEFAULT_STATE_PARENT.is_symlink():
+            state_root = self._constructor_ownership.create(
+                "acceptance state root", DEFAULT_STATE_PARENT,
+                DEFAULT_STATE_PARENT.parent, parents=True).directory
+        else:
+            state_root = ensure_private_directory(DEFAULT_STATE_PARENT, "acceptance state root")
+        self.state_parent = self._constructor_ownership.create(
+            "acceptance state", state_root / ("claude-" + stamp), state_root).directory
+        self.test_tmp = self._constructor_ownership.create(
+            "isolated Claude temporary root", self.state_parent / "tmp", self.state_parent).directory
         self.host_home = host_home_directory()
         self.environment = native_account_acceptance_environment(os.environ, self.host_home, self.test_tmp)
-        self.state = ensure_private_directory(self.state_parent / "state", "acceptance state", create=True)
+        self.state = self._constructor_ownership.create(
+            "acceptance state data", self.state_parent / "state", self.state_parent).directory
         # Keep the scratch checkout outside the caller's home tree. Claude's
         # project-policy walk includes every ancestor up to the filesystem
         # root, so a home-contained checkout would still discover the real
         # ~/.claude project settings even with an isolated HOME.
         workspace_parent = private_mkdtemp(
-            "delegation-layer-claude-workspace-", "acceptance workspace parent")
-        self.workspace = ensure_private_directory(workspace_parent / "fresh",
-                                                   "acceptance workspace", create=True)
-        self.sibling = ensure_private_directory(workspace_parent / "sibling",
-                                                 "acceptance sibling", create=True)
-        self.briefs = ensure_private_directory(self.state_parent / "briefs", "acceptance briefs", create=True)
+            "delegation-layer-claude-workspace-", "acceptance workspace parent",
+            self._constructor_ownership).directory
+        self.workspace_parent = workspace_parent
+        self.workspace = self._constructor_ownership.create(
+            "acceptance workspace", workspace_parent / "fresh", workspace_parent).directory
+        self.sibling = self._constructor_ownership.create(
+            "acceptance sibling", workspace_parent / "sibling", workspace_parent).directory
+        self.briefs = self._constructor_ownership.create(
+            "acceptance briefs", self.state_parent / "briefs", self.state_parent).directory
         for path, label in ((self.state, "acceptance state"), (self.workspace, "acceptance workspace"),
                             (self.sibling, "acceptance sibling"), (self.output, "evidence output")):
             reject_runtime_roots(path, label, self.environment)
@@ -947,7 +984,8 @@ class ClaudeAcceptance:
         write_bytes(self.sibling_sentinel, self.sibling_bytes)
         self.workspace_before = None
         self.sibling_before = None
-        self.processes = Processes(self.output / "processes", self.environment)
+        self.processes = Processes(self.output / "processes", self.environment,
+                                   owner=self._constructor_ownership)
         self.ops = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
                                  self.state_parent, self.state, self.output,
                                  watch_seconds=WATCH_SECONDS)
@@ -971,12 +1009,21 @@ class ClaudeAcceptance:
         return args
 
     def setup(self) -> None:
-        self.pueue_base = private_mkdtemp("delegation-layer-claude-", "private pueue base")
-        ensure_private_directory(self.pueue_base / "state", "private pueue state", create=True)
-        ensure_private_directory(self.pueue_base / "run", "private pueue runtime", create=True)
-        write_bytes(self.pueue_base / "aliases.yml", b"{}\n")
-        self.pueue_config = self.pueue_base / "pueue.yml"
-        write_json(self.pueue_config, config_for(self.pueue_base))
+        try:
+            pueue_token = private_mkdtemp(
+                "delegation-layer-claude-", "private pueue base", self._pueue_ownership)
+            self.pueue_base = pueue_token.directory
+            self._pueue_ownership.create(
+                "private pueue state", self.pueue_base / "state", self.pueue_base)
+            self._pueue_ownership.create(
+                "private pueue runtime", self.pueue_base / "run", self.pueue_base)
+            write_bytes(self.pueue_base / "aliases.yml", b"{}\n")
+            self.pueue_config = self.pueue_base / "pueue.yml"
+            write_json(self.pueue_config, config_for(self.pueue_base))
+            self.pueue_owned_directories = self._pueue_ownership.transfer()
+        except BaseException:
+            self._pueue_ownership.rollback()
+            raise
         config_digest = digest(self.pueue_config)
         pueue_version = self.ops.direct("pueue-version", [self.pueue, "--version"], timeout=15)
         pueued_version = self.ops.direct("pueued-version", [self.pueued, "-c", self.pueue_config, "--version"], timeout=15)
@@ -1325,6 +1372,14 @@ class ClaudeAcceptance:
         self.closed = self.ops.closed
         return result
 
+    def finalize(self, success: bool) -> bool:
+        """Remove this completed run's private state and raw process captures."""
+        directories = list(self.owned_directories)
+        directories.extend(self.pueue_owned_directories)
+        return finalize_acceptance_artifacts(
+            self.output, self.closed, tuple(directories), success,
+            raw_process_captures_token=self.processes.capture_root)
+
     def run(self) -> None:
         try:
             self.setup()
@@ -1332,7 +1387,7 @@ class ClaudeAcceptance:
             self.run_resume(fresh)
             self.replay()
             self.shutdown()
-            write_json(self.output / "success.json", {
+            success_receipt = {
                 "status": ACCEPTANCE_STATUS, "provider": PROVIDER,
                 "native_ai_turns": len(self.tasks),
                 "planned_native_ai_turns": PLANNED_NATIVE_AI_TURNS,
@@ -1342,12 +1397,21 @@ class ClaudeAcceptance:
                                   "evidence_sha256": self.records[name]["outcome"]["evidence_sha256"]}
                            for name in ("fresh", "resume")},
                 "replay_launches": 0, "natural_daemon_shutdown": self.closed, "signals_sent": 0,
-            })
+            }
+            if not self.finalize(True):
+                raise AcceptanceFailure("completed acceptance artifacts could not be cleaned")
+            write_json(self.output / "success.json", success_receipt, replace=True)
             print("PASS Claude acceptance", flush=True)
         except BaseException as error:
             traceback_text = traceback.format_exc()
             diagnostics_written = False
             naturally_shutdown = False
+            artifact_finalized = False
+            finalization_error: str | None = None
+            try:
+                (self.output / "success.json").unlink(missing_ok=True)
+            except BaseException as receipt_error:
+                finalization_error = "passed receipt removal failed: " + str(receipt_error)
             try:
                 try:
                     write_json(self.output / "failure.json", {
@@ -1370,12 +1434,21 @@ class ClaudeAcceptance:
                 except BaseException:
                     naturally_shutdown = False
                 try:
+                    artifact_finalized = self.finalize(False)
+                    if not artifact_finalized:
+                        finalization_error = finalization_error or "acceptance artifact finalization was not completed"
+                except BaseException as finalize_error:
+                    finalization_error = finalization_error or str(finalize_error)
+                try:
                     write_json(self.output / "failure-cleanup.json", {
                         "natural_daemon_shutdown": naturally_shutdown,
                         "signals_sent": 0,
                         "owned_processes_joined": naturally_shutdown,
                         "failure_diagnostics_written": diagnostics_written,
-                    })
+                        "artifact_finalization_completed": artifact_finalized,
+                        "artifact_finalization_error": finalization_error,
+                        "passed_receipt_absent": not (self.output / "success.json").exists(),
+                    }, replace=True)
                 except BaseException:
                     pass
             raise

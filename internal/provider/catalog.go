@@ -357,6 +357,24 @@ func (c Catalog) Descriptions() []Description {
 // registrations that are intentionally omitted from discovery.
 func (c Catalog) Registry() predicate.Registry { return c.registry }
 
+// ValidateContinuation checks shared identity and any adapter-specific
+// exact-session constraints before lifecycle recovery can release a
+// predecessor session. The prepared predecessor record supplies the sealed
+// adapter contract that governed its original launch.
+func (c Catalog) ValidateContinuation(predecessor task.TaskRecord, predecessorMeta task.MetaRecord, successor task.TaskRecord) error {
+	if predecessor.Provider != successor.Provider || predecessor.Mode != successor.Mode {
+		return task.ErrIdentityMismatch
+	}
+	registration, err := c.Lookup(successor.Provider)
+	if err != nil {
+		return err
+	}
+	if registration.ValidateContinuation == nil {
+		return nil
+	}
+	return registration.ValidateContinuation(predecessor, predecessorMeta, successor)
+}
+
 // ValidateRequest checks provider capabilities before any preparation or
 // supervisor admission. Structural task validation remains in config/task.
 func (c Catalog) ValidateRequest(request task.TaskRecord) error {

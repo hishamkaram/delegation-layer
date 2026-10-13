@@ -3,6 +3,8 @@ package ccr
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +14,42 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/provider/claude"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
+
+func routeFacts(t *testing.T, candidate commonprovider.ProfileCandidate, resumeRoute bool) json.RawMessage {
+	t.Helper()
+	if candidate.Inspection == nil {
+		t.Fatal("candidate has no inspection")
+	}
+	native, err := task.MarshalCanonical(routeCapabilities{ResumeRoute: resumeRoute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
+		Executable: candidate.Inspection.Executable,
+		SHA256:     candidate.Inspection.ExecutableSHA256,
+		Version:    "fixture",
+	}, native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return facts
+}
+
+func legacyFacts(t *testing.T, candidate commonprovider.ProfileCandidate) json.RawMessage {
+	t.Helper()
+	if candidate.Inspection == nil {
+		t.Fatal("candidate has no inspection")
+	}
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
+		Executable: candidate.Inspection.Executable,
+		SHA256:     candidate.Inspection.ExecutableSHA256,
+		Version:    "fixture",
+	}, json.RawMessage(`{"forwarded_flags_verified":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return facts
+}
 
 func testRequest() task.TaskRecord {
 	return task.TaskRecord{RootID: strings.Repeat("a", 32), TaskID: strings.Repeat("b", 32), Provider: Provider, Mode: "read-only", CanonicalCwd: "/workspace", BriefLength: 20, BudgetNanos: int64(time.Minute), RequestedConfig: task.TaskConfig{Model: "local-model", Permission: "read-only"}}
@@ -39,12 +77,56 @@ func TestForegroundArgumentsAndExactContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if permission != "bypassPermissions" || slices.Contains(args, "--effort") || slices.Contains(args, "--session-id") || !slices.Equal(args[len(args)-2:], []string{"--resume", session}) {
+	expected = []string{"launch", "--resume-route", "--print", "--permission-mode", "bypassPermissions", "--", "--input-format", "text", "--output-format", "stream-json", "--verbose", "--permission-prompts", "none", "--resume", session}
+	if permission != "bypassPermissions" || !slices.Equal(args, expected) || slices.Contains(args, "--model") || slices.Contains(args, "--auth-mode") || slices.Contains(args, "--session-id") {
 		t.Fatalf("resume argv=%v", args)
 	}
 	request.PriorSession.Provider = claude.Provider
 	if _, _, err := arguments(request); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("cross-adapter continuation: %v", err)
+	}
+}
+
+func TestContinuationModelChangeFollowsRecordedRoute(t *testing.T) {
+	predecessor := testRequest()
+	successor := predecessor
+	successor.RequestedConfig.Model = "other-alias"
+	for name, test := range map[string]struct {
+		reference task.PredicateRef
+		wantErr   error
+	}{
+		"route-preserving": {reference: Reference(predecessor.Mode), wantErr: commonprovider.ErrUnsupportedOption},
+		"modeled":          {reference: modeledReference(predecessor.Mode)},
+		"previous":         {reference: previousReference(predecessor.Mode)},
+		"historical":       {reference: HistoricalReference(predecessor.Mode)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateContinuation(predecessor, task.MetaRecord{Predicate: test.reference}, successor)
+			if test.wantErr == nil && err != nil {
+				t.Fatalf("changed model continuation error = %v, want nil", err)
+			}
+			if test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("changed model continuation error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+	if err := validateContinuation(predecessor, task.MetaRecord{Predicate: Reference(predecessor.Mode)}, predecessor); err != nil {
+		t.Fatalf("unchanged model continuation error = %v", err)
+	}
+}
+
+func TestLegacyRuntimeProjectionChecksForwardedEffort(t *testing.T) {
+	request := testRequest()
+	help := []byte("--input-format --output-format --verbose --permission-prompts --permission-mode --session-id --resume")
+	if _, err := helpProjector(request)(help); err != nil {
+		t.Fatal(err)
+	}
+	request.RequestedConfig.Effort = "high"
+	if _, err := helpProjector(request)(help); err == nil {
+		t.Fatal("missing forwarded effort accepted")
+	}
+	if _, err := helpProjector(request)(append(help, []byte(" --effort")...)); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -69,50 +151,57 @@ func TestCatalogRequiresAliasAndCopiesMetadata(t *testing.T) {
 	}
 }
 
-func TestRuntimeProjectionChecksForwardedEffort(t *testing.T) {
-	request := testRequest()
-	help := []byte("--input-format --output-format --verbose --permission-prompts --permission-mode --session-id --resume")
-	if _, err := helpProjector(request)(help); err != nil {
-		t.Fatal(err)
-	}
-	request.RequestedConfig.Effort = "high"
-	if _, err := helpProjector(request)(help); err == nil {
-		t.Fatal("missing forwarded effort accepted")
-	}
-	if _, err := helpProjector(request)(append(help, []byte(" --effort")...)); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestFinalizeRequiresBothRuntimeAndForwardedFacts(t *testing.T) {
+func TestFinalizeRequiresRuntimeFacts(t *testing.T) {
 	request := testRequest()
 	cli := commonprovider.CLIInfo{Path: "/usr/bin/ccr", SHA256: strings.Repeat("d", 64)}
 	args, permission, err := arguments(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, verified := range []bool{false, true} {
-		native, marshalErr := json.Marshal(map[string]bool{"forwarded_flags_verified": verified})
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
-		facts, factsErr := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: cli.Path, SHA256: cli.SHA256, Version: "ccr changed-build"}, native)
-		if factsErr != nil {
-			t.Fatal(factsErr)
-		}
-		profile, finalErr := finalize(request, args, permission, cli, []string{"HOME=/home/test"}, []string{"/tmp"}, Reference(request.Mode), facts)
-		if !verified {
-			if finalErr == nil {
-				t.Fatal("missing forwarded facts accepted")
+	facts, factsErr := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: cli.Path, SHA256: cli.SHA256, Version: "ccr changed-build"}, nil)
+	if factsErr != nil {
+		t.Fatal(factsErr)
+	}
+	profile, finalErr := finalize(request, args, permission, cli, []string{"HOME=/home/test"}, []string{"/tmp"}, Reference(request.Mode), facts)
+	if finalErr != nil {
+		t.Fatal(finalErr)
+	}
+	if profile.Plan.Predicate.Adapter != Provider || profile.Effective.Approval != "plan" || len(profile.Plan.InputFiles) != 0 {
+		t.Fatalf("profile=%+v", profile)
+	}
+}
+
+func TestFreshProfileSelectsRouteCompatiblePreparation(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "ccr"), []byte("fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", directory)
+	t.Setenv("PATH", directory)
+
+	request := testRequest()
+	request.CanonicalCwd = directory
+	for name, resumeRoute := range map[string]bool{"legacy": false, "route-preserving": true} {
+		t.Run(name, func(t *testing.T) {
+			candidate, err := PrepareCandidate(request)
+			if err != nil {
+				t.Fatal(err)
 			}
-			continue
-		}
-		if finalErr != nil {
-			t.Fatal(finalErr)
-		}
-		if profile.Plan.Predicate.Adapter != Provider || profile.Effective.Approval != "plan" || len(profile.Plan.InputFiles) != 0 {
-			t.Fatalf("profile=%+v", profile)
-		}
+			if candidate.Inspection == nil || !slices.Equal(candidate.Inspection.Arguments, []string{"launch", "--help"}) || slices.Contains(candidate.Inspection.Runtime.RequiredFlags, "--resume-route") {
+				t.Fatalf("inspection=%+v", candidate.Inspection)
+			}
+			profile, err := candidate.Finalize(routeFacts(t, candidate, resumeRoute), time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := modeledReference(request.Mode)
+			if resumeRoute {
+				want = Reference(request.Mode)
+			}
+			if !profile.Plan.Predicate.Equal(want) {
+				t.Fatalf("predicate=%+v want=%+v", profile.Plan.Predicate, want)
+			}
+		})
 	}
 }
 

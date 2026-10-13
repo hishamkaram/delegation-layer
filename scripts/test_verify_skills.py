@@ -54,6 +54,41 @@ class VerifySkillsTests(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("required skill is missing", errors[0])
 
+    def test_authority_links_are_required_for_go_reviewer(self):
+        (self.root / "agents" / "_data").mkdir(parents=True)
+        for relative in checker.REQUIRED_AUTHORITY_LINKS["go-reviewer"]:
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# Contract\n", encoding="utf-8")
+        self.write_skill(name="go-reviewer", body="A review skill.\n")
+        errors = checker.verify(self.root, required_skills=("go-reviewer",))
+        self.assertTrue(any("required authoritative link" in error for error in errors))
+
+    def test_authority_links_pass_when_all_required_destinations_are_linked(self):
+        for relative in checker.REQUIRED_AUTHORITY_LINKS["go-reviewer"]:
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# Contract\n", encoding="utf-8")
+        links = "\n".join(
+            f"Read [contract]({Path('..') / '..' / relative})."
+            for relative in checker.REQUIRED_AUTHORITY_LINKS["go-reviewer"]
+        )
+        self.write_skill(name="go-reviewer", body=links + "\n")
+        self.assertEqual(checker.verify(self.root, required_skills=("go-reviewer",)), [])
+
+    def test_default_required_skills_include_supervisor_architect(self):
+        for name in checker.REQUIRED_SKILLS:
+            if name != "supervisor-architect":
+                self.write_skill(name)
+
+        errors = checker.verify(self.root)
+
+        self.assertTrue(any(
+            "skills/supervisor-architect/SKILL.md" in error and
+            "required skill is missing" in error
+            for error in errors
+        ))
+
     def test_missing_metadata_field_is_an_error(self):
         self.write_skill(metadata={"name": "demo"})
         errors = self.verify_demo()
