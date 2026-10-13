@@ -2,6 +2,8 @@
 
 package lifetime
 
+import "context"
+
 func preparePlatformPlan(string, string, string) (Plan, error) {
 	return Plan{}, ErrUnsupported
 }
@@ -14,7 +16,7 @@ func openPreparedPlatformScope(Plan) (*Scope, error) {
 	return nil, ErrUnsupported
 }
 
-func openRegisteredPlatformScope(Plan, Ref) (*Scope, error) {
+func openRegisteredPlatformScope(context.Context, Plan, Ref) (*Scope, error) {
 	return nil, ErrUnsupported
 }
 

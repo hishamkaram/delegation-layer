@@ -45,7 +45,7 @@ func signalVerifiedProcessGroup(context.Context, *processGroupScope, int, []Laun
 
 func validateProcessGroupReferenceIdentifier(string) error { return ErrUnsupported }
 
-func openProcessGroupPlatformState(Ref) (string, processGroupPin, error) {
+func openProcessGroupPlatformState(context.Context, Ref) (string, processGroupPin, error) {
 	return "", nil, ErrUnsupported
 }
 

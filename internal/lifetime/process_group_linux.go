@@ -226,7 +226,10 @@ func validateProcessGroupReferenceIdentifier(identifier string) error {
 	return validateProcessGroupPlanIdentifier(identifier)
 }
 
-func openProcessGroupPlatformState(ref Ref) (string, processGroupPin, error) {
+func openProcessGroupPlatformState(ctx context.Context, ref Ref) (string, processGroupPin, error) {
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
 	return ref.identifier, nil, nil
 }
 

@@ -105,6 +105,19 @@ func TestProcessGroupReferenceShape(t *testing.T) {
 	}
 }
 
+func TestOpenContextRejectsCanceledContext(t *testing.T) {
+	ref := testProcessGroupRef(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := OpenContext(ctx, ref); !errors.Is(err, context.Canceled) {
+		t.Fatalf("OpenContext canceled error = %v, want context.Canceled", err)
+	}
+	var nilContext context.Context
+	if _, err := OpenContext(nilContext, ref); !errors.Is(err, ErrNilContext) {
+		t.Fatalf("OpenContext nil error = %v, want ErrNilContext", err)
+	}
+}
+
 func TestProcessGroupTestScopesUseUniqueIdentifiers(t *testing.T) {
 	first, _ := commandForProcessGroup(t, "true")
 	second, _ := commandForProcessGroup(t, "true")

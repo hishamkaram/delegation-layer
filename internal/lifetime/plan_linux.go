@@ -3,6 +3,7 @@
 package lifetime
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -64,7 +65,7 @@ func createPreparedPlatformScope(plan Plan) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		return openProcessGroupScope(ref)
+		return openProcessGroupScope(context.Background(), ref)
 	}
 	locator, parent, err := openPlannedCgroupParent(plan)
 	if err != nil {
@@ -137,21 +138,24 @@ func openPreparedPlatformScope(plan Plan) (*Scope, error) {
 	return scope, nil
 }
 
-func openRegisteredPlatformScope(plan Plan, ref Ref) (*Scope, error) {
+func openRegisteredPlatformScope(ctx context.Context, plan Plan, ref Ref) (*Scope, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if plan.kind == KindProcessGroup {
-		return openRegisteredProcessGroupScope(plan, ref)
+		return openRegisteredProcessGroupScope(ctx, plan, ref)
 	}
 	return openRegisteredCgroupScope(plan, ref)
 }
 
-func openRegisteredProcessGroupScope(plan Plan, ref Ref) (*Scope, error) {
+func openRegisteredProcessGroupScope(ctx context.Context, plan Plan, ref Ref) (*Scope, error) {
 	if ref.kind != plan.kind || ref.assurance != plan.assurance || ref.identifier != plan.identifier {
 		return nil, ErrInvalidRef
 	}
 	if err := requireLinuxPidfd(); err != nil {
 		return nil, err
 	}
-	return openProcessGroupScope(ref)
+	return openProcessGroupScope(ctx, ref)
 }
 
 func openRegisteredCgroupScope(plan Plan, ref Ref) (*Scope, error) {

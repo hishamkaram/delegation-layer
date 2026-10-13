@@ -2,9 +2,11 @@
 
 package lifetime
 
-func openPlatformScope(ref Ref) (*Scope, error) {
+import "context"
+
+func openPlatformScope(ctx context.Context, ref Ref) (*Scope, error) {
 	if ref.kind == KindProcessGroup {
-		return openProcessGroupScope(ref)
+		return openProcessGroupScope(ctx, ref)
 	}
 	return nil, ErrUnsupported
 }

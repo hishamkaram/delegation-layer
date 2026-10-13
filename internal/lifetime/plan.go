@@ -1,6 +1,7 @@
 package lifetime
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -67,13 +68,26 @@ func OpenPrepared(plan Plan) (*Scope, error) {
 // plan. This allows recovery from a different caller cgroup while still
 // proving the exact planned parent, child path, and created object identity.
 func OpenRegistered(plan Plan, ref Ref) (*Scope, error) {
+	return OpenRegisteredContext(context.Background(), plan, ref)
+}
+
+// OpenRegisteredContext reopens a registered scope while retaining the
+// caller's cancellation and deadline through platform-specific identity
+// checks.
+func OpenRegisteredContext(ctx context.Context, plan Plan, ref Ref) (*Scope, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
 	if err := validatePlanShape(plan); err != nil {
 		return nil, err
 	}
 	if err := validateRefShape(ref); err != nil {
 		return nil, err
 	}
-	return openRegisteredPlatformScope(plan, ref)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return openRegisteredPlatformScope(ctx, plan, ref)
 }
 
 func validatePlanShape(plan Plan) error {

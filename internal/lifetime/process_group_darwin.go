@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/ebitengine/purego"
 	"golang.org/x/sys/unix"
 )
 
@@ -22,6 +23,10 @@ var (
 	processSignalTerm            = syscall.SIGTERM
 	processSignalKill            = syscall.SIGKILL
 	errProcessNoSuchEntity error = unix.ESRCH
+
+	// libSystem owns the process-info ABI. Resolve its wrapper once so every
+	// identity read and audit-token signal uses the same immutable binding.
+	darwinProcInfoSymbol, darwinProcInfoSymbolErr = purego.Dlsym(purego.RTLD_DEFAULT, "__proc_info")
 )
 
 const darwinProcessMarkerReadAttempts = 3
@@ -56,47 +61,58 @@ func configureProcessGroupOwner() error {
 }
 
 func configureProcessGroupCommand(scope *processGroupScope, cmd *exec.Cmd) error {
+	attr, err := validatedDarwinProcessAttributes(cmd)
+	if err != nil {
+		return err
+	}
+	if scope == nil || scope.pin == nil {
+		// Each new provider launch owns a private session. Discovery retains the
+		// marker and exact topology ledger so children that create nested sessions
+		// remain discoverable without a helper process or numeric group authority.
+		return ConfigureIndependentSession(cmd)
+	}
+	return configurePinnedDarwinProcessGroupCommand(cmd, attr, scope.pin.processRef())
+}
+
+func validatedDarwinProcessAttributes(cmd *exec.Cmd) (syscall.SysProcAttr, error) {
 	if cmd == nil {
-		return fmt.Errorf("%w: nil command", ErrInvalidRef)
+		return syscall.SysProcAttr{}, fmt.Errorf("%w: nil command", ErrInvalidRef)
 	}
 	if cmd.Process != nil || cmd.ProcessState != nil {
-		return fmt.Errorf("%w: command has already started", ErrConflictingSysProc)
+		return syscall.SysProcAttr{}, fmt.Errorf("%w: command has already started", ErrConflictingSysProc)
 	}
 	attr := syscall.SysProcAttr{}
 	if cmd.SysProcAttr != nil {
 		attr = *cmd.SysProcAttr
 		if attr.Setctty || attr.Foreground || attr.Ctty != 0 {
-			return fmt.Errorf("%w: process-scope launch conflicts with terminal or PGID settings", ErrConflictingSysProc)
+			return syscall.SysProcAttr{}, fmt.Errorf("%w: process-scope launch conflicts with terminal or PGID settings", ErrConflictingSysProc)
 		}
 	}
-	if scope != nil && scope.pin != nil {
-		pin := scope.pin.processRef()
-		if err := validateProcessRef(pin); err != nil {
-			return err
-		}
-		if attr.Setsid {
-			return fmt.Errorf("%w: legacy Darwin process-group pin conflicts with session settings", ErrConflictingSysProc)
-		}
-		if attr.Setpgid || attr.Pgid != 0 {
-			if attr.Setpgid && attr.Pgid == pin.PID() {
-				return nil
-			}
-			return fmt.Errorf("%w: process-scope launch conflicts with terminal or PGID settings", ErrConflictingSysProc)
-		}
-		if pin.PID() <= 1 {
-			return fmt.Errorf("%w: invalid Darwin process-group pin", ErrUnverifiableLaunch)
-		}
-		// Existing pinned references retain their historical launch topology
-		// until their immutable records drain.
-		attr.Setpgid = true
-		attr.Pgid = pin.PID()
-		cmd.SysProcAttr = &attr
-		return nil
+	return attr, nil
+}
+
+func configurePinnedDarwinProcessGroupCommand(cmd *exec.Cmd, attr syscall.SysProcAttr, pin ProcessRef) error {
+	if err := validateProcessRef(pin); err != nil {
+		return err
 	}
-	// Each new provider launch owns a private session. Discovery retains the
-	// marker and exact topology ledger so children that create nested sessions
-	// remain discoverable without a helper process or numeric group authority.
-	return ConfigureIndependentSession(cmd)
+	if attr.Setsid {
+		return fmt.Errorf("%w: legacy Darwin process-group pin conflicts with session settings", ErrConflictingSysProc)
+	}
+	if attr.Setpgid || attr.Pgid != 0 {
+		if attr.Setpgid && attr.Pgid == pin.PID() {
+			return nil
+		}
+		return fmt.Errorf("%w: process-scope launch conflicts with terminal or PGID settings", ErrConflictingSysProc)
+	}
+	if pin.PID() <= 1 {
+		return fmt.Errorf("%w: invalid Darwin process-group pin", ErrUnverifiableLaunch)
+	}
+	// Existing pinned references retain their historical launch topology until
+	// their immutable records drain.
+	attr.Setpgid = true
+	attr.Pgid = pin.PID()
+	cmd.SysProcAttr = &attr
+	return nil
 }
 
 func observeProcessIdentity(pid int) (bool, string, error) {
@@ -162,12 +178,18 @@ func nativeDarwinProcInfo(callNum int32, pid int32, flavor uint32, arg uint64, b
 	if len(buffer) > int(^uint32(0)>>1) {
 		return -1, fmt.Errorf("%w: Darwin proc_info buffer is too large", ErrInvalidLaunchRef)
 	}
+	if darwinProcInfoSymbolErr != nil {
+		return -1, fmt.Errorf("%w: Darwin libSystem proc_info wrapper is unavailable: %w", ErrUnverifiableLaunch, darwinProcInfoSymbolErr)
+	}
+	if darwinProcInfoSymbol == 0 {
+		return -1, fmt.Errorf("%w: Darwin libSystem proc_info wrapper has no address", ErrUnverifiableLaunch)
+	}
 	var bufferPointer uintptr
 	if len(buffer) > 0 {
 		bufferPointer = uintptr(unsafe.Pointer(&buffer[0]))
 	}
-	result, _, err := unix.Syscall6(
-		uintptr(unix.SYS_PROC_INFO),
+	result, _, errno := purego.SyscallN(
+		darwinProcInfoSymbol,
 		uintptr(callNum),
 		uintptr(pid),
 		uintptr(flavor),
@@ -175,10 +197,21 @@ func nativeDarwinProcInfo(callNum int32, pid int32, flavor uint32, arg uint64, b
 		bufferPointer,
 		uintptr(len(buffer)),
 	)
-	if err != 0 {
-		return -1, err
+	returned := int(int32(result))
+	if returned != -1 {
+		return returned, nil
 	}
-	return int(result), nil
+	nativeErrno := darwinProcInfoErrno(errno)
+	if nativeErrno == 0 {
+		return -1, fmt.Errorf("%w: Darwin libSystem proc_info failed without errno", ErrUnverifiableLaunch)
+	}
+	return -1, nativeErrno
+}
+
+// purego stores Darwin's int errno in the low word of a uintptr-sized return
+// slot. The upper word is unspecified and must not become part of Errno.
+func darwinProcInfoErrno(value uintptr) syscall.Errno {
+	return syscall.Errno(uint32(value))
 }
 
 func inspectDarwinProcessIdentityWith(
@@ -194,37 +227,53 @@ func inspectDarwinProcessIdentityWith(
 	}
 	var transitionErr error
 	for attempt := 0; attempt < darwinProcessIdentityObservationAttempts; attempt++ {
-		process, err := lookup(pid)
-		if err != nil {
-			if errors.Is(err, unix.ESRCH) {
-				return false, darwinProcessIdentity{}, nil
-			}
-			if errors.Is(err, unix.EIO) {
-				transitionErr = fmt.Errorf("inspect PID %d: %w", pid, err)
-				continue
-			}
-			return false, darwinProcessIdentity{}, fmt.Errorf("inspect PID %d: %w", pid, err)
+		present, identity, retry, err := inspectDarwinProcessIdentityOnce(pid, procInfo, lookup)
+		if !retry {
+			return present, identity, err
 		}
-		if process == nil {
-			return false, darwinProcessIdentity{}, nil
-		}
-		if process.Proc.P_pid != int32(pid) {
-			return false, darwinProcessIdentity{}, errors.New("darwin process identity is ambiguous")
-		}
-		identity, identityErr := darwinProcessIdentityFromKinfo(pid, *process, procInfo)
-		if errors.Is(identityErr, unix.ESRCH) {
-			return false, darwinProcessIdentity{}, nil
-		}
-		if errors.Is(identityErr, unix.EIO) {
-			transitionErr = fmt.Errorf("inspect PID %d identity: %w", pid, identityErr)
-			continue
-		}
-		if identityErr != nil {
-			return false, darwinProcessIdentity{}, identityErr
-		}
-		return true, identity, nil
+		transitionErr = err
 	}
 	return false, darwinProcessIdentity{}, transitionErr
+}
+
+func inspectDarwinProcessIdentityOnce(
+	pid int,
+	procInfo darwinProcInfoCall,
+	lookup darwinProcessKinfoLookup,
+) (bool, darwinProcessIdentity, bool, error) {
+	process, err := lookup(pid)
+	if err != nil {
+		return classifyDarwinProcessLookupError(pid, err)
+	}
+	if process == nil {
+		return false, darwinProcessIdentity{}, false, nil
+	}
+	if process.Proc.P_pid != int32(pid) {
+		return false, darwinProcessIdentity{}, false, errors.New("darwin process identity is ambiguous")
+	}
+	identity, err := darwinProcessIdentityFromKinfo(pid, *process, procInfo)
+	if err != nil {
+		return classifyDarwinProcessInfoError(pid, err)
+	}
+	return true, identity, false, nil
+}
+
+func classifyDarwinProcessLookupError(pid int, err error) (bool, darwinProcessIdentity, bool, error) {
+	if errors.Is(err, unix.ESRCH) {
+		return false, darwinProcessIdentity{}, false, nil
+	}
+	resultErr := fmt.Errorf("inspect PID %d: %w", pid, err)
+	return false, darwinProcessIdentity{}, errors.Is(err, unix.EIO), resultErr
+}
+
+func classifyDarwinProcessInfoError(pid int, err error) (bool, darwinProcessIdentity, bool, error) {
+	if errors.Is(err, unix.ESRCH) {
+		return false, darwinProcessIdentity{}, false, nil
+	}
+	if errors.Is(err, unix.EIO) {
+		return false, darwinProcessIdentity{}, true, fmt.Errorf("inspect PID %d identity: %w", pid, err)
+	}
+	return false, darwinProcessIdentity{}, false, err
 }
 
 func darwinProcessIdentityFromKinfo(pid int, process unix.KinfoProc, procInfo darwinProcInfoCall) (darwinProcessIdentity, error) {
@@ -312,43 +361,66 @@ func signalDarwinProcessWith(
 	observe func(int) (bool, darwinProcessIdentity, error),
 	send darwinAuditSignal,
 ) (bool, error) {
-	if ctx == nil {
-		return false, ErrNilContext
-	}
-	if err := validateLaunchRefShape(ref); err != nil {
+	if err := validateDarwinProcessSignalRequest(ctx, ref, signal, observe, send); err != nil {
 		return false, err
 	}
-	if signal != syscall.SIGTERM && signal != syscall.SIGKILL {
-		return false, fmt.Errorf("%w: unsupported Darwin process signal %d", ErrInvalidRef, signal)
-	}
-	if observe == nil || send == nil {
-		return false, fmt.Errorf("%w: Darwin audit-token signal path is unavailable", ErrUnverifiableLaunch)
-	}
 	for attempt := 0; attempt < darwinProcessIdentityRefreshAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		present, identity, err := observe(ref.PID())
-		if err != nil {
-			if errors.Is(err, unix.ESRCH) {
-				return false, nil
-			}
-			return false, err
-		}
-		if !present || !processIdentityTokensMatch(identity.startToken, ref.StartToken()) {
-			return false, nil
-		}
-		err = send(ref.PID(), identity.pidVersion, signal)
-		if err == nil {
-			return true, nil
-		}
-		if !errors.Is(err, unix.ESRCH) {
-			return false, err
+		present, retry, err := signalDarwinProcessOnce(ctx, ref, signal, observe, send)
+		if !retry {
+			return present, err
 		}
 		// A Darwin exec can advance pidversion while preserving the stable
 		// uniqueid. The next bounded pass re-reads it before retrying.
 	}
 	return false, errProcessNoSuchEntity
+}
+
+func validateDarwinProcessSignalRequest(
+	ctx context.Context,
+	ref LaunchRef,
+	signal syscall.Signal,
+	observe func(int) (bool, darwinProcessIdentity, error),
+	send darwinAuditSignal,
+) error {
+	if ctx == nil {
+		return ErrNilContext
+	}
+	if err := validateLaunchRefShape(ref); err != nil {
+		return err
+	}
+	if signal != syscall.SIGTERM && signal != syscall.SIGKILL {
+		return fmt.Errorf("%w: unsupported Darwin process signal %d", ErrInvalidRef, signal)
+	}
+	if observe == nil || send == nil {
+		return fmt.Errorf("%w: Darwin audit-token signal path is unavailable", ErrUnverifiableLaunch)
+	}
+	return nil
+}
+
+func signalDarwinProcessOnce(
+	ctx context.Context,
+	ref LaunchRef,
+	signal syscall.Signal,
+	observe func(int) (bool, darwinProcessIdentity, error),
+	send darwinAuditSignal,
+) (bool, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, false, err
+	}
+	present, identity, err := observe(ref.PID())
+	if errors.Is(err, unix.ESRCH) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if !present || !processIdentityTokensMatch(identity.startToken, ref.StartToken()) {
+		return false, false, nil
+	}
+	if err = send(ref.PID(), identity.pidVersion, signal); err == nil {
+		return true, false, nil
+	}
+	return false, errors.Is(err, unix.ESRCH), err
 }
 
 func signalDarwinProcess(pid int, pidVersion int32, signal syscall.Signal) error {
@@ -467,45 +539,75 @@ func discoverProcessScopeLaunches(ctx context.Context, identifier string, roots 
 	if err != nil {
 		return nil, fmt.Errorf("inspect Darwin process table: %w", err)
 	}
+	snapshots, err := snapshotDarwinProcessScope(ctx, identifier, processes, pendingStart)
+	if err != nil {
+		return nil, err
+	}
+	return discoverDarwinOwnedProcessLaunches(roots, retained, owner, anchors, snapshots)
+}
+
+func snapshotDarwinProcessScope(
+	ctx context.Context,
+	identifier string,
+	processes []unix.KinfoProc,
+	pendingStart bool,
+) ([]processScopeSnapshot, error) {
 	snapshots := make([]processScopeSnapshot, 0, len(processes))
 	effectiveUID := uint32(unix.Geteuid())
 	for _, process := range processes {
-		if err = ctx.Err(); err != nil {
+		snapshot, include, err := snapshotDarwinProcess(ctx, identifier, process, effectiveUID, pendingStart)
+		if err != nil {
 			return nil, err
 		}
-		pid := int(process.Proc.P_pid)
-		if pid <= 1 || process.Proc.P_stat == 5 || process.Eproc.Ucred.Uid != effectiveUID {
+		if !include {
 			continue
 		}
-		sessionID, sessionErr := unix.Getsid(pid)
-		if errors.Is(sessionErr, unix.ESRCH) {
-			continue
-		}
-		if sessionErr != nil {
-			return nil, fmt.Errorf("inspect Darwin session for PID %d: %w", pid, sessionErr)
-		}
-		identityPresent, identity, identityErr := inspectDarwinCensusIdentity(pid, process)
-		if identityErr != nil {
-			return nil, fmt.Errorf("inspect Darwin identity for PID %d: %w", pid, identityErr)
-		}
-		if !identityPresent {
-			continue
-		}
-		scopeMarked, markerErr := darwinProcessHasScopeMarker(ctx, pid, identity.startToken, identifier, pendingStart)
-		if markerErr != nil {
-			return nil, markerErr
-		}
-		snapshots = append(snapshots, processScopeSnapshot{
-			pid:         pid,
-			parentPID:   int(process.Eproc.Ppid),
-			pgid:        int(process.Eproc.Pgid),
-			sessionID:   sessionID,
-			startToken:  identity.startToken,
-			scopeMarked: scopeMarked,
-			zombie:      identity.zombie,
-		})
+		snapshots = append(snapshots, snapshot)
 	}
-	return discoverDarwinOwnedProcessLaunches(roots, retained, owner, anchors, snapshots)
+	return snapshots, nil
+}
+
+func snapshotDarwinProcess(
+	ctx context.Context,
+	identifier string,
+	process unix.KinfoProc,
+	effectiveUID uint32,
+	pendingStart bool,
+) (processScopeSnapshot, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return processScopeSnapshot{}, false, err
+	}
+	pid := int(process.Proc.P_pid)
+	if pid <= 1 || process.Proc.P_stat == 5 || process.Eproc.Ucred.Uid != effectiveUID {
+		return processScopeSnapshot{}, false, nil
+	}
+	sessionID, err := unix.Getsid(pid)
+	if errors.Is(err, unix.ESRCH) {
+		return processScopeSnapshot{}, false, nil
+	}
+	if err != nil {
+		return processScopeSnapshot{}, false, fmt.Errorf("inspect Darwin session for PID %d: %w", pid, err)
+	}
+	present, identity, err := inspectDarwinCensusIdentity(pid, process)
+	if err != nil {
+		return processScopeSnapshot{}, false, fmt.Errorf("inspect Darwin identity for PID %d: %w", pid, err)
+	}
+	if !present {
+		return processScopeSnapshot{}, false, nil
+	}
+	marked, err := darwinProcessHasScopeMarker(ctx, pid, identity.startToken, identifier, pendingStart)
+	if err != nil {
+		return processScopeSnapshot{}, false, err
+	}
+	return processScopeSnapshot{
+		pid:         pid,
+		parentPID:   int(process.Eproc.Ppid),
+		pgid:        int(process.Eproc.Pgid),
+		sessionID:   sessionID,
+		startToken:  identity.startToken,
+		scopeMarked: marked,
+		zombie:      identity.zombie,
+	}, true, nil
 }
 
 func inspectDarwinCensusIdentity(pid int, process unix.KinfoProc) (bool, darwinProcessIdentity, error) {
@@ -581,22 +683,9 @@ func darwinProcessHasScopeMarkerWith(
 		}
 		data, err := readProcargs(pid)
 		if err == nil {
-			if retrying {
-				matches, matchErr := darwinProcessIdentityMatches(pid, expectedStartToken, inspectIdentity)
-				if matchErr != nil || !matches {
-					return false, matchErr
-				}
-			}
-			if !bytes.Contains(data, []byte(expected)) {
-				return false, nil
-			}
-			marked, parseErr := darwinProcessEnvironmentContains(data, expected)
-			if parseErr != nil {
-				return false, fmt.Errorf("parse Darwin environment for PID %d: %w", pid, parseErr)
-			}
-			return marked, nil
+			return parseDarwinProcessScopeMarker(pid, expectedStartToken, expected, retrying, data, inspectIdentity)
 		}
-		if !errors.Is(err, unix.EIO) && !errors.Is(err, unix.EINVAL) {
+		if !retryableDarwinProcessMarkerError(err) {
 			return classifyDarwinProcessMarkerError(pid, err, strict)
 		}
 		retrying = true
@@ -611,7 +700,35 @@ func darwinProcessHasScopeMarkerWith(
 			return false, err
 		}
 	}
-	return false, errors.New("Darwin process marker read exhausted without a result")
+	return false, errors.New("darwin process marker read exhausted without a result")
+}
+
+func parseDarwinProcessScopeMarker(
+	pid int,
+	expectedStartToken string,
+	expected string,
+	retrying bool,
+	data []byte,
+	inspectIdentity func(int) (bool, bool, string, error),
+) (bool, error) {
+	if retrying {
+		matches, err := darwinProcessIdentityMatches(pid, expectedStartToken, inspectIdentity)
+		if err != nil || !matches {
+			return false, err
+		}
+	}
+	if !bytes.Contains(data, []byte(expected)) {
+		return false, nil
+	}
+	marked, err := darwinProcessEnvironmentContains(data, expected)
+	if err != nil {
+		return false, fmt.Errorf("parse Darwin environment for PID %d: %w", pid, err)
+	}
+	return marked, nil
+}
+
+func retryableDarwinProcessMarkerError(err error) bool {
+	return errors.Is(err, unix.EIO) || errors.Is(err, unix.EINVAL)
 }
 
 func darwinProcessIdentityMatches(
@@ -644,47 +761,63 @@ func classifyDarwinProcessMarkerError(pid int, err error, strict bool) (bool, er
 }
 
 func darwinProcessEnvironmentContains(data []byte, expected string) (bool, error) {
+	offset, err := darwinProcessEnvironmentOffset(data, expected)
+	if err != nil {
+		return false, err
+	}
+	return darwinProcessEnvironmentEntryContains(data, offset, expected)
+}
+
+func darwinProcessEnvironmentOffset(data []byte, expected string) (int, error) {
 	const argumentCountSize = 4
 	if len(data) < argumentCountSize || expected == "" || strings.IndexByte(expected, 0) >= 0 {
-		return false, errors.New("Darwin procargs record is malformed")
+		return 0, errors.New("darwin procargs record is malformed")
 	}
 	argumentCount := int(int32(binary.LittleEndian.Uint32(data[:argumentCountSize])))
 	if argumentCount < 0 || argumentCount > len(data)-argumentCountSize {
-		return false, errors.New("Darwin procargs argument count is invalid")
+		return 0, errors.New("darwin procargs argument count is invalid")
 	}
-	offset := argumentCountSize
-	executableEnd := bytes.IndexByte(data[offset:], 0)
-	if executableEnd < 0 {
-		return false, errors.New("Darwin procargs executable path is unterminated")
+	offset, err := skipDarwinProcargsValue(data, argumentCountSize)
+	if err != nil {
+		return 0, errors.New("darwin procargs executable path is unterminated")
 	}
-	offset += executableEnd + 1
-	for offset < len(data) && data[offset] == 0 {
-		offset++
-	}
+	offset = skipDarwinProcargsNulls(data, offset)
 	for argument := 0; argument < argumentCount; argument++ {
-		end := bytes.IndexByte(data[offset:], 0)
-		if end < 0 {
-			return false, errors.New("Darwin procargs argument is unterminated")
+		offset, err = skipDarwinProcargsValue(data, offset)
+		if err != nil {
+			return 0, errors.New("darwin procargs argument is unterminated")
 		}
-		offset += end + 1
 	}
-	for offset < len(data) && data[offset] == 0 {
-		offset++
-	}
+	return skipDarwinProcargsNulls(data, offset), nil
+}
+
+func darwinProcessEnvironmentEntryContains(data []byte, offset int, expected string) (bool, error) {
 	for offset < len(data) {
 		end := bytes.IndexByte(data[offset:], 0)
 		if end < 0 {
-			return false, errors.New("Darwin procargs environment is unterminated")
+			return false, errors.New("darwin procargs environment is unterminated")
 		}
 		if string(data[offset:offset+end]) == expected {
 			return true, nil
 		}
-		offset += end + 1
-		for offset < len(data) && data[offset] == 0 {
-			offset++
-		}
+		offset = skipDarwinProcargsNulls(data, offset+end+1)
 	}
 	return false, nil
+}
+
+func skipDarwinProcargsValue(data []byte, offset int) (int, error) {
+	end := bytes.IndexByte(data[offset:], 0)
+	if end < 0 {
+		return 0, errors.New("darwin procargs value is unterminated")
+	}
+	return offset + end + 1, nil
+}
+
+func skipDarwinProcargsNulls(data []byte, offset int) int {
+	for offset < len(data) && data[offset] == 0 {
+		offset++
+	}
+	return offset
 }
 
 func darwinProcessStartToken(start unix.Timeval) string {

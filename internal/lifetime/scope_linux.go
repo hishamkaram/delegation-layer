@@ -42,7 +42,10 @@ type cgroupScope struct {
 	file *os.File
 }
 
-func openPlatformScope(ref Ref) (*Scope, error) {
+func openPlatformScope(ctx context.Context, ref Ref) (*Scope, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	switch ref.kind {
 	case KindCgroupV2:
 		return openCgroupScope(ref)
@@ -50,7 +53,7 @@ func openPlatformScope(ref Ref) (*Scope, error) {
 		if err := requireLinuxPidfd(); err != nil {
 			return nil, err
 		}
-		return openProcessGroupScope(ref)
+		return openProcessGroupScope(ctx, ref)
 	default:
 		return nil, fmt.Errorf("%w: unknown scope kind %q", ErrInvalidRef, ref.kind)
 	}

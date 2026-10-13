@@ -239,13 +239,13 @@ func openRegisteredLifetime(ctx context.Context, intent *task.LifetimeIntentReco
 	}
 	var scope *lifetime.Scope
 	if intent == nil {
-		scope, err = lifetime.Open(ref)
+		scope, err = lifetime.OpenContext(ctx, ref)
 	} else {
 		plan, planErr := lifetime.NewPlan(lifetime.Kind(intent.ScopeKind), lifetime.Assurance(intent.Assurance), intent.ScopePlan)
 		if planErr != nil {
 			return nil, nil, planErr
 		}
-		scope, err = lifetime.OpenRegistered(plan, ref)
+		scope, err = lifetime.OpenRegisteredContext(ctx, plan, ref)
 	}
 	if err != nil {
 		return nil, nil, err

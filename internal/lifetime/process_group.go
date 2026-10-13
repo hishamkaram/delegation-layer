@@ -82,11 +82,17 @@ type processScopeSnapshot struct {
 	zombie      bool
 }
 
-func openProcessGroupScope(ref Ref) (*Scope, error) {
+func openProcessGroupScope(ctx context.Context, ref Ref) (*Scope, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
 	if err := validateProcessGroupIdentifier(ref); err != nil {
 		return nil, err
 	}
-	identifier, pin, err := openProcessGroupPlatformState(ref)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	identifier, pin, err := openProcessGroupPlatformState(ctx, ref)
 	if err != nil {
 		return nil, err
 	}

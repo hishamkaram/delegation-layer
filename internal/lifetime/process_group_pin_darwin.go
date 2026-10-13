@@ -77,7 +77,10 @@ func validateProcessGroupReferenceIdentifier(identifier string) error {
 	return err
 }
 
-func openProcessGroupPlatformState(ref Ref) (string, processGroupPin, error) {
+func openProcessGroupPlatformState(ctx context.Context, ref Ref) (string, processGroupPin, error) {
+	if ctx == nil {
+		return "", nil, ErrNilContext
+	}
 	if validateProcessGroupPlanIdentifier(ref.identifier) == nil {
 		if err := darwinProcessInfoCapability(); err != nil {
 			return "", nil, err
@@ -88,7 +91,7 @@ func openProcessGroupPlatformState(ref Ref) (string, processGroupPin, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), processGroupPinTimeout)
+	ctx, cancel := context.WithTimeout(ctx, processGroupPinTimeout)
 	defer cancel()
 	if err = pin.probe(ctx); err != nil {
 		if errors.Is(err, ErrScopeAbsent) {
@@ -182,16 +185,21 @@ func signalDarwinPinnedProcessGroup(ctx context.Context, scope *processGroupScop
 	if !ok || pin.ref.PID() != pgid {
 		return fmt.Errorf("%w: process group %d is not pinned", ErrUnverifiableLaunch, pgid)
 	}
-	operation := ""
-	switch signal {
-	case syscall.SIGTERM:
-		operation = processGroupPinTerm
-	case syscall.SIGKILL:
-		operation = processGroupPinKill
-	default:
-		return fmt.Errorf("%w: unsupported Darwin process-group signal %d", ErrInvalidRef, signal)
+	operation, err := darwinProcessGroupPinOperation(signal)
+	if err != nil {
+		return err
 	}
 	return pin.request(ctx, operation)
+}
+
+func darwinProcessGroupPinOperation(signal syscall.Signal) (string, error) {
+	if signal == syscall.SIGTERM {
+		return processGroupPinTerm, nil
+	}
+	if signal == syscall.SIGKILL {
+		return processGroupPinKill, nil
+	}
+	return "", fmt.Errorf("%w: unsupported Darwin process-group signal %d", ErrInvalidRef, signal)
 }
 
 func releaseProcessGroupPlatformState(scope *processGroupScope) error {
@@ -321,7 +329,7 @@ func (p *darwinProcessGroupPin) request(ctx context.Context, operation string) e
 	return p.requestUnchecked(ctx, operation)
 }
 
-func (p *darwinProcessGroupPin) requestUnchecked(ctx context.Context, operation string) error {
+func (p *darwinProcessGroupPin) requestUnchecked(ctx context.Context, operation string) (resultErr error) {
 	if ctx == nil {
 		return ErrNilContext
 	}
@@ -331,29 +339,50 @@ func (p *darwinProcessGroupPin) requestUnchecked(ctx context.Context, operation 
 	dialer := net.Dialer{}
 	connection, err := dialer.DialContext(ctx, "tcp4", p.address)
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
+		}
 		return fmt.Errorf("%w: contact Darwin process-group pin: %w", ErrUnverifiableLaunch, err)
 	}
-	defer connection.Close()
-	if deadline, ok := ctx.Deadline(); ok {
-		if err = connection.SetDeadline(deadline); err != nil {
-			return err
-		}
-	}
+	closeConnection := bindDarwinProcessGroupPinConnection(ctx, connection)
+	defer func() {
+		resultErr = errors.Join(resultErr, closeConnection())
+	}()
 	request := processGroupPinRequest{
 		Version: processGroupPinVersion, Token: p.token, Operation: operation,
 		PID: p.ref.PID(), PGID: p.ref.PID(),
 	}
 	if err = json.NewEncoder(connection).Encode(request); err != nil {
-		return err
+		return normalizeDarwinProcessGroupPinIOError(ctx, err)
 	}
 	var response processGroupPinResponse
 	if err = decodeProcessGroupPinFrame(connection, &response); err != nil {
-		return err
+		return normalizeDarwinProcessGroupPinIOError(ctx, err)
 	}
 	if response.Version != processGroupPinVersion || !response.OK {
 		return fmt.Errorf("%w: Darwin process-group pin refused request", ErrUnverifiableLaunch)
 	}
 	return nil
+}
+
+func bindDarwinProcessGroupPinConnection(ctx context.Context, connection net.Conn) func() error {
+	cancelClose := make(chan error, 1)
+	stopCancelClose := context.AfterFunc(ctx, func() {
+		cancelClose <- connection.Close()
+	})
+	return func() error {
+		if stopCancelClose() {
+			return connection.Close()
+		}
+		return <-cancelClose
+	}
+}
+
+func normalizeDarwinProcessGroupPinIOError(ctx context.Context, err error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	return err
 }
 
 func (p *darwinProcessGroupPin) wait(ctx context.Context) error {
@@ -377,17 +406,9 @@ func (p *darwinProcessGroupPin) wait(ctx context.Context) error {
 }
 
 func startDarwinProcessGroupPin() (*darwinProcessGroupPin, error) {
-	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	address, listenerFile, err := openDarwinProcessGroupPinListener()
 	if err != nil {
-		return nil, fmt.Errorf("create Darwin process-group pin listener: %w", err)
-	}
-	listenerFile, err := listener.File()
-	if err != nil {
-		return nil, errors.Join(err, listener.Close())
-	}
-	address := listener.Addr().String()
-	if err = listener.Close(); err != nil {
-		return nil, errors.Join(err, listenerFile.Close())
+		return nil, err
 	}
 	readyReader, readyWriter, err := os.Pipe()
 	if err != nil {
@@ -395,49 +416,84 @@ func startDarwinProcessGroupPin() (*darwinProcessGroupPin, error) {
 	}
 	token, err := newProcessGroupPinToken()
 	if err != nil {
-		return nil, errors.Join(err, listenerFile.Close(), readyReader.Close(), readyWriter.Close())
+		return nil, errors.Join(err, closeDarwinProcessGroupPinFiles(listenerFile, readyReader, readyWriter))
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		return nil, errors.Join(err, listenerFile.Close(), readyReader.Close(), readyWriter.Close())
+		return nil, errors.Join(err, closeDarwinProcessGroupPinFiles(listenerFile, readyReader, readyWriter))
 	}
 	cmd := exec.Command(executable)
 	cmd.Env = appendProcessGroupPinEnvironment(os.Environ(), token)
 	cmd.ExtraFiles = []*os.File{listenerFile, readyWriter}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err = cmd.Start(); err != nil {
-		return nil, errors.Join(err, listenerFile.Close(), readyReader.Close(), readyWriter.Close())
+		return nil, errors.Join(err, closeDarwinProcessGroupPinFiles(listenerFile, readyReader, readyWriter))
 	}
-	closeErr := errors.Join(listenerFile.Close(), readyWriter.Close())
-	if closeErr != nil {
-		return nil, errors.Join(closeErr, abortDarwinProcessGroupPin(cmd), readyReader.Close())
+	if err = closeDarwinProcessGroupPinFiles(listenerFile, readyWriter); err != nil {
+		return nil, errors.Join(err, abortDarwinProcessGroupPin(cmd), readyReader.Close())
 	}
 	if err = waitDarwinProcessGroupPinReady(readyReader); err != nil {
 		return nil, errors.Join(err, abortDarwinProcessGroupPin(cmd))
 	}
-	present, startToken, err := observeStartedProcessIdentity(cmd.Process.Pid)
-	if err != nil || !present {
-		return nil, errors.Join(err, ErrUnverifiableLaunch, abortDarwinProcessGroupPin(cmd))
-	}
-	pgid, err := processGroupID(cmd.Process.Pid)
-	if err != nil || pgid != cmd.Process.Pid {
-		return nil, errors.Join(err, ErrUnverifiableLaunch, abortDarwinProcessGroupPin(cmd))
-	}
-	ref, err := NewProcessRef(cmd.Process.Pid, startToken)
+	pin, err := finishDarwinProcessGroupPinStart(cmd, address, token)
 	if err != nil {
-		return nil, errors.Join(err, abortDarwinProcessGroupPin(cmd))
-	}
-	pin := &darwinProcessGroupPin{ref: ref, address: address, token: token, cmd: cmd, owned: true}
-	ctx, cancel := context.WithTimeout(context.Background(), processGroupPinTimeout)
-	defer cancel()
-	if err = pin.probe(ctx); err != nil {
 		return nil, errors.Join(err, abortDarwinProcessGroupPin(cmd))
 	}
 	return pin, nil
 }
 
-func waitDarwinProcessGroupPinReady(reader *os.File) error {
-	defer reader.Close()
+func openDarwinProcessGroupPinListener() (string, *os.File, error) {
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		return "", nil, fmt.Errorf("create Darwin process-group pin listener: %w", err)
+	}
+	listenerFile, err := listener.File()
+	if err != nil {
+		return "", nil, errors.Join(err, listener.Close())
+	}
+	address := listener.Addr().String()
+	if err = listener.Close(); err != nil {
+		return "", nil, errors.Join(err, listenerFile.Close())
+	}
+	return address, listenerFile, nil
+}
+
+func closeDarwinProcessGroupPinFiles(files ...*os.File) error {
+	var resultErr error
+	for _, file := range files {
+		if file != nil {
+			resultErr = errors.Join(resultErr, file.Close())
+		}
+	}
+	return resultErr
+}
+
+func finishDarwinProcessGroupPinStart(cmd *exec.Cmd, address, token string) (*darwinProcessGroupPin, error) {
+	present, startToken, err := observeStartedProcessIdentity(cmd.Process.Pid)
+	if err != nil || !present {
+		return nil, errors.Join(err, ErrUnverifiableLaunch)
+	}
+	pgid, err := processGroupID(cmd.Process.Pid)
+	if err != nil || pgid != cmd.Process.Pid {
+		return nil, errors.Join(err, ErrUnverifiableLaunch)
+	}
+	ref, err := NewProcessRef(cmd.Process.Pid, startToken)
+	if err != nil {
+		return nil, err
+	}
+	pin := &darwinProcessGroupPin{ref: ref, address: address, token: token, cmd: cmd, owned: true}
+	ctx, cancel := context.WithTimeout(context.Background(), processGroupPinTimeout)
+	defer cancel()
+	if err = pin.probe(ctx); err != nil {
+		return nil, err
+	}
+	return pin, nil
+}
+
+func waitDarwinProcessGroupPinReady(reader *os.File) (resultErr error) {
+	defer func() {
+		resultErr = errors.Join(resultErr, reader.Close())
+	}()
 	result := make(chan error, 1)
 	go func() {
 		var ready [1]byte
@@ -461,7 +517,7 @@ func abortDarwinProcessGroupPin(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	killErr := cmd.Process.Kill()
+	killErr := unix.Kill(cmd.Process.Pid, unix.SIGKILL)
 	waitErr := cmd.Wait()
 	var exitErr *exec.ExitError
 	if errors.As(waitErr, &exitErr) {
@@ -501,36 +557,75 @@ func encodeDarwinProcessGroupPinReference(identifier string, pin *darwinProcessG
 }
 
 func decodeDarwinProcessGroupPinReference(identifier string) (string, *darwinProcessGroupPin, error) {
-	parts := strings.Split(identifier, "|")
-	if len(parts) != 6 || parts[1] != processGroupPinRefVersion || validateProcessGroupPlanIdentifier(parts[0]) != nil {
-		return "", nil, fmt.Errorf("%w: Darwin process-group pin reference is malformed", ErrInvalidRef)
-	}
-	pid, err := strconv.Atoi(parts[2])
-	if err != nil || pid <= 1 || strconv.Itoa(pid) != parts[2] {
-		return "", nil, fmt.Errorf("%w: Darwin process-group pin PID is malformed", ErrInvalidRef)
-	}
-	startToken, err := base64.RawURLEncoding.DecodeString(parts[3])
-	if err != nil || len(startToken) == 0 || strings.ContainsRune(string(startToken), '\x00') {
-		return "", nil, fmt.Errorf("%w: Darwin process-group pin identity is malformed", ErrInvalidRef)
-	}
-	addressBytes, err := base64.RawURLEncoding.DecodeString(parts[4])
+	parts, err := splitDarwinProcessGroupPinReference(identifier)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: Darwin process-group pin address is malformed", ErrInvalidRef)
+		return "", nil, err
 	}
-	address := string(addressBytes)
-	endpoint, err := netip.ParseAddrPort(address)
-	if err != nil || !endpoint.Addr().Is4() || !endpoint.Addr().IsLoopback() || endpoint.Port() == 0 || endpoint.String() != address {
-		return "", nil, fmt.Errorf("%w: Darwin process-group pin address is malformed", ErrInvalidRef)
+	pid, err := decodeDarwinProcessGroupPinPID(parts[2])
+	if err != nil {
+		return "", nil, err
 	}
-	tokenBytes, err := hex.DecodeString(parts[5])
-	if err != nil || len(tokenBytes) != 32 || hex.EncodeToString(tokenBytes) != parts[5] {
-		return "", nil, fmt.Errorf("%w: Darwin process-group pin token is malformed", ErrInvalidRef)
+	startToken, err := decodeDarwinProcessGroupPinIdentity(parts[3])
+	if err != nil {
+		return "", nil, err
 	}
-	ref, err := NewProcessRef(pid, string(startToken))
+	address, err := decodeDarwinProcessGroupPinAddress(parts[4])
+	if err != nil {
+		return "", nil, err
+	}
+	if err = validateDarwinProcessGroupPinToken(parts[5]); err != nil {
+		return "", nil, err
+	}
+	ref, err := NewProcessRef(pid, startToken)
 	if err != nil {
 		return "", nil, err
 	}
 	return parts[0], &darwinProcessGroupPin{ref: ref, address: address, token: parts[5]}, nil
+}
+
+func splitDarwinProcessGroupPinReference(identifier string) ([]string, error) {
+	parts := strings.Split(identifier, "|")
+	if len(parts) != 6 || parts[1] != processGroupPinRefVersion || validateProcessGroupPlanIdentifier(parts[0]) != nil {
+		return nil, fmt.Errorf("%w: Darwin process-group pin reference is malformed", ErrInvalidRef)
+	}
+	return parts, nil
+}
+
+func decodeDarwinProcessGroupPinPID(encoded string) (int, error) {
+	pid, err := strconv.Atoi(encoded)
+	if err != nil || pid <= 1 || strconv.Itoa(pid) != encoded {
+		return 0, fmt.Errorf("%w: Darwin process-group pin PID is malformed", ErrInvalidRef)
+	}
+	return pid, nil
+}
+
+func decodeDarwinProcessGroupPinIdentity(encoded string) (string, error) {
+	startToken, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || len(startToken) == 0 || strings.ContainsRune(string(startToken), '\x00') {
+		return "", fmt.Errorf("%w: Darwin process-group pin identity is malformed", ErrInvalidRef)
+	}
+	return string(startToken), nil
+}
+
+func decodeDarwinProcessGroupPinAddress(encoded string) (string, error) {
+	addressBytes, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", fmt.Errorf("%w: Darwin process-group pin address is malformed", ErrInvalidRef)
+	}
+	address := string(addressBytes)
+	endpoint, err := netip.ParseAddrPort(address)
+	if err != nil || !endpoint.Addr().Is4() || !endpoint.Addr().IsLoopback() || endpoint.Port() == 0 || endpoint.String() != address {
+		return "", fmt.Errorf("%w: Darwin process-group pin address is malformed", ErrInvalidRef)
+	}
+	return address, nil
+}
+
+func validateDarwinProcessGroupPinToken(token string) error {
+	tokenBytes, err := hex.DecodeString(token)
+	if err != nil || len(tokenBytes) != 32 || hex.EncodeToString(tokenBytes) != token {
+		return fmt.Errorf("%w: Darwin process-group pin token is malformed", ErrInvalidRef)
+	}
+	return nil
 }
 
 // RunProcessGroupPinMode handles the private Darwin group authority process.
@@ -545,11 +640,10 @@ func RunProcessGroupPinMode(_ []string) (int, bool) {
 	return 0, true
 }
 
-func runDarwinProcessGroupPin() error {
+func runDarwinProcessGroupPin() (resultErr error) {
 	token := os.Getenv(processGroupPinTokenEnv)
-	decodedToken, err := hex.DecodeString(token)
-	if err != nil || len(decodedToken) != 32 || hex.EncodeToString(decodedToken) != token {
-		return ErrInvalidRef
+	if err := validateDarwinProcessGroupPinToken(token); err != nil {
+		return err
 	}
 	pid := os.Getpid()
 	pgid, err := processGroupID(pid)
@@ -557,23 +651,41 @@ func runDarwinProcessGroupPin() error {
 		return errors.Join(err, ErrUnverifiableLaunch)
 	}
 	signal.Ignore(syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
+	listener, err := openInheritedDarwinProcessGroupPinListener()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, listener.Close())
+	}()
+	return runDarwinProcessGroupPinServer(listener, token, pid)
+}
+
+func openInheritedDarwinProcessGroupPinListener() (net.Listener, error) {
 	listenerFile := os.NewFile(processGroupPinListenerFD, "delegate-process-group-pin-listener")
 	readyFile := os.NewFile(processGroupPinReadyFD, "delegate-process-group-pin-ready")
 	if listenerFile == nil || readyFile == nil {
-		return ErrInvalidRef
+		return nil, errors.Join(ErrInvalidRef, closeDarwinProcessGroupPinFiles(listenerFile, readyFile))
 	}
 	listener, err := net.FileListener(listenerFile)
 	closeErr := listenerFile.Close()
 	if err != nil || closeErr != nil {
-		return errors.Join(err, closeErr, readyFile.Close())
+		var listenerCloseErr error
+		if listener != nil {
+			listenerCloseErr = listener.Close()
+		}
+		return nil, errors.Join(err, closeErr, readyFile.Close(), listenerCloseErr)
 	}
 	if _, err = readyFile.Write([]byte{1}); err != nil {
-		return errors.Join(err, readyFile.Close(), listener.Close())
+		return nil, errors.Join(err, readyFile.Close(), listener.Close())
 	}
 	if err = readyFile.Close(); err != nil {
-		return errors.Join(err, listener.Close())
+		return nil, errors.Join(err, listener.Close())
 	}
-	defer listener.Close()
+	return listener, nil
+}
+
+func runDarwinProcessGroupPinServer(listener net.Listener, token string, pid int) error {
 	for {
 		connection, acceptErr := listener.Accept()
 		if acceptErr != nil {
@@ -604,15 +716,27 @@ func serveDarwinProcessGroupPin(connection net.Conn, token string, pid int) (sto
 	if err := connection.SetDeadline(time.Now().Add(processGroupPinTimeout)); err != nil {
 		return false, err
 	}
-	var request processGroupPinRequest
-	if err := decodeProcessGroupPinFrame(connection, &request); err != nil {
+	operation, err := readDarwinProcessGroupPinOperation(connection, token, pid)
+	if err != nil {
 		return false, err
 	}
-	if request.Version != processGroupPinVersion || request.Token != token || request.PID != pid || request.PGID != pid {
-		return false, ErrInvalidRef
+	return executeDarwinProcessGroupPinOperation(operation, connection, closeConnection)
+}
+
+func readDarwinProcessGroupPinOperation(connection net.Conn, token string, pid int) (string, error) {
+	var request processGroupPinRequest
+	if err := decodeProcessGroupPinFrame(connection, &request); err != nil {
+		return "", err
 	}
+	if request.Version != processGroupPinVersion || request.Token != token || request.PID != pid || request.PGID != pid {
+		return "", ErrInvalidRef
+	}
+	return request.Operation, nil
+}
+
+func executeDarwinProcessGroupPinOperation(operation string, connection net.Conn, closeConnection func() error) (bool, error) {
 	response := processGroupPinResponse{Version: processGroupPinVersion, OK: true}
-	switch request.Operation {
+	switch operation {
 	case processGroupPinProbe:
 		return false, json.NewEncoder(connection).Encode(response)
 	case processGroupPinTerm:

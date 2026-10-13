@@ -2,6 +2,8 @@
 
 package lifetime
 
+import "context"
+
 func preparePlatformPlan(rootID, ownerKind, taskID string) (Plan, error) {
 	return processGroupPlan(rootID, ownerKind, taskID), nil
 }
@@ -11,14 +13,14 @@ func createPreparedPlatformScope(plan Plan) (*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	return openProcessGroupScope(ref)
+	return openProcessGroupScope(context.Background(), ref)
 }
 
 func openPreparedPlatformScope(Plan) (*Scope, error) {
 	return nil, ErrScopeAbsent
 }
 
-func openRegisteredPlatformScope(plan Plan, ref Ref) (*Scope, error) {
+func openRegisteredPlatformScope(ctx context.Context, plan Plan, ref Ref) (*Scope, error) {
 	if ref.kind != plan.kind || ref.assurance != plan.assurance {
 		return nil, ErrInvalidRef
 	}
@@ -33,7 +35,7 @@ func openRegisteredPlatformScope(plan Plan, ref Ref) (*Scope, error) {
 	if identifier != plan.identifier {
 		return nil, ErrInvalidRef
 	}
-	return openProcessGroupScope(ref)
+	return openProcessGroupScope(ctx, ref)
 }
 
 func validatePlatformPlan(Plan) error {

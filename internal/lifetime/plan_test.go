@@ -1,6 +1,10 @@
 package lifetime
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 func TestProcessGroupPlanIsDeterministicAndOwnerScoped(t *testing.T) {
 	first := processGroupPlan("root", "task", "task-id")
@@ -47,5 +51,22 @@ func TestOpenRegisteredProcessGroupRequiresExactPlan(t *testing.T) {
 	other := processGroupPlan("root", "inspection", "task-id")
 	if _, err = OpenRegistered(other, ref); err == nil {
 		t.Fatal("OpenRegistered accepted a reference from another plan")
+	}
+}
+
+func TestOpenRegisteredContextRejectsCanceledContext(t *testing.T) {
+	plan := processGroupPlan("root", "task", "canceled-task")
+	ref, err := NewRef(plan.Kind(), plan.Assurance(), plan.Identifier())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = OpenRegisteredContext(ctx, plan, ref); !errors.Is(err, context.Canceled) {
+		t.Fatalf("OpenRegisteredContext canceled error = %v, want context.Canceled", err)
+	}
+	var nilContext context.Context
+	if _, err = OpenRegisteredContext(nilContext, plan, ref); !errors.Is(err, ErrNilContext) {
+		t.Fatalf("OpenRegisteredContext nil error = %v, want ErrNilContext", err)
 	}
 }

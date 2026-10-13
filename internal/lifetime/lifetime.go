@@ -156,10 +156,22 @@ func (s *Scope) TrackOwnerProcess(ref ProcessRef) error {
 // Open reopens a previously created scope after validating both its typed
 // reference and its platform-specific identity.
 func Open(ref Ref) (*Scope, error) {
+	return OpenContext(context.Background(), ref)
+}
+
+// OpenContext reopens a previously created scope while retaining the caller's
+// cancellation and deadline through platform-specific identity checks.
+func OpenContext(ctx context.Context, ref Ref) (*Scope, error) {
+	if ctx == nil {
+		return nil, ErrNilContext
+	}
 	if err := validateRefShape(ref); err != nil {
 		return nil, err
 	}
-	return openPlatformScope(ref)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return openPlatformScope(ctx, ref)
 }
 
 // Reference returns the immutable scope reference.

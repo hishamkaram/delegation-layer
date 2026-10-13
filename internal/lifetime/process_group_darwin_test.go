@@ -3,9 +3,11 @@
 package lifetime
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -55,7 +57,7 @@ func TestDarwinProcessGroupRegistrationUsesPlanAndPrivateSession(t *testing.T) {
 			t.Errorf("reopened scope Release: %v", releaseErr)
 		}
 	})
-	cmd := exec.Command("true")
+	cmd := exec.Command("sleep", "60")
 	if err = reopened.Configure(cmd); err != nil {
 		t.Fatalf("Configure through pinned registration: %v", err)
 	}
@@ -66,9 +68,7 @@ func TestDarwinProcessGroupRegistrationUsesPlanAndPrivateSession(t *testing.T) {
 	if implementation.pin != nil {
 		t.Fatal("new Darwin scope retained a process-group pin")
 	}
-	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setsid || cmd.SysProcAttr.Setpgid || cmd.SysProcAttr.Pgid != 0 {
-		t.Fatalf("provider session settings = %#v, want Setsid without Setpgid", cmd.SysProcAttr)
-	}
+	assertDarwinCommandStartsPrivateSession(t, scope, cmd)
 }
 
 func TestDarwinProcessGroupRejectsNumericSignalAuthority(t *testing.T) {
@@ -115,6 +115,73 @@ func TestDarwinProcessGroupPinReferenceRejectsChangedPlan(t *testing.T) {
 	}
 }
 
+func TestDarwinProcessGroupPinRequestCancellationClosesConnectedSocket(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	assertDarwinProcessGroupPinRequestInterrupted(t, ctx, cancel, context.Canceled)
+}
+
+func TestDarwinProcessGroupPinRequestDeadlineClosesConnectedSocket(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	assertDarwinProcessGroupPinRequestInterrupted(t, ctx, func() {}, context.DeadlineExceeded)
+}
+
+func assertDarwinProcessGroupPinRequestInterrupted(
+	t *testing.T,
+	ctx context.Context,
+	interrupt func(),
+	want error,
+) {
+	t.Helper()
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := listener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			t.Errorf("close test listener: %v", closeErr)
+		}
+	})
+	ref, err := NewProcessRef(4242, "darwin:1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := &darwinProcessGroupPin{
+		ref: ref, address: listener.Addr().String(), token: strings.Repeat("a", 64),
+	}
+	requestDone := make(chan error, 1)
+	go func() { requestDone <- pin.requestUnchecked(ctx, processGroupPinProbe) }()
+
+	connection, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := connection.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			t.Errorf("close accepted test connection: %v", closeErr)
+		}
+	})
+	if err = connection.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = bufio.NewReader(connection).ReadString('\n'); err != nil {
+		t.Fatalf("read pin request: %v", err)
+	}
+	if err = ctx.Err(); err != nil {
+		t.Fatalf("request context ended before the connected-socket assertion: %v", err)
+	}
+	interrupt()
+	select {
+	case requestErr := <-requestDone:
+		if !errors.Is(requestErr, want) {
+			t.Fatalf("interrupted pin request error = %v, want %v", requestErr, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled pin request did not release the connected socket")
+	}
+}
+
 func TestDarwinProcessInfoRejectsMalformedUniqueIdentifierResponse(t *testing.T) {
 	for _, returned := range []int{darwinProcUniqIdentifierInfoSize - 1, darwinProcUniqIdentifierInfoSize + 1} {
 		t.Run(strconv.Itoa(returned), func(t *testing.T) {
@@ -129,6 +196,13 @@ func TestDarwinProcessInfoRejectsMalformedUniqueIdentifierResponse(t *testing.T)
 				t.Fatalf("malformed identity response error = %v, want ErrUnverifiableLaunch", err)
 			}
 		})
+	}
+}
+
+func TestDarwinProcInfoErrnoUsesLowWord(t *testing.T) {
+	const raw = uintptr(0x6d88400000000003)
+	if got := darwinProcInfoErrno(raw); got != syscall.ESRCH {
+		t.Fatalf("Darwin proc_info errno = %v, want ESRCH", got)
 	}
 }
 
@@ -435,182 +509,32 @@ func TestDarwinDiscoveryDoesNotClaimUnrelatedObserverChild(t *testing.T) {
 }
 
 func TestDarwinProcessScopeCleansNestedSessionAndPreservesUnrelatedProcess(t *testing.T) {
-	switch os.Getenv(darwinNestedHelperMode) {
-	case "root":
-		runDarwinNestedRootHelper(t)
+	if runDarwinNestedSessionHelperMode(t) {
 		return
-	case "child":
-		signal.Ignore(syscall.SIGTERM)
-		for {
-			time.Sleep(time.Hour)
-		}
 	}
-
-	pidFile := filepath.Join(t.TempDir(), "nested.pid")
-	scope, err := Open(testProcessGroupRef(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = scope.BindOwnerProcess(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { cleanupProcessGroupTestScope(t, scope) })
-
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDarwinProcessScopeCleansNestedSessionAndPreservesUnrelatedProcess$")
-	cmd.Env = append(os.Environ(), darwinNestedHelperMode+"=root", darwinNestedPIDFile+"="+pidFile)
-	if err = scope.Configure(cmd); err != nil {
-		t.Fatal(err)
-	}
-	if err = cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	waitDone := make(chan error, 1)
-	go func() {
-		waitDone <- cmd.Wait()
-	}()
-
-	rootRef, err := scope.ObserveStarted(cmd.Process.Pid)
-	if err != nil {
-		killDarwinTestCommand(t, cmd, "kill nested-session root after failed observation")
-		acceptDarwinTestCommandExit(t, "wait nested-session root after failed observation", <-waitDone)
-		t.Fatal(err)
-	}
-	childPID := waitForDarwinNestedPID(t, pidFile)
-	childPresent, childToken, err := observeStartedProcessIdentity(childPID)
-	if err != nil || !childPresent {
-		t.Fatalf("observe nested child PID %d: present=%t err=%v", childPID, childPresent, err)
-	}
-	childPGID, err := processGroupID(childPID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	childSessionID, err := syscall.Getsid(childPID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if childPGID != childPID || childSessionID != childPID || childPGID == rootRef.PGID() {
-		t.Fatalf("nested child scope = PID %d PGID %d SID %d, root PGID %d", childPID, childPGID, childSessionID, rootRef.PGID())
-	}
-	childRef, err := NewLaunchRef(childPID, childToken, childPGID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		killVerifiedTestProcess(t, rootRef)
-		killVerifiedTestProcess(t, childRef)
-	})
-	unrelated := exec.Command("sleep", "60")
-	if err = unrelated.Start(); err != nil {
-		t.Fatal(err)
-	}
-	unrelatedRef, err := ObserveStartedProcess(unrelated.Process.Pid)
-	if err != nil {
-		killAndWaitDarwinTestCommand(t, unrelated, "unrelated process after failed observation")
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		alive, presentErr := ProcessPresent(unrelatedRef)
-		if presentErr != nil {
-			t.Errorf("observe unrelated cleanup process: %v", presentErr)
-		} else if !alive {
-			t.Error("unrelated same-user process was killed before test cleanup")
-		}
-		if alive {
-			if killErr := unrelated.Process.Kill(); killErr != nil {
-				t.Errorf("kill unrelated cleanup process: %v", killErr)
-			}
-		}
-		acceptDarwinTestCommandExit(t, "wait unrelated cleanup process", unrelated.Wait())
-	})
+	fixture := startDarwinNestedSessionFixture(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err = scope.Terminate(ctx, []LaunchRef{rootRef}); err != nil {
+	if err := fixture.scope.Terminate(ctx, []LaunchRef{fixture.root.ref}); err != nil {
 		t.Fatalf("nested-session Terminate: %v", err)
 	}
-	rootAlive, _, err := observeProcessIdentity(rootRef.PID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rootAlive {
-		t.Fatal("nested-session root survived termination")
-	}
-	childAlive, _, err := observeProcessIdentity(childPID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if childAlive {
-		t.Fatalf("nested-session child PID %d survived termination", childPID)
-	}
-	unrelatedAlive, err := ProcessPresent(unrelatedRef)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !unrelatedAlive {
-		t.Fatal("unrelated same-user process did not survive process-scope termination")
-	}
+	acceptDarwinTestCommandExit(t, "wait nested-session root", fixture.root.wait(t))
+	assertDarwinProcessAbsent(t, fixture.root.ref.PID(), "nested-session root")
+	assertDarwinProcessAbsent(t, fixture.child.PID(), "nested-session child")
+	assertDarwinProcessPresent(t, fixture.unrelated, "unrelated same-user process did not survive process-scope termination")
 }
 
 func TestDarwinProcessScopeCleansReparentedSession(t *testing.T) {
-	switch os.Getenv(darwinNestedHelperMode) {
-	case "orphan-root":
-		runDarwinOrphanRootHelper(t)
+	if runDarwinOrphanSessionHelperMode(t) {
 		return
-	case "orphan-child":
-		signal.Ignore(syscall.SIGTERM)
-		for {
-			time.Sleep(time.Hour)
-		}
 	}
-
-	pidFile := filepath.Join(t.TempDir(), "orphan.pid")
-	scope, err := Open(testProcessGroupRef(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = scope.BindOwnerProcess(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { cleanupProcessGroupTestScope(t, scope) })
-
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDarwinProcessScopeCleansReparentedSession$")
-	cmd.Env = append(os.Environ(), darwinNestedHelperMode+"=orphan-root", darwinNestedPIDFile+"="+pidFile)
-	if err = scope.Configure(cmd); err != nil {
-		t.Fatal(err)
-	}
-	if err = cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	rootRef, err := scope.ObserveStarted(cmd.Process.Pid)
-	if err != nil {
-		killAndWaitDarwinTestCommand(t, cmd, "orphan root after failed observation")
-		t.Fatal(err)
-	}
-	childPID := waitForDarwinNestedPID(t, pidFile)
-	childPresent, childToken, err := observeStartedProcessIdentity(childPID)
-	if err != nil || !childPresent {
-		t.Fatalf("observe orphan child PID %d: present=%t err=%v", childPID, childPresent, err)
-	}
-	childPGID, err := processGroupID(childPID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	childRef, err := NewLaunchRef(childPID, childToken, childPGID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { killVerifiedTestProcess(t, childRef) })
-	if waitErr := cmd.Wait(); waitErr != nil {
+	fixture := startDarwinOrphanSessionFixture(t)
+	if waitErr := fixture.root.wait(t); waitErr != nil {
 		t.Fatalf("orphan root helper: %v", waitErr)
 	}
-	rootPresent, _, err := observeProcessIdentity(rootRef.PID())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rootPresent {
-		t.Fatalf("root PID %d remained present after Wait", rootRef.PID())
-	}
-	empty, err := scope.Empty([]LaunchRef{rootRef})
+	assertDarwinProcessAbsent(t, fixture.root.ref.PID(), "root after Wait")
+	empty, err := fixture.scope.Empty([]LaunchRef{fixture.root.ref})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,16 +544,10 @@ func TestDarwinProcessScopeCleansReparentedSession(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err = scope.Terminate(ctx, []LaunchRef{rootRef}); err != nil {
+	if err = fixture.scope.Terminate(ctx, []LaunchRef{fixture.root.ref}); err != nil {
 		t.Fatalf("reparented-session Terminate: %v", err)
 	}
-	childAlive, _, err := observeProcessIdentity(childPID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if childAlive {
-		t.Fatalf("reparented child PID %d survived termination", childPID)
-	}
+	assertDarwinProcessAbsent(t, fixture.child.PID(), "reparented child")
 }
 
 func TestDarwinProcessEnvironmentContainsScopeMarkerOnlyInEnvironment(t *testing.T) {
@@ -840,6 +758,284 @@ func TestDarwinProcessMarkerReportsIdentityInspectionFailure(t *testing.T) {
 	}
 }
 
+// darwinTestCommand owns the fixture command's single Wait; its scope owns termination.
+type darwinTestCommand struct {
+	cmd      *exec.Cmd
+	scope    *Scope
+	ref      LaunchRef
+	retained []LaunchRef
+	waited   bool
+}
+
+type darwinNestedSessionFixture struct {
+	scope     *Scope
+	root      *darwinTestCommand
+	child     LaunchRef
+	unrelated ProcessRef
+}
+
+type darwinOrphanSessionFixture struct {
+	scope *Scope
+	root  *darwinTestCommand
+	child LaunchRef
+}
+
+func assertDarwinCommandStartsPrivateSession(t *testing.T, scope *Scope, cmd *exec.Cmd) {
+	t.Helper()
+	command := startConfiguredDarwinTestCommand(t, scope, cmd)
+	sessionID, err := syscall.Getsid(command.ref.PID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.ref.PGID() != command.ref.PID() || sessionID != command.ref.PID() {
+		t.Fatalf(
+			"provider session = PID %d PGID %d SID %d, want a private session",
+			command.ref.PID(),
+			command.ref.PGID(),
+			sessionID,
+		)
+	}
+	terminateDarwinTestScope(t, scope, []LaunchRef{command.ref}, "private-session command")
+	acceptDarwinTestCommandExit(t, "wait private-session command", command.wait(t))
+}
+
+func runDarwinNestedSessionHelperMode(t *testing.T) bool {
+	t.Helper()
+	switch os.Getenv(darwinNestedHelperMode) {
+	case "root":
+		runDarwinNestedRootHelper(t)
+	case "child":
+		runDarwinTermResistantHelper()
+	default:
+		return false
+	}
+	return true
+}
+
+func runDarwinOrphanSessionHelperMode(t *testing.T) bool {
+	t.Helper()
+	switch os.Getenv(darwinNestedHelperMode) {
+	case "orphan-root":
+		runDarwinOrphanRootHelper(t)
+	case "orphan-child":
+		runDarwinTermResistantHelper()
+	default:
+		return false
+	}
+	return true
+}
+
+func runDarwinTermResistantHelper() {
+	signal.Ignore(syscall.SIGTERM)
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+func startDarwinNestedSessionFixture(t *testing.T) darwinNestedSessionFixture {
+	t.Helper()
+	pidFile := filepath.Join(t.TempDir(), "nested.pid")
+	scope := openDarwinTestScope(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDarwinProcessScopeCleansNestedSessionAndPreservesUnrelatedProcess$")
+	cmd.Env = append(os.Environ(), darwinNestedHelperMode+"=root", darwinNestedPIDFile+"="+pidFile)
+	root := startDarwinScopedTestCommand(t, scope, cmd)
+	child := observeDarwinNestedSession(t, pidFile, root.ref)
+	root.retained = append(root.retained, child)
+	registerDarwinScopeProcessCleanup(t, scope, []LaunchRef{root.ref, child}, "nested-session scope")
+
+	return darwinNestedSessionFixture{
+		scope:     scope,
+		root:      root,
+		child:     child,
+		unrelated: startDarwinUnrelatedProcess(t),
+	}
+}
+
+func startDarwinOrphanSessionFixture(t *testing.T) darwinOrphanSessionFixture {
+	t.Helper()
+	pidFile := filepath.Join(t.TempDir(), "orphan.pid")
+	scope := openDarwinTestScope(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDarwinProcessScopeCleansReparentedSession$")
+	cmd.Env = append(os.Environ(), darwinNestedHelperMode+"=orphan-root", darwinNestedPIDFile+"="+pidFile)
+	root := startDarwinScopedTestCommand(t, scope, cmd)
+	child := observeDarwinPublishedProcess(t, pidFile)
+	root.retained = append(root.retained, child)
+	registerDarwinScopeProcessCleanup(t, scope, []LaunchRef{root.ref, child}, "reparented-session scope")
+
+	return darwinOrphanSessionFixture{scope: scope, root: root, child: child}
+}
+
+func openDarwinTestScope(t *testing.T) *Scope {
+	t.Helper()
+	scope, err := Open(testProcessGroupRef(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = scope.BindOwnerProcess(); err != nil {
+		cleanupProcessGroupTestScope(t, scope)
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cleanupProcessGroupTestScope(t, scope) })
+	return scope
+}
+
+func startDarwinScopedTestCommand(t *testing.T, scope *Scope, cmd *exec.Cmd) *darwinTestCommand {
+	t.Helper()
+	if err := scope.Configure(cmd); err != nil {
+		t.Fatal(err)
+	}
+	return startConfiguredDarwinTestCommand(t, scope, cmd)
+}
+
+func startConfiguredDarwinTestCommand(t *testing.T, scope *Scope, cmd *exec.Cmd) *darwinTestCommand {
+	t.Helper()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	command := &darwinTestCommand{cmd: cmd, scope: scope}
+	t.Cleanup(func() { command.cleanup(t) })
+	ref, err := scope.ObserveStarted(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.ref = ref
+	return command
+}
+
+func (c *darwinTestCommand) wait(t *testing.T) error {
+	t.Helper()
+	if c.waited {
+		t.Fatal("Darwin test command Wait called more than once")
+	}
+	err := c.cmd.Wait()
+	c.waited = true
+	return err
+}
+
+func (c *darwinTestCommand) cleanup(t *testing.T) {
+	t.Helper()
+	if c.waited {
+		return
+	}
+	refs := append([]LaunchRef(nil), c.retained...)
+	if c.ref.PID() > 0 {
+		refs = append([]LaunchRef{c.ref}, refs...)
+	}
+	terminateDarwinTestScope(t, c.scope, refs, "test command cleanup")
+	acceptDarwinTestCommandExit(t, "wait test command cleanup", c.wait(t))
+}
+
+func startDarwinUnrelatedProcess(t *testing.T) ProcessRef {
+	t.Helper()
+	scope := openDarwinTestScope(t)
+	command := startDarwinScopedTestCommand(t, scope, exec.Command("sleep", "60"))
+	ref, err := NewProcessRef(command.ref.PID(), command.ref.StartToken())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		present, presentErr := ProcessPresent(ref)
+		if presentErr != nil {
+			t.Errorf("observe unrelated cleanup process: %v", presentErr)
+		} else if !present {
+			t.Error("unrelated same-user process was killed before test cleanup")
+		}
+	})
+	return ref
+}
+
+func observeDarwinNestedSession(t *testing.T, pidFile string, root LaunchRef) LaunchRef {
+	t.Helper()
+	child := observeDarwinPublishedProcess(t, pidFile)
+	sessionID, err := syscall.Getsid(child.PID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.PGID() != child.PID() || sessionID != child.PID() || child.PGID() == root.PGID() {
+		t.Fatalf(
+			"nested child scope = PID %d PGID %d SID %d, root PGID %d",
+			child.PID(),
+			child.PGID(),
+			sessionID,
+			root.PGID(),
+		)
+	}
+	return child
+}
+
+func observeDarwinPublishedProcess(t *testing.T, pidFile string) LaunchRef {
+	t.Helper()
+	pid := waitForDarwinNestedPID(t, pidFile)
+	return observeDarwinStartedCommand(t, pid)
+}
+
+func observeDarwinStartedCommand(t *testing.T, pid int) LaunchRef {
+	t.Helper()
+	present, token, err := observeStartedProcessIdentity(pid)
+	if err != nil || !present {
+		t.Fatalf("observe Darwin test process PID %d: present=%t err=%v", pid, present, err)
+	}
+	pgid, err := processGroupID(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := NewLaunchRef(pid, token, pgid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+func assertDarwinProcessAbsent(t *testing.T, pid int, label string) {
+	t.Helper()
+	present, _, err := observeProcessIdentity(pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if present {
+		t.Fatalf("%s PID %d survived termination", label, pid)
+	}
+}
+
+func assertDarwinProcessPresent(t *testing.T, ref ProcessRef, message string) {
+	t.Helper()
+	present, err := ProcessPresent(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present {
+		t.Fatal(message)
+	}
+}
+
+func registerDarwinScopeProcessCleanup(t *testing.T, scope *Scope, refs []LaunchRef, label string) {
+	t.Helper()
+	t.Cleanup(func() { terminateDarwinTestScope(t, scope, refs, label) })
+}
+
+func terminateDarwinTestScope(t *testing.T, scope *Scope, refs []LaunchRef, label string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := scope.Terminate(ctx, refs); err != nil {
+		t.Errorf("terminate %s: %v", label, err)
+		for _, ref := range refs {
+			killVerifiedTestProcess(t, ref)
+		}
+	}
+}
+
+func startDarwinIndependentTestCommand(t *testing.T, cmd *exec.Cmd) LaunchRef {
+	t.Helper()
+	if err := ConfigureIndependentSession(cmd); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return observeDarwinStartedCommand(t, cmd.Process.Pid)
+}
+
 func runDarwinNestedRootHelper(t *testing.T) {
 	pidFile := os.Getenv(darwinNestedPIDFile)
 	if pidFile == "" {
@@ -847,12 +1043,10 @@ func runDarwinNestedRootHelper(t *testing.T) {
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestDarwinProcessScopeCleansNestedSessionAndPreservesUnrelatedProcess$")
 	child.Env = append(os.Environ(), darwinNestedHelperMode+"=child")
-	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
+	childRef := startDarwinIndependentTestCommand(t, child)
 	if err := publishTestPID(pidFile, child.Process.Pid); err != nil {
-		killAndWaitDarwinTestCommand(t, child, "nested child after failed PID publication")
+		killVerifiedTestProcess(t, childRef)
+		acceptDarwinTestCommandExit(t, "wait nested child after failed PID publication", child.Wait())
 		t.Fatal(err)
 	}
 	// The parent scope escalates this TERM-resistant child to KILL. Its wait
@@ -871,26 +1065,11 @@ func runDarwinOrphanRootHelper(t *testing.T) {
 	}
 	child := exec.Command(os.Args[0], "-test.run=^TestDarwinProcessScopeCleansReparentedSession$")
 	child.Env = append(os.Environ(), darwinNestedHelperMode+"=orphan-child")
-	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
+	childRef := startDarwinIndependentTestCommand(t, child)
 	if err := publishTestPID(pidFile, child.Process.Pid); err != nil {
-		killAndWaitDarwinTestCommand(t, child, "orphan child after failed PID publication")
+		killVerifiedTestProcess(t, childRef)
+		acceptDarwinTestCommandExit(t, "wait orphan child after failed PID publication", child.Wait())
 		t.Fatal(err)
-	}
-}
-
-func killAndWaitDarwinTestCommand(t *testing.T, cmd *exec.Cmd, label string) {
-	t.Helper()
-	killDarwinTestCommand(t, cmd, "kill "+label)
-	acceptDarwinTestCommandExit(t, "wait "+label, cmd.Wait())
-}
-
-func killDarwinTestCommand(t *testing.T, cmd *exec.Cmd, label string) {
-	t.Helper()
-	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		t.Errorf("%s: %v", label, err)
 	}
 }
 

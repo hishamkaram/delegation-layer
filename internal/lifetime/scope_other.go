@@ -2,6 +2,8 @@
 
 package lifetime
 
-func openPlatformScope(Ref) (*Scope, error) {
+import "context"
+
+func openPlatformScope(context.Context, Ref) (*Scope, error) {
 	return nil, ErrUnsupported
 }
