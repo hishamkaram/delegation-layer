@@ -32,6 +32,53 @@ func TestPrivateMaintenanceCoalescesConcurrentTerminalTriggers(t *testing.T) {
 	}, 1)
 }
 
+func TestScheduledPrivateMaintenanceCoalescesAcrossClients(t *testing.T) {
+	scenario := newPrivateTerminalTriggerScenario(t, "cross-client-maintenance", true)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	second, err := BindPrivate(ctx, scenario.fixture.clientPath, scenario.fixture.daemonPath,
+		scenario.fixture.stateRoot, Options{ObservationTimeout: 10 * time.Second})
+	cancel()
+	supervisorLeaseTestSettleClient(t, second, err)
+	if err != nil {
+		t.Fatalf("bind second maintenance client: %v", err)
+	}
+	second.options = scenario.client.options
+
+	if !scenario.client.SchedulePrivateQueueMaintenance(t.Context()) {
+		t.Fatal("first private maintenance was not scheduled")
+	}
+	waitForPrivateFixtureMarker(t, scenario.startedPath)
+	if !second.SchedulePrivateQueueMaintenance(t.Context()) {
+		t.Fatal("second private maintenance was not coalesced")
+	}
+
+	secondClosed := make(chan error, 1)
+	go func() { secondClosed <- second.Close() }()
+	select {
+	case closeErr := <-secondClosed:
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("coalesced maintenance client waited behind the elected root owner")
+	}
+	if got := scenario.statusCommands.Load(); got != 1 {
+		t.Fatalf("cross-client maintenance issued %d queue snapshots, want one", got)
+	}
+
+	scenario.releaseStatus(t)
+	if closeErr := scenario.client.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if got := scenario.statusCommands.Load(); got != 1 {
+		t.Fatalf("elected cross-client maintenance issued %d queue snapshots, want one", got)
+	}
+	if got := scenario.removeCommands.Load(); got != 1 {
+		t.Fatalf("elected cross-client maintenance issued %d removals, want one", got)
+	}
+	assertPrivateTerminalTriggerRemoved(t, scenario)
+}
+
 func TestScheduledPrivateMaintenanceRetainsTimedOutCommandUntilClose(t *testing.T) {
 	scenario := newPrivateTerminalTriggerScenario(t, "scheduled-maintenance", true)
 	scenario.client.options.ObservationTimeout = 50 * time.Millisecond

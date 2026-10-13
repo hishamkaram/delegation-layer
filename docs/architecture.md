@@ -131,8 +131,11 @@ lease without launching a Pueue client process. A missing or refused endpoint,
 a changed binding, or a stale receipt enters one elected exclusive path, which
 uses Pueue's group protocol before it repairs policy or restarts anything.
 Changed bindings use normal version discovery.
-Queue maintenance uses a separate bounded lock scope, skips a busy lock, and
-reports execution failures without changing task outcomes. A real logical
+Queue maintenance uses a separate bounded lock scope. Opportunistic probes
+skip a busy lock. Terminal-triggered cleanup elects one root-wide owner that
+may wait within its bounded maintenance deadline; other clients and processes
+coalesce without starting duplicate queue scans. Maintenance failures do not
+change task outcomes. A real logical
 config or endpoint migration is explicit and runs under the state-root lock:
 it proves the queue is safe, shuts down the old endpoint through its client,
 starts the current bundled daemon, and then replaces the launch record. Before

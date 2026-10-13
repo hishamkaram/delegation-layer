@@ -79,6 +79,8 @@ Load the [maintainability contract](../../agents/_data/maintainability-contract.
   status scan that belongs to dispatch or observation?
 - Does healthy warm admission launch a supervisor client process, or can it use
   the exact-generation receipt and direct endpoint probe?
+- Does terminal-triggered maintenance elect one root-wide owner across clients
+  and processes before any caller waits or scans the queue?
 - Can any worker or deferred close path destroy a native scope before durable
   empty-scope termination, or bypass the application finalizer?
 - Does each affected production store reach the real consumer named in its row?

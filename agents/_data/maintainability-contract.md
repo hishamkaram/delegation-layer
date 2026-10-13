@@ -162,9 +162,12 @@ whole scenario, and reject timed-out tasks even if a stale queue row still
 says Running.
 Healthy no-change paths must not acquire exclusive transition ownership merely
 to discover there is nothing to change. Reuse the same validation and planning
-functions for a shared probe and the fresh exclusive mutation check. Optional
-maintenance skips a busy lock; required transitions still wait within their
-control deadline. Preserve failed load receipts and distinguish host contention
+functions for a shared probe and the fresh exclusive mutation check.
+Opportunistic maintenance skips a busy lock. Terminal-triggered maintenance
+elects at most one root-wide owner across clients and processes before waiting
+for its bounded mutation scope; followers coalesce without issuing another
+queue scan. Required transitions still wait within their control deadline.
+Preserve failed load receipts and distinguish host contention
 from demonstrated application defects rather than assuming either cause.
 For a published private generation, warm admission validates the binding,
 executable bytes, resolved config, migration completion, and exact-generation

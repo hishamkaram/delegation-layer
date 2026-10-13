@@ -3944,11 +3944,31 @@ func (c *Client) runPrivateQueueMaintenance(ctx context.Context, finish func(), 
 	// non-owning view for its nested controls so Close can reject new callers
 	// while allowing this exact admitted operation to finish.
 	worker := c.backgroundClient()
-	err := worker.withPrivateSupervisorLock(maintenanceContext, func(lockedContext context.Context) error {
-		return worker.cleanSuccessfulTasks(lockedContext)
-	}, func(lockContext context.Context, root string, callback func(context.Context) error) error {
-		return withPublishedPrivateLockContext(lockContext, root, "bootstrap.lock", lockMode, callback)
-	})
+	maintain := func() error {
+		return worker.withPrivateSupervisorLock(maintenanceContext, func(lockedContext context.Context) error {
+			return worker.cleanSuccessfulTasks(lockedContext)
+		}, func(lockContext context.Context, root string, callback func(context.Context) error) error {
+			return withPublishedPrivateLockContext(lockContext, root, "bootstrap.lock", lockMode, callback)
+		})
+	}
+	var err error
+	if waitForLease {
+		stateRoot, private := privateStateRoot(worker.binding.ConfigPath)
+		if private {
+			// workOwner coalesces callers for one Client. Independent dispatch
+			// processes still need one state-root owner before any of them waits
+			// for the exclusive cleanup snapshot.
+			var acquired bool
+			acquired, err = TryWithPrivateTransition(maintenanceContext, stateRoot, maintain)
+			if err == nil && !acquired {
+				return
+			}
+		} else {
+			err = maintain()
+		}
+	} else {
+		err = maintain()
+	}
 	if err != nil {
 		finishOnReturn = !retainPrivateQueueWorkUntilPending(err, finish)
 		log.Printf("delegate: terminal supervisor cleanup deferred: %v", err)
