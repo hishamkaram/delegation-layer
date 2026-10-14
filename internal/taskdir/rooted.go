@@ -118,6 +118,16 @@ func (s *Store) readRecord(path string, dst any) error {
 	return task.DecodeStrict(b, dst)
 }
 
+func (s *Store) readRecordContext(ctx context.Context, path string, dst any) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errors.Join(s.readRecord(path, dst), ctx.Err())
+}
+
 func (s *Store) readBytes(path string, limit int64) ([]byte, error) {
 	f, err := s.openFile(path, unix.O_RDONLY)
 	if err != nil {
@@ -125,6 +135,17 @@ func (s *Store) readBytes(path string, limit int64) ([]byte, error) {
 	}
 	b, readErr := task.ReadBounded(f, limit)
 	return b, errors.Join(readErr, f.Close())
+}
+
+func (s *Store) readBytesContext(ctx context.Context, path string, limit int64) ([]byte, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	b, err := s.readBytes(path, limit)
+	return b, errors.Join(err, ctx.Err())
 }
 
 func (s *Store) barrierDir(path string) error {

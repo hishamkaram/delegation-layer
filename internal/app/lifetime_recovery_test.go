@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,57 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
+
+type lifetimeTerminationRecorderProbe struct {
+	ctx   context.Context
+	calls int
+}
+
+type lifetimeTestContextKey struct{}
+
+func (p *lifetimeTerminationRecorderProbe) RecordLifetimeTerminationContext(ctx context.Context, cause string) (*task.LifetimeTerminationRecord, error) {
+	p.ctx = ctx
+	p.calls++
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &task.LifetimeTerminationRecord{Cause: cause, ScopeEmpty: true}, nil
+}
+
+func TestRecordTaskLifetimeTerminationContextPreservesCallerAndNilGuard(t *testing.T) {
+	probe := &lifetimeTerminationRecorderProbe{}
+	var nilContext context.Context
+	if _, err := recordTaskLifetimeTerminationContext(nilContext, probe, task.LifetimeTerminationRecovery); !errors.Is(err, context.Canceled) {
+		t.Fatalf("nil context error = %v, want context canceled", err)
+	}
+	if probe.calls != 0 {
+		t.Fatalf("nil context invoked recorder %d times, want 0", probe.calls)
+	}
+
+	marker := &struct{}{}
+	ctx := context.WithValue(t.Context(), lifetimeTestContextKey{}, marker)
+	if _, err := recordTaskLifetimeTerminationContext(ctx, probe, task.LifetimeTerminationRecovery); err != nil {
+		t.Fatalf("record with caller context: %v", err)
+	}
+	if probe.ctx != ctx {
+		t.Fatal("record did not receive the exact caller context")
+	}
+	if probe.ctx.Value(lifetimeTestContextKey{}) != marker {
+		t.Fatal("record lost caller context value")
+	}
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := recordTaskLifetimeTerminationContext(canceled, probe, task.LifetimeTerminationRecovery); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context error = %v, want context canceled", err)
+	}
+	if probe.ctx != canceled {
+		t.Fatal("canceled caller context was replaced")
+	}
+}
 
 func TestRecoverTaskLifetimeRefusesCooperativeScopeWithoutLaunchIdentity(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
@@ -23,6 +76,20 @@ func TestRecoverTaskLifetimeRefusesCooperativeScopeWithoutLaunchIdentity(t *test
 	}
 	if _, err := td.ReadLifetimeTermination(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cooperative scope received false termination evidence: %v", err)
+	}
+}
+
+func TestRecoverTaskLifetimeDoesNotIgnorePresentRecordsWithMissingPreparedInput(t *testing.T) {
+	store, td, _ := newAppTestTask(t, false)
+	defer closeAppTestTask(t, store, td)
+	recordRecoverableLifetime(t, td, currentBootID(t))
+	if err := os.Remove(filepath.Join(td.Dir, "brief.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := recoverTaskLifetime(t.Context(), td)
+	if !errors.Is(err, task.ErrIdentityMismatch) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recovery error = %v, want identity mismatch and os.ErrNotExist", err)
 	}
 }
 

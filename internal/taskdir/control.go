@@ -219,7 +219,10 @@ func (d *ControlDir) verifyCanonicalRecord(name string, data []byte) error {
 	// The original writer may have linked this winner before a failed
 	// directory barrier. Reestablish that barrier before accepting it;
 	// this still never grants a fresh guard to the caller.
-	return d.store.barrierDirectoryEntry(d.dir, filepath.Dir(d.dir), d.store.faultInjector)
+	if err := d.store.barrierDirectoryEntry(d.dir, filepath.Dir(d.dir), d.store.faultInjector); err != nil {
+		return errors.Join(task.ErrEvidenceFault, err)
+	}
+	return nil
 }
 
 // Read strictly decodes a bounded record through the pinned root descriptor.

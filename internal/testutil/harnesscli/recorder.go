@@ -126,6 +126,10 @@ func (r *eventRecorder) begin(argv []string) error {
 }
 
 func (r *eventRecorder) executionHooks(cfg HookConfig) execution.Hooks {
+	return r.executionHooksWithWait(cfg, waitForHook)
+}
+
+func (r *eventRecorder) executionHooksWithWait(cfg HookConfig, waitHook func(HookConfig) error) execution.Hooks {
 	hooks := execution.Hooks{Event: r.executionEvent}
 	switch cfg.Mode {
 	case HookStartFailed:
@@ -136,7 +140,7 @@ func (r *eventRecorder) executionHooks(cfg HookConfig) execution.Hooks {
 		hooks.Capture = captureFailed
 	case HookStartDelayed:
 		hooks.Start = func(cmd *exec.Cmd) error {
-			if err := waitForHook(cfg); err != nil {
+			if err := waitHook(cfg); err != nil {
 				return err
 			}
 			return cmd.Start()
@@ -145,7 +149,7 @@ func (r *eventRecorder) executionHooks(cfg HookConfig) execution.Hooks {
 		hooks.Event = func(name string) {
 			r.executionEvent(name)
 			if name == "published" {
-				if err := waitForHook(cfg); err != nil {
+				if err := waitHook(cfg); err != nil {
 					r.recordError(err)
 				}
 			}

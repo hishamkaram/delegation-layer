@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -17,7 +16,7 @@ import (
 
 const (
 	defaultLifetimeGuardianCleanupTimeout = 5 * time.Second
-	defaultLifetimeGuardianStopPoll       = 100 * time.Millisecond
+	defaultLifetimeGuardianStopPoll       = time.Second
 	defaultLifetimeWorkerWaitRetry        = 100 * time.Millisecond
 	defaultLifetimeFinalizationBackoff    = 100 * time.Millisecond
 	maxLifetimeFinalizationBackoff        = 5 * time.Second
@@ -50,15 +49,15 @@ type lifetimeGuardianOwner interface {
 // lifetimeGuardianRecords contains only the durable lifetime record operations
 // needed by the state machine. The application owns their ordering policy.
 type lifetimeGuardianRecords interface {
-	ReadLifetimeTermination() (*task.LifetimeTerminationRecord, error)
-	ReadLifetimeIntent() (*task.LifetimeIntentRecord, error)
-	ReadLifetimeRegistration() (*task.LifetimeRegistrationRecord, error)
-	RecordLifetimeIntent(taskdir.LifetimeIntentFacts) (*task.LifetimeIntentRecord, error)
-	RecordLifetimeRegistration(taskdir.LifetimeRegistrationFacts) (*task.LifetimeRegistrationRecord, error)
-	RecordLifetimeWorker(taskdir.LifetimeWorkerFacts) (*task.LifetimeWorkerRecord, error)
-	RecordLifetimeWorkerWait(taskdir.LifetimeWorkerWaitFacts) (*task.LifetimeWorkerWaitRecord, error)
-	RecordLifetimeLaunch(taskdir.LifetimeLaunchFacts) (*task.LifetimeLaunchRecord, error)
-	RecordLifetimeTermination(string) (*task.LifetimeTerminationRecord, error)
+	ReadLifetimeTerminationContext(context.Context) (*task.LifetimeTerminationRecord, error)
+	ReadLifetimeIntentContext(context.Context) (*task.LifetimeIntentRecord, error)
+	ReadLifetimeRegistrationContext(context.Context) (*task.LifetimeRegistrationRecord, error)
+	RecordLifetimeIntentContext(context.Context, taskdir.LifetimeIntentFacts) (*task.LifetimeIntentRecord, error)
+	RecordLifetimeRegistrationContext(context.Context, taskdir.LifetimeRegistrationFacts) (*task.LifetimeRegistrationRecord, error)
+	RecordLifetimeWorkerContext(context.Context, taskdir.LifetimeWorkerFacts) (*task.LifetimeWorkerRecord, error)
+	RecordLifetimeWorkerWaitContext(context.Context, taskdir.LifetimeWorkerWaitFacts) (*task.LifetimeWorkerWaitRecord, error)
+	RecordLifetimeLaunchContext(context.Context, taskdir.LifetimeLaunchFacts) (*task.LifetimeLaunchRecord, error)
+	RecordLifetimeTerminationContext(context.Context, string) (*task.LifetimeTerminationRecord, error)
 }
 
 // lifetimeGuardianScope is deliberately narrower than lifetime.Scope's
@@ -302,7 +301,7 @@ func (g *lifetimeGuardian) runOwned(ctx context.Context) (resultErr error) {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, g.finalizeOwnedRun(ctx)) }()
-	if err = g.refuseTerminalReplay(); err != nil {
+	if err = g.refuseTerminalReplay(ctx); err != nil {
 		return err
 	}
 	if g.deadlineReached() {
@@ -344,11 +343,11 @@ func (g *lifetimeGuardian) runOwned(ctx context.Context) (resultErr error) {
 // recoverExpiredStart refuses fresh work after its immutable deadline while
 // preserving recovery authority for durable state left by an earlier owner.
 func (g *lifetimeGuardian) recoverExpiredStart(ctx context.Context) error {
-	intent, err := optionalLifetimeIntent(g.options.records.ReadLifetimeIntent())
+	intent, err := optionalLifetimeIntent(g.options.records.ReadLifetimeIntentContext(ctx))
 	if err != nil {
 		return errors.Join(errLifetimeGuardianDeadline, err)
 	}
-	registration, err := optionalLifetimeRegistration(g.options.records.ReadLifetimeRegistration())
+	registration, err := optionalLifetimeRegistration(g.options.records.ReadLifetimeRegistrationContext(ctx))
 	if err != nil {
 		return errors.Join(errLifetimeGuardianDeadline, err)
 	}
@@ -516,9 +515,12 @@ func (g *lifetimeGuardian) releaseOwnerUntilDone(ctx context.Context) error {
 	return nil
 }
 
-func (g *lifetimeGuardian) refuseTerminalReplay() error {
-	record, err := g.options.records.ReadLifetimeTermination()
-	if errors.Is(err, os.ErrNotExist) {
+func (g *lifetimeGuardian) refuseTerminalReplay(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	record, err := g.options.records.ReadLifetimeTerminationContext(ctx)
+	if task.RecordAbsent(err) {
 		return nil
 	}
 	if err != nil {
@@ -554,7 +556,7 @@ func (g *lifetimeGuardian) prepareRunScope(ctx context.Context) (string, lifetim
 	if err != nil {
 		return "", nil, fmt.Errorf("plan lifetime scope: %w", err)
 	}
-	if err = g.recordIntent(plan, bootID); err != nil {
+	if err = g.recordIntent(ctx, plan, bootID); err != nil {
 		return "", nil, err
 	}
 	scope, err := g.options.scopeFactory(plan)
@@ -565,7 +567,7 @@ func (g *lifetimeGuardian) prepareRunScope(ctx context.Context) (string, lifetim
 		if recoveryErr != nil {
 			return "", nil, fmt.Errorf("reconcile existing lifetime scope: %w", recoveryErr)
 		}
-		if terminalErr := g.refuseTerminalReplay(); terminalErr != nil {
+		if terminalErr := g.refuseTerminalReplay(ctx); terminalErr != nil {
 			return "", nil, terminalErr
 		}
 		scope, err = g.options.scopeFactory(plan)
@@ -586,7 +588,7 @@ func (g *lifetimeGuardian) bindAndRecordRunScope(ctx context.Context, bootID str
 		cancel()
 		return errors.Join(fmt.Errorf("bind lifetime scope owner: %w", err), cleanupErr)
 	}
-	if err := g.recordRegistration(bootID); err != nil {
+	if err := g.recordRegistration(ctx, bootID); err != nil {
 		cleanupCtx, cancel := g.recoveryContext(ctx)
 		cleanupErr := g.resolveCreatedScopeFailure(cleanupCtx, bootID)
 		cancel()
@@ -600,8 +602,8 @@ func (g *lifetimeGuardian) bindAndRecordRunScope(ctx context.Context, bootID str
 // record only after a fresh registration read proves that this exact scope was
 // never published.
 func (g *lifetimeGuardian) resolveCreatedScopeFailure(ctx context.Context, bootID string) error {
-	registration, err := g.options.records.ReadLifetimeRegistration()
-	if errors.Is(err, os.ErrNotExist) {
+	registration, err := g.options.records.ReadLifetimeRegistrationContext(ctx)
+	if task.RecordAbsent(err) {
 		return g.disposeUnregisteredScope(ctx)
 	}
 	if err != nil {
@@ -611,7 +613,7 @@ func (g *lifetimeGuardian) resolveCreatedScopeFailure(ctx context.Context, bootI
 		disposeErr := g.disposeUnregisteredScope(ctx)
 		return errors.Join(task.ErrIdentityMismatch, disposeErr)
 	}
-	if err = g.recordRegistration(bootID); err != nil {
+	if err = g.recordRegistration(ctx, bootID); err != nil {
 		return fmt.Errorf("acknowledge lifetime registration after setup failure: %w", err)
 	}
 	return g.terminateAndRecord(ctx, task.LifetimeTerminationRecovery)
@@ -686,7 +688,7 @@ func (g *lifetimeGuardian) startAndRecordWorker(ctx context.Context, reader *lif
 func (g *lifetimeGuardian) persistWorkerIdentity(ctx context.Context, ref lifetime.ProcessRef, bootID string) error {
 	backoff := defaultLifetimeFinalizationBackoff
 	for {
-		if err := g.recordWorker(ref, bootID); err == nil {
+		if err := g.recordWorker(ctx, ref, bootID); err == nil {
 			return nil
 		}
 		g.waitFinalizationRetry(ctx, backoff, g.options.waitRecordRetry)
@@ -710,8 +712,8 @@ func (g *lifetimeGuardian) endRun() {
 	g.runMu.Unlock()
 }
 
-func (g *lifetimeGuardian) recordIntent(plan lifetime.Plan, bootID string) error {
-	record, err := g.options.records.RecordLifetimeIntent(taskdir.LifetimeIntentFacts{
+func (g *lifetimeGuardian) recordIntent(ctx context.Context, plan lifetime.Plan, bootID string) error {
+	record, err := g.options.records.RecordLifetimeIntentContext(ctx, taskdir.LifetimeIntentFacts{
 		ScopeKind: string(plan.Kind()),
 		Assurance: string(plan.Assurance()),
 		ScopePlan: plan.Identifier(),
@@ -727,9 +729,9 @@ func (g *lifetimeGuardian) recordIntent(plan lifetime.Plan, bootID string) error
 	return nil
 }
 
-func (g *lifetimeGuardian) recordRegistration(bootID string) error {
+func (g *lifetimeGuardian) recordRegistration(ctx context.Context, bootID string) error {
 	ref := g.scope.Reference()
-	record, err := g.options.records.RecordLifetimeRegistration(taskdir.LifetimeRegistrationFacts{
+	record, err := g.options.records.RecordLifetimeRegistrationContext(ctx, taskdir.LifetimeRegistrationFacts{
 		ScopeKind: string(ref.Kind()),
 		Assurance: string(ref.Assurance()),
 		ScopeID:   ref.Identifier(),
@@ -746,8 +748,8 @@ func (g *lifetimeGuardian) recordRegistration(bootID string) error {
 	return nil
 }
 
-func (g *lifetimeGuardian) recordWorker(ref lifetime.ProcessRef, bootID string) error {
-	record, err := g.options.records.RecordLifetimeWorker(taskdir.LifetimeWorkerFacts{
+func (g *lifetimeGuardian) recordWorker(ctx context.Context, ref lifetime.ProcessRef, bootID string) error {
+	record, err := g.options.records.RecordLifetimeWorkerContext(ctx, taskdir.LifetimeWorkerFacts{
 		PID:          ref.PID(),
 		ProcessStart: ref.StartToken(),
 		BootID:       bootID,
@@ -782,7 +784,7 @@ func (g *lifetimeGuardian) recordWorkerWait(ctx context.Context) error {
 		return fmt.Errorf("%w: exact worker Wait is unavailable", errLifetimeGuardianInvalid)
 	}
 	g.freezeWorkerWaitFacts()
-	record, err := g.options.records.RecordLifetimeWorkerWait(*g.workerWaitFacts)
+	record, err := g.options.records.RecordLifetimeWorkerWaitContext(ctx, *g.workerWaitFacts)
 	if err != nil {
 		return fmt.Errorf("record lifetime worker Wait: %w", err)
 	}
@@ -1133,7 +1135,7 @@ func (g *lifetimeGuardian) handleStarted(ctx context.Context, message lifetimeMe
 		return errors.Join(fmt.Errorf("observe started lifetime launch: %w", err), replyErr)
 	}
 	g.launchRefs = appendLifetimeLaunchRef(g.launchRefs, launchRef)
-	record, err := g.options.records.RecordLifetimeLaunch(taskdir.LifetimeLaunchFacts{
+	record, err := g.options.records.RecordLifetimeLaunchContext(controlCtx, taskdir.LifetimeLaunchFacts{
 		Sequence:     message.Sequence,
 		PID:          launchRef.PID(),
 		ProcessStart: launchRef.StartToken(),
@@ -1243,19 +1245,22 @@ func (g *lifetimeGuardian) terminateAndRecord(ctx context.Context, cause string)
 		}
 		g.terminationEmptyProven = true
 	}
-	return g.recordTermination()
+	return g.recordTermination(ctx)
 }
 
-func (g *lifetimeGuardian) recordTermination() error {
-	record, err := g.options.records.RecordLifetimeTermination(g.terminationCause)
+func (g *lifetimeGuardian) recordTermination(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	record, err := g.options.records.RecordLifetimeTerminationContext(ctx, g.terminationCause)
 	if err != nil {
-		existing, readErr := g.options.records.ReadLifetimeTermination()
+		existing, readErr := g.options.records.ReadLifetimeTerminationContext(ctx)
 		if readErr == nil && g.terminationRecordMatches(existing) {
 			g.activeSequence = 0
 			g.terminationRecorded = true
 			return nil
 		}
-		if errors.Is(readErr, os.ErrNotExist) {
+		if task.RecordAbsent(readErr) {
 			readErr = nil
 		}
 		return errors.Join(fmt.Errorf("record lifetime termination: %w", err), readErr)

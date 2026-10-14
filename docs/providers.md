@@ -20,7 +20,7 @@ Its read-only metadata describes the native mechanism selected by the adapter;
 the containment value is `provider-owned` for the shipped profiles, so this
 mode is not an independent delegate-owned sandbox. Provider-native controls
 such as Pi read-only's `--no-extensions` remain part of that provider contract;
-they are capability-probed before admission rather than treated as delegate
+they are capability-probed before provider execution rather than treated as delegate
 owned policy.
 This provider containment metadata is separate from process-lifetime
 containment, which is guardian-owned and independently proven.
@@ -62,7 +62,10 @@ format changes do not become false admission failures.
 ## Shared compatibility behavior
 
 Before a task is admitted, the selected adapter resolves a canonical regular
-executable and records its observed identity. A supervised runtime probe then:
+executable and records its static identity and required capability contract.
+For managed runtime-only tasks, admission records that runtime verification is
+pending. The task's supervised runner performs the runtime probe before the
+provider task starts:
 
 1. invokes the provider-declared version command (defaulting to `--version`)
    and accepts any nonempty, valid
@@ -86,6 +89,11 @@ contract, and input/output declarations remain immutable and are still matched
 exactly before the process starts. The final executable, observed version, and
 digest are recorded in the started and sealed task evidence.
 
+Native policy projections, custom runners, and historical tasks retain their
+admission inspection requirements. Runtime-only tasks do not share capability
+observations: every task's fresh preflight is required, even when unchanged
+launcher bytes load an updated runtime payload.
+
 The same compatibility rule applies to the private Pueue boundary: delegate
 checks the required queue behavior and fields, accepts nonempty observed Pueue
 version output and additive status fields, and keeps the bundled artifact pin
@@ -95,10 +103,10 @@ The observed version is descriptive evidence stored with the task. It does not
 authorize a release by itself, and Delegation Layer does not query a web release
 list or maintain a semver allowlist. The version-size bound is a durable-record
 safety limit, not a release compatibility check; an observation that exceeds it
-is rejected before admission evidence is committed. Terminal launch evidence
+is rejected before provider execution. Terminal launch evidence
 uses the same bound so publication remains durable. The inspection definition and
-executable digest bind the capability result to the exact command that was checked; the runner
-repeats the check before launch. Probe failures expose only a bounded reason
+executable digest bind each capability result to the checked command. The runner
+checks the current runtime before launch. Probe failures expose only a bounded reason
 class, such as a missing required flag or executable identity drift, and never
 provider output or process diagnostics.
 

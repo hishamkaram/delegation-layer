@@ -83,7 +83,7 @@ func recordLifetimeIntentTx(tx *taskdir.ControlTransaction, o *Operation, candid
 		}
 		return existing, nil
 	}
-	if !errors.Is(readErr, os.ErrNotExist) {
+	if !task.RecordAbsent(readErr) {
 		return nil, readErr
 	}
 	created, putErr := tx.Put(inspectionLifetimeIntentName, candidate)
@@ -176,7 +176,7 @@ func recordLifetimeRegistrationTx(tx *taskdir.ControlTransaction, o *Operation, 
 		}
 		return existing, nil
 	}
-	if !errors.Is(readErr, os.ErrNotExist) {
+	if !task.RecordAbsent(readErr) {
 		return nil, readErr
 	}
 	intent, intentErr := readLifetimeIntentTx(tx, o)
@@ -291,7 +291,7 @@ func recordLifetimeWorkerTx(tx *taskdir.ControlTransaction, o *Operation, candid
 		}
 		return existing, nil
 	}
-	if !errors.Is(readErr, os.ErrNotExist) {
+	if !task.RecordAbsent(readErr) {
 		return nil, readErr
 	}
 	created, putErr := tx.Put(inspectionLifetimeWorkerName, candidate)
@@ -392,7 +392,7 @@ func recordLifetimeWorkerWaitTx(tx *taskdir.ControlTransaction, o *Operation, ca
 		}
 		return existing, nil
 	}
-	if !errors.Is(readErr, os.ErrNotExist) {
+	if !task.RecordAbsent(readErr) {
 		return nil, readErr
 	}
 	created, putErr := tx.Put(inspectionLifetimeWorkerWaitName, candidate)
@@ -472,7 +472,7 @@ func recordLifetimeLaunchTx(tx *taskdir.ControlTransaction, o *Operation, facts 
 	}
 	if _, terminationErr := readLifetimeTerminationTx(tx, o, registrationDigest, launches); terminationErr == nil {
 		return nil, task.ErrTerminalTask
-	} else if !errors.Is(terminationErr, os.ErrNotExist) {
+	} else if !task.RecordAbsent(terminationErr) {
 		return nil, terminationErr
 	}
 
@@ -602,7 +602,7 @@ func recordLifetimeTerminationTx(tx *taskdir.ControlTransaction, o *Operation, c
 		}
 		return existing, nil
 	}
-	if !errors.Is(terminationErr, os.ErrNotExist) {
+	if !task.RecordAbsent(terminationErr) {
 		return nil, terminationErr
 	}
 
@@ -636,16 +636,32 @@ func (o *Operation) ReadLifetimeTerminationContext(ctx context.Context) (result 
 		return nil, err
 	}
 	err := withControlTransactionContext(ctx, o.control, func(tx *taskdir.ControlTransaction) error {
+		var record task.LifetimeTerminationRecord
+		if readErr := tx.Read(inspectionLifetimeTerminationName, &record); readErr != nil {
+			return lifetimeReadError(inspectionLifetimeTerminationName, readErr)
+		}
+		if readErr := task.ValidateLifetimeTerminationRecord(&record); readErr != nil {
+			return readErr
+		}
+		if record.RootID != o.request.RootID || record.TaskID != o.request.TaskID {
+			return task.ErrIdentityMismatch
+		}
 		_, registrationDigest, readErr := readLifetimeRegistrationTx(tx, o)
 		if readErr != nil {
-			return readErr
+			return lifetimeDependencyError(readErr)
 		}
 		launches, launchesErr := readLifetimeLaunchesTx(tx, o, registrationDigest)
 		if launchesErr != nil {
-			return launchesErr
+			return lifetimeDependencyError(launchesErr)
 		}
-		result, readErr = readLifetimeTerminationTx(tx, o, registrationDigest, launches)
-		return readErr
+		if readErr = validateLifetimeTerminationForOperation(o, record, registrationDigest, launches); readErr != nil {
+			return readErr
+		}
+		if readErr = tx.Verify(inspectionLifetimeTerminationName, record); readErr != nil {
+			return readErr
+		}
+		result = &record
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -662,7 +678,7 @@ func (o *Operation) HasTerminatedLifetime(cause string) (bool, error) {
 // HasTerminatedLifetimeContext reports termination under a bounded read.
 func (o *Operation) HasTerminatedLifetimeContext(ctx context.Context, cause string) (bool, error) {
 	record, err := o.ReadLifetimeTerminationContext(ctx)
-	if errors.Is(err, os.ErrNotExist) {
+	if task.RecordAbsent(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -817,13 +833,16 @@ func readLifetimeIntentTx(tx *taskdir.ControlTransaction, o *Operation) (*task.L
 }
 
 func readLifetimeWorkerTx(tx *taskdir.ControlTransaction, o *Operation) (*task.LifetimeWorkerRecord, error) {
-	registration, registrationDigest, err := readLifetimeRegistrationTx(tx, o)
-	if err != nil {
+	var record task.LifetimeWorkerRecord
+	if err := tx.Read(inspectionLifetimeWorkerName, &record); err != nil {
+		return nil, lifetimeReadError(inspectionLifetimeWorkerName, err)
+	}
+	if err := task.ValidateLifetimeWorkerRecord(&record); err != nil {
 		return nil, err
 	}
-	var record task.LifetimeWorkerRecord
-	if err = tx.Read(inspectionLifetimeWorkerName, &record); err != nil {
-		return nil, lifetimeReadError(inspectionLifetimeWorkerName, err)
+	registration, registrationDigest, err := readLifetimeRegistrationTx(tx, o)
+	if err != nil {
+		return nil, lifetimeDependencyError(err)
 	}
 	if err = validateLifetimeWorkerForOperation(o, record, registration, registrationDigest); err != nil {
 		return nil, err
@@ -836,7 +855,7 @@ func readLifetimeWorkerTx(tx *taskdir.ControlTransaction, o *Operation) (*task.L
 
 func readLifetimeWorkerBindingTx(tx *taskdir.ControlTransaction, o *Operation) (*task.LifetimeWorkerRecord, string, error) {
 	worker, err := readLifetimeWorkerTx(tx, o)
-	if errors.Is(err, os.ErrNotExist) {
+	if task.RecordAbsent(err) {
 		return nil, "", nil
 	}
 	if err != nil {
@@ -850,17 +869,20 @@ func readLifetimeWorkerBindingTx(tx *taskdir.ControlTransaction, o *Operation) (
 }
 
 func readLifetimeWorkerWaitTx(tx *taskdir.ControlTransaction, o *Operation) (*task.LifetimeWorkerWaitRecord, error) {
+	var record task.LifetimeWorkerWaitRecord
+	if err := tx.Read(inspectionLifetimeWorkerWaitName, &record); err != nil {
+		return nil, lifetimeReadError(inspectionLifetimeWorkerWaitName, err)
+	}
+	if err := task.ValidateLifetimeWorkerWaitRecord(&record); err != nil {
+		return nil, err
+	}
 	registration, registrationDigest, err := readLifetimeRegistrationTx(tx, o)
 	if err != nil {
-		return nil, err
+		return nil, lifetimeDependencyError(err)
 	}
 	worker, workerDigest, err := readLifetimeWorkerBindingTx(tx, o)
 	if err != nil {
-		return nil, err
-	}
-	var record task.LifetimeWorkerWaitRecord
-	if err = tx.Read(inspectionLifetimeWorkerWaitName, &record); err != nil {
-		return nil, lifetimeReadError(inspectionLifetimeWorkerWaitName, err)
+		return nil, lifetimeDependencyError(err)
 	}
 	if err = validateLifetimeWorkerWaitForOperation(o, record, registration, registrationDigest, worker, workerDigest); err != nil {
 		return nil, err
@@ -956,6 +978,17 @@ func lifetimeReadError(name string, err error) error {
 		return err
 	}
 	return fmt.Errorf("%w: invalid persisted %s: %w", task.ErrEvidenceFault, name, err)
+}
+
+func lifetimeDependencyError(err error) error {
+	if err == nil ||
+		errors.Is(err, task.ErrIdentityMismatch) ||
+		errors.Is(err, task.ErrEvidenceFault) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return errors.Join(task.ErrIdentityMismatch, err)
 }
 
 func inspectionLifetimeLaunchName(sequence uint64) string {

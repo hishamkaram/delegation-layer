@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -37,7 +36,7 @@ func evaluateInspectionAdmission(ctx context.Context, operation *inspection.Oper
 		return inspectionAdmissionEvaluation{}, task.ErrEvidenceFault
 	}
 	result, succeeded, err := operation.ReadWorkerResultContext(ctx)
-	if errors.Is(err, os.ErrNotExist) {
+	if task.RecordAbsent(err) {
 		return inspectionAdmissionEvaluation{decision: inspectionAdmissionPending}, nil
 	}
 	if err != nil {
@@ -107,7 +106,7 @@ func timelyCompletedInspectionEvidence(ctx context.Context, operation *inspectio
 
 func completedInspectionEvidence(ctx context.Context, operation *inspection.Operation, requireTermination bool) (bool, error) {
 	result, completion, err := operation.ReadCompletedContext(ctx)
-	if errors.Is(err, os.ErrNotExist) {
+	if task.RecordAbsent(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -116,7 +115,7 @@ func completedInspectionEvidence(ctx context.Context, operation *inspection.Oper
 	var termination *task.LifetimeTerminationRecord
 	if requireTermination {
 		termination, err = operation.ReadLifetimeTerminationContext(ctx)
-		if errors.Is(err, os.ErrNotExist) {
+		if task.RecordAbsent(err) {
 			return false, nil
 		}
 		if err != nil {

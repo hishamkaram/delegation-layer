@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 
 from acceptance_provider_common import (
     AcceptanceFailure,
+    _hex_digest,
     clean_absolute,
     ensure_private_directory,
     path_is_within,
@@ -33,6 +34,7 @@ from acceptance_provider_common import (
     reject_tmp,
     require,
     sha,
+    validate_provider_runtime_metadata,
     validate_managed_lifetime_closure,
     validate_queue_row as validate_exact_queue_row,
     write_bytes,
@@ -779,8 +781,6 @@ class NativeRun:
                 isinstance(started.get("diagnostic_nanos"), int) and started["diagnostic_nanos"] >= 0,
                 f"{name} provider.started evidence identity mismatch")
         meta = self.read_record(task, "meta.json")
-        require(meta.get("provider_executable") == str(self.agy), f"{name} provider executable drifted")
-        require(meta.get("provider_version") == self.provider_version, f"{name} provider version drifted")
         meta_supervisor = meta.get("supervisor_config")
         require(meta_supervisor == supervisor, f"{name} meta supervisor binding differs from submit evidence")
         predicate = meta.get("predicate")
@@ -792,8 +792,10 @@ class NativeRun:
                 isinstance(effective.get("digest"), str) and effective.get("digest"),
                 f"{name} effective policy is absent")
         policy = effective.get("policy")
+        pending_runtime = "runtime_preflight_sha256" in meta
         require(isinstance(policy, dict) and policy.get("workspace") == str(self.prepared.workspace) and
-                policy.get("runtime_sha256") == self.provider_sha256,
+                (_hex_digest(policy.get("runtime_sha256")) if pending_runtime
+                 else policy.get("runtime_sha256") == self.provider_sha256),
                 f"{name} effective policy binding mismatch")
         profile_revision = policy.get("profile_revision")
         require(isinstance(profile_revision, str) and profile_revision,
@@ -807,6 +809,14 @@ class NativeRun:
         require(profile_revision == "native-permissions-v1" and not policy.get("sources"),
                 f"{name} unexpectedly inventoried provider configuration")
         provider_exit = self.read_record(task, "provider.exit")
+        launch_identity = validate_provider_runtime_metadata(
+            meta, launch_evidence=(started, provider_exit),
+            label=f"{name} provider runtime metadata")
+        require(isinstance(launch_identity, dict),
+                f"{name} provider launch identity is unavailable")
+        if not pending_runtime:
+            require(meta.get("provider_executable") == str(self.agy),
+                    f"{name} provider executable drifted")
         require(provider_exit.get("root_id") == self.root_id and provider_exit.get("task_id") == task and
                 provider_exit.get("invocation_state") == "started" and provider_exit.get("predicate") == predicate,
                 f"{name} provider.exit identity mismatch")

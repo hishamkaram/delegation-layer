@@ -111,89 +111,64 @@ func TestEventRecorderSerializesConcurrentSupervisorCommands(t *testing.T) {
 
 func TestPublicationDelayedEventAllowsConcurrentSupervisorCompletion(t *testing.T) {
 	dir := t.TempDir()
-	release := filepath.Join(dir, "publication.release")
-	cfg := HarnessConfig{EventsDirectory: dir, Hooks: HookConfig{Mode: HookPublicationDelayed, ReleasePath: release}}
+	cfg := HarnessConfig{EventsDirectory: dir, Hooks: HookConfig{Mode: HookPublicationDelayed}}
 	recorder := newEventRecorder(cfg)
 	if err := recorder.begin([]string{"delegate-run", "--root", "/private/root", "task"}); err != nil {
 		t.Fatal(err)
 	}
-	publishedPath, publishedDone := startDelayedPublication(t, recorder, cfg.Hooks, dir)
-	assertConcurrentSupervisorCompletion(t, recorder, dir, release, publishedDone)
-	if err := recorder.finish(0, ""); err != nil {
-		t.Fatal(err)
+	recorder.mu.Lock()
+	wrapperID := recorder.wrapper.receipt.InvocationID
+	recorder.mu.Unlock()
+	publicationEntered := make(chan struct{})
+	publicationRelease := make(chan struct{})
+	publishedDone := make(chan struct{})
+	release := sync.OnceFunc(func() { close(publicationRelease) })
+	hooks := recorder.executionHooksWithWait(cfg.Hooks, func(HookConfig) error {
+		close(publicationEntered)
+		<-publicationRelease
+		return nil
+	})
+	go func() {
+		hooks.Event("published")
+		close(publishedDone)
+	}()
+	t.Cleanup(func() {
+		release()
+		<-publishedDone
+	})
+	select {
+	case <-publicationEntered:
+	case <-publishedDone:
+		t.Fatal("publication-delayed hook returned before wait callback entered")
 	}
 
+	publishedPath := filepath.Join(dir, wrapperID, "event-000001.json")
 	var event eventEnvelope
 	readCanonical(t, publishedPath, &event)
 	if event.Name != "published" || event.Sequence != 1 {
 		t.Fatalf("publication event=%+v", event)
 	}
-}
-
-func startDelayedPublication(t *testing.T, recorder *eventRecorder, cfg HookConfig, dir string) (string, <-chan struct{}) {
-	t.Helper()
-	recorder.mu.Lock()
-	wrapperID := recorder.wrapper.receipt.InvocationID
+	if !recorder.mu.TryLock() {
+		release()
+		t.Fatal("publication wait retained the recorder mutex")
+	}
 	recorder.mu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		recorder.executionHooks(cfg).Event("published")
-		close(done)
-	}()
-	path := filepath.Join(dir, wrapperID, "event-000001.json")
-	if !waitForTestPath(path, time.Second) {
-		if err := os.WriteFile(cfg.ReleasePath, []byte("release\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		<-done
-		t.Fatal("publication event was not recorded")
-	}
-	select {
-	case <-done:
-		t.Fatal("publication-delayed event returned before explicit release")
-	default:
-	}
-	return path, done
-}
 
-func assertConcurrentSupervisorCompletion(t *testing.T, recorder *eventRecorder, dir, release string, publishedDone <-chan struct{}) {
-	t.Helper()
 	commandID := strings.Repeat("1", 32)
 	commandArgv := []string{"pueue", "-c", "/private/pueue.yml", "kill", "7"}
-	supervisorDone := make(chan struct{})
-	go func() {
-		recorder.supervisorEvent(pueue.CommandEvent{CommandID: commandID, Stage: "entry", Argv: commandArgv, ExitCode: -1})
-		recorder.supervisorEvent(pueue.CommandEvent{CommandID: commandID, Stage: "started", Argv: commandArgv, PID: 42, ExitCode: -1})
-		recorder.supervisorEvent(pueue.CommandEvent{CommandID: commandID, Stage: "completed", Argv: commandArgv, PID: 42, ExitCode: 0})
-		close(supervisorDone)
-	}()
-	select {
-	case <-supervisorDone:
-	case <-time.After(time.Second):
-		if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		<-publishedDone
-		t.Fatal("supervisor completion blocked by publication delay")
-	}
+	recorder.supervisorEvent(pueue.CommandEvent{CommandID: commandID, Stage: "entry", Argv: commandArgv, ExitCode: -1})
+	recorder.supervisorEvent(pueue.CommandEvent{CommandID: commandID, Stage: "started", Argv: commandArgv, PID: 42, ExitCode: -1})
+	recorder.supervisorEvent(pueue.CommandEvent{CommandID: commandID, Stage: "completed", Argv: commandArgv, PID: 42, ExitCode: 0})
+	assertSupervisorReceipts(t, dir, commandID, commandArgv)
 	select {
 	case <-publishedDone:
 		t.Fatal("publication-delayed event returned before explicit release")
 	default:
 	}
-	assertSupervisorReceipts(t, dir, commandID, commandArgv)
-
-	releasedAt := time.Now()
-	if err := os.WriteFile(release, []byte("release\n"), 0o600); err != nil {
+	release()
+	<-publishedDone
+	if err := recorder.finish(0, ""); err != nil {
 		t.Fatal(err)
-	}
-	select {
-	case <-publishedDone:
-		if elapsed := time.Since(releasedAt); elapsed > time.Second {
-			t.Fatalf("publication release remained blocked: %s", elapsed)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("publication release did not complete")
 	}
 }
 
@@ -271,18 +246,5 @@ func readCanonical(t *testing.T, path string, value any) {
 	}
 	if err = task.DecodeStrict(data, value); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func waitForTestPath(path string, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }

@@ -196,7 +196,7 @@ func (td *TaskDir) recordSame(name string, record any, readSame func() (bool, er
 		}
 		return td.acknowledgeRecord(name)
 	}
-	if !errors.Is(err, os.ErrNotExist) {
+	if !task.RecordAbsent(err) {
 		return err
 	}
 	data, err := marshalControlRecord(record)
@@ -232,7 +232,7 @@ func (td *TaskDir) recordSameContext(ctx context.Context, name string, record an
 	if err == nil {
 		return td.acknowledgeSameContext(ctx, name, same)
 	}
-	if !errors.Is(err, os.ErrNotExist) {
+	if !task.RecordAbsent(err) {
 		return err
 	}
 	if err = ctx.Err(); err != nil {

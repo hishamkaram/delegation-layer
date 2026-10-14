@@ -21,6 +21,16 @@ func TestRecoverInspectionLifetimeHistoricalWithoutRegistration(t *testing.T) {
 	}
 }
 
+func TestOptionalInspectionLifetimeRecordDoesNotIgnoreMarkedDependency(t *testing.T) {
+	record, err := optionalLifetimeRegistration(nil, errors.Join(task.ErrIdentityMismatch, os.ErrNotExist))
+	if record != nil {
+		t.Fatal("marked dependency fault returned a record")
+	}
+	if !errors.Is(err, task.ErrIdentityMismatch) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("optional registration error = %v, want identity mismatch and os.ErrNotExist", err)
+	}
+}
+
 func TestRecoverInspectionLifetimeCleansUnregisteredIntentWithoutTerminationEvidence(t *testing.T) {
 	_, operation, _ := newCleanupInspectionTestOperation(t, inspection.ResultUnavailable, false)
 	_, err := operation.RecordLifetimeIntentContext(t.Context(), taskdir.LifetimeIntentFacts{

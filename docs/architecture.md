@@ -11,21 +11,23 @@ flowchart TD
     A --> B[Validate request and canonical paths]
     B --> C[Static provider selection]
     C --> D[Prepare provider candidate]
-    D --> E[Supervised runtime capability probe]
-    E --> F[Capability evidence and diagnostics]
-    F --> G[Finalize profile and effective policy]
-    G --> H[Persist immutable task records]
-    H --> I{Supervisor selection}
+    D --> I{Supervisor selection}
     I -->|default| J[Create or reuse private bundled Pueue]
     I -->|explicit config| J2[Bind compatible external Pueue]
-    J --> K[Stage one Pueue row]
-    J2 --> K
+    J --> E{Native policy facts required?}
+    J2 --> E
+    E -->|yes| F[Supervised policy inspection]
+    E -->|runtime only| G[Prepare static contract]
+    F --> G
+    G --> H[Persist immutable task records]
+    H --> K[Stage one Pueue row]
     K --> K2[Persist exact receipt]
     K2 --> K3[Enqueue exact numeric row]
     K3 --> L[delegate-run reconstructs and rechecks]
     L --> M[Start per-task guardian]
-    M --> M2[Guardian registers scope and starts provider]
-    M2 --> N[Bounded stdout/stderr capture]
+    M --> M2[Register scope and run fresh capability preflight]
+    M2 --> M3[Start provider after preflight succeeds]
+    M3 --> N[Bounded stdout/stderr capture]
     N --> O[Seal artifacts and validate behavior]
     O --> P[Publish outcome.json]
     P --> Q[status / collect / logs]
@@ -49,11 +51,18 @@ request. Provider preparation constructs an immutable candidate containing the
 command, environment, policy, input/output declarations, and identity
 observer. It does not start a process.
 
-The inspection worker performs the provider's version and help checks under a
-bounded timeout. Its non-secret facts, including a bounded observed version,
-are passed to the profile finalizer,
-which records the observed version, executable identity, effective policy, and
-bounded launch environment in the task metadata. The inspection binding keeps
+Managed runtime-only tasks are admitted from their static request and provider
+contract. Immutable metadata records `runtime_preflight_sha256` and an empty
+`provider_version`; it does not claim runtime compatibility. Each task's runner
+checks version and help inside its guardian-owned lifetime before provider
+execution. The final executable, observed version, and digest belong to the
+started and sealed task evidence. There is no shared admission capability
+cache or second runtime-only inspection worker.
+
+Native policy projections, model discovery, custom runners, and historical
+tasks retain their admission inspection contract. The inspection worker's
+non-secret facts are passed to the profile finalizer, which records the
+observed version and effective policy in metadata. The inspection binding keeps
 the same environment for a queued worker, including when a private daemon is
 reused for another task. The version is an observation; advertised behavior
 and the executable identity decide compatibility. New profiles record native
@@ -78,6 +87,14 @@ when the current CLI still satisfies the adapter's version/help and declared
 runtime contract. The runner keeps the admitted task request, predicate, permission,
 workspace, writable roots, policy sources, and declared artifacts fixed; a
 change to any of those contracts is rejected before launch.
+
+### Runtime-only transition ownership
+
+| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
+|---|---|---|---|---|---|---|
+| RT-A1: immutable request, static policy, pending capability digest; no observed version | Application admission / task admission lease | Persist and submit the static task contract | Task metadata and exact supervisor receipt | Reuse the same create-once request and submission | Admitted; runtime verification remains pending | `TestPendingRuntimeAdmissionReconstructsFromTaskMetadataWithoutInspection` |
+| RT-L1: required digest in metadata, matching plan, consumed start permit | Task runner inside guardian lifetime / task start lease | Probe this task's runtime and finalize its launch plan | Successful fresh preflight followed by `provider.started.json` | Failed or missing probe seals a rejected result; no second task launch | Execution allowed only after the pending plan marker is cleared and runtime identity is observed | `TestPendingRuntimeRequiresPlanCallback`, `TestPendingRuntimeRejectsUnfinishedPreflight`, `TestPendingRuntimePreflightLaunchesOnceWithObservedIdentity` |
+| RT-R1: persisted pending metadata and recorded launch context | Application reconstruction / recorded task contract | Rebuild static inputs and compare the exact required digest | Validated reconstructed contract | Capability, environment, or policy drift fails before provider execution | Metadata remains immutable; another task's runtime proof grants no authority | `TestPendingRuntimeCandidateRejectsChangedContractBeforeProbe`, `TestPendingRuntimeBindsImmutableAdmissionMarker`, `TestPreparedProfileMatchesRequiresExactPendingMarkerAndImmutablePolicy` |
 
 Pueue owns scheduling and worker-row state. One application lifetime state
 machine owns native-lifetime transition policy for both the live guardian and
@@ -250,7 +267,10 @@ and records that `Wait`, disposes the empty native scope, and finally releases
 the guardian's scope handle and owner lease. A live guardian retries its current finalization phase
 with bounded attempts and capped backoff; it does not release reconstructable
 authority while native cleanup remains unresolved. User cancellation first
-persists its stop request.
+persists its stop request. Active guardians check durable stop evidence on a
+one-second cadence and retain full prepared-record validation on each check.
+Task-budget expiry uses a separate timer. The cadence is not a guarantee that
+native termination completes within one second.
 Provider-start, provider-finish, and normal provider-close control use the
 immutable task or inspection deadline, including native process-scope
 observation. They do not replace that deadline with a shorter local control
@@ -334,13 +354,12 @@ never cleaned.
 The private supervisor's ordinary default group uses Pueue's unlimited
 parallel_tasks: 0 setting. The orchestrating model chooses fan-out by issuing
 independent dispatches concurrently; Delegation Layer does not impose a
-task-count or CPU-based concurrency policy. New private runtime capability
-inspections use that same unlimited queue, with independent request journals,
-labels, deadlines, and exit evidence. Fresh capability probes use a finite
-one-minute queue-inclusive deadline; historical 20-second journals retain their
-recorded deadline. Dispatch prepares this scheduling policy
-before inspection; this can release previously admitted queued tasks even if
-the new request subsequently fails inspection. Observation and recovery do not
+task-count or CPU-based concurrency policy. Managed runtime-only dispatches
+create no separate inspection row. Their fresh capability check runs within
+the ordinary task's finite budget. Required admission inspections retain their
+immutable deadlines, including historical 20-second journals. Dispatch prepares
+this scheduling policy before admission; this can release previously admitted
+queued tasks even if a new request fails. Observation and recovery do not
 change scheduling. Saved inspections retain their recorded group and deadline;
 model discovery and external supervisors retain the separate single-slot group.
 The operating system, provider, authentication, and available resources remain

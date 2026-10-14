@@ -43,10 +43,13 @@ supervisor for advanced integrations.
 Private ordinary-task supervision uses Pueue's unlimited default group. The
 orchestrating model chooses fan-out by issuing multiple dispatches concurrently;
 tasks are still durably recorded and observable through `status` and `collect`.
-New private runtime inspections use the same unlimited queue. Saved inspections,
-model discovery, and external supervisors retain their existing inspection
-groups. Dispatch prepares unlimited scheduling before inspection and may release
-previously admitted queued work even if the new request fails inspection.
+Managed runtime-only tasks use static admission and check the provider inside
+their own supervised execution budget. An admitted task still needs that fresh
+check before provider execution; `collect` reports its terminal result. Required
+native policy inspections, custom runners, and saved inspections retain their
+recorded path. Model discovery retains its bounded inspection group. Dispatch
+prepares unlimited scheduling before admission and may release previously
+admitted queued work even if the new request fails.
 Use separate workspaces or read-only permissions when concurrent tasks could
 write the same files.
 
@@ -221,7 +224,8 @@ rejected task outcome if it violates those contracts.
 command is currently implemented. It uses the state-rooted supervisor and the
 shared bounded inspection path, whose `model-discovery-v1` native inspection
 window is five minutes to allow first-run provider model/cache initialization.
-Fresh admission probes use a one-minute queue-inclusive bound. Existing
+Required admission inspections use a one-minute queue-inclusive bound. Managed
+runtime-only tasks perform their checks within their own task budget. Existing
 20-second admission journals retain their recorded deadline.
 It creates inspection evidence but does not admit a provider task or launch a
 delegated turn. It may contact the selected provider CLI, so use it when an

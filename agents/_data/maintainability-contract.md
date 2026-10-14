@@ -33,6 +33,12 @@ skills.
 - Give each lifecycle decision one canonical owner. A lower layer may expose a
   narrow primitive or callback, but it must not duplicate application policy
   for another record family or command path.
+- Managed runtime-only admission owns the static request and immutable required
+  capability digest; each task's runner owns the fresh runtime check inside its
+  guardian lifetime. Admission must not repeat that check or consume another
+  task's observation. Pending metadata carries no observed version, and the
+  execution boundary must enforce its required digest even if a plan drops the
+  pending marker. Native policy projections keep their strict inspection path.
 - Before adding a lifecycle branch, map all callers and both dependency
   directions with the codebase graph, write the affected rows in the canonical
   durable transition matrix below, and compare the proposed owner with existing
@@ -126,6 +132,13 @@ rule](delegation-invariants.md#ambiguous-create-once-writes) to every durable
 record family. Registration is not a special case: each affected transition row
 must cover absent, matching, conflicting, and unreadable results under its
 canonical owner and lease.
+
+Only a missing requested record establishes absence. Once that record has been
+read, a missing validation dependency, including a later digest reread, is an
+unreadable record. Storage marks that failure without hiding its underlying
+error; action- and verdict-producing consumers use `task.RecordAbsent` rather
+than testing `os.ErrNotExist` alone. Regression tests cover both direct absence
+and a dependency disappearing between reads through the production store.
 
 Before removing operational state, identify every consumer that still needs
 it. Persist independently observed terminal evidence first, then make those
@@ -269,8 +282,11 @@ its parent remains alive. Review the waiter, pipes, parent exit, and failure
 paths together; do not infer process exit solely from socket disappearance.
 Acceptance cleanup owns only directories created or immediately adopted by the
 current invocation. That owner records the directory and parent identities at
-creation, removes through the verified parent descriptor, and rejects a
-replaced path. Shared/default parents such as `/tmp`, `$HOME`, and
+creation and keeps both directory descriptors pinned until cleanup or release
+consumes its authority. Explicitly owned FIFO cleanup likewise keeps the FIFO
+and parent descriptors pinned through removal; saved inode numbers alone do
+not survive inode reuse. Removal uses the verified parent descriptor and
+rejects a replaced path. Shared/default parents such as `/tmp`, `$HOME`, and
 `/Users/Shared` are never disposable merely because a child was created there.
 Raw process captures require the same identity token; a boolean or pathname is
 not cleanup authority.
@@ -290,6 +306,10 @@ window elapsed. Scope any longer observation window to that lifecycle phase;
 retain the original client for stop control and cleanup. Prove delayed success
 and deadline expiry with the same owned command, without redispatching.
 Task-directory persistence owns the local fallback for control and journal I/O.
+A guardian's record interface uses context-aware methods for every read and
+write. The guardian selects the phase context; storage preserves it. Audit the
+whole interface when changing this boundary. Compatibility wrappers remain for
+callers without a context.
 A finite caller deadline remains authoritative through every nested lock and
 record write; an inner layer must not replace it with a shorter convenience
 timeout. A caller without a deadline receives the bounded local fallback.
@@ -463,6 +483,12 @@ boundaries, and compatibility. Do not copy lifecycle or capability-check tests
 into every provider. Keep provider interpretation pure over sealed evidence and
 keep acceptance orchestration in the shipped dispatcher/runner and shared
 harness.
+
+Concurrency ordering tests must synchronize at the owner's entry and release
+boundaries instead of using short wall-clock waits as ordering evidence. Keep
+hang watchdogs separate from latency requirements, and release and join owned
+goroutines on assertion failures. Real deadline and native latency claims still
+require their recorded clocks and native evidence.
 
 ### Handoff evidence
 

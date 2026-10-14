@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -287,28 +286,28 @@ func lifetimeIntentMatchesRegistrationRecord(intent *task.LifetimeIntentRecord, 
 }
 
 func optionalLifetimeIntent(record *task.LifetimeIntentRecord, err error) (*task.LifetimeIntentRecord, error) {
-	if errors.Is(err, os.ErrNotExist) {
+	if task.RecordAbsent(err) {
 		return nil, nil
 	}
 	return record, err
 }
 
 func optionalLifetimeRegistration(record *task.LifetimeRegistrationRecord, err error) (*task.LifetimeRegistrationRecord, error) {
-	if errors.Is(err, os.ErrNotExist) {
+	if task.RecordAbsent(err) {
 		return nil, nil
 	}
 	return record, err
 }
 
 func optionalLifetimeWorker(record *task.LifetimeWorkerRecord, err error) (*task.LifetimeWorkerRecord, error) {
-	if errors.Is(err, os.ErrNotExist) {
+	if task.RecordAbsent(err) {
 		return nil, nil
 	}
 	return record, err
 }
 
 func optionalLifetimeWorkerWait(record *task.LifetimeWorkerWaitRecord, err error) (*task.LifetimeWorkerWaitRecord, error) {
-	if errors.Is(err, os.ErrNotExist) {
+	if task.RecordAbsent(err) {
 		return nil, nil
 	}
 	return record, err

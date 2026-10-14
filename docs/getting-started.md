@@ -188,7 +188,9 @@ delegate capabilities --provider codex:exec --json
 
 Capability discovery is side-effect-free and reports the catalog projection. It
 does not prove that the executable, supervisor, or authentication is available
-on the current host. Dispatch performs those runtime checks before admission.
+on the current host. Dispatch checks static readiness and prepares supervision.
+Each managed runtime-only task then checks the current provider before its turn
+starts. Collect the task's terminal outcome to prove completion.
 The response also reports supported permission modes, request options,
 continuation, and the provider-owned read-only mechanism. Model and effort
 choices remain in the separate `models` discovery response.

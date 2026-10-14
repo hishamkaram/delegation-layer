@@ -25,11 +25,11 @@ func recoverTaskLifetime(parent context.Context, td *taskdir.TaskDir) (resultErr
 	if td == nil {
 		return task.ErrEvidenceFault
 	}
-	intent, err := optionalLifetimeIntent(td.ReadLifetimeIntent())
+	intent, err := optionalLifetimeIntent(td.ReadLifetimeIntentContext(parent))
 	if err != nil {
 		return err
 	}
-	registration, err := optionalLifetimeRegistration(td.ReadLifetimeRegistration())
+	registration, err := optionalLifetimeRegistration(td.ReadLifetimeRegistrationContext(parent))
 	if err != nil {
 		return err
 	}
@@ -59,11 +59,11 @@ func reconcileTaskLifetimeOwned(ctx context.Context, td *taskdir.TaskDir) error 
 	if td == nil {
 		return task.ErrEvidenceFault
 	}
-	intent, err := optionalLifetimeIntent(td.ReadLifetimeIntent())
+	intent, err := optionalLifetimeIntent(td.ReadLifetimeIntentContext(ctx))
 	if err != nil {
 		return err
 	}
-	registration, err := optionalLifetimeRegistration(td.ReadLifetimeRegistration())
+	registration, err := optionalLifetimeRegistration(td.ReadLifetimeRegistrationContext(ctx))
 	if err != nil {
 		return err
 	}
@@ -75,19 +75,19 @@ func reconcileTaskLifetimeOwned(ctx context.Context, td *taskdir.TaskDir) error 
 	var launches []task.LifetimeLaunchRecord
 	terminated := false
 	if registration != nil {
-		worker, err = optionalLifetimeWorker(td.ReadLifetimeWorker())
+		worker, err = optionalLifetimeWorker(td.ReadLifetimeWorkerContext(ctx))
 		if err != nil {
 			return err
 		}
-		workerWait, err = optionalLifetimeWorkerWait(td.ReadLifetimeWorkerWait())
+		workerWait, err = optionalLifetimeWorkerWait(td.ReadLifetimeWorkerWaitContext(ctx))
 		if err != nil {
 			return err
 		}
-		launches, err = td.ReadLifetimeLaunches()
+		launches, err = td.ReadLifetimeLaunchesContext(ctx)
 		if err != nil {
 			return err
 		}
-		terminated, err = td.HasTerminatedLifetime("")
+		terminated, err = td.HasTerminatedLifetimeContext(ctx, "")
 		if err != nil {
 			return err
 		}
@@ -98,17 +98,14 @@ func reconcileTaskLifetimeOwned(ctx context.Context, td *taskdir.TaskDir) error 
 }
 
 type lifetimeTerminationRecorder interface {
-	RecordLifetimeTermination(cause string) (*task.LifetimeTerminationRecord, error)
+	RecordLifetimeTerminationContext(context.Context, string) (*task.LifetimeTerminationRecord, error)
 }
 
 func recordTaskLifetimeTerminationContext(ctx context.Context, recorder lifetimeTerminationRecorder, cause string) (*task.LifetimeTerminationRecord, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return recorder.RecordLifetimeTermination(cause)
+	return recorder.RecordLifetimeTerminationContext(ctx, cause)
 }
 
 func recoverLifetimeScope(ctx context.Context, scope lifetimeFinalizationScope, refs []lifetime.LaunchRef, assurance string) error {

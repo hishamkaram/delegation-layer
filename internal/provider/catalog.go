@@ -473,24 +473,52 @@ func (c Catalog) candidate(request task.TaskRecord, existing *task.MetaRecord) (
 		}
 		candidate.Inspection = &definition
 	}
-	directory := candidate.Directory
-	writableRoots := slices.Clone(candidate.WritableRoots)
-	finalize := candidate.Finalize
-	registry := c.registry
+	bindCatalogFinalizer(request, &candidate, c.registry)
+	if err = bindCatalogAdmission(request, &candidate, c.registry); err != nil {
+		return ProfileCandidate{}, err
+	}
+	return candidate, nil
+}
+
+func bindCatalogFinalizer(request task.TaskRecord, candidate *ProfileCandidate, registry predicate.Registry) {
+	source := *candidate
 	candidate.Finalize = func(facts json.RawMessage, now time.Time) (PreparedProfile, error) {
-		profile, finalizeErr := finalize(facts, now)
+		profile, finalizeErr := source.Finalize(facts, now)
 		if finalizeErr != nil {
 			return PreparedProfile{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, finalizeErr)
 		}
-		if profile.Plan.Directory != directory || !slices.Equal(profile.WritableRoots, writableRoots) {
+		if profile.Plan.Directory != source.Directory || !slices.Equal(profile.WritableRoots, source.WritableRoots) {
 			return PreparedProfile{}, task.ErrIdentityMismatch
 		}
 		if _, resolveErr := registry.Resolve(profile.Plan.Predicate); resolveErr != nil {
 			return PreparedProfile{}, fmt.Errorf("%w: provider returned an unregistered predicate: %w", ErrProfileUnavailable, resolveErr)
 		}
+		if runtimeErr := source.ValidateRuntimeProfile(profile); runtimeErr != nil {
+			return PreparedProfile{}, runtimeErr
+		}
 		return finalizeCatalogProfile(request, profile)
 	}
-	return candidate, nil
+}
+
+func bindCatalogAdmission(request task.TaskRecord, candidate *ProfileCandidate, registry predicate.Registry) error {
+	if candidate.Admit == nil {
+		return nil
+	}
+	if candidate.Inspection == nil || !candidate.Inspection.RuntimeOnly() {
+		return fmt.Errorf("%w: static admission requires runtime-only inspection", ErrProfileUnavailable)
+	}
+	source := *candidate
+	candidate.Admit = func() (PreparedProfile, error) {
+		profile, admitErr := source.AdmissionProfile(request)
+		if admitErr != nil {
+			return PreparedProfile{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, admitErr)
+		}
+		if _, resolveErr := registry.Resolve(profile.Plan.Predicate); resolveErr != nil {
+			return PreparedProfile{}, fmt.Errorf("%w: provider returned an unregistered predicate: %w", ErrProfileUnavailable, resolveErr)
+		}
+		return normalizeCatalogProfile(request, profile, true)
+	}
+	return nil
 }
 
 // Prepare preserves the finite preparation path for providers without native
@@ -507,6 +535,10 @@ func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
 }
 
 func finalizeCatalogProfile(request task.TaskRecord, profile PreparedProfile) (PreparedProfile, error) {
+	return normalizeCatalogProfile(request, profile, false)
+}
+
+func normalizeCatalogProfile(request task.TaskRecord, profile PreparedProfile, admission bool) (PreparedProfile, error) {
 	var err error
 	profile.Plan.InputFiles, err = task.NormalizeInputFiles(profile.Plan.InputFiles)
 	if err != nil {
@@ -522,7 +554,11 @@ func finalizeCatalogProfile(request task.TaskRecord, profile PreparedProfile) (P
 	if err = task.ValidateOutputArtifacts(profile.Plan.OutputArtifacts, profile.Plan.OutputWriterContract); err != nil {
 		return PreparedProfile{}, fmt.Errorf("%w: invalid prepared output contract: %w", ErrProfileUnavailable, err)
 	}
-	if err = profile.Validate(request); err != nil {
+	validate := profile.Validate
+	if admission {
+		validate = profile.ValidateAdmission
+	}
+	if err = validate(request); err != nil {
 		return PreparedProfile{}, fmt.Errorf("%w: invalid finalized profile: %w", ErrProfileUnavailable, err)
 	}
 	return cloneCandidateProfile(profile), nil

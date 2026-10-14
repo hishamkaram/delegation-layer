@@ -26,7 +26,7 @@ const unattendedApproval = "always-proceed"
 // supervised runtime capability probe. The core owns every provider process;
 // the finalizer receives only the resulting nonsecret runtime facts.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	candidate, err := prepareCandidate(request, true)
+	candidate, err := prepareCandidate(request, true, true)
 	if err != nil {
 		return candidate, err
 	}
@@ -46,6 +46,16 @@ func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (co
 }
 
 func withPredicate(candidate commonprovider.ProfileCandidate, reference task.PredicateRef) commonprovider.ProfileCandidate {
+	admit := candidate.Admit
+	if admit != nil {
+		candidate.Admit = func() (commonprovider.PreparedProfile, error) {
+			prepared, err := admit()
+			if err == nil {
+				prepared.Plan.Predicate = reference
+			}
+			return prepared, err
+		}
+	}
 	finalize := candidate.Finalize
 	candidate.Finalize = func(data json.RawMessage, observed time.Time) (commonprovider.PreparedProfile, error) {
 		prepared, err := finalize(data, observed)
@@ -60,7 +70,7 @@ func withPredicate(candidate commonprovider.ProfileCandidate, reference task.Pre
 func prepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
 	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
 	if !native {
-		return prepareCandidate(request, false)
+		return prepareCandidate(request, false, false)
 	}
 	approval := meta.EffectiveConfig.Approval
 	if request.Mode == ModeReadOnly {
@@ -74,15 +84,15 @@ func prepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (co
 	if meta.EffectiveConfig.Policy != nil {
 		recordedRoots = meta.EffectiveConfig.Policy.WritableRoots
 	}
-	return prepareCandidateWithEnvironment(request, true, approval, meta.Environment, recordedRoots)
+	return prepareCandidateWithEnvironment(request, true, approval, meta.Environment, recordedRoots, meta.RuntimePreflightSHA256 != "")
 }
 
-func prepareCandidate(request task.TaskRecord, native bool) (commonprovider.ProfileCandidate, error) {
+func prepareCandidate(request task.TaskRecord, native, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
 	approval := unattendedApproval
 	if native {
 		approval = nativeApprovalForMode(request.Mode)
 	}
-	return prepareCandidateWithEnvironment(request, native, approval, nil, nil)
+	return prepareCandidateWithEnvironment(request, native, approval, nil, nil, allowStaticAdmit)
 }
 
 func nativeApprovalForMode(mode string) string {
@@ -92,7 +102,7 @@ func nativeApprovalForMode(mode string) string {
 	return unattendedApproval
 }
 
-func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, approval string, recordedEnvironment, recordedRoots []string) (commonprovider.ProfileCandidate, error) {
+func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, approval string, recordedEnvironment, recordedRoots []string, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
 	arguments, err := candidateArguments(request, native, approval)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -115,11 +125,15 @@ func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, appro
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
 	}
+	capability, err := staticCapability(definition, native, allowStaticAdmit)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
 	inventory, err := candidateInventory(request, environment, native)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	return commonprovider.ProfileCandidate{
+	candidate := commonprovider.ProfileCandidate{
 		Directory:     request.CanonicalCwd,
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
@@ -132,23 +146,44 @@ func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, appro
 			if finalErr != nil {
 				return commonprovider.PreparedProfile{}, finalErr
 			}
-			effective, finalErr := candidateEffectiveConfig(request, environment, identity, inventory, native, approval)
-			if finalErr != nil {
-				return commonprovider.PreparedProfile{}, finalErr
-			}
-			prepared := commonprovider.PreparedProfile{
-				Plan:            execution.Plan{Executable: identity.Executable, ExecutableSHA256: identity.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd, Environment: slices.Clone(environment.Values), Predicate: NewCurrentPrintInterpreterForMode(request.Mode).Reference()},
-				ObservedVersion: identity.Version, Effective: effective, WritableRoots: slices.Clone(environment.WritableRoots),
-				Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
-					return NewIdentityObserver(request.TaskID, expected, record)
-				},
-			}
-			if finalErr = prepared.Validate(request); finalErr != nil {
-				return commonprovider.PreparedProfile{}, finalErr
-			}
-			return prepared, nil
+			return buildPreparedCandidate(request, arguments, environment, identity, inventory, native, approval, NewCurrentPrintInterpreterForMode(request.Mode).Reference(), "")
 		},
-	}, nil
+	}
+	if capability != "" {
+		candidate.Admit = func() (commonprovider.PreparedProfile, error) {
+			identity := runtimeIdentity{Executable: located.Path, SHA256: located.SHA256}
+			return buildPreparedCandidate(request, arguments, environment, identity, inventory, true, approval, NewCurrentPrintInterpreterForMode(request.Mode).Reference(), capability)
+		}
+	}
+	return candidate, nil
+}
+
+func staticCapability(definition commonprovider.InspectionDefinition, native, allowStaticAdmit bool) (string, error) {
+	if !native || !allowStaticAdmit {
+		return "", nil
+	}
+	return commonprovider.RuntimeCapabilityDigest(definition)
+}
+
+func buildPreparedCandidate(request task.TaskRecord, arguments []string, environment profileEnvironment, identity runtimeIdentity, inventory PolicyInventory, native bool, approval string, predicateReference task.PredicateRef, preflightSHA256 string) (commonprovider.PreparedProfile, error) {
+	effective, err := candidateEffectiveConfig(request, environment, identity, inventory, native, approval)
+	if err != nil {
+		return commonprovider.PreparedProfile{}, err
+	}
+	prepared := commonprovider.PreparedProfile{
+		Plan:                   execution.Plan{Executable: identity.Executable, ExecutableSHA256: identity.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd, Environment: slices.Clone(environment.Values), Predicate: predicateReference},
+		ObservedVersion:        identity.Version,
+		RuntimePreflightSHA256: preflightSHA256,
+		Effective:              effective,
+		WritableRoots:          slices.Clone(environment.WritableRoots),
+		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
+			return NewIdentityObserver(request.TaskID, expected, record)
+		},
+	}
+	if err = prepared.ValidateAdmission(request); err != nil {
+		return commonprovider.PreparedProfile{}, err
+	}
+	return prepared, nil
 }
 
 func candidateArguments(request task.TaskRecord, native bool, approval string) ([]string, error) {

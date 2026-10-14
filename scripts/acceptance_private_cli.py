@@ -27,8 +27,11 @@ from acceptance_provider_common import (
     validate_managed_lifetime_closure,
 )
 from acceptance_supervisor_common import (
+    _close_parent_descriptor,
+    _open_parent_directory,
     DirectoryOwner,
     OwnedDirectory,
+    remove_exact_owned_fifo,
     remove_owned_directory,
     require,
     rollback_owned_directories,
@@ -44,6 +47,10 @@ COLLECT_TIMEOUT_SECONDS = 165
 # ten minutes on a loaded host; it is not the task-timeout acceptance case.
 CAPACITY_TASK_BUDGET = "30m"
 CAPACITY_TARGET_TASKS = 200
+DEFAULT_STOP_SCENARIO = "default-stop"
+DEFAULT_STOP_TASK_COUNT = 2
+DEFAULT_STOP_TASK_BUDGET = "5s"
+DEFAULT_STOP_BUDGET = "900ms"
 DEFAULT_DISPATCH_WORKERS = 16
 PRIVATE_ACCEPTANCE_PREFIX = ".dl-"
 LEASE_HANDSHAKE_TIMEOUT_SECONDS = 5
@@ -362,33 +369,78 @@ class LockedReleaseGate:
             os.close(descriptor)
 
 
-class LiveFIFOLease:
-    """One read descriptor proving the exact fixture writer remains alive."""
+def _validate_live_parent_pin(path, parent_descriptor, parent_identity, task_id):
+    """Validate the path and descriptor still identify the original parent."""
+    require(type(parent_descriptor) is int and parent_descriptor >= 0,
+            "capacity fixture lease parent descriptor is closed: " + task_id)
+    try:
+        held_parent = os.fstat(parent_descriptor)
+    except OSError as error:
+        raise RuntimeError(
+            "capacity fixture lease parent descriptor is closed: " + task_id
+        ) from error
+    require(stat.S_ISDIR(held_parent.st_mode)
+            and (held_parent.st_dev, held_parent.st_ino) == parent_identity,
+            "capacity fixture lease parent descriptor was replaced: " + task_id)
+    try:
+        current_parent = Path(path).parent.lstat()
+    except OSError as error:
+        raise RuntimeError(
+            "capacity fixture lease parent was replaced: " + task_id
+        ) from error
+    require(stat.S_ISDIR(current_parent.st_mode) and not stat.S_ISLNK(current_parent.st_mode)
+            and (current_parent.st_dev, current_parent.st_ino) == parent_identity,
+            "capacity fixture lease parent was replaced: " + task_id)
 
-    def __init__(self, task_id, pid, path, descriptor):
+
+class LiveFIFOLease:
+    """An identity-pinned FIFO lease with a live entry and parent pin."""
+
+    def __init__(self, task_id, pid, path, descriptor, parent_descriptor,
+                 identity, parent_identity, owns_parent_descriptor):
         self.task_id = task_id
         self.pid = pid
         self.path = path
         self.descriptor = descriptor
+        self.parent_descriptor = parent_descriptor
+        self.identity = identity
+        self.parent_identity = parent_identity
+        self._owns_parent_descriptor = owns_parent_descriptor
 
     @classmethod
     def acquire(cls, task_id, pid, path, nonce, timeout=LEASE_HANDSHAKE_TIMEOUT_SECONDS):
-        path = Path(path)
+        path = Path(path).absolute()
+        parent_descriptor, parent_identity = _open_parent_directory(path.parent)
         try:
-            before = path.lstat()
-        except FileNotFoundError as error:
-            raise RuntimeError("capacity fixture lease is missing: " + task_id) from error
-        if not stat.S_ISFIFO(before.st_mode) or before.st_uid != os.getuid():
-            raise RuntimeError("capacity fixture lease is unsafe: " + task_id)
-        flags = os.O_RDONLY | os.O_NONBLOCK
-        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            descriptor = os.open(path, flags)
-        except OSError as error:
-            if error.errno in (errno.EMFILE, errno.ENFILE):
-                raise AcceptanceBlocked("file-descriptor-capacity-unavailable") from error
+            return cls._acquire_with_parent(
+                task_id, pid, path, nonce, parent_descriptor, parent_identity,
+                timeout, owns_parent_descriptor=True,
+            )
+        except BaseException:
+            _close_parent_descriptor(parent_descriptor)
             raise
+
+    @classmethod
+    def _acquire_with_parent(cls, task_id, pid, path, nonce, parent_descriptor,
+                             parent_identity, timeout, owns_parent_descriptor):
+        path = Path(path).absolute()
+        descriptor = -1
         try:
+            _validate_live_parent_pin(path, parent_descriptor, parent_identity, task_id)
+            try:
+                before = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+            except FileNotFoundError as error:
+                raise RuntimeError("capacity fixture lease is missing: " + task_id) from error
+            if not stat.S_ISFIFO(before.st_mode) or before.st_uid != os.getuid():
+                raise RuntimeError("capacity fixture lease is unsafe: " + task_id)
+            flags = os.O_RDONLY | os.O_NONBLOCK
+            flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                descriptor = os.open(path.name, flags, dir_fd=parent_descriptor)
+            except OSError as error:
+                if error.errno in (errno.EMFILE, errno.ENFILE):
+                    raise AcceptanceBlocked("file-descriptor-capacity-unavailable") from error
+                raise
             opened = os.fstat(descriptor)
             if (not stat.S_ISFIFO(opened.st_mode) or opened.st_uid != os.getuid()
                     or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
@@ -411,16 +463,23 @@ class LiveFIFOLease:
                     time.sleep(0.01)
             if received != expected:
                 raise RuntimeError("capacity fixture lease handshake is invalid: " + task_id)
-            lease = cls(task_id, pid, path, descriptor)
+            lease = cls(
+                task_id, pid, path, descriptor, parent_descriptor,
+                (opened.st_dev, opened.st_ino), parent_identity, owns_parent_descriptor,
+            )
             lease.assert_live()
             return lease
         except BaseException:
-            os.close(descriptor)
+            if descriptor >= 0:
+                os.close(descriptor)
             raise
 
     def assert_live(self):
         if self.descriptor < 0:
             raise RuntimeError("capacity fixture lease was already closed: " + self.task_id)
+        _validate_live_parent_pin(
+            self.path, self.parent_descriptor, self.parent_identity, self.task_id,
+        )
         try:
             unexpected = os.read(self.descriptor, 1)
         except BlockingIOError:
@@ -430,43 +489,108 @@ class LiveFIFOLease:
         raise RuntimeError("capacity fixture lease emitted unexpected data: " + self.task_id)
 
     def close(self):
-        if self.descriptor >= 0:
-            descriptor = self.descriptor
-            self.descriptor = -1
-            os.close(descriptor)
+        descriptor = self.descriptor
+        self.descriptor = -1
+        parent_descriptor = self.parent_descriptor
+        self.parent_descriptor = -1
+        owns_parent_descriptor = self._owns_parent_descriptor
+        self._owns_parent_descriptor = False
+        try:
+            if descriptor >= 0:
+                os.close(descriptor)
+        finally:
+            if owns_parent_descriptor and parent_descriptor >= 0:
+                _close_parent_descriptor(parent_descriptor)
+
+    def _remove_closed_fifo(self, parent_descriptor):
+        """Remove this worker-owned FIFO while both original pins remain live."""
+        require(self.descriptor >= 0,
+                "capacity fixture lease entry descriptor is closed: " + self.task_id)
+        require(parent_descriptor == self.parent_descriptor,
+                "capacity fixture lease parent descriptor is not its pinned parent: " + self.task_id)
+        _validate_live_parent_pin(
+            self.path, parent_descriptor, self.parent_identity, self.task_id,
+        )
+        try:
+            remove_exact_owned_fifo(
+                parent_descriptor, self.descriptor, self.path.name,
+                self.identity, self.parent_identity,
+            )
+        except FileNotFoundError:
+            return {"path": str(self.path), "state": "absent"}
+        return {
+            "path": str(self.path),
+            "state": "removed",
+            "device": self.identity[0],
+            "inode": self.identity[1],
+        }
+
+    def remove_closed_fifo(self):
+        return self._remove_closed_fifo(self.parent_descriptor)
 
 
 class LiveFIFOLeaseCohort:
-    """Own and close every live capacity-fixture lease descriptor."""
+    """Own one parent pin per directory and every live lease descriptor."""
 
-    def __init__(self, leases):
+    def __init__(self, leases, parent_pins):
         self.leases = leases
+        self.parent_pins = parent_pins
 
     @classmethod
     def acquire(cls, specifications, nonce, timeout=LEASE_HANDSHAKE_TIMEOUT_SECONDS):
         leases = []
+        parent_pins = {}
         try:
             for specification in specifications:
-                leases.append(LiveFIFOLease.acquire(
-                    specification["task_id"], specification["pid"],
-                    specification["path"], nonce, timeout,
+                path = Path(specification["path"]).absolute()
+                parent_pin = parent_pins.get(path.parent)
+                if parent_pin is None:
+                    parent_pin = _open_parent_directory(path.parent)
+                    parent_pins[path.parent] = parent_pin
+                leases.append(LiveFIFOLease._acquire_with_parent(
+                    specification["task_id"], specification["pid"], path, nonce,
+                    parent_pin[0], parent_pin[1], timeout,
+                    owns_parent_descriptor=False,
                 ))
-            cohort = cls(leases)
+            cohort = cls(leases, parent_pins)
             cohort.assert_live()
             return cohort
-        except BaseException:
-            for lease in reversed(leases):
-                lease.close()
+        except BaseException as error:
+            try:
+                cls._close_resources(leases, parent_pins)
+            except OSError as cleanup_error:
+                raise cleanup_error from error
             raise
+
+    @staticmethod
+    def _close_resources(leases, parent_pins):
+        first_error = None
+        for lease in reversed(leases):
+            try:
+                lease.close()
+            except OSError as error:
+                if first_error is None:
+                    first_error = error
+        for parent_descriptor, _parent_identity in reversed(tuple(parent_pins.values())):
+            _close_parent_descriptor(parent_descriptor)
+        if first_error is not None:
+            raise first_error
 
     def assert_live(self):
         for lease in self.leases:
             lease.assert_live()
 
     def close(self):
-        for lease in reversed(self.leases):
-            lease.close()
+        leases = tuple(self.leases)
+        parent_pins = dict(self.parent_pins)
         self.leases = []
+        self.parent_pins = {}
+        self._close_resources(leases, parent_pins)
+
+    def remove_closed_fifos(self):
+        """Remove exact worker-owned lease paths while their original pins remain live."""
+        return [lease._remove_closed_fifo(lease.parent_descriptor)
+                for lease in tuple(self.leases)]
 
     def __enter__(self):
         return self
@@ -560,7 +684,8 @@ def record_invocation_error(receipt, args, error, captured):
     }, indent=2) + "\n")
 
 
-def run_json(delegate, env, args, expected=(0,), timeout=45, receipt=None, phase=None):
+def run_json(delegate, env, args, expected=(0,), timeout=45, receipt=None, phase=None,
+             capture_response=False):
     captured = None
     try:
         command_env = phase_environment(env, phase) if phase is not None else env
@@ -593,9 +718,13 @@ def run_json(delegate, env, args, expected=(0,), timeout=45, receipt=None, phase
             % (args, result.returncode, result.stdout[-2000:], result.stderr[-2000:])
         )
     try:
-        return json.loads(result.stdout)
+        response = json.loads(result.stdout)
     except json.JSONDecodeError as error:
         raise RuntimeError("delegate returned invalid JSON for %r: %s" % (args, error)) from error
+    if receipt is not None and capture_response:
+        evidence["response"] = response
+        receipt.write_text(json.dumps(evidence, indent=2) + "\n")
+    return response
 
 
 def install_fixture(source, destination):
@@ -645,15 +774,56 @@ def observe_created_admission(delegate, state, env, response, receipt, timeout=6
 
 
 def read_created_task_status(delegate, state, env, task_id, receipt,
-                             phase="task-observation"):
+                             phase="task-observation", timeout=45):
     """Read one created task without changing or resubmitting its request."""
     observed = run_json(
         delegate, env, ["--root", str(state), "status", task_id, "--json"],
-        receipt=receipt, phase=phase,
+        timeout=timeout, receipt=receipt, phase=phase, capture_response=True,
     )
     if observed.get("task_id") != task_id:
         raise RuntimeError("task observation returned a different task")
     return observed
+
+
+def await_created_task_ended(delegate, state, env, response, receipt,
+                             timeout=30, phase="task-observation"):
+    """Poll one created task until the queue reports ended, without resubmitting it."""
+    task_id = response.get("task_id")
+    root_id = response.get("root_id")
+    if not isinstance(task_id, str) or not isinstance(root_id, str) or not root_id:
+        raise RuntimeError("task observation lacks its created task/root identity")
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    poll_receipts = []
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("created task queue status remained non-ended: " + task_id)
+        poll_receipt = receipt.with_name(
+            "%s-%03d%s" % (receipt.stem, attempt, receipt.suffix)
+        )
+        status = read_created_task_status(
+            delegate, state, env, task_id, poll_receipt,
+            phase=phase, timeout=min(45, remaining),
+        )
+        poll_receipts.append(poll_receipt.name)
+        if status.get("root_id") != root_id:
+            raise RuntimeError("task observation returned a different root")
+        failure = status.get("failure")
+        if status.get("error") or failure:
+            raise RuntimeError("task status reported an operational failure: %r" % status)
+        liveness = status.get("liveness")
+        if liveness == "ended":
+            return status, {
+                "kind": "queue-ended-observation",
+                "final_receipt": poll_receipt.name,
+                "poll_receipts": poll_receipts,
+                "poll_count": len(poll_receipts),
+            }
+        if liveness != "running":
+            raise RuntimeError("task status did not report running or ended: %r" % status)
+        attempt += 1
+        time.sleep(min(0.2, max(0, deadline - time.monotonic())))
 
 
 def package_layout(root, symlinked):
@@ -1732,6 +1902,316 @@ def remove_private_acceptance_root(root_token: OwnedDirectory,
                            str(root_token.directory))
 
 
+def default_stop_live_lease(client, config, env, state, response, waiter_directory,
+                            lease_nonce):
+    """Prove one fixture provider is live before exercising its stop path."""
+    task_id = response["task_id"]
+    root_id = response["root_id"]
+    label = "delegate:" + root_id + ":" + task_id
+    wait_for_pueue_state(
+        client, config, env, label, "Running", phase="default-stop-observation",
+    )
+    deadline = time.monotonic() + 30
+    while True:
+        specifications = capacity_lease_specifications(
+            state, [response], waiter_directory, lease_nonce,
+        )
+        if len(specifications) == 1 and specifications[0]["path"].exists():
+            lease_started = time.time_ns()
+            cohort = LiveFIFOLeaseCohort.acquire(specifications, lease_nonce)
+            cohort.assert_live()
+            lease_observed = time.time_ns()
+            return specifications[0], cohort, {
+                "observed_at_unix_ns": lease_observed,
+                "acquire_elapsed_ns": max(0, lease_observed - lease_started),
+            }
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "fixture provider did not reach a live lease before its bounded observation deadline: "
+                + task_id
+            )
+        time.sleep(min(0.05, remaining))
+
+
+def default_stop_status_row(status, request_id):
+    rows = status.get("stops") or []
+    for row in rows:
+        if isinstance(row, dict) and row.get("request_id") == request_id:
+            return row
+    raise RuntimeError("status did not retain the exact stop request: " + request_id)
+
+
+def default_stop_dispatch_evidence(response):
+    failure = response.get("failure") or {}
+    return {
+        "task_id": response.get("task_id"),
+        "root_id": response.get("root_id"),
+        "task_record": response.get("task_record"),
+        "admission": response.get("admission"),
+        "failure": {
+            key: failure.get(key)
+            for key in ("code", "stage", "next_action")
+            if failure.get(key) is not None
+        },
+    }
+
+
+def default_stop_lease_evidence(specification, lease_observation):
+    return {
+        "pid": specification["pid"],
+        "scope_kind": specification["scope_kind"],
+        "assurance": specification["assurance"],
+        "owner_sha256": specification["owner_sha256"],
+        "registration_sha256": specification["registration_sha256"],
+        "scope_plan_sha256": specification["scope_plan_sha256"],
+        "scope_id_sha256": specification["scope_id_sha256"],
+        **lease_observation,
+    }
+
+
+def default_stop_stop_evidence(stop):
+    if not isinstance(stop, dict):
+        raise RuntimeError("stop response omitted its durable stop facts")
+    return {
+        key: stop.get(key)
+        for key in (
+            "request_id", "cause", "requested", "matched", "attempted",
+            "action", "numeric_task_id", "acknowledged", "in_flight",
+            "observed_state", "terminated",
+        )
+        if key in stop
+    }
+
+
+def default_stop_closure_evidence(closure, task_id, cause):
+    if not isinstance(closure, dict):
+        raise RuntimeError("canonical lifetime closure omitted task evidence: " + task_id)
+    termination = closure.get("termination")
+    registration = closure.get("registration")
+    worker_wait = closure.get("worker_wait")
+    launches = closure.get("launches")
+    if not isinstance(termination, dict) or termination.get("cause") != cause:
+        raise RuntimeError("canonical lifetime closure recorded the wrong termination cause: " + task_id)
+    if termination.get("scope_empty") is not True:
+        raise RuntimeError("canonical lifetime closure did not prove an empty native scope: " + task_id)
+    intent = closure.get("intent")
+    if not isinstance(intent, dict) or not isinstance(registration, dict) or not isinstance(worker_wait, dict):
+        raise RuntimeError("canonical lifetime closure omitted registration or worker Wait evidence: " + task_id)
+    if not isinstance(launches, list) or not launches:
+        raise RuntimeError("canonical lifetime closure omitted provider launch evidence: " + task_id)
+    return {
+        "task_id": task_id,
+        "termination": {
+            "cause": termination.get("cause"),
+            "scope_empty": termination.get("scope_empty"),
+            "observed_at": termination.get("observed_at"),
+        },
+        "lifetime": {
+            "deadline": intent.get("deadline"),
+            "created_at": intent.get("created_at"),
+            "registered_at": registration.get("created_at"),
+        },
+        "worker_wait": {
+            key: worker_wait.get(key)
+            for key in ("child_pid", "result", "exit_code", "observed_at")
+            if key in worker_wait
+        },
+        "launch_count": len(launches),
+        "scope": {
+            "kind": registration.get("scope_kind"),
+            "assurance": registration.get("assurance"),
+        },
+    }
+
+
+def require_empty_fixture_waiters(waiter_directory):
+    entries = tuple(Path(waiter_directory).iterdir())
+    if entries:
+        raise RuntimeError(
+            "fixture provider lease entries remained after canonical lifetime closure: "
+            + str(len(entries))
+        )
+
+
+def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
+                                waiter_directory, config, env, response_directory,
+                                provider_fixture, lease_nonce, run_receipt,
+                                attempted_task_ids):
+    """Exercise default user-stop and sub-second budget termination on live fixtures."""
+    waiting_brief = brief.with_name("default-stop-waiting-brief.md")
+    waiting_brief.write_text("DELEGATE_PRIVATE_UPGRADE_WAIT\n")
+    waiting_brief.chmod(0o600)
+    receipts = Path(response_directory)
+    release_gate = LockedReleaseGate.acquire(gate)
+    task_evidence = {}
+    acceptance_evidence = {
+        "scenario": DEFAULT_STOP_SCENARIO,
+        "requested_task_count": DEFAULT_STOP_TASK_COUNT,
+        "provider": "pi:json",
+        "fixture": "fake-pi-live-fifo",
+        "supervisor": "real-pueue-private",
+        "stop_poll_policy": {
+            "override": False,
+            "mode": "production-default",
+            "timing_claim": "observed native lifecycle timestamps; no fixed latency guarantee",
+        },
+        "fingerprints": {"provider_fixture": file_fingerprint(provider_fixture)},
+        "tasks": task_evidence,
+        "cleanup": {
+            "fixture_waiter_entries": "pending",
+            "lifetime_closure": "canonical-managed-validator",
+            "supervisor_shutdown": "pending",
+        },
+    }
+    # Keep completed task evidence in the receipt even when fixture cleanup fails later.
+    run_receipt.add_details(default_stop=acceptance_evidence)
+
+    def dispatch_fixture(task_id, budget, receipt_name):
+        response = run_json(
+            delegate, env, [
+                "--root", str(state), "dispatch", "--provider", "pi:json",
+                "--brief", str(waiting_brief), "--cwd", str(workspace),
+                "--id", task_id, "--permission", "read-only", "--budget", budget,
+                "--json",
+            ], expected=(0, 1), timeout=45,
+            receipt=receipts / receipt_name, phase="default-stop-dispatch",
+        )
+        if response.get("task_id") != task_id or response.get("task_record") != "created":
+            raise RuntimeError("default-stop dispatch did not create the requested task")
+        if not response.get("root_id") or response.get("admission") != "admitted":
+            raise RuntimeError("default-stop dispatch did not admit the requested task")
+        observed = observe_created_admission(
+            delegate, state, env, response, receipts / receipt_name,
+            phase="default-stop-admission-observation",
+        )
+        if observed.get("task_id") != task_id or observed.get("admission") != "admitted":
+            raise RuntimeError("default-stop admission observation did not confirm the same task")
+        run_receipt.increment("dispatch_completed_count")
+        run_receipt.increment("admitted_task_count")
+        return response
+
+    def close_task(response, cause, status_receipt):
+        task_id = response["task_id"]
+        closure = await_managed_lifetime_closure(state, (task_id,), timeout=30)
+        task_closure = closure.get("tasks", {}).get(task_id)
+        closure_evidence = default_stop_closure_evidence(task_closure, task_id, cause)
+        status, queue_observation = await_created_task_ended(
+            delegate, state, env, response, receipts / status_receipt,
+            phase="default-stop-observation",
+        )
+        return status, closure_evidence, queue_observation
+
+    try:
+        run_receipt.phase("default_stop_user")
+        user_task_id = uuid.uuid4().hex
+        attempted_task_ids.append(user_task_id)
+        user_dispatch = dispatch_fixture(
+            user_task_id, DEFAULT_STOP_TASK_BUDGET, "dispatch-default-stop-user.json",
+        )
+        user_specification, user_cohort, user_lease = default_stop_live_lease(
+            client, config, env, state, user_dispatch, waiter_directory, lease_nonce,
+        )
+        run_receipt.update_counts(running_task_count=1, live_lease_count=1)
+        with user_cohort:
+            cancel_started = time.time_ns()
+            cancel = run_json(
+                delegate, env, ["--root", str(state), "cancel", user_task_id, "--json"],
+                receipt=receipts / "cancel-default-stop-user.json",
+                phase="default-stop-user-request",
+            )
+            cancel_finished = time.time_ns()
+            if cancel.get("task_id") != user_task_id or cancel.get("root_id") != user_dispatch.get("root_id"):
+                raise RuntimeError("default-stop cancel response changed task identity")
+            user_stop = cancel.get("stop")
+            if not isinstance(user_stop, dict) or (
+                    user_stop.get("requested") is not True
+                    or user_stop.get("cause") != "user"
+                    or user_stop.get("in_flight") is not True
+                    or user_stop.get("attempted") is not True
+                    or not isinstance(user_stop.get("request_id"), str)):
+                raise RuntimeError("default-stop cancel did not record a live user stop request")
+            user_status, user_closure, user_queue_observation = close_task(
+                user_dispatch, "requested", "status-default-stop-user.json",
+            )
+            user_row = default_stop_status_row(user_status, user_stop["request_id"])
+            if user_row.get("cause") != "user" or user_row.get("terminated") is not True:
+                raise RuntimeError("default-stop status did not retain the completed user stop")
+            task_evidence["user_stop"] = {
+                "budget": DEFAULT_STOP_TASK_BUDGET,
+                "dispatch": default_stop_dispatch_evidence(user_dispatch),
+                "lease": default_stop_lease_evidence(user_specification, user_lease),
+                "cancel": {
+                    "receipt": "cancel-default-stop-user.json",
+                    "started_at_unix_ns": cancel_started,
+                    "finished_at_unix_ns": cancel_finished,
+                    "stop": default_stop_stop_evidence(user_stop),
+                },
+                "status": {
+                    "receipt": user_queue_observation["final_receipt"],
+                    "liveness": user_status.get("liveness"),
+                    "stop": default_stop_stop_evidence(user_row),
+                    "queue_ended_observation": user_queue_observation,
+                },
+                "closure": user_closure,
+                "fixture_lease_cleanup": {"state": "pending"},
+            }
+            task_evidence["user_stop"]["fixture_lease_cleanup"] = user_cohort.remove_closed_fifos()
+            run_receipt.update_counts(running_task_count=0, live_lease_count=0)
+
+        run_receipt.phase("default_stop_budget")
+        budget_task_id = uuid.uuid4().hex
+        attempted_task_ids.append(budget_task_id)
+        budget_dispatch = dispatch_fixture(
+            budget_task_id, DEFAULT_STOP_BUDGET, "dispatch-default-stop-budget.json",
+        )
+        budget_specification, budget_cohort, budget_lease = default_stop_live_lease(
+            client, config, env, state, budget_dispatch, waiter_directory, lease_nonce,
+        )
+        run_receipt.update_counts(running_task_count=1, live_lease_count=1)
+        with budget_cohort:
+            budget_status, budget_closure, budget_queue_observation = close_task(
+                budget_dispatch, "budget", "status-default-stop-budget.json",
+            )
+            budget_row = default_stop_status_row(budget_status, "budget")
+            if budget_row.get("cause") != "budget" or budget_row.get("terminated") is not True:
+                raise RuntimeError("default-stop status did not retain the budget termination")
+            if any(row.get("cause") == "user" for row in (budget_status.get("stops") or [])):
+                raise RuntimeError("budget fixture unexpectedly acquired a user stop request")
+            task_evidence["budget_stop"] = {
+                "budget": DEFAULT_STOP_BUDGET,
+                "dispatch": default_stop_dispatch_evidence(budget_dispatch),
+                "lease": default_stop_lease_evidence(budget_specification, budget_lease),
+                "status": {
+                    "receipt": budget_queue_observation["final_receipt"],
+                    "liveness": budget_status.get("liveness"),
+                    "stop": default_stop_stop_evidence(budget_row),
+                    "queue_ended_observation": budget_queue_observation,
+                },
+                "closure": budget_closure,
+                "fixture_lease_cleanup": {"state": "pending"},
+            }
+            task_evidence["budget_stop"]["fixture_lease_cleanup"] = budget_cohort.remove_closed_fifos()
+            run_receipt.update_counts(running_task_count=0, live_lease_count=0)
+        require_empty_fixture_waiters(waiter_directory)
+        acceptance_evidence["cleanup"]["fixture_waiter_entries"] = 0
+        release_gate.release()
+        release_gate = None
+        shutdown_private_supervisor(
+            client, config, env, state=state, task_ids=tuple(attempted_task_ids),
+        )
+        if run_receipt is not None:
+            run_receipt.update_counts(
+                dispatch_completed_count=DEFAULT_STOP_TASK_COUNT,
+                admitted_task_count=DEFAULT_STOP_TASK_COUNT,
+            )
+        acceptance_evidence["cleanup"]["supervisor_shutdown"] = "verified"
+        return acceptance_evidence
+    finally:
+        if release_gate is not None:
+            release_gate.release()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--delegate", type=Path, required=True)
@@ -1741,13 +2221,23 @@ def main():
     parser.add_argument("--pueue", type=Path, required=True)
     parser.add_argument("--pueued", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--scenario", choices=("capacity", DEFAULT_STOP_SCENARIO), default="capacity")
     parser.add_argument("--parallel-tasks", type=int, default=CAPACITY_TARGET_TASKS)
     parser.add_argument("--dispatch-workers", type=int,
                         help="concurrent dispatch callers (defaults to 16; capped at --parallel-tasks; this load-generator setting is not a product task limit)")
     parser.add_argument("--runtime-only", action="store_true",
                         help="exercise a root without a legacy model-discovery group journal")
     args = parser.parse_args()
-    if args.parallel_tasks != CAPACITY_TARGET_TASKS:
+    if args.scenario == DEFAULT_STOP_SCENARIO:
+        if args.parallel_tasks != DEFAULT_STOP_TASK_COUNT:
+            parser.error("--parallel-tasks must be exactly %d for the %s scenario" %
+                         (DEFAULT_STOP_TASK_COUNT, DEFAULT_STOP_SCENARIO))
+        if not args.runtime_only:
+            parser.error("--scenario %s requires --runtime-only" % DEFAULT_STOP_SCENARIO)
+        if args.upgraded_delegate is not None or args.upgraded_runner is not None:
+            parser.error("--scenario %s does not accept upgraded installation arguments" %
+                         DEFAULT_STOP_SCENARIO)
+    elif args.parallel_tasks != CAPACITY_TARGET_TASKS:
         parser.error("--parallel-tasks must be exactly %d for the capacity proof" % CAPACITY_TARGET_TASKS)
     if args.dispatch_workers is not None and args.dispatch_workers <= 0:
         parser.error("--dispatch-workers must be positive")
@@ -1787,6 +2277,7 @@ def main():
     run_receipt = AcceptanceReceipt(
         output, args.parallel_tasks, dispatch_workers, binary_sources,
     )
+    run_receipt.add_details(scenario=args.scenario)
     ownership = DirectoryOwner()
     old_layout_ownership = DirectoryOwner()
     old_layout_owned = ()
@@ -1868,6 +2359,36 @@ def main():
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
         })
+
+        if args.scenario == DEFAULT_STOP_SCENARIO:
+            run_receipt.phase("default_stop")
+            default_stop = run_default_stop_acceptance(
+                old_install / "delegate", old_libexec / "pueue", state, workspace,
+                brief, gate, waiter_directory, private_config, env, response_directory,
+                provider_bin / "pi", lease_nonce, run_receipt, attempted_task_ids,
+            )
+            wrapper_calls = (
+                wrapper_call_records(base / "old-client-starts-calls", "client", "old")
+                + wrapper_call_records(base / "old-daemon-starts-calls", "daemon", "old")
+            )
+            require_no_startup_control_calls(wrapper_calls)
+            if not old_daemon_marker.is_file() or old_daemon_marker.read_text().splitlines() != ["started"]:
+                raise RuntimeError("default-stop scenario did not start exactly one private daemon")
+            if upgraded_daemon_marker.exists():
+                raise RuntimeError("default-stop scenario started an unexpected upgraded daemon")
+            run_receipt.add_details(
+                default_stop=default_stop,
+                pueue_wrapper_calls=compact_sequence_evidence(wrapper_calls),
+                checks=[
+                    "a user cancellation was issued only after the exact fake provider lease was live",
+                    "a sub-second budget termination was issued only after the exact fake provider lease was live",
+                    "both tasks reached canonical worker Wait and empty native-scope closure",
+                    "the private supervisor shutdown was verified after both closures",
+                ],
+            )
+            run_receipt.stage("default-stop-proved")
+            success = True
+            return
 
         if args.parallel_tasks > 1:
             # PATH is intentionally retained by the control environment;

@@ -623,6 +623,15 @@ class RoutingTests(unittest.TestCase):
                 },
             },
         })
+        request_sha = gate.digest(inspection / "request.json")
+        gate.write_json(inspection / "receipt.json", {
+            "schema_version": 1, "request_sha256": request_sha,
+            "numeric_task_id": 37,
+        })
+        gate.write_json(inspection / "submission.json", {
+            "schema_version": 1, "request_sha256": request_sha,
+            "created_at": "2026-10-13T00:00:02Z",
+        })
         owner.delegate_state_roots = {state}
         empty = Mock()
         empty.json.return_value = {"tasks": {}}

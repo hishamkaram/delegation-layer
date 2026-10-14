@@ -18,7 +18,7 @@ import (
 // shared supervised runtime capability probe. The finalizer consumes only the
 // nonsecret facts produced by that probe.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, nativeCurrentProfile, task.PredicateRef{}, os.Environ())
+	return prepareCandidate(request, nativeCurrentProfile, task.PredicateRef{}, os.Environ(), true)
 }
 
 // PrepareExistingCandidate retains the launch and policy contract recorded by
@@ -36,7 +36,7 @@ func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (co
 	if meta.EnvironmentRecorded {
 		environment = slices.Clone(meta.Environment)
 	}
-	return prepareCandidate(request, profile, meta.Predicate, environment)
+	return prepareCandidate(request, profile, meta.Predicate, environment, meta.RuntimePreflightSHA256 != "" && profile == nativeCurrentProfile)
 }
 
 type profileKind uint8
@@ -47,34 +47,11 @@ const (
 	nativeCurrentProfile
 )
 
-func prepareCandidate(request task.TaskRecord, profile profileKind, storedPredicate task.PredicateRef, environmentValues []string) (commonprovider.ProfileCandidate, error) {
+func prepareCandidate(request task.TaskRecord, profile profileKind, storedPredicate task.PredicateRef, environmentValues []string, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
 	native := profile != legacyProfile
-	environment, err := prepareProfileEnvironment(environmentValues, native)
+	environment, err := prepareCandidateEnvironment(request, profile, environmentValues)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
-	}
-	if profile == nativeCurrentProfile && request.Mode == ModeReadOnly {
-		initialSessionDir := environment.SessionDir
-		baseSessionDir, baseErr := config.CanonicalizePath(filepath.Join(environment.AgentDir, "sessions"))
-		if baseErr != nil {
-			return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: resolve Pi default session directory: %w", ErrUnsupportedProfile, baseErr)
-		}
-		environment.SessionDir, err = resolveNativeSessionDirectory(environment, request.CanonicalCwd)
-		if err != nil {
-			return commonprovider.ProfileCandidate{}, err
-		}
-		if initialSessionDir != baseSessionDir {
-			environment.WritableRoots = slices.DeleteFunc(environment.WritableRoots, func(root string) bool { return root == initialSessionDir })
-		}
-		if !pathContains(baseSessionDir, environment.SessionDir) {
-			environment.WritableRoots = append(environment.WritableRoots, environment.SessionDir)
-		}
-		environment.WritableRoots = append(environment.WritableRoots, baseSessionDir)
-		slices.Sort(environment.WritableRoots)
-		environment.WritableRoots = slices.Compact(environment.WritableRoots)
-		// Pin the settings-derived directory in the admitted launch environment
-		// so retries and continuations reuse the exact session location.
-		environment.Values = pinSessionDirectory(environment.Values, environment.SessionDir)
 	}
 	arguments, err := profileArguments(request, profile, environment)
 	if err != nil {
@@ -97,14 +74,73 @@ func prepareCandidate(request task.TaskRecord, profile profileKind, storedPredic
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
 	}
-	return commonprovider.ProfileCandidate{
+	var capability string
+	if profile == nativeCurrentProfile && allowStaticAdmit {
+		capability, err = commonprovider.RuntimeCapabilityDigest(definition)
+		if err != nil {
+			return commonprovider.ProfileCandidate{}, err
+		}
+	}
+	predicateReference := profilePredicateReference(native, request.Mode, storedPredicate)
+	candidate := commonprovider.ProfileCandidate{
 		Directory:     request.CanonicalCwd,
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
 		Finalize: func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
-			return finalizePreparedCandidate(request, native, arguments, environment, cli, legacyEffective, profilePredicateReference(native, request.Mode, storedPredicate), data)
+			return finalizePreparedCandidate(request, native, arguments, environment, cli, legacyEffective, predicateReference, data)
 		},
-	}, nil
+	}
+	if capability != "" {
+		candidate.Admit = func() (commonprovider.PreparedProfile, error) {
+			return buildPreparedCandidate(request, true, arguments, environment, cli, legacyEffective, predicateReference, "", cli.SHA256, capability)
+		}
+	}
+	return candidate, nil
+}
+
+func prepareCandidateEnvironment(request task.TaskRecord, profile profileKind, environmentValues []string) (profileEnvironment, error) {
+	native := profile != legacyProfile
+	environment, err := prepareProfileEnvironment(environmentValues, native)
+	if err != nil {
+		return profileEnvironment{}, err
+	}
+	if profile != nativeCurrentProfile || request.Mode != ModeReadOnly {
+		return environment, nil
+	}
+	initialSessionDir := environment.SessionDir
+	baseSessionDir, err := config.CanonicalizePath(filepath.Join(environment.AgentDir, "sessions"))
+	if err != nil {
+		return profileEnvironment{}, fmt.Errorf("%w: resolve Pi default session directory: %w", ErrUnsupportedProfile, err)
+	}
+	environment.SessionDir, err = resolveNativeSessionDirectory(environment, request.CanonicalCwd)
+	if err != nil {
+		return profileEnvironment{}, err
+	}
+	if initialSessionDir != baseSessionDir {
+		environment.WritableRoots = slices.DeleteFunc(environment.WritableRoots, func(root string) bool { return root == initialSessionDir })
+	}
+	if !pathContains(baseSessionDir, environment.SessionDir) {
+		environment.WritableRoots = append(environment.WritableRoots, environment.SessionDir)
+	}
+	environment.WritableRoots = append(environment.WritableRoots, baseSessionDir)
+	slices.Sort(environment.WritableRoots)
+	environment.WritableRoots = slices.Compact(environment.WritableRoots)
+	// Pin the settings-derived directory in the admitted launch environment
+	// so retries and continuations reuse the exact session location.
+	environment.Values = pinSessionDirectory(environment.Values, environment.SessionDir)
+	return environment, nil
+}
+
+func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments []string, environment profileEnvironment, cli commonprovider.CLIInfo, legacyEffective task.EffectiveConfig, predicateReference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
+	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
+	if decodeErr != nil || facts.Runtime == nil || facts.Native != nil {
+		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
+	}
+	runtime := *facts.Runtime
+	if runtime.Executable != cli.Path || runtime.SHA256 != cli.SHA256 {
+		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: runtime executable changed during inspection", ErrUnsupportedProfile)
+	}
+	return buildPreparedCandidate(request, native, arguments, environment, cli, legacyEffective, predicateReference, runtime.Version, runtime.SHA256, "")
 }
 
 func profileArguments(request task.TaskRecord, profile profileKind, environment profileEnvironment) ([]string, error) {
@@ -162,16 +198,8 @@ func profileRuntimeRequirements(profile profileKind, mode string, storedPredicat
 	}
 }
 
-func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments []string, environment profileEnvironment, cli commonprovider.CLIInfo, legacyEffective task.EffectiveConfig, predicateReference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
-	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
-	if decodeErr != nil || facts.Runtime == nil || facts.Native != nil {
-		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
-	}
-	runtime := *facts.Runtime
-	if runtime.Executable != cli.Path || runtime.SHA256 != cli.SHA256 {
-		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: runtime executable changed during inspection", ErrUnsupportedProfile)
-	}
-	effective, err := finalizedEffectiveConfig(request, native, environment, legacyEffective, runtime.SHA256)
+func buildPreparedCandidate(request task.TaskRecord, native bool, arguments []string, environment profileEnvironment, cli commonprovider.CLIInfo, legacyEffective task.EffectiveConfig, predicateReference task.PredicateRef, observedVersion, runtimeSHA256, preflightSHA256 string) (commonprovider.PreparedProfile, error) {
+	effective, err := finalizedEffectiveConfig(request, native, environment, legacyEffective, runtimeSHA256)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
@@ -180,14 +208,15 @@ func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments [
 			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: slices.Clone(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(environment.Values), Predicate: predicateReference,
 		},
-		ObservedVersion: runtime.Version,
-		Effective:       task.CloneEffectiveConfig(effective),
-		WritableRoots:   slices.Clone(environment.WritableRoots),
+		ObservedVersion:        observedVersion,
+		RuntimePreflightSHA256: preflightSHA256,
+		Effective:              task.CloneEffectiveConfig(effective),
+		WritableRoots:          slices.Clone(environment.WritableRoots),
 		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 			return NewIdentityObserver(expected, record)
 		},
 	}
-	if err := prepared.Validate(request); err != nil {
+	if err := prepared.ValidateAdmission(request); err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
 	return prepared, nil

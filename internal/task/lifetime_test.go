@@ -1,9 +1,33 @@
 package task
 
 import (
+	"context"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestRecordAbsentRequiresUnmarkedFilesystemAbsence(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "direct", err: os.ErrNotExist, want: true},
+		{name: "identity", err: errors.Join(ErrIdentityMismatch, os.ErrNotExist)},
+		{name: "evidence", err: errors.Join(ErrEvidenceFault, os.ErrNotExist)},
+		{name: "canceled", err: errors.Join(context.Canceled, os.ErrNotExist)},
+		{name: "deadline", err: errors.Join(context.DeadlineExceeded, os.ErrNotExist)},
+		{name: "nil", err: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RecordAbsent(tc.err); got != tc.want {
+				t.Fatalf("RecordAbsent(%v) = %t, want %t", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 func validLifetimeRegistration() LifetimeRegistrationRecord {
 	return LifetimeRegistrationRecord{

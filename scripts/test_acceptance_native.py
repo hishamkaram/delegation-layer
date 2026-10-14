@@ -1443,6 +1443,43 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                                         "no admitted provider runtime identity"):
                 operation._record_provider_runtime_identity(task_id, meta)
 
+    def test_pending_runtime_identity_uses_terminal_launch_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="native-runtime-pending-") as directory:
+            root = Path(directory)
+            selected = root / "provider"
+            selected.write_text("selected\n")
+            refreshed = root / "provider-v2"
+            refreshed.write_text("refreshed\n")
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.provider_executable = selected.resolve()
+            operation.provider_runtime_identities = {}
+            task_id = "a" * 32
+            meta = {
+                "provider_executable": str(selected.resolve()),
+                "provider_version": "",
+                "runtime_preflight_sha256": "a" * 64,
+                "environment_recorded": True,
+            }
+            started = {
+                "provider_executable": str(refreshed.resolve()),
+                "provider_version": "fixture-v2",
+                "provider_sha256": "b" * 64,
+            }
+            exited = dict(started)
+
+            identity = operation._record_provider_runtime_identity(
+                task_id, meta, (started, exited))
+
+            self.assertEqual(identity, {
+                "executable": str(refreshed.resolve()),
+                "version": "fixture-v2",
+                "sha256": "b" * 64,
+            })
+            changed_exit = dict(exited, provider_version="fixture-v3")
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "runtime identities differ"):
+                operation._record_provider_runtime_identity(
+                    "c" * 32, meta, (started, changed_exit))
+
     def test_model_discovery_binds_helper_to_selected_provider_executable(self):
         with tempfile.TemporaryDirectory(prefix="native-model-executable-") as directory:
             root = Path(directory)

@@ -2,6 +2,7 @@ package taskdir
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -281,15 +282,34 @@ func samePreparedRecord(name string, existing, data []byte) (bool, error) {
 }
 
 func (td *TaskDir) loadAndValidatePreparedSet() ([]byte, *task.TaskRecord, *task.MetaRecord, string, string, error) {
-	brief, err := td.store.readBytes(filepath.Join(td.Dir, "brief.md"), task.MaxBriefSize)
+	return td.loadAndValidatePreparedSetWithReader(td.store.readBytes)
+}
+
+func (td *TaskDir) loadAndValidatePreparedSetContext(ctx context.Context) ([]byte, *task.TaskRecord, *task.MetaRecord, string, string, error) {
+	if ctx == nil {
+		return nil, nil, nil, "", "", context.Canceled
+	}
+	brief, request, meta, specHash, metaHash, err := td.loadAndValidatePreparedSetWithReader(func(path string, limit int64) ([]byte, error) {
+		return td.store.readBytesContext(ctx, path, limit)
+	})
+	// Local file reads complete synchronously. Recheck after guard validation
+	// so a caller deadline can never produce a successful prepared-set proof.
+	if err = errors.Join(err, ctx.Err()); err != nil {
+		return nil, nil, nil, "", "", err
+	}
+	return brief, request, meta, specHash, metaHash, nil
+}
+
+func (td *TaskDir) loadAndValidatePreparedSetWithReader(read func(string, int64) ([]byte, error)) ([]byte, *task.TaskRecord, *task.MetaRecord, string, string, error) {
+	brief, err := read(filepath.Join(td.Dir, "brief.md"), task.MaxBriefSize)
 	if err != nil {
 		return nil, nil, nil, "", "", err
 	}
-	reqBytes, err := td.store.readBytes(filepath.Join(td.Dir, "task.json"), task.MaxControlRecordSize)
+	reqBytes, err := read(filepath.Join(td.Dir, "task.json"), task.MaxControlRecordSize)
 	if err != nil {
 		return nil, nil, nil, "", "", err
 	}
-	metaBytes, err := td.store.readBytes(filepath.Join(td.Dir, "meta.json"), task.MaxControlRecordSize)
+	metaBytes, err := read(filepath.Join(td.Dir, "meta.json"), task.MaxControlRecordSize)
 	if err != nil {
 		return nil, nil, nil, "", "", err
 	}

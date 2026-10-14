@@ -60,6 +60,10 @@ collection watch, and `4` is a validated rejected outcome.
 
 Catalog facts (`verification: "catalog"`) are not runtime proof. Preflight
 checks static readiness; runtime verification requires the supervised probe.
+For managed runtime-only dispatches, admission accepts the static contract and
+the task's runner performs that probe before provider execution. Always collect
+the created task's outcome; `admission: "admitted"` alone does not prove that
+the provider started or completed the work.
 Versions and help are observations, not semantic-version allowlists.
 Authentication is a separate live gate (`not_run`, `passed`, or `blocked`).
 Report a blocked prerequisite without inventing a login command or retrying.

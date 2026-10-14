@@ -111,7 +111,7 @@ _META_REQUIRED_KEYS = {
 }
 _META_OPTIONAL_KEYS = {
     "runner_executable", "runner_ownership", "environment", "environment_recorded",
-    "output_artifacts", "output_writer_contract", "input_files",
+    "runtime_preflight_sha256", "output_artifacts", "output_writer_contract", "input_files",
 }
 _EFFECTIVE_CONFIG_KEYS = {"containment", "approval", "digest"}
 _PREDICATE_KEYS = {"adapter", "mode", "version", "sha256"}
@@ -757,6 +757,64 @@ def _hex_digest(value: object) -> bool:
             all(character in "0123456789abcdef" for character in value))
 
 
+def validate_provider_runtime_metadata(
+        meta: dict[str, object], *, observed_version: str | None = None,
+        launch_evidence: tuple[dict[str, object], dict[str, object]] | None = None,
+        label: str = "provider runtime metadata") -> dict[str, str] | None:
+    """Validate pending or historical runtime metadata and terminal identity."""
+    require(isinstance(meta, dict), f"{label} is not an object")
+    executable = meta.get("provider_executable")
+    require(isinstance(executable, str) and Path(executable).is_absolute() and
+            Path(executable) == Path(os.path.normpath(executable)),
+            f"{label} executable is invalid")
+    pending = "runtime_preflight_sha256" in meta
+    version = meta.get("provider_version")
+    if pending:
+        require(_hex_digest(meta.get("runtime_preflight_sha256")),
+                f"{label} preflight digest is invalid")
+        require(version == "", f"{label} pending version is not empty")
+        require(meta.get("environment_recorded") is True,
+                f"{label} pending environment is not recorded")
+    else:
+        require(isinstance(version, str) and bool(version.strip()),
+                f"{label} version is invalid")
+        if observed_version is not None:
+            require(version == observed_version,
+                    f"{label} version does not match observed runtime")
+    if "environment_recorded" in meta:
+        require(type(meta["environment_recorded"]) is bool,
+                f"{label} environment marker is invalid")
+    if launch_evidence is None:
+        return None
+    started, exited = launch_evidence
+    identities: list[dict[str, str]] = []
+    for phase, evidence in (("started", started), ("exit", exited)):
+        require(isinstance(evidence, dict), f"{label} {phase} evidence is not an object")
+        evidence_executable = evidence.get("provider_executable")
+        evidence_version = evidence.get("provider_version")
+        evidence_sha256 = evidence.get("provider_sha256")
+        require(isinstance(evidence_executable, str) and
+                Path(evidence_executable).is_absolute() and
+                Path(evidence_executable) == Path(os.path.normpath(evidence_executable)),
+                f"{label} {phase} executable is invalid")
+        require(isinstance(evidence_version, str) and bool(evidence_version.strip()),
+                f"{label} {phase} version is invalid")
+        require(_hex_digest(evidence_sha256),
+                f"{label} {phase} digest is invalid")
+        identities.append({
+            "executable": evidence_executable,
+            "version": evidence_version,
+            "sha256": evidence_sha256,
+        })
+    require(identities[0] == identities[1],
+            f"{label} started and exit runtime identities differ")
+    identity = identities[0]
+    if not pending:
+        require(executable == identity["executable"] and version == identity["version"],
+                f"{label} metadata does not match launch identity")
+    return identity
+
+
 def _task_identity(value: object) -> bool:
     return (isinstance(value, str) and len(value) == 32 and
             all(character in "0123456789abcdef" for character in value))
@@ -1278,6 +1336,12 @@ def _scan_managed_inspection_lifetime_closure(
         deadline = _canonical_timestamp(
             request_deadline, f"inspection request deadline for {task}")
 
+        if not _inspection_managed_authority_started(directory):
+            # A request and its task-local proof reference are intent-only. No
+            # managed worker or scope exists until a lifecycle authority is
+            # durably published.
+            _validate_unsubmitted_inspection_records(directory, task)
+            continue
         authority = _inspection_exit_authority(
             directory, root, task, binding, digest(request_path), created,
             request_deadline, deadline)
@@ -1319,6 +1383,53 @@ def _inspection_lifetime_control_started(directory: Path) -> bool:
     except OSError as error:
         raise AcceptanceFailure("cannot inspect managed inspection lifetime records") from error
     return False
+
+
+def _inspection_managed_authority_started(directory: Path) -> bool:
+    """Return whether the inspection published a lifecycle authority.
+
+    The immutable request is admission intent, and a proof reference is a
+    task-local pointer to already-materialized facts. Neither creates a local
+    worker or a managed scope. Submission, receipt, start, result, completion,
+    observation, upgrade, or lifetime records do establish that the operation
+    advanced into a lifecycle that must have a closure proof.
+    """
+    lifecycle_records = (
+        "submission.json",
+        "receipt.json",
+        "start.json",
+        "result.json",
+        "completion.json",
+        "worker-observation.json",
+        "worker-upgrade.json",
+    )
+    for name in lifecycle_records:
+        try:
+            (directory / name).lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise AcceptanceFailure(
+                "cannot inspect managed inspection lifecycle records") from error
+        return True
+    return _inspection_lifetime_control_started(directory)
+
+
+def _validate_unsubmitted_inspection_records(directory: Path, task: str) -> None:
+    """Allow only intent and an optional opaque proof reference before submit."""
+    allowed = {"request.json", "proof-reference.json"}
+    try:
+        entries = tuple(directory.iterdir())
+    except OSError as error:
+        raise AcceptanceFailure(
+            "cannot inspect unsubmitted managed inspection records") from error
+    unexpected = sorted(entry.name for entry in entries if entry.name not in allowed)
+    require(not unexpected,
+            f"unsubmitted inspection has unexpected records for {task}: " +
+            ", ".join(unexpected))
+    proof_reference = directory / "proof-reference.json"
+    if proof_reference.exists() or proof_reference.is_symlink():
+        _read_control_record(proof_reference, f"inspection proof reference for {task}")
 
 
 def _inspection_exit_authority(directory: Path, root: str, task: str,
@@ -2111,6 +2222,8 @@ class NativeTaskOps:
         meta = _read_control_record(meta_path, f"ordinary task metadata for {task}")
         _exact_keys(meta, _META_REQUIRED_KEYS, _META_OPTIONAL_KEYS,
                     label=f"ordinary task metadata for {task}")
+        validate_provider_runtime_metadata(
+            meta, label=f"ordinary task provider runtime metadata for {task}")
         require(type(meta.get("schema_version")) is int and meta["schema_version"] == 1 and
                 meta.get("root_id") == root and meta.get("task_id") == task and
                 meta.get("spec_sha256") == spec_digest and

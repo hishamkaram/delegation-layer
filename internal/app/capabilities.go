@@ -165,6 +165,9 @@ func runtimeCapability(providerID string, candidate commonprovider.ProfileCandid
 	if candidate.Inspection == nil || candidate.Inspection.Runtime == nil {
 		return declaredCapability(description), nil
 	}
+	if profile.RuntimePreflightSHA256 != "" {
+		return declaredCapability(description), nil
+	}
 	runtime := candidate.Inspection.Runtime
 	report := CapabilityReport{
 		Contract:         commonprovider.RuntimeInspectionRevision,

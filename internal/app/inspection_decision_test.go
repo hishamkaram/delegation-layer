@@ -105,6 +105,42 @@ func TestManagedInspectionAdmissionRequiresLifetimeTermination(t *testing.T) {
 	}
 }
 
+func TestTimelyCompletedInspectionEvidenceRejectsMissingLifetimeRegistration(t *testing.T) {
+	store, operation, _ := newCleanupInspectionTestOperation(t, inspection.ResultEligible, true)
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+	registrationPath := filepath.Join(store.Root, "inspections", operation.Request().TaskID, "lifetime-registration.json")
+	if err := os.Remove(registrationPath); err != nil {
+		t.Fatal(err)
+	}
+
+	ready, err := timelyCompletedInspectionEvidence(t.Context(), operation)
+	if ready {
+		t.Fatal("missing lifetime registration was treated as pending")
+	}
+	if !errors.Is(err, task.ErrIdentityMismatch) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing lifetime registration error = %v, want identity mismatch and os.ErrNotExist", err)
+	}
+}
+
+func TestRecordedInspectionFactsRejectsMissingManagedLifetimeRegistration(t *testing.T) {
+	store, operation, _ := newCleanupInspectionTestOperationWithOwnership(
+		t, inspection.ResultEligible, true, false, task.RunnerOwnershipManaged,
+	)
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+	registrationPath := filepath.Join(store.Root, "inspections", operation.Request().TaskID, "lifetime-registration.json")
+	if err := os.Remove(registrationPath); err != nil {
+		t.Fatal(err)
+	}
+
+	facts, recorded, terminal, err := recordedInspectionFacts(t.Context(), operation)
+	if facts != nil || recorded || terminal {
+		t.Fatalf("missing managed lifetime registration changed the decision state: facts=%s recorded=%t terminal=%t", facts, recorded, terminal)
+	}
+	if !errors.Is(err, task.ErrIdentityMismatch) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing managed lifetime registration error = %v, want identity mismatch and os.ErrNotExist", err)
+	}
+}
+
 func TestInspectionStatusCannotOverrideManagedGuardianProof(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

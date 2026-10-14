@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
@@ -80,40 +81,56 @@ func (o *lifetimeGuardianTestOwner) setReleaseErrors(errs []error) {
 type lifetimeGuardianTestRecords struct {
 	timeline *lifetimeGuardianTestTimeline
 
-	mu                       sync.Mutex
-	intents                  []taskdir.LifetimeIntentFacts
-	registrations            []taskdir.LifetimeRegistrationFacts
-	workers                  []taskdir.LifetimeWorkerFacts
-	workerWaits              []taskdir.LifetimeWorkerWaitFacts
-	launches                 []taskdir.LifetimeLaunchFacts
-	terminations             []string
-	intentErr                error
-	registrationErr          error
-	registrationErrors       []error
-	workerErrors             []error
-	workerCommitOnError      bool
-	existingWorker           *task.LifetimeWorkerRecord
-	workerWaitErrors         []error
-	workerRecordEntered      chan struct{}
-	workerRecordRelease      <-chan struct{}
-	cleanupRelease           <-chan struct{}
-	launchErr                error
-	terminationErr           error
-	terminationErrors        []error
-	terminationCommitOnError bool
-	existingRegistration     *task.LifetimeRegistrationRecord
-	registrationReadErr      error
-	existingIntent           *task.LifetimeIntentRecord
-	intentReadErr            error
-	existingTermination      *task.LifetimeTerminationRecord
-	terminationReadErr       error
-	invalidLaunchRecord      bool
-	ownerKind                string
+	mu                        sync.Mutex
+	intents                   []taskdir.LifetimeIntentFacts
+	registrations             []taskdir.LifetimeRegistrationFacts
+	workers                   []taskdir.LifetimeWorkerFacts
+	workerWaits               []taskdir.LifetimeWorkerWaitFacts
+	launches                  []taskdir.LifetimeLaunchFacts
+	terminations              []string
+	intentErr                 error
+	registrationErr           error
+	registrationErrors        []error
+	workerErrors              []error
+	workerCommitOnError       bool
+	existingWorker            *task.LifetimeWorkerRecord
+	workerWaitErrors          []error
+	workerRecordEntered       chan struct{}
+	workerRecordRelease       <-chan struct{}
+	cleanupRelease            <-chan struct{}
+	launchErr                 error
+	terminationErr            error
+	terminationErrors         []error
+	terminationCommitOnError  bool
+	existingRegistration      *task.LifetimeRegistrationRecord
+	registrationReadErr       error
+	existingIntent            *task.LifetimeIntentRecord
+	intentReadErr             error
+	existingTermination       *task.LifetimeTerminationRecord
+	terminationReadErr        error
+	invalidLaunchRecord       bool
+	ownerKind                 string
+	intentRecordContext       context.Context
+	registrationRecordContext context.Context
+	workerRecordContext       context.Context
+	workerWaitRecordContext   context.Context
+	intentReadContext         context.Context
+	registrationReadContext   context.Context
+	launchContextDeadline     time.Time
+	terminationRecordContext  context.Context
+	terminationReadContext    context.Context
 }
 
-func (r *lifetimeGuardianTestRecords) ReadLifetimeIntent() (*task.LifetimeIntentRecord, error) {
+func (r *lifetimeGuardianTestRecords) ReadLifetimeIntentContext(ctx context.Context) (*task.LifetimeIntentRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	r.mu.Lock()
+	r.intentReadContext = ctx
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if r.intentReadErr != nil {
 		return nil, r.intentReadErr
 	}
@@ -124,9 +141,16 @@ func (r *lifetimeGuardianTestRecords) ReadLifetimeIntent() (*task.LifetimeIntent
 	return &record, nil
 }
 
-func (r *lifetimeGuardianTestRecords) ReadLifetimeTermination() (*task.LifetimeTerminationRecord, error) {
+func (r *lifetimeGuardianTestRecords) ReadLifetimeTerminationContext(ctx context.Context) (*task.LifetimeTerminationRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	r.mu.Lock()
+	r.terminationReadContext = ctx
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if r.terminationReadErr != nil {
 		return nil, r.terminationReadErr
 	}
@@ -137,9 +161,16 @@ func (r *lifetimeGuardianTestRecords) ReadLifetimeTermination() (*task.LifetimeT
 	return &record, nil
 }
 
-func (r *lifetimeGuardianTestRecords) ReadLifetimeRegistration() (*task.LifetimeRegistrationRecord, error) {
+func (r *lifetimeGuardianTestRecords) ReadLifetimeRegistrationContext(ctx context.Context) (*task.LifetimeRegistrationRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	r.mu.Lock()
+	r.registrationReadContext = ctx
 	defer r.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if r.registrationReadErr != nil {
 		return nil, r.registrationReadErr
 	}
@@ -150,8 +181,16 @@ func (r *lifetimeGuardianTestRecords) ReadLifetimeRegistration() (*task.Lifetime
 	return &record, nil
 }
 
-func (r *lifetimeGuardianTestRecords) RecordLifetimeIntent(facts taskdir.LifetimeIntentFacts) (*task.LifetimeIntentRecord, error) {
+func (r *lifetimeGuardianTestRecords) RecordLifetimeIntentContext(ctx context.Context, facts taskdir.LifetimeIntentFacts) (*task.LifetimeIntentRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	r.mu.Lock()
+	r.intentRecordContext = ctx
+	if err := ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
 	r.intents = append(r.intents, facts)
 	err := r.intentErr
 	r.mu.Unlock()
@@ -162,8 +201,16 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeIntent(facts taskdir.Lifetim
 	return &task.LifetimeIntentRecord{TaskID: lifetimeGuardianTestTaskID, ScopePlan: facts.ScopePlan}, nil
 }
 
-func (r *lifetimeGuardianTestRecords) RecordLifetimeRegistration(facts taskdir.LifetimeRegistrationFacts) (*task.LifetimeRegistrationRecord, error) {
+func (r *lifetimeGuardianTestRecords) RecordLifetimeRegistrationContext(ctx context.Context, facts taskdir.LifetimeRegistrationFacts) (*task.LifetimeRegistrationRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	r.mu.Lock()
+	r.registrationRecordContext = ctx
+	if err := ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
 	r.registrations = append(r.registrations, facts)
 	err := r.registrationErr
 	if len(r.registrationErrors) > 0 {
@@ -191,8 +238,16 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeRegistration(facts taskdir.L
 	return record, nil
 }
 
-func (r *lifetimeGuardianTestRecords) RecordLifetimeWorker(facts taskdir.LifetimeWorkerFacts) (*task.LifetimeWorkerRecord, error) {
+func (r *lifetimeGuardianTestRecords) RecordLifetimeWorkerContext(ctx context.Context, facts taskdir.LifetimeWorkerFacts) (*task.LifetimeWorkerRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	r.mu.Lock()
+	r.workerRecordContext = ctx
+	if err := ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
 	r.workers = append(r.workers, facts)
 	var err error
 	if len(r.workerErrors) > 0 {
@@ -225,8 +280,16 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeWorker(facts taskdir.Lifetim
 	return record, nil
 }
 
-func (r *lifetimeGuardianTestRecords) RecordLifetimeWorkerWait(facts taskdir.LifetimeWorkerWaitFacts) (*task.LifetimeWorkerWaitRecord, error) {
+func (r *lifetimeGuardianTestRecords) RecordLifetimeWorkerWaitContext(ctx context.Context, facts taskdir.LifetimeWorkerWaitFacts) (*task.LifetimeWorkerWaitRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	r.mu.Lock()
+	r.workerWaitRecordContext = ctx
+	if err := ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
 	r.workerWaits = append(r.workerWaits, facts)
 	var err error
 	if len(r.workerWaitErrors) > 0 {
@@ -252,10 +315,22 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeWorkerWait(facts taskdir.Lif
 }
 
 func (r *lifetimeGuardianTestRecords) RecordLifetimeLaunch(facts taskdir.LifetimeLaunchFacts) (*task.LifetimeLaunchRecord, error) {
+	return r.RecordLifetimeLaunchContext(context.Background(), facts)
+}
+
+func (r *lifetimeGuardianTestRecords) RecordLifetimeLaunchContext(ctx context.Context, facts taskdir.LifetimeLaunchFacts) (*task.LifetimeLaunchRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	deadline, _ := ctx.Deadline()
 	r.mu.Lock()
 	r.launches = append(r.launches, facts)
 	err := r.launchErr
 	invalid := r.invalidLaunchRecord
+	r.launchContextDeadline = deadline
 	r.mu.Unlock()
 	r.timeline.add("launch-record")
 	if err != nil {
@@ -267,8 +342,16 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeLaunch(facts taskdir.Lifetim
 	return &task.LifetimeLaunchRecord{Sequence: facts.Sequence, PID: facts.PID}, nil
 }
 
-func (r *lifetimeGuardianTestRecords) RecordLifetimeTermination(cause string) (*task.LifetimeTerminationRecord, error) {
+func (r *lifetimeGuardianTestRecords) RecordLifetimeTerminationContext(ctx context.Context, cause string) (*task.LifetimeTerminationRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
 	r.mu.Lock()
+	r.terminationRecordContext = ctx
+	if err := ctx.Err(); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
 	r.terminations = append(r.terminations, cause)
 	err := r.terminationErr
 	if len(r.terminationErrors) > 0 {
@@ -285,6 +368,24 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeTermination(cause string) (*
 		return nil, err
 	}
 	return record, nil
+}
+
+func (r *lifetimeGuardianTestRecords) terminationContexts() (context.Context, context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.terminationRecordContext, r.terminationReadContext
+}
+
+func (r *lifetimeGuardianTestRecords) boundaryWriteContexts() (context.Context, context.Context, context.Context, context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.intentRecordContext, r.registrationRecordContext, r.workerRecordContext, r.workerWaitRecordContext
+}
+
+func (r *lifetimeGuardianTestRecords) boundaryReadContexts() (context.Context, context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.intentReadContext, r.registrationReadContext
 }
 
 func (r *lifetimeGuardianTestRecords) registrationFacts() taskdir.LifetimeRegistrationFacts {
@@ -793,6 +894,56 @@ func TestLifetimeGuardianDurableUserStopOwnsNativeTermination(t *testing.T) {
 	}
 }
 
+func TestLifetimeGuardianStopPollCadencePreservesBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		interval   time.Duration
+		wantChecks int
+	}{
+		{"default interval", 0, 0},
+		{"explicit interval", 200 * time.Millisecond, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				checks := 0
+				f := newLifetimeGuardianTestFixtureWithOptions(
+					t, nil, lifetime.KindProcessGroup, lifetime.AssuranceCooperative, nil,
+					func(scope *lifetimeGuardianTestScope) { scope.emptyResults = []bool{false, true} },
+					func(options *lifetimeGuardianOptions) {
+						options.now = time.Now
+						options.deadline = time.Now().Add(350 * time.Millisecond)
+						options.stopPoll = tc.interval
+						options.userStop = func() (bool, error) {
+							checks++
+							return false, nil
+						}
+					},
+				)
+				f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
+				f.callMust(t, "begin", f.message(lifetimeMessageBegin, 1, 0))
+				f.callMust(t, "started", f.message(lifetimeMessageStarted, 1, 101))
+				synctest.Wait()
+				// Advance fake time past the budget while the worker remains
+				// active; release and join it only after budget recovery runs.
+				time.Sleep(450 * time.Millisecond)
+				synctest.Wait()
+				f.worker.release()
+				err := f.waitRun(t)
+				<-f.runExited
+				if !errors.Is(err, errLifetimeGuardianDeadline) {
+					t.Fatalf("run error = %v, want budget deadline", err)
+				}
+				if causes := f.records.terminationCauses(); len(causes) != 1 || causes[0] != task.LifetimeTerminationBudget {
+					t.Fatalf("termination causes = %v, want [%s]", causes, task.LifetimeTerminationBudget)
+				}
+				if checks != tc.wantChecks {
+					t.Fatalf("user-stop checks = %d, want %d before the budget deadline", checks, tc.wantChecks)
+				}
+			})
+		})
+	}
+}
+
 func (f *lifetimeGuardianTestFixture) setNow(now time.Time) {
 	f.nowMu.Lock()
 	f.now = now
@@ -894,6 +1045,132 @@ func TestLifetimeGuardianNormalClose(t *testing.T) {
 	events := f.timeline.snapshot()
 	assertTimelineContains(t, events, "acquire", "intent", "scope", "scope-bind-owner", "registration", "worker-start", "scope-track-worker", "worker-wait", "worker-record", "termination-record", "worker-wait-record", "scope-destroy", "scope-release", "release")
 	assertTimelineOrder(t, events, "acquire", "intent", "scope", "scope-bind-owner", "registration", "worker-start", "scope-track-worker", "worker-record", "termination-record", "worker-wait-record", "scope-destroy", "scope-release", "release")
+}
+
+func TestLifetimeGuardianRecordBoundariesPreserveSelectedContext(t *testing.T) {
+	marker := &struct{}{}
+	runContext := context.WithValue(t.Context(), lifetimeTestContextKey{}, marker)
+	f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
+		t,
+		runContext,
+		nil,
+		lifetime.KindProcessGroup,
+		lifetime.AssuranceCooperative,
+		nil,
+		nil,
+		nil,
+	)
+	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
+	f.callMust(t, "begin", f.message(lifetimeMessageBegin, 1, 0))
+	f.callMust(t, "started", f.message(lifetimeMessageStarted, 1, 101))
+	f.callMust(t, "finish", f.message(lifetimeMessageFinish, 1, 0))
+	f.callMust(t, "close", f.message(lifetimeMessageClose, 0, 0))
+	f.worker.release()
+	if err := f.waitRun(t); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	intentContext, registrationContext, workerContext, workerWaitContext := f.records.boundaryWriteContexts()
+	for name, ctx := range map[string]context.Context{
+		"intent":       intentContext,
+		"registration": registrationContext,
+		"worker":       workerContext,
+		"worker Wait":  workerWaitContext,
+	} {
+		if ctx == nil {
+			t.Fatalf("%s record received nil context", name)
+		}
+		if got := ctx.Value(lifetimeTestContextKey{}); got != marker {
+			t.Fatalf("%s record lost caller context value: %v", name, got)
+		}
+	}
+	if intentContext != runContext || registrationContext != runContext {
+		t.Fatal("initial lifetime records did not receive the state-machine context")
+	}
+	if workerContext.Done() != nil {
+		t.Fatal("worker identity record did not retain its non-cancelable ownership context")
+	}
+}
+
+func TestLifetimeGuardianTerminationUsesSameContextForAmbiguousReplay(t *testing.T) {
+	marker := &struct{}{}
+	runContext := context.WithValue(t.Context(), lifetimeTestContextKey{}, marker)
+	wantErr := errors.New("ambiguous termination write")
+	f := newLifetimeGuardianTestFixtureWithOptionsAndContext(
+		t,
+		runContext,
+		nil,
+		lifetime.KindProcessGroup,
+		lifetime.AssuranceCooperative,
+		nil,
+		nil,
+		func(options *lifetimeGuardianOptions) {
+			records := lifetimeGuardianTestRecordsFromOptions(t, options)
+			records.terminationErrors = []error{wantErr}
+			records.terminationCommitOnError = true
+		},
+	)
+	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
+	f.callMust(t, "close", f.message(lifetimeMessageClose, 0, 0))
+	f.worker.release()
+	if err := f.waitRun(t); err != nil {
+		t.Fatalf("run after ambiguous termination write: %v", err)
+	}
+
+	recordContext, readContext := f.records.terminationContexts()
+	if recordContext == nil || readContext == nil {
+		t.Fatalf("termination contexts = record %v, read %v; want both present", recordContext, readContext)
+	}
+	if recordContext != readContext {
+		t.Fatal("ambiguity reread did not use the exact state-machine termination context")
+	}
+	if recordContext.Value(lifetimeTestContextKey{}) != marker {
+		t.Fatal("termination context lost the caller context value")
+	}
+}
+
+func TestLifetimeGuardianRecordTerminationHandlesNilAndCanceledContext(t *testing.T) {
+	records := &lifetimeGuardianTestRecords{timeline: &lifetimeGuardianTestTimeline{}}
+	guardian := &lifetimeGuardian{options: lifetimeGuardianOptions{records: records}}
+	var nilContext context.Context
+	if err := guardian.recordTermination(nilContext); !errors.Is(err, context.Canceled) {
+		t.Fatalf("nil termination context error = %v, want context canceled", err)
+	}
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := guardian.recordTermination(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled termination context error = %v, want context canceled", err)
+	}
+	if got := len(records.terminations); got != 0 {
+		t.Fatalf("canceled termination published %d records, want 0", got)
+	}
+}
+
+func TestLifetimeGuardianExpiredRecoveryReadsUseCallerContext(t *testing.T) {
+	marker := &struct{}{}
+	runContext := context.WithValue(t.Context(), lifetimeTestContextKey{}, marker)
+	records := &lifetimeGuardianTestRecords{timeline: &lifetimeGuardianTestTimeline{}}
+	guardian := &lifetimeGuardian{options: lifetimeGuardianOptions{
+		records: records,
+		reconcileOwned: func(context.Context) error {
+			return nil
+		},
+	}}
+	if err := guardian.recoverExpiredStart(runContext); !errors.Is(err, errLifetimeGuardianDeadline) {
+		t.Fatalf("expired recovery error = %v, want deadline", err)
+	}
+
+	intentContext, registrationContext := records.boundaryReadContexts()
+	if intentContext == nil || registrationContext == nil {
+		t.Fatalf("expired recovery read contexts = intent %v, registration %v; want both present", intentContext, registrationContext)
+	}
+	if intentContext != runContext || registrationContext != runContext {
+		t.Fatal("expired recovery reads did not receive the state-machine context")
+	}
+	if intentContext.Value(lifetimeTestContextKey{}) != marker || registrationContext.Value(lifetimeTestContextKey{}) != marker {
+		t.Fatal("expired recovery reads lost the caller context value")
+	}
 }
 
 func TestLifetimeGuardianCancellationStillFinalizesResidentScope(t *testing.T) {
@@ -1237,6 +1514,56 @@ func TestLifetimeGuardianRegistrationReadFailureRetainsScope(t *testing.T) {
 	}
 	if destroy, release := f.scope.disposalCounts(); destroy != 1 || release != 1 {
 		t.Fatalf("resolved unreadable registration disposal = destroy %d release %d, want 1/1", destroy, release)
+	}
+}
+
+func TestLifetimeGuardianMarkedRegistrationAbsenceRetainsScope(t *testing.T) {
+	wantErr := errors.New("registration write failed")
+	wantReadErr := errors.Join(task.ErrIdentityMismatch, os.ErrNotExist)
+	retryEntered := make(chan struct{})
+	retryRelease := make(chan struct{})
+	var retryOnce sync.Once
+	f := newLifetimeGuardianTestFixtureWithOptions(
+		t,
+		nil,
+		lifetime.KindProcessGroup,
+		lifetime.AssuranceCooperative,
+		nil,
+		nil,
+		func(options *lifetimeGuardianOptions) {
+			records := lifetimeGuardianTestRecordsFromOptions(t, options)
+			records.registrationErr = wantErr
+			records.registrationReadErr = wantReadErr
+			options.finalizationBackoff = func(ctx context.Context, _ time.Duration) error {
+				retryOnce.Do(func() { close(retryEntered) })
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-retryRelease:
+					records.mu.Lock()
+					records.registrationReadErr = nil
+					records.registrationErr = nil
+					records.mu.Unlock()
+					return nil
+				}
+			}
+		},
+	)
+	select {
+	case err := <-f.runDone:
+		t.Fatalf("guardian disposed scope while registration was unverifiable: %v", err)
+	case <-retryEntered:
+	}
+	if destroy, release := f.scope.disposalCounts(); destroy != 0 || release != 0 {
+		t.Fatalf("marked missing registration disposal = destroy %d release %d, want 0/0", destroy, release)
+	}
+	close(retryRelease)
+	err := f.waitRun(t)
+	if !errors.Is(err, wantErr) || !errors.Is(err, wantReadErr) {
+		t.Fatalf("Run error = %v, want write and marked read failures", err)
+	}
+	if destroy, release := f.scope.disposalCounts(); destroy != 1 || release != 1 {
+		t.Fatalf("resolved marked registration disposal = destroy %d release %d, want 1/1", destroy, release)
 	}
 }
 
@@ -2050,6 +2377,26 @@ func TestLifetimeGuardianFailedStartClearsAuthorization(t *testing.T) {
 	}
 	if got := len(f.records.launches); got != 0 {
 		t.Fatalf("launch records = %d, want 0", got)
+	}
+}
+
+func TestLifetimeGuardianLaunchRecordUsesWorkContext(t *testing.T) {
+	f := newLifetimeGuardianTestFixture(t)
+	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
+	f.callMust(t, "begin", f.message(lifetimeMessageBegin, 1, 0))
+	f.callMust(t, "started", f.message(lifetimeMessageStarted, 1, 404))
+
+	f.records.mu.Lock()
+	launchDeadline := f.records.launchContextDeadline
+	f.records.mu.Unlock()
+	if launchDeadline.IsZero() || !launchDeadline.Equal(f.guardian.options.deadline) {
+		t.Fatalf("launch record deadline = %v, want guardian deadline %v", launchDeadline, f.guardian.options.deadline)
+	}
+
+	f.callMust(t, "close", f.message(lifetimeMessageClose, 0, 0))
+	f.worker.release()
+	if err := f.waitRun(t); err != nil {
+		t.Fatalf("run: %v", err)
 	}
 }
 

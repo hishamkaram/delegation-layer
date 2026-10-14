@@ -1,8 +1,10 @@
 package task
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -31,6 +33,17 @@ const (
 	// guardians and both durable record stores.
 	MaxLifetimeLaunches uint64 = 64
 )
+
+// RecordAbsent reports only a direct, non-contextual record absence.
+// Store readers must add ErrIdentityMismatch or ErrEvidenceFault after a
+// primary record has been read and a required dependency is missing.
+func RecordAbsent(err error) bool {
+	return errors.Is(err, os.ErrNotExist) &&
+		!errors.Is(err, ErrIdentityMismatch) &&
+		!errors.Is(err, ErrEvidenceFault) &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded)
+}
 
 // LifetimeWorkerWaitResult is the closed classification of one managed-worker
 // completion disposition: either no child started or one exact child Wait.

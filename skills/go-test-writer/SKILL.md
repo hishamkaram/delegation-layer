@@ -53,7 +53,9 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
 5. Run the focused tests, then `make test-race` and the applicable gate. Keep
    assertions independent of incidental timestamps or internal helper names;
    assert ordering when ordering is the contract, such as closing writers
-   before committing a seal.
+   before committing a seal. Apply the shared contract's [concurrency ordering
+   rule](../../agents/_data/maintainability-contract.md#compatibility-and-evidence)
+   to asynchronous fixtures and their failure cleanup.
 6. For an OS-sensitive lifecycle change, apply the contract's [native backend
    matrix and receipt requirements](../../agents/_data/maintainability-contract.md#native-portability-proof).
    Include nested group/session descendants, exact `Wait`, interruption

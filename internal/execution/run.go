@@ -116,7 +116,7 @@ func prepareLaunchPlan(i *invocation, budgetNanos int64, plan Plan, opts Options
 	if preflightErr != nil {
 		return launchPlan, preflightErr
 	}
-	if err := validatePlanRuntimeEvidence(refreshedPlan); err != nil {
+	if err := validatePreflightPlan(plan, refreshedPlan); err != nil {
 		return launchPlan, err
 	}
 	if i.boundPlan == nil || !sameLaunchPlan(*i.boundPlan, refreshedPlan) {
@@ -182,6 +182,10 @@ func validatePlan(td *taskdir.TaskDir, permit *taskdir.StartPermit, p Plan, allo
 	req, meta, err := td.PreparedRecords()
 	if err != nil {
 		return err
+	}
+	// The caller cannot bypass a pending admission by clearing its plan marker.
+	if p.RuntimePreflightSHA256 != meta.RuntimePreflightSHA256 {
+		return task.ErrIdentityMismatch
 	}
 	guard, err := permit.Record()
 	if err != nil {
@@ -345,7 +349,7 @@ func (i *invocation) unbind() error {
 
 func sameLaunchPlan(left, right Plan) bool {
 	return left.Executable == right.Executable && left.ExecutableSHA256 == right.ExecutableSHA256 &&
-		left.ProviderRuntime == right.ProviderRuntime &&
+		left.ProviderRuntime == right.ProviderRuntime && left.RuntimePreflightSHA256 == right.RuntimePreflightSHA256 &&
 		left.Directory == right.Directory && sameLaunchEnvironment(left.Environment, right.Environment) &&
 		slices.Equal(left.Arguments, right.Arguments) && left.Predicate.Equal(right.Predicate) &&
 		task.CompareInputFiles(left.InputFiles, right.InputFiles) &&
@@ -368,6 +372,9 @@ func clonePlan(plan Plan) *Plan {
 
 func validatePlanRuntimeIdentity(plan Plan) error {
 	identity := plan.ProviderRuntime
+	if plan.RuntimePreflightSHA256 != "" && identity != (task.ProviderRuntimeIdentity{}) {
+		return task.ErrIdentityMismatch
+	}
 	if err := task.ValidateProviderRuntimeIdentity(identity); err != nil {
 		return task.ErrIdentityMismatch
 	}
@@ -385,6 +392,16 @@ func validatePlanRuntimeEvidence(plan Plan) error {
 		return task.ErrIdentityMismatch
 	}
 	return validatePlanRuntimeIdentity(plan)
+}
+
+func validatePreflightPlan(admitted, refreshed Plan) error {
+	if refreshed.RuntimePreflightSHA256 != "" {
+		return fmt.Errorf("%w: required runtime preflight is still pending", task.ErrIdentityMismatch)
+	}
+	if admitted.RuntimePreflightSHA256 != "" && refreshed.ProviderRuntime.Executable == "" {
+		return fmt.Errorf("%w: runtime preflight did not return an observed provider identity", task.ErrIdentityMismatch)
+	}
+	return validatePlanRuntimeEvidence(refreshed)
 }
 
 func (i *invocation) prepareLaunchFiles(plan Plan) ([]string, error) {

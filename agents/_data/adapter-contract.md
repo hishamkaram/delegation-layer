@@ -17,10 +17,13 @@ This document defines the normative requirements for provider adapters
 | `opencode:run` | `read-only`, `workspace-write` | native plan/build agent; native `--auto` for workspace-write | `opencode run --format json --dir <workspace> ...` | unrestricted execution |
 
 Each native adapter locates its executable during static preparation and records
-the executable identity in the immutable candidate. The already-supervised
-inspection worker then verifies that the file is still executable, runs its
+the executable identity in the immutable candidate. Managed runtime-only
+admission records the required capability digest with no observed version.
+The task's already-supervised runner verifies that the file is still executable, runs its
 version and help commands, and checks the stable public entrypoint flags that
-the profile can observe reliably before finalization and provider launch. A
+the profile can observe reliably before finalization and provider launch.
+Native policy projections, custom runners, and historical contracts retain
+their required admission inspection. A
 provider's complete launch argv remains subject to the provider process and its
 result predicate; rapidly changing or pipe-truncated forwarded options are not
 turned into a stale admission allowlist.
@@ -93,9 +96,9 @@ inspection bound, which is five minutes to allow first-run provider model/cache
 initialization. It may contact the provider CLI and creates
 inspection evidence, but it does not admit a provider task or launch a
 delegated turn.
-This revision applies the five-minute bound only to model discovery. Fresh
-admission probes use a one-minute queue-inclusive bound so provider checks can
-start under high task concurrency. Existing 20-second admission journals and
+This revision applies the five-minute bound only to model discovery. Required
+admission inspections use a one-minute queue-inclusive bound; managed
+runtime-only checks use the admitted task's budget. Existing 20-second admission journals and
 model-discovery-v1 journals with the former one-minute deadline remain
 recoverable with their recorded deadlines.
 

@@ -135,7 +135,7 @@ func (o *Operation) readManagedWorkerResultContext(ctx context.Context) (*Result
 	}
 	termination, err := o.ReadLifetimeTerminationContext(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, false, lifetimeDependencyError(err)
 	}
 	if task.LifetimeWorkerWaitProvesNotStarted(waitRecord) {
 		return managedWorkerFailureResult(termination.Cause)
@@ -152,7 +152,7 @@ func (o *Operation) readManagedWorkerResultContext(ctx context.Context) (*Result
 func (o *Operation) readStartedManagedWorkerResultContext(ctx context.Context, waitRecord *task.LifetimeWorkerWaitRecord, terminationCause string) (*ResultRecord, bool, error) {
 	worker, err := o.ReadLifetimeWorkerContext(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, false, lifetimeDependencyError(err)
 	}
 	workerDigest, err := lifetimeRecordDigest(worker)
 	if err != nil || waitRecord.WorkerSHA256 == "" || waitRecord.WorkerSHA256 != workerDigest || waitRecord.ChildPID != worker.PID {
@@ -163,7 +163,7 @@ func (o *Operation) readStartedManagedWorkerResultContext(ctx context.Context, w
 	}
 	result, _, err := o.ReadCompletedContext(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, false, lifetimeDependencyError(err)
 	}
 	if result.Reason != ResultEligible {
 		return nil, false, task.ErrEvidenceFault
@@ -202,7 +202,7 @@ func (o *Operation) readObservedWorkerCompletion(ctx context.Context, observatio
 	}
 	result, completion, err := o.ReadCompletedContext(ctx)
 	if err != nil {
-		return ResultRecord{}, err
+		return ResultRecord{}, lifetimeDependencyError(err)
 	}
 	data, err := task.MarshalCanonical(completion)
 	if err != nil {

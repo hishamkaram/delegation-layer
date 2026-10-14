@@ -608,7 +608,7 @@ func (td *TaskDir) RecordStopObservationContext(ctx context.Context, id string, 
 // observation under the same exclusive lifetime-owner lease. This closes the
 // race where a guardian could publish a registration after a readiness check.
 func (td *TaskDir) recordStopObservationOwned(ctx context.Context, id string, facts task.StopObservationFacts) error {
-	ready, err := td.StopTerminationReady()
+	ready, err := td.StopTerminationReadyContext(ctx)
 	if err != nil {
 		return err
 	}

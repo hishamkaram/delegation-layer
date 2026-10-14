@@ -294,10 +294,13 @@ type MetaRecord struct {
 	Approval           string          `json:"approval"`
 	ProviderExecutable string          `json:"provider_executable"`
 	ProviderVersion    string          `json:"provider_version"`
-	RunnerExecutable   string          `json:"runner_executable,omitempty"`
-	RunnerOwnership    string          `json:"runner_ownership,omitempty"`
-	PublisherBuild     string          `json:"publisher_build"`
-	PublisherVersion   string          `json:"publisher_version"`
+	// RuntimePreflightSHA256 is the capability contract required before launch.
+	// A nonempty value explicitly means ProviderVersion has not been observed.
+	RuntimePreflightSHA256 string `json:"runtime_preflight_sha256,omitempty"`
+	RunnerExecutable       string `json:"runner_executable,omitempty"`
+	RunnerOwnership        string `json:"runner_ownership,omitempty"`
+	PublisherBuild         string `json:"publisher_build"`
+	PublisherVersion       string `json:"publisher_version"`
 	// Environment is the adapter's bounded, nonsecret launch environment.
 	Environment []string `json:"environment,omitempty"`
 	// EnvironmentRecorded distinguishes a newly admitted empty environment from

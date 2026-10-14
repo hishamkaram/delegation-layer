@@ -239,7 +239,19 @@ func (l *LifetimeOwnerLease) DuplicateControlLeaseFiles() ([]*os.File, error) {
 }
 
 func (td *TaskDir) RecordLifetimeIntent(facts LifetimeIntentFacts) (*task.LifetimeIntentRecord, error) {
-	_, _, _, spec, meta, err := td.loadAndValidatePreparedSet()
+	return td.RecordLifetimeIntentContext(context.Background(), facts)
+}
+
+// RecordLifetimeIntentContext persists the lifetime scope plan under the
+// caller's bounded persistence context.
+func (td *TaskDir) RecordLifetimeIntentContext(ctx context.Context, facts LifetimeIntentFacts) (*task.LifetimeIntentRecord, error) {
+	ctx, cancel, err := persistenceContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
+	_, _, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -263,11 +275,11 @@ func (td *TaskDir) RecordLifetimeIntent(facts LifetimeIntentFacts) (*task.Lifeti
 	if err = task.ValidateLifetimeIntentRecord(&record); err != nil {
 		return nil, err
 	}
-	if err = td.store.mkdir(filepath.Join(td.Dir, lifetimeDirectory), td.store.faultInjector); err != nil {
+	if err = td.store.mkdirContext(ctx, filepath.Join(td.Dir, lifetimeDirectory), td.store.faultInjector); err != nil {
 		return nil, err
 	}
-	err = td.recordSame(filepath.Join(lifetimeDirectory, lifetimeIntentName), record, func() (bool, error) {
-		existing, readErr := td.ReadLifetimeIntent()
+	err = td.recordSameContext(ctx, filepath.Join(lifetimeDirectory, lifetimeIntentName), record, func() (bool, error) {
+		existing, readErr := td.ReadLifetimeIntentContext(ctx)
 		if readErr != nil {
 			return false, readErr
 		}
@@ -277,26 +289,47 @@ func (td *TaskDir) RecordLifetimeIntent(facts LifetimeIntentFacts) (*task.Lifeti
 	if err != nil {
 		return nil, err
 	}
-	return td.ReadLifetimeIntent()
+	return td.ReadLifetimeIntentContext(ctx)
 }
 
 func (td *TaskDir) ReadLifetimeIntent() (*task.LifetimeIntentRecord, error) {
+	return td.ReadLifetimeIntentContext(context.Background())
+}
+
+// ReadLifetimeIntentContext validates the intent against its admitted task
+// while preserving the caller's context through every nested read.
+func (td *TaskDir) ReadLifetimeIntentContext(ctx context.Context) (*task.LifetimeIntentRecord, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	var record task.LifetimeIntentRecord
 	path := filepath.Join(td.Dir, lifetimeDirectory, lifetimeIntentName)
-	if err := td.store.readRecord(path, &record); err != nil {
+	if err := td.store.readRecordContext(ctx, path, &record); err != nil {
 		return nil, err
 	}
 	if err := task.ValidateLifetimeIntentRecord(&record); err != nil {
 		return nil, err
 	}
-	if err := td.matchLifetimeOwner(record.RootID, record.TaskID, record.OwnerKind, record.OwnerSHA256); err != nil {
-		return nil, err
+	if err := td.matchLifetimeOwner(ctx, record.RootID, record.TaskID, record.OwnerKind, record.OwnerSHA256); err != nil {
+		return nil, lifetimeValidationDependencyError(err)
 	}
 	return &record, nil
 }
 
 func (td *TaskDir) RecordLifetimeRegistration(facts LifetimeRegistrationFacts) (*task.LifetimeRegistrationRecord, error) {
-	_, _, _, spec, meta, err := td.loadAndValidatePreparedSet()
+	return td.RecordLifetimeRegistrationContext(context.Background(), facts)
+}
+
+// RecordLifetimeRegistrationContext persists the scope registration under the
+// caller's bounded persistence context.
+func (td *TaskDir) RecordLifetimeRegistrationContext(ctx context.Context, facts LifetimeRegistrationFacts) (*task.LifetimeRegistrationRecord, error) {
+	ctx, cancel, err := persistenceContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
+	_, _, _, spec, meta, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -320,24 +353,27 @@ func (td *TaskDir) RecordLifetimeRegistration(facts LifetimeRegistrationFacts) (
 	if err = task.ValidateLifetimeRegistrationRecord(&record); err != nil {
 		return nil, err
 	}
-	if existing, readErr := td.ReadLifetimeRegistration(); readErr == nil {
+	if existing, readErr := td.ReadLifetimeRegistrationContext(ctx); readErr == nil {
 		record.CreatedAt = existing.CreatedAt
 		if !reflect.DeepEqual(existing, &record) {
 			return nil, task.ErrIdentityMismatch
 		}
-		return existing, td.acknowledgeRecord(filepath.Join(lifetimeDirectory, lifetimeRegistrationName))
-	} else if !errors.Is(readErr, os.ErrNotExist) {
+		if acknowledgeErr := td.acknowledgeSameContext(ctx, filepath.Join(lifetimeDirectory, lifetimeRegistrationName), true); acknowledgeErr != nil {
+			return nil, acknowledgeErr
+		}
+		return td.ReadLifetimeRegistrationContext(ctx)
+	} else if !task.RecordAbsent(readErr) {
 		return nil, readErr
 	}
-	intent, err := td.ReadLifetimeIntent()
+	intent, err := td.ReadLifetimeIntentContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !task.LifetimeIntentMatchesRegistration(intent, &record) {
 		return nil, task.ErrIdentityMismatch
 	}
-	err = td.recordSame(filepath.Join(lifetimeDirectory, lifetimeRegistrationName), record, func() (bool, error) {
-		existing, readErr := td.ReadLifetimeRegistration()
+	err = td.recordSameContext(ctx, filepath.Join(lifetimeDirectory, lifetimeRegistrationName), record, func() (bool, error) {
+		existing, readErr := td.ReadLifetimeRegistrationContext(ctx)
 		if readErr != nil {
 			return false, readErr
 		}
@@ -347,30 +383,54 @@ func (td *TaskDir) RecordLifetimeRegistration(facts LifetimeRegistrationFacts) (
 	if err != nil {
 		return nil, err
 	}
-	return td.ReadLifetimeRegistration()
+	return td.ReadLifetimeRegistrationContext(ctx)
 }
 
 func (td *TaskDir) ReadLifetimeRegistration() (*task.LifetimeRegistrationRecord, error) {
+	return td.ReadLifetimeRegistrationContext(context.Background())
+}
+
+// ReadLifetimeRegistrationContext reads the registration while preserving the
+// caller's cancellation and deadline at each persistence boundary.
+func (td *TaskDir) ReadLifetimeRegistrationContext(ctx context.Context) (*task.LifetimeRegistrationRecord, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	var record task.LifetimeRegistrationRecord
 	path := filepath.Join(td.Dir, lifetimeDirectory, lifetimeRegistrationName)
-	if err := td.store.readRecord(path, &record); err != nil {
+	if err := td.store.readRecordContext(ctx, path, &record); err != nil {
+		return nil, err
+	}
+	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
 	if err := task.ValidateLifetimeRegistrationRecord(&record); err != nil {
 		return nil, err
 	}
-	if err := td.matchLifetimeOwner(record.RootID, record.TaskID, record.OwnerKind, record.OwnerSHA256); err != nil {
+	if err := td.matchLifetimeOwner(ctx, record.RootID, record.TaskID, record.OwnerKind, record.OwnerSHA256); err != nil {
+		return nil, lifetimeValidationDependencyError(err)
+	}
+	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
 	return &record, nil
 }
 
 func (td *TaskDir) LifetimeRegistrationDigest() (string, error) {
-	if _, err := td.ReadLifetimeRegistration(); err != nil {
+	return td.LifetimeRegistrationDigestContext(context.Background())
+}
+
+// LifetimeRegistrationDigestContext returns the persisted registration digest
+// while preserving the caller's cancellation and deadline.
+func (td *TaskDir) LifetimeRegistrationDigestContext(ctx context.Context) (string, error) {
+	if _, err := td.ReadLifetimeRegistrationContext(ctx); err != nil {
 		return "", err
 	}
-	data, err := td.store.readBytes(filepath.Join(td.Dir, lifetimeDirectory, lifetimeRegistrationName), task.MaxControlRecordSize)
+	data, err := td.store.readBytesContext(ctx, filepath.Join(td.Dir, lifetimeDirectory, lifetimeRegistrationName), task.MaxControlRecordSize)
 	if err != nil {
+		return "", lifetimeValidationDependencyError(err)
+	}
+	if err := lifetimeContextErr(ctx); err != nil {
 		return "", err
 	}
 	return task.ComputeSHA256(data), nil
@@ -379,22 +439,40 @@ func (td *TaskDir) LifetimeRegistrationDigest() (string, error) {
 // LifetimeWorkerDigest returns the digest of the canonical persisted worker
 // winner using taskdir's persisted-byte identity semantics.
 func (td *TaskDir) LifetimeWorkerDigest() (string, error) {
-	if _, err := td.ReadLifetimeWorker(); err != nil {
+	return td.LifetimeWorkerDigestContext(context.Background())
+}
+
+// LifetimeWorkerDigestContext validates and hashes the persisted worker winner
+// using the caller's context for both reads.
+func (td *TaskDir) LifetimeWorkerDigestContext(ctx context.Context) (string, error) {
+	if _, err := td.ReadLifetimeWorkerContext(ctx); err != nil {
 		return "", err
 	}
-	data, err := td.store.readBytes(filepath.Join(td.Dir, lifetimeDirectory, lifetimeWorkerName), task.MaxControlRecordSize)
+	data, err := td.store.readBytesContext(ctx, filepath.Join(td.Dir, lifetimeDirectory, lifetimeWorkerName), task.MaxControlRecordSize)
 	if err != nil {
-		return "", err
+		return "", lifetimeValidationDependencyError(err)
 	}
 	return task.ComputeSHA256(data), nil
 }
 
 func (td *TaskDir) RecordLifetimeWorker(facts LifetimeWorkerFacts) (*task.LifetimeWorkerRecord, error) {
-	registration, err := td.ReadLifetimeRegistration()
+	return td.RecordLifetimeWorkerContext(context.Background(), facts)
+}
+
+// RecordLifetimeWorkerContext persists the managed worker identity under the
+// caller's bounded persistence context.
+func (td *TaskDir) RecordLifetimeWorkerContext(ctx context.Context, facts LifetimeWorkerFacts) (*task.LifetimeWorkerRecord, error) {
+	ctx, cancel, err := persistenceContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	registrationDigest, err := td.LifetimeRegistrationDigest()
+	defer cancel()
+
+	registration, err := td.ReadLifetimeRegistrationContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -414,8 +492,8 @@ func (td *TaskDir) RecordLifetimeWorker(facts LifetimeWorkerFacts) (*task.Lifeti
 	if record.BootID != registration.BootID {
 		return nil, task.ErrIdentityMismatch
 	}
-	err = td.recordSame(filepath.Join(lifetimeDirectory, lifetimeWorkerName), record, func() (bool, error) {
-		existing, readErr := td.ReadLifetimeWorker()
+	err = td.recordSameContext(ctx, filepath.Join(lifetimeDirectory, lifetimeWorkerName), record, func() (bool, error) {
+		existing, readErr := td.ReadLifetimeWorkerContext(ctx)
 		if readErr != nil {
 			return false, readErr
 		}
@@ -425,25 +503,34 @@ func (td *TaskDir) RecordLifetimeWorker(facts LifetimeWorkerFacts) (*task.Lifeti
 	if err != nil {
 		return nil, err
 	}
-	return td.ReadLifetimeWorker()
+	return td.ReadLifetimeWorkerContext(ctx)
 }
 
 func (td *TaskDir) ReadLifetimeWorker() (*task.LifetimeWorkerRecord, error) {
-	registration, err := td.ReadLifetimeRegistration()
-	if err != nil {
-		return nil, err
-	}
-	registrationDigest, err := td.LifetimeRegistrationDigest()
-	if err != nil {
+	return td.ReadLifetimeWorkerContext(context.Background())
+}
+
+// ReadLifetimeWorkerContext validates the worker and its registration binding
+// without detaching any nested read from the caller's context.
+func (td *TaskDir) ReadLifetimeWorkerContext(ctx context.Context) (*task.LifetimeWorkerRecord, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
 	var record task.LifetimeWorkerRecord
 	path := filepath.Join(td.Dir, lifetimeDirectory, lifetimeWorkerName)
-	if err = td.store.readRecord(path, &record); err != nil {
+	if err := td.store.readRecordContext(ctx, path, &record); err != nil {
 		return nil, err
 	}
-	if err = task.ValidateLifetimeWorkerRecord(&record); err != nil {
+	if err := task.ValidateLifetimeWorkerRecord(&record); err != nil {
 		return nil, err
+	}
+	registration, err := td.ReadLifetimeRegistrationContext(ctx)
+	if err != nil {
+		return nil, lifetimeValidationDependencyError(err)
+	}
+	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
+	if err != nil {
+		return nil, lifetimeValidationDependencyError(err)
 	}
 	if record.RootID != td.store.RootID || record.TaskID != td.TaskID || record.RegistrationSHA256 != registrationDigest || record.BootID != registration.BootID {
 		return nil, task.ErrIdentityMismatch
@@ -455,7 +542,19 @@ func (td *TaskDir) ReadLifetimeWorker() (*task.LifetimeWorkerRecord, error) {
 // disposition. An empty WorkerSHA256 is accepted when no worker started or
 // when an exact scope has no persisted worker identity to bind to.
 func (td *TaskDir) RecordLifetimeWorkerWait(facts LifetimeWorkerWaitFacts) (*task.LifetimeWorkerWaitRecord, error) {
-	registration, registrationDigest, worker, workerDigest, err := td.lifetimeWorkerWaitBinding()
+	return td.RecordLifetimeWorkerWaitContext(context.Background(), facts)
+}
+
+// RecordLifetimeWorkerWaitContext persists the managed-worker completion
+// disposition under the caller's bounded persistence context.
+func (td *TaskDir) RecordLifetimeWorkerWaitContext(ctx context.Context, facts LifetimeWorkerWaitFacts) (*task.LifetimeWorkerWaitRecord, error) {
+	ctx, cancel, err := persistenceContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
+	registration, registrationDigest, worker, workerDigest, err := td.lifetimeWorkerWaitBindingContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -477,8 +576,8 @@ func (td *TaskDir) RecordLifetimeWorkerWait(facts LifetimeWorkerWaitFacts) (*tas
 	if err = validateLifetimeWorkerWaitForTask(&record, registration, registrationDigest, worker, workerDigest); err != nil {
 		return nil, err
 	}
-	err = td.recordSame(filepath.Join(lifetimeDirectory, lifetimeWorkerWaitName), record, func() (bool, error) {
-		existing, readErr := td.ReadLifetimeWorkerWait()
+	err = td.recordSameContext(ctx, filepath.Join(lifetimeDirectory, lifetimeWorkerWaitName), record, func() (bool, error) {
+		existing, readErr := td.ReadLifetimeWorkerWaitContext(ctx)
 		if readErr != nil {
 			return false, readErr
 		}
@@ -488,43 +587,59 @@ func (td *TaskDir) RecordLifetimeWorkerWait(facts LifetimeWorkerWaitFacts) (*tas
 	if err != nil {
 		return nil, err
 	}
-	return td.ReadLifetimeWorkerWait()
+	return td.ReadLifetimeWorkerWaitContext(ctx)
 }
 
 // ReadLifetimeWorkerWait returns the strictly validated child Wait winner.
 func (td *TaskDir) ReadLifetimeWorkerWait() (*task.LifetimeWorkerWaitRecord, error) {
-	registration, registrationDigest, worker, workerDigest, err := td.lifetimeWorkerWaitBinding()
-	if err != nil {
+	return td.ReadLifetimeWorkerWaitContext(context.Background())
+}
+
+// ReadLifetimeWorkerWaitContext validates the child Wait winner and all of its
+// registration and worker evidence within the caller's context.
+func (td *TaskDir) ReadLifetimeWorkerWaitContext(ctx context.Context) (*task.LifetimeWorkerWaitRecord, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
 	var record task.LifetimeWorkerWaitRecord
 	path := filepath.Join(td.Dir, lifetimeDirectory, lifetimeWorkerWaitName)
-	if err = td.store.readRecord(path, &record); err != nil {
+	if err := td.store.readRecordContext(ctx, path, &record); err != nil {
 		return nil, err
 	}
-	if err = validateLifetimeWorkerWaitForTask(&record, registration, registrationDigest, worker, workerDigest); err != nil {
+	if err := task.ValidateLifetimeWorkerWaitRecord(&record); err != nil {
+		return nil, err
+	}
+	registration, registrationDigest, worker, workerDigest, err := td.lifetimeWorkerWaitBindingContext(ctx)
+	if err != nil {
+		return nil, lifetimeValidationDependencyError(err)
+	}
+	if err := validateLifetimeWorkerWaitForTask(&record, registration, registrationDigest, worker, workerDigest); err != nil {
 		return nil, err
 	}
 	return &record, nil
 }
 
 func (td *TaskDir) lifetimeWorkerWaitBinding() (*task.LifetimeRegistrationRecord, string, *task.LifetimeWorkerRecord, string, error) {
-	registration, err := td.ReadLifetimeRegistration()
+	return td.lifetimeWorkerWaitBindingContext(context.Background())
+}
+
+func (td *TaskDir) lifetimeWorkerWaitBindingContext(ctx context.Context) (*task.LifetimeRegistrationRecord, string, *task.LifetimeWorkerRecord, string, error) {
+	registration, err := td.ReadLifetimeRegistrationContext(ctx)
 	if err != nil {
 		return nil, "", nil, "", err
 	}
-	registrationDigest, err := td.LifetimeRegistrationDigest()
+	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
 	if err != nil {
 		return nil, "", nil, "", err
 	}
-	worker, workerErr := td.ReadLifetimeWorker()
-	if errors.Is(workerErr, os.ErrNotExist) {
+	worker, workerErr := td.ReadLifetimeWorkerContext(ctx)
+	if task.RecordAbsent(workerErr) {
 		return registration, registrationDigest, nil, "", nil
 	}
 	if workerErr != nil {
 		return nil, "", nil, "", workerErr
 	}
-	workerDigest, err := td.LifetimeWorkerDigest()
+	workerDigest, err := td.LifetimeWorkerDigestContext(ctx)
 	if err != nil {
 		return nil, "", nil, "", err
 	}
@@ -554,15 +669,24 @@ func validateLifetimeWorkerWaitForTask(record *task.LifetimeWorkerWaitRecord, re
 }
 
 func (td *TaskDir) RecordLifetimeLaunch(facts LifetimeLaunchFacts) (*task.LifetimeLaunchRecord, error) {
+	return td.RecordLifetimeLaunchContext(context.Background(), facts)
+}
+
+// RecordLifetimeLaunchContext persists one native launch while retaining the
+// guardian's bounded work context for every nested read and write.
+func (td *TaskDir) RecordLifetimeLaunchContext(ctx context.Context, facts LifetimeLaunchFacts) (*task.LifetimeLaunchRecord, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	if facts.Sequence == 0 || facts.Sequence > task.MaxLifetimeLaunches {
 		return nil, fmt.Errorf("%w: lifetime launch sequence is outside 1..%d", task.ErrEvidenceFault, task.MaxLifetimeLaunches)
 	}
-	if _, err := td.ReadLifetimeTermination(); err == nil {
+	if _, err := td.ReadLifetimeTerminationContext(ctx); err == nil {
 		return nil, task.ErrTerminalTask
-	} else if !errors.Is(err, os.ErrNotExist) {
+	} else if !task.RecordAbsent(err) {
 		return nil, err
 	}
-	registrationDigest, err := td.LifetimeRegistrationDigest()
+	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -581,8 +705,8 @@ func (td *TaskDir) RecordLifetimeLaunch(facts LifetimeLaunchFacts) (*task.Lifeti
 		return nil, err
 	}
 	name := lifetimeLaunchName(facts.Sequence)
-	err = td.recordSame(filepath.Join(lifetimeDirectory, name), record, func() (bool, error) {
-		existing, readErr := td.readLifetimeLaunch(facts.Sequence)
+	err = td.recordSameContext(ctx, filepath.Join(lifetimeDirectory, name), record, func() (bool, error) {
+		existing, readErr := td.readLifetimeLaunchContext(ctx, facts.Sequence)
 		if readErr != nil {
 			return false, readErr
 		}
@@ -592,16 +716,51 @@ func (td *TaskDir) RecordLifetimeLaunch(facts LifetimeLaunchFacts) (*task.Lifeti
 	if err != nil {
 		return nil, err
 	}
-	return td.readLifetimeLaunch(facts.Sequence)
+	return td.readLifetimeLaunchContext(ctx, facts.Sequence)
 }
 
 func (td *TaskDir) ReadLifetimeLaunches() ([]task.LifetimeLaunchRecord, error) {
+	return td.ReadLifetimeLaunchesContext(context.Background())
+}
+
+// ReadLifetimeLaunchesContext reads the complete contiguous launch set while
+// retaining the caller's cancellation and deadline for each record read.
+func (td *TaskDir) ReadLifetimeLaunchesContext(ctx context.Context) ([]task.LifetimeLaunchRecord, error) {
+	sequences, err := td.readLifetimeLaunchSequencesContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	launches := make([]task.LifetimeLaunchRecord, 0, len(sequences))
+	for index, sequence := range sequences {
+		if err := lifetimeContextErr(ctx); err != nil {
+			return nil, err
+		}
+		if sequence != uint64(index+1) {
+			return nil, task.ErrIdentityMismatch
+		}
+		launch, readErr := td.readLifetimeLaunchContext(ctx, sequence)
+		if readErr != nil {
+			return nil, readErr
+		}
+		launches = append(launches, *launch)
+	}
+	return launches, nil
+}
+
+func (td *TaskDir) readLifetimeLaunchSequencesContext(ctx context.Context) ([]uint64, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	dir, err := td.store.openDir(filepath.Join(td.Dir, lifetimeDirectory))
 	if err != nil {
 		return nil, err
 	}
 	var sequences []uint64
 	for {
+		if contextErr := lifetimeContextErr(ctx); contextErr != nil {
+			err = contextErr
+			break
+		}
 		names, readErr := dir.Readdirnames(1)
 		for _, name := range names {
 			sequence, launch := parseLifetimeLaunchName(name)
@@ -621,31 +780,32 @@ func (td *TaskDir) ReadLifetimeLaunches() ([]task.LifetimeLaunchRecord, error) {
 			break
 		}
 	}
-	err = errors.Join(err, dir.Close())
+	err = errors.Join(err, dir.Close(), lifetimeContextErr(ctx))
 	if err != nil {
 		return nil, err
 	}
 	sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
-	launches := make([]task.LifetimeLaunchRecord, 0, len(sequences))
-	for index, sequence := range sequences {
-		if sequence != uint64(index+1) {
-			return nil, task.ErrIdentityMismatch
-		}
-		launch, readErr := td.readLifetimeLaunch(sequence)
-		if readErr != nil {
-			return nil, readErr
-		}
-		launches = append(launches, *launch)
-	}
-	return launches, nil
+	return sequences, nil
 }
 
 func (td *TaskDir) RecordLifetimeTermination(cause string) (*task.LifetimeTerminationRecord, error) {
-	registrationDigest, err := td.LifetimeRegistrationDigest()
+	return td.RecordLifetimeTerminationContext(context.Background(), cause)
+}
+
+// RecordLifetimeTerminationContext persists the caller's independently proven
+// empty-scope observation within its bounded persistence context. Once staging
+// starts, the durable writer retains ownership through barriers and cleanup.
+func (td *TaskDir) RecordLifetimeTerminationContext(ctx context.Context, cause string) (*task.LifetimeTerminationRecord, error) {
+	ctx, cancel, err := persistenceContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	launches, err := td.ReadLifetimeLaunches()
+	defer cancel()
+	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	launches, err := td.ReadLifetimeLaunchesContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -667,8 +827,8 @@ func (td *TaskDir) RecordLifetimeTermination(cause string) (*task.LifetimeTermin
 	if err = task.ValidateLifetimeTerminationRecord(&record); err != nil {
 		return nil, err
 	}
-	err = td.recordSame(filepath.Join(lifetimeDirectory, lifetimeTerminationName), record, func() (bool, error) {
-		existing, readErr := td.ReadLifetimeTermination()
+	err = td.recordSameContext(ctx, filepath.Join(lifetimeDirectory, lifetimeTerminationName), record, func() (bool, error) {
+		existing, readErr := td.ReadLifetimeTerminationContext(ctx)
 		if readErr != nil {
 			return false, readErr
 		}
@@ -678,13 +838,25 @@ func (td *TaskDir) RecordLifetimeTermination(cause string) (*task.LifetimeTermin
 	if err != nil {
 		return nil, err
 	}
-	return td.ReadLifetimeTermination()
+	return td.ReadLifetimeTerminationContext(ctx)
 }
 
 func (td *TaskDir) ReadLifetimeTermination() (*task.LifetimeTerminationRecord, error) {
+	return td.ReadLifetimeTerminationContext(context.Background())
+}
+
+// ReadLifetimeTerminationContext validates termination against the complete
+// launch set while preserving the caller's context for nested reads.
+func (td *TaskDir) ReadLifetimeTerminationContext(ctx context.Context) (*task.LifetimeTerminationRecord, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	var record task.LifetimeTerminationRecord
 	path := filepath.Join(td.Dir, lifetimeDirectory, lifetimeTerminationName)
-	if err := td.store.readRecord(path, &record); err != nil {
+	if err := td.store.readRecordContext(ctx, path, &record); err != nil {
+		return nil, err
+	}
+	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
 	if err := task.ValidateLifetimeTerminationRecord(&record); err != nil {
@@ -693,13 +865,16 @@ func (td *TaskDir) ReadLifetimeTermination() (*task.LifetimeTerminationRecord, e
 	if err := td.matchLifetimeIdentity(record.RootID, record.TaskID); err != nil {
 		return nil, err
 	}
-	registrationDigest, err := td.LifetimeRegistrationDigest()
-	if err != nil || registrationDigest != record.RegistrationSHA256 {
-		return nil, errors.Join(task.ErrIdentityMismatch, err)
-	}
-	launches, err := td.ReadLifetimeLaunches()
+	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, lifetimeValidationDependencyError(err)
+	}
+	if registrationDigest != record.RegistrationSHA256 {
+		return nil, task.ErrIdentityMismatch
+	}
+	launches, err := td.ReadLifetimeLaunchesContext(ctx)
+	if err != nil {
+		return nil, lifetimeValidationDependencyError(err)
 	}
 	digest, err := lifetimeLaunchSetDigest(launches)
 	if err != nil {
@@ -708,12 +883,21 @@ func (td *TaskDir) ReadLifetimeTermination() (*task.LifetimeTerminationRecord, e
 	if uint64(len(launches)) != record.LaunchCount || digest != record.LaunchSetSHA256 {
 		return nil, task.ErrIdentityMismatch
 	}
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	return &record, nil
 }
 
 func (td *TaskDir) HasTerminatedLifetime(cause string) (bool, error) {
-	record, err := td.ReadLifetimeTermination()
-	if errors.Is(err, os.ErrNotExist) {
+	return td.HasTerminatedLifetimeContext(context.Background(), cause)
+}
+
+// HasTerminatedLifetimeContext checks the existing empty-scope proof without
+// detaching its validation from the caller's context.
+func (td *TaskDir) HasTerminatedLifetimeContext(ctx context.Context, cause string) (bool, error) {
+	record, err := td.ReadLifetimeTerminationContext(ctx)
+	if task.RecordAbsent(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -728,10 +912,16 @@ func (td *TaskDir) HasTerminatedLifetime(cause string) (bool, error) {
 // Tasks without a registration retain the queue-only path used before native
 // launch and by historical records.
 func (td *TaskDir) StopTerminationReady() (bool, error) {
-	if _, err := td.ReadLifetimeRegistration(); errors.Is(err, os.ErrNotExist) {
-		if _, intentErr := td.ReadLifetimeIntent(); intentErr == nil {
+	return td.StopTerminationReadyContext(context.Background())
+}
+
+// StopTerminationReadyContext applies the same stop-termination policy using
+// the caller's context for every registration, intent, termination, and Wait read.
+func (td *TaskDir) StopTerminationReadyContext(ctx context.Context) (bool, error) {
+	if _, err := td.ReadLifetimeRegistrationContext(ctx); task.RecordAbsent(err) {
+		if _, intentErr := td.ReadLifetimeIntentContext(ctx); intentErr == nil {
 			return false, nil
-		} else if errors.Is(intentErr, os.ErrNotExist) {
+		} else if task.RecordAbsent(intentErr) {
 			return true, nil
 		} else {
 			return false, intentErr
@@ -739,9 +929,9 @@ func (td *TaskDir) StopTerminationReady() (bool, error) {
 	} else if err != nil {
 		return false, err
 	}
-	termination, err := td.ReadLifetimeTermination()
+	termination, err := td.ReadLifetimeTerminationContext(ctx)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if task.RecordAbsent(err) {
 			return false, nil
 		}
 		return false, err
@@ -749,8 +939,8 @@ func (td *TaskDir) StopTerminationReady() (bool, error) {
 	if termination.Cause == task.LifetimeTerminationPreviousBoot {
 		return true, nil
 	}
-	if _, err = td.ReadLifetimeWorkerWait(); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+	if _, err = td.ReadLifetimeWorkerWaitContext(ctx); err != nil {
+		if task.RecordAbsent(err) {
 			return false, nil
 		}
 		return false, err
@@ -759,9 +949,19 @@ func (td *TaskDir) StopTerminationReady() (bool, error) {
 }
 
 func (td *TaskDir) readLifetimeLaunch(sequence uint64) (*task.LifetimeLaunchRecord, error) {
+	return td.readLifetimeLaunchContext(context.Background(), sequence)
+}
+
+func (td *TaskDir) readLifetimeLaunchContext(ctx context.Context, sequence uint64) (*task.LifetimeLaunchRecord, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	var record task.LifetimeLaunchRecord
 	path := filepath.Join(td.Dir, lifetimeDirectory, lifetimeLaunchName(sequence))
-	if err := td.store.readRecord(path, &record); err != nil {
+	if err := td.store.readRecordContext(ctx, path, &record); err != nil {
+		return nil, err
+	}
+	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
 	if err := task.ValidateLifetimeLaunchRecord(&record); err != nil {
@@ -773,15 +973,36 @@ func (td *TaskDir) readLifetimeLaunch(sequence uint64) (*task.LifetimeLaunchReco
 	if err := td.matchLifetimeIdentity(record.RootID, record.TaskID); err != nil {
 		return nil, err
 	}
-	registrationDigest, err := td.LifetimeRegistrationDigest()
-	if err != nil || registrationDigest != record.RegistrationSHA256 {
-		return nil, errors.Join(task.ErrIdentityMismatch, err)
+	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
+	if err != nil {
+		return nil, lifetimeValidationDependencyError(err)
+	}
+	if registrationDigest != record.RegistrationSHA256 {
+		return nil, task.ErrIdentityMismatch
 	}
 	return &record, nil
 }
 
-func (td *TaskDir) matchLifetimeOwner(root, id, ownerKind, ownerSHA string) error {
-	_, _, _, expectedSpec, expectedMeta, err := td.loadAndValidatePreparedSet()
+func lifetimeContextErr(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	return ctx.Err()
+}
+
+func lifetimeValidationDependencyError(err error) error {
+	if err == nil ||
+		errors.Is(err, task.ErrIdentityMismatch) ||
+		errors.Is(err, task.ErrEvidenceFault) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return errors.Join(task.ErrIdentityMismatch, err)
+}
+
+func (td *TaskDir) matchLifetimeOwner(ctx context.Context, root, id, ownerKind, ownerSHA string) error {
+	_, _, _, expectedSpec, expectedMeta, err := td.loadAndValidatePreparedSetContext(ctx)
 	if err != nil {
 		return err
 	}

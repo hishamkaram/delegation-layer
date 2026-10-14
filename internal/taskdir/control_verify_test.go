@@ -195,6 +195,55 @@ func TestControlTransactionVerifyPreservesDurabilityFault(t *testing.T) {
 	}
 }
 
+func TestControlVerificationBarrierFailureIsNotRecordAbsence(t *testing.T) {
+	for _, tc := range []struct {
+		method  string
+		barrier string
+	}{
+		{method: "verify", barrier: "directory"},
+		{method: "verify", barrier: "parent"},
+		{method: "replay", barrier: "directory"},
+		{method: "replay", barrier: "parent"},
+	} {
+		t.Run(tc.method+"/"+tc.barrier, func(t *testing.T) {
+			s, d := controlVerifyDir(t)
+			record := controlTestRecord{Request: "group-binding"}
+			created, err := d.Put("request.json", record)
+			must(t, err)
+			if !created {
+				t.Fatal("fixture did not create its record")
+			}
+			path := filepath.Join(d.dir, "request.json")
+			before := readTestFile(t, path)
+			fault := &controlVerifyFault{failAt: tc.barrier, failure: os.ErrNotExist}
+			s.SetFaultInjector(fault)
+			t.Cleanup(func() { s.SetFaultInjector(nil) })
+
+			if tc.method == "verify" {
+				err = d.WithLock(t.Context(), func(tx *ControlTransaction) error {
+					return tx.Verify("request.json", record)
+				})
+			} else {
+				created, err = d.Put("request.json", record)
+				if created {
+					t.Fatal("replay granted another record claim")
+				}
+			}
+			if !errors.Is(err, os.ErrNotExist) || !errors.Is(err, task.ErrEvidenceFault) || task.RecordAbsent(err) {
+				t.Fatalf("verification barrier failure was treated as absence: %v", err)
+			}
+			if !bytes.Equal(before, readTestFile(t, path)) {
+				t.Fatal("verification changed the existing record")
+			}
+
+			s.SetFaultInjector(nil)
+			must(t, d.WithLock(t.Context(), func(tx *ControlTransaction) error {
+				return tx.Verify("request.json", record)
+			}))
+		})
+	}
+}
+
 func TestControlTransactionVerifyContextMatchesRead(t *testing.T) {
 	for _, lockName := range []string{"maintenance", "operation"} {
 		t.Run(lockName, func(t *testing.T) {

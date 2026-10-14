@@ -70,6 +70,21 @@ func TestInspectionLifetimeRecordsBindOwnerAndFenceTermination(t *testing.T) {
 	assertInspectionLifetimeTermination(t, op)
 }
 
+func TestInspectionPresentTerminationWithMissingRegistrationIsNotAbsent(t *testing.T) {
+	store, op := openInspectionLifetimeTest(t)
+	facts := inspectionLifetimeRegistrationFacts(op)
+	recordInspectionLifetimeForTest(t, op, facts)
+	recordInspectionLifetimeLaunchesForTest(t, op)
+	_, err := op.RecordLifetimeTermination(task.LifetimeTerminationCompleted)
+	mustInspection(t, err)
+	registrationPath := filepath.Join(store.Root, "inspections", op.Request().TaskID, inspectionLifetimeRegistrationName)
+	mustInspection(t, os.Remove(registrationPath))
+
+	if _, err = op.ReadLifetimeTerminationContext(t.Context()); !errors.Is(err, task.ErrIdentityMismatch) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("termination read error = %v, want identity mismatch and os.ErrNotExist", err)
+	}
+}
+
 func TestInspectionLifetimeRegistrationPostLinkErrorRequiresExactReplay(t *testing.T) {
 	store, op := openInspectionLifetimeTest(t)
 	facts := inspectionLifetimeRegistrationFacts(op)

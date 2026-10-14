@@ -16,6 +16,7 @@ import unittest
 from unittest.mock import patch
 
 import acceptance_private_cli as private_cli
+import acceptance_supervisor_common as common
 
 
 class PrivateDispatchArgumentsTests(unittest.TestCase):
@@ -30,13 +31,15 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             source.chmod(0o700)
             self.sources[name] = source
 
-    def arguments(self, total, workers, output=None):
+    def arguments(self, total, workers, output=None, scenario="capacity"):
         output = output or (self.root / "receipt.json")
         args = ["acceptance_private_cli.py"]
         for name in ("delegate", "runner", "pueue", "pueued"):
             args.extend(["--" + name, str(self.sources[name])])
         args.extend(["--output", str(output),
                      "--parallel-tasks", str(total), "--runtime-only"])
+        if scenario != "capacity":
+            args.extend(["--scenario", scenario])
         if workers is not None:
             args.extend(["--dispatch-workers", str(workers)])
         return args
@@ -121,6 +124,21 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                         private_cli.main()
                 self.assertEqual(raised.exception.code, 2)
                 self.assertIn("must be exactly 200", errors.getvalue())
+                setup.assert_not_called()
+
+    def test_default_stop_requires_exact_two_tasks_before_fixture_setup(self):
+        for total in (0, 1, 3, 200):
+            with self.subTest(total=total):
+                errors = io.StringIO()
+                with patch.object(
+                        sys, "argv",
+                        self.arguments(total, 2, scenario=private_cli.DEFAULT_STOP_SCENARIO)), \
+                        patch.object(private_cli.tempfile, "mkdtemp") as setup, \
+                        redirect_stderr(errors):
+                    with self.assertRaises(SystemExit) as raised:
+                        private_cli.main()
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("must be exactly 2", errors.getvalue())
                 setup.assert_not_called()
 
     def test_invalid_workers_are_rejected_before_fixture_setup(self):
@@ -314,6 +332,355 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
         return json.loads(output.read_text()), observed_upgrade, error
 
 
+class PrivateDefaultStopScenarioTests(unittest.TestCase):
+    def test_orchestration_requires_live_leases_and_canonical_closure(self):
+        with tempfile.TemporaryDirectory(prefix="delegate-default-stop-") as directory:
+            root = Path(directory)
+            state = root / "state"
+            workspace = root / "workspace"
+            workspace.mkdir()
+            brief = root / "brief.md"
+            brief.write_text("bounded stop fixture\n")
+            gate_path = root / "gate"
+            waiters = root / "waiters"
+            waiters.mkdir()
+            responses = root / "responses"
+            responses.mkdir()
+            provider = root / "pi"
+            provider.write_text("#!/bin/sh\n")
+            provider.chmod(0o700)
+            receipt = private_cli.AcceptanceReceipt(
+                root / "receipt.json", private_cli.DEFAULT_STOP_TASK_COUNT, 2,
+                {"delegate": provider, "runner": provider,
+                 "pueue": provider, "pueued": provider},
+            )
+            attempted = []
+            calls = []
+            lease_cleanup_calls = []
+            dispatches = []
+            status_reads = {}
+            lifecycle = []
+            user_request_id = "u" * 32
+
+            class Gate:
+                def __init__(self, path):
+                    self.path = path
+                    self.released = False
+
+                def release(self):
+                    self.released = True
+                    self.path.touch()
+
+            gate = Gate(gate_path)
+
+            class Cohort:
+                def __enter__(self):
+                    lifecycle.append("enter")
+                    return self
+
+                def __exit__(self, _error_type, _error, _traceback):
+                    lifecycle.append("exit")
+                    return False
+
+                def remove_closed_fifos(self):
+                    lifecycle.append("remove")
+                    lease_cleanup_calls.append(True)
+                    return [{"state": "removed"}]
+
+            def run_json(_delegate, _env, args, **_options):
+                command = args[2]
+                calls.append(args)
+                if command == "dispatch":
+                    task_id = args[args.index("--id") + 1]
+                    dispatches.append((task_id, args[args.index("--budget") + 1]))
+                    return {
+                        "root_id": "r" * 32, "task_id": task_id,
+                        "task_record": "created", "admission": "admitted",
+                    }
+                if command == "cancel":
+                    lifecycle.append("cancel")
+                    self.assertEqual(args[3], dispatches[0][0])
+                    return {
+                        "root_id": "r" * 32, "task_id": args[3],
+                        "stop": {
+                            "request_id": user_request_id, "cause": "user",
+                            "requested": True, "attempted": True, "in_flight": True,
+                            "terminated": False,
+                        },
+                    }
+                self.assertEqual(command, "status")
+                lifecycle.append("status")
+                task_id = args[3]
+                status_reads[task_id] = status_reads.get(task_id, 0) + 1
+                ended = status_reads[task_id] > 1
+                if task_id == dispatches[0][0]:
+                    stop = {
+                        "request_id": user_request_id, "cause": "user",
+                        "requested": True, "terminated": ended,
+                        "observed_state": "ended" if ended else "running",
+                    }
+                else:
+                    self.assertEqual(task_id, dispatches[1][0])
+                    stop = {
+                        "request_id": "budget", "cause": "budget",
+                        "requested": True, "terminated": ended,
+                        "observed_state": "ended" if ended else "running",
+                    }
+                return {
+                    "root_id": "r" * 32, "task_id": task_id,
+                    "liveness": "ended" if ended else "running", "stops": [stop],
+                }
+
+            def live_lease(_client, _config, _env, _state, response, _waiters, _nonce):
+                return ({
+                    "task_id": response["task_id"], "root_id": response["root_id"],
+                    "pid": 100 + len(dispatches), "scope_kind": "process-group",
+                    "assurance": "cooperative", "owner_sha256": "a" * 64,
+                    "registration_sha256": "b" * 64,
+                    "scope_plan_sha256": "c" * 64, "scope_id_sha256": "d" * 64,
+                    "path": root / (response["task_id"] + ".fifo"),
+                }, Cohort(), {"observed_at_unix_ns": 1, "acquire_elapsed_ns": 1})
+
+            def closure(_state, task_ids, timeout=30):
+                lifecycle.append("closure")
+                task_id = tuple(task_ids)[0]
+                cause = "requested" if task_id == dispatches[0][0] else "budget"
+                return {"tasks": {task_id: {
+                    "intent": {"deadline": "2026-10-14T00:00:01Z",
+                                "created_at": "2026-10-14T00:00:00Z"},
+                    "registration": {"scope_kind": "process-group", "assurance": "cooperative"},
+                    "worker_wait": {"child_pid": 101, "result": "exit-error",
+                                     "exit_code": 143, "observed_at": "2026-10-14T00:00:01Z"},
+                    "launches": [{"pid": 101}],
+                    "termination": {"cause": cause, "scope_empty": True,
+                                    "observed_at": "2026-10-14T00:00:02Z"},
+                }}}
+
+            shutdown = []
+
+            def shutdown_private(*_args, **_kwargs):
+                self.assertTrue(gate.released, "supervisor shutdown preceded fixture gate release")
+                shutdown.append(True)
+
+            with patch.object(private_cli.LockedReleaseGate, "acquire", return_value=gate), \
+                    patch.object(private_cli, "run_json", side_effect=run_json), \
+                    patch.object(private_cli.time, "sleep"), \
+                    patch.object(private_cli, "default_stop_live_lease", side_effect=live_lease), \
+                    patch.object(private_cli, "await_managed_lifetime_closure", side_effect=closure), \
+                    patch.object(private_cli, "shutdown_private_supervisor", side_effect=shutdown_private):
+                evidence = private_cli.run_default_stop_acceptance(
+                    provider, provider, state, workspace, brief, gate_path, waiters,
+                    root / "pueue.yml", {}, responses, provider, "e" * 32,
+                    receipt, attempted,
+                )
+
+            self.assertEqual([command[2] for command in calls], [
+                "dispatch", "cancel", "status", "status", "dispatch", "status", "status",
+            ])
+            self.assertEqual(
+                [budget for _, budget in dispatches],
+                [private_cli.DEFAULT_STOP_TASK_BUDGET, private_cli.DEFAULT_STOP_BUDGET],
+            )
+            self.assertEqual(attempted, [dispatches[0][0], dispatches[1][0]])
+            self.assertEqual(evidence["scenario"], private_cli.DEFAULT_STOP_SCENARIO)
+            self.assertEqual(set(evidence["tasks"]), {"user_stop", "budget_stop"})
+            self.assertEqual(lease_cleanup_calls, [True, True])
+            self.assertEqual(lifecycle, [
+                "enter", "cancel", "closure", "status", "status", "remove", "exit",
+                "enter", "closure", "status", "status", "remove", "exit",
+            ])
+            self.assertEqual(
+                evidence["tasks"]["user_stop"]["status"]["queue_ended_observation"],
+                {
+                    "kind": "queue-ended-observation",
+                    "final_receipt": "status-default-stop-user-001.json",
+                    "poll_receipts": [
+                        "status-default-stop-user-000.json",
+                        "status-default-stop-user-001.json",
+                    ],
+                    "poll_count": 2,
+                },
+            )
+            self.assertEqual(
+                evidence["tasks"]["budget_stop"]["status"]["queue_ended_observation"],
+                {
+                    "kind": "queue-ended-observation",
+                    "final_receipt": "status-default-stop-budget-001.json",
+                    "poll_receipts": [
+                        "status-default-stop-budget-000.json",
+                        "status-default-stop-budget-001.json",
+                    ],
+                    "poll_count": 2,
+                },
+            )
+            self.assertEqual(
+                evidence["tasks"]["user_stop"]["fixture_lease_cleanup"],
+                [{"state": "removed"}],
+            )
+            self.assertFalse(evidence["stop_poll_policy"]["override"])
+            self.assertEqual(evidence["cleanup"]["fixture_waiter_entries"], 0)
+            self.assertEqual(receipt.counts["dispatch_completed_count"], 2)
+            self.assertEqual(receipt.counts["admitted_task_count"], 2)
+            self.assertEqual(shutdown, [True])
+
+
+class EndedTaskObservationTests(unittest.TestCase):
+    def response(self):
+        return {"task_id": "a" * 32, "root_id": "r" * 32}
+
+    def test_running_status_is_polled_until_same_task_ends_with_unique_receipts(self):
+        response = self.response()
+        observations = [
+            {**response, "liveness": "running", "stops": []},
+            {**response, "liveness": "ended", "stops": []},
+        ]
+        with patch.object(private_cli, "read_created_task_status",
+                          side_effect=observations) as read, \
+                patch.object(private_cli.time, "sleep") as sleep:
+            status, evidence = private_cli.await_created_task_ended(
+                Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
+                Path("/fixture/status.json"), timeout=5,
+            )
+
+        self.assertEqual(status["liveness"], "ended")
+        self.assertEqual(evidence, {
+            "kind": "queue-ended-observation",
+            "final_receipt": "status-001.json",
+            "poll_receipts": ["status-000.json", "status-001.json"],
+            "poll_count": 2,
+        })
+        self.assertEqual(
+            [call.args[3] for call in read.call_args_list],
+            [response["task_id"], response["task_id"]],
+        )
+        self.assertEqual(
+            [call.args[4].name for call in read.call_args_list],
+            ["status-000.json", "status-001.json"],
+        )
+        self.assertTrue(all(call.kwargs["timeout"] <= 5 for call in read.call_args_list))
+        sleep.assert_called_once()
+
+    def test_running_status_times_out_with_fake_clock(self):
+        response = self.response()
+        now = [0.0]
+
+        def monotonic():
+            return now[0]
+
+        def advance_to_deadline(_duration):
+            now[0] = 5.0
+
+        with patch.object(private_cli, "read_created_task_status",
+                          return_value={**response, "liveness": "running", "stops": []}) as read, \
+                patch.object(private_cli.time, "monotonic", side_effect=monotonic), \
+                patch.object(private_cli.time, "sleep", side_effect=advance_to_deadline) as sleep:
+            with self.assertRaisesRegex(TimeoutError, "queue status remained non-ended"):
+                private_cli.await_created_task_ended(
+                    Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
+                    Path("/fixture/status.json"), timeout=5,
+                )
+
+        read.assert_called_once()
+        sleep.assert_called_once()
+
+    def test_identity_and_operational_errors_fail_without_another_poll(self):
+        response = self.response()
+        wrong_task = {
+            "task_id": "b" * 32, "root_id": response["root_id"], "liveness": "running",
+        }
+        with patch.object(private_cli, "run_json", return_value=wrong_task) as run, \
+                patch.object(private_cli.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "different task"):
+                private_cli.await_created_task_ended(
+                    Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
+                    Path("/fixture/status.json"), timeout=5,
+                )
+        run.assert_called_once()
+        sleep.assert_not_called()
+
+        cases = (
+            (
+                "root identity",
+                {"task_id": response["task_id"], "root_id": "s" * 32, "liveness": "running"},
+                "different root",
+            ),
+            (
+                "status error",
+                {**response, "liveness": "running", "error": "status unavailable"},
+                "operational failure",
+            ),
+            (
+                "status failure",
+                {**response, "liveness": "running",
+                 "failure": {"code": "supervisor_unavailable"}},
+                "operational failure",
+            ),
+        )
+        for label, observed, message in cases:
+            with self.subTest(label=label), \
+                    patch.object(private_cli, "read_created_task_status",
+                                 return_value=observed) as read, \
+                    patch.object(private_cli.time, "sleep") as sleep:
+                with self.assertRaisesRegex(RuntimeError, message):
+                    private_cli.await_created_task_ended(
+                        Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
+                        Path("/fixture/status.json"), timeout=5,
+                    )
+                read.assert_called_once()
+                sleep.assert_not_called()
+
+        with patch.object(private_cli, "read_created_task_status",
+                          side_effect=RuntimeError("delegate command failed: exit=2")) as read, \
+                patch.object(private_cli.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "exit=2"):
+                private_cli.await_created_task_ended(
+                    Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
+                    Path("/fixture/status.json"), timeout=5,
+                )
+        read.assert_called_once()
+        sleep.assert_not_called()
+
+
+class TaskStatusReceiptTests(unittest.TestCase):
+    def test_status_response_is_retained_before_identity_validation(self):
+        for returned_id in ("a" * 32, "b" * 32):
+            with self.subTest(returned_id=returned_id), \
+                    tempfile.TemporaryDirectory(prefix="delegate-status-receipt-") as directory:
+                receipt = Path(directory) / "status-000.json"
+                response = {
+                    "command": "status", "task_id": returned_id,
+                    "root_id": "r" * 32, "liveness": "running",
+                }
+                stdout = (json.dumps(response) + "\n").encode()
+                completed = subprocess.CompletedProcess([], 0, stdout, b"")
+                with patch.object(private_cli, "run_captured_command", return_value=completed) as command:
+                    if returned_id == "a" * 32:
+                        observed = private_cli.read_created_task_status(
+                            Path("/fixture/delegate"), Path(directory), {}, "a" * 32, receipt,
+                        )
+                        self.assertEqual(observed, response)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "different task"):
+                            private_cli.read_created_task_status(
+                                Path("/fixture/delegate"), Path(directory), {}, "a" * 32, receipt,
+                            )
+                recorded = json.loads(receipt.read_text())
+                self.assertEqual(recorded["response"], response)
+                self.assertEqual(recorded["stdout_sha256"], hashlib.sha256(stdout).hexdigest())
+                self.assertEqual(recorded["exit_code"], 0)
+                self.assertEqual(command.call_count, 1)
+
+    def test_other_commands_do_not_capture_response_bodies_by_default(self):
+        with tempfile.TemporaryDirectory(prefix="delegate-control-receipt-") as directory:
+            receipt = Path(directory) / "command.json"
+            completed = subprocess.CompletedProcess([], 0, b'{"fixture":"control"}\n', b"")
+            with patch.object(private_cli, "run_captured_command", return_value=completed):
+                private_cli.run_json(
+                    Path("/fixture/delegate"), {}, ["providers", "--json"], receipt=receipt,
+                )
+            self.assertNotIn("response", json.loads(receipt.read_text()))
+
+
 class CreatedAdmissionTests(unittest.TestCase):
     def response(self):
         return {"task_id": "a" * 32, "task_record": "created", "admission": "unknown",
@@ -350,6 +717,56 @@ class CreatedAdmissionTests(unittest.TestCase):
             run.call_args.args[2],
             ["--root", "/fixture/state", "status", task_id, "--json"],
         )
+
+    def test_enqueue_uncertainty_observes_exact_stashed_task_without_redispatch(self):
+        root_id = "b" * 32
+        task_id = "c" * 32
+        numeric_task_id = 37
+        dispatch = {
+            "root_id": root_id,
+            "task_id": task_id,
+            "task_record": "created",
+            "admission": "admitted",
+            "supervisor": {
+                "matched": True,
+                "state": "stashed",
+                "numeric_task_id": numeric_task_id,
+            },
+            "pending": {"kind": "supervisor-command"},
+            "failure": {
+                "code": "task_launch_uncertain",
+                "stage": "enqueue-task",
+                "next_action": "check_status",
+            },
+            "error": "Delegate recorded the exact supervisor task but could not confirm that it was enqueued.",
+        }
+        status = {
+            "root_id": root_id,
+            "task_id": task_id,
+            "admission": "admitted",
+            "liveness": "running",
+            "supervisor": {
+                "matched": True,
+                "state": "running",
+                "numeric_task_id": numeric_task_id,
+            },
+        }
+
+        def scripted_control(_delegate, _env, args, **_options):
+            self.assertEqual(args[2], "status", "uncertain dispatch must not be redispatched")
+            self.assertEqual(args[3], task_id)
+            return status
+
+        with patch.object(private_cli, "run_json", side_effect=scripted_control) as run:
+            observed = self.observe(dispatch)
+
+        self.assertEqual(run.call_count, 1)
+        self.assertIs(observed, status)
+        self.assertEqual(observed["root_id"], dispatch["root_id"])
+        self.assertEqual(observed["task_id"], dispatch["task_id"])
+        self.assertEqual(observed["supervisor"]["numeric_task_id"], numeric_task_id)
+        self.assertEqual(dispatch["failure"]["code"], "task_launch_uncertain")
+        self.assertEqual(dispatch["admission"], "admitted")
 
     def test_uncertain_submission_only_observes_its_created_task(self):
         response = self.response()
@@ -706,6 +1123,49 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.nonce = "d" * 32
 
+    def start_fifo_writer(self, fifo):
+        script = (
+            "import os,sys\n"
+            "fifo,nonce=sys.argv[1:]\n"
+            "try:\n"
+            " fd=os.open(fifo,os.O_WRONLY)\n"
+            "except FileNotFoundError:\n"
+            " sys.exit(0)\n"
+            "os.write(fd,(nonce+'\\t'+str(os.getpid())+'\\n').encode())\n"
+            "sys.stdin.buffer.read(1)\n"
+            "os.close(fd)\n"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(fifo), self.nonce],
+            stdin=subprocess.PIPE,
+        )
+        self.addCleanup(self.reap, process)
+        return process
+
+    def start_fifo_mock_writer_cohort(self, fifos):
+        script = (
+            "import os,sys,time\n"
+            "nonce=sys.argv[1]\n"
+            "fds=[]\n"
+            "for fifo in sys.argv[2:]:\n"
+            " fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)\n"
+            " fds.append(fd)\n"
+            " os.write(fd,(nonce+'\\t'+str(os.getpid())+'\\n').encode())\n"
+            "try:\n"
+            " time.sleep(30)\n"
+            "finally:\n"
+            " for fd in fds:\n"
+            "  os.close(fd)\n"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, self.nonce, *(str(fifo) for fifo in fifos)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.addCleanup(self.reap, process)
+        return process
+
     def test_stale_fifo_without_writer_fails_and_closes_its_descriptor(self):
         fifo = self.root / "stale.fifo"
         os.mkfifo(fifo, 0o600)
@@ -717,14 +1177,16 @@ class PrivateLiveLeaseTests(unittest.TestCase):
             opened.append(descriptor)
             return descriptor
 
-        with patch.object(private_cli.os, "open", side_effect=recording_open):
+        with patch.object(common, "_require_fd_cleanup_support"), \
+                patch.object(private_cli.os, "open", side_effect=recording_open):
             with self.assertRaisesRegex(RuntimeError, "no live writer"):
                 private_cli.LiveFIFOLease.acquire(
                     "a" * 32, 101, fifo, self.nonce, timeout=0.03,
                 )
-        self.assertEqual(len(opened), 1)
-        with self.assertRaises(OSError):
-            os.fstat(opened[0])
+        self.assertEqual(len(opened), 2)
+        for descriptor in opened:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
 
     def test_pi_fixture_holds_nonce_bound_fifo_until_gate_release(self):
         install = self.root / "bin"
@@ -798,6 +1260,275 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         self.assertIn(b"private supervisor acceptance passed", stdout)
         self.assertFalse(fifo.exists())
 
+    def test_cohort_removes_owned_fifos_while_original_pins_remain_live(self):
+        first_fifo = self.root / "first-owned.fifo"
+        second_fifo = self.root / "second-owned.fifo"
+        os.mkfifo(first_fifo, 0o600)
+        os.mkfifo(second_fifo, 0o600)
+        first = self.start_fifo_writer(first_fifo)
+        second = self.start_fifo_writer(second_fifo)
+        cohort = private_cli.LiveFIFOLeaseCohort.acquire([
+            {"task_id": "a" * 32, "pid": first.pid, "path": first_fifo},
+            {"task_id": "b" * 32, "pid": second.pid, "path": second_fifo},
+        ], self.nonce, timeout=2)
+        self.addCleanup(cohort.close)
+        leases = tuple(cohort.leases)
+        self.assertEqual(len(cohort.parent_pins), 1)
+        parent_descriptor = next(iter(cohort.parent_pins.values()))[0]
+        self.assertEqual({lease.parent_descriptor for lease in leases}, {parent_descriptor})
+
+        for process in (first, second):
+            process.terminate()
+            process.wait(timeout=3)
+        with cohort:
+            removed = cohort.remove_closed_fifos()
+            for lease in leases:
+                os.fstat(lease.descriptor)
+            os.fstat(parent_descriptor)
+
+        self.assertEqual([item["state"] for item in removed], ["removed", "removed"])
+        self.assertFalse(first_fifo.exists())
+        self.assertFalse(second_fifo.exists())
+        self.assertEqual(cohort.leases, [])
+        self.assertEqual(cohort.parent_pins, {})
+        for lease in leases:
+            with self.assertRaises(OSError):
+                os.fstat(lease.descriptor)
+        with self.assertRaises(OSError):
+            os.fstat(parent_descriptor)
+
+    def test_parent_replacement_before_fifo_open_fails_and_closes_parent_pin(self):
+        parent = self.root / "waiters"
+        parent.mkdir()
+        fifo = parent / "lease.fifo"
+        os.mkfifo(fifo, 0o600)
+        original_parent = self.root / "original-waiters"
+        opened_parent = []
+        real_open_parent = private_cli._open_parent_directory
+
+        def open_then_replace(path):
+            descriptor, identity = real_open_parent(path)
+            opened_parent.append(descriptor)
+            parent.rename(original_parent)
+            parent.mkdir()
+            return descriptor, identity
+
+        with patch.object(private_cli, "_open_parent_directory",
+                          side_effect=open_then_replace):
+            with self.assertRaisesRegex(RuntimeError, "parent was replaced"):
+                private_cli.LiveFIFOLease.acquire(
+                    "a" * 32, 101, fifo, self.nonce,
+                )
+
+        self.assertEqual(len(opened_parent), 1)
+        with self.assertRaises(OSError):
+            os.fstat(opened_parent[0])
+        self.assertTrue((original_parent / "lease.fifo").exists())
+        self.assertFalse((parent / "lease.fifo").exists())
+
+    def test_parent_replacement_between_borrowed_acquisitions_fails_before_second_fifo(self):
+        parent = self.root / "waiters"
+        parent.mkdir()
+        first_fifo = parent / "first.fifo"
+        second_fifo = parent / "second.fifo"
+        os.mkfifo(first_fifo, 0o600)
+        os.mkfifo(second_fifo, 0o600)
+        first = self.start_fifo_writer(first_fifo)
+        second = self.start_fifo_writer(second_fifo)
+        original_parent = self.root / "original-waiters"
+        acquired = []
+        real_acquire = private_cli.LiveFIFOLease._acquire_with_parent
+
+        def acquire_then_replace(*args, **kwargs):
+            lease = real_acquire(*args, **kwargs)
+            acquired.append((lease, lease.descriptor, lease.parent_descriptor))
+            if len(acquired) == 1:
+                parent.rename(original_parent)
+                parent.mkdir()
+            return lease
+
+        specifications = [
+            {"task_id": "a" * 32, "pid": first.pid, "path": first_fifo},
+            {"task_id": "b" * 32, "pid": second.pid, "path": second_fifo},
+        ]
+        with patch.object(private_cli.LiveFIFOLease, "_acquire_with_parent",
+                          side_effect=acquire_then_replace):
+            with self.assertRaisesRegex(RuntimeError, "parent was replaced"):
+                private_cli.LiveFIFOLeaseCohort.acquire(
+                    specifications, self.nonce, timeout=2,
+                )
+
+        self.assertEqual(len(acquired), 1)
+        _first_lease, first_descriptor, parent_descriptor = acquired[0]
+        with self.assertRaises(OSError):
+            os.fstat(first_descriptor)
+        with self.assertRaises(OSError):
+            os.fstat(parent_descriptor)
+        self.assertTrue((original_parent / "first.fifo").exists())
+        self.assertTrue((original_parent / "second.fifo").exists())
+        self.assertFalse((parent / "first.fifo").exists())
+        self.assertFalse((parent / "second.fifo").exists())
+
+    def test_cohort_pins_one_parent_for_200_mock_handshakes(self):
+        waiters = self.root / "waiters"
+        waiters.mkdir()
+        fifos = [waiters / ("lease-%03d.fifo" % index) for index in range(200)]
+        for fifo in fifos:
+            os.mkfifo(fifo, 0o600)
+        process = self.start_fifo_mock_writer_cohort(fifos)
+        specifications = [
+            {"task_id": "%032x" % index, "pid": process.pid, "path": fifo}
+            for index, fifo in enumerate(fifos)
+        ]
+        opened_parents = []
+        real_open_parent = private_cli._open_parent_directory
+
+        def record_open_parent(path):
+            descriptor, identity = real_open_parent(path)
+            opened_parents.append(descriptor)
+            return descriptor, identity
+
+        with patch.object(private_cli, "_open_parent_directory",
+                          side_effect=record_open_parent):
+            cohort = private_cli.LiveFIFOLeaseCohort.acquire(
+                specifications, self.nonce, timeout=2,
+            )
+        leases = tuple(cohort.leases)
+        parent_descriptor = next(iter(cohort.parent_pins.values()))[0]
+        try:
+            self.assertEqual(len(opened_parents), 1)
+            self.assertEqual(len(cohort.parent_pins), 1)
+            self.assertEqual(len(leases), 200)
+            self.assertEqual(
+                {lease.parent_descriptor for lease in leases}, {parent_descriptor},
+            )
+            self.assertEqual(len({lease.descriptor for lease in leases}), 200)
+            os.fstat(parent_descriptor)
+        finally:
+            cohort.close()
+        with self.assertRaises(OSError):
+            os.fstat(parent_descriptor)
+        for lease in leases:
+            with self.assertRaises(OSError):
+                os.fstat(lease.descriptor)
+
+    def test_cohort_parent_replacement_after_acquisition_fails_live_assertion(self):
+        parent = self.root / "waiters"
+        parent.mkdir()
+        fifo = parent / "lease.fifo"
+        os.mkfifo(fifo, 0o600)
+        process = self.start_fifo_writer(fifo)
+        cohort = private_cli.LiveFIFOLeaseCohort.acquire([
+            {"task_id": "a" * 32, "pid": process.pid, "path": fifo},
+        ], self.nonce, timeout=2)
+        self.addCleanup(cohort.close)
+        original_parent = self.root / "original-waiters"
+        parent.rename(original_parent)
+        parent.mkdir()
+
+        try:
+            with self.assertRaisesRegex(RuntimeError, "parent was replaced"):
+                cohort.assert_live()
+            self.assertTrue((original_parent / "lease.fifo").exists())
+            self.assertFalse((parent / "lease.fifo").exists())
+        finally:
+            cohort.close()
+
+    def test_cohort_parent_replacement_retains_original_fifo(self):
+        parent = self.root / "waiters"
+        parent.mkdir()
+        fifo = parent / "lease.fifo"
+        os.mkfifo(fifo, 0o600)
+        process = self.start_fifo_writer(fifo)
+        cohort = private_cli.LiveFIFOLeaseCohort.acquire([
+            {"task_id": "a" * 32, "pid": process.pid, "path": fifo},
+        ], self.nonce, timeout=2)
+        process.terminate()
+        process.wait(timeout=3)
+        original_parent = self.root / "original-waiters"
+        parent.rename(original_parent)
+        parent.mkdir()
+
+        try:
+            with self.assertRaisesRegex(RuntimeError, "parent was replaced"):
+                cohort.remove_closed_fifos()
+            self.assertTrue((original_parent / "lease.fifo").exists())
+            self.assertFalse((parent / "lease.fifo").exists())
+        finally:
+            cohort.close()
+
+    def test_replaced_fifo_identity_fails_and_retains_replacement(self):
+        fifo = self.root / "replaced.fifo"
+        os.mkfifo(fifo, 0o600)
+        process = self.start_fifo_writer(fifo)
+        lease = private_cli.LiveFIFOLease.acquire(
+            "a" * 32, process.pid, fifo, self.nonce, timeout=2,
+        )
+        replacement_path = self.root / "replacement.fifo"
+        os.mkfifo(replacement_path, 0o600)
+        replacement_identity = None
+        real_remove = private_cli.remove_exact_owned_fifo
+
+        def replace_after_observation(*args, **kwargs):
+            nonlocal replacement_identity
+            fifo.unlink()
+            replacement_path.rename(fifo)
+            replacement_identity = (fifo.stat().st_dev, fifo.stat().st_ino)
+            return real_remove(*args, **kwargs)
+
+        try:
+            with patch.object(private_cli, "remove_exact_owned_fifo",
+                              side_effect=replace_after_observation):
+                with self.assertRaisesRegex(RuntimeError, "was replaced"):
+                    lease.remove_closed_fifo()
+
+            self.assertTrue(fifo.exists())
+            self.assertEqual(
+                (fifo.stat().st_dev, fifo.stat().st_ino), replacement_identity,
+            )
+        finally:
+            lease.close()
+
+    def test_closed_fifo_pin_is_rejected_without_removing_the_entry(self):
+        fifo = self.root / "closed.fifo"
+        os.mkfifo(fifo, 0o600)
+        process = self.start_fifo_writer(fifo)
+        lease = private_cli.LiveFIFOLease.acquire(
+            "a" * 32, process.pid, fifo, self.nonce, timeout=2,
+        )
+        parent_descriptor = lease.parent_descriptor
+        os.fstat(parent_descriptor)
+        lease.close()
+
+        with self.assertRaises(OSError):
+            os.fstat(parent_descriptor)
+
+        with self.assertRaisesRegex(RuntimeError, "entry descriptor is closed"):
+            lease.remove_closed_fifo()
+        self.assertTrue(fifo.exists())
+
+    def test_replaced_fifo_parent_fails_and_retains_both_parent_entries(self):
+        parent = self.root / "waiters"
+        parent.mkdir()
+        fifo = parent / "lease.fifo"
+        os.mkfifo(fifo, 0o600)
+        process = self.start_fifo_writer(fifo)
+        lease = private_cli.LiveFIFOLease.acquire(
+            "a" * 32, process.pid, fifo, self.nonce, timeout=2,
+        )
+        original_parent = self.root / "original-waiters"
+        parent.rename(original_parent)
+        parent.mkdir()
+
+        try:
+            with self.assertRaisesRegex(RuntimeError, "parent was replaced"):
+                lease.remove_closed_fifo()
+
+            self.assertTrue(parent.is_dir())
+            self.assertTrue((original_parent / "lease.fifo").exists())
+        finally:
+            lease.close()
+
     def test_child_death_during_cohort_formation_fails_and_closes_all_fds(self):
         first_fifo = self.root / "first.fifo"
         second_fifo = self.root / "second.fifo"
@@ -828,7 +1559,7 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         def recording_open(*args, **kwargs):
             descriptor = real_open(*args, **kwargs)
             opened.append(descriptor)
-            if len(opened) == 2:
+            if len(opened) == 3:
                 first.stdin.write(b"x")
                 first.stdin.flush()
                 first.stdin.close()
@@ -838,12 +1569,13 @@ class PrivateLiveLeaseTests(unittest.TestCase):
             {"task_id": "a" * 32, "pid": first.pid, "path": first_fifo},
             {"task_id": "b" * 32, "pid": second.pid, "path": second_fifo},
         ]
-        with patch.object(private_cli.os, "open", side_effect=recording_open):
+        with patch.object(common, "_require_fd_cleanup_support"), \
+                patch.object(private_cli.os, "open", side_effect=recording_open):
             with self.assertRaisesRegex(RuntimeError, "died during lease cohort formation"):
                 private_cli.LiveFIFOLeaseCohort.acquire(
                     specifications, self.nonce, timeout=2,
                 )
-        self.assertEqual(len(opened), 2)
+        self.assertEqual(len(opened), 3)
         for descriptor in opened:
             with self.assertRaises(OSError):
                 os.fstat(descriptor)

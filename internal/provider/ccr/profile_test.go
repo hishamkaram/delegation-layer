@@ -183,25 +183,33 @@ func TestFreshProfileSelectsRouteCompatiblePreparation(t *testing.T) {
 	request.CanonicalCwd = directory
 	for name, resumeRoute := range map[string]bool{"legacy": false, "route-preserving": true} {
 		t.Run(name, func(t *testing.T) {
-			candidate, err := PrepareCandidate(request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if candidate.Inspection == nil || !slices.Equal(candidate.Inspection.Arguments, []string{"launch", "--help"}) || slices.Contains(candidate.Inspection.Runtime.RequiredFlags, "--resume-route") {
-				t.Fatalf("inspection=%+v", candidate.Inspection)
-			}
-			profile, err := candidate.Finalize(routeFacts(t, candidate, resumeRoute), time.Now())
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := modeledReference(request.Mode)
-			if resumeRoute {
-				want = Reference(request.Mode)
-			}
-			if !profile.Plan.Predicate.Equal(want) {
-				t.Fatalf("predicate=%+v want=%+v", profile.Plan.Predicate, want)
-			}
+			testFreshProfileRoute(t, request, resumeRoute)
 		})
+	}
+}
+
+func testFreshProfileRoute(t *testing.T, request task.TaskRecord, resumeRoute bool) {
+	t.Helper()
+	candidate, err := PrepareCandidate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Admit != nil {
+		t.Fatal("CCR route inspection exposed static admission")
+	}
+	if candidate.Inspection == nil || !slices.Equal(candidate.Inspection.Arguments, []string{"launch", "--help"}) || slices.Contains(candidate.Inspection.Runtime.RequiredFlags, "--resume-route") {
+		t.Fatalf("inspection=%+v", candidate.Inspection)
+	}
+	profile, err := candidate.Finalize(routeFacts(t, candidate, resumeRoute), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := modeledReference(request.Mode)
+	if resumeRoute {
+		want = Reference(request.Mode)
+	}
+	if !profile.Plan.Predicate.Equal(want) {
+		t.Fatalf("predicate=%+v want=%+v", profile.Plan.Predicate, want)
 	}
 }
 

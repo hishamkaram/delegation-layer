@@ -4,7 +4,12 @@ Use `--json` while diagnosing a task. It keeps admission, liveness, and
 publication separate and includes a bounded error message without embedding
 provider answer text.
 
-## Provider is not found or rejected before admission
+## Provider is not found or runtime verification fails
+
+Managed runtime-only tasks resolve the executable before admission, then check
+version and help inside the admitted task. When `task_record` is `created`,
+observe that task with `status` and `collect`; do not dispatch it again.
+Admission alone does not prove runtime compatibility, authentication, or completion.
 
 Check that the executable is on the dispatch process's `PATH`, is a regular
 executable file, and can run in the requested workspace. Delegation Layer
@@ -24,7 +29,8 @@ profile's declared runtime flags.
 Use `delegate providers --json` to confirm the profile ID and required runtime
 flags. Discovery does not prove that the current host has the executable.
 
-`provider_preflight_failed` can mean the supervised inspection worker failed
+For paths that require admission inspection, `provider_preflight_failed` can
+mean the supervised inspection worker failed
 before it established provider readiness. That failure does not prove the
 provider is unavailable, misconfigured, or unauthenticated. Preserve the
 response and follow its `failure.next_action`; do not change provider settings
@@ -37,7 +43,7 @@ not authorize a retry or supervisor repair. Follow `failure.next_action` and
 report these fields as evidence without inferring a provider configuration or
 authentication problem.
 
-Codex and Claude use the same portable runtime admission path on Linux and
+Codex and Claude use the same portable runtime verification path on Linux and
 Darwin. If either is rejected, inspect the specific executable, required flag,
 policy, or authentication reason in the structured response.
 

@@ -50,6 +50,9 @@ func finalizeCandidate(candidate commonprovider.ProfileCandidate, req task.TaskR
 	if err = profile.Validate(req); err != nil {
 		return PreparedProfile{}, err
 	}
+	if err = candidate.ValidateRuntimeProfile(profile); err != nil {
+		return PreparedProfile{}, err
+	}
 	if profile.Plan.Directory != candidate.Directory || !slices.Equal(profile.WritableRoots, candidate.WritableRoots) {
 		return PreparedProfile{}, ErrProfileUnavailable
 	}
@@ -61,6 +64,10 @@ func finalizeCandidate(candidate commonprovider.ProfileCandidate, req task.TaskR
 		}
 	}
 	return profile, nil
+}
+
+func admitCandidate(candidate commonprovider.ProfileCandidate, req task.TaskRecord) (PreparedProfile, error) {
+	return candidate.AdmissionProfile(req)
 }
 
 func refreshAdmissionCandidate(deps Dependencies, root string, req task.TaskRecord, admitted commonprovider.ProfileCandidate) (commonprovider.ProfileCandidate, error) {
@@ -258,7 +265,7 @@ func prepareMatchedProfileForRunner(deps Dependencies, root string, req task.Tas
 }
 
 func validateRunnerExecutableBeforeProvider(root string, candidate commonprovider.ProfileCandidate, req task.TaskRecord, meta task.MetaRecord, store *taskdir.Store, currentExecutable, runnerOwnership string) error {
-	if candidate.Inspection == nil {
+	if candidate.Inspection == nil || meta.RuntimePreflightSHA256 != "" {
 		return validateManagedOrdinaryRunnerExecutable(root, meta.RunnerExecutable, currentExecutable, runnerOwnership)
 	}
 	return validateInspectionRunnerExecutable(root, req, meta, store, currentExecutable)
@@ -319,6 +326,19 @@ func validateManagedTaskRunnerExecutable(root, recorded, current string) error {
 }
 
 func finalizeMatchedProfile(candidate commonprovider.ProfileCandidate, facts json.RawMessage, root string, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {
+	if meta.RuntimePreflightSHA256 != "" {
+		profile, err := admitCandidate(candidate, req)
+		if err != nil {
+			return PreparedProfile{}, err
+		}
+		if err = profile.MatchesPendingRuntimeRefresh(req, meta); err != nil {
+			return PreparedProfile{}, err
+		}
+		if err = profile.ValidateStatePlacement(root); err != nil {
+			return PreparedProfile{}, err
+		}
+		return profile, nil
+	}
 	var err error
 	facts, err = factsForCurrentRuntime(candidate, facts)
 	if err != nil {
@@ -356,11 +376,29 @@ func prepareExistingCandidateContext(ctx context.Context, deps Dependencies, roo
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, nil, err
 	}
+	if meta.RuntimePreflightSHA256 != "" {
+		if err = validatePendingRuntimeCandidate(candidate, meta); err != nil {
+			return commonprovider.ProfileCandidate{}, nil, err
+		}
+		return candidate, nil, nil
+	}
 	if candidate.Inspection == nil {
 		return candidate, nil, nil
 	}
 	facts, err := storedInspectionFactsContext(ctx, deps, root, req, meta, candidate)
 	return candidate, facts, err
+}
+
+func validatePendingRuntimeCandidate(candidate commonprovider.ProfileCandidate, meta task.MetaRecord) error {
+	if candidate.Admit == nil || candidate.Inspection == nil || !candidate.Inspection.RuntimeOnly() {
+		return task.ErrIdentityMismatch
+	}
+	capability, err := commonprovider.RuntimeCapabilityDigest(*candidate.Inspection)
+	if err != nil || capability != meta.RuntimePreflightSHA256 || !meta.EnvironmentRecorded ||
+		!slices.Equal(candidate.Inspection.Environment, meta.Environment) {
+		return task.ErrIdentityMismatch
+	}
+	return nil
 }
 
 func prepareInspectionWorkerCandidate(deps Dependencies, root string, req task.TaskRecord, meta *task.MetaRecord) (commonprovider.ProfileCandidate, error) {
@@ -393,7 +431,7 @@ func (d Dependencies) useCatalogExistingFor(request task.TaskRecord) bool {
 }
 
 func runtimeOnlyInspectionDefinition(definition commonprovider.InspectionDefinition) bool {
-	return definition.Runtime != nil && definition.Models == nil && len(definition.Arguments) == 0 && definition.Project == nil && definition.Remote == nil
+	return definition.RuntimeOnly()
 }
 
 func runtimeOwnsInspectionExecutable(definition commonprovider.InspectionDefinition) bool {

@@ -67,6 +67,9 @@ Load the [maintainability contract](../../agents/_data/maintainability-contract.
     barrier does not prove every child crossed an internal single-flight entry
     before publication. Keep exact-flight tests deterministic, and let native
     process bursts record coalescing without introducing stale-result windows.
+    For runtime-only tasks, use static admission and the task's own fresh launch
+    preflight. Do not add an admission capability cache or a second probe; the
+    metadata's required capability digest remains authoritative until launch.
 13. Produce the contract's [complete evidence
     handoff](../../agents/_data/maintainability-contract.md#handoff-evidence),
     keyed by transition-row ID.

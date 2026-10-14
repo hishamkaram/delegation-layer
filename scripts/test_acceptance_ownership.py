@@ -1,6 +1,8 @@
 """Focused identity-token ownership tests for acceptance fixtures."""
 
 from pathlib import Path
+import os
+import stat
 import sys
 import tempfile
 import threading
@@ -362,6 +364,8 @@ class DirectoryOwnershipTests(unittest.TestCase):
                 common.rollback_owned_directories(entries)
             self.assertEqual(removed, [entry.directory for entry in reversed(entries)])
             self.assertTrue(deepest.directory.is_dir())
+            for entry in entries:
+                entry.consume()
 
     def test_replaced_directory_is_retained_and_cleanup_fails(self):
         with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:
@@ -374,6 +378,45 @@ class DirectoryOwnershipTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "replaced"):
                 common.remove_owned_directory(token)
             self.assertTrue(replacement.is_dir())
+
+    def test_pinned_directory_rejects_unlink_recreate_for_create_and_adopt(self):
+        operations = (
+            ("remove", common.remove_owned_directory),
+            ("clear", common.clear_owned_directory),
+            ("release", common.release_owned_directory),
+        )
+        for factory_name in ("create", "adopt"):
+            for operation_name, operation in operations:
+                with self.subTest(factory=factory_name, operation=operation_name), \
+                        tempfile.TemporaryDirectory(prefix="acceptance-owner-pinned-") as directory:
+                    root = Path(directory)
+                    owned = root / "owned"
+                    owner = common.DirectoryOwner()
+                    if factory_name == "create":
+                        token = owner.create("owned", owned, root)
+                    else:
+                        owned.mkdir()
+                        token = owner.adopt_created("owned", owned, root)
+                    parent_fd = token.parent_fd
+                    directory_fd = token.directory_fd
+
+                    owned.rmdir()
+                    owned.mkdir()
+                    marker = owned / "replacement.txt"
+                    marker.write_text("replacement", encoding="utf-8")
+                    replacement = owned.stat()
+                    self.assertNotEqual(
+                        (replacement.st_dev, replacement.st_ino), token.identity,
+                    )
+
+                    with self.assertRaisesRegex(RuntimeError, "replaced"):
+                        operation(token)
+
+                    self.assertEqual(marker.read_text(encoding="utf-8"), "replacement")
+                    with self.assertRaises(OSError):
+                        common.os.fstat(directory_fd)
+                    with self.assertRaises(OSError):
+                        common.os.fstat(parent_fd)
 
     def test_symlink_replacement_is_retained_and_not_followed(self):
         with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:
@@ -484,6 +527,65 @@ class DirectoryOwnershipTests(unittest.TestCase):
                 common.remove_owned_directory(token)
             self.assertTrue(parent.is_dir())
 
+    def test_exact_owned_fifo_cleanup_removes_only_the_explicit_token(self):
+        with tempfile.TemporaryDirectory(prefix="acceptance-owned-fifo-") as directory:
+            root = Path(directory)
+            fifo = root / "lease.fifo"
+            os.mkfifo(fifo, 0o600)
+            parent_fd, parent_identity = common._open_parent_directory(root)
+            entry_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                identity = fifo.lstat()
+                self.assertTrue(common.remove_exact_owned_fifo(
+                    parent_fd, entry_fd, fifo.name,
+                    (identity.st_dev, identity.st_ino), parent_identity,
+                ))
+                os.fstat(entry_fd)
+            finally:
+                os.close(entry_fd)
+                common._close_parent_descriptor(parent_fd)
+            self.assertFalse(fifo.exists())
+            self.assertEqual(tuple(root.glob(".delegate-cleanup-*")), ())
+
+    def test_exact_owned_fifo_replacement_is_retained(self):
+        with tempfile.TemporaryDirectory(prefix="acceptance-owned-fifo-replacement-") as directory:
+            root = Path(directory)
+            fifo = root / "lease.fifo"
+            os.mkfifo(fifo, 0o600)
+            original = fifo.lstat()
+            parent_fd, parent_identity = common._open_parent_directory(root)
+            entry_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                replacement_path = root / "replacement.fifo"
+                os.mkfifo(replacement_path, 0o600)
+                fifo.unlink()
+                replacement_path.rename(fifo)
+                replacement = fifo.lstat()
+                with self.assertRaisesRegex(RuntimeError, "owned FIFO was replaced"):
+                    common.remove_exact_owned_fifo(
+                        parent_fd, entry_fd, fifo.name,
+                        (original.st_dev, original.st_ino), parent_identity,
+                    )
+                self.assertEqual(
+                    (fifo.stat().st_dev, fifo.stat().st_ino),
+                    (replacement.st_dev, replacement.st_ino),
+                )
+            finally:
+                os.close(entry_fd)
+                common._close_parent_descriptor(parent_fd)
+
+    def test_recursive_directory_cleanup_still_rejects_unregistered_fifo(self):
+        with tempfile.TemporaryDirectory(prefix="acceptance-owned-fifo-reject-") as directory:
+            root = Path(directory)
+            owner = common.DirectoryOwner()
+            token = owner.create("owned", root / "owned", root)
+            os.mkfifo(token.directory / "lease.fifo", 0o600)
+            with self.assertRaisesRegex(RuntimeError, "unsupported unsafe entry"):
+                common.clear_owned_directory(token)
+            retained = tuple(token.directory.glob(".delegate-cleanup-*/entry"))
+            self.assertEqual(len(retained), 1)
+            self.assertTrue(stat.S_ISFIFO(retained[0].stat().st_mode))
+
     def test_descendant_identity_failure_retains_ancestor(self):
         with tempfile.TemporaryDirectory(prefix="acceptance-owner-ancestor-") as directory:
             root = Path(directory)
@@ -593,11 +695,14 @@ class DirectoryOwnershipTests(unittest.TestCase):
             parent = parent_owner.create("capture root", root / "processes", root)
             child_owner = common.DirectoryOwner()
             child = child_owner.create("capture", parent.directory / "001", parent.directory)
-            descriptor = child.parent_fd
+            parent_descriptor = child.parent_fd
+            directory_descriptor = child.directory_fd
 
             self.assertTrue(child_owner.transfer_child_to(parent))
             with self.assertRaises(OSError):
-                common.os.fstat(descriptor)
+                common.os.fstat(parent_descriptor)
+            with self.assertRaises(OSError):
+                common.os.fstat(directory_descriptor)
             self.assertTrue(child.directory.is_dir())
             self.assertTrue(parent_owner.rollback())
             self.assertFalse(parent.directory.exists())

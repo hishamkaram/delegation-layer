@@ -188,7 +188,7 @@ def _directory_name(directory, parent):
 
 @dataclass(slots=True)
 class OwnedDirectory:
-    """Single-use authority for one directory created by this invocation."""
+    """Single-use authority with live pins for its directory and parent."""
 
     label: str
     directory: Path
@@ -196,6 +196,7 @@ class OwnedDirectory:
     identity: tuple[int, int]
     parent_identity: tuple[int, int]
     _parent_fd: int = field(repr=False)
+    _directory_fd: int = field(default=-1, repr=False)
     _consumed: bool = field(default=False, init=False, repr=False)
 
     @property
@@ -204,25 +205,44 @@ class OwnedDirectory:
                 "owned directory authority was already consumed: " + str(self.directory))
         return self._parent_fd
 
+    @property
+    def directory_fd(self) -> int:
+        require(not self._consumed,
+                "owned directory authority was already consumed: " + str(self.directory))
+        require(self._directory_fd >= 0,
+                "owned directory authority has no pinned directory: " + str(self.directory))
+        return self._directory_fd
+
     def consume(self) -> None:
         require(not self._consumed,
                 "owned directory authority was already consumed: " + str(self.directory))
-        descriptor = self._parent_fd
+        parent_fd = self._parent_fd
+        directory_fd = self._directory_fd
         self._parent_fd = -1
+        self._directory_fd = -1
         self._consumed = True
-        _close_parent_descriptor(descriptor)
+        _close_parent_descriptor(directory_fd)
+        _close_parent_descriptor(parent_fd)
 
 
 def _capture_created_directory(label, directory, parent, parent_fd, parent_identity):
     name = _directory_name(directory, parent)
+    directory_fd = -1
     try:
+        directory_fd = os.open(name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_fd)
+        held = os.fstat(directory_fd)
+        require(stat.S_ISDIR(held.st_mode) and not stat.S_ISLNK(held.st_mode),
+                "owned directory is unsafe: " + str(directory))
         result = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    except OSError:
+        require(stat.S_ISDIR(result.st_mode) and not stat.S_ISLNK(result.st_mode) and
+                (result.st_dev, result.st_ino) == (held.st_dev, held.st_ino),
+                "owned directory changed while being adopted: " + str(directory))
+        return OwnedDirectory(str(label), Path(directory), Path(parent),
+                              (held.st_dev, held.st_ino), parent_identity,
+                              parent_fd, directory_fd)
+    except BaseException:
+        _close_parent_descriptor(directory_fd)
         raise
-    require(stat.S_ISDIR(result.st_mode) and not stat.S_ISLNK(result.st_mode),
-            "owned directory is unsafe: " + str(directory))
-    return OwnedDirectory(str(label), Path(directory), Path(parent),
-                          (result.st_dev, result.st_ino), parent_identity, parent_fd)
 
 
 def _rename_noreplace(source_fd, source_name, destination_fd, destination_name):
@@ -282,11 +302,12 @@ def _create_one_directory(label, directory, parent, mode):
         require(stat.S_ISDIR(final.st_mode) and not stat.S_ISLNK(final.st_mode) and
                 (final.st_dev, final.st_ino) == staging_identity,
                 "owned directory changed during publication: " + str(directory))
-        _close_parent_descriptor(staging_fd)
-        staging_fd = -1
-        return OwnedDirectory(
-            str(label), directory, parent, staging_identity, parent_identity, parent_fd,
+        entry = OwnedDirectory(
+            str(label), directory, parent, staging_identity, parent_identity,
+            parent_fd, staging_fd,
         )
+        staging_fd = -1
+        return entry
     except BaseException:
         _close_parent_descriptor(staging_fd)
         if not published and staging_identity is not None:
@@ -315,6 +336,10 @@ def _validate_entry_parent(token):
     require(stat.S_ISDIR(held_identity.st_mode) and
             (held_identity.st_dev, held_identity.st_ino) == token.parent_identity,
             "held owned directory parent changed: " + str(token.parent))
+    held_directory = os.fstat(token.directory_fd)
+    require(stat.S_ISDIR(held_directory.st_mode) and not stat.S_ISLNK(held_directory.st_mode)
+            and (held_directory.st_dev, held_directory.st_ino) == token.identity,
+            "held owned directory changed: " + str(token.directory))
 
 
 def _create_cleanup_quarantine(parent_fd):
@@ -348,7 +373,7 @@ def _remove_empty_cleanup_quarantine(parent_fd, name, descriptor, expected_ident
 
 
 def _remove_entry_at(parent_fd, name, expected_identity, require_directory=False,
-                     deadline=None):
+                     deadline=None, *, _allow_fifo=False):
     """Atomically isolate one exact entry before deleting any of its bytes."""
     _check_cleanup_deadline(deadline)
     quarantine_name, quarantine_fd, quarantine_identity = \
@@ -387,8 +412,12 @@ def _remove_entry_at(parent_fd, name, expected_identity, require_directory=False
             finally:
                 _close_parent_descriptor(descriptor)
         else:
-            require(stat.S_ISREG(result.st_mode) or stat.S_ISLNK(result.st_mode),
-                    "unsupported unsafe entry in owned directory: " + name)
+            if _allow_fifo:
+                require(stat.S_ISFIFO(result.st_mode) and result.st_uid == os.getuid(),
+                        "owned FIFO is unsafe: " + name)
+            else:
+                require(stat.S_ISREG(result.st_mode) or stat.S_ISLNK(result.st_mode),
+                        "unsupported unsafe entry in owned directory: " + name)
             current = os.stat("entry", dir_fd=quarantine_fd, follow_symlinks=False)
             require((current.st_dev, current.st_ino) == expected_identity,
                     "owned directory entry changed during cleanup: " + name)
@@ -406,6 +435,47 @@ def _remove_entry_at(parent_fd, name, expected_identity, require_directory=False
         raise
     finally:
         _close_parent_descriptor(quarantine_fd)
+
+
+def remove_exact_owned_fifo(parent_fd, entry_fd, name, expected_identity,
+                            expected_parent_identity, deadline=None):
+    """Remove one explicitly token-owned FIFO through the shared quarantine owner."""
+    require(type(parent_fd) is int and parent_fd >= 0,
+            "owned FIFO parent descriptor is invalid")
+    require(type(entry_fd) is int and entry_fd >= 0,
+            "owned FIFO entry descriptor is invalid")
+    require(isinstance(name, str) and name not in ("", ".", "..")
+            and Path(name).name == name and Path(name).parent == Path("."),
+            "owned FIFO entry name is invalid")
+    require(isinstance(expected_identity, tuple) and len(expected_identity) == 2
+            and all(type(value) is int and value >= 0 for value in expected_identity),
+            "owned FIFO identity is invalid")
+    require(isinstance(expected_parent_identity, tuple) and len(expected_parent_identity) == 2
+            and all(type(value) is int and value >= 0 for value in expected_parent_identity),
+            "owned FIFO parent identity is invalid")
+    _check_cleanup_deadline(deadline)
+    try:
+        held_parent = os.fstat(parent_fd)
+    except OSError as error:
+        raise RuntimeError("owned FIFO parent descriptor is not live") from error
+    require(stat.S_ISDIR(held_parent.st_mode)
+            and (held_parent.st_dev, held_parent.st_ino) == expected_parent_identity,
+            "owned FIFO parent descriptor was replaced")
+    try:
+        held_entry = os.fstat(entry_fd)
+    except OSError as error:
+        raise RuntimeError("owned FIFO entry descriptor is not live") from error
+    require(stat.S_ISFIFO(held_entry.st_mode) and held_entry.st_uid == os.getuid()
+            and (held_entry.st_dev, held_entry.st_ino) == expected_identity,
+            "owned FIFO entry descriptor was replaced")
+    current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    require(stat.S_ISFIFO(current.st_mode) and current.st_uid == os.getuid()
+            and (current.st_dev, current.st_ino) == expected_identity,
+            "owned FIFO was replaced: " + name)
+    _remove_entry_at(
+        parent_fd, name, expected_identity, deadline=deadline, _allow_fifo=True,
+    )
+    return True
 
 
 def remove_owned_directory(token: OwnedDirectory, deadline=None) -> bool:
@@ -454,7 +524,7 @@ def clear_owned_directory(token: OwnedDirectory, deadline=None) -> bool:
     """Remove an owned directory's contents while retaining its exact root."""
     require(isinstance(token, OwnedDirectory), "owned directory identity token is required")
     parent_fd = token.parent_fd
-    descriptor = -1
+    descriptor = token.directory_fd
     try:
         _check_cleanup_deadline(deadline)
         _validate_entry_parent(token)
@@ -464,10 +534,6 @@ def clear_owned_directory(token: OwnedDirectory, deadline=None) -> bool:
                 "owned directory is unsafe: " + str(token.directory))
         require((result.st_dev, result.st_ino) == token.identity,
                 "owned directory was replaced: " + str(token.directory))
-        descriptor = os.open(name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_fd)
-        held = os.fstat(descriptor)
-        require((held.st_dev, held.st_ino) == token.identity,
-                "owned directory changed while opening: " + str(token.directory))
         for child in os.listdir(descriptor):
             _check_cleanup_deadline(deadline)
             child_result = os.stat(child, dir_fd=descriptor, follow_symlinks=False)
@@ -482,7 +548,6 @@ def clear_owned_directory(token: OwnedDirectory, deadline=None) -> bool:
                 "owned directory is not empty after cleanup: " + str(token.directory))
         return True
     finally:
-        _close_parent_descriptor(descriptor)
         token.consume()
 
 

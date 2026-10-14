@@ -152,11 +152,12 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	if err != nil {
 		return admissionPreparation{}, withDispatchStage("prepare-provider", err)
 	}
-	profile, err := initialAdmissionProfile(candidate, req)
+	runnerOwnership := requestedRunnerOwnership(a)
+	deferRuntime := runnerOwnership == task.RunnerOwnershipManaged && candidate.Admit != nil
+	profile, err := profileForAdmission(candidate, req, deferRuntime)
 	if err != nil {
 		return admissionPreparation{}, withDispatchStage("finalize-provider", err)
 	}
-	runnerOwnership := requestedRunnerOwnership(a)
 	a.runnerOwnership = runnerOwnership
 	runner, err := prepareAdmissionExecutables(a, deps, store.Root)
 	if err != nil {
@@ -177,7 +178,7 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	}
 	supervisor := supervisorOwner.Client()
 	prepared = admissionPreparation{Profile: profile, Supervisor: supervisor, RunnerExecutable: runner, RunnerOwnership: runnerOwnership}
-	if candidate.Inspection != nil {
+	if candidate.Inspection != nil && !deferRuntime {
 		prepared.Profile, candidate, err = finalizeAdmissionInspection(a, deps, store, req, candidate, supervisor)
 		if err != nil {
 			return admissionPreparation{}, err
@@ -193,6 +194,13 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	}
 	supervisorOwner.Release()
 	return prepared, nil
+}
+
+func profileForAdmission(candidate commonprovider.ProfileCandidate, req task.TaskRecord, deferRuntime bool) (PreparedProfile, error) {
+	if deferRuntime {
+		return admitCandidate(candidate, req)
+	}
+	return initialAdmissionProfile(candidate, req)
 }
 
 func resumeRetainedPrivateQueueMaintenance(stateRoot string, supervisor *pueue.Client) {

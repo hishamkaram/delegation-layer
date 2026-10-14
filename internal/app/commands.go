@@ -775,7 +775,7 @@ func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.
 	profile, supervisor := prepared.Profile, prepared.Supervisor
 	defer func() { closeSupervisorMaintenance(supervisor, result.err) }()
 	runner := prepared.RunnerExecutable
-	if err = profile.Validate(req); err != nil {
+	if err = profile.ValidateAdmission(req); err != nil {
 		return failed(response, withDispatchStage("validate-profile", err), classifyCode(err, 2))
 	}
 	runnerOwnership := prepared.RunnerOwnership
@@ -894,7 +894,7 @@ func submitPreparedWithOptionsMode(a Arguments, deps Dependencies, td *taskdir.T
 
 func submitPreparedWithProfile(a Arguments, deps Dependencies, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, client *pueue.Client, profile PreparedProfile, response Response) (result commandResult) {
 	defer func() { mergeCommandClose(&result, td.Close) }()
-	if err := profile.Validate(*req); err != nil {
+	if err := profile.ValidateAdmission(*req); err != nil {
 		return failed(response, err, classifyCode(err, 2))
 	}
 	runner, err := resolveTaskRunner(a.Runner, deps, meta)
@@ -1271,7 +1271,7 @@ func updateStatusStopsContext(ctx context.Context, td *taskdir.TaskDir, response
 	} else if err != nil {
 		return err
 	}
-	ready, err := td.StopTerminationReady()
+	ready, err := td.StopTerminationReadyContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -1989,7 +1989,7 @@ func recordStoppedTaskTermination(ctx context.Context, td *taskdir.TaskDir, requ
 	} else if err != nil {
 		return false, err
 	}
-	ready, err := td.StopTerminationReady()
+	ready, err := td.StopTerminationReadyContext(ctx)
 	if err != nil || !ready {
 		return false, err
 	}

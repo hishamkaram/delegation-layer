@@ -42,6 +42,7 @@ from acceptance_provider_common import (
     snapshot,
     status_jobs,
     validate_queue_row,
+    validate_provider_runtime_metadata,
     verify_collected_outcome,
     write_bytes,
 )
@@ -1431,23 +1432,33 @@ class NativeAcceptance:
         })
 
     def _record_provider_runtime_identity(
-            self, task_id: str, meta: dict[str, object]) -> dict[str, str]:
-        """Record the immutable runtime identity admitted for one task."""
-        executable = meta.get("provider_executable")
-        version = meta.get("provider_version")
-        effective = meta.get("effective_config")
-        policy = effective.get("policy") if isinstance(effective, dict) else None
-        runtime_sha256 = policy.get("runtime_sha256") if isinstance(policy, dict) else None
-        require(_task_identity(task_id) and isinstance(executable, str) and
-                executable == str(self.provider_executable) and
-                isinstance(version, str) and bool(version) and
-                _hex_digest(runtime_sha256),
-                f"task {task_id} has no admitted provider runtime identity")
-        identity = {
-            "executable": executable,
-            "version": version,
-            "sha256": runtime_sha256,
-        }
+            self, task_id: str, meta: dict[str, object],
+            launch_evidence: tuple[dict[str, object], dict[str, object]] | None = None
+            ) -> dict[str, str]:
+        """Record one task's static or terminal provider runtime identity."""
+        require(_task_identity(task_id), f"task {task_id} has an invalid identity")
+        identity = validate_provider_runtime_metadata(
+            meta, launch_evidence=launch_evidence,
+            label=f"task {task_id} provider runtime metadata")
+        if launch_evidence is None:
+            require("runtime_preflight_sha256" not in meta,
+                    f"task {task_id} pending provider runtime has no launch evidence")
+            executable = meta.get("provider_executable")
+            version = meta.get("provider_version")
+            effective = meta.get("effective_config")
+            policy = effective.get("policy") if isinstance(effective, dict) else None
+            runtime_sha256 = policy.get("runtime_sha256") if isinstance(policy, dict) else None
+            require(isinstance(executable, str) and isinstance(version, str) and
+                    executable == str(self.provider_executable) and
+                    _hex_digest(runtime_sha256),
+                    f"task {task_id} has no admitted provider runtime identity")
+            identity = {
+                "executable": executable,
+                "version": version,
+                "sha256": runtime_sha256,
+            }
+        require(isinstance(identity, dict),
+                f"task {task_id} provider runtime identity is unavailable")
         existing = self.provider_runtime_identities.get(task_id)
         require(existing is None or existing == identity,
                 f"task {task_id} changed its admitted provider runtime identity")
@@ -2344,7 +2355,7 @@ class NativeAcceptance:
                 "timed-out source published answer evidence")
         return response
 
-    def _request_binding(self, task_id: str,
+    def _request_binding(self, task_id: str, require_launch_evidence: bool = False,
                          budget: str = CANONICAL_TASK_BUDGET,
                          budget_nanos: int = TASK_BUDGET_NANOS) -> tuple[
             Path, dict[str, object], dict[str, object], str, str, Path]:
@@ -2371,7 +2382,13 @@ class NativeAcceptance:
         meta = read_json(directory / "meta.json")
         meta_digest = digest(directory / "meta.json")
         spec_digest = meta.get("spec_sha256")
-        identity = self._record_provider_runtime_identity(task_id, meta)
+        launch_evidence = None
+        if require_launch_evidence:
+            launch_evidence = (
+                read_json(directory / "provider.started.json"),
+                read_json(directory / "provider.exit"),
+            )
+        identity = self._record_provider_runtime_identity(task_id, meta, launch_evidence)
         if self.provider_version is None:
             self.provider_version = identity["version"]
             self.write_binding(task_id, identity)
@@ -2379,8 +2396,8 @@ class NativeAcceptance:
 
     def timeout_source_binding(self, task_id: str) -> Path:
         directory, record, _meta, _meta_digest, _spec_digest, _brief = self._request_binding(
-            task_id, CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
-            TIMEOUT_RESUME_SOURCE_BUDGET_NANOS)
+            task_id, budget=CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
+            budget_nanos=TIMEOUT_RESUME_SOURCE_BUDGET_NANOS)
         requested = record.get("requested_config")
         args = getattr(self, "args", None)
         requested_model = getattr(args, "model", None)
@@ -2476,7 +2493,8 @@ class NativeAcceptance:
 
     def task_binding(self, task_id: str, predecessor: str | None = None,
                      predecessor_session: str | None = None) -> None:
-        directory, record, meta, meta_digest, spec_digest, _ = self._request_binding(task_id)
+        directory, record, meta, meta_digest, spec_digest, _ = self._request_binding(
+            task_id, require_launch_evidence=True)
         requested = record.get("requested_config")
         args = getattr(self, "args", None)
         requested_model = getattr(args, "model", None)
@@ -2493,9 +2511,8 @@ class NativeAcceptance:
         identity = self.provider_runtime_identities.get(task_id)
         require(isinstance(identity, dict),
                 f"task {task_id} admitted provider runtime identity is unavailable")
+        pending_runtime = "runtime_preflight_sha256" in meta
         require(meta.get("root_id") == self.root_id and meta.get("task_id") == task_id and
-                meta.get("provider_executable") == identity["executable"] and
-                meta.get("provider_version") == identity["version"] and
                 meta.get("containment") == self.mode and
                 isinstance(spec_digest, str) and len(spec_digest) == 64 and
                 all(character in "0123456789abcdef" for character in spec_digest),
@@ -2505,7 +2522,8 @@ class NativeAcceptance:
         require(isinstance(effective, dict) and effective.get("containment") == self.mode and
                 isinstance(effective.get("digest"), str) and
                 isinstance(policy, dict) and policy.get("workspace") == str(self.workspace) and
-                policy.get("runtime_sha256") == identity["sha256"],
+                (_hex_digest(policy.get("runtime_sha256")) if pending_runtime
+                 else policy.get("runtime_sha256") == identity["sha256"]),
                 f"task {task_id} effective policy binding is invalid")
         if self.provider == "antigravity:print":
             expected_approval = "plan" if self.mode == "read-only" else "always-proceed"

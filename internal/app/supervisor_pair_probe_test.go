@@ -10,9 +10,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+)
+
+const (
+	supervisorPairProbeFixtureSetupTimeout = 30 * time.Second
+	supervisorPairProbeLeaseEntryTimeout   = 10 * time.Second
 )
 
 func TestSupervisorPairProbeHealthyAdmissionSharesLeaseWithoutWrites(t *testing.T) {
@@ -91,6 +97,30 @@ func TestSupervisorPairProbeChangedSourceWaitsForExclusiveOwnership(t *testing.T
 	for _, member := range []string{"client", "daemon"} {
 		t.Run(member, func(t *testing.T) { testSupervisorPairProbeChangedSource(t, member) })
 	}
+}
+
+func TestSupervisorPairProbeLeaseOutlivesConvenienceDeadline(t *testing.T) {
+	fixture := newSupervisorPairProbeFixture(t)
+	synctest.Test(t, func(t *testing.T) {
+		release := holdSupervisorPairProbeLease(t, fixture.root)
+		time.Sleep(11 * time.Second)
+		synctest.Wait()
+
+		writeRunnerFixture(t, fixture.sourceClient, "changed client")
+		freezeSupervisorPairProbeTimes(t, fixture)
+		before := snapshotSupervisorPairProbe(t, fixture.base)
+		assertSupervisorPairProbeWaits(t, fixture)
+		assertSupervisorPairProbeUnchanged(t, fixture.base, before)
+		assertSupervisorPairProbeNoStages(t, fixture.base)
+
+		release()
+		installSupervisorPairProbeFixture(t, fixture)
+		client, daemon := requireResolvedSupervisorPair(t, fixture.base, "changed client", "saved daemon")
+		requireSupervisorPairGenerationChanged(t, fixture.client, fixture.daemon, client, daemon)
+		requireRunnerFixture(t, fixture.client, "saved client")
+		requireRunnerFixture(t, fixture.daemon, "saved daemon")
+		assertSupervisorPairProbeNoStages(t, fixture.base)
+	})
 }
 
 func testSupervisorPairProbeChangedSource(t *testing.T, member string) {
@@ -216,7 +246,7 @@ func newSupervisorPairProbeFixture(t *testing.T) supervisorPairProbeFixture {
 	fixture := supervisorPairProbeFixture{root: canonicalAppTestTempDir(t)}
 	fixture.base = filepath.Join(fixture.root, ".supervisor")
 	fixture.sourceClient, fixture.sourceDaemon = writeSavedSupervisorPair(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), supervisorPairProbeFixtureSetupTimeout)
 	defer cancel()
 	err := pueue.WithBootstrapLock(ctx, fixture.root, func() error {
 		return installStateSupervisorPair(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon)
@@ -230,7 +260,7 @@ func newSupervisorPairProbeFixture(t *testing.T) supervisorPairProbeFixture {
 
 func installSupervisorPairProbeFixture(t *testing.T, fixture supervisorPairProbeFixture) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), supervisorPairProbeFixtureSetupTimeout)
 	defer cancel()
 	if err := installStateSupervisorPairForAdmission(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon); err != nil {
 		t.Fatalf("prepare supervisor pair: %v", err)
@@ -251,20 +281,30 @@ func assertSupervisorPairProbeWaits(t *testing.T, fixture supervisorPairProbeFix
 // both explicit release and test cleanup join completion before deleting files.
 func holdSupervisorPairProbeLease(t *testing.T, root string) func() {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
+	entryContext, cancelEntry := context.WithTimeout(t.Context(), supervisorPairProbeLeaseEntryTimeout)
+	defer cancelEntry()
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan struct{})
 	var resultErr error
-	finish := sync.OnceFunc(func() {
-		close(release)
-		<-done
-		cancel()
-		if resultErr != nil {
-			t.Errorf("shared supervisor lease holder failed: %v", resultErr)
-		}
+	var finishOnce sync.Once
+	finish := func(abort bool) {
+		finishOnce.Do(func() {
+			close(release)
+			if abort {
+				cancel()
+			}
+			<-done
+			cancel()
+			if !abort && resultErr != nil {
+				t.Errorf("shared supervisor lease holder failed: %v", resultErr)
+			}
+		})
+	}
+	t.Cleanup(func() {
+		finish(false)
 	})
-	t.Cleanup(finish)
 	go func() {
 		resultErr = pueue.WithSupervisorLease(ctx, root, func() error {
 			close(entered)
@@ -280,11 +320,13 @@ func holdSupervisorPairProbeLease(t *testing.T, root string) func() {
 	select {
 	case <-entered:
 	case <-done:
+		finish(true)
 		t.Fatalf("shared supervisor lease failed before entry: %v", resultErr)
-	case <-ctx.Done():
-		t.Fatalf("shared supervisor lease setup exceeded its deadline: %v", ctx.Err())
+	case <-entryContext.Done():
+		finish(true)
+		t.Fatalf("shared supervisor lease setup exceeded its entry deadline: %v", entryContext.Err())
 	}
-	return finish
+	return func() { finish(false) }
 }
 
 func freezeSupervisorPairProbeTimes(t *testing.T, fixture supervisorPairProbeFixture) {

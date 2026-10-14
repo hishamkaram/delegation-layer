@@ -82,22 +82,27 @@ func waitForPrivateQueueMaintenanceIdle(t *testing.T, ctx context.Context, super
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	stateRoot := filepath.Dir(filepath.Dir(supervisor.Binding().ConfigPath))
+	journalPath := filepath.Join(stateRoot, ".supervisor", "queue-maintenance.json")
+	failMaintenanceWait := func(stage string, waitErr error) {
+		journal, journalErr := os.ReadFile(journalPath)
+		t.Fatalf("private queue maintenance %s: %v journal=%q journal_error=%v", stage, waitErr, journal, journalErr)
+	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		pending, err := pueue.PrivateQueueMaintenanceRetryNeededContext(ctx, stateRoot)
 		if err != nil {
-			t.Fatal(err)
+			failMaintenanceWait("retry-state check failed", err)
 		}
 		if !pending {
 			if err = pueue.WaitForPrivateQueueMaintenanceIdle(ctx, stateRoot); err != nil {
-				t.Fatal(err)
+				failMaintenanceWait("owner handoff failed", err)
 			}
 			return
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("private queue maintenance did not become idle: %v", ctx.Err())
+			failMaintenanceWait("did not become idle", ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -750,8 +755,14 @@ func testInspectionTerminalEventFallback(t *testing.T, registrationKnown, regist
 		t.Fatalf("exact terminal-row fallback facts=%s err=%v", facts, err)
 	}
 	removals := filepath.Join(store.Root, ".supervisor", "terminal-event-removals")
-	waitForTestFileContent(t, removals, "7\n")
 	waitForPrivateQueueMaintenanceIdle(t, t.Context(), supervisor)
+	removed, readErr := os.ReadFile(removals)
+	if readErr != nil {
+		t.Fatalf("private queue maintenance completed without removal record: %v", readErr)
+	}
+	if string(removed) != "7\n" {
+		t.Fatalf("fallback removal contents=%q, want %q", removed, "7\n")
+	}
 	if got := statusCalls.Load(); got != 4 {
 		t.Fatalf("fallback made %d status calls, want one exact reconciliation, one candidate revalidation and one cleanup authorization/revalidation pair", got)
 	}

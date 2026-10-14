@@ -1049,6 +1049,101 @@ class InspectionHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "inspection lifetime worker Wait"):
             provider_common.validate_managed_lifetime_closure(self.state)
 
+    def test_root_lifetime_closure_ignores_unsubmitted_managed_proof_reference(self):
+        directory = self.inspection_records(include_ordinary=False, managed_exit_proof=True)
+        for entry in tuple(directory.iterdir()):
+            if entry.name != "request.json":
+                self.assertTrue(entry.is_file())
+                entry.unlink()
+        write_json(directory / "proof-reference.json", {})
+
+        closure = provider_common.validate_managed_lifetime_closure(self.state)
+
+        self.assertEqual(closure["inspections"], {})
+
+    def test_root_lifetime_closure_rejects_unsubmitted_unexpected_record(self):
+        directory = self.inspection_records(include_ordinary=False, managed_exit_proof=True)
+        for entry in tuple(directory.iterdir()):
+            if entry.name != "request.json":
+                entry.unlink()
+        write_json(directory / "unexpected.json", {})
+
+        with self.assertRaisesRegex(AcceptanceFailure, "unexpected records"):
+            provider_common.validate_managed_lifetime_closure(self.state)
+
+    def test_root_lifetime_closure_rejects_submitted_managed_inspection_without_lifetime(self):
+        directory = self.inspection_records(include_ordinary=False, managed_exit_proof=True)
+        for entry in tuple(directory.iterdir()):
+            if entry.name.startswith("lifetime-"):
+                entry.unlink()
+
+        with self.assertRaisesRegex(AcceptanceFailure, "managed inspection lifetime evidence is absent"):
+            provider_common.validate_managed_lifetime_closure(self.state)
+
+    def test_provider_runtime_metadata_accepts_pending_admission_contract(self):
+        meta = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": "",
+            "runtime_preflight_sha256": "a" * 64,
+            "environment_recorded": True,
+        }
+
+        self.assertIsNone(provider_common.validate_provider_runtime_metadata(meta))
+
+    def test_provider_runtime_metadata_rejects_invalid_pending_contract(self):
+        base = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": "",
+            "runtime_preflight_sha256": "a" * 64,
+            "environment_recorded": True,
+        }
+        cases = (
+            ("missing marker", "runtime_preflight_sha256", None, True),
+            ("invalid marker", "runtime_preflight_sha256", "invalid", False),
+            ("observed version", "provider_version", "fixture-v1", False),
+            ("missing environment marker", "environment_recorded", None, True),
+            ("false environment marker", "environment_recorded", False, False),
+        )
+        for name, key, value, remove in cases:
+            with self.subTest(name=name):
+                changed = dict(base)
+                if remove:
+                    changed.pop(key, None)
+                else:
+                    changed[key] = value
+                with self.assertRaises(AcceptanceFailure):
+                    provider_common.validate_provider_runtime_metadata(changed)
+
+    def test_provider_runtime_metadata_keeps_historical_version_equality(self):
+        meta = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": "fixture-v1",
+        }
+
+        provider_common.validate_provider_runtime_metadata(
+            meta, observed_version="fixture-v1")
+        with self.assertRaisesRegex(AcceptanceFailure, "does not match observed runtime"):
+            provider_common.validate_provider_runtime_metadata(
+                meta, observed_version="fixture-v2")
+
+    def test_provider_runtime_metadata_rejects_actual_launch_identity_mismatch(self):
+        meta = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": "",
+            "runtime_preflight_sha256": "a" * 64,
+            "environment_recorded": True,
+        }
+        started = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": "fixture-v2",
+            "provider_sha256": "b" * 64,
+        }
+        exited = dict(started, provider_version="fixture-v3")
+
+        with self.assertRaisesRegex(AcceptanceFailure, "runtime identities differ"):
+            provider_common.validate_provider_runtime_metadata(
+                meta, launch_evidence=(started, exited))
+
     def test_root_lifetime_closure_rejects_complete_task_with_incomplete_inspection(self):
         self.inspection_records(managed_exit_proof=True)
         ordinary = self.durable_ordinary_admission(runner_ownership="managed")

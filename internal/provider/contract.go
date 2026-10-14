@@ -89,8 +89,11 @@ type PreparedProfile struct {
 	Interaction     func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.InteractionProtocol, error)
 	Plan            execution.Plan
 	ObservedVersion string
-	Effective       task.EffectiveConfig
-	Identity        func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.IdentityObserver, error)
+	// RuntimePreflightSHA256 names the immutable capability contract still to
+	// be checked. It is empty only after finalization from observed facts.
+	RuntimePreflightSHA256 string
+	Effective              task.EffectiveConfig
+	Identity               func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.IdentityObserver, error)
 	// WritableRoots includes provider runtime, temporary, and cache roots.
 	// Native resolvers must include this canonical list in Effective.Digest.
 	WritableRoots []string
@@ -125,14 +128,35 @@ func pathContains(parent, child string) bool {
 // It validates shape and identity only; the caller remains responsible for
 // process admission and launch.
 func (p PreparedProfile) Validate(request task.TaskRecord) error {
+	if p.RuntimePreflightSHA256 != "" || p.Plan.RuntimePreflightSHA256 != "" || p.ObservedVersion == "" {
+		return errors.New("profile requires a completed runtime preflight")
+	}
+	return p.validateShape(request)
+}
+
+// ValidateAdmission validates static admission without claiming an observed
+// version. Finalized profiles retain the strict Validate contract.
+func (p PreparedProfile) ValidateAdmission(request task.TaskRecord) error {
+	if p.RuntimePreflightSHA256 == "" {
+		return p.Validate(request)
+	}
+	if task.ValidateSHA256(p.RuntimePreflightSHA256) != nil || p.ObservedVersion != "" ||
+		p.Plan.ProviderRuntime != (task.ProviderRuntimeIdentity{}) || task.ValidateSHA256(p.Plan.ExecutableSHA256) != nil ||
+		(p.Plan.RuntimePreflightSHA256 != "" && p.Plan.RuntimePreflightSHA256 != p.RuntimePreflightSHA256) || p.Plan.Environment == nil {
+		return task.ErrIdentityMismatch
+	}
+	return p.validateShape(request)
+}
+
+func (p PreparedProfile) validateShape(request task.TaskRecord) error {
 	if request.RequestedConfig.Interactive != (p.Interaction != nil) {
 		return ErrUnsupportedOption
 	}
 	if err := validatePlanBindings(p.Plan); err != nil {
 		return err
 	}
-	if !filepath.IsAbs(p.Plan.Executable) || p.ObservedVersion == "" {
-		return errors.New("profile must resolve an absolute executable and observed version")
+	if !filepath.IsAbs(p.Plan.Executable) {
+		return errors.New("profile must resolve an absolute executable")
 	}
 	if p.Plan.Directory != request.CanonicalCwd || p.Plan.Predicate.Adapter != request.Provider || p.Plan.Predicate.Mode != request.Mode {
 		return task.ErrIdentityMismatch
@@ -166,11 +190,31 @@ func (p PreparedProfile) Matches(request task.TaskRecord, meta task.MetaRecord) 
 // policy, workspace, predicate, writable roots, and artifact declarations
 // remain immutable.
 func (p PreparedProfile) MatchesWithRuntimeRefresh(request task.TaskRecord, meta task.MetaRecord) error {
+	if p.RuntimePreflightSHA256 != "" {
+		return task.ErrIdentityMismatch
+	}
+	return p.matches(request, meta, true)
+}
+
+// MatchesPendingRuntimeRefresh reconstructs a pending task after executable
+// replacement while preserving its required capability and immutable policy.
+// It cannot satisfy launch validation; this task still needs fresh preflight.
+func (p PreparedProfile) MatchesPendingRuntimeRefresh(request task.TaskRecord, meta task.MetaRecord) error {
+	if p.RuntimePreflightSHA256 == "" || p.RuntimePreflightSHA256 != meta.RuntimePreflightSHA256 {
+		return task.ErrIdentityMismatch
+	}
 	return p.matches(request, meta, true)
 }
 
 func (p PreparedProfile) matches(request task.TaskRecord, meta task.MetaRecord, allowRuntimeRefresh bool) error {
-	if err := p.Validate(request); err != nil {
+	validate := p.Validate
+	if p.RuntimePreflightSHA256 != "" || (!allowRuntimeRefresh && meta.RuntimePreflightSHA256 != "") {
+		if p.RuntimePreflightSHA256 != meta.RuntimePreflightSHA256 {
+			return task.ErrIdentityMismatch
+		}
+		validate = p.ValidateAdmission
+	}
+	if err := validate(request); err != nil {
 		return err
 	}
 	if allowRuntimeRefresh && meta.Environment == nil && !meta.EnvironmentRecorded {
