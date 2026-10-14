@@ -33,8 +33,8 @@ type StagedInspectionCommit = InspectionSubmissionCommit
 // ObservedVersion is intentionally absent: staged admission depends on the
 // command surface, not a release string.
 type StagedLaunchCapability struct {
-	AddStashed  bool
-	EnqueueByID bool
+	AddStashed  bool `json:"add_stashed"`
+	EnqueueByID bool `json:"enqueue_by_id"`
 }
 
 // StagedLaunchCapability observes the add --stashed and enqueue-by-ID help
@@ -66,6 +66,25 @@ func (c *Client) StagedLaunchCapability(ctx context.Context) (StagedLaunchCapabi
 func (c *Client) SupportsStagedLaunch(ctx context.Context) (bool, error) {
 	capability, err := c.StagedLaunchCapability(ctx)
 	return err == nil && capability.AddStashed && capability.EnqueueByID, err
+}
+
+// StagedLaunchCapabilityWithBootstrapLock observes the staged command surface
+// while the caller owns WithBootstrapLock for stateRoot. This lets the
+// application publish one exact-generation capability receipt without nesting
+// a shared generation lease under its exclusive transition.
+func (c *Client) StagedLaunchCapabilityWithBootstrapLock(ctx context.Context, stateRoot string) (StagedLaunchCapability, error) {
+	if c == nil || !IsPrivateConfig(stateRoot, c.binding.ConfigPath) {
+		return StagedLaunchCapability{}, ErrConfiguration
+	}
+	controlContext, cancel, controlErr := c.privateControlContext(ctx)
+	if controlErr != nil {
+		return StagedLaunchCapability{}, controlErr
+	}
+	defer cancel()
+	if err := c.verify(controlContext); err != nil {
+		return StagedLaunchCapability{}, err
+	}
+	return c.stagedLaunchCapabilityLocked(controlContext)
 }
 
 func (c *Client) stagedLaunchCapabilityLocked(ctx context.Context) (StagedLaunchCapability, error) {
@@ -177,13 +196,13 @@ func (c *Client) submitStagedLocked(ctx context.Context, permit *taskdir.Submiss
 		unknown.Pending = pendingFrom(verifyErr)
 		return unknown, verifyErr
 	}
-	_, capabilityErr := c.stagedLaunchCapabilityLocked(ctx)
-	if capabilityErr != nil {
+	authorization, gateErr := c.checkSubmissionGate(ctx, gate)
+	if gateErr != nil {
+		return unknown, gateErr
+	}
+	if capabilityErr := c.requireStagedLaunchCapability(ctx, authorization); capabilityErr != nil {
 		unknown.Pending = pendingFrom(capabilityErr)
 		return unknown, capabilityErr
-	}
-	if gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
-		return unknown, gateErr
 	}
 	runnerArguments := []string{launch.RunnerExecutable}
 	if launch.Supervised {
@@ -191,24 +210,32 @@ func (c *Client) submitStagedLocked(ctx context.Context, permit *taskdir.Submiss
 	}
 	runnerArguments = append(runnerArguments, "--root", launch.RootPath, record.TaskID)
 	arguments := []string{"add", "--escape", "--stashed", "--label", record.Label, "--print-task-id", "--"}
-	id, pending, addErr := c.stagedAdd(ctx, permit.Consume, append(arguments, runnerArguments...)...)
-	if addErr != nil {
-		unknown.Pending = pending
-		return unknown, addErr
-	}
-	identity.NumericTaskID = &id
-	observation, observationErr := stagedOrdinaryObservation(identity, c.binding, id)
-	if observationErr != nil {
-		return unknown, errors.Join(ErrSubmissionUncertain, observationErr)
-	}
-	commitErr := commit(observation)
-	if commitErr != nil {
-		return observation, commitErr
-	}
-	enqueueErr := c.enqueueStaged(ctx, id)
-	if enqueueErr != nil {
-		observation.Pending = pendingFrom(enqueueErr)
-		return observation, enqueueErr
+	var id int64
+	var pending *Pending
+	var observation Observation
+	transitionErr := c.withPrivateQueueIdentityLease(ctx, func(lockedContext context.Context) error {
+		var err error
+		id, pending, err = c.stagedAdd(lockedContext, permit.Consume, append(arguments, runnerArguments...)...)
+		if err != nil {
+			return err
+		}
+		identity.NumericTaskID = &id
+		observation, err = stagedOrdinaryObservation(identity, c.binding, id)
+		if err != nil {
+			return errors.Join(ErrSubmissionUncertain, err)
+		}
+		if err = commit(observation); err != nil {
+			return err
+		}
+		return c.enqueueStagedOrdinaryLocked(lockedContext, id)
+	})
+	if transitionErr != nil {
+		if !observation.Matched {
+			unknown.Pending = pending
+			return unknown, transitionErr
+		}
+		observation.Pending = pendingFrom(transitionErr)
+		return observation, transitionErr
 	}
 	return observation, nil
 }
@@ -286,17 +313,39 @@ func (c *Client) enqueueStaged(ctx context.Context, id int64) error {
 	return nil
 }
 
+// enqueueStagedOrdinaryLocked publishes callback classification before the
+// exact Stashed row can run. The caller holds the queue identity lease, so a
+// prior inspection classification cannot race numeric-ID reuse.
+func (c *Client) enqueueStagedOrdinaryLocked(ctx context.Context, id int64) error {
+	if err := c.RegisterPrivateOrdinaryTerminalEvent(ctx, id); err != nil {
+		return err
+	}
+	return c.enqueueStaged(ctx, id)
+}
+
 // CommitStaged revalidates one exact Stashed ordinary row while holding the
 // generation lease, reruns the idempotent application commit, and enqueues
 // only that numeric ID. Already-scheduled rows remain unknown to this API;
 // only the application can accept them from an independently durable receipt.
 func (c *Client) CommitStaged(ctx context.Context, staged Observation, commit SubmissionCommit) (Observation, error) {
-	return c.commitStagedObservation(ctx, staged, commit)
+	return c.commitStagedObservation(ctx, staged, nil, commit)
+}
+
+// CommitStagedWithGate is CommitStaged with application-owned generation and
+// staged-capability authorization evaluated under the same supervisor lease.
+func (c *Client) CommitStagedWithGate(ctx context.Context, staged Observation, gate SubmissionGate, commit SubmissionCommit) (Observation, error) {
+	return c.commitStagedObservation(ctx, staged, gate, commit)
 }
 
 // RecoverStaged revalidates an exact ordinary identity and numeric row as
 // StateStashed before rerunning the application commit and enqueueing it.
 func (c *Client) RecoverStaged(ctx context.Context, identity Identity, numericTaskID int64, commit SubmissionCommit) (Observation, error) {
+	return c.RecoverStagedWithGate(ctx, identity, numericTaskID, nil, commit)
+}
+
+// RecoverStagedWithGate is RecoverStaged with application-owned generation and
+// staged-capability authorization evaluated under the same supervisor lease.
+func (c *Client) RecoverStagedWithGate(ctx context.Context, identity Identity, numericTaskID int64, gate SubmissionGate, commit SubmissionCommit) (Observation, error) {
 	if c == nil {
 		return Observation{Identity: identity}, ErrConfiguration
 	}
@@ -308,13 +357,13 @@ func (c *Client) RecoverStaged(ctx context.Context, identity Identity, numericTa
 	if err != nil {
 		return staged, err
 	}
-	return c.commitStagedObservation(ctx, staged, commit)
+	return c.commitStagedObservation(ctx, staged, gate, commit)
 }
 
 // RecoverStagedObservation is the observation form of CommitStaged for callers
 // that already retained the exact staged receipt.
 func (c *Client) RecoverStagedObservation(ctx context.Context, staged Observation, commit SubmissionCommit) (Observation, error) {
-	return c.commitStagedObservation(ctx, staged, commit)
+	return c.commitStagedObservation(ctx, staged, nil, commit)
 }
 
 // RecoverStagedIdentity retains compatibility with callers whose identity
@@ -343,7 +392,7 @@ func stagedIdentityWithID(identity Identity, id int64) (Identity, error) {
 	return identity, nil
 }
 
-func (c *Client) commitStagedObservation(ctx context.Context, staged Observation, commit SubmissionCommit) (Observation, error) {
+func (c *Client) commitStagedObservation(ctx context.Context, staged Observation, gate SubmissionGate, commit SubmissionCommit) (Observation, error) {
 	if c == nil {
 		return staged, ErrConfiguration
 	}
@@ -361,17 +410,34 @@ func (c *Client) commitStagedObservation(ctx context.Context, staged Observation
 	defer cancel()
 	result := staged
 	leaseErr := c.withPrivateSupervisorLease(controlContext, func(lockedContext context.Context) error {
-		verifyErr := c.verify(lockedContext)
-		if verifyErr != nil {
-			result.Pending = pendingFrom(verifyErr)
-			return verifyErr
-		}
-		_, capabilityErr := c.stagedLaunchCapabilityLocked(lockedContext)
-		if capabilityErr != nil {
-			result.Pending = pendingFrom(capabilityErr)
-			return capabilityErr
-		}
-		current, reconcileErr := c.reconcileStagedOrdinaryLocked(lockedContext, staged.Identity)
+		var commitErr error
+		result, commitErr = c.commitStagedObservationLocked(lockedContext, staged, gate, commit)
+		return commitErr
+	})
+	return result, leaseErr
+}
+
+func (c *Client) commitStagedObservationLocked(ctx context.Context, staged Observation, gate SubmissionGate, commit SubmissionCommit) (Observation, error) {
+	result := staged
+	if verifyErr := c.verify(ctx); verifyErr != nil {
+		result.Pending = pendingFrom(verifyErr)
+		return result, verifyErr
+	}
+	authorization, gateErr := c.checkSubmissionGate(ctx, gate)
+	if gateErr != nil {
+		return result, gateErr
+	}
+	if capabilityErr := c.requireStagedLaunchCapability(ctx, authorization); capabilityErr != nil {
+		result.Pending = pendingFrom(capabilityErr)
+		return result, capabilityErr
+	}
+	return c.commitStagedObservationWithQueueIdentityMutation(ctx, staged, commit)
+}
+
+func (c *Client) commitStagedObservationWithQueueIdentityMutation(ctx context.Context, staged Observation, commit SubmissionCommit) (Observation, error) {
+	result := staged
+	leaseErr := c.withPrivateQueueIdentityMutation(ctx, func(identityContext context.Context) error {
+		current, reconcileErr := c.reconcileStagedOrdinaryLocked(identityContext, staged.Identity)
 		result = current
 		if reconcileErr != nil {
 			return reconcileErr
@@ -379,12 +445,10 @@ func (c *Client) commitStagedObservation(ctx context.Context, staged Observation
 		if current.State != StateStashed {
 			return ErrUnknown
 		}
-		commitErr := commit(current)
-		if commitErr != nil {
+		if commitErr := commit(current); commitErr != nil {
 			return commitErr
 		}
-		enqueueErr := c.enqueueStaged(lockedContext, current.NumericTaskID)
-		if enqueueErr != nil {
+		if enqueueErr := c.enqueueStagedOrdinaryLocked(identityContext, current.NumericTaskID); enqueueErr != nil {
 			result.Pending = pendingFrom(enqueueErr)
 			return enqueueErr
 		}
@@ -515,12 +579,13 @@ func (c *Client) submitInspectionStagedLocked(ctx context.Context, permit Inspec
 			return unknown, err
 		}
 	}
-	if _, err := c.stagedLaunchCapabilityLocked(ctx); err != nil {
-		unknown.Pending = pendingFrom(err)
-		return unknown, err
+	authorization, gateErr := c.checkSubmissionGate(ctx, gate)
+	if gateErr != nil {
+		return unknown, gateErr
 	}
-	if err := c.checkSubmissionGate(ctx, gate); err != nil {
-		return unknown, err
+	if capabilityErr := c.requireStagedLaunchCapability(ctx, authorization); capabilityErr != nil {
+		unknown.Pending = pendingFrom(capabilityErr)
+		return unknown, capabilityErr
 	}
 	runnerArguments := []string{launch.RunnerExecutable, "--inspection"}
 	if launch.Supervised {
@@ -528,25 +593,56 @@ func (c *Client) submitInspectionStagedLocked(ctx context.Context, permit Inspec
 	}
 	runnerArguments = append(runnerArguments, "--root", launch.RootPath, identity.TaskID)
 	arguments := []string{"add", "--escape", "--stashed", "--group", identity.Group(), "--label", identity.Label(), "--print-task-id", "--"}
-	id, pending, err := c.stagedAdd(ctx, permit.ConsumeInspectionSubmission, append(arguments, runnerArguments...)...)
+	var id int64
+	var pending *Pending
+	var observation InspectionObservation
+	err := c.withPrivateQueueIdentityLease(ctx, func(lockedContext context.Context) error {
+		var addErr error
+		id, pending, addErr = c.stagedAdd(lockedContext, permit.ConsumeInspectionSubmission, append(arguments, runnerArguments...)...)
+		if addErr != nil {
+			return addErr
+		}
+		identity.NumericTaskID = &id
+		var observationErr error
+		observation, observationErr = stagedInspectionObservation(identity, c.binding, id)
+		if observationErr != nil {
+			return errors.Join(ErrSubmissionUncertain, observationErr)
+		}
+		observation.TerminalEventRegistrationKnown, observation.TerminalEventRegistered = c.registerStagedInspectionTerminalEvent(lockedContext, id)
+		if commitErr := commit(observation); commitErr != nil {
+			return commitErr
+		}
+		return c.enqueueStaged(lockedContext, id)
+	})
 	if err != nil {
-		unknown.Pending = pending
-		return unknown, err
-	}
-	identity.NumericTaskID = &id
-	observation, err := stagedInspectionObservation(identity, c.binding, id)
-	if err != nil {
-		return unknown, errors.Join(ErrSubmissionUncertain, err)
-	}
-	observation.TerminalEventRegistrationKnown, observation.TerminalEventRegistered = c.registerStagedInspectionTerminalEvent(ctx, id)
-	if err := commit(observation); err != nil {
-		return observation, err
-	}
-	if err := c.enqueueStaged(ctx, id); err != nil {
+		if !observation.Matched {
+			unknown.Pending = pending
+			return unknown, err
+		}
 		observation.Pending = pendingFrom(err)
 		return observation, err
 	}
 	return observation, nil
+}
+
+func stagedInspectionCommand(launch Launch, identity InspectionIdentity) string {
+	return runnerCommand(launch.RunnerExecutable, RunnerCommandReplacement{
+		RootPath:   launch.RootPath,
+		TaskID:     identity.TaskID,
+		Inspection: true,
+	}, launch.Supervised)
+}
+
+func (c *Client) requireStagedLaunchCapability(ctx context.Context, authorization SubmissionAuthorization) error {
+	if authorization.StagedLaunchCapability == nil {
+		_, err := c.stagedLaunchCapabilityLocked(ctx)
+		return err
+	}
+	capability := *authorization.StagedLaunchCapability
+	if !capability.AddStashed || !capability.EnqueueByID {
+		return ErrStagedCapability
+	}
+	return nil
 }
 
 func stagedInspectionObservation(identity InspectionIdentity, binding task.SupervisorRef, id int64) (InspectionObservation, error) {
@@ -590,12 +686,24 @@ func validateStagedInspectionObservation(observation InspectionObservation, bind
 // enqueues only that numeric ID. Already-scheduled rows remain unknown to this
 // API; only the application can accept them from a durable exact receipt.
 func (c *Client) CommitInspectionStaged(ctx context.Context, staged InspectionObservation, commit InspectionSubmissionCommit) (InspectionObservation, error) {
-	return c.commitInspectionStagedObservation(ctx, staged, commit)
+	return c.commitInspectionStagedObservation(ctx, staged, nil, commit)
+}
+
+// CommitInspectionStagedWithGate is CommitInspectionStaged with application
+// generation and staged-capability authorization under the same lease.
+func (c *Client) CommitInspectionStagedWithGate(ctx context.Context, staged InspectionObservation, gate SubmissionGate, commit InspectionSubmissionCommit) (InspectionObservation, error) {
+	return c.commitInspectionStagedObservation(ctx, staged, gate, commit)
 }
 
 // RecoverInspectionStaged revalidates an exact inspection identity and numeric
 // row as StateStashed before rerunning the application commit and enqueueing it.
 func (c *Client) RecoverInspectionStaged(ctx context.Context, identity InspectionIdentity, numericTaskID int64, commit InspectionSubmissionCommit) (InspectionObservation, error) {
+	return c.RecoverInspectionStagedWithGate(ctx, identity, numericTaskID, nil, commit)
+}
+
+// RecoverInspectionStagedWithGate is RecoverInspectionStaged with application
+// generation and staged-capability authorization under the same lease.
+func (c *Client) RecoverInspectionStagedWithGate(ctx context.Context, identity InspectionIdentity, numericTaskID int64, gate SubmissionGate, commit InspectionSubmissionCommit) (InspectionObservation, error) {
 	if c == nil {
 		return InspectionObservation{Identity: identity}, ErrConfiguration
 	}
@@ -607,14 +715,14 @@ func (c *Client) RecoverInspectionStaged(ctx context.Context, identity Inspectio
 	if err != nil {
 		return staged, err
 	}
-	return c.commitInspectionStagedObservation(ctx, staged, commit)
+	return c.commitInspectionStagedObservation(ctx, staged, gate, commit)
 }
 
 // RecoverInspectionStagedObservation is the observation form of
 // CommitInspectionStaged for callers that already retained the exact staged
 // receipt.
 func (c *Client) RecoverInspectionStagedObservation(ctx context.Context, staged InspectionObservation, commit InspectionSubmissionCommit) (InspectionObservation, error) {
-	return c.commitInspectionStagedObservation(ctx, staged, commit)
+	return c.commitInspectionStagedObservation(ctx, staged, nil, commit)
 }
 
 // RecoverInspectionStagedIdentity retains compatibility with callers whose
@@ -643,7 +751,7 @@ func stagedInspectionIdentityWithID(identity InspectionIdentity, id int64) (Insp
 	return identity, nil
 }
 
-func (c *Client) commitInspectionStagedObservation(ctx context.Context, staged InspectionObservation, commit InspectionSubmissionCommit) (InspectionObservation, error) {
+func (c *Client) commitInspectionStagedObservation(ctx context.Context, staged InspectionObservation, gate SubmissionGate, commit InspectionSubmissionCommit) (InspectionObservation, error) {
 	if c == nil {
 		return staged, ErrConfiguration
 	}
@@ -661,17 +769,34 @@ func (c *Client) commitInspectionStagedObservation(ctx context.Context, staged I
 	defer cancel()
 	result := staged
 	leaseErr := c.withPrivateSupervisorLease(controlContext, func(lockedContext context.Context) error {
-		verifyErr := c.verify(lockedContext)
-		if verifyErr != nil {
-			result.Pending = pendingFrom(verifyErr)
-			return verifyErr
-		}
-		_, capabilityErr := c.stagedLaunchCapabilityLocked(lockedContext)
-		if capabilityErr != nil {
-			result.Pending = pendingFrom(capabilityErr)
-			return capabilityErr
-		}
-		current, reconcileErr := c.reconcileInspectionLocked(lockedContext, staged.Identity)
+		var commitErr error
+		result, commitErr = c.commitInspectionStagedObservationLocked(lockedContext, staged, gate, commit)
+		return commitErr
+	})
+	return result, leaseErr
+}
+
+func (c *Client) commitInspectionStagedObservationLocked(ctx context.Context, staged InspectionObservation, gate SubmissionGate, commit InspectionSubmissionCommit) (InspectionObservation, error) {
+	result := staged
+	if verifyErr := c.verify(ctx); verifyErr != nil {
+		result.Pending = pendingFrom(verifyErr)
+		return result, verifyErr
+	}
+	authorization, gateErr := c.checkSubmissionGate(ctx, gate)
+	if gateErr != nil {
+		return result, gateErr
+	}
+	if capabilityErr := c.requireStagedLaunchCapability(ctx, authorization); capabilityErr != nil {
+		result.Pending = pendingFrom(capabilityErr)
+		return result, capabilityErr
+	}
+	return c.commitInspectionStagedObservationWithQueueIdentityMutation(ctx, staged, commit)
+}
+
+func (c *Client) commitInspectionStagedObservationWithQueueIdentityMutation(ctx context.Context, staged InspectionObservation, commit InspectionSubmissionCommit) (InspectionObservation, error) {
+	result := staged
+	leaseErr := c.withPrivateQueueIdentityMutation(ctx, func(identityContext context.Context) error {
+		current, reconcileErr := c.reconcileInspectionLocked(identityContext, staged.Identity)
 		result = current
 		if reconcileErr != nil {
 			return reconcileErr
@@ -679,14 +804,12 @@ func (c *Client) commitInspectionStagedObservation(ctx context.Context, staged I
 		if current.Job.State != StateStashed {
 			return ErrUnknown
 		}
-		current.TerminalEventRegistrationKnown, current.TerminalEventRegistered = c.registerStagedInspectionTerminalEvent(controlContext, current.Job.ID)
+		current.TerminalEventRegistrationKnown, current.TerminalEventRegistered = c.registerStagedInspectionTerminalEvent(identityContext, current.Job.ID)
 		result = current
-		commitErr := commit(current)
-		if commitErr != nil {
+		if commitErr := commit(current); commitErr != nil {
 			return commitErr
 		}
-		enqueueErr := c.enqueueStaged(controlContext, current.Job.ID)
-		if enqueueErr != nil {
+		if enqueueErr := c.enqueueStaged(identityContext, current.Job.ID); enqueueErr != nil {
 			result.Pending = pendingFrom(enqueueErr)
 			return enqueueErr
 		}

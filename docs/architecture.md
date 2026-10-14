@@ -95,7 +95,12 @@ the private supervisor, the state-rooted config path, config digests, and
 endpoint define durable identity. Executable paths, hashes, resolver details,
 and observed versions remain provenance; a live daemon is adopted only after
 the resolved Pueue client successfully reads and parses its status through that
-private config. New private bindings use a verified content-addressed
+private config. Fresh configs use the ordinary state-rooted socket name when it
+fits the host's Unix-domain limit and a compact name in the same private
+supervisor directory otherwise. Delegate validates that path before publishing
+the config. It can atomically repair only its exact legacy over-limit config
+when an unfinished bootstrap journal proves ownership and no daemon or
+generation record exists. New private bindings use a verified content-addressed
 client/daemon pair under the state root. Recovery reuses the saved executable
 pair when it is available. A different verified client may inspect a compatible
 active endpoint without changing its generation, but it cannot start or publish
@@ -115,8 +120,9 @@ process group cannot terminate the private supervisor.
 The completed supervisor identity is the sole active-generation record. The
 state-root executable-pair record is verified successor inventory until fresh
 bootstrap or explicit migration publishes it as active. The ordinary-scheduling
-receipt proves default-group policy for the exact active generation; it never
-selects executables. This lets an install upgrade stage a compatible pair while
+receipt proves default-group policy and the staged add/enqueue command surface
+for the exact active generation; it never selects executables. This lets an
+install upgrade stage a compatible pair while
 ordinary admission keeps using the published daemon and its queued work. A
 launch-path or digest change is provenance drift only and does not rewrite the
 active identity while that daemon is alive. Ordinary controls share a lease on the supervisor generation, allowing
@@ -130,12 +136,72 @@ checks those records and connects to the private Unix socket under the shared
 lease without launching a Pueue client process. A missing or refused endpoint,
 a changed binding, or a stale receipt enters one elected exclusive path, which
 uses Pueue's group protocol before it repairs policy or restarts anything.
-Changed bindings use normal version discovery.
-Queue maintenance uses a separate bounded lock scope. Opportunistic probes
-skip a busy lock. Terminal-triggered cleanup elects one root-wide owner that
-may wait within its bounded maintenance deadline; other clients and processes
-coalesce without starting duplicate queue scans. Maintenance failures do not
-change task outcomes. A real logical
+Changed bindings use normal version discovery. The staged command surface is
+probed only while repairing that exact-generation receipt; warm submissions
+and staged recovery consume the recorded capability without repeating help
+commands.
+Pueue's terminal callback triggers maintenance after a row reaches `Done`;
+dispatch records the admission verdict and does not wait for cleanup.
+Every current ordinary and inspection submission installs a callback ticket
+before enqueue. Its callback publishes an ID-scoped candidate event before it
+requests maintenance. When the callback is delayed, exact admission observation
+revalidates an ended inspection row under queue identity and publishes the same
+event. That accepted observation starts an independent `delegate-run`
+maintenance process, so cleanup survives the observing CLI without extending
+admission.
+
+The event directory is the durable candidate inbox; it remains recoverable even
+if the generation-journal write or process handoff fails. The per-root journal
+owns requested, attempted, successful, and full-recovery watermarks. The
+election lock alone identifies the live owner. A callback that loses the
+nonblocking election returns immediately. The winner waits for a short bounded
+quiet interval, captures the latest generation, and handles the completion
+burst in one pass. It rechecks the durable journal after releasing ownership,
+so a wake published during final handoff is either drained by that owner or
+wins the next election. Requests arriving during a pass remain above the
+attempted watermark and receive the same quiet interval before a later pass.
+A control command that outlives its finite observation window remains owned
+through natural completion and does not consume the generation early. Before
+retrying, that owner observes release of the retained election lock, so it
+cannot misclassify itself as a competing owner and strand the durable wake. A
+released interrupted pass is recoverable; a finished failed attempt waits for a
+later trigger instead of looping. Validated root activation also resumes retained
+inbox or journal work.
+Under the event lock, maintenance also removes exact-shaped temporary publisher
+files left by an interrupted create-once write. Those files never carry event
+authority. Committed numeric filenames and payloads still receive strict
+validation, and unrelated entries remain errors.
+
+Normal passes stream one queue snapshot and expose only event-backed numeric
+IDs to Delegate's cleanup policy, for both ordinary and inspection rows. Every
+same-label row remains visible so ambiguity cannot be hidden. A conservative
+full-recovery wake is used when candidate publication fails or a historical row
+has no ticket; it additionally exposes ordinary managed rows while inspection
+rows still require candidate events. Durable task and inspection journals
+remain the sole authority for every removal. A later callback or accepted
+terminal observation wakes a retry for rows retained by an earlier failed pass.
+
+A queue writer publishes intent under its dedicated owner lock before waiting
+for exclusive queue identity. New readers check that intent before and while
+crossing the short gate, so a continuous submission stream cannot overtake the
+writer. An abandoned intent is cleared only after exclusive acquisition proves
+its writer is gone. Application authorization runs without queue identity;
+maintenance then takes a fresh same-scope snapshot under the exclusive identity
+mutation, verifies every authorized terminal row is unchanged, removes those
+exact IDs, and retires callback state after successful removal. Failed removal
+keeps the event for retry. Every new submission resets callback classification
+before enqueue while holding queue identity, preventing an old hint from
+crossing numeric-ID reuse. Queued inspection stops do the same before their
+authorized `remove`. If durable evidence is terminal while the row still
+reports running, maintenance releases queue identity during settlement and
+reacquires it for a fresh snapshot. The stable callback helper path is
+atomically refreshed for compatible implementation upgrades, so an existing
+daemon receives current behavior without callback-config drift.
+Every supervisor command inherits duplicates of all nested generation, writer,
+gate, and identity leases held by its caller. A finite observer timeout or
+caller exit therefore cannot release an outer lifecycle lease while the owned
+command can still mutate the queue.
+Maintenance failures do not change task outcomes. A real logical
 config or endpoint migration is explicit and runs under the state-root lock:
 it proves the queue is safe, shuts down the old endpoint through its client,
 starts the current bundled daemon, and then replaces the launch record. Before
@@ -231,16 +297,17 @@ only scheduling and identity facts; the aggregate queue is not subject to the
 records remain bounded. Provider environments are not retained in the parsed
 snapshot.
 
-Before ordinary admission, cleanup selects exact terminal rows whose
-Delegate receipts and outcomes validate. It uses the same evidence checks as
-migration and removes only those numeric IDs. Active, incomplete, malformed,
-or unrelated rows stay intact without vetoing cleanup of validated rows.
+Terminal-callback maintenance selects exact terminal rows whose Delegate
+receipts and outcomes validate. It uses the same evidence checks as migration
+and removes only those numeric IDs. Active, incomplete, malformed, or unrelated
+rows stay intact without vetoing cleanup of validated rows. Cleanup is outside
+the dispatch critical path and one elected pass can retire many completed rows.
 For every fresh inspection worker, admission derives exit authority from the
 guardian's create-once completion disposition and independently proven
 empty-scope termination. The disposition is either the started child's exact
 `Wait` or `not-started` with no process identity. Admission reads that evidence
 before checking its wall-clock deadline or polling Pueue. Terminal events and
-exact labeled status remain wake-up and cleanup signals for this path; they
+exact labeled status remain wake-up signals for this path; they
 cannot replace the guardian proof. Historical markerless inspections retain
 the queue-observation fallback. Both successful and failed managed worker
 exits are retained; a failed worker does not need to fabricate a local

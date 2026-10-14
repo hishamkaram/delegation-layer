@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -150,7 +152,12 @@ func awaitCompletedInspectionObservation(operation *inspection.Operation, superv
 	return nil, err
 }
 
-func acceptCompletedInspectionObservation(ctx context.Context, operation *inspection.Operation, supervisor *pueue.Client, observation pueue.InspectionObservation) (json.RawMessage, bool, error) {
+func acceptCompletedInspectionObservation(ctx context.Context, operation *inspection.Operation, supervisor *pueue.Client, observation pueue.InspectionObservation) (facts json.RawMessage, terminal bool, resultErr error) {
+	defer func() {
+		if terminal {
+			_ = requestInspectionQueueMaintenance(ctx, supervisor, observation)
+		}
+	}()
 	if facts, _, terminal, err := recordedInspectionFacts(ctx, operation); terminal || err != nil {
 		return facts, terminal, err
 	}
@@ -171,6 +178,49 @@ func acceptCompletedInspectionObservation(ctx context.Context, operation *inspec
 	}
 	identity := observation.Identity
 	return acceptInspectionObservation(ctx, operation, supervisor, &identity, observation.Job)
+}
+
+func requestInspectionQueueMaintenance(ctx context.Context, supervisor *pueue.Client, observation pueue.InspectionObservation) bool {
+	if ctx == nil || supervisor == nil {
+		return false
+	}
+	eventContext, cancelEvent := context.WithTimeout(context.WithoutCancel(ctx), inspectionStatusWatchdog)
+	eventFailed := false
+	if observation.Matched && observation.Job.State == pueue.StateEnded {
+		_, eventErr := supervisor.RecordPrivateTerminalObservation(eventContext, observation)
+		if eventErr != nil {
+			eventFailed = true
+			log.Printf("delegation-layer: terminal inspection candidate deferred: %v", eventErr)
+		}
+	}
+	cancelEvent()
+	configPath := supervisor.Binding().ConfigPath
+	stateRoot := filepath.Dir(filepath.Dir(configPath))
+	if !pueue.IsPrivateConfig(stateRoot, configPath) {
+		return false
+	}
+	requestContext, cancelRequest := context.WithTimeout(context.WithoutCancel(ctx), inspectionStatusWatchdog)
+	defer cancelRequest()
+	var requestErr error
+	if eventFailed {
+		requestErr = pueue.RequestPrivateQueueMaintenance(requestContext, stateRoot)
+	} else {
+		// Every independently accepted terminal observation owns a generation.
+		// Suppressing this wake because another pass is currently pending can
+		// strand the candidate when that concurrent pass settles as failed.
+		requestErr = pueue.RequestPrivateCandidateQueueMaintenance(requestContext, stateRoot)
+	}
+	if requestErr != nil {
+		log.Printf("delegation-layer: terminal inspection cleanup request deferred: %v", requestErr)
+		if eventFailed {
+			return false
+		}
+	}
+	scheduled := supervisor.ScheduleRequestedPrivateQueueMaintenance(requestContext)
+	if !scheduled {
+		log.Printf("delegation-layer: terminal inspection cleanup owner deferred")
+	}
+	return scheduled
 }
 
 type completedInspectionAcceptance struct {

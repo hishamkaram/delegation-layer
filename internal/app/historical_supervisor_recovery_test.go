@@ -247,7 +247,7 @@ func prepareHistoricalInspectionRecovery(t *testing.T, scenario *historicalInspe
 	if err = os.RemoveAll(scenario.legacyDir); err != nil {
 		t.Fatal(err)
 	}
-	if err = publishPrivateOrdinaryScheduling(fixture.root, fixture.successor); err != nil {
+	if err = publishPrivateOrdinaryScheduling(fixture.root, fixture.successor, pueue.StagedLaunchCapability{AddStashed: true, EnqueueByID: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -485,8 +485,8 @@ func newHistoricalSupervisorOptions() pueue.Options {
 	return pueue.Options{
 		ObservationTimeout: pueue.DefaultObservationTimeout,
 		Environment:        pueue.DefaultEnvironment(),
-		SuccessfulCleanupAuthorizer: func(context.Context, string, task.SupervisorRef, []pueue.Job) ([]int64, error) {
-			return nil, nil
+		SuccessfulCleanupAuthorizer: func(context.Context, string, task.SupervisorRef, []pueue.Job) (pueue.PrivateQueueCleanupPlan, error) {
+			return pueue.PrivateQueueCleanupPlan{}, nil
 		},
 		PrivateMigrationAuthorizer: func(_ context.Context, _ string, _ task.SupervisorRef, jobs []pueue.Job) error {
 			if len(jobs) != 0 {
@@ -856,7 +856,7 @@ command=
 for argument in "$@"; do
   case "$argument" in
     --version) command=version ;;
-    status|group|parallel|shutdown|kill|remove) command="$argument" ;;
+    status|group|parallel|shutdown|kill|remove|add|enqueue) command="$argument" ;;
   esac
 done
 printf '%%s %%s\n' '%s' "$command" >> '%s'
@@ -878,6 +878,12 @@ case "$command" in
     ;;
   parallel)
     [ -f '%s' ] || exit 1
+    ;;
+  add)
+    printf '%%s\n' '--stashed --print-task-id'
+    ;;
+  enqueue)
+    printf '%%s\n' 'Usage: pueue enqueue <TASK_IDS>...'
     ;;
   shutdown)
     pid="$(cat '%s' 2>/dev/null || true)"

@@ -58,9 +58,10 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 self.assertTrue(receipt["capacity_proof"]["gate_opened_after_proof"])
                 self.assertEqual(receipt["dispatch_batch"]["requested_caller_concurrency"], chosen)
                 self.assertEqual(receipt["dispatch_batch"]["admitted_task_count"], 200)
-                self.assertEqual(receipt["status_single_flight"], {
+                self.assertEqual(receipt["status_coalescing"], {
                     "concurrent_status_call_count": 16,
                     "pueue_status_snapshot_count": 1,
+                    "shared_status_call_count": 15,
                 })
                 self.assertTrue(receipt["packaged_default_path"]["fresh_bootstrap"])
                 self.assertEqual(receipt["result"], "PASS")
@@ -244,9 +245,10 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                     "admission_elapsed_seconds": 0.001,
                     "admitted_task_count": total,
                 },
-                "status_single_flight": {
+                "status_coalescing": {
                     "concurrent_status_call_count": 16,
                     "pueue_status_snapshot_count": 1,
+                    "shared_status_call_count": 15,
                 },
             })
             if upgrade_failure:
@@ -925,8 +927,6 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         self.gate = self.root / "gate"
         self.waiters = self.root / "waiters"
         self.waiters.mkdir()
-        self.lease_candidate = self.waiters / "candidate"
-        self.lease_candidate.touch()
         self.old_layout = self.root / "old"
         self.old_layout.mkdir()
         owner = private_cli.DirectoryOwner()
@@ -934,6 +934,12 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
             "old package root", self.old_layout, self.root),)
         self.total = 200
         self.task_ids = ["%032x" % (index + 1) for index in range(self.total)]
+        self.lease_candidates = [
+            self.waiters / ("candidate-%03d.fifo" % index)
+            for index in range(self.total)
+        ]
+        for candidate in self.lease_candidates:
+            candidate.touch()
         self.restart_id = "f" * 32
         self.lock = threading.Lock()
         self.dispatched = set()
@@ -959,7 +965,10 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         self.failed_dispatch_index = None
         self.attempted_task_ids = []
 
-    def test_slower_arrival_still_proves_all_200_running_before_release(self):
+    def test_orchestration_records_all_200_capacity_members_before_release(self):
+        # This unit isolates receipt/orchestration logic. Live FIFO handshakes,
+        # owner-lock contention, and 200 native workers are separate executable
+        # tests and the mandatory private CLI acceptance gate.
         task_ids, status_bytes = self.run_upgrade()
         self.assertEqual(self.worker_counts, [2, 2, 16, 16])
         self.assertEqual(task_ids, [*self.task_ids, self.restart_id])
@@ -1005,9 +1014,10 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         self.assertTrue(capacity_proof["proof_established_before_gate"])
         self.assertTrue(capacity_proof["gate_opened_after_proof"])
         self.assertTrue(self.cohort_closed)
-        self.assertEqual(self.evidence["status_single_flight"], {
+        self.assertEqual(self.evidence["status_coalescing"], {
             "concurrent_status_call_count": 16,
             "pueue_status_snapshot_count": 1,
+            "shared_status_call_count": 15,
         })
         receipts = list((self.root / "dispatch-responses").glob("dispatch-[0-9][0-9][0-9].json"))
         self.assertEqual(len(receipts), self.total)
@@ -1022,8 +1032,8 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
             capacity_proof,
         )
         self.assertEqual(
-            json.loads((self.root / "dispatch-responses" / "status-single-flight.json").read_text()),
-            self.evidence["status_single_flight"],
+            json.loads((self.root / "dispatch-responses" / "status-coalescing.json").read_text()),
+            self.evidence["status_coalescing"],
         )
         self.assertTrue(self.gate.exists())
         self.assertFalse(self.old_layout.exists())
@@ -1078,9 +1088,25 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         self.assertEqual(self.collected, set())
         self.assertTrue(self.old_layout.exists())
 
-    def test_multiple_status_snapshot_owners_fail_acceptance(self):
+    def test_multiple_scheduled_status_cohorts_still_prove_coalescing(self):
         self.status_snapshot_owners = 2
-        with self.assertRaisesRegex(RuntimeError, "exactly one queue snapshot"):
+        self.run_upgrade()
+        self.assertEqual(self.evidence["status_coalescing"], {
+            "concurrent_status_call_count": 16,
+            "pueue_status_snapshot_count": 2,
+            "shared_status_call_count": 14,
+        })
+
+    def test_uncoalesced_status_burst_fails_acceptance(self):
+        self.status_snapshot_owners = 16
+        with self.assertRaisesRegex(RuntimeError, "did not coalesce queue snapshots"):
+            self.run_upgrade()
+        self.assertFalse(self.gate.exists())
+        self.assertEqual(self.collected, set())
+
+    def test_missing_status_snapshot_fails_acceptance(self):
+        self.status_snapshot_owners = 0
+        with self.assertRaisesRegex(RuntimeError, "did not coalesce queue snapshots"):
             self.run_upgrade()
         self.assertFalse(self.gate.exists())
         self.assertEqual(self.collected, set())
@@ -1142,7 +1168,7 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
                 "task_id": task_id,
                 "root_id": "b" * 32,
                 "pid": index + 1,
-                "path": self.lease_candidate,
+                "path": self.lease_candidates[index],
                 "owner_lock": self.root / (task_id + ".lock"),
                 "owner_sha256": "%064x" % (index + 1),
                 "registration_sha256": "%064x" % (index + 201),

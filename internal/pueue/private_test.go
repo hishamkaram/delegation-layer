@@ -287,7 +287,7 @@ func TestPrivateCleanupRemovesOnlyAuthorizedTerminalRows(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(base, "test-record-kill"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error { return client.cleanSuccessfulTasks(context.Background()) }); err != nil {
+	if err := WithBootstrapLock(context.Background(), fixture.stateRoot, func() error { return client.cleanSuccessfulTasks(context.Background(), false) }); err != nil {
 		t.Fatal(err)
 	}
 	removed := strings.Fields(string(readPrivateSupervisorFile(t, filepath.Join(base, "test-kill-task-id"))))
@@ -310,7 +310,7 @@ func TestPrivateCleanupRemovesOnlyAuthorizedTerminalRows(t *testing.T) {
 func TestPrivateCleanupFailsClosedWithoutApplicationAuthorizer(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	client := bindPrivateSetupForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath, Options{ObservationTimeout: DefaultObservationTimeout})
-	if err := client.cleanSuccessfulTasks(context.Background()); !errors.Is(err, ErrCleanupAuthorization) {
+	if err := client.cleanSuccessfulTasks(context.Background(), false); !errors.Is(err, ErrCleanupAuthorization) {
 		t.Fatalf("cleanup without authorizer: %v", err)
 	}
 }
@@ -519,7 +519,8 @@ func TestPrivateClientReadyDoesNotCleanAfterVersionOverflows(t *testing.T) {
 		t.Fatal(err)
 	}
 	cleanMarker := filepath.Join(fixture.stateRoot, privateSupervisorDirectory, "clean-version-overflow")
-	client.options.Environment = append(os.Environ(),
+	client.options.Environment = append(
+		os.Environ(),
 		"PRIVATE_VERSION_FILE="+versionPath,
 		"PRIVATE_CLEAN_MARKER="+cleanMarker,
 	)
@@ -640,6 +641,71 @@ func TestBindSavedForMigrationUsesSavedEndpointAfterPrivateConfigDrift(t *testin
 	}
 	if err := migration.Ready(context.Background()); err != nil {
 		t.Fatalf("migration binding could not inspect the saved endpoint: %v", err)
+	}
+}
+
+func TestCompactPrivateEndpointMigrationAndRecoveryUseSavedEndpoint(t *testing.T) {
+	fixture := newPrivateSupervisorTestFixture(t)
+	base := filepath.Join(fixture.stateRoot, privateSupervisorDirectory)
+	if err := ensurePrivateBase(base); err != nil {
+		t.Fatal(err)
+	}
+	if err := markPrivateBootstrapPending(fixture.stateRoot); err != nil {
+		t.Fatal(err)
+	}
+	configPath := PrivateConfigPath(fixture.stateRoot)
+	if err := createPrivateConfig(configPath, base, privateConfigYAMLWithSocket(base, filepath.Join(base, "s"))); err != nil {
+		t.Fatal(err)
+	}
+	first := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+	saved := first.Binding()
+	if saved.Endpoint != "unix:"+filepath.Join(base, "s") {
+		t.Fatalf("saved compact endpoint = %q", saved.Endpoint)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := configWithSocketPath(data, filepath.Join(base, "t"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(configPath, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	migration, err := BindSavedForMigration(context.Background(), saved, Options{})
+	if err != nil {
+		t.Fatalf("compact endpoint migration failed: %v", err)
+	}
+	if migration.runtimeBinding.Endpoint != saved.Endpoint {
+		t.Fatalf("migration endpoint = %q, want %q", migration.runtimeBinding.Endpoint, saved.Endpoint)
+	}
+	if err = migration.PersistPrivateRecoveryBinding(fixture.stateRoot); err != nil {
+		t.Fatalf("persist compact recovery binding: %v", err)
+	}
+	if err = migration.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := RecoverPrivate(
+		context.Background(),
+		fixture.stateRoot,
+		saved,
+		fixture.clientPath,
+		fixture.daemonPath,
+		Options{ObservationTimeout: privateTestObservationTimeout},
+	)
+	if err != nil {
+		t.Fatalf("compact endpoint recovery failed: %v", err)
+	}
+	defer func() {
+		if closeErr := recovered.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}()
+	if recovered.runtimeBinding.Endpoint != saved.Endpoint {
+		t.Fatalf("recovered endpoint = %q, want %q", recovered.runtimeBinding.Endpoint, saved.Endpoint)
 	}
 }
 
@@ -920,6 +986,328 @@ func TestFreshPrivateConfigRecordsBootstrapIntentBeforePublication(t *testing.T)
 	}
 	if pending {
 		t.Fatal("completed private bootstrap retained its pending marker")
+	}
+}
+
+func TestFreshPrivateConfigUsesCompactDarwinSocketWithinNativeLimit(t *testing.T) {
+	stateRoot, resolution := newLongDarwinPrivateStateRoot(t)
+	configPath, base, err := ensurePrivateConfig(stateRoot, resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := readPrivateConfig(configPath, base, resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(base, "s")
+	if resolved.SocketPath != want {
+		t.Fatalf("socket path = %q, want %q", resolved.SocketPath, want)
+	}
+	limit, ok := unixSocketPathLimit("darwin")
+	if !ok || len(resolved.SocketPath) > limit {
+		t.Fatalf("socket path length = %d, Darwin limit = %d", len(resolved.SocketPath), limit)
+	}
+	pending, err := PrivateBootstrapPending(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pending {
+		t.Fatal("fresh compact config was published without bootstrap intent")
+	}
+}
+
+func TestFreshPrivateConfigRejectsUnrepresentableDarwinSocketBeforePublication(t *testing.T) {
+	stateRoot, resolution := newPrivateStateRootAtBaseLength(t, 104)
+	if _, _, err := ensurePrivateConfig(stateRoot, resolution); !errors.Is(err, errUnixSocketPathTooLong) {
+		t.Fatalf("unrepresentable socket error = %v", err)
+	}
+	if _, err := os.Stat(PrivateConfigPath(stateRoot)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid config was published: %v", err)
+	}
+	pending, err := PrivateBootstrapPending(stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending {
+		t.Fatal("invalid config published bootstrap intent")
+	}
+}
+
+func TestExistingValidPrivateConfigRemainsByteIdentical(t *testing.T) {
+	stateRoot, resolution := newLongDarwinPrivateStateRoot(t)
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	if err := ensurePrivateBase(base); err != nil {
+		t.Fatal(err)
+	}
+	if err := markPrivateBootstrapPending(stateRoot); err != nil {
+		t.Fatal(err)
+	}
+	source := privateConfigYAMLWithSocket(base, filepath.Join(base, "x"))
+	configPath := PrivateConfigPath(stateRoot)
+	if err := createPrivateConfig(configPath, base, source); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ensurePrivateConfig(stateRoot, resolution); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != source {
+		t.Fatal("existing valid config bytes changed")
+	}
+}
+
+func TestPendingPrivateConfigRecoversReplacementVisibleBeforeDirectoryBarrier(t *testing.T) {
+	stateRoot, resolution := newLongDarwinPrivateStateRoot(t)
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	if err := ensurePrivateBase(base); err != nil {
+		t.Fatal(err)
+	}
+	if err := markPrivateBootstrapPending(stateRoot); err != nil {
+		t.Fatal(err)
+	}
+	configPath := PrivateConfigPath(stateRoot)
+	if err := createPrivateConfig(configPath, base, privateConfigYAML(base)); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := privateConfigYAMLForResolution(base, resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(base, ".interrupted-config")
+	if err = os.WriteFile(stage, []byte(replacement), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(stage, configPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err = ensurePrivateConfig(stateRoot, resolution); err != nil {
+		t.Fatalf("visible replacement was not recovered: %v", err)
+	}
+	resolved, err := readPrivateConfig(configPath, base, resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.SocketPath != filepath.Join(base, "s") {
+		t.Fatalf("recovered socket path = %q", resolved.SocketPath)
+	}
+}
+
+func TestConcurrentCompactPrivateConfigBootstrapConverges(t *testing.T) {
+	stateRoot, resolution := newLongDarwinPrivateStateRoot(t)
+	const callers = 8
+	start := make(chan struct{})
+	errorsByCaller := make(chan error, callers)
+	var wait sync.WaitGroup
+	for range callers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			errorsByCaller <- WithBootstrapLock(context.Background(), stateRoot, func() error {
+				_, _, err := ensurePrivateConfig(stateRoot, resolution)
+				return err
+			})
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errorsByCaller)
+	for err := range errorsByCaller {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolved, err := readPrivateConfig(
+		PrivateConfigPath(stateRoot),
+		filepath.Join(stateRoot, privateSupervisorDirectory),
+		resolution,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.SocketPath != filepath.Join(stateRoot, privateSupervisorDirectory, "s") {
+		t.Fatalf("concurrent bootstrap socket path = %q", resolved.SocketPath)
+	}
+}
+
+func TestIncompletePrivateConfigRepairsOwnedLegacyDarwinPath(t *testing.T) {
+	stateRoot, resolution, base, configPath, _ := newIncompletePrivateConfig(t, true, false)
+	if err := validatePrivateConfig(configPath, base, resolution); !errors.Is(err, errUnixSocketPathTooLong) {
+		t.Fatalf("legacy config validation = %v", err)
+	}
+
+	gotPath, gotBase, err := ensurePrivateConfig(stateRoot, resolution)
+	if err != nil {
+		t.Fatalf("owned incomplete config was not repaired: %v", err)
+	}
+	if gotPath != configPath || gotBase != base {
+		t.Fatalf("repair changed config identity: path=%q base=%q", gotPath, gotBase)
+	}
+	resolved, err := readPrivateConfig(configPath, base, resolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.SocketPath != filepath.Join(base, "s") {
+		t.Fatalf("repaired socket path = %q", resolved.SocketPath)
+	}
+	if _, _, err = ensurePrivateConfig(stateRoot, resolution); err != nil {
+		t.Fatalf("repaired config was not idempotent: %v", err)
+	}
+}
+
+func TestIncompletePrivateConfigRepairRefusesAmbiguousState(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		pending  bool
+		changed  bool
+		artifact string
+	}{
+		{name: "missing bootstrap ownership"},
+		{name: "changed config", pending: true, changed: true},
+		{name: "daemon identity present", pending: true, artifact: "identity"},
+		{name: "recovery alias present", pending: true, artifact: "recovery"},
+		{name: "migration history present", pending: true, artifact: "history"},
+		{name: "compact endpoint present", pending: true, artifact: "endpoint"},
+		{name: "runtime state present", pending: true, artifact: "runtime"},
+		{name: "data state present", pending: true, artifact: "data"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateRoot, resolution, base, configPath, source := newIncompletePrivateConfig(t, test.pending, test.changed)
+			addIncompletePrivateConfigArtifact(t, stateRoot, base, test.artifact)
+
+			_, _, err := ensurePrivateConfig(stateRoot, resolution)
+			if !errors.Is(err, errUnixSocketPathTooLong) {
+				t.Fatalf("unsafe repair was not refused: %v", err)
+			}
+			got, readErr := os.ReadFile(configPath)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(got) != source {
+				t.Fatal("refused repair changed the existing config")
+			}
+		})
+	}
+}
+
+func newIncompletePrivateConfig(t *testing.T, pending, changed bool) (string, ResolutionContext, string, string, string) {
+	t.Helper()
+	stateRoot, resolution := newLongDarwinPrivateStateRoot(t)
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	if err := ensurePrivateBase(base); err != nil {
+		t.Fatal(err)
+	}
+	if pending {
+		if err := markPrivateBootstrapPending(stateRoot); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := privateConfigYAML(base)
+	if changed {
+		source += "\n"
+	}
+	configPath := PrivateConfigPath(stateRoot)
+	if err := createPrivateConfig(configPath, base, source); err != nil {
+		t.Fatal(err)
+	}
+	return stateRoot, resolution, base, configPath, source
+}
+
+func addIncompletePrivateConfigArtifact(t *testing.T, stateRoot, base, artifact string) {
+	t.Helper()
+	if addIncompletePrivatePathArtifact(t, base, artifact) {
+		return
+	}
+	switch artifact {
+	case "":
+		return
+	case "identity":
+		data, err := task.MarshalCanonical(privateDaemonIdentity{
+			Executable: "/bin/sh",
+			SHA256:     strings.Repeat("a", 64),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = publishPrivateRecord(base, privateDaemonIdentityPath(base), data); err != nil {
+			t.Fatal(err)
+		}
+	case "recovery":
+		if err := os.WriteFile(privateRecoveryPendingConfigPath(stateRoot), []byte("retained"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	case "history":
+		data, err := task.MarshalCanonical(privateMigrationHistory{
+			SchemaVersion: task.SchemaVersion,
+			Migrations:    []privateMigrationRecord{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = publishPrivateRecord(base, privateMigrationHistoryPath(base), data); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("unknown incomplete-config artifact %q", artifact)
+	}
+}
+
+func addIncompletePrivatePathArtifact(t *testing.T, base, artifact string) bool {
+	t.Helper()
+	switch artifact {
+	case "endpoint":
+		if err := os.WriteFile(filepath.Join(base, "s"), []byte("retained"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return true
+	case "runtime":
+		if err := os.Mkdir(filepath.Join(base, "run"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return true
+	case "data":
+		if err := os.Mkdir(filepath.Join(base, "data"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func newLongDarwinPrivateStateRoot(t *testing.T) (string, ResolutionContext) {
+	t.Helper()
+	stateRoot, resolution := newPrivateStateRootAtBaseLength(t, 100)
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	limit, ok := unixSocketPathLimit("darwin")
+	if !ok || len(filepath.Join(base, "run", "pueue.sock")) <= limit || len(filepath.Join(base, "s")) > limit {
+		t.Fatal("Darwin socket boundary fixture does not straddle the native limit")
+	}
+	return stateRoot, resolution
+}
+
+func newPrivateStateRootAtBaseLength(t *testing.T, targetBaseLength int) (string, ResolutionContext) {
+	t.Helper()
+	parent := canonicalTemp(t)
+	padding := targetBaseLength - len(parent) - 2 - len(privateSupervisorDirectory)
+	if padding < 1 {
+		t.Fatalf("temporary parent is too long for Darwin boundary fixture: %q", parent)
+	}
+	stateRoot := filepath.Join(parent, strings.Repeat("s", padding))
+	writePrivateStateRootRecord(t, stateRoot)
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	if len(base) != targetBaseLength {
+		t.Fatalf("private base length = %d, want %d", len(base), targetBaseLength)
+	}
+	return stateRoot, ResolutionContext{
+		OS:       "darwin",
+		Home:     "/Users/delegate-test",
+		Username: "delegate-test",
+		Cwd:      parent,
 	}
 }
 
@@ -1524,7 +1912,8 @@ func TestRecoverSavedRetainsStagedConfigUntilProbeCompletes(t *testing.T) {
 	}
 	options := Options{
 		ObservationTimeout: time.Second,
-		Environment: append(os.Environ(),
+		Environment: append(
+			os.Environ(),
 			"PRIVATE_VERSION_RELEASE="+filepath.Join(filepath.Dir(configPath), "version-release"),
 			"PRIVATE_VERSION_MARKER="+filepath.Join(filepath.Dir(configPath), "version-marker"),
 		),
@@ -1753,7 +2142,8 @@ func TestWaitReadyRejectsParentCancellationAndRetainsPendingOwner(t *testing.T) 
 func TestStopRecoveredWaitsForPriorPendingProbeBeforeShutdown(t *testing.T) {
 	fake := newFakeSupervisorPaths(t, "delay-status", "pueue "+FixtureVersion)
 	shutdownMarker := filepath.Join(filepath.Dir(fake.configPath), "shutdown-marker")
-	fake.environment = append(fake.environment,
+	fake.environment = append(
+		fake.environment,
 		"FAKE_STATUS_DELAY=0.3",
 		"FAKE_SHUTDOWN_MARKER="+shutdownMarker,
 	)
@@ -3118,7 +3508,8 @@ func TestPreparePrivateForMigrationDoesNotProbeChangedEndpoint(t *testing.T) {
 	bindPrivateSetupForTest(t, stateRoot, clientPath, daemonPath, Options{ObservationTimeout: privateTestObservationTimeout})
 	statusStarted := filepath.Join(base, "status-started")
 	releaseStatus := filepath.Join(base, "release-status")
-	environment := append(os.Environ(),
+	environment := append(
+		os.Environ(),
 		"PRIVATE_STATUS_STARTED="+statusStarted,
 		"PRIVATE_STATUS_RELEASE="+releaseStatus,
 	)
@@ -3667,14 +4058,14 @@ func bindPrivateSetupForTest(t *testing.T, stateRoot, clientPath, daemonPath str
 	return client
 }
 
-func allowSuccessfulCleanupForTest(_ context.Context, _ string, _ task.SupervisorRef, jobs []Job) ([]int64, error) {
-	var ids []int64
+func allowSuccessfulCleanupForTest(_ context.Context, _ string, _ task.SupervisorRef, jobs []Job) (PrivateQueueCleanupPlan, error) {
+	var plan PrivateQueueCleanupPlan
 	for _, job := range jobs {
 		if job.State == StateEnded && job.Succeeded {
-			ids = append(ids, job.ID)
+			plan.RemoveIDs = append(plan.RemoveIDs, job.ID)
 		}
 	}
-	return ids, nil
+	return plan, nil
 }
 
 func privateTestProcessObserver(stateRoot string) func(int) (privateProcessObservation, error) {
@@ -4563,7 +4954,9 @@ func TestPrivateMaintenanceRetainsPendingCommandLock(t *testing.T) {
 			client.options.ObservationTimeout = time.Second
 			prefix := "PRIVATE_" + strings.ToUpper(command)
 			client.options.Environment = append(os.Environ(), prefix+"_STARTED="+started, prefix+"_RELEASE="+release)
-			client.options.SuccessfulCleanupAuthorizer = func(context.Context, string, task.SupervisorRef, []Job) ([]int64, error) { return []int64{0}, nil }
+			client.options.SuccessfulCleanupAuthorizer = func(context.Context, string, task.SupervisorRef, []Job) (PrivateQueueCleanupPlan, error) {
+				return PrivateQueueCleanupPlan{RemoveIDs: []int64{0}}, nil
+			}
 			cancel, err := configurePrivateTestParallelismAndMaintain(context.Background(), client)
 			if err != nil {
 				t.Fatal(err)

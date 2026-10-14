@@ -41,8 +41,8 @@ func TestAuthorizePrivateSuccessfulCleanupOwnsAllEvidenceFamilies(t *testing.T) 
 	if err := os.MkdirAll(filepath.Join(root, "tasks", taskID), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if ids, err := authorizePrivateSuccessfulCleanup(context.Background(), root, task.SupervisorRef{}, nil); err != nil || len(ids) != 0 {
-		t.Fatalf("unrelated incomplete history affected empty queue cleanup: ids=%v err=%v", ids, err)
+	if plan, err := authorizePrivateSuccessfulCleanup(context.Background(), root, task.SupervisorRef{}, nil); err != nil || len(plan.RemoveIDs) != 0 || plan.Settling {
+		t.Fatalf("unrelated incomplete history affected empty queue cleanup: plan=%+v err=%v", plan, err)
 	}
 }
 
@@ -449,15 +449,15 @@ func assertPrivateCleanupSelectsOnlyProvenRows(t *testing.T, store *taskdir.Stor
 		{ID: 8, Label: &activeLabel, State: pueue.StateRunning, Group: "default"},
 		{ID: 9, Label: &unknownLabel, State: pueue.StateEnded, Succeeded: true, Group: "default"},
 	}
-	ids, cleanupErr := authorizePrivateSuccessfulCleanup(context.Background(), store.Root, binding, candidates)
-	if cleanupErr != nil || len(ids) != 1 || ids[0] != job.ID {
-		t.Fatalf("unrelated active/incomplete tasks blocked exact cleanup: ids=%v err=%v", ids, cleanupErr)
+	plan, cleanupErr := authorizePrivateSuccessfulCleanup(context.Background(), store.Root, binding, candidates)
+	if cleanupErr != nil || len(plan.RemoveIDs) != 1 || plan.RemoveIDs[0] != job.ID || plan.Settling {
+		t.Fatalf("unrelated active/incomplete tasks blocked exact cleanup: plan=%+v err=%v", plan, cleanupErr)
 	}
 
 	duplicate := cleanupJob
 	duplicate.ID = 10
-	ids, cleanupErr = authorizePrivateSuccessfulCleanup(context.Background(), store.Root, binding, append(candidates, duplicate))
-	if cleanupErr != nil || len(ids) != 0 {
-		t.Fatalf("duplicate label was authorized: ids=%v err=%v", ids, cleanupErr)
+	plan, cleanupErr = authorizePrivateSuccessfulCleanup(context.Background(), store.Root, binding, append(candidates, duplicate))
+	if cleanupErr != nil || len(plan.RemoveIDs) != 0 || plan.Settling {
+		t.Fatalf("duplicate label was authorized: plan=%+v err=%v", plan, cleanupErr)
 	}
 }

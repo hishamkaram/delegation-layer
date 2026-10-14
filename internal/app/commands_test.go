@@ -1260,7 +1260,7 @@ func TestOrdinaryStagedRecoveryAcceptsRunningRaceOnlyWithDurableReceipt(t *testi
 		Identity: identity, Binding: receipt.SupervisorRef(), NumericTaskID: numericTaskID,
 	}
 	writeRunnerStatus(t, fixture.statusPath, fixture.req.RootID, fixture.req.TaskID, numericTaskID)
-	recovered, err := recoverStagedOrdinarySubmission(t.Context(), fixture.td, fixture.supervisor, stale)
+	recovered, err := recoverStagedOrdinarySubmission(t.Context(), fixture.stateRoot, fixture.td, fixture.supervisor, stale)
 	if err != nil || !recovered.Matched || recovered.State != pueue.StateRunning || recovered.NumericTaskID != numericTaskID {
 		t.Fatalf("running staged recovery race = %+v, err %v", recovered, err)
 	}
@@ -1705,6 +1705,19 @@ func TestRunnerArgumentValidationRejectsProviderArguments(t *testing.T) {
 	parsed, err := parseRunnerArguments([]string{"--root", root, "--inspection", "--supervised", id})
 	if err != nil || !parsed.Inspection || !parsed.Supervised || parsed.TaskID != id {
 		t.Fatalf("runner rejected supervised inspection arguments: parsed=%+v err=%v", parsed, err)
+	}
+	maintenance, err := parseRunnerArguments([]string{"--queue-maintenance", "--root", root})
+	if err != nil || !maintenance.QueueMaintenance || maintenance.TaskID != "" {
+		t.Fatalf("runner rejected queue maintenance arguments: parsed=%+v err=%v", maintenance, err)
+	}
+	for _, args := range [][]string{
+		{"--queue-maintenance", "--root", root, id},
+		{"--queue-maintenance", "--terminal-event", "--root", root, "--pueue-id", "7", "--exit-code", "0"},
+		{"--queue-maintenance", "--json", "--root", root},
+	} {
+		if _, err = parseRunnerArguments(args); err == nil {
+			t.Fatalf("runner accepted mixed queue maintenance arguments: %q", args)
+		}
 	}
 }
 

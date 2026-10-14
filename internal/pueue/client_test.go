@@ -538,12 +538,12 @@ func TestSubmitWithGateRejectsBeforePueueAdd(t *testing.T) {
 		context.Background(),
 		prepared,
 		Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root},
-		func(_ context.Context, binding task.SupervisorRef) error {
+		func(_ context.Context, binding task.SupervisorRef) (SubmissionAuthorization, error) {
 			gateCalls++
 			if binding != fake.client.RuntimeBinding() || binding == fake.client.Binding() {
 				t.Fatalf("submission gate received durable binding instead of active runtime: got=%+v durable=%+v runtime=%+v", binding, fake.client.Binding(), fake.client.RuntimeBinding())
 			}
-			return gateErr
+			return SubmissionAuthorization{}, gateErr
 		},
 	)
 	if !errors.Is(err, gateErr) || observation.Matched {

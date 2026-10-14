@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,17 +23,18 @@ import (
 const runnerReceiptPollInterval = 10 * time.Millisecond
 
 type runnerArguments struct {
-	Root          string
-	TaskID        string
-	JSON          bool
-	Inspection    bool
-	Supervised    bool
-	Guardian      bool
-	LifetimeChild bool
-	LifetimeFD    int
-	TerminalEvent bool
-	PueueID       int64
-	ExitCode      string
+	Root             string
+	TaskID           string
+	JSON             bool
+	Inspection       bool
+	Supervised       bool
+	Guardian         bool
+	QueueMaintenance bool
+	LifetimeChild    bool
+	LifetimeFD       int
+	TerminalEvent    bool
+	PueueID          int64
+	ExitCode         string
 }
 
 // RunRunner executes one saved task from the supervisor's exact root/task
@@ -58,8 +61,13 @@ func RunRunner(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 
 func runRunnerControlMode(parsed runnerArguments, stderr io.Writer, deps Dependencies) (int, bool) {
 	switch {
+	case parsed.QueueMaintenance:
+		if err := runQueueMaintenance(parsed, deps.normalized()); err != nil {
+			return writeCLIError(stderr, errors.New("supervisor maintenance unavailable"), 1), true
+		}
+		return 0, true
 	case parsed.TerminalEvent:
-		if err := runTerminalEvent(parsed); err != nil {
+		if err := runTerminalEvent(parsed, deps.normalized()); err != nil {
 			return writeCLIError(stderr, errors.New("terminal event unavailable"), 1), true
 		}
 		return 0, true
@@ -126,6 +134,7 @@ func newRunnerFlagSet(parsed *runnerArguments) *flag.FlagSet {
 	fs.BoolVar(&parsed.Inspection, "inspection", false, "run the saved internal inspection operation")
 	fs.BoolVar(&parsed.Supervised, "supervised", false, "consume a saved supervisor receipt")
 	fs.BoolVar(&parsed.Guardian, "guardian", false, "own the saved task process lifetime")
+	fs.BoolVar(&parsed.QueueMaintenance, "queue-maintenance", false, "own requested private queue maintenance")
 	fs.BoolVar(&parsed.LifetimeChild, "lifetime-child", false, "run behind the saved task guardian")
 	fs.IntVar(&parsed.LifetimeFD, "lifetime-fd", -1, "private guardian control descriptor")
 	fs.BoolVar(&parsed.TerminalEvent, "terminal-event", false, "record one private supervisor terminal event")
@@ -144,6 +153,12 @@ func validateRunnerArguments(parsed runnerArguments, positional []string) (runne
 		}
 		return parsed, nil
 	}
+	if parsed.QueueMaintenance {
+		if runnerQueueMaintenanceHasUnexpectedArguments(parsed, positional) {
+			return runnerArguments{}, errors.New("delegate-run queue maintenance requires --root only")
+		}
+		return parsed, nil
+	}
 	if len(positional) != 1 {
 		return runnerArguments{}, errors.New("delegate-run requires exactly one task ID")
 	}
@@ -158,13 +173,20 @@ func validateRunnerArguments(parsed runnerArguments, positional []string) (runne
 }
 
 func runnerTerminalEventHasUnexpectedArguments(parsed runnerArguments, positional []string) bool {
-	if parsed.Inspection || parsed.Supervised || parsed.Guardian || parsed.LifetimeChild {
+	if parsed.Inspection || parsed.Supervised || parsed.Guardian || parsed.QueueMaintenance || parsed.LifetimeChild {
 		return true
 	}
 	if parsed.LifetimeFD != -1 || parsed.JSON || len(positional) != 0 {
 		return true
 	}
 	return parsed.PueueID < 0 || parsed.ExitCode == ""
+}
+
+func runnerQueueMaintenanceHasUnexpectedArguments(parsed runnerArguments, positional []string) bool {
+	if parsed.Inspection || parsed.Supervised || parsed.Guardian || parsed.TerminalEvent || parsed.LifetimeChild {
+		return true
+	}
+	return parsed.LifetimeFD != -1 || parsed.JSON || parsed.PueueID >= 0 || parsed.ExitCode != "" || len(positional) != 0
 }
 
 func validateRunnerModes(parsed runnerArguments) error {
@@ -180,10 +202,113 @@ func validateRunnerModes(parsed runnerArguments) error {
 	return nil
 }
 
-func runTerminalEvent(parsed runnerArguments) error {
-	ctx, cancel := context.WithTimeout(context.Background(), pueue.DefaultObservationTimeout)
-	defer cancel()
-	return pueue.RecordPrivateTerminalEvent(ctx, parsed.Root, parsed.PueueID, parsed.ExitCode)
+func runTerminalEvent(parsed runnerArguments, deps Dependencies) error {
+	eventContext, cancelEvent := context.WithTimeout(context.Background(), pueue.DefaultObservationTimeout)
+	recorded, eventErr := pueue.RecordPrivateTerminalEventForMaintenance(eventContext, parsed.Root, parsed.PueueID, parsed.ExitCode)
+	cancelEvent()
+	if eventErr != nil {
+		// Candidate classification is a cleanup hint, not task authority. Keep a
+		// conservative full-scope wake durable even when its publication fails;
+		// application journals still decide whether any row may be removed.
+		log.Printf("delegate: terminal supervisor candidate deferred: %v", eventErr)
+	}
+	requestContext, cancelRequest := context.WithTimeout(context.Background(), pueue.DefaultObservationTimeout)
+	defer cancelRequest()
+	var requestErr error
+	if eventErr == nil && recorded {
+		requestErr = pueue.RequestPrivateCandidateQueueMaintenance(requestContext, parsed.Root)
+	} else {
+		// Legacy rows without a callback ticket and failed candidate publication
+		// take the conservative recovery scope. Current ordinary and inspection
+		// submissions both publish exact event-backed candidates.
+		requestErr = pueue.RequestPrivateQueueMaintenance(requestContext, parsed.Root)
+	}
+	if requestErr != nil {
+		if !recorded {
+			return errors.Join(eventErr, requestErr)
+		}
+		// The terminal event itself is a durable cleanup inbox entry. Continue
+		// with an elected pass even when the generation journal could not be
+		// advanced; a later root activation can recover the retained event too.
+		log.Printf("delegate: terminal supervisor cleanup request deferred: %v", requestErr)
+	}
+	// Pueue invokes this helper after a row reaches Done, so this process already
+	// outlives the task creator. It owns the persisted wake to completion; task
+	// and inspection journals remain the sole removal authority.
+	if err := runQueueMaintenance(parsed, deps); err != nil {
+		log.Printf("delegate: terminal supervisor cleanup deferred: %v", err)
+	}
+	return nil
+}
+
+func runQueueMaintenance(parsed runnerArguments, deps Dependencies) (resultErr error) {
+	binding, found, err := pueue.ReadPrivateSupervisorBinding(parsed.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return pueue.ErrBinding
+	}
+	supervisor, err := pueue.NewClient(binding, deps.SupervisorOptions)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, supervisor.Close())
+	}()
+	if !supervisor.RunRequestedPrivateQueueMaintenance(context.Background()) {
+		return pueue.ErrConfiguration
+	}
+	return nil
+}
+
+func launchPrivateQueueMaintenanceOwner(ctx context.Context, executable, root string) error {
+	_, err := startPrivateQueueMaintenanceOwner(ctx, executable, root)
+	return err
+}
+
+func startPrivateQueueMaintenanceOwner(ctx context.Context, executable, root string) (<-chan error, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(executable) || filepath.Clean(executable) != executable ||
+		!filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return nil, pueue.ErrConfiguration
+	}
+	resolved, err := filepath.EvalSymlinks(executable)
+	if err != nil || resolved != executable {
+		return nil, errors.Join(pueue.ErrConfiguration, err)
+	}
+	info, err := os.Stat(executable)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return nil, errors.Join(pueue.ErrConfiguration, err)
+	}
+	command := exec.Command(executable, "--queue-maintenance", "--root", root)
+	command.Dir = filepath.Dir(executable)
+	command.Env = pueue.DefaultEnvironment()
+	if err = lifetime.ConfigureIndependentSession(command); err != nil {
+		return nil, err
+	}
+	if err = command.Start(); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	// Start transfers durable ownership to the independent process. Keep one
+	// asynchronous Wait while this caller lives so an early helper exit cannot
+	// become a zombie. If the caller exits first, the OS adopts the independent
+	// session and reaps it after natural completion.
+	go func() {
+		waitErr := command.Wait()
+		if waitErr != nil {
+			log.Printf("delegate: maintenance process deferred: %v", waitErr)
+		}
+		done <- waitErr
+		close(done)
+	}()
+	return done, nil
 }
 
 func orderRunnerFlags(fs *flag.FlagSet, args []string) ([]string, error) {

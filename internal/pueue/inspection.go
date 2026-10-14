@@ -98,8 +98,24 @@ func (c *Client) Snapshot(ctx context.Context) (QueueSnapshot, error) {
 }
 
 func (c *Client) snapshotAfterVerify(ctx context.Context, query ...string) (QueueSnapshot, error) {
+	return c.snapshotAfterVerifyCompletion(ctx, false, query...)
+}
+
+// snapshotAfterVerifySettled is reserved for asynchronous maintenance that
+// already owns an admitted command through natural completion. Interactive
+// observations keep snapshotAfterVerify's finite-return behavior.
+func (c *Client) snapshotAfterVerifySettled(ctx context.Context, query ...string) (QueueSnapshot, error) {
+	return c.snapshotAfterVerifyCompletion(ctx, true, query...)
+}
+
+func (c *Client) snapshotAfterVerifyCompletion(ctx context.Context, settle bool, query ...string) (QueueSnapshot, error) {
 	args := append([]string{"status", "--json"}, query...)
 	result, err := c.command(ctx, nil, args...)
+	if settle {
+		if pending := pendingFrom(err); pending != nil {
+			result, err = awaitPending(ctx, pending)
+		}
+	}
 	if err != nil {
 		return QueueSnapshot{}, errors.Join(ErrUnknown, err)
 	}
@@ -433,7 +449,7 @@ func (c *Client) submitInspectionLocked(ctx context.Context, permit InspectionSu
 	if groupErr := validInspectionGroup(snapshot, identity); groupErr != nil {
 		return unknown, groupErr
 	}
-	if gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
+	if _, gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
 		return unknown, gateErr
 	}
 	id, terminalEventRegistered, terminalEventRegistrationKnown, err := c.addInspectionWorker(ctx, permit, identity, launch)
@@ -454,7 +470,7 @@ func (c *Client) submitConcurrentInspectionLocked(ctx context.Context, permit In
 		unknown.Pending = pendingFrom(err)
 		return unknown, err
 	}
-	if gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
+	if _, gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
 		return unknown, gateErr
 	}
 	id, terminalEventRegistered, terminalEventRegistrationKnown, err := c.addInspectionWorker(ctx, permit, identity, launch)
@@ -475,6 +491,14 @@ func (c *Client) submitConcurrentInspectionLocked(ctx context.Context, permit In
 }
 
 func (c *Client) addInspectionWorker(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch) (id int64, terminalEventRegistered, terminalEventRegistrationKnown bool, resultErr error) {
+	resultErr = c.withPrivateQueueIdentityLease(ctx, func(lockedContext context.Context) error {
+		id, terminalEventRegistered, terminalEventRegistrationKnown, resultErr = c.addInspectionWorkerWithIdentityLease(lockedContext, permit, identity, launch)
+		return resultErr
+	})
+	return id, terminalEventRegistered, terminalEventRegistrationKnown, resultErr
+}
+
+func (c *Client) addInspectionWorkerWithIdentityLease(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch) (id int64, terminalEventRegistered, terminalEventRegistrationKnown bool, resultErr error) {
 	runnerArguments := []string{launch.RunnerExecutable, "--inspection"}
 	if launch.Supervised {
 		runnerArguments = append(runnerArguments, "--guardian", "--supervised")
@@ -566,6 +590,15 @@ func (c *Client) stopInspectionMatched(ctx context.Context, permit InspectionSto
 	current, err := c.readBinding()
 	if err != nil || current != c.runtimeBinding {
 		return result, errors.Join(ErrBinding, err)
+	}
+	if action == "remove" {
+		// Removing a queued row can make its numeric ID immediately reusable and
+		// produces no terminal callback. Retire the old ID-scoped ticket first;
+		// the exclusive supervisor generation scope prevents a concurrent add
+		// between this clear and the remove command.
+		if err = c.ClearPrivateTerminalEvents(ctx, id); err != nil {
+			return result, err
+		}
 	}
 	consume := func() error {
 		if consumeErr := permit.ConsumeInspectionStop(); consumeErr != nil {

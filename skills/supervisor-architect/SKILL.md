@@ -63,7 +63,11 @@ Load the [maintainability contract](../../agents/_data/maintainability-contract.
     Keep fixture, native-lifecycle, packaged/default-path, and live-provider
     claims separate with their own verdicts and receipts; one class cannot
     upgrade another.
-12. Produce the contract's [complete evidence
+12. Gate concurrency proofs at the ownership boundary they claim. A launcher
+    barrier does not prove every child crossed an internal single-flight entry
+    before publication. Keep exact-flight tests deterministic, and let native
+    process bursts record coalescing without introducing stale-result windows.
+13. Produce the contract's [complete evidence
     handoff](../../agents/_data/maintainability-contract.md#handoff-evidence),
     keyed by transition-row ID.
 
@@ -79,11 +83,72 @@ Load the [maintainability contract](../../agents/_data/maintainability-contract.
   status scan that belongs to dispatch or observation?
 - Does healthy warm admission launch a supervisor client process, or can it use
   the exact-generation receipt and direct endpoint probe?
-- Does terminal-triggered maintenance elect one root-wide owner across clients
-  and processes before any caller waits or scans the queue?
+- Is terminal cleanup triggered outside admission, with one nonblocking
+  per-root election winner before a streamed queue snapshot and application
+  authorization?
+- Does the callback remain only a trigger/wake-up hint while durable Delegate
+  journals remain the sole cleanup and admission authority?
+- Does one per-root journal own requested, attempted, and successful
+  maintenance generations, does the event inbox recover a failed journal or
+  launch handoff, and does the election lock alone identify a live owner?
+- Does the event lock recover exact-shaped publisher stages from every
+  interrupted create-once window before strict committed-record validation,
+  while rejecting every other unexpected directory entry?
+- Does bounded quiet settling batch callback bursts, does full scope dominate,
+  does each later pass get the same quiet settling, and does a wake published
+  after a pass captures its target remain above the attempted watermark?
+- Does a child-process death test prove real election-lock release and
+  interrupted-pass recovery?
+- Does a finished failed attempt require a new wake instead of busy-looping?
+- Does candidate-publication failure still persist a conservative wake before
+  supervisor recovery, without turning that hint into removal authority?
+- Does an independently accepted terminal inspection always publish a wake and
+  start an independent `delegate-run` maintenance process, so admission does
+  not wait, caller exit cannot kill cleanup, and a missing or failed callback
+  cannot leave the wake unowned?
+- Does an in-flight control command remain unattempted and owned through natural
+  completion instead of consuming its generation at an observer timeout?
+- Does a retry observe release of every election lease retained by that command
+  before attempting re-election, rather than treating pending completion as
+  lock release?
+- Does normal cleanup expose only event-backed ordinary and inspection
+  candidates, retain same-label rows for ambiguity checks, and include an exact
+  application-observation fallback when the configured callback is delayed?
+- Do cleanup and migration consume the same canonical inspection terminal
+  evidence as admission, including exact failed exits without local completion?
+- Do callback-disabled historical roots retain exact journal reconciliation
+  instead of becoming permanently ineligible for cleanup?
+- Does candidate filtering retain every same-label row so duplicate evidence
+  reaches both application authorization and fresh mutation revalidation?
+- Does application authorization stay outside queue identity, followed by one
+  fresh same-scope identity check and exact removal under the mutation lock?
+- Does a waiting queue writer publish intent before it can be overtaken, do
+  readers check that intent on both sides of the short gate, and can stale
+  intent be repaired only after proving its owner lock is free?
+- Does each nested control scope append its generation, intent, gate, or
+  identity lease, and does a caller-exit test prove the external command keeps
+  every outer lease until its exact `Wait`?
+- Is every generated Unix socket path checked against the target OS byte limit
+  before config publication, with native packaged-path evidence at the
+  boundary? Can an over-limit interrupted config be replaced only when the
+  bootstrap journal and absence of every active-generation signal prove it is
+  safe?
+- Is callback state cleared only after successful removal and retained after a
+  failed removal so the same exact row remains retryable?
+- Do staged recovery and queued inspection removal prevent callback tickets
+  from crossing numeric-ID reuse?
+- Can a later terminal callback retry a failed maintenance pass without changing
+  the already-recorded task or inspection verdict?
+- Can a compatible callback-helper upgrade atomically refresh the stable helper
+  path without changing the live daemon's callback contract?
+- Is staged add/enqueue capability probed only while publishing an
+  exact-generation scheduling receipt, then reused by warm submission and
+  staged recovery without help-process fan-out?
 - Can any worker or deferred close path destroy a native scope before durable
   empty-scope termination, or bypass the application finalizer?
 - Does each affected production store reach the real consumer named in its row?
+- Are fixture orchestration assertions labeled separately from native capacity
+  evidence with distinct live leases and lifetime-owner contention?
 - Does any production path bypass persisted intent or create a backend other
   than the row selected by the native backend matrix?
 - Is every platform claim backed by native evidence for the exact changed

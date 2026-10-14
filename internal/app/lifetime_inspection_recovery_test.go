@@ -189,9 +189,9 @@ func TestFailedManagedInspectionRefusesAfterGuardianLossBeforeTermination(t *tes
 		t.Fatalf("queue failure replaced missing guardian Wait proof: facts=%s recorded=%t terminal=%t err=%v", facts, recorded, terminal, replayErr)
 	}
 
-	ids, cleanupErr := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, operation.Request().Binding.Supervisor, []pueue.Job{job})
-	if cleanupErr != nil || len(ids) != 0 {
-		t.Fatalf("failed inspection with unproven lifetime was authorized for cleanup: ids=%v err=%v", ids, cleanupErr)
+	plan, cleanupErr := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, operation.Request().Binding.Supervisor, []pueue.Job{job})
+	if cleanupErr != nil || len(plan.RemoveIDs) != 0 || plan.Settling {
+		t.Fatalf("failed inspection with unproven lifetime was authorized for cleanup: plan=%+v err=%v", plan, cleanupErr)
 	}
 	if _, err := operation.ReadLifetimeTerminationContext(t.Context()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("guardian-loss fixture acquired false termination proof: %v", err)

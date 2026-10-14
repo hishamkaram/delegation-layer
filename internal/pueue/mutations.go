@@ -13,13 +13,21 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+// SubmissionAuthorization carries application-owned generation evidence into
+// the infrastructure operation that consumes it. A nil staged capability means
+// the application has no durable staged-launch evidence, so staged callers must
+// probe the command surface before consuming a create-once permit.
+type SubmissionAuthorization struct {
+	StagedLaunchCapability *StagedLaunchCapability
+}
+
 // SubmissionGate lets the application validate its own generation evidence
 // while the private supervisor's shared generation lease is still held.
-type SubmissionGate func(context.Context, task.SupervisorRef) error
+type SubmissionGate func(context.Context, task.SupervisorRef) (SubmissionAuthorization, error)
 
-func (c *Client) checkSubmissionGate(ctx context.Context, gate SubmissionGate) error {
+func (c *Client) checkSubmissionGate(ctx context.Context, gate SubmissionGate) (SubmissionAuthorization, error) {
 	if gate == nil {
-		return nil
+		return SubmissionAuthorization{}, nil
 	}
 	return gate(ctx, c.runtimeBinding)
 }
@@ -174,7 +182,7 @@ func (c *Client) submitLocked(ctx context.Context, permit *taskdir.SubmissionPer
 		unknown.Pending = pendingFrom(verifyErr)
 		return unknown, verifyErr
 	}
-	if gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
+	if _, gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
 		return unknown, gateErr
 	}
 	runnerArguments := []string{launch.RunnerExecutable}
@@ -183,7 +191,12 @@ func (c *Client) submitLocked(ctx context.Context, permit *taskdir.SubmissionPer
 	}
 	runnerArguments = append(runnerArguments, "--root", launch.RootPath, record.TaskID)
 	arguments := []string{"add", "--escape", "--label", record.Label, "--print-task-id", "--"}
-	result, err := c.command(ctx, permit.Consume, append(arguments, runnerArguments...)...)
+	var result CommandResult
+	err = c.withPrivateQueueIdentityLease(ctx, func(lockedContext context.Context) error {
+		var commandErr error
+		result, commandErr = c.command(lockedContext, permit.Consume, append(arguments, runnerArguments...)...)
+		return commandErr
+	})
 	if err != nil {
 		unknown.Pending = pendingFrom(err)
 		if !result.Started && !errors.Is(err, ErrInFlight) {

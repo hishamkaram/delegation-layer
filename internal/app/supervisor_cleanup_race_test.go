@@ -63,6 +63,81 @@ func TestPrivateMigrationRejectsDuplicateInspectionLabelsBeforeObservation(t *te
 	}
 }
 
+func TestFailedManagedInspectionWithoutCompletionAuthorizesCleanupAndMigration(t *testing.T) {
+	for _, migrate := range []bool{false, true} {
+		name := "cleanup"
+		if migrate {
+			name = "migration"
+		}
+		t.Run(name, func(t *testing.T) {
+			assertFailedManagedInspectionWithoutCompletionAuthorized(t, migrate)
+		})
+	}
+}
+
+func assertFailedManagedInspectionWithoutCompletionAuthorized(t *testing.T, migrate bool) {
+	t.Helper()
+	store, operation, job := newCleanupInspectionTestOperationWithOwnership(
+		t, inspection.ResultUnavailable, false, false, task.RunnerOwnershipManaged,
+	)
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+	operationDirectory := filepath.Join(store.Root, "inspections", operation.Request().TaskID)
+	for _, record := range []string{"completion.json", "result.json"} {
+		if err := os.Remove(filepath.Join(operationDirectory, record)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := operation.ReadCompletedContext(t.Context()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fixture retained local completion: %v", err)
+	}
+
+	binding := operation.Request().Binding.Supervisor
+	if migrate {
+		if err := authorizePrivateMigrationQueue(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
+			t.Fatalf("proven failed inspection blocked migration: %v", err)
+		}
+	} else {
+		plan, err := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, binding, []pueue.Job{job})
+		if err != nil || len(plan.RemoveIDs) != 1 || plan.RemoveIDs[0] != job.ID || plan.Settling {
+			t.Fatalf("proven failed inspection cleanup plan=%+v err=%v", plan, err)
+		}
+	}
+	result, succeeded, err := operation.ReadWorkerResultContext(t.Context())
+	if err != nil || succeeded || result != nil {
+		t.Fatalf("failed inspection result=%+v succeeded=%t err=%v", result, succeeded, err)
+	}
+}
+
+func TestManagedInspectionCleanupUsesGuardianEvidenceOverQueueResult(t *testing.T) {
+	for _, migrate := range []bool{false, true} {
+		name := "cleanup"
+		if migrate {
+			name = "migration"
+		}
+		t.Run(name, func(t *testing.T) {
+			store, operation, job := newCleanupInspectionTestOperationWithOwnership(
+				t, inspection.ResultEligible, false, false, task.RunnerOwnershipManaged,
+			)
+			completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+			binding := operation.Request().Binding.Supervisor
+			if migrate {
+				if err := authorizePrivateMigrationQueue(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
+					t.Fatalf("guardian queue failure blocked child-proven migration: %v", err)
+				}
+			} else {
+				plan, err := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, binding, []pueue.Job{job})
+				if err != nil || len(plan.RemoveIDs) != 1 || plan.RemoveIDs[0] != job.ID || plan.Settling {
+					t.Fatalf("guardian queue failure cleanup plan=%+v err=%v", plan, err)
+				}
+			}
+			result, succeeded, err := operation.ReadWorkerResultContext(t.Context())
+			if err != nil || !succeeded || result == nil || result.Reason != inspection.ResultEligible {
+				t.Fatalf("guardian result=%+v succeeded=%t err=%v", result, succeeded, err)
+			}
+		})
+	}
+}
+
 func assertCleanupInspectionExitSaved(t *testing.T, reason inspection.ResultReason, wantSucceeded bool, wantErr error) {
 	t.Helper()
 	store, operation, job := newCleanupInspectionTestOperation(t, reason, wantSucceeded)
@@ -73,9 +148,9 @@ func assertCleanupInspectionExitSaved(t *testing.T, reason inspection.ResultReas
 	if _, _, proofErr := operation.ReadWorkerResultContext(t.Context()); !errors.Is(proofErr, os.ErrNotExist) {
 		t.Fatalf("fixture already has independent worker observation: %v", proofErr)
 	}
-	ids, cleanupErr := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, request.Binding.Supervisor, []pueue.Job{job})
-	if cleanupErr != nil || len(ids) != 1 || ids[0] != job.ID {
-		t.Fatalf("cleanup did not authorize its completed inspection row: ids=%v want=[%d] err=%v", ids, job.ID, cleanupErr)
+	plan, cleanupErr := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, request.Binding.Supervisor, []pueue.Job{job})
+	if cleanupErr != nil || len(plan.RemoveIDs) != 1 || plan.RemoveIDs[0] != job.ID || plan.Settling {
+		t.Fatalf("cleanup did not authorize its completed inspection row: plan=%+v want=[%d] err=%v", plan, job.ID, cleanupErr)
 	}
 	result, succeeded, resultErr := operation.ReadWorkerResultContext(t.Context())
 	if resultErr != nil || result.Reason != reason || succeeded != wantSucceeded {
@@ -109,9 +184,9 @@ func assertUnsafeInspectionCleanupRejected(t *testing.T, running bool) {
 	} else if recordErr := operation.RecordWorkerExitContext(t.Context(), job.ID, false); recordErr != nil {
 		t.Fatalf("seed independently observed worker failure: %v", recordErr)
 	}
-	ids, cleanupErr := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, operation.Request().Binding.Supervisor, []pueue.Job{job})
-	if cleanupErr != nil || len(ids) != 0 {
-		t.Fatalf("unsafe inspection row was authorized for cleanup: ids=%v err=%v", ids, cleanupErr)
+	plan, cleanupErr := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, operation.Request().Binding.Supervisor, []pueue.Job{job})
+	if cleanupErr != nil || len(plan.RemoveIDs) != 0 || plan.Settling {
+		t.Fatalf("unsafe inspection row was authorized for cleanup: plan=%+v err=%v", plan, cleanupErr)
 	}
 	result, succeeded, resultErr := operation.ReadWorkerResultContext(t.Context())
 	if running {
@@ -242,7 +317,7 @@ func TestPrivateDefaultQueueInspectionCleanupAndMigrationNeedNoLegacyGroup(t *te
 	}
 }
 
-func TestTerminalInspectionTriggersPrivateBatchCleanup(t *testing.T) {
+func TestTerminalInspectionDecisionDoesNotOwnQueueCleanup(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		reason    inspection.ResultReason
@@ -253,15 +328,54 @@ func TestTerminalInspectionTriggersPrivateBatchCleanup(t *testing.T) {
 		{name: "unavailable failure", reason: inspection.ResultUnavailable, wantErr: errInspectionWorkerUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assertTerminalInspectionBatchCleanup(t, tc.reason, tc.succeeded, tc.wantErr)
+			assertTerminalInspectionDecisionOnly(t, tc.reason, tc.succeeded, tc.wantErr)
 		})
 	}
 }
 
-func assertTerminalInspectionBatchCleanup(t *testing.T, reason inspection.ResultReason, succeeded bool, wantErr error) {
+func TestGuardianTerminalInspectionDecisionDoesNotOwnQueueCleanup(t *testing.T) {
+	store := newBareInspectionStore(t)
+	supervisor, removals, _ := newTerminalInspectionCleanupSupervisor(t, store)
+	operation, job := newTerminalInspectionCleanupOperation(t, store, supervisor, inspection.ResultEligible, true)
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+	if err := operation.RecordWorkerSuccessContext(t.Context(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	state := inspectionAwaitState{identity: operation.Request().SupervisorIdentity()}
+
+	facts, ended, acceptErr := state.observe(t.Context(), operation, supervisor)
+	if !ended || acceptErr != nil || string(facts) != "{\"eligible\":true}\n" {
+		t.Fatalf("guardian-terminal inspection acceptance = facts=%s ended=%t err=%v", facts, ended, acceptErr)
+	}
+	if closeErr := supervisor.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if _, err := os.Lstat(removals); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("guardian-terminal admission mutated its supervisor row: %v", err)
+	}
+}
+
+func TestPrivateCleanupReportsGuardianTerminalRunningRowAsSettling(t *testing.T) {
+	store := newBareInspectionStore(t)
+	supervisor, _, _ := newTerminalInspectionCleanupSupervisor(t, store)
+	operation, job := newTerminalInspectionCleanupOperation(t, store, supervisor, inspection.ResultEligible, true)
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+	if err := operation.RecordWorkerSuccessContext(t.Context(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	job.State = pueue.StateRunning
+	job.Succeeded = false
+
+	plan, err := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, operation.Request().Binding.Supervisor, []pueue.Job{job})
+	if err != nil || len(plan.RemoveIDs) != 0 || !plan.Settling {
+		t.Fatalf("guardian-terminal running row cleanup plan=%+v err=%v", plan, err)
+	}
+}
+
+func assertTerminalInspectionDecisionOnly(t *testing.T, reason inspection.ResultReason, succeeded bool, wantErr error) {
 	t.Helper()
 	store := newBareInspectionStore(t)
-	supervisor, removals := newTerminalInspectionCleanupSupervisor(t, store)
+	supervisor, removals, statusQueries := newTerminalInspectionCleanupSupervisor(t, store)
 	operation, job := newTerminalInspectionCleanupOperation(t, store, supervisor, reason, succeeded)
 	if succeeded {
 		completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
@@ -281,8 +395,11 @@ func assertTerminalInspectionBatchCleanup(t *testing.T, reason inspection.Result
 	if closeErr := supervisor.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
-	if got := string(readCleanupTestFile(t, removals)); got != "7\n" {
-		t.Fatalf("terminal inspection did not reap its exact supervisor row: removals=%q", got)
+	if _, err := os.Lstat(removals); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal inspection admission mutated its supervisor row: %v", err)
+	}
+	if _, err := os.Lstat(statusQueries); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal inspection admission started a cleanup observation: %v", err)
 	}
 	result, gotSucceeded, resultErr := operation.ReadWorkerResultContext(t.Context())
 	if resultErr != nil || gotSucceeded != succeeded || result.Reason != reason {
@@ -290,7 +407,7 @@ func assertTerminalInspectionBatchCleanup(t *testing.T, reason inspection.Result
 	}
 }
 
-func newTerminalInspectionCleanupSupervisor(t *testing.T, store *taskdir.Store) (*pueue.Client, string) {
+func newTerminalInspectionCleanupSupervisor(t *testing.T, store *taskdir.Store) (*pueue.Client, string, string) {
 	t.Helper()
 	base := filepath.Join(store.Root, ".supervisor")
 	if err := os.MkdirAll(base, 0o700); err != nil {
@@ -299,6 +416,7 @@ func newTerminalInspectionCleanupSupervisor(t *testing.T, store *taskdir.Store) 
 	clientPath := filepath.Join(base, "cleanup-pueue")
 	statusPath := filepath.Join(base, "cleanup-status.json")
 	removals := filepath.Join(base, "cleanup-removals")
+	statusQueries := filepath.Join(base, "cleanup-status-queries")
 	script := `#!/bin/sh
 set -eu
 command=''
@@ -311,7 +429,7 @@ for arg in "$@"; do
 done
 case "$command" in
   --version) printf '%s\n' 'pueue 4.0.4' ;;
-  status) cat "$FAKE_STATUS" ;;
+  status) printf '%s\n' "${5-}" >> "$FAKE_STATUS_QUERIES"; cat "$FAKE_STATUS" ;;
   remove) printf '%s\n' "$last" >> "$FAKE_REMOVALS" ;;
   add) printf '%s\n' '9' ;;
   *) exit 64 ;;
@@ -346,7 +464,7 @@ esac
 		t.Fatal(err)
 	}
 	options := pueue.Options{
-		Environment:                 append(os.Environ(), "FAKE_STATUS="+statusPath, "FAKE_REMOVALS="+removals),
+		Environment:                 append(os.Environ(), "FAKE_STATUS="+statusPath, "FAKE_REMOVALS="+removals, "FAKE_STATUS_QUERIES="+statusQueries),
 		ObservationTimeout:          5 * time.Second,
 		SuccessfulCleanupAuthorizer: authorizePrivateSuccessfulCleanup,
 	}
@@ -359,7 +477,7 @@ esac
 			t.Error(closeErr)
 		}
 	})
-	return client, removals
+	return client, removals, statusQueries
 }
 
 func newTerminalInspectionCleanupOperation(t *testing.T, store *taskdir.Store, supervisor *pueue.Client, reason inspection.ResultReason, succeeded bool) (*inspection.Operation, pueue.Job) {
@@ -465,9 +583,9 @@ func assertDefaultQueueCleanupAndMigration(t *testing.T, migrate bool) {
 			t.Fatalf("default-only inspection blocked migration: %v", err)
 		}
 	} else {
-		ids, err := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, binding, []pueue.Job{job})
-		if err != nil || len(ids) != 1 || ids[0] != job.ID {
-			t.Fatalf("default inspection was not selected: ids=%v err=%v", ids, err)
+		plan, err := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, binding, []pueue.Job{job})
+		if err != nil || len(plan.RemoveIDs) != 1 || plan.RemoveIDs[0] != job.ID || plan.Settling {
+			t.Fatalf("default inspection was not selected: plan=%+v err=%v", plan, err)
 		}
 	}
 	assertCleanupInspectionTestProof(t, operation, true)

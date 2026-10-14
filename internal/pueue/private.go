@@ -30,6 +30,13 @@ const (
 	privateIdentityPublicationRecordName = "identity.pending.json"
 	privateSchedulingEvidenceRecordName  = "ordinary-scheduling.json"
 	privateTransitionLockName            = "transition.lock"
+	privateQueueMaintenanceLockName      = "queue-maintenance.lock"
+	privateQueueWriterIntentLockName     = "queue-writer-intent.lock"
+	privateQueueIdentityGateLockName     = "queue-identity-gate.lock"
+	privateQueueIdentityLockName         = "queue-identity.lock"
+	privateQueueWriterIdleState          = "0"
+	privateQueueWriterWaitingState       = "1"
+	privateRecordStagePrefix             = ".private-record-"
 )
 
 var (
@@ -479,6 +486,303 @@ func TryWithPrivateTransition(ctx context.Context, stateRoot string, callback fu
 	return acquired, err
 }
 
+// tryWithPrivateQueueMaintenance elects one terminal-row cleanup owner for a
+// private state root. Its dedicated lock keeps optional cleanup out of the
+// lifecycle-transition election used by required admission and recovery work.
+func tryWithPrivateQueueMaintenance(ctx context.Context, stateRoot string, callback func() error) (bool, error) {
+	if ctx == nil {
+		return false, context.Canceled
+	}
+	if callback == nil {
+		return false, ErrConfiguration
+	}
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	if err := ensurePrivateLockFile(base, privateQueueMaintenanceLockName); err != nil {
+		return false, err
+	}
+	acquired := false
+	err := withPublishedPrivateLock(ctx, stateRoot, privateQueueMaintenanceLockName, unix.LOCK_EX|unix.LOCK_NB, func() error {
+		acquired = true
+		return callback()
+	})
+	return acquired, err
+}
+
+func withPrivateQueueMaintenance(ctx context.Context, stateRoot string, callback func() error) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if callback == nil {
+		return ErrConfiguration
+	}
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	if err := ensurePrivateLockFile(base, privateQueueMaintenanceLockName); err != nil {
+		return err
+	}
+	return withPublishedPrivateLock(ctx, stateRoot, privateQueueMaintenanceLockName, unix.LOCK_EX, callback)
+}
+
+// runElectedPrivateQueueMaintenance handles the release handoff for scheduled
+// work. A request published while an owner is finishing either gets observed
+// after that owner releases the election or elects its own owner. Durable
+// generations describe pending work; only the election lock describes a live
+// owner.
+func runElectedPrivateQueueMaintenance(ctx context.Context, stateRoot string, maintain func() error) (bool, error) {
+	owned := false
+	var resultErr error
+	for {
+		target, acquired, selected, err := runPrivateQueueMaintenanceElectionPass(ctx, stateRoot, maintain)
+		if !acquired {
+			// Another owner already holds the election. The wake was persisted
+			// before this attempt, and that owner rechecks the journal after
+			// releasing its lease. Callback processes therefore never queue
+			// behind one another merely to observe an already-consumed wake.
+			return owned, errors.Join(resultErr, err)
+		}
+		owned = owned || selected
+		resultErr = errors.Join(resultErr, err)
+		if err != nil && !selected {
+			return owned, resultErr
+		}
+		wake, wakeErr := readPrivateQueueMaintenanceWake(ctx, stateRoot)
+		if wakeErr != nil {
+			return owned, errors.Join(resultErr, wakeErr)
+		}
+		if wake.Requested <= wake.Attempted {
+			return owned, resultErr
+		}
+		if err != nil && wake.Attempted < target {
+			// The failed owner did not settle the generation it selected. Keep
+			// that wake durable for another callback or lifecycle invocation,
+			// but do not spin this process on the same operational failure.
+			return owned, resultErr
+		}
+	}
+}
+
+func runPrivateQueueMaintenanceElectionPass(ctx context.Context, stateRoot string, maintain func() error) (target uint64, acquired, selected bool, resultErr error) {
+	acquired, resultErr = tryWithPrivateQueueMaintenance(ctx, stateRoot, func() error {
+		wake, err := readPrivateQueueMaintenanceWake(ctx, stateRoot)
+		if err != nil {
+			return err
+		}
+		if err = settlePrivateQueueMaintenanceWake(ctx, stateRoot); err != nil {
+			return err
+		}
+		wake, err = readPrivateQueueMaintenanceWake(ctx, stateRoot)
+		if err != nil {
+			return err
+		}
+		target = wake.Requested
+		needed, retryErr := PrivateQueueMaintenanceRetryNeededContext(ctx, stateRoot)
+		if retryErr != nil || !needed {
+			return retryErr
+		}
+		selected = true
+		return maintain()
+	})
+	return target, acquired, selected, resultErr
+}
+
+// preparePrivateQueueIdentityLocks returns the private root and provisions the
+// writer-intent owner, short reader gate, and identity lock on a mutation path.
+// Callers already hold the generation lease, so a lifecycle transition cannot
+// replace the queue underneath them.
+func (c *Client) preparePrivateQueueIdentityLocks() (string, bool, error) {
+	if c == nil {
+		return "", false, ErrConfiguration
+	}
+	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
+	if !private {
+		return "", false, nil
+	}
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	for _, name := range []string{privateQueueWriterIntentLockName, privateQueueIdentityGateLockName, privateQueueIdentityLockName} {
+		if err := ensurePrivateLockFile(base, name); err != nil {
+			return "", false, err
+		}
+	}
+	return stateRoot, true, nil
+}
+
+// withPrivateQueueIdentityLease lets concurrent submissions allocate IDs and
+// publish callback tickets. The short shared gate closes before the caller's
+// work starts: an elected cleanup takes that gate exclusively, blocks new
+// submissions, and lets existing identity leases drain without starvation.
+func (c *Client) withPrivateQueueIdentityLease(ctx context.Context, callback func(context.Context) error) (resultErr error) {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if c == nil || callback == nil {
+		return ErrConfiguration
+	}
+	stateRoot, private, err := c.preparePrivateQueueIdentityLocks()
+	if err != nil {
+		return err
+	}
+	if !private {
+		return callback(ctx)
+	}
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	for {
+		if err = waitForPrivateQueueWriter(ctx, base); err != nil {
+			return err
+		}
+		var identity *bootstrapLock
+		retry := false
+		err = withPublishedPrivateLockContext(ctx, stateRoot, privateQueueIdentityGateLockName, unix.LOCK_SH, func(gateContext context.Context) error {
+			active, intentErr := privateQueueWriterIntentActive(gateContext, base)
+			if intentErr != nil {
+				return intentErr
+			}
+			if active {
+				retry = true
+				return nil
+			}
+			var acquireErr error
+			identity, acquireErr = acquireExistingSupervisorLock(gateContext, filepath.Join(base, privateQueueIdentityLockName), unix.LOCK_SH)
+			return acquireErr
+		})
+		if err != nil {
+			return err
+		}
+		if retry {
+			continue
+		}
+		defer finishPrivateBootstrap(&identity, &resultErr)
+		return callback(withControlLockLease(ctx, identity))
+	}
+}
+
+func (c *Client) withPrivateQueueIdentityMutation(ctx context.Context, callback func(context.Context) error) (resultErr error) {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if c == nil || callback == nil {
+		return ErrConfiguration
+	}
+	stateRoot, private, err := c.preparePrivateQueueIdentityLocks()
+	if err != nil {
+		return err
+	}
+	if !private {
+		return callback(ctx)
+	}
+	base := filepath.Join(stateRoot, privateSupervisorDirectory)
+	intent, err := acquireExistingSupervisorLock(ctx, filepath.Join(base, privateQueueWriterIntentLockName), unix.LOCK_EX)
+	if err != nil {
+		return err
+	}
+	if err = writePrivateQueueWriterIntent(intent, true); err != nil {
+		return errors.Join(err, closeBootstrapLock(intent))
+	}
+	defer finishPrivateQueueWriterIntent(&intent, &resultErr)
+	intentContext := withControlLockLease(ctx, intent)
+	resultErr = withPublishedPrivateLockContext(intentContext, stateRoot, privateQueueIdentityGateLockName, unix.LOCK_EX, func(gateContext context.Context) error {
+		return withPublishedPrivateLockContext(gateContext, stateRoot, privateQueueIdentityLockName, unix.LOCK_EX, callback)
+	})
+	return resultErr
+}
+
+// waitForPrivateQueueWriter blocks new shared identity leases after a writer
+// has published intent. Readers that crossed before publication are finite and
+// drain through the gate; later readers cannot continuously overtake the
+// waiting writer.
+func waitForPrivateQueueWriter(ctx context.Context, base string) error {
+	for {
+		active, err := privateQueueWriterIntentActive(ctx, base)
+		if err != nil || !active {
+			return err
+		}
+		timer := time.NewTimer(privateQueueSettlementPoll)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// privateQueueWriterIntentActive reads the durable intent bit. If a previous
+// writer exited before clearing it, the absence of its exclusive lock proves
+// the bit stale and authorizes repair under that same lock.
+func privateQueueWriterIntentActive(ctx context.Context, base string) (active bool, resultErr error) {
+	path := filepath.Join(base, privateQueueWriterIntentLockName)
+	data, err := readRegular(path, 2)
+	if err != nil {
+		return false, err
+	}
+	switch string(data) {
+	case "", privateQueueWriterIdleState:
+		return false, nil
+	case privateQueueWriterWaitingState:
+	default:
+		return false, fmt.Errorf("%w: invalid private queue writer intent", ErrConfiguration)
+	}
+	intent, err := acquireExistingSupervisorLock(ctx, path, unix.LOCK_EX|unix.LOCK_NB)
+	if errors.Is(err, errSupervisorLockBusy) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer finishPrivateBootstrap(&intent, &resultErr)
+	resultErr = writePrivateQueueWriterIntent(intent, false)
+	return false, resultErr
+}
+
+func writePrivateQueueWriterIntent(lock *bootstrapLock, active bool) error {
+	if lock == nil {
+		return ErrConfiguration
+	}
+	state := privateQueueWriterIdleState
+	if active {
+		state = privateQueueWriterWaitingState
+	}
+	lock.mu.Lock()
+	defer lock.mu.Unlock()
+	if lock.closed || lock.file == nil {
+		return os.ErrClosed
+	}
+	if _, err := lock.file.WriteAt([]byte(state), 0); err != nil {
+		return fmt.Errorf("%w: write private queue writer intent: %w", ErrConfiguration, err)
+	}
+	if err := lock.file.Truncate(int64(len(state))); err != nil {
+		return fmt.Errorf("%w: truncate private queue writer intent: %w", ErrConfiguration, err)
+	}
+	if err := lock.file.Sync(); err != nil {
+		return fmt.Errorf("%w: sync private queue writer intent: %w", ErrConfiguration, err)
+	}
+	return nil
+}
+
+func finishPrivateQueueWriterIntent(lock **bootstrapLock, resultErr *error) {
+	if lock == nil || *lock == nil || resultErr == nil {
+		return
+	}
+	pending := pendingHandles(*resultErr)
+	if len(pending) == 0 {
+		*resultErr = errors.Join(*resultErr, writePrivateQueueWriterIntent(*lock, false), closeBootstrapLock(*lock))
+		*lock = nil
+		return
+	}
+	retained := *lock
+	*lock = nil
+	go func() {
+		for _, handle := range pending {
+			if handle != nil {
+				<-handle.Done()
+			}
+		}
+		if err := errors.Join(writePrivateQueueWriterIntent(retained, false), closeBootstrapLock(retained)); err != nil {
+			log.Printf("delegate: retained queue writer intent cleanup failed: %v", err)
+		}
+	}()
+}
+
 // WaitForPrivateTransition waits for the currently elected state-root
 // transition, if any, to release its election lock. It never changes the
 // supervisor itself; callers re-probe their required live state afterward.
@@ -572,7 +876,7 @@ func withPrivateLockContext(ctx context.Context, stateRoot, name string, mode in
 		return err
 	}
 	defer finishPrivateBootstrap(&lock, &resultErr)
-	return callback(withGenerationControlLease(ctx, lock))
+	return callback(withControlLockLease(ctx, lock))
 }
 
 func privateBootstrapLockPresent(stateRoot string) (bool, error) {
@@ -707,10 +1011,11 @@ const (
 	privateBootstrapObservationPhases      = 7
 	privateReconciliationObservationPhases = 2
 	// Queue maintenance can wait for the current generation lease, observe the
-	// complete queue, and remove the exact authorized rows. Give each phase one
-	// observation window while keeping the window independent from a longer
-	// admission timeout.
+	// complete queue, let terminal rows settle, and remove the exact authorized
+	// rows. Give each phase one observation window while keeping the window
+	// independent from a longer admission timeout.
 	privateQueueMaintenanceObservationPhases = 3
+	privateQueueSettlementPoll               = 25 * time.Millisecond
 	// Migration performs one current-pair preparation, legacy binding and
 	// queue inspection, shutdown acknowledgement and endpoint drain, then
 	// successor startup and readiness reconciliation. Keep this explicit so
@@ -1391,8 +1696,8 @@ func bindSavedEndpointMigration(ctx context.Context, saved task.SupervisorRef, c
 	if err != nil {
 		return nil, err
 	}
-	if err = pathWithin(resolved.RuntimeDirectory, socketPath); err != nil {
-		return nil, fmt.Errorf("%w: legacy private supervisor endpoint is outside its runtime directory", ErrBinding)
+	if err = pathWithin(base, socketPath); err != nil {
+		return nil, fmt.Errorf("%w: legacy private supervisor endpoint is outside its private directory", ErrBinding)
 	}
 	migrationData, err := configWithSocketPath(data, socketPath)
 	if err != nil {
@@ -1450,8 +1755,8 @@ func validateResolvedPrivateMigrationConfig(resolved ResolvedConfig, base, endpo
 		if resolved.SocketPath != socketPath {
 			return fmt.Errorf("%w: legacy private supervisor socket path changed", ErrBinding)
 		}
-	} else if err := pathWithin(resolved.RuntimeDirectory, resolved.SocketPath); err != nil {
-		return fmt.Errorf("%w: legacy private supervisor endpoint is outside its runtime directory", ErrBinding)
+	} else if err := pathWithin(base, resolved.SocketPath); err != nil {
+		return fmt.Errorf("%w: legacy private supervisor endpoint is outside its private directory", ErrBinding)
 	}
 	if resolved.Host != "127.0.0.1" || resolved.Port != "6924" || resolved.SocketPermissions == nil || *resolved.SocketPermissions != 448 {
 		return fmt.Errorf("%w: legacy private supervisor transport settings changed", ErrBinding)
@@ -2773,7 +3078,7 @@ func (c *Client) cleanupStatusOverflow(ctx context.Context, err error, allowed, 
 	if !allowed || cleaned || !errors.Is(err, errStatusControlLimit) || !isPrivateClient(c) {
 		return false, nil
 	}
-	if cleanErr := c.cleanSuccessfulTasks(ctx); cleanErr != nil {
+	if cleanErr := c.cleanSuccessfulTasks(ctx, false); cleanErr != nil {
 		return false, cleanErr
 	}
 	return true, nil
@@ -3037,6 +3342,14 @@ func ReplacePrivateSchedulingEvidence(stateRoot string, data []byte) error {
 
 func loadPrivateSupervisorBinding(stateRoot string) (binding task.SupervisorRef, found bool, resultErr error) {
 	return loadPrivateSupervisorBindingRaw(stateRoot)
+}
+
+// ReadPrivateSupervisorBinding returns the validated active generation for a
+// Delegate-owned private root. It never repairs, migrates, or starts a daemon;
+// callers must still use Client operations, which revalidate the generation
+// under the appropriate supervisor lease before issuing controls.
+func ReadPrivateSupervisorBinding(stateRoot string) (task.SupervisorRef, bool, error) {
+	return loadPrivateSupervisorBinding(stateRoot)
 }
 
 // publishPrivateSupervisorBindingIfAbsent records a verified predecessor
@@ -3673,11 +3986,11 @@ func replacePrivateSupervisorBindingRecord(stateRoot string, data []byte) error 
 // publisher below remains strict for all other private records.
 func replacePrivateDaemonIdentityRecord(base string, data []byte) error {
 	destination := privateDaemonIdentityPath(base)
-	return replacePrivateRecordAtomic(base, destination, ".private-record-", "private daemon identity", data, false)
+	return replacePrivateRecordAtomic(base, destination, privateRecordStagePrefix, "private daemon identity", data, false)
 }
 
 func publishPrivateRecord(base, destination string, data []byte) (resultErr error) {
-	file, stagePath, err := createPrivateStage(base, ".private-record-")
+	file, stagePath, err := createPrivateStage(base, privateRecordStagePrefix)
 	if err != nil {
 		return err
 	}
@@ -3831,38 +4144,176 @@ func privateReadyEndpointFailure(ctx context.Context, client *Client, result Com
 
 // cleanSuccessfulTasks removes only exact terminal rows authorized by the
 // application. It never issues broad clean, including after status overflow.
-func (c *Client) cleanSuccessfulTasks(ctx context.Context) error {
-	snapshot, ids, err := c.authorizePrivateSuccessfulTasks(ctx)
+func (c *Client) cleanSuccessfulTasks(ctx context.Context, eventOnly bool) error {
+	for {
+		settling, err := c.cleanSuccessfulTasksPass(ctx, eventOnly)
+		if err != nil {
+			return err
+		}
+		if !settling {
+			return nil
+		}
+		// A settling hint grants no removal authority. Release queue identity
+		// while the daemon advances its row, then reacquire it for a fresh
+		// snapshot and application decision. This keeps admission available
+		// without weakening the snapshot-to-removal identity invariant.
+		if err = waitPrivateQueueSettlement(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+func (c *Client) cleanSuccessfulTasksPass(ctx context.Context, eventOnly bool) (bool, error) {
+	snapshot, plan, err := c.authorizePrivateSuccessfulTasks(ctx, eventOnly)
 	if err != nil {
+		return false, err
+	}
+	if len(plan.RemoveIDs) != 0 {
+		err = c.withPrivateQueueIdentityMutation(ctx, func(lockedContext context.Context) error {
+			current, snapshotErr := c.privateCleanupSnapshot(lockedContext)
+			if snapshotErr != nil {
+				return snapshotErr
+			}
+			if validateAuthorizedTerminalRows(snapshot, current, plan.RemoveIDs) != nil {
+				return ErrCleanupAuthorization
+			}
+			return c.removeAuthorizedTerminalRows(lockedContext, current, plan.RemoveIDs)
+		})
+		if err != nil {
+			return false, err
+		}
+	}
+	if err = c.clearStalePrivateTerminalEvents(ctx); err != nil {
+		return false, err
+	}
+	return plan.Settling, nil
+}
+
+// clearStalePrivateTerminalEvents repairs a callback candidate left behind
+// after its queue row was removed. The fresh full snapshot and the event
+// retirement must share the queue-identity mutation lease so a new submission
+// cannot reuse an ID between those operations.
+func (c *Client) clearStalePrivateTerminalEvents(ctx context.Context) error {
+	if c == nil {
+		return ErrConfiguration
+	}
+	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
+	if !private {
+		return nil
+	}
+	enabled, err := c.PrivateTerminalEventsEnabled(ctx)
+	if err != nil || !enabled {
 		return err
 	}
-	return c.removeAuthorizedTerminalRows(ctx, snapshot, ids)
+	pending, err := privateTerminalEventWakePending(ctx, stateRoot)
+	if err != nil || !pending {
+		return err
+	}
+	return c.withPrivateQueueIdentityMutation(ctx, func(lockedContext context.Context) error {
+		snapshot, snapshotErr := c.privateCleanupSnapshot(lockedContext)
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		return c.clearPrivateTerminalEventsForAbsentRows(lockedContext, snapshot)
+	})
+}
+
+func validateAuthorizedTerminalRows(authorized, current QueueSnapshot, ids []int64) error {
+	authorizedLabels := queueJobLabelCounts(authorized.Jobs)
+	currentLabels := queueJobLabelCounts(current.Jobs)
+	for _, id := range ids {
+		before, beforeCount := uniqueQueueJob(authorized.Jobs, id)
+		after, afterCount := uniqueQueueJob(current.Jobs, id)
+		if beforeCount != 1 || afterCount != 1 || !sameTerminalQueueJob(before, after) {
+			return ErrCleanupAuthorization
+		}
+		if before.Label == nil || authorizedLabels[*before.Label] != 1 || currentLabels[*before.Label] != 1 {
+			return ErrCleanupAuthorization
+		}
+	}
+	return nil
+}
+
+func queueJobLabelCounts(jobs []Job) map[string]int {
+	counts := make(map[string]int, len(jobs))
+	for _, job := range jobs {
+		if job.Label != nil {
+			counts[*job.Label]++
+		}
+	}
+	return counts
+}
+
+func uniqueQueueJob(jobs []Job, id int64) (Job, int) {
+	var matched Job
+	count := 0
+	for _, job := range jobs {
+		if job.ID == id {
+			matched = job
+			count++
+		}
+	}
+	return matched, count
+}
+
+func sameTerminalQueueJob(left, right Job) bool {
+	if left.ID != right.ID || left.State != StateEnded || right.State != StateEnded ||
+		left.Group != right.Group || left.Succeeded != right.Succeeded {
+		return false
+	}
+	if left.Label == nil || right.Label == nil {
+		return left.Label == nil && right.Label == nil
+	}
+	return *left.Label == *right.Label
 }
 
 // authorizePrivateSuccessfulTasks takes one queue snapshot and asks the
 // application-owned policy to validate its terminal rows. The callback is the
 // sole owner of Delegate record interpretation; it records independently
 // observed worker exits before any caller is allowed to remove a row.
-func (c *Client) authorizePrivateSuccessfulTasks(ctx context.Context) (QueueSnapshot, []int64, error) {
+func (c *Client) authorizePrivateSuccessfulTasks(ctx context.Context, eventOnly bool) (QueueSnapshot, PrivateQueueCleanupPlan, error) {
 	if c == nil {
-		return QueueSnapshot{}, nil, ErrConfiguration
+		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, ErrConfiguration
 	}
 	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
 	if !private {
-		return QueueSnapshot{}, nil, ErrConfiguration
+		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, ErrConfiguration
 	}
 	if c.options.SuccessfulCleanupAuthorizer == nil {
-		return QueueSnapshot{}, nil, ErrCleanupAuthorization
+		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, ErrCleanupAuthorization
 	}
-	snapshot, err := c.Snapshot(ctx)
+	snapshot, err := c.privateCleanupSnapshot(ctx)
 	if err != nil {
-		return QueueSnapshot{}, nil, err
+		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, err
 	}
-	ids, err := c.options.SuccessfulCleanupAuthorizer(ctx, stateRoot, c.binding, cloneQueueSnapshot(snapshot).Jobs)
+	candidates := cloneQueueSnapshot(snapshot).Jobs
+	candidates, err = c.privateTerminalEventJobs(ctx, stateRoot, candidates, eventOnly)
 	if err != nil {
-		return QueueSnapshot{}, nil, err
+		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, err
 	}
-	return snapshot, ids, nil
+	plan, err := c.options.SuccessfulCleanupAuthorizer(ctx, stateRoot, c.binding, candidates)
+	if err != nil {
+		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, err
+	}
+	return snapshot, plan, nil
+}
+
+func (c *Client) privateCleanupSnapshot(ctx context.Context) (QueueSnapshot, error) {
+	if err := c.verify(ctx); err != nil {
+		return QueueSnapshot{}, err
+	}
+	return c.snapshotAfterVerifySettled(ctx)
+}
+
+func waitPrivateQueueSettlement(ctx context.Context) error {
+	timer := time.NewTimer(privateQueueSettlementPoll)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *Client) removeAuthorizedTerminalRows(ctx context.Context, snapshot QueueSnapshot, ids []int64) error {
@@ -3888,10 +4339,9 @@ func (c *Client) removeAuthorizedTerminalRows(ctx context.Context, snapshot Queu
 		seen[id] = struct{}{}
 		args = append(args, strconv.FormatInt(id, 10))
 	}
-	// Pueue accepts multiple explicit IDs in one remove command. The caller
-	// holds the exclusive private supervisor lock across this snapshot and
-	// mutation, so numeric IDs cannot be reused between authorization and the
-	// batch removal.
+	// Pueue accepts multiple explicit IDs in one remove command. Every ID still
+	// names the authorized row here because it remains present from the snapshot
+	// through this command; a concurrent add therefore cannot reuse it.
 	result, err := c.command(ctx, nil, args...)
 	if pending := pendingFrom(err); pending != nil {
 		settled, waitErr := awaitPending(ctx, pending)
@@ -3900,6 +4350,11 @@ func (c *Client) removeAuthorizedTerminalRows(ctx context.Context, snapshot Queu
 	if err = errors.Join(err, result.Err); err != nil {
 		return err
 	}
+	// An inspection row can reach this point only after its callback published
+	// an event. Retire callback state after successful removal; failed removals
+	// keep it so the next maintenance generation can retry the exact row. A new
+	// submission also replaces classification before enqueue, covering a crash
+	// between successful removal and this bounded cleanup.
 	return c.ClearPrivateTerminalEvents(ctx, ids...)
 }
 
@@ -3909,7 +4364,7 @@ func (c *Client) removeAuthorizedTerminalRows(ctx context.Context, snapshot Queu
 // waits behind an active lifecycle transition and it never changes admission
 // or inspection authority when maintenance cannot run.
 func (c *Client) MaintainPrivateQueue(ctx context.Context) bool {
-	if c == nil || !isPrivateClient(c) || c.options.SuccessfulCleanupAuthorizer == nil {
+	if ctx == nil || c == nil || !isPrivateClient(c) || c.options.SuccessfulCleanupAuthorizer == nil {
 		return false
 	}
 	finish, _, available := c.beginPrivateMaintenance()
@@ -3920,6 +4375,32 @@ func (c *Client) MaintainPrivateQueue(ctx context.Context) bool {
 	return true
 }
 
+type privateQueueMaintenanceRun struct {
+	worker      *Client
+	stateRoot   string
+	private     bool
+	scheduled   bool
+	lockMode    int
+	passTimeout time.Duration
+}
+
+func newPrivateQueueMaintenanceRun(client *Client, scheduled bool) privateQueueMaintenanceRun {
+	lockMode := unix.LOCK_SH | unix.LOCK_NB
+	if scheduled {
+		lockMode = unix.LOCK_SH
+	}
+	worker := client.backgroundClient()
+	stateRoot, private := privateStateRoot(worker.binding.ConfigPath)
+	return privateQueueMaintenanceRun{
+		worker:      worker,
+		stateRoot:   stateRoot,
+		private:     private,
+		scheduled:   scheduled,
+		lockMode:    lockMode,
+		passTimeout: privateQueueMaintenanceTimeout(client.options.ObservationTimeout),
+	}
+}
+
 func (c *Client) runPrivateQueueMaintenance(ctx context.Context, finish func(), waitForLease bool) {
 	finishOnReturn := true
 	defer func() {
@@ -3927,52 +4408,136 @@ func (c *Client) runPrivateQueueMaintenance(ctx context.Context, finish func(), 
 			finish()
 		}
 	}()
-	maintenanceContext, cancel := context.WithTimeout(ctx, privateQueueMaintenanceTimeout(c.options.ObservationTimeout))
-	defer cancel()
-	// Maintenance owns a separate bounded lock scope. Its error must reach the
-	// lock owner before it is suppressed, preserving any unfinished command's
-	// lock until its sole Wait owner records completion.
-	lockMode := unix.LOCK_EX | unix.LOCK_NB
+	ownerContext := ctx
 	if waitForLease {
-		// Scheduled cleanup already runs outside the admission caller. Waiting
-		// here lets a terminal observation release its shared generation lease
-		// before cleanup takes the exclusive snapshot/removal lease. A
-		// synchronous opportunistic probe still skips a busy generation.
-		lockMode = unix.LOCK_EX
+		// A scheduled owner has already left the admission critical path. Its
+		// journal generation and election define lifetime; caller cancellation
+		// cannot revoke work that was durably requested.
+		ownerContext = context.WithoutCancel(ctx)
 	}
-	// beginPrivateMaintenance already admitted one outer work token. Use a
-	// non-owning view for its nested controls so Close can reject new callers
-	// while allowing this exact admitted operation to finish.
-	worker := c.backgroundClient()
-	maintain := func() error {
-		return worker.withPrivateSupervisorLock(maintenanceContext, func(lockedContext context.Context) error {
-			return worker.cleanSuccessfulTasks(lockedContext)
-		}, func(lockContext context.Context, root string, callback func(context.Context) error) error {
-			return withPublishedPrivateLockContext(lockContext, root, "bootstrap.lock", lockMode, callback)
-		})
-	}
-	var err error
-	if waitForLease {
-		stateRoot, private := privateStateRoot(worker.binding.ConfigPath)
-		if private {
-			// workOwner coalesces callers for one Client. Independent dispatch
-			// processes still need one state-root owner before any of them waits
-			// for the exclusive cleanup snapshot.
-			var acquired bool
-			acquired, err = TryWithPrivateTransition(maintenanceContext, stateRoot, maintain)
-			if err == nil && !acquired {
+	run := newPrivateQueueMaintenanceRun(c, waitForLease)
+	for {
+		skipped, err := run.attempt(ownerContext)
+		if skipped {
+			return
+		}
+		if waitForLease {
+			resume, waitErr := waitPrivateQueueMaintenancePending(ownerContext, run.stateRoot, run.private, err)
+			if waitErr != nil {
+				log.Printf("delegate: terminal supervisor cleanup deferred: %v", errors.Join(err, waitErr))
 				return
 			}
-		} else {
-			err = maintain()
+			if resume {
+				// Pending completion is visible before a retained election lock is
+				// necessarily released. Re-enter only after observing that release,
+				// otherwise this owner can mistake itself for a contender and leave
+				// its durable wake unattempted.
+				continue
+			}
 		}
-	} else {
-		err = maintain()
+		if err != nil {
+			finishOnReturn = !retainPrivateQueueWorkUntilPending(err, finish)
+			log.Printf("delegate: terminal supervisor cleanup deferred: %v", err)
+		}
+		return
 	}
+}
+
+func (run privateQueueMaintenanceRun) attempt(ctx context.Context) (bool, error) {
+	if run.scheduled {
+		if run.private {
+			owned, err := runElectedPrivateQueueMaintenance(ctx, run.stateRoot, func() error { return run.maintain(ctx) })
+			return err == nil && !owned, err
+		}
+		return false, run.maintain(ctx)
+	}
+	if !run.private {
+		return false, run.maintain(ctx)
+	}
+	acquired, err := tryWithPrivateQueueMaintenance(ctx, run.stateRoot, func() error { return run.maintain(ctx) })
+	return err == nil && !acquired, err
+}
+
+func (run privateQueueMaintenanceRun) maintain(ctx context.Context) error {
+	maintenanceContext, cancel := run.maintenanceContext(ctx)
+	defer cancel()
+	return run.worker.withPrivateSupervisorLock(maintenanceContext, run.maintainLocked, run.acquireGenerationLock)
+}
+
+func (run privateQueueMaintenanceRun) maintenanceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if run.scheduled {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, run.passTimeout)
+}
+
+func (run privateQueueMaintenanceRun) acquireGenerationLock(ctx context.Context, root string, callback func(context.Context) error) error {
+	return withPublishedPrivateLockContext(ctx, root, "bootstrap.lock", run.lockMode, callback)
+}
+
+func (run privateQueueMaintenanceRun) maintainLocked(ctx context.Context) error {
+	complete, err := PrivateSupervisorMigrationComplete(run.stateRoot, run.worker.binding)
 	if err != nil {
-		finishOnReturn = !retainPrivateQueueWorkUntilPending(err, finish)
-		log.Printf("delegate: terminal supervisor cleanup deferred: %v", err)
+		return err
 	}
+	if !complete {
+		return ErrPrivateSupervisorMigrationRequired
+	}
+	for {
+		pending, err := run.maintainGeneration(ctx)
+		if err != nil || !pending {
+			return err
+		}
+		// Requests published after this pass's target need a fresh queue
+		// observation. Give the completion wave one more bounded quiet window so
+		// the next pass captures the latest generation instead of scanning once
+		// per callback in a burst.
+		if err = settlePrivateQueueMaintenanceWake(ctx, run.stateRoot); err != nil {
+			return err
+		}
+	}
+}
+
+func (run privateQueueMaintenanceRun) maintainGeneration(ctx context.Context) (bool, error) {
+	target, full, needed, err := beginPrivateQueueMaintenancePass(ctx, run.stateRoot, !run.scheduled)
+	if err != nil || !needed {
+		return false, err
+	}
+	cleanErr := run.worker.cleanSuccessfulTasks(ctx, !full)
+	if len(pendingHandles(cleanErr)) != 0 {
+		// An observer deadline does not settle the pass: the command still owns
+		// its result and may still mutate the queue. Keep this generation
+		// unattempted so the scheduled owner resumes it after natural completion.
+		return false, cleanErr
+	}
+	pending, stateErr := finishPrivateQueueMaintenancePass(ctx, run.stateRoot, target, full, cleanErr == nil)
+	if stateErr != nil {
+		return false, errors.Join(cleanErr, stateErr)
+	}
+	if cleanErr != nil {
+		return false, cleanErr
+	}
+	return pending, nil
+}
+
+func waitPrivateQueueMaintenancePending(ctx context.Context, stateRoot string, private bool, err error) (bool, error) {
+	pending := pendingHandles(err)
+	if len(pending) == 0 {
+		return false, nil
+	}
+	for _, handle := range pending {
+		select {
+		case <-handle.Done():
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	if private {
+		if waitErr := WaitForPrivateQueueMaintenanceIdle(ctx, stateRoot); waitErr != nil {
+			return false, waitErr
+		}
+	}
+	return true, nil
 }
 
 func retainPrivateQueueWorkUntilPending(err error, finish func()) bool {
@@ -4006,12 +4571,56 @@ func (c *Client) SchedulePrivateQueueMaintenance(ctx context.Context) bool {
 	if ctx == nil || c == nil || !isPrivateClient(c) || c.options.SuccessfulCleanupAuthorizer == nil {
 		return false
 	}
-	finish, _, available := c.beginPrivateMaintenance()
-	if finish == nil {
-		return available
+	stateRoot, _ := privateStateRoot(c.binding.ConfigPath)
+	if _, err := requestPrivateQueueMaintenance(ctx, stateRoot); err != nil {
+		log.Printf("delegate: terminal supervisor cleanup request deferred: %v", err)
+		return false
+	}
+	return c.ScheduleRequestedPrivateQueueMaintenance(ctx)
+}
+
+// ScheduleRequestedPrivateQueueMaintenance starts a best-effort owner for a
+// request already persisted by the terminal callback. It never consumes or
+// duplicates that request when binding the active supervisor fails.
+func (c *Client) ScheduleRequestedPrivateQueueMaintenance(ctx context.Context) bool {
+	if ctx == nil || c == nil || !isPrivateClient(c) || c.options.SuccessfulCleanupAuthorizer == nil {
+		return false
+	}
+	if c.options.PrivateMaintenanceLauncher != nil {
+		stateRoot, _ := privateStateRoot(c.binding.ConfigPath)
+		// The wake is already durable. Launch has its own bounded lifetime so an
+		// inspection poll deadline cannot revoke the maintenance handoff after
+		// publication succeeded.
+		launchContext, cancelLaunch := context.WithTimeout(context.WithoutCancel(ctx), DefaultObservationTimeout)
+		err := c.options.PrivateMaintenanceLauncher(launchContext, c.options.ControlOwnerExecutable, stateRoot)
+		cancelLaunch()
+		if err != nil {
+			log.Printf("delegate: terminal supervisor cleanup owner deferred: %v", err)
+			return false
+		}
+		return true
+	}
+	finish, err := c.beginCommandWork()
+	if err != nil {
+		return false
 	}
 	maintenanceContext := context.WithoutCancel(ctx)
 	go c.runPrivateQueueMaintenance(maintenanceContext, finish, true)
+	return true
+}
+
+// RunRequestedPrivateQueueMaintenance owns already-persisted maintenance in
+// the current process. delegate-run uses it after becoming the independent
+// process owner; focused package tests use it through the scheduler above.
+func (c *Client) RunRequestedPrivateQueueMaintenance(ctx context.Context) bool {
+	if ctx == nil || c == nil || !isPrivateClient(c) || c.options.SuccessfulCleanupAuthorizer == nil {
+		return false
+	}
+	finish, err := c.beginCommandWork()
+	if err != nil {
+		return false
+	}
+	c.runPrivateQueueMaintenance(context.WithoutCancel(ctx), finish, true)
 	return true
 }
 
@@ -4100,12 +4709,16 @@ func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (config
 		return "", "", err
 	}
 	if _, err := os.Stat(configPath); err == nil {
-		if validateErr := validatePrivateConfig(configPath, base, resolution); validateErr != nil {
-			return "", "", validateErr
+		if err = validateExistingPrivateConfig(stateRoot, configPath, base, resolution); err != nil {
+			return "", "", err
 		}
 		return configPath, base, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", "", fmt.Errorf("%w: inspect private supervisor config: %w", ErrConfiguration, err)
+	}
+	configSource, err := privateConfigYAMLForResolution(base, resolution)
+	if err != nil {
+		return "", "", err
 	}
 
 	// Record bootstrap intent before exposing the config. If the process dies
@@ -4114,13 +4727,139 @@ func ensurePrivateConfig(stateRoot string, resolution ResolutionContext) (config
 	if err := markPrivateBootstrapPending(stateRoot); err != nil {
 		return "", "", err
 	}
-	if err := createPrivateConfig(configPath, base, privateConfigYAML(base)); err != nil {
+	if err := createPrivateConfig(configPath, base, configSource); err != nil {
 		return "", "", err
 	}
 	if err := validatePrivateConfig(configPath, base, resolution); err != nil {
 		return "", "", err
 	}
 	return configPath, base, nil
+}
+
+func validateExistingPrivateConfig(stateRoot, configPath, base string, resolution ResolutionContext) error {
+	if validateErr := validatePrivateConfig(configPath, base, resolution); validateErr != nil {
+		repaired, repairErr := repairIncompletePrivateConfig(stateRoot, configPath, base, resolution, validateErr)
+		if repairErr != nil {
+			return repairErr
+		}
+		if !repaired {
+			return validateErr
+		}
+		if validateErr = validatePrivateConfig(configPath, base, resolution); validateErr != nil {
+			return validateErr
+		}
+	}
+	pending, err := PrivateBootstrapPending(stateRoot)
+	if err != nil || !pending {
+		return err
+	}
+	// A replacement rename may have succeeded before its final directory
+	// barrier reported failure. Re-establish durability before launch.
+	return syncPrivateDirectory(base)
+}
+
+func repairIncompletePrivateConfig(stateRoot, configPath, base string, resolution ResolutionContext, validationErr error) (bool, error) {
+	if !errors.Is(validationErr, errUnixSocketPathTooLong) {
+		return false, nil
+	}
+	pending, err := PrivateBootstrapPending(stateRoot)
+	if err != nil || !pending {
+		return false, err
+	}
+	current, err := readRegular(configPath, MaxControlBytes)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(current, []byte(privateConfigYAML(base))) {
+		return false, nil
+	}
+	authorized, err := incompletePrivateConfigRepairAuthorized(stateRoot, base)
+	if err != nil || !authorized {
+		return false, err
+	}
+	replacement, err := privateConfigYAMLForResolution(base, resolution)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(current, []byte(replacement)) {
+		return false, nil
+	}
+	if err = replacePrivateRecordAtomic(
+		base,
+		configPath,
+		".private-config-",
+		"incomplete private supervisor config",
+		[]byte(replacement),
+		true,
+	); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func incompletePrivateConfigRepairAuthorized(stateRoot, base string) (bool, error) {
+	generationAbsent, err := incompletePrivateConfigGenerationAbsent(stateRoot, base)
+	if err != nil || !generationAbsent {
+		return false, err
+	}
+	recoveryAbsent, err := incompletePrivateConfigRecoveryAbsent(stateRoot)
+	if err != nil || !recoveryAbsent {
+		return false, err
+	}
+	return incompletePrivateConfigRuntimeAbsent(base)
+}
+
+func incompletePrivateConfigGenerationAbsent(stateRoot, base string) (bool, error) {
+	if _, found, err := loadPrivateDaemonIdentity(base); err != nil || found {
+		return false, err
+	}
+	if _, found, err := loadPrivateSupervisorBinding(stateRoot); err != nil || found {
+		return false, err
+	}
+	if pending, err := PrivateSupervisorMigrationPending(stateRoot); err != nil || pending {
+		return false, err
+	}
+	if _, present, err := readPrivateIdentityPublication(stateRoot); err != nil || present {
+		return false, err
+	}
+	if _, present, err := loadPrivateMigrationHistory(base); err != nil || present {
+		return false, err
+	}
+	return true, nil
+}
+
+func incompletePrivateConfigRecoveryAbsent(stateRoot string) (bool, error) {
+	if present, err := PrivateRecoveryBindingPresent(stateRoot); err != nil || present {
+		return false, err
+	}
+	if present, err := privateRecoveryAliasArtifactsPresent(stateRoot); err != nil || present {
+		return false, err
+	}
+	if _, err := readRegular(privateSchedulingEvidencePath(stateRoot), MaxControlBytes); err == nil {
+		return false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return true, nil
+}
+
+func incompletePrivateConfigRuntimeAbsent(base string) (bool, error) {
+	// The legacy endpoint and PID both live under run. Requiring that whole
+	// directory to be absent also rejects unrecognized runtime residue without
+	// following a symlinked component. Data presence likewise proves that setup
+	// advanced beyond the pre-start config publication repaired here.
+	for _, path := range []string{
+		filepath.Join(base, "s"),
+		filepath.Join(base, "run"),
+		filepath.Join(base, "data"),
+	} {
+		if _, err := os.Lstat(path); err == nil {
+			return false, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func createPrivateConfig(configPath, base, data string) (resultErr error) {
@@ -4319,6 +5058,10 @@ func readPrivateConfig(configPath, base string, resolution ResolutionContext) (R
 	if err != nil {
 		return ResolvedConfig{}, fmt.Errorf("%w: read private supervisor config: %w", ErrConfiguration, err)
 	}
+	return resolvePrivateConfigSource(data, base, resolution)
+}
+
+func resolvePrivateConfigSource(data []byte, base string, resolution ResolutionContext) (ResolvedConfig, error) {
 	config, err := ParseConfig(data)
 	if err != nil {
 		return ResolvedConfig{}, err
@@ -4350,6 +5093,26 @@ func validatePrivateConfig(configPath, base string, resolution ResolutionContext
 }
 
 func privateConfigYAML(base string) string {
+	return privateConfigYAMLWithSocket(base, filepath.Join(base, "run", "pueue.sock"))
+}
+
+func privateConfigYAMLForResolution(base string, resolution ResolutionContext) (string, error) {
+	limit, ok := unixSocketPathLimit(resolution.OS)
+	if !ok {
+		return "", fmt.Errorf("%w: unsupported platform", ErrConfiguration)
+	}
+	socketPath := filepath.Join(base, "run", "pueue.sock")
+	if len(socketPath) > limit {
+		socketPath = filepath.Join(base, "s")
+	}
+	data := privateConfigYAMLWithSocket(base, socketPath)
+	if _, err := resolvePrivateConfigSource([]byte(data), base, resolution); err != nil {
+		return "", err
+	}
+	return data, nil
+}
+
+func privateConfigYAMLWithSocket(base, socketPath string) string {
 	quote := strconv.Quote
 	data := filepath.Join(base, "data")
 	runtimeDirectory := filepath.Join(base, "run")
@@ -4361,7 +5124,7 @@ func privateConfigYAML(base string) string {
 		"  runtime_directory: " + quote(runtimeDirectory),
 		"  alias_file: " + quote(filepath.Join(base, "aliases.yml")),
 		"  use_unix_socket: true",
-		"  unix_socket_path: " + quote(filepath.Join(runtimeDirectory, "pueue.sock")),
+		"  unix_socket_path: " + quote(socketPath),
 		"  unix_socket_permissions: 448",
 		"  pid_path: " + quote(filepath.Join(runtimeDirectory, "pueue.pid")),
 		"  shared_secret_path: " + quote(filepath.Join(data, "shared_secret")),

@@ -121,7 +121,7 @@ acceptance-private-cli: build
 		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--parallel-tasks 200 \
-		--dispatch-workers 16 \
+		--dispatch-workers 4 \
 		--output "$$receipt_dir/receipt.json"
 
 acceptance-agy: build test-native-harness

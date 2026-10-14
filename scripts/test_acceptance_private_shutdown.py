@@ -124,6 +124,38 @@ class ManagedLifetimeFixture:
 
 
 class PrivateShutdownTests(unittest.TestCase):
+    def test_shutdown_evidence_accepts_owned_compact_native_socket(self):
+        with tempfile.TemporaryDirectory(prefix="dls-", dir="/tmp") as directory:
+            parent = Path(directory).resolve()
+            socket_limit = 103 if private_cli.platform.system() == "Darwin" else 107
+            target_base_length = socket_limit - 2
+            padding = target_base_length - len(private_cli.os.fsencode(parent)) - 2 - len(".supervisor")
+            self.assertGreater(padding, 0)
+            supervisor = parent / ("s" * padding) / ".supervisor"
+            runtime = supervisor / "run"
+            runtime.mkdir(parents=True)
+            self.assertEqual(len(private_cli.os.fsencode(supervisor)), target_base_length)
+            endpoint = supervisor / "s"
+            self.assertLessEqual(len(private_cli.os.fsencode(endpoint)), socket_limit)
+            self.assertGreater(len(private_cli.os.fsencode(runtime / "pueue.sock")), socket_limit)
+            (runtime / "pueue.pid").write_text("999999\n", encoding="utf-8")
+            config = supervisor / "pueue.yml"
+            config.write_text(
+                "shared:\n"
+                f"  runtime_directory: {json.dumps(str(runtime))}\n"
+                f"  unix_socket_path: {json.dumps(str(endpoint))}\n"
+                f"  pid_path: {json.dumps(str(runtime / 'pueue.pid'))}\n",
+                encoding="utf-8",
+            )
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+                listener.bind(str(endpoint))
+                listener.listen()
+                info = endpoint.stat()
+                self.assertEqual(
+                    private_cli.private_shutdown_evidence(config),
+                    (999999, endpoint, (info.st_dev, info.st_ino)),
+                )
+
     def test_waits_for_managed_lifetime_closure_after_gate_release(self):
         evidence = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
         with patch.object(

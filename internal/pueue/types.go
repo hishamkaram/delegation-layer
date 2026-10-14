@@ -54,11 +54,15 @@ type Options struct {
 	// Empty keeps the in-process owner used by focused package tests and
 	// explicitly embedded clients.
 	ControlOwnerExecutable string
-	resolutionPinned       bool
+	// PrivateMaintenanceLauncher starts one delegate-run process to own already
+	// persisted private queue maintenance after the invoking CLI exits. Empty
+	// keeps the in-process owner used by focused package tests and embedders.
+	PrivateMaintenanceLauncher func(context.Context, string, string) error
+	resolutionPinned           bool
 	// SuccessfulCleanupAuthorizer is the application-owned policy gate for
-	// exact private-supervisor cleanup. It returns only validated terminal row
-	// IDs; Pueue does not inspect Delegate task or inspection schemas.
-	SuccessfulCleanupAuthorizer func(context.Context, string, task.SupervisorRef, []Job) ([]int64, error)
+	// exact private-supervisor cleanup. Pueue does not inspect Delegate task or
+	// inspection schemas.
+	SuccessfulCleanupAuthorizer func(context.Context, string, task.SupervisorRef, []Job) (PrivateQueueCleanupPlan, error)
 	// PrivateMigrationAuthorizer is the application-owned policy gate for
 	// stopping a private supervisor. Pueue supplies an immutable queue snapshot;
 	// it does not inspect Delegate task or inspection schemas.
@@ -72,6 +76,15 @@ type Options struct {
 	// taskObservationEntryObserver is a deterministic test seam for proving
 	// that independent callers overlap one private task-status snapshot.
 	taskObservationEntryObserver func()
+}
+
+// PrivateQueueCleanupPlan separates removal authority from a bounded retry
+// hint. RemoveIDs are exact terminal rows authorized by application evidence.
+// Settling is true only when that evidence is already terminal while its queue
+// row has not yet advanced; it never authorizes a removal by itself.
+type PrivateQueueCleanupPlan struct {
+	RemoveIDs []int64
+	Settling  bool
 }
 
 // CommandEvent reports entry, successful Start, or actual completion. Entry

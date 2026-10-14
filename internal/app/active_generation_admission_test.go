@@ -24,7 +24,7 @@ func TestPrivateSubmissionGateRejectsCapturedGenerationAfterPublishedSuccessor(t
 	assertHistoricalActiveSupervisor(t, fixture)
 	assertHistoricalMigrationComplete(t, fixture)
 
-	if err := publishPrivateOrdinaryScheduling(fixture.root, generationB); err != nil {
+	if err := publishPrivateOrdinaryScheduling(fixture.root, generationB, pueue.StagedLaunchCapability{AddStashed: true, EnqueueByID: true}); err != nil {
 		t.Fatalf("publish generation B scheduling receipt: %v", err)
 	}
 	recorded, err := privateOrdinarySchedulingRecorded(fixture.root, generationB)
@@ -33,11 +33,51 @@ func TestPrivateSubmissionGateRejectsCapturedGenerationAfterPublishedSuccessor(t
 	}
 
 	gate := privateSubmissionGate(fixture.root)
-	if err := gate(t.Context(), generationA); !errors.Is(err, pueue.ErrBinding) {
-		t.Fatalf("captured generation A was admitted after generation B publication: %v", err)
+	if _, gateErr := gate(t.Context(), generationA); !errors.Is(gateErr, pueue.ErrBinding) {
+		t.Fatalf("captured generation A was admitted after generation B publication: %v", gateErr)
 	}
-	if err := gate(t.Context(), generationB); err != nil {
+	authorization, err := gate(t.Context(), generationB)
+	if err != nil {
 		t.Fatalf("published complete generation B was refused: %v", err)
+	}
+	if authorization.StagedLaunchCapability == nil || !authorization.StagedLaunchCapability.AddStashed || !authorization.StagedLaunchCapability.EnqueueByID {
+		t.Fatalf("published generation B lost staged capability evidence: %+v", authorization)
+	}
+}
+
+func TestPrivateSubmissionGateRejectsIncompleteStagedCapabilityEvidence(t *testing.T) {
+	store, deps, _ := newSupervisorProbeTestFixture(t)
+	supervisor, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
+	settleSupervisorProbeTestClient(t, supervisor, err)
+	if err != nil || supervisor == nil {
+		t.Fatalf("initial private admission failed: client=%v err=%v", supervisor, err)
+	}
+	binding := supervisor.Binding()
+	if closeErr := supervisor.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	path := privateOrdinarySchedulingTestPath(store.Root)
+	data := readActiveGenerationFile(t, path)
+	var record map[string]json.RawMessage
+	if err = task.DecodeStrict(data, &record); err != nil {
+		t.Fatal(err)
+	}
+	capability, err := task.MarshalCanonical(pueue.StagedLaunchCapability{AddStashed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record["staged_launch"] = capability
+	data, err = task.MarshalCanonical(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	authorization, gateErr := privateSubmissionGate(store.Root)(t.Context(), binding)
+	if !errors.Is(gateErr, task.ErrEvidenceFault) || authorization.StagedLaunchCapability != nil {
+		t.Fatalf("incomplete staged capability was admitted: authorization=%+v err=%v", authorization, gateErr)
 	}
 }
 
@@ -161,6 +201,7 @@ func TestPrivateAdmissionConcurrentStaleReceiptElectsOneRepairOwner(t *testing.T
 	}
 	assertSupervisorProbeTestNoStatus(t, base)
 	assertSupervisorProbeTestGroupCount(t, base, 3)
+	assertSupervisorProbeTestStagedCapabilityCount(t, base, 1)
 	assertSupervisorProbeTestDaemonStartCount(t, base, 1)
 	assertPublishedGenerationFilesUnchanged(t, activeFiles)
 	if got := readActiveGenerationFile(t, privateOrdinarySchedulingTestPath(store.Root)); !bytes.Equal(got, activeReceipt) {
@@ -233,6 +274,84 @@ func TestPrivateAdmissionRepairsValidIncompleteSchedulingReceipt(t *testing.T) {
 	assertActiveGenerationNoStatusOrDaemonRestart(t, base, 1)
 	assertPublishedGenerationFilesUnchanged(t, activeFiles)
 	if closeErr := admitted.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+}
+
+func TestPrivateAdmissionUpgradesCapabilitylessGenerationReceiptOnce(t *testing.T) {
+	store, deps, _ := newSupervisorProbeTestFixture(t)
+	initial, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
+	settleSupervisorProbeTestClient(t, initial, err)
+	if err != nil || initial == nil {
+		t.Fatalf("initial private admission failed: client=%v err=%v", initial, err)
+	}
+	active := initial.Binding()
+	activeReceipt := readActiveGenerationFile(t, privateOrdinarySchedulingTestPath(store.Root))
+	if closeErr := initial.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	writeCapabilitylessActiveGenerationSchedulingReceipt(t, store.Root)
+	base := filepath.Dir(active.ConfigPath)
+	clearActiveGenerationSupervisorCommands(t, base)
+
+	admitted, admissionErr := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
+	settleSupervisorProbeTestClient(t, admitted, admissionErr)
+	if admissionErr != nil || admitted == nil || admitted.Binding() != active {
+		t.Fatalf("capabilityless receipt upgrade returned client=%v binding=%+v err=%v", admitted, bindingOfActiveGenerationClient(admitted), admissionErr)
+	}
+	if got := readActiveGenerationFile(t, privateOrdinarySchedulingTestPath(store.Root)); !bytes.Equal(got, activeReceipt) {
+		t.Fatalf("capabilityless receipt was not upgraded to current evidence: got=%s want=%s", got, activeReceipt)
+	}
+	assertActiveGenerationNoStatusOrDaemonRestart(t, base, 1)
+	if closeErr := admitted.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	clearActiveGenerationSupervisorCommands(t, base)
+	warm, warmErr := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
+	settleSupervisorProbeTestClient(t, warm, warmErr)
+	if warmErr != nil || warm == nil || warm.Binding() != active {
+		t.Fatalf("warm admission after capability upgrade = client=%v binding=%+v err=%v", warm, bindingOfActiveGenerationClient(warm), warmErr)
+	}
+	assertActiveGenerationNoSupervisorCommands(t, base)
+	if closeErr := warm.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+}
+
+func TestPrivateStatusRepairUpgradesCapabilitylessGenerationReceipt(t *testing.T) {
+	store, deps, _ := newSupervisorProbeTestFixture(t)
+	supervisor, err := preparePrivateAdmissionSupervisor(deps, store, deps.SupervisorOptions)
+	settleSupervisorProbeTestClient(t, supervisor, err)
+	if err != nil || supervisor == nil {
+		t.Fatalf("initial private admission failed: client=%v err=%v", supervisor, err)
+	}
+	want := readActiveGenerationFile(t, privateOrdinarySchedulingTestPath(store.Root))
+	writeCapabilitylessActiveGenerationSchedulingReceipt(t, store.Root)
+	base := filepath.Dir(supervisor.Binding().ConfigPath)
+	clearActiveGenerationSupervisorCommands(t, base)
+
+	controlContext, cancel := context.WithTimeout(t.Context(), pueue.PrivateStatusObservationTimeout)
+	err = ensurePrivateAdmissionSchedulingContext(controlContext, store.Root, supervisor)
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := readActiveGenerationFile(t, privateOrdinarySchedulingTestPath(store.Root)); !bytes.Equal(got, want) {
+		t.Fatalf("status repair did not upgrade scheduling receipt: got=%s want=%s", got, want)
+	}
+	assertSupervisorProbeTestNoStatus(t, base)
+	assertSupervisorProbeTestGroupCount(t, base, 2)
+	assertSupervisorProbeTestStagedCapabilityCount(t, base, 1)
+	assertSupervisorProbeTestDaemonStartCount(t, base, 1)
+	parallel, readErr := os.ReadFile(filepath.Join(base, "parallel"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if count := bytes.Count(parallel, []byte("parallel\n")); count != 1 {
+		t.Fatalf("status scheduling repair count=%d, want one; log=%q", count, parallel)
+	}
+	if closeErr := supervisor.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
 }
@@ -454,6 +573,29 @@ func writeIncompleteActiveGenerationSchedulingReceipt(t *testing.T, root string,
 	}
 }
 
+func writeCapabilitylessActiveGenerationSchedulingReceipt(t *testing.T, root string) {
+	t.Helper()
+	path := privateOrdinarySchedulingTestPath(root)
+	data := readActiveGenerationFile(t, path)
+	var record map[string]json.RawMessage
+	if err := task.DecodeStrict(data, &record); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := json.Marshal(privateOrdinarySchedulingCapabilitylessRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record["revision"] = revision
+	delete(record, "staged_launch")
+	data, err = task.MarshalCanonical(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func stopActiveGenerationEndpoint(t *testing.T, binding task.SupervisorRef) {
 	t.Helper()
 	base := filepath.Dir(binding.ConfigPath)
@@ -502,12 +644,16 @@ func clearActiveGenerationSupervisorCommands(t *testing.T, base string) {
 	if err := os.WriteFile(filepath.Join(base, "parallel"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(base, "staged-capability"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertActiveGenerationNoSupervisorCommands(t *testing.T, base string) {
 	t.Helper()
 	assertSupervisorProbeTestNoStatus(t, base)
 	assertSupervisorProbeTestGroupCount(t, base, 0)
+	assertSupervisorProbeTestStagedCapabilityCount(t, base, 0)
 	parallel, err := os.ReadFile(filepath.Join(base, "parallel"))
 	if errors.Is(err, os.ErrNotExist) {
 		return
@@ -524,6 +670,7 @@ func assertActiveGenerationNoStatusOrDaemonRestart(t *testing.T, base string, da
 	t.Helper()
 	assertSupervisorProbeTestNoStatus(t, base)
 	assertSupervisorProbeTestGroupCount(t, base, 3)
+	assertSupervisorProbeTestStagedCapabilityCount(t, base, 1)
 	assertSupervisorProbeTestDaemonStartCount(t, base, daemonStarts)
 	parallel, err := os.ReadFile(filepath.Join(base, "parallel"))
 	if err != nil {
@@ -531,6 +678,20 @@ func assertActiveGenerationNoStatusOrDaemonRestart(t *testing.T, base string, da
 	}
 	if count := bytes.Count(parallel, []byte("parallel\n")); count != 1 {
 		t.Fatalf("ordinary scheduling repair count=%d, want one; log=%q", count, parallel)
+	}
+}
+
+func assertSupervisorProbeTestStagedCapabilityCount(t *testing.T, base string, want int) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(base, "staged-capability"))
+	if errors.Is(err, os.ErrNotExist) && want == 0 {
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if add, enqueue := bytes.Count(data, []byte("add-help\n")), bytes.Count(data, []byte("enqueue-help\n")); add != want || enqueue != want {
+		t.Fatalf("staged capability probes add=%d enqueue=%d, want %d each; log=%q", add, enqueue, want, data)
 	}
 }
 

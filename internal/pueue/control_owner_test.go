@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 )
 
 const controlOwnerCallerTestMode = "--test-control-owner-caller"
+
+const controlOwnerTestStartupTimeout = 10 * time.Second
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == controlOwnerCallerTestMode {
@@ -26,18 +29,20 @@ func TestMain(m *testing.M) {
 }
 
 func runControlOwnerCallerTest(args []string) int {
-	if len(args) != 4 {
+	if len(args) < 4 {
 		return 2
 	}
-	lockFile, err := os.OpenFile(args[3], os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return 1
+	ctx := context.Background()
+	for _, path := range args[3:] {
+		lockFile, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return 1
+		}
+		if err = unix.Flock(int(lockFile.Fd()), unix.LOCK_SH); err != nil {
+			return 1
+		}
+		ctx = withControlLockLease(ctx, &bootstrapLock{file: lockFile})
 	}
-	if err = unix.Flock(int(lockFile.Fd()), unix.LOCK_SH); err != nil {
-		return 1
-	}
-	lock := &bootstrapLock{file: lockFile}
-	ctx := withGenerationControlLease(context.Background(), lock)
 	command := exec.Command(args[0], args[1], args[2])
 	command.Dir = filepath.Dir(args[0])
 	started := make(chan struct{}, 1)
@@ -49,7 +54,7 @@ func runControlOwnerCallerTest(args []string) int {
 	select {
 	case <-started:
 		return 0
-	case <-time.After(2 * time.Second):
+	case <-time.After(controlOwnerTestStartupTimeout):
 		return 1
 	}
 }
@@ -58,10 +63,7 @@ func TestControlOwnerReturnsNaturalCommandResult(t *testing.T) {
 	executable := finiteExecutable(t, "printf 'owned\\n'")
 	command := exec.Command(executable)
 	command.Dir = filepath.Dir(executable)
-	pending := startControlOwnedCaptured(
-		t.Context(), os.Args[0], command,
-		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil, "",
-	)
+	pending := startControlOwnerTest(t, command, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "")
 	result, err := observeCommand(t.Context(), pending, 2*time.Second)
 	if err != nil {
 		t.Fatalf("external owner result: %+v: %v", result, err)
@@ -82,10 +84,7 @@ func TestControlOwnerReturnsStatusSnapshot(t *testing.T) {
 	executable := finiteExecutable(t, "cat \"$1\"")
 	command := exec.Command(executable, payload)
 	command.Dir = filepath.Dir(executable)
-	pending := startControlOwnedCaptured(
-		t.Context(), os.Args[0], command,
-		"cccccccccccccccccccccccccccccccc", nil, FixtureVersion,
-	)
+	pending := startControlOwnerTest(t, command, "cccccccccccccccccccccccccccccccc", FixtureVersion)
 	result, err := observeCommand(t.Context(), pending, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -116,9 +115,8 @@ func TestControlOwnerPreservesUnknownStatus(t *testing.T) {
 	executable := finiteExecutable(t, "cat \"$1\"")
 	command := exec.Command(executable, statusCaptureTestPayloadFile(t, data))
 	command.Dir = filepath.Dir(executable)
-	result, err := observeCommand(t.Context(), startControlOwnedCaptured(
-		t.Context(), os.Args[0], command,
-		"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", nil, FixtureVersion,
+	result, err := observeCommand(t.Context(), startControlOwnerTest(
+		t, command, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", FixtureVersion,
 	), 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -132,10 +130,7 @@ func TestControlOwnerPreservesCompletedRefusal(t *testing.T) {
 	executable := finiteExecutable(t, "exit 7")
 	command := exec.Command(executable)
 	command.Dir = filepath.Dir(executable)
-	pending := startControlOwnedCaptured(
-		t.Context(), os.Args[0], command,
-		"dddddddddddddddddddddddddddddddd", nil, "",
-	)
+	pending := startControlOwnerTest(t, command, "dddddddddddddddddddddddddddddddd", "")
 	result, err := observeCommand(t.Context(), pending, 2*time.Second)
 	if err == nil || !completedExit(err) || result.ExitCode != 7 {
 		t.Fatalf("completed refusal = %+v, %v", result, err)
@@ -150,22 +145,33 @@ func TestControlOwnerAndGenerationLeaseSurviveCallerExit(t *testing.T) {
 	base := t.TempDir()
 	marker := filepath.Join(base, "completed")
 	release := filepath.Join(base, "release")
-	lockPath := filepath.Join(base, "bootstrap.lock")
+	var releaseErr error
+	releaseOnce := sync.OnceFunc(func() { releaseErr = os.WriteFile(release, []byte("release"), 0o600) })
+	t.Cleanup(releaseOnce)
+	lockPaths := []string{
+		filepath.Join(base, "bootstrap.lock"),
+		filepath.Join(base, "queue-writer-intent.lock"),
+		filepath.Join(base, "queue-identity-gate.lock"),
+		filepath.Join(base, "queue-identity.lock"),
+	}
 	executable := finiteExecutable(t, "while [ ! -e \"$2\" ]; do sleep 0.02; done\nprintf completed >\"$1\"")
-	caller := exec.Command(os.Args[0], controlOwnerCallerTestMode, executable, marker, release, lockPath)
+	caller := exec.Command(os.Args[0], append([]string{controlOwnerCallerTestMode, executable, marker, release}, lockPaths...)...)
 	if output, err := caller.CombinedOutput(); err != nil {
 		t.Fatalf("caller process: %v: %s", err, output)
 	}
-	if available, err := exclusiveLockAvailable(lockPath); err != nil || available {
-		t.Fatalf("generation lease after caller exit: available=%t err=%v", available, err)
+	for _, lockPath := range lockPaths {
+		if available, err := exclusiveLockAvailable(lockPath); err != nil || available {
+			t.Fatalf("nested control lease %s after caller exit: available=%t err=%v", filepath.Base(lockPath), available, err)
+		}
 	}
-	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
-		t.Fatal(err)
+	releaseOnce()
+	if releaseErr != nil {
+		t.Fatal(releaseErr)
 	}
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(controlOwnerTestStartupTimeout)
 	for {
 		markerData, markerErr := os.ReadFile(marker)
-		available, lockErr := exclusiveLockAvailable(lockPath)
+		available, lockErr := allExclusiveLocksAvailable(lockPaths)
 		if markerErr == nil && string(markerData) == "completed" && lockErr == nil && available {
 			break
 		}
@@ -174,6 +180,41 @@ func TestControlOwnerAndGenerationLeaseSurviveCallerExit(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func startControlOwnerTest(t *testing.T, command *exec.Cmd, commandID, statusVersion string) *Pending {
+	t.Helper()
+	started := make(chan struct{}, 1)
+	pending := startControlOwnedCaptured(t.Context(), os.Args[0], command, commandID, func(event CommandEvent) {
+		if event.Stage == "started" {
+			started <- struct{}{}
+		}
+	}, statusVersion)
+	timer := time.NewTimer(controlOwnerTestStartupTimeout)
+	defer timer.Stop()
+	select {
+	case <-started:
+		return pending
+	case <-pending.Done():
+		result, _ := pending.Result()
+		if !result.Started {
+			t.Fatalf("external control owner failed before command start: %+v", result)
+		}
+		return pending
+	case <-timer.C:
+		t.Fatal("external control owner did not start the command")
+		return nil
+	}
+}
+
+func allExclusiveLocksAvailable(paths []string) (bool, error) {
+	for _, path := range paths {
+		available, err := exclusiveLockAvailable(path)
+		if err != nil || !available {
+			return false, err
+		}
+	}
+	return true, nil
 }
 
 func exclusiveLockAvailable(path string) (available bool, resultErr error) {

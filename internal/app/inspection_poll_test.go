@@ -311,6 +311,120 @@ func TestAwaitCompletedInspectionObservationStartsIndependentControlWindow(t *te
 	}
 }
 
+func TestAcceptedTerminalObservationLaunchesMaintenanceAfterCallerExpiry(t *testing.T) {
+	store, operation, bound, job := newRecordedTerminalCleanupFixture(t)
+	probe := newPrivateMaintenanceLaunchProbe(t)
+	client := newPrivateMaintenanceLaunchClient(t, bound, probe.launch)
+	observation := pueue.InspectionObservation{
+		Binding:  client.Binding(),
+		Identity: operation.Request().SupervisorIdentity(),
+		Job:      job,
+		Matched:  true,
+	}
+	facts, terminal, acceptErr := acceptCompletedInspectionObservation(probe.callerContext, operation, client, observation)
+	if acceptErr != nil || !terminal || string(facts) != "{\"eligible\":true}\n" {
+		t.Fatalf("accepted terminal observation facts=%s terminal=%t err=%v", facts, terminal, acceptErr)
+	}
+	probe.assert(t, store.Root)
+}
+
+type privateMaintenanceLaunchObservation struct {
+	callerErr  error
+	launchErr  error
+	executable string
+	root       string
+	requested  uint64
+	err        error
+}
+
+type privateMaintenanceLaunchProbe struct {
+	callerContext context.Context
+	cancelCaller  context.CancelFunc
+	launched      chan privateMaintenanceLaunchObservation
+}
+
+func newPrivateMaintenanceLaunchProbe(t *testing.T) *privateMaintenanceLaunchProbe {
+	t.Helper()
+	callerContext, cancelCaller := context.WithCancel(t.Context())
+	t.Cleanup(cancelCaller)
+	return &privateMaintenanceLaunchProbe{
+		callerContext: callerContext,
+		cancelCaller:  cancelCaller,
+		launched:      make(chan privateMaintenanceLaunchObservation, 1),
+	}
+}
+
+func newPrivateMaintenanceLaunchClient(t *testing.T, bound *pueue.Client, launcher func(context.Context, string, string) error) *pueue.Client {
+	t.Helper()
+	client, err := pueue.NewClient(bound.Binding(), pueue.Options{
+		ObservationTimeout:          pueue.DefaultObservationTimeout,
+		Environment:                 os.Environ(),
+		SuccessfulCleanupAuthorizer: authorizePrivateSuccessfulCleanup,
+		PrivateMaintenanceLauncher:  launcher,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := client.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	return client
+}
+
+func (probe *privateMaintenanceLaunchProbe) launch(launchContext context.Context, executable, root string) error {
+	requested, readErr := readPrivateMaintenanceRequested(root)
+	probe.cancelCaller()
+	probe.launched <- privateMaintenanceLaunchObservation{
+		callerErr:  probe.callerContext.Err(),
+		launchErr:  launchContext.Err(),
+		executable: executable,
+		root:       root,
+		requested:  requested,
+		err:        readErr,
+	}
+	return readErr
+}
+
+func readPrivateMaintenanceRequested(root string) (uint64, error) {
+	data, err := os.ReadFile(filepath.Join(root, ".supervisor", "queue-maintenance.json"))
+	if err != nil {
+		return 0, err
+	}
+	var record struct {
+		Requested uint64 `json:"requested"`
+	}
+	if err = json.Unmarshal(data, &record); err != nil {
+		return 0, err
+	}
+	return record.Requested, nil
+}
+
+func (probe *privateMaintenanceLaunchProbe) assert(t *testing.T, wantRoot string) {
+	t.Helper()
+	select {
+	case launch := <-probe.launched:
+		if launch.err != nil {
+			t.Fatal(launch.err)
+		}
+		if !errors.Is(launch.callerErr, context.Canceled) {
+			t.Fatalf("publication caller context remained live at handoff: %v", launch.callerErr)
+		}
+		if launch.launchErr != nil {
+			t.Fatalf("fresh maintenance launch context was already expired: %v", launch.launchErr)
+		}
+		if launch.root != wantRoot || launch.executable != "" {
+			t.Fatalf("maintenance launch target executable=%q root=%q", launch.executable, launch.root)
+		}
+		if launch.requested == 0 {
+			t.Fatal("maintenance launched before its generation was durable")
+		}
+	default:
+		t.Fatal("accepted terminal observation did not hand off maintenance")
+	}
+}
+
 func TestAwaitCompletedInspectionObservationConsumesPendingStatusResult(t *testing.T) {
 	store := newBareInspectionStore(t)
 	bound, logPath, _ := newUncertainGroupSupervisor(t, store.RootID)

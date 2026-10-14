@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -56,6 +57,275 @@ func TestInstallStateRunnerKeepsExecutableVersionsImmutable(t *testing.T) {
 	}
 	if !managedRunnerExecutable(root, newRunner, task.RunnerOwnershipManaged) {
 		t.Fatal("new content-addressed state runner was not recognized as managed")
+	}
+}
+
+func TestInstallStateTerminalEventRunnerAtomicallyRefreshesCompatibleHelper(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
+	writeRunnerFixture(t, source, "old callback helper")
+	destination, err := prepareStateTerminalEventRunnerRevision(context.Background(), root, source, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := os.Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := opened.Close(); closeErr != nil {
+			t.Errorf("close prior callback helper: %v", closeErr)
+		}
+	}()
+
+	writeRunnerFixture(t, source, "current callback helper")
+	refreshed, err := prepareStateTerminalEventRunnerRevision(context.Background(), root, source, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed != destination || refreshed != pueue.PrivateTerminalEventRunnerPath(root) {
+		t.Fatalf("terminal callback path changed across compatible refresh: before=%q after=%q", destination, refreshed)
+	}
+	requireRunnerFixture(t, refreshed, "current callback helper")
+	prior, err := io.ReadAll(opened)
+	if err != nil || string(prior) != "old callback helper" {
+		t.Fatalf("running callback inode changed during refresh: content=%q err=%v", prior, err)
+	}
+	info, err := os.Stat(refreshed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("refreshed callback mode=%v, want 0700", info.Mode().Perm())
+	}
+}
+
+func TestPrepareStateTerminalEventRunnerRetainsEqualRevisionBuild(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
+	writeRunnerFixture(t, source, "published callback helper")
+	published := filepath.Join(canonicalAppTestTempDir(t), "published")
+	writeRunnerFixture(t, published, "published callback helper")
+	wantDigest, err := stateExecutableSourceDigest(published)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, prepareErr := prepareStateTerminalEventRunnerRevision(context.Background(), root, source, 7); prepareErr != nil {
+		t.Fatal(prepareErr)
+	}
+
+	writeRunnerFixture(t, source, "different build of same callback helper")
+	destination, err := prepareStateTerminalEventRunnerRevision(context.Background(), root, source, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireRunnerFixture(t, destination, "published callback helper")
+
+	record, found, err := readStateTerminalEventRunnerRecord(filepath.Join(root, ".supervisor"))
+	if err != nil || !found {
+		t.Fatalf("callback publication record found=%t err=%v", found, err)
+	}
+	if record.ImplementationRevision != 7 {
+		t.Fatalf("callback publication revision=%d, want 7", record.ImplementationRevision)
+	}
+	if record.BuildSHA256 != wantDigest {
+		t.Fatalf("callback publication digest=%q, want %q (err=%v)", record.BuildSHA256, wantDigest, err)
+	}
+}
+
+func TestPrepareStateTerminalEventRunnerConcurrentRevisionsDoNotRollback(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	oldSource := filepath.Join(canonicalAppTestTempDir(t), "delegate-run-old")
+	newSource := filepath.Join(canonicalAppTestTempDir(t), "delegate-run-new")
+	writeRunnerFixture(t, oldSource, "old callback helper")
+	writeRunnerFixture(t, newSource, "new callback helper")
+
+	start := make(chan struct{})
+	errorsFound := make(chan error, 2)
+	var writers sync.WaitGroup
+	writers.Add(2)
+	go func() {
+		defer writers.Done()
+		<-start
+		_, err := prepareStateTerminalEventRunnerRevision(context.Background(), root, oldSource, 1)
+		errorsFound <- err
+	}()
+	go func() {
+		defer writers.Done()
+		<-start
+		_, err := prepareStateTerminalEventRunnerRevision(context.Background(), root, newSource, 2)
+		errorsFound <- err
+	}()
+	close(start)
+	writers.Wait()
+	close(errorsFound)
+	for err := range errorsFound {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	destination := pueue.PrivateTerminalEventRunnerPath(root)
+	requireRunnerFixture(t, destination, "new callback helper")
+	record, found, err := readStateTerminalEventRunnerRecord(filepath.Join(root, ".supervisor"))
+	if err != nil || !found {
+		t.Fatalf("callback publication record found=%t err=%v", found, err)
+	}
+	if record.ImplementationRevision != 2 {
+		t.Fatalf("callback publication revision=%d, want 2", record.ImplementationRevision)
+	}
+}
+
+func TestPrepareStateTerminalEventRunnerReadyPathDoesNotWaitForTransition(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
+	writeRunnerFixture(t, source, "callback helper")
+	destination, err := prepareStateTerminalEventRunnerRevision(context.Background(), root, source, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transitionHeld := make(chan struct{})
+	releaseTransition := make(chan struct{})
+	transitionDone := make(chan error, 1)
+	go func() {
+		acquired, transitionErr := pueue.TryWithPrivateTransition(context.Background(), root, func() error {
+			close(transitionHeld)
+			<-releaseTransition
+			return nil
+		})
+		if transitionErr == nil && !acquired {
+			transitionErr = errors.New("transition owner was not acquired")
+		}
+		transitionDone <- transitionErr
+	}()
+	<-transitionHeld
+	probeContext, cancelProbe := context.WithCancel(t.Context())
+	var probes sync.WaitGroup
+	var releaseOnce sync.Once
+	var transitionErr error
+	releaseOwner := func() {
+		releaseOnce.Do(func() {
+			close(releaseTransition)
+			transitionErr = <-transitionDone
+		})
+	}
+	var cleanupOnce sync.Once
+	cleanupProbes := func() {
+		cleanupOnce.Do(func() {
+			cancelProbe()
+			releaseOwner()
+			probes.Wait()
+		})
+	}
+	t.Cleanup(func() {
+		cleanupProbes()
+		if transitionErr != nil {
+			t.Errorf("release transition owner: %v", transitionErr)
+		}
+	})
+
+	type probeResult struct {
+		path string
+		err  error
+	}
+	const callers = 16
+	results := make(chan probeResult, callers)
+	probes.Add(callers)
+	for range callers {
+		go func() {
+			defer probes.Done()
+			ready, probeErr := prepareStateTerminalEventRunnerRevision(probeContext, root, source, 1)
+			results <- probeResult{path: ready, err: probeErr}
+		}()
+	}
+	// Completion while the transition remains held is the assertion. This
+	// timer is only a deadlock diagnostic; it never supplies the call context or
+	// turns elapsed time into a successful result.
+	watchdog := time.NewTimer(30 * time.Second)
+	defer watchdog.Stop()
+	var firstFailure string
+	for range callers {
+		select {
+		case result := <-results:
+			if result.err != nil && firstFailure == "" {
+				firstFailure = fmt.Sprintf("prepared helper waited for unrelated transition: %v", result.err)
+			}
+			if result.err == nil && result.path != destination && firstFailure == "" {
+				firstFailure = fmt.Sprintf("prepared helper=%q, want %q", result.path, destination)
+			}
+		case <-watchdog.C:
+			cleanupProbes()
+			t.Fatal("prepared helper did not finish while unrelated transition remained held")
+		}
+	}
+	cleanupProbes()
+	if firstFailure != "" {
+		t.Fatal(firstFailure)
+	}
+}
+
+func TestPrepareStateTerminalEventRunnerRecoversDesiredRecordBeforeRename(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	oldSource := filepath.Join(canonicalAppTestTempDir(t), "delegate-run-old")
+	newSource := filepath.Join(canonicalAppTestTempDir(t), "delegate-run-new")
+	writeRunnerFixture(t, oldSource, "old callback helper")
+	writeRunnerFixture(t, newSource, "new callback helper")
+	if _, err := prepareStateTerminalEventRunnerRevision(context.Background(), root, oldSource, 1); err != nil {
+		t.Fatal(err)
+	}
+	newDigest, err := stateExecutableSourceDigest(newSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := stateTerminalEventRunnerRecord{
+		SchemaVersion:          task.SchemaVersion,
+		ProtocolPath:           stateTerminalEventRunnerName,
+		ImplementationRevision: 2,
+		BuildSHA256:            newDigest,
+	}
+	if err = publishStateTerminalEventRunnerRecord(filepath.Join(root, ".supervisor"), record, syncRunnerDirectory); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a process crash after the desired record barrier and before the
+	// executable rename: the old bytes remain until the matching source retries.
+	if _, err = prepareStateTerminalEventRunnerRevision(context.Background(), root, oldSource, 1); !errors.Is(err, errStateTerminalEventRunnerRevisionDeferred) {
+		t.Fatalf("older source recovery error=%v, want deferred revision", err)
+	}
+	requireRunnerFixture(t, pueue.PrivateTerminalEventRunnerPath(root), "old callback helper")
+	if _, err = prepareStateTerminalEventRunnerRevision(context.Background(), root, newSource, 2); err != nil {
+		t.Fatal(err)
+	}
+	requireRunnerFixture(t, pueue.PrivateTerminalEventRunnerPath(root), "new callback helper")
+}
+
+func TestPrepareStateTerminalEventRunnerRetriesMatchingDirectorySync(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	source := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
+	writeRunnerFixture(t, source, "callback helper")
+	if _, err := prepareStateTerminalEventRunner(context.Background(), root, source); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("directory sync failed once")
+	var calls int
+	syncDirectory := func(path string) error {
+		calls++
+		if path != filepath.Join(root, ".supervisor") {
+			t.Fatalf("directory sync path=%q", path)
+		}
+		if calls == 1 {
+			return wantErr
+		}
+		return nil
+	}
+	if _, err := prepareStateTerminalEventRunnerRevisionWithSync(context.Background(), root, source, stateTerminalEventRunnerRevision, syncDirectory); !errors.Is(err, wantErr) {
+		t.Fatalf("first matching publication error=%v, want %v", err, wantErr)
+	}
+	if _, err := prepareStateTerminalEventRunnerRevisionWithSync(context.Background(), root, source, stateTerminalEventRunnerRevision, syncDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("matching publication directory sync calls=%d, want 2", calls)
 	}
 }
 

@@ -160,13 +160,82 @@ record the number of concurrent dispatch callers without treating it as a
 product concurrency limit. Give gated fixture tasks enough budget for the
 whole scenario, and reject timed-out tasks even if a stale queue row still
 says Running.
+An external process-launch barrier proves concurrent invocation, not that every
+process crossed an internal single-flight boundary before publication. Prove an
+exact shared flight with a deterministic boundary gate. An ungated native burst
+may prove observable coalescing by recording fewer backend snapshots than
+callers, but it must not require one snapshot or add a stale-result window to
+make scheduler timing pass.
 Healthy no-change paths must not acquire exclusive transition ownership merely
 to discover there is nothing to change. Reuse the same validation and planning
 functions for a shared probe and the fresh exclusive mutation check.
-Opportunistic maintenance skips a busy lock. Terminal-triggered maintenance
-elects at most one root-wide owner across clients and processes before waiting
-for its bounded mutation scope; followers coalesce without issuing another
-queue scan. Required transitions still wait within their control deadline.
+Pueue's terminal callback and an independently accepted terminal inspection are
+cleanup triggers; Delegate's durable task and inspection journals are the sole
+removal authority. Admission records its verdict and never waits for cleanup.
+Every current ordinary and inspection submission installs a callback ticket
+before enqueue. The callback publishes a durable ID-scoped candidate first,
+then requests a candidate pass. An exact application observation revalidates an
+ended inspection row under queue identity, publishes the same candidate when
+needed, and starts an independent `delegate-run` maintenance process. Candidate
+publication failure requests a conservative full-recovery pass; the candidate
+never owns task authority.
+
+The candidate-event directory is the durable inbox when journal publication or
+process handoff fails. The per-root journal owns requested, attempted,
+successful, and full-recovery generations, while the election lock is the sole
+live-owner authority. Election is nonblocking for callback contenders. After a
+bounded quiet window, the winner captures the latest generation for one pass;
+it rechecks durable progress after releasing ownership so the last wake cannot
+be stranded. A wake arriving during a pass remains above the attempted
+watermark and receives the same quiet window before the next pass. An
+interrupted or still-running control command remains unattempted and owned
+through natural completion. The owner must observe release of every election
+lease retained by that command before retrying; pending-result visibility alone
+does not authorize re-election. A completed failed attempt waits for a later
+wake instead of spinning. Validated root activation resumes retained inbox or
+journal work.
+This election does not occupy the lifecycle-transition election used by
+admission or recovery. A normal pass exposes only event-backed ordinary and
+inspection rows from one streamed snapshot and retains all same-label rows for
+ambiguity checks. A full-recovery pass additionally exposes historical ordinary
+rows; inspection rows still require events. In both cases, Delegate's journals
+decide which exact rows may be removed. A later callback or independently
+accepted terminal observation creates the wake that retries rows whose earlier
+maintenance attempt failed; cleanup failure never changes task or inspection
+authority. Historical private roots without the callback keep the exact
+journal-reconciliation path and do not require event candidates.
+The event lock also owns recovery of the publisher's reserved temporary-file
+namespace. An exclusive pass removes exact-shaped uncommitted stages left at
+any publication crash point before it validates committed ticket and event
+records. Temporary stages never carry authority; committed filenames and
+payloads remain strict, and every other directory entry fails closed.
+
+A queue writer publishes intent under a dedicated live-owner lock before it
+waits for exclusive queue identity. Readers check intent before and again while
+crossing the short gate; once intent is visible, only the finite readers that
+already crossed may drain. An abandoned intent may be reset only after
+exclusive acquisition of its owner lock proves no writer remains. Supervisor
+control contexts compose every nested generation, intent, gate, and identity
+lease; adding an inner lease must never replace an outer one. A one-shot
+control owner inherits duplicates of the complete set until its exact child
+`Wait`, including after observer timeout or caller exit. Application
+authorization runs outside queue identity, then one
+exclusive queue-identity mutation takes a fresh same-scope snapshot, verifies
+that every authorized row still has the same terminal identity, removes those
+exact numeric IDs, and clears their callback state only after successful
+removal. A failed removal retains the candidate for retry. Every new ordinary
+or inspection submission resets callback classification before enqueue while
+holding the queue-identity lease, so a stale ID-scoped hint cannot cross Pueue
+numeric-ID reuse. A queued inspection stop clears classification before its
+authorized `remove`. If durable terminal evidence exists while a row still
+reports running, maintenance releases queue identity during settlement and
+reacquires it for a fresh snapshot. The supervisor adapter never infers
+terminal state or removal authority itself.
+
+The stable terminal-callback path is a versioned protocol endpoint. A compatible
+helper implementation may be atomically refreshed at that path so existing
+private daemons receive current maintenance behavior without config drift; an
+incompatible callback contract requires a new versioned path.
 Preserve failed load receipts and distinguish host contention
 from demonstrated application defects rather than assuming either cause.
 For a published private generation, warm admission validates the binding,
@@ -175,8 +244,11 @@ scheduling receipt under the shared generation lease, then probes the Unix
 endpoint directly. It must not launch a supervisor control process. Missing,
 refused, changed, or stale state falls through to the elected exclusive path,
 which performs the protocol-level group check before repair or startup. Treat
-the scheduling receipt as Delegate's authority for its own default-group policy;
-manual supervisor mutation is outside the public lifecycle boundary.
+the scheduling receipt as Delegate's authority for its own default-group policy
+and staged add/enqueue capability. Probe that command surface only in the
+elected receipt-repair path; warm submission and staged recovery consume the
+same receipt instead of launching repeated help commands. Manual supervisor
+mutation is outside the public lifecycle boundary.
 
 Keep supervisor lifecycle work out of an already-running task's data path.
 Dispatch and explicit observation own bootstrap, migration, repair, and queue
@@ -267,6 +339,19 @@ strict no-symlink path boundary must canonicalize its test-owned temporary root
 before constructing evidence paths, and must separately prove that a deliberate
 symlinked parent is rejected. Do not weaken the production path check to accept
 the platform alias.
+
+Validate every generated Unix-domain endpoint against the target OS byte limit
+before publishing its config. The config remains the sole endpoint authority;
+when the ordinary state-rooted name is too long, select a shorter path inside
+the same private supervisor directory. An interrupted-bootstrap repair may
+replace only the exact Delegate-generated legacy config while the bootstrap
+journal is present and no daemon identity, active binding, migration, recovery,
+publication, migration history, scheduling receipt, socket, PID, runtime, or
+data state exists. The pending journal also requires a directory barrier on
+every readable-config retry, because an atomic replacement may have become
+visible before its final barrier reported failure. Boundary tests must cover
+the exact native limit and one byte beyond it, and native packaged-path
+acceptance must exercise the generated endpoint.
 
 Private supervisor launch is a native boundary owned by the Pueue client. The
 Pueue client owns the launch decision and waiter; `internal/lifetime` owns the

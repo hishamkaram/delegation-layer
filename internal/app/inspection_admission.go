@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,15 +28,17 @@ type admissionPreparation struct {
 }
 
 const (
-	privateOrdinarySchedulingRevision       = "unlimited-v3"
-	privateOrdinarySchedulingDaemonRevision = "unlimited-v2"
-	privateOrdinarySchedulingLegacyRevision = "unlimited-v1"
+	privateOrdinarySchedulingRevision               = "unlimited-v4"
+	privateOrdinarySchedulingCapabilitylessRevision = "unlimited-v3"
+	privateOrdinarySchedulingDaemonRevision         = "unlimited-v2"
+	privateOrdinarySchedulingLegacyRevision         = "unlimited-v1"
 )
 
 type privateOrdinarySchedulingRecord struct {
-	SchemaVersion int                `json:"schema_version"`
-	Revision      string             `json:"revision"`
-	Supervisor    task.SupervisorRef `json:"supervisor"`
+	SchemaVersion int                          `json:"schema_version"`
+	Revision      string                       `json:"revision"`
+	Supervisor    task.SupervisorRef           `json:"supervisor"`
+	StagedLaunch  pueue.StagedLaunchCapability `json:"staged_launch"`
 }
 
 type privateOrdinarySchedulingDaemon struct {
@@ -180,6 +183,7 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 			return admissionPreparation{}, err
 		}
 	}
+	resumeRetainedPrivateQueueMaintenance(store.Root, supervisor)
 	prepared.Capability, err = admissionRuntimeCapability(deps, req, candidate, prepared.Profile)
 	if err != nil {
 		return admissionPreparation{}, err
@@ -189,6 +193,20 @@ func prepareAdmission(a Arguments, deps Dependencies, store *taskdir.Store, req 
 	}
 	supervisorOwner.Release()
 	return prepared, nil
+}
+
+func resumeRetainedPrivateQueueMaintenance(stateRoot string, supervisor *pueue.Client) {
+	if supervisor == nil || !pueue.IsPrivateConfig(stateRoot, supervisor.Binding().ConfigPath) {
+		return
+	}
+	pending, err := pueue.PrivateQueueMaintenanceRetryNeeded(stateRoot)
+	if err != nil {
+		log.Printf("delegation-layer: retained terminal cleanup probe deferred: %v", err)
+		return
+	}
+	if pending && !supervisor.ScheduleRequestedPrivateQueueMaintenance(context.Background()) {
+		log.Printf("delegation-layer: retained terminal cleanup owner deferred")
+	}
 }
 
 func prepareAdmissionSupervisor(a Arguments, deps Dependencies, store *taskdir.Store, candidate commonprovider.ProfileCandidate, runner string, options pueue.Options, privateSupervisor bool) (*pueue.Client, error) {
@@ -235,17 +253,27 @@ func ensurePrivateAdmissionScheduling(store *taskdir.Store, supervisor *pueue.Cl
 	}
 	controlContext, cancel := supervisorControlContext(options)
 	defer cancel()
+	return ensurePrivateAdmissionSchedulingContext(controlContext, store.Root, supervisor)
+}
+
+func ensurePrivateAdmissionSchedulingContext(controlContext context.Context, stateRoot string, supervisor *pueue.Client) error {
+	if controlContext == nil {
+		return context.Canceled
+	}
+	if supervisor == nil || !pueue.IsPrivateConfig(stateRoot, supervisor.Binding().ConfigPath) {
+		return errors.New("missing private admission supervisor")
+	}
 	for {
-		recorded, err := privateOrdinarySchedulingRecorded(store.Root, supervisor.RuntimeBinding())
+		recorded, err := privateOrdinarySchedulingRecorded(stateRoot, supervisor.RuntimeBinding())
 		if err != nil {
 			return err
 		}
 		if recorded {
 			return nil
 		}
-		acquired, transitionErr := pueue.TryWithPrivateTransition(controlContext, store.Root, func() error {
-			return pueue.WithBootstrapLockContext(controlContext, store.Root, func(lockedContext context.Context) error {
-				return ensurePrivateOrdinarySchedulingWithBootstrapLock(lockedContext, store.Root, supervisor)
+		acquired, transitionErr := pueue.TryWithPrivateTransition(controlContext, stateRoot, func() error {
+			return pueue.WithBootstrapLockContext(controlContext, stateRoot, func(lockedContext context.Context) error {
+				return ensurePrivateOrdinarySchedulingWithBootstrapLock(lockedContext, stateRoot, supervisor)
 			})
 		})
 		if transitionErr != nil {
@@ -254,85 +282,95 @@ func ensurePrivateAdmissionScheduling(store *taskdir.Store, supervisor *pueue.Cl
 		if acquired {
 			return nil
 		}
-		if transitionErr = pueue.WaitForPrivateTransition(controlContext, store.Root); transitionErr != nil {
+		if transitionErr = pueue.WaitForPrivateTransition(controlContext, stateRoot); transitionErr != nil {
 			return transitionErr
 		}
 	}
 }
 
 func privateOrdinarySchedulingRecorded(stateRoot string, binding task.SupervisorRef) (bool, error) {
+	_, recorded, err := privateOrdinarySchedulingAuthorization(stateRoot, binding)
+	return recorded, err
+}
+
+func privateOrdinarySchedulingAuthorization(stateRoot string, binding task.SupervisorRef) (pueue.SubmissionAuthorization, bool, error) {
 	if !pueue.IsPrivateConfig(stateRoot, binding.ConfigPath) {
-		return false, pueue.ErrConfiguration
+		return pueue.SubmissionAuthorization{}, false, pueue.ErrConfiguration
 	}
 	data, found, err := pueue.ReadPrivateSchedulingEvidence(stateRoot)
 	if err != nil || !found {
-		return false, err
+		return pueue.SubmissionAuthorization{}, false, err
 	}
-	recorded, err := decodePrivateOrdinaryScheduling(data, binding)
+	authorization, recorded, err := decodePrivateOrdinaryScheduling(data, binding)
 	if err != nil {
-		return false, errors.Join(pueue.ErrBinding, err)
+		return pueue.SubmissionAuthorization{}, false, errors.Join(pueue.ErrBinding, err)
 	}
-	return recorded, nil
+	return authorization, recorded, nil
 }
 
 func privateSubmissionGate(stateRoot string) pueue.SubmissionGate {
-	return func(_ context.Context, binding task.SupervisorRef) error {
+	return func(_ context.Context, binding task.SupervisorRef) (pueue.SubmissionAuthorization, error) {
 		if !pueue.IsPrivateConfig(stateRoot, binding.ConfigPath) {
-			return nil
+			return pueue.SubmissionAuthorization{}, nil
 		}
 		complete, err := pueue.PrivateSupervisorMigrationComplete(stateRoot, binding)
 		if err != nil {
-			return err
+			return pueue.SubmissionAuthorization{}, err
 		}
 		if !complete {
-			return pueue.ErrBinding
+			return pueue.SubmissionAuthorization{}, pueue.ErrBinding
 		}
-		recorded, err := privateOrdinarySchedulingRecorded(stateRoot, binding)
+		authorization, recorded, err := privateOrdinarySchedulingAuthorization(stateRoot, binding)
 		if err != nil {
-			return err
+			return pueue.SubmissionAuthorization{}, err
 		}
 		if !recorded {
-			return pueue.ErrBinding
+			return pueue.SubmissionAuthorization{}, pueue.ErrBinding
 		}
-		return nil
+		return authorization, nil
 	}
 }
 
-func decodePrivateOrdinaryScheduling(data []byte, binding task.SupervisorRef) (bool, error) {
+func decodePrivateOrdinaryScheduling(data []byte, binding task.SupervisorRef) (pueue.SubmissionAuthorization, bool, error) {
 	var fields map[string]json.RawMessage
 	if err := task.DecodeStrict(data, &fields); err != nil {
-		return false, err
+		return pueue.SubmissionAuthorization{}, false, err
 	}
 	if err := validatePrivateOrdinarySchedulingFields(fields); err != nil {
-		return false, err
+		return pueue.SubmissionAuthorization{}, false, err
 	}
 	var schemaVersion int
 	if err := json.Unmarshal(fields["schema_version"], &schemaVersion); err != nil {
-		return false, err
+		return pueue.SubmissionAuthorization{}, false, err
 	}
 	if schemaVersion != task.SchemaVersion {
-		return false, task.ErrUnsupportedSchema
+		return pueue.SubmissionAuthorization{}, false, task.ErrUnsupportedSchema
 	}
 	var revision string
 	if err := json.Unmarshal(fields["revision"], &revision); err != nil {
-		return false, err
+		return pueue.SubmissionAuthorization{}, false, err
 	}
 	switch revision {
 	case privateOrdinarySchedulingLegacyRevision:
-		return decodeLegacyPrivateOrdinaryScheduling(fields)
+		recorded, err := decodeLegacyPrivateOrdinaryScheduling(fields)
+		return pueue.SubmissionAuthorization{}, recorded, err
 	case privateOrdinarySchedulingDaemonRevision:
-		return decodeDaemonPrivateOrdinaryScheduling(fields)
+		recorded, err := decodeDaemonPrivateOrdinaryScheduling(fields)
+		return pueue.SubmissionAuthorization{}, recorded, err
+	case privateOrdinarySchedulingCapabilitylessRevision:
+		recorded, err := decodeCapabilitylessPrivateOrdinaryScheduling(fields, binding)
+		return pueue.SubmissionAuthorization{}, recorded, err
 	case privateOrdinarySchedulingRevision:
 		return decodeCurrentPrivateOrdinaryScheduling(fields, binding)
 	default:
-		return false, fmt.Errorf("unsupported private ordinary scheduling revision %q", revision)
+		return pueue.SubmissionAuthorization{}, false, fmt.Errorf("unsupported private ordinary scheduling revision %q", revision)
 	}
 }
 
 func validatePrivateOrdinarySchedulingFields(fields map[string]json.RawMessage) error {
 	for field := range fields {
 		switch field {
-		case "schema_version", "revision", "supervisor", "config_digest":
+		case "schema_version", "revision", "supervisor", "config_digest", "staged_launch":
 		default:
 			return fmt.Errorf("unknown private ordinary scheduling field %q", field)
 		}
@@ -345,7 +383,7 @@ func validatePrivateOrdinarySchedulingFields(fields map[string]json.RawMessage) 
 
 func decodeLegacyPrivateOrdinaryScheduling(fields map[string]json.RawMessage) (bool, error) {
 	configDigest, err := privateOrdinarySchedulingString(fields, "config_digest")
-	if err != nil || len(fields["supervisor"]) != 0 || task.ValidateSHA256(configDigest) != nil {
+	if err != nil || len(fields["supervisor"]) != 0 || len(fields["staged_launch"]) != 0 || task.ValidateSHA256(configDigest) != nil {
 		return false, task.ErrEvidenceFault
 	}
 	return false, nil
@@ -353,7 +391,7 @@ func decodeLegacyPrivateOrdinaryScheduling(fields map[string]json.RawMessage) (b
 
 func decodeDaemonPrivateOrdinaryScheduling(fields map[string]json.RawMessage) (bool, error) {
 	configDigest, err := privateOrdinarySchedulingString(fields, "config_digest")
-	if err != nil || configDigest != "" || len(fields["supervisor"]) == 0 {
+	if err != nil || configDigest != "" || len(fields["supervisor"]) == 0 || len(fields["staged_launch"]) != 0 {
 		return false, task.ErrEvidenceFault
 	}
 	var daemon privateOrdinarySchedulingDaemon
@@ -410,7 +448,38 @@ func canonicalAbsolutePath(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.ContainsRune(path, 0)
 }
 
-func decodeCurrentPrivateOrdinaryScheduling(fields map[string]json.RawMessage, binding task.SupervisorRef) (bool, error) {
+func decodeCapabilitylessPrivateOrdinaryScheduling(fields map[string]json.RawMessage, binding task.SupervisorRef) (bool, error) {
+	_, err := decodePrivateOrdinarySchedulingBinding(fields, binding)
+	if err != nil || len(fields["staged_launch"]) != 0 {
+		if err == nil {
+			err = task.ErrEvidenceFault
+		}
+		return false, err
+	}
+	// v3 proves the exact generation and scheduling policy but contains no
+	// staged command-surface evidence, so it is a valid stale receipt.
+	return false, nil
+}
+
+func decodeCurrentPrivateOrdinaryScheduling(fields map[string]json.RawMessage, binding task.SupervisorRef) (pueue.SubmissionAuthorization, bool, error) {
+	recorded, err := decodePrivateOrdinarySchedulingBinding(fields, binding)
+	if err != nil || !recorded {
+		return pueue.SubmissionAuthorization{}, recorded, err
+	}
+	if len(fields["staged_launch"]) == 0 {
+		return pueue.SubmissionAuthorization{}, false, task.ErrEvidenceFault
+	}
+	var capability pueue.StagedLaunchCapability
+	if err := task.DecodeStrict(fields["staged_launch"], &capability); err != nil {
+		return pueue.SubmissionAuthorization{}, false, err
+	}
+	if !capability.AddStashed || !capability.EnqueueByID {
+		return pueue.SubmissionAuthorization{}, false, task.ErrEvidenceFault
+	}
+	return pueue.SubmissionAuthorization{StagedLaunchCapability: &capability}, true, nil
+}
+
+func decodePrivateOrdinarySchedulingBinding(fields map[string]json.RawMessage, binding task.SupervisorRef) (bool, error) {
 	configDigest, err := privateOrdinarySchedulingString(fields, "config_digest")
 	if err != nil || configDigest != "" || len(fields["supervisor"]) == 0 {
 		return false, task.ErrEvidenceFault
@@ -461,20 +530,28 @@ func repairPrivateOrdinarySchedulingWithBootstrapLock(ctx context.Context, state
 	if !found || group.ParallelTasks != 0 {
 		return fmt.Errorf("%w: private supervisor did not retain unlimited ordinary task parallelism", pueue.ErrBinding)
 	}
-	return publishPrivateOrdinaryScheduling(stateRoot, supervisor.RuntimeBinding())
+	capability, err := supervisor.StagedLaunchCapabilityWithBootstrapLock(ctx, stateRoot)
+	if err != nil {
+		return err
+	}
+	return publishPrivateOrdinaryScheduling(stateRoot, supervisor.RuntimeBinding(), capability)
 }
 
-func publishPrivateOrdinaryScheduling(stateRoot string, binding task.SupervisorRef) error {
+func publishPrivateOrdinaryScheduling(stateRoot string, binding task.SupervisorRef, capability pueue.StagedLaunchCapability) error {
 	if !pueue.IsPrivateConfig(stateRoot, binding.ConfigPath) {
 		return pueue.ErrConfiguration
 	}
 	if err := validatePrivateOrdinarySchedulingBinding(binding); err != nil {
 		return errors.Join(pueue.ErrConfiguration, err)
 	}
+	if !capability.AddStashed || !capability.EnqueueByID {
+		return errors.Join(pueue.ErrConfiguration, pueue.ErrStagedCapability)
+	}
 	data, err := task.MarshalCanonical(privateOrdinarySchedulingRecord{
 		SchemaVersion: task.SchemaVersion,
 		Revision:      privateOrdinarySchedulingRevision,
 		Supervisor:    binding,
+		StagedLaunch:  capability,
 	})
 	if err != nil {
 		return errors.Join(pueue.ErrConfiguration, err)
@@ -515,15 +592,15 @@ func resolveAdmissionRunner(argument, ownership string, deps Dependencies) (stri
 }
 
 func preparePrivateAdmissionExecutables(a Arguments, deps Dependencies, root, runner, runnerOwnership string) (string, error) {
+	controlContext, cancel := supervisorControlContext(deps.SupervisorOptions)
+	defer cancel()
 	terminalRunner, err := resolveRunner("", deps)
 	if err != nil {
 		return "", withDispatchStage("resolve-runner", err)
 	}
-	if _, err = installStateTerminalEventRunner(root, terminalRunner); err != nil {
+	if _, err = prepareStateTerminalEventRunner(controlContext, root, terminalRunner); err != nil {
 		return "", withDispatchStage("prepare-runner", err)
 	}
-	controlContext, cancel := supervisorControlContext(deps.SupervisorOptions)
-	defer cancel()
 	if runnerOwnership == task.RunnerOwnershipManaged {
 		runner, err = installStateRunner(root, runner)
 		if err != nil {
@@ -1270,9 +1347,14 @@ func validateLegacyEndedInspectionJob(taskID string, job pueue.Job) error {
 	return nil
 }
 
-func validateLegacyEndedInspectionEvidence(ctx context.Context, operation *inspection.Operation, taskID string) error {
-	if _, _, err := operation.ReadCompletedContext(ctx); err != nil {
-		return fmt.Errorf("%w: ended Delegate inspection %s has no valid terminal evidence: %w", inspection.ErrGroupMigrationRequired, taskID, err)
+func validateLegacyEndedInspectionEvidence(ctx context.Context, operation *inspection.Operation, taskID string, job pueue.Job) error {
+	result, succeeded, err := operation.ReadWorkerResultContext(ctx)
+	managed := operation.Request().Binding.WorkerExitProof == inspection.WorkerExitProofGuardianWaitV1
+	if managed && errors.Is(err, inspection.ErrAdmissionExpired) {
+		return nil
+	}
+	if err != nil || (!managed && succeeded != job.Succeeded) || (succeeded && (result == nil || result.Reason != inspection.ResultEligible)) {
+		return fmt.Errorf("%w: ended Delegate inspection %s has no valid terminal evidence: %w", inspection.ErrGroupMigrationRequired, taskID, errors.Join(task.ErrEvidenceFault, err))
 	}
 	return nil
 }
@@ -1332,9 +1414,6 @@ func inspectLegacyEndedInspection(ctx context.Context, store *taskdir.Store, leg
 		return fmt.Errorf("%w: ended Delegate inspection %s could not be reopened: %w", inspection.ErrGroupMigrationRequired, taskID, err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
-	if err := validateLegacyEndedInspectionEvidence(ctx, operation, taskID); err != nil {
-		return err
-	}
 	if err := validateLegacyEndedInspectionBinding(ctx, store, legacy, operation, taskID, job); err != nil {
 		return err
 	}
@@ -1344,7 +1423,10 @@ func inspectLegacyEndedInspection(ctx context.Context, store *taskdir.Store, leg
 	// Preserve this independent exit observation before cleanup or migration
 	// removes the row. Admission can then finish from durable evidence even if
 	// its own next queue snapshot no longer contains the worker.
-	return recordLegacyEndedInspectionExit(ctx, operation, taskID, job)
+	if err := recordLegacyEndedInspectionExit(ctx, operation, taskID, job); err != nil {
+		return err
+	}
+	return validateLegacyEndedInspectionEvidence(ctx, operation, taskID, job)
 }
 
 func privateMigrationSupervisorMatches(stateRoot string, current, candidate task.SupervisorRef) (bool, error) {
@@ -2062,9 +2144,6 @@ func acceptInspectionObservation(ctx context.Context, operation *inspection.Oper
 	id := job.ID
 	identity.NumericTaskID = &id
 	if facts, _, terminal, err := recordedInspectionFacts(ctx, operation); terminal || err != nil {
-		if terminal && job.State == pueue.StateEnded {
-			schedulePrivateQueueMaintenance(ctx, supervisor)
-		}
 		return facts, terminal, err
 	}
 	if job.State != pueue.StateEnded {
@@ -2081,7 +2160,6 @@ func acceptInspectionObservation(ctx context.Context, operation *inspection.Oper
 		} else if err != nil {
 			return nil, true, err
 		}
-		schedulePrivateQueueMaintenance(ctx, supervisor)
 		return nil, true, errInspectionWorkerUnavailable
 	}
 	recordErr := operation.RecordWorkerExitContext(ctx, job.ID, job.Succeeded)
@@ -2093,7 +2171,6 @@ func acceptInspectionObservation(ctx context.Context, operation *inspection.Oper
 		return nil, true, recordErr
 	}
 	facts, _, terminal, err := recordedInspectionFacts(ctx, operation)
-	schedulePrivateQueueMaintenance(ctx, supervisor)
 	return facts, terminal, err
 }
 
@@ -2115,13 +2192,6 @@ func requireInspectionReceipt(ctx context.Context, operation *inspection.Operati
 		return task.ErrIdentityMismatch
 	}
 	return nil
-}
-
-func schedulePrivateQueueMaintenance(ctx context.Context, supervisor *pueue.Client) {
-	if supervisor == nil {
-		return
-	}
-	supervisor.SchedulePrivateQueueMaintenance(ctx)
 }
 
 func reconcileInspectionObservation(ctx context.Context, operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, commit pueue.InspectionObservationCommit) (pueue.InspectionObservation, error) {
@@ -2155,7 +2225,8 @@ func recoverStagedInspectionObservation(ctx context.Context, operation *inspecti
 	receiptCommit := func(current pueue.InspectionObservation) error {
 		return operation.RecordReceiptContext(ctx, current.Job.ID)
 	}
-	recovered, recoverErr := supervisor.RecoverInspectionStaged(ctx, observation.Identity, observation.Job.ID, receiptCommit)
+	root := filepath.Dir(filepath.Dir(observation.Binding.ConfigPath))
+	recovered, recoverErr := supervisor.RecoverInspectionStagedWithGate(ctx, observation.Identity, observation.Job.ID, privateSubmissionGate(root), receiptCommit)
 	if recoverErr == nil || !errors.Is(recoverErr, pueue.ErrUnknown) {
 		return recovered, recoverErr
 	}

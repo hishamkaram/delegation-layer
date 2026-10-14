@@ -430,6 +430,10 @@ queue status. Changing install paths, executable hashes, or observed version
 does not by itself invalidate a compatible private supervisor. The
 configuration parser accepts YAML and JSON-form YAML with strict fields and
 bounded depth, aliases, nodes, and document size.
+Fresh bootstrap may choose a shorter socket filename inside the same private
+supervisor directory when the ordinary name exceeds the host limit. This
+pre-publication choice does not alter a published generation; changing a
+published config or endpoint still requires the migration flow below.
 
 `delegate-run` normally resolves beside `delegate`. Use the absolute global
 `--runner` option for a source-build layout or a custom integration.

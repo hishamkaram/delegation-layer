@@ -3,6 +3,7 @@ package pueue
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -128,7 +129,17 @@ func writeStagedInspectionStatus(t *testing.T, fake *fakeSupervisor, identity In
 	writeStagedInspectionStatusState(t, fake, identity, id, stagedStateForTest(t, state), label, group)
 }
 
+func writeStagedInspectionStatusWithLaunch(t *testing.T, fake *fakeSupervisor, identity InspectionIdentity, id int64, state State, launch Launch) {
+	t.Helper()
+	writeStagedInspectionStatusStateWithCommand(t, fake, identity, id, stagedStateForTest(t, state), "", identity.Group(), stagedInspectionCommand(launch, identity))
+}
+
 func writeStagedInspectionStatusState(t *testing.T, fake *fakeSupervisor, identity InspectionIdentity, id int64, state map[string]any, label, group string) {
+	t.Helper()
+	writeStagedInspectionStatusStateWithCommand(t, fake, identity, id, state, label, group, "")
+}
+
+func writeStagedInspectionStatusStateWithCommand(t *testing.T, fake *fakeSupervisor, identity InspectionIdentity, id int64, state map[string]any, label, group, command string) {
 	t.Helper()
 	if label == "" {
 		label = identity.Label()
@@ -138,6 +149,10 @@ func writeStagedInspectionStatusState(t *testing.T, fake *fakeSupervisor, identi
 	}
 	job := statusTestJob(id, label, state)
 	job["group"] = group
+	if command != "" {
+		job["original_command"] = command
+		job["command"] = command
+	}
 	parallel := 1
 	if identity.Group() == "default" {
 		parallel = 0
@@ -284,6 +299,22 @@ func inspectionQueuedStatus(t *testing.T, identity InspectionIdentity, id int64)
 	job["group"] = identity.Group()
 	return statusTestPayload(t, map[string]any{strconv.FormatInt(id, 10): job}, map[string]any{
 		identity.Group(): map[string]any{"status": "Running", "parallel_tasks": 1},
+	})
+}
+
+func inspectionQueuedStatusWithLaunch(t *testing.T, identity InspectionIdentity, id int64, launch Launch) []byte {
+	t.Helper()
+	job := statusTestJob(id, identity.Label(), stagedStateForTest(t, StateQueued))
+	job["group"] = identity.Group()
+	command := stagedInspectionCommand(launch, identity)
+	job["original_command"] = command
+	job["command"] = command
+	parallel := uint64(1)
+	if identity.Group() == "default" {
+		parallel = 0
+	}
+	return statusTestPayload(t, map[string]any{strconv.FormatInt(id, 10): job}, map[string]any{
+		identity.Group(): map[string]any{"status": "Running", "parallel_tasks": parallel},
 	})
 }
 
@@ -499,6 +530,96 @@ func TestStagedLaunchCapabilityUsesObservedHelpSurface(t *testing.T) {
 	}
 }
 
+func TestSubmitStagedUsesRecordedGenerationCapabilityWithoutHelpProbe(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	_, permit, identity, launch := prepareStagedOrdinarySubmission(t, fake)
+	if err := os.WriteFile(fake.logPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capability := StagedLaunchCapability{AddStashed: true, EnqueueByID: true}
+	gate := func(context.Context, task.SupervisorRef) (SubmissionAuthorization, error) {
+		return SubmissionAuthorization{StagedLaunchCapability: &capability}, nil
+	}
+	var committed Observation
+	observation, err := fake.client.SubmitStagedWithGate(context.Background(), permit, launch, gate, captureOrdinaryStagedCommit(t, fake, identity, &committed))
+	if err != nil || observation != committed || !observation.Matched {
+		t.Fatalf("authorized staged submission failed: observation=%+v committed=%+v err=%v", observation, committed, err)
+	}
+	if addHelp, enqueueHelp := len(stagedHelpInvocations(t, fake, "add")), len(stagedHelpInvocations(t, fake, "enqueue")); addHelp != 0 || enqueueHelp != 0 {
+		t.Fatalf("recorded capability repeated help probes: add=%d enqueue=%d invocations=%+v", addHelp, enqueueHelp, readInvocations(t, fake.logPath))
+	}
+}
+
+func TestSubmitConcurrentInspectionStagedUsesRecordedGenerationCapabilityWithoutHelpProbe(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "ok")
+	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
+	launch := Launch{RunnerExecutable: fake.executable, RootPath: store.Root, Supervised: true}
+	writeStagedInspectionStatusWithLaunch(t, fake, identity, 9, StateStashed, launch)
+	permit := &concurrentInspectionTestPermit{
+		inspectionTestPermit: &inspectionTestPermit{
+			submissionRoot:       identity.RootID,
+			submissionTask:       identity.TaskID,
+			submissionSupervisor: fake.client.Binding(),
+		},
+		queueGroup: "default",
+	}
+	if err := os.WriteFile(fake.logPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capability := StagedLaunchCapability{AddStashed: true, EnqueueByID: true}
+	gate := func(context.Context, task.SupervisorRef) (SubmissionAuthorization, error) {
+		return SubmissionAuthorization{StagedLaunchCapability: &capability}, nil
+	}
+	observation, err := fake.client.SubmitConcurrentInspectionStagedWithGate(context.Background(), permit, identity, launch, gate, func(InspectionObservation) error { return nil })
+	if err != nil || !observation.Matched {
+		t.Fatalf("authorized staged inspection failed: observation=%+v err=%v", observation, err)
+	}
+	if addHelp, enqueueHelp := len(stagedHelpInvocations(t, fake, "add")), len(stagedHelpInvocations(t, fake, "enqueue")); addHelp != 0 || enqueueHelp != 0 {
+		t.Fatalf("recorded inspection capability repeated help probes: add=%d enqueue=%d invocations=%+v", addHelp, enqueueHelp, readInvocations(t, fake.logPath))
+	}
+}
+
+func TestRecoverStagedUsesRecordedGenerationCapabilityWithoutHelpProbe(t *testing.T) {
+	fake := newFakeSupervisor(t, "ok")
+	_, _, identity, _ := prepareStagedOrdinarySubmission(t, fake)
+	writeStagedOrdinaryStatus(t, fake, identity, 7, StateStashed, "", "default")
+	if err := os.WriteFile(fake.logPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capability := StagedLaunchCapability{AddStashed: true, EnqueueByID: true}
+	gate := func(context.Context, task.SupervisorRef) (SubmissionAuthorization, error) {
+		return SubmissionAuthorization{StagedLaunchCapability: &capability}, nil
+	}
+	observation, err := fake.client.RecoverStagedWithGate(context.Background(), identity, 7, gate, func(Observation) error { return nil })
+	if err != nil || !observation.Matched || observation.State != StateStashed {
+		t.Fatalf("authorized staged recovery failed: observation=%+v err=%v", observation, err)
+	}
+	if addHelp, enqueueHelp := len(stagedHelpInvocations(t, fake, "add")), len(stagedHelpInvocations(t, fake, "enqueue")); addHelp != 0 || enqueueHelp != 0 {
+		t.Fatalf("recorded recovery capability repeated help probes: add=%d enqueue=%d invocations=%+v", addHelp, enqueueHelp, readInvocations(t, fake.logPath))
+	}
+}
+
+func TestRecoverInspectionStagedUsesRecordedGenerationCapabilityWithoutHelpProbe(t *testing.T) {
+	fake := newInspectionSupervisor(t, "ok")
+	fixture := newTaskFixture(t, fake.client.Binding())
+	identity := InspectionIdentity{RootID: fixture.store.RootID, TaskID: fixture.taskDir.TaskID}
+	writeStagedInspectionStatus(t, fake, identity, 9, StateStashed, "", identity.Group())
+	if err := os.WriteFile(fake.logPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	capability := StagedLaunchCapability{AddStashed: true, EnqueueByID: true}
+	gate := func(context.Context, task.SupervisorRef) (SubmissionAuthorization, error) {
+		return SubmissionAuthorization{StagedLaunchCapability: &capability}, nil
+	}
+	observation, err := fake.client.RecoverInspectionStagedWithGate(context.Background(), identity, 9, gate, func(InspectionObservation) error { return nil })
+	if err != nil || !observation.Matched || observation.Job.State != StateStashed {
+		t.Fatalf("authorized staged inspection recovery failed: observation=%+v err=%v", observation, err)
+	}
+	if addHelp, enqueueHelp := len(stagedHelpInvocations(t, fake, "add")), len(stagedHelpInvocations(t, fake, "enqueue")); addHelp != 0 || enqueueHelp != 0 {
+		t.Fatalf("recorded inspection recovery capability repeated help probes: add=%d enqueue=%d invocations=%+v", addHelp, enqueueHelp, readInvocations(t, fake.logPath))
+	}
+}
+
 func TestSubmitStagedCommitsExactStashedReceiptBeforeEnqueue(t *testing.T) {
 	fake := newFakeSupervisor(t, "ok")
 	_, permit, identity, launch := prepareStagedOrdinarySubmission(t, fake)
@@ -604,6 +725,104 @@ func TestSubmitStagedEnqueueTimeoutRetainsReceiptAndPending(t *testing.T) {
 	}
 	if got := len(stagedInvocations(t, fake, "add")); got != 1 || len(stagedInvocations(t, fake, "enqueue")) != 1 {
 		t.Fatalf("enqueue was duplicated or add retried: adds=%d enqueues=%d", got, len(stagedInvocations(t, fake, "enqueue")))
+	}
+}
+
+func TestSubmitStagedExternalEnqueueRetainsEveryPrivateLease(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "delay-enqueue")
+	configureExternalPendingEnqueue(t, fake)
+	_, permit, _, launch := prepareStagedOrdinarySubmission(t, fake)
+	clearStagedInvocationLog(t, fake)
+	observation, err := fake.client.SubmitStaged(t.Context(), permit, launch, func(Observation) error { return nil })
+	if !errors.Is(err, ErrEnqueueUncertain) || observation.Pending == nil {
+		t.Fatalf("external ordinary enqueue did not remain pending: observation=%+v err=%v", observation, err)
+	}
+	assertNoStagedStatusSnapshot(t, fake)
+	assertPendingSubmissionLeases(t, fake.client, store.Root, observation.Pending)
+}
+
+func TestSubmitConcurrentInspectionExternalEnqueueRetainsEveryPrivateLease(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "delay-enqueue")
+	configureExternalPendingEnqueue(t, fake)
+	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
+	permit := &concurrentInspectionTestPermit{
+		inspectionTestPermit: &inspectionTestPermit{
+			submissionRoot:       identity.RootID,
+			submissionTask:       identity.TaskID,
+			submissionSupervisor: fake.client.Binding(),
+		},
+		queueGroup: "default",
+	}
+	launch := Launch{RunnerExecutable: fake.executable, RootPath: store.Root, Supervised: true}
+	clearStagedInvocationLog(t, fake)
+	observation, err := fake.client.SubmitConcurrentInspectionStaged(t.Context(), permit, identity, launch, func(InspectionObservation) error { return nil })
+	if !errors.Is(err, ErrEnqueueUncertain) || observation.Pending == nil {
+		t.Fatalf("external inspection enqueue did not remain pending: observation=%+v err=%v", observation, err)
+	}
+	assertNoStagedStatusSnapshot(t, fake)
+	assertPendingSubmissionLeases(t, fake.client, store.Root, observation.Pending)
+}
+
+func configureExternalPendingEnqueue(t *testing.T, fake *fakeSupervisor) {
+	t.Helper()
+	owner, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err = filepath.EvalSymlinks(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.client.options.ControlOwnerExecutable = owner
+	fake.client.options.Observer = func(event CommandEvent) {
+		if event.Stage == "entry" && slices.Contains(event.Argv, "enqueue") && !slices.Contains(event.Argv, "--help") {
+			fake.client.options.ObservationTimeout = 20 * time.Millisecond
+		}
+	}
+}
+
+func clearStagedInvocationLog(t *testing.T, fake *fakeSupervisor) {
+	t.Helper()
+	if err := os.WriteFile(fake.logPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertNoStagedStatusSnapshot(t *testing.T, fake *fakeSupervisor) {
+	t.Helper()
+	if got := countCommand(readInvocations(t, fake.logPath), "status"); got != 0 {
+		t.Fatalf("normal staged submission issued %d queue snapshots, want zero", got)
+	}
+}
+
+func assertPendingSubmissionLeases(t *testing.T, client *Client, stateRoot string, pending *Pending) {
+	t.Helper()
+	bootstrapContext, cancelBootstrap := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	bootstrapErr := WithBootstrapLock(bootstrapContext, stateRoot, func() error { return nil })
+	cancelBootstrap()
+	if !errors.Is(bootstrapErr, context.DeadlineExceeded) {
+		t.Fatalf("external enqueue released its supervisor generation: %v", bootstrapErr)
+	}
+	identityContext, cancelIdentity := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	identityErr := client.withPrivateQueueIdentityMutation(identityContext, func(context.Context) error { return nil })
+	cancelIdentity()
+	if !errors.Is(identityErr, context.DeadlineExceeded) {
+		t.Fatalf("external enqueue released its queue identity lease: %v", identityErr)
+	}
+	if !awaitPendingNaturally(pending, 2*time.Second) {
+		t.Fatal("external enqueue did not finish naturally")
+	}
+	result, ok := pending.Result()
+	if !ok || result.Err != nil || result.ExitCode != 0 {
+		t.Fatalf("external enqueue completed unsuccessfully: result=%+v available=%t", result, ok)
+	}
+	releaseContext, cancelRelease := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancelRelease()
+	if err := WithBootstrapLock(releaseContext, stateRoot, func() error { return nil }); err != nil {
+		t.Fatalf("supervisor generation did not release after enqueue: %v", err)
+	}
+	if err := client.withPrivateQueueIdentityMutation(releaseContext, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("queue identity lease did not release after enqueue: %v", err)
 	}
 }
 
@@ -738,23 +957,79 @@ func TestSubmitInspectionStagedPassesExactReceiptAndRegistrationState(t *testing
 	fixture := newTaskFixture(t, fake.client.Binding())
 	taskID := fixture.taskDir.TaskID
 	identity := InspectionIdentity{RootID: fixture.store.RootID, TaskID: taskID}
-	writeStagedInspectionStatus(t, fake, identity, 9, StateQueued, "", identity.Group())
+	launch := Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root, Supervised: true}
+	writeStagedInspectionStatusWithLaunch(t, fake, identity, 9, StateStashed, launch)
 	permit := &inspectionTestPermit{
 		submissionRoot:       identity.RootID,
 		submissionTask:       identity.TaskID,
 		submissionSupervisor: fake.client.Binding(),
 	}
 	var committed InspectionObservation
-	observation, err := fake.client.SubmitInspectionStaged(context.Background(), permit, identity, Launch{
-		RunnerExecutable: fake.executable,
-		RootPath:         fixture.store.Root,
-		Supervised:       true,
-	}, captureInspectionStagedCommit(t, fake, identity, &committed))
+	observation, err := fake.client.SubmitInspectionStaged(context.Background(), permit, identity, launch, captureInspectionStagedCommit(t, fake, identity, &committed))
 	if err != nil || observation != committed || !observation.Matched || observation.Job.State != StateStashed {
 		t.Fatalf("staged inspection result was not retained: observation=%+v committed=%+v err=%v", observation, committed, err)
 	}
 	if permit.calls != 1 || len(stagedInvocations(t, fake, "add")) != 1 || len(stagedInvocations(t, fake, "enqueue")) != 1 {
 		t.Fatalf("inspection staged protocol issued the wrong commands: calls=%d invocations=%+v", permit.calls, readInvocations(t, fake.logPath))
+	}
+}
+
+func TestSubmitInspectionStagedHoldsQueueIdentityThroughCommitAndEnqueue(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "ok")
+	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
+	launch := Launch{RunnerExecutable: fake.executable, RootPath: store.Root, Supervised: true}
+	permit := &concurrentInspectionTestPermit{
+		inspectionTestPermit: &inspectionTestPermit{
+			submissionRoot:       identity.RootID,
+			submissionTask:       identity.TaskID,
+			submissionSupervisor: fake.client.Binding(),
+		},
+		queueGroup: "default",
+	}
+	commitEntered := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	submissionDone := make(chan error, 1)
+	go func() {
+		_, err := fake.client.SubmitConcurrentInspectionStaged(t.Context(), permit, identity, launch, func(candidate InspectionObservation) error {
+			if !candidate.Matched || candidate.Job.State != StateStashed || candidate.Job.ID != 9 {
+				return errors.New("submission commit received the wrong staged row")
+			}
+			close(commitEntered)
+			<-releaseCommit
+			return nil
+		})
+		submissionDone <- err
+	}()
+	assertStagedTransitionBlocksQueueIdentityMutation(t, fake.client, commitEntered, releaseCommit, submissionDone)
+	if got := len(stagedInvocations(t, fake, "add")); got != 1 || len(stagedInvocations(t, fake, "enqueue")) != 1 {
+		t.Fatalf("staged submission changed command cardinality: adds=%d enqueues=%d", got, len(stagedInvocations(t, fake, "enqueue")))
+	}
+}
+
+func TestSubmitInspectionStagedEnqueueFailureRetainsExactReceipt(t *testing.T) {
+	fake := newInspectionSupervisor(t, "enqueue-refuse")
+	fixture := newTaskFixture(t, fake.client.Binding())
+	identity := InspectionIdentity{RootID: fixture.store.RootID, TaskID: fixture.taskDir.TaskID}
+	launch := Launch{RunnerExecutable: fake.executable, RootPath: fixture.store.Root, Supervised: true}
+	writeStagedInspectionStatusWithLaunch(t, fake, identity, 9, StateStashed, launch)
+	permit := &inspectionTestPermit{
+		submissionRoot:       identity.RootID,
+		submissionTask:       identity.TaskID,
+		submissionSupervisor: fake.client.Binding(),
+	}
+	commits := 0
+	observation, submitErr := fake.client.SubmitInspectionStaged(context.Background(), permit, identity, launch, func(candidate InspectionObservation) error {
+		commits++
+		if candidate.Job.State != StateStashed || candidate.Job.ID != 9 {
+			t.Fatalf("enqueue failure callback received the wrong receipt: %+v", candidate)
+		}
+		return nil
+	})
+	if !errors.Is(submitErr, ErrEnqueueUncertain) || commits != 1 || !observation.Matched || observation.Job.State != StateStashed || observation.Job.ID != 9 {
+		t.Fatalf("enqueue failure lost the committed receipt: observation=%+v err=%v commits=%d", observation, submitErr, commits)
+	}
+	if got := len(stagedInvocations(t, fake, "add")); got != 1 || len(stagedInvocations(t, fake, "enqueue")) != 1 {
+		t.Fatalf("enqueue failure duplicated staged commands: adds=%d enqueues=%d", got, len(stagedInvocations(t, fake, "enqueue")))
 	}
 }
 
@@ -765,6 +1040,8 @@ func TestSubmitConcurrentInspectionStagedRegistersBeforeCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity := InspectionIdentity{RootID: store.RootID, TaskID: taskID, QueueGroup: "default"}
+	launch := Launch{RunnerExecutable: fake.executable, RootPath: store.Root, Supervised: true}
+	writeStagedInspectionStatusWithLaunch(t, fake, identity, 9, StateStashed, launch)
 	permit := &concurrentInspectionTestPermit{
 		inspectionTestPermit: &inspectionTestPermit{
 			submissionRoot:       identity.RootID,
@@ -774,11 +1051,7 @@ func TestSubmitConcurrentInspectionStagedRegistersBeforeCommit(t *testing.T) {
 		queueGroup: "default",
 	}
 	callbackRegistration := [2]bool{}
-	observation, err := fake.client.SubmitConcurrentInspectionStaged(context.Background(), permit, identity, Launch{
-		RunnerExecutable: fake.executable,
-		RootPath:         store.Root,
-		Supervised:       true,
-	}, func(candidate InspectionObservation) error {
+	observation, err := fake.client.SubmitConcurrentInspectionStaged(context.Background(), permit, identity, launch, func(candidate InspectionObservation) error {
 		callbackRegistration = [2]bool{candidate.TerminalEventRegistrationKnown, candidate.TerminalEventRegistered}
 		if candidate.Job.State != StateStashed || candidate.Job.ID != 9 || candidate.Job.Group != "default" {
 			t.Fatalf("concurrent inspection callback received the wrong receipt: %+v", candidate)
@@ -824,6 +1097,304 @@ func TestRecoverInspectionStagedRegistersBeforeCommit(t *testing.T) {
 	}
 	if got := len(stagedInvocations(t, fake, "enqueue")); got != 1 {
 		t.Fatalf("staged inspection recovery did not enqueue exactly once: %d", got)
+	}
+}
+
+func TestRecoverStagedHoldsQueueIdentityThroughCommitAndEnqueue(t *testing.T) {
+	fake, _ := newPrivateInspectionSupervisor(t, "ok")
+	_, _, identity, _ := prepareStagedOrdinarySubmission(t, fake)
+	writeStagedOrdinaryStatus(t, fake, identity, 7, StateStashed, "", "default")
+	commitEntered := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	recoveryDone := make(chan error, 1)
+	go func() {
+		_, err := fake.client.RecoverStaged(t.Context(), identity, 7, func(Observation) error {
+			close(commitEntered)
+			<-releaseCommit
+			return nil
+		})
+		recoveryDone <- err
+	}()
+	assertStagedTransitionBlocksQueueIdentityMutation(t, fake.client, commitEntered, releaseCommit, recoveryDone)
+}
+
+func TestRecoverInspectionStagedHoldsQueueIdentityThroughRegistrationCommitAndEnqueue(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "ok")
+	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
+	writeStagedInspectionStatus(t, fake, identity, 9, StateStashed, "", "default")
+	commitEntered := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	recoveryDone := make(chan error, 1)
+	go func() {
+		_, err := fake.client.RecoverInspectionStaged(t.Context(), identity, 9, func(candidate InspectionObservation) error {
+			if !candidate.TerminalEventRegistered {
+				return errors.New("terminal callback was not registered before commit")
+			}
+			close(commitEntered)
+			<-releaseCommit
+			return nil
+		})
+		recoveryDone <- err
+	}()
+	assertStagedTransitionBlocksQueueIdentityMutation(t, fake.client, commitEntered, releaseCommit, recoveryDone)
+}
+
+func TestPrivateQueueWriterIntentBlocksNewReaders(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "ok")
+	initialEntered := make(chan struct{})
+	releaseInitial := make(chan struct{})
+	releaseInitialOnce := sync.OnceFunc(func() { close(releaseInitial) })
+	t.Cleanup(releaseInitialOnce)
+	initialDone := make(chan error, 1)
+	go func() {
+		initialDone <- fake.client.withPrivateQueueIdentityLease(t.Context(), func(context.Context) error {
+			close(initialEntered)
+			<-releaseInitial
+			return nil
+		})
+	}()
+	waitForStagedCommit(t, initialEntered, "initial queue identity reader did not enter")
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	releaseWriterOnce := sync.OnceFunc(func() { close(releaseWriter) })
+	t.Cleanup(releaseWriterOnce)
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- fake.client.withPrivateQueueIdentityMutation(t.Context(), func(context.Context) error {
+			close(writerEntered)
+			<-releaseWriter
+			return nil
+		})
+	}()
+	waitForPrivateQueueWriterIntent(t, store.Root)
+
+	const readerCount = 32
+	readerEntered := make(chan struct{}, readerCount)
+	readerDone := make(chan error, readerCount)
+	for range readerCount {
+		go func() {
+			readerDone <- fake.client.withPrivateQueueIdentityLease(t.Context(), func(context.Context) error {
+				readerEntered <- struct{}{}
+				return nil
+			})
+		}()
+	}
+	assertNoQueueIdentityReader(t, readerEntered, "new reader overtook a waiting writer")
+	releaseInitialOnce()
+	waitForStagedCommit(t, writerEntered, "writer did not enter after the existing reader drained")
+	assertNoQueueIdentityReader(t, readerEntered, "new reader crossed an active writer")
+	releaseWriterOnce()
+	if err := <-writerDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-initialDone; err != nil {
+		t.Fatal(err)
+	}
+	for range readerCount {
+		select {
+		case <-readerEntered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("reader did not enter after writer completion")
+		}
+		if err := <-readerDone; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestPrivateQueueWriterIntentRepairsAbandonedState(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "ok")
+	base := filepath.Join(store.Root, privateSupervisorDirectory)
+	if _, _, err := fake.client.preparePrivateQueueIdentityLocks(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(base, privateQueueWriterIntentLockName)
+	if err := os.WriteFile(path, []byte(privateQueueWriterWaitingState), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entered := false
+	if err := fake.client.withPrivateQueueIdentityLease(t.Context(), func(context.Context) error {
+		entered = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != privateQueueWriterIdleState || !entered {
+		t.Fatalf("abandoned writer intent was not repaired: entered=%t state=%q err=%v", entered, data, err)
+	}
+}
+
+func waitForPrivateQueueWriterIntent(t *testing.T, stateRoot string) {
+	t.Helper()
+	path := filepath.Join(stateRoot, privateSupervisorDirectory, privateQueueWriterIntentLockName)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil && string(data) == privateQueueWriterWaitingState {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("writer intent was not published: state=%q err=%v", data, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func assertNoQueueIdentityReader(t *testing.T, entered <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-entered:
+		t.Fatal(message)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestSubmitConcurrentInspectionStagedSerializesRecoveryAfterCommit(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "ok")
+	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
+	launch := Launch{RunnerExecutable: fake.executable, RootPath: store.Root, Supervised: true}
+	writeStagedInspectionStatusWithLaunch(t, fake, identity, 9, StateStashed, launch)
+	transition := installEnqueueStatusTransition(fake, inspectionQueuedStatusWithLaunch(t, identity, 9, launch))
+	permit := &concurrentInspectionTestPermit{
+		inspectionTestPermit: &inspectionTestPermit{
+			submissionRoot:       identity.RootID,
+			submissionTask:       identity.TaskID,
+			submissionSupervisor: fake.client.Binding(),
+		},
+		queueGroup: "default",
+	}
+	originalCommitEntered, releaseOriginalCommit, originalDone, originalCommitted := startBlockedConcurrentInspectionSubmission(t, fake, permit, identity, launch)
+	waitForStagedCommit(t, originalCommitEntered, "original submission did not reach its durable commit barrier")
+	var recoveryCommitted atomic.Bool
+	recoveryDone := startInspectionRecoveryWithCommitFlag(fake.client, identity, 9, &recoveryCommitted)
+	assertInspectionRecoveryBlocked(t, recoveryDone)
+	if got := transition.entries.Load(); got != 0 {
+		t.Fatalf("enqueue crossed the durable commit barrier: %d", got)
+	}
+	close(releaseOriginalCommit)
+	transition.wait(t)
+	recovery := <-recoveryDone
+	original := <-originalDone
+	assertSerializedInspectionSubmission(t, fake, transition, recovery, recoveryCommitted.Load(), original, *originalCommitted)
+}
+
+func startBlockedConcurrentInspectionSubmission(t *testing.T, fake *fakeSupervisor, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch) (<-chan struct{}, chan<- struct{}, <-chan inspectionRecoveryResult, *InspectionObservation) {
+	t.Helper()
+	commitEntered := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	done := make(chan inspectionRecoveryResult, 1)
+	committed := &InspectionObservation{}
+	go func() {
+		observation, submitErr := fake.client.SubmitConcurrentInspectionStaged(t.Context(), permit, identity, launch, func(candidate InspectionObservation) error {
+			*committed = candidate
+			if enqueueCount := len(stagedInvocations(t, fake, "enqueue")); enqueueCount != 0 {
+				return fmt.Errorf("original enqueue ran before its durable commit returned: %d", enqueueCount)
+			}
+			close(commitEntered)
+			<-releaseCommit
+			return nil
+		})
+		done <- inspectionRecoveryResult{observation: observation, err: submitErr}
+	}()
+	return commitEntered, releaseCommit, done, committed
+}
+
+func startInspectionRecoveryWithCommitFlag(client *Client, identity InspectionIdentity, id int64, committed *atomic.Bool) <-chan inspectionRecoveryResult {
+	done := make(chan inspectionRecoveryResult, 1)
+	go func() {
+		observation, err := client.RecoverInspectionStaged(context.Background(), identity, id, func(InspectionObservation) error {
+			committed.Store(true)
+			return nil
+		})
+		done <- inspectionRecoveryResult{observation: observation, err: err}
+	}()
+	return done
+}
+
+func assertInspectionRecoveryBlocked(t *testing.T, done <-chan inspectionRecoveryResult) {
+	t.Helper()
+	select {
+	case recovery := <-done:
+		t.Fatalf("recovery crossed the original submission's queue identity lease: observation=%+v err=%v", recovery.observation, recovery.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func assertSerializedInspectionSubmission(t *testing.T, fake *fakeSupervisor, transition *enqueueStatusTransition, recovery inspectionRecoveryResult, recoveryCommitted bool, original inspectionRecoveryResult, originalCommitted InspectionObservation) {
+	t.Helper()
+	assertSerializedInspectionRecovery(t, transition, recovery, recoveryCommitted, original, originalCommitted)
+	assertSingleInspectionEnqueue(t, fake, transition)
+}
+
+func assertSerializedInspectionRecovery(t *testing.T, transition *enqueueStatusTransition, recovery inspectionRecoveryResult, recoveryCommitted bool, original inspectionRecoveryResult, originalCommitted InspectionObservation) {
+	t.Helper()
+	if transition.writeErr != nil || !errors.Is(recovery.err, ErrUnknown) || !recovery.observation.Matched || recovery.observation.Job.State != StateQueued || recovery.observation.Job.ID != 9 {
+		t.Fatalf("serialized recovery did not observe the exact queued row: observation=%+v err=%v observer=%v", recovery.observation, recovery.err, transition.writeErr)
+	}
+	if recoveryCommitted {
+		t.Fatal("serialized recovery repeated the durable commit")
+	}
+	if original.err != nil || original.observation != originalCommitted || !original.observation.Matched || original.observation.Job.State != StateStashed || original.observation.Job.ID != 9 {
+		t.Fatalf("original submission did not return its exact committed receipt: observation=%+v committed=%+v err=%v", original.observation, originalCommitted, original.err)
+	}
+}
+
+func assertSingleInspectionEnqueue(t *testing.T, fake *fakeSupervisor, transition *enqueueStatusTransition) {
+	t.Helper()
+	if got := transition.entries.Load(); got != 1 {
+		t.Fatalf("serialized submission issued %d effective enqueue commands, want one", got)
+	}
+	adds, enqueues := len(stagedInvocations(t, fake, "add")), stagedInvocations(t, fake, "enqueue")
+	if adds != 1 || len(enqueues) != 1 {
+		t.Fatalf("serialized recovery changed staged command cardinality: adds=%d enqueues=%d", adds, len(enqueues))
+	}
+	if !slices.Equal(enqueues[0], []string{"-c", fake.configPath, "enqueue", "9"}) {
+		t.Fatalf("serialized recovery mutated a stale numeric ID: enqueue=%v", enqueues)
+	}
+}
+
+func waitForStagedCommit(t *testing.T, entered <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal(message)
+	}
+}
+
+func assertStagedTransitionBlocksQueueIdentityMutation(t *testing.T, client *Client, commitEntered <-chan struct{}, releaseCommit chan<- struct{}, recoveryDone <-chan error) {
+	t.Helper()
+	select {
+	case <-commitEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("staged recovery did not reach its commit callback")
+	}
+	mutationEntered := make(chan struct{})
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- client.withPrivateQueueIdentityMutation(t.Context(), func(context.Context) error {
+			close(mutationEntered)
+			return nil
+		})
+	}()
+	select {
+	case <-mutationEntered:
+		t.Fatal("queue identity mutation crossed an unfinished staged recovery")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseCommit)
+	if err := <-recoveryDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-mutationEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queue identity mutation did not enter after staged recovery")
+	}
+	if err := <-mutationDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

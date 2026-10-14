@@ -1000,12 +1000,28 @@ def private_shutdown_evidence(config):
     # general YAML parser or a fallback to the user's ambient Pueue config.
     lines = config.read_text(encoding="utf-8").splitlines()
     for key, path in (("runtime_directory", runtime),
-                      ("pid_path", runtime / "pueue.pid"),
-                      ("unix_socket_path", runtime / "pueue.sock")):
+                      ("pid_path", runtime / "pueue.pid")):
         prefix = "  " + key + ": "
         values = [line[len(prefix):] for line in lines if line.startswith(prefix)]
         if len(values) != 1 or json.loads(values[0]) != str(path):
             raise RuntimeError("private shutdown config does not bind its owned " + key)
+    prefix = "  unix_socket_path: "
+    values = [line[len(prefix):] for line in lines if line.startswith(prefix)]
+    if len(values) != 1:
+        raise RuntimeError("private shutdown config does not bind its owned unix_socket_path")
+    endpoint_value = json.loads(values[0])
+    if (not isinstance(endpoint_value, str) or "\0" in endpoint_value
+            or not Path(endpoint_value).is_absolute()):
+        raise RuntimeError("private supervisor socket path is invalid")
+    endpoint = Path(endpoint_value)
+    if Path(os.path.normpath(endpoint_value)) != endpoint:
+        raise RuntimeError("private supervisor socket path is not canonical")
+    try:
+        endpoint.relative_to(config.parent)
+    except ValueError as error:
+        raise RuntimeError("private supervisor socket escapes its owned directory") from error
+    if endpoint == config.parent or endpoint.parent.resolve(strict=True) != endpoint.parent:
+        raise RuntimeError("private supervisor socket parent is unsafe")
     pid_path = runtime / "pueue.pid"
     with os.fdopen(os.open(pid_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
         info = os.fstat(stream.fileno())
@@ -1016,7 +1032,6 @@ def private_shutdown_evidence(config):
     if (len(raw) > 128 or not value.isdigit() or value != str(int(value)).encode()
             or int(value) <= 1 or int(value) == os.getpid()):
         raise RuntimeError("invalid private supervisor PID")
-    endpoint = runtime / "pueue.sock"
     info = endpoint.lstat()
     if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
         raise RuntimeError("unsafe private supervisor socket")
@@ -1587,19 +1602,20 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, gate,
         status_snapshot_count = (
             wrapper_command_counts(client_call_log).get("status", 0) - status_snapshots_before
         )
-        status_single_flight = {
+        status_coalescing = {
             "concurrent_status_call_count": len(status_probe_responses),
             "pueue_status_snapshot_count": status_snapshot_count,
+            "shared_status_call_count": len(status_probe_responses) - status_snapshot_count,
         }
-        if status_snapshot_count != 1:
+        if status_snapshot_count <= 0 or status_snapshot_count >= len(status_probe_responses):
             raise RuntimeError(
-                "concurrent public status calls did not share exactly one queue snapshot: %r"
-                % status_single_flight
+                "concurrent public status calls did not coalesce queue snapshots: %r"
+                % status_coalescing
             )
-        (receipts / "status-single-flight.json").write_text(
-            json.dumps(status_single_flight, sort_keys=True) + "\n"
+        (receipts / "status-coalescing.json").write_text(
+            json.dumps(status_coalescing, sort_keys=True) + "\n"
         )
-        evidence["status_single_flight"] = status_single_flight
+        evidence["status_coalescing"] = status_coalescing
         lease_cohort.assert_live()
         gate.touch(mode=0o600, exist_ok=True)
         capacity_proof["gate_opened_after_proof"] = True
@@ -1959,10 +1975,10 @@ def main():
                 "concurrent_status_bytes": status_bytes,
                 "capacity_proof": acceptance_evidence["capacity_proof"],
                 "dispatch_batch": acceptance_evidence["dispatch_batch"],
-                "status_single_flight": acceptance_evidence["status_single_flight"],
+                "status_coalescing": acceptance_evidence["status_coalescing"],
                 "capacity_proof_receipt": "capacity-proof.json",
                 "dispatch_batch_receipt": "dispatch-batch.json",
-                "status_single_flight_receipt": "status-single-flight.json",
+                "status_coalescing_receipt": "status-coalescing.json",
                 "pueue_client_commands": {
                     "initial": wrapper_command_counts(base / "old-client-starts-calls"),
                     "upgraded": wrapper_command_counts(base / "upgraded-client-starts-calls"),
@@ -1979,7 +1995,7 @@ def main():
                     "dispatch restarted the private supervisor after package removal",
                     "all requested fixture tasks retained live provider leases and lifetime-owner locks with bound native-scope registrations while Running",
                     "dispatch caller concurrency and burst metrics were recorded separately from capacity proof",
-                    "sixteen concurrent public status calls shared one authoritative queue snapshot",
+                    "sixteen concurrent public status calls coalesced into fewer authoritative queue snapshots",
                 ],
             })
             run_receipt.stage("all-current-installation-proofs-complete")

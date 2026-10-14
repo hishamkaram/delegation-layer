@@ -590,12 +590,12 @@ func TestSubmitConcurrentInspectionWithGateRejectsBeforeAddOrPermitConsumption(t
 		permit,
 		identity,
 		Launch{RunnerExecutable: fake.executable, RootPath: store.Root, Supervised: true},
-		func(_ context.Context, binding task.SupervisorRef) error {
+		func(_ context.Context, binding task.SupervisorRef) (SubmissionAuthorization, error) {
 			gateCalls++
 			if binding != fake.client.Binding() {
 				t.Fatalf("inspection gate received the wrong binding: %+v", binding)
 			}
-			return gateErr
+			return SubmissionAuthorization{}, gateErr
 		},
 	)
 	if !errors.Is(err, gateErr) || observation.Matched {
@@ -804,6 +804,33 @@ func TestStopInspectionRoutesOneTargetAndPreservesUncertainty(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { runInspectionStopCase(t, tc) })
+	}
+}
+
+func TestStopQueuedInspectionRetiresTerminalTicketBeforeNumericIDReuse(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "ok")
+	id := int64(9)
+	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), NumericTaskID: &id}
+	writeInspectionStatus(t, fake, identity, id, StateQueued)
+	if err := fake.client.RegisterPrivateTerminalEvent(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	ticketPath := filepath.Join(store.Root, privateSupervisorDirectory, privateTerminalEventTicketDir, "9.json")
+	if _, err := os.Lstat(ticketPath); err != nil {
+		t.Fatal(err)
+	}
+	permit := &inspectionTestPermit{
+		stopRoot:       identity.RootID,
+		stopTask:       identity.TaskID,
+		stopTarget:     &id,
+		stopSupervisor: fake.client.Binding(),
+	}
+	result, err := fake.client.StopInspection(t.Context(), permit, identity)
+	if err != nil || result.Action != "remove" || result.Acknowledged == nil || !*result.Acknowledged {
+		t.Fatalf("queued inspection stop result=%+v err=%v", result, err)
+	}
+	if _, err = os.Lstat(ticketPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("queued inspection stop retained reusable callback ticket: %v", err)
 	}
 }
 
@@ -1090,6 +1117,7 @@ case "${3-}" in
     if [ "${4-}" = "--help" ]; then
       printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...'
     else
+	  if [ "${FAKE_ENQUEUE_DELAY:-}" != "" ]; then sleep "$FAKE_ENQUEUE_DELAY"; elif [ "${FAKE_MODE:-ok}" = "delay-enqueue" ]; then sleep 0.5; fi
       case "${FAKE_MODE:-ok}" in
         enqueue-refuse) printf '%s\n' 'refused' >&2; exit 7 ;;
         *) exit 0 ;;

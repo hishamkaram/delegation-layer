@@ -431,6 +431,16 @@ case "${3-}" in
 	  printf '%s\n' parallel >> "$base/parallel"
 	  : > "$base/parallel-unlimited"
 	  ;;
+	add)
+	  [ "${4-}" = --help ] || exit 64
+	  printf '%s\n' add-help >> "$base/staged-capability"
+	  printf '%s\n' '--stashed --print-task-id'
+	  ;;
+	enqueue)
+	  [ "${4-}" = --help ] || exit 64
+	  printf '%s\n' enqueue-help >> "$base/staged-capability"
+	  printf '%s\n' 'Usage: pueue enqueue <TASK_IDS>...'
+	  ;;
   *) exit 64 ;;
 esac
 `)

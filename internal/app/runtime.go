@@ -148,6 +148,9 @@ func (d Dependencies) normalized() Dependencies {
 	if d.SupervisorOptions.ControlOwnerExecutable == "" {
 		d.SupervisorOptions.ControlOwnerExecutable = discoverControlOwnerExecutable()
 	}
+	if d.SupervisorOptions.PrivateMaintenanceLauncher == nil && d.SupervisorOptions.ControlOwnerExecutable != "" {
+		d.SupervisorOptions.PrivateMaintenanceLauncher = launchPrivateQueueMaintenanceOwner
+	}
 	if d.SupervisorOptions.SuccessfulCleanupAuthorizer == nil {
 		d.SupervisorOptions.SuccessfulCleanupAuthorizer = authorizePrivateSuccessfulCleanup
 	}

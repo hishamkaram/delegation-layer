@@ -236,6 +236,35 @@ func TestResolveRefusesAmbiguity(t *testing.T) {
 	}
 }
 
+func TestResolveUsesNativeUnixSocketByteLimit(t *testing.T) {
+	for _, test := range []struct {
+		goos  string
+		limit int
+	}{
+		{goos: "darwin", limit: 103},
+		{goos: "linux", limit: 107},
+	} {
+		t.Run(test.goos, func(t *testing.T) {
+			resolution := fixedResolution()
+			resolution.OS = test.goos
+			for _, path := range []string{
+				"/" + strings.Repeat("s", test.limit-1),
+				"/" + strings.Repeat("é", (test.limit-1)/2) + strings.Repeat("s", (test.limit-1)%2),
+			} {
+				if len(path) != test.limit {
+					t.Fatalf("boundary fixture length = %d, want %d", len(path), test.limit)
+				}
+				if _, err := ResolveConfig(parseConfigOK(t, "shared: {unix_socket_path: '"+path+"'}"), resolution); err != nil {
+					t.Fatalf("native-limit socket path was rejected: %v", err)
+				}
+				if _, err := ResolveConfig(parseConfigOK(t, "shared: {unix_socket_path: '"+path+"s'}"), resolution); !errors.Is(err, errUnixSocketPathTooLong) {
+					t.Fatalf("over-limit socket path error = %v", err)
+				}
+			}
+		})
+	}
+}
+
 func privateConfig(t *testing.T, base string) []byte {
 	t.Helper()
 	shared := map[string]any{

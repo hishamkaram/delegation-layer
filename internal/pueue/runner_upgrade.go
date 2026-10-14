@@ -56,7 +56,7 @@ func (c *Client) ReplaceQueuedRunnerCommands(ctx context.Context, replacements [
 		return err
 	}
 	defer func() { finishPrivateBootstrap(&lock, &resultErr) }()
-	ctx = withGenerationControlLease(ctx, lock)
+	ctx = withControlLockLease(ctx, lock)
 	// The shared observation only chose whether to take this lock. Replan from
 	// a fresh exclusive snapshot before authorizing any numeric-ID mutation.
 	snapshot, err := c.Snapshot(ctx)

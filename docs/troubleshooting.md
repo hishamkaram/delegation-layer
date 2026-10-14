@@ -106,6 +106,14 @@ migration-required failure; the explicit `supervisor migrate` transaction then
 transfers authority to the staged pair. Launch provenance is updated only after
 the authorized generation becomes ready.
 
+Before first publication, Delegate checks the generated socket path against the
+host limit. If the ordinary state-rooted name is too long, it uses a compact
+name in the same private supervisor directory. A release that encounters the
+exact older over-limit config left by an interrupted pre-identity bootstrap
+repairs that config atomically and continues. Any changed config, active
+identity, migration/recovery artifact, endpoint, PID, runtime data, or
+scheduling record still fails closed; users should not edit those files.
+
 On an upgraded installation, a different verified state-root executable pair
 is only a staged successor. The completed supervisor identity remains the
 active generation, and its ordinary-scheduling receipt must match that exact
@@ -156,10 +164,29 @@ to an external supervisor reports `supervisor_migration_unsupported` and
 
 Delegate reads supervisor status one bounded record at a time, so a large
 queue does not inherit the 1 MiB limit for an individual control record.
-Ordinary admission performs best-effort cleanup of exact terminal rows only
-after their Delegate receipts and outcomes validate. Active, incomplete,
-ambiguous, or unrelated rows remain available without blocking cleanup of
-other validated rows. No Pueue command or state-file editing is required.
+The private supervisor's terminal callback requests best-effort cleanup after a
+row reaches `Done`. Current ordinary and inspection callbacks first publish an
+exact candidate event, then request a candidate pass. The event remains a
+durable inbox entry if the generation write or process launch fails. An exact
+terminal inspection observation also revalidates the candidate and starts an
+independent maintenance owner without delaying admission. Callback bursts
+coalesce in the per-root generation journal. One nonblocking election winner
+waits through a bounded quiet window and streams the queue snapshot; losing
+callback processes return immediately. The winner rechecks the journal after
+releasing ownership, and every later pass gets the same quiet window. An
+interrupted claim or in-flight control command remains recoverable; a finished
+failed attempt waits for a later terminal trigger and does not spin. A
+validated later root activation resumes retained inbox or journal work.
+Candidate-event publication failure records a conservative full-recovery wake.
+Normal passes expose only event-backed ordinary and inspection rows, while the
+recovery scope retains exact historical ordinary-row reconciliation. Delegate
+validates its own receipts and durable outcomes, rechecks each unchanged
+terminal row under the queue-identity mutation, and removes only those exact
+numeric IDs. Dispatch does not wait for this maintenance. Active, incomplete,
+ambiguous, unrelated, or not-yet-observed inspection rows remain available
+without blocking cleanup of validated rows. Failed removal retains the
+candidate for a later terminal trigger to retry, so no Pueue command or
+state-file editing is required.
 `status` and `collect` also request removal of their task's exact recorded row
 after a terminal outcome exists. A runner can publish that outcome shortly
 before Pueue marks its row ended; Delegate leaves that still-running row intact

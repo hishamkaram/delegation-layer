@@ -12,10 +12,19 @@ executable fixture and a real private supervisor on macOS and Linux. This gate
 checks startup, dispatch, status, collection, model discovery, and
 ordinary-task parallelism; it does not build historical releases. The unit and
 hermetic acceptance suites provide their own supervisor fixtures. The private
-CLI capacity proof establishes 200 counted
-tasks Running while live provider leases, durable native-scope registrations,
-and contended lifetime-owner locks overlap. Clone the repository and run the
-local checks before editing:
+CLI capacity proof establishes 200 counted tasks Running while live provider
+leases, durable native-scope registrations, and contended lifetime-owner locks
+overlap. Its four concurrent dispatch callers are a recorded load-generator
+setting, not a product task limit or a 200-call burst requirement; running
+capacity and dispatch throughput remain separate measurements. The Python
+orchestration unit tests validate receipt and gate ordering with fakes; they are
+never capacity evidence. Only the executable private CLI gate may make the
+200-running-task claim. Its process-level status burst must reduce the number of
+queue snapshots below the number of callers. Exact one-flight behavior is
+proved separately by the deterministic package test, which holds the first
+snapshot open until every counted caller has crossed the observation boundary;
+a process-launch barrier alone does not establish that overlap. Clone the
+repository and run the local checks before editing:
 
 ```sh
 go test ./...

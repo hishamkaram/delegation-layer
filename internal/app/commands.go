@@ -1092,7 +1092,7 @@ func reconcileExisting(root string, td *taskdir.TaskDir, req *task.TaskRecord, m
 	observation, reconcileErr := client.Reconcile(context.Background(), taskIdentity(req, meta, spec, metaHash, receipt))
 	if observation.Matched && observation.State == pueue.StateStashed {
 		var recoverErr error
-		observation, recoverErr = recoverStagedOrdinarySubmission(context.Background(), td, client, observation)
+		observation, recoverErr = recoverStagedOrdinarySubmission(context.Background(), root, td, client, observation)
 		reconcileErr = errors.Join(reconcileErr, recoverErr)
 	}
 	response.Supervisor = supervisorResponse(observation)
@@ -1157,7 +1157,7 @@ func reconcileStatusWithClient(ctx context.Context, root string, td *taskdir.Tas
 	observation, reconcileErr := statusClient.ReconcileStatus(ctx, taskIdentity(req, meta, spec, metaHash, receipt))
 	if observation.Matched && observation.State == pueue.StateStashed {
 		var recoverErr error
-		observation, recoverErr = recoverStagedOrdinarySubmission(ctx, td, statusClient, observation)
+		observation, recoverErr = recoverStagedOrdinarySubmission(ctx, root, td, statusClient, observation)
 		reconcileErr = errors.Join(reconcileErr, recoverErr)
 	}
 	response.Supervisor = supervisorResponse(observation)
@@ -1181,7 +1181,15 @@ func reconcileStatusWithClient(ctx context.Context, root string, td *taskdir.Tas
 	return observation, reconcileErr
 }
 
-func recoverStagedOrdinarySubmission(ctx context.Context, td *taskdir.TaskDir, client *pueue.Client, observation pueue.Observation) (pueue.Observation, error) {
+func recoverStagedOrdinarySubmission(ctx context.Context, root string, td *taskdir.TaskDir, client *pueue.Client, observation pueue.Observation) (pueue.Observation, error) {
+	if pueue.IsPrivateConfig(root, client.Binding().ConfigPath) {
+		controlContext, cancel := context.WithTimeout(ctx, pueue.PrivateStatusObservationTimeout)
+		repairErr := ensurePrivateAdmissionSchedulingContext(controlContext, root, client)
+		cancel()
+		if repairErr != nil {
+			return observation, repairErr
+		}
+	}
 	commit := func(current pueue.Observation) error {
 		receipt, err := current.Receipt()
 		if err != nil {
@@ -1189,7 +1197,7 @@ func recoverStagedOrdinarySubmission(ctx context.Context, td *taskdir.TaskDir, c
 		}
 		return td.RecordSupervisorReceiptContext(ctx, *receipt)
 	}
-	recovered, err := client.RecoverStaged(ctx, observation.Identity, observation.NumericTaskID, commit)
+	recovered, err := client.RecoverStagedWithGate(ctx, observation.Identity, observation.NumericTaskID, privateSubmissionGate(root), commit)
 	if err == nil || !errors.Is(err, pueue.ErrUnknown) {
 		return recovered, err
 	}

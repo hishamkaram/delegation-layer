@@ -82,23 +82,44 @@ func closeSupervisorMaintenance(client *pueue.Client, cause error) {
 	}
 }
 
-func privateSuccessfulCleanupCandidates(rootID string, jobs []pueue.Job) []pueue.Job {
+type privateCleanupCandidate struct {
+	job      pueue.Job
+	taskID   string
+	settling bool
+}
+
+type privateCleanupDecision struct {
+	remove   bool
+	settling bool
+}
+
+func privateSuccessfulCleanupCandidates(rootID string, jobs []pueue.Job) []privateCleanupCandidate {
 	labelCounts := privateQueueLabelCounts(jobs)
-	candidates := make([]pueue.Job, 0, len(jobs))
+	candidates := make([]privateCleanupCandidate, 0, len(jobs))
 	for _, job := range jobs {
-		if job.State != pueue.StateEnded || job.Label == nil || labelCounts[*job.Label] != 1 {
+		if job.Label == nil || labelCounts[*job.Label] != 1 {
 			continue
 		}
-		if _, managed, _, labelErr := legacyJobTaskID(*job.Label, rootID); labelErr != nil || !managed {
+		taskID, managed, inspectionWorker, labelErr := legacyJobTaskID(*job.Label, rootID)
+		if labelErr != nil || !managed {
 			continue
 		}
-		candidates = append(candidates, job)
+		switch job.State {
+		case pueue.StateEnded:
+			candidates = append(candidates, privateCleanupCandidate{job: job, taskID: taskID})
+		case pueue.StateRunning:
+			if inspectionWorker {
+				candidates = append(candidates, privateCleanupCandidate{job: job, taskID: taskID, settling: true})
+			}
+		case pueue.StateUnknown, pueue.StateQueued, pueue.StateStashed:
+			continue
+		}
 	}
 	return candidates
 }
 
-func authorizePrivateSuccessfulCleanupCandidates(ctx context.Context, store *taskdir.Store, group inspection.GroupRequestRecord, candidates []pueue.Job) (ids []int64, resultErr error) {
-	authorized := make([]bool, len(candidates))
+func authorizePrivateSuccessfulCleanupCandidates(ctx context.Context, store *taskdir.Store, group inspection.GroupRequestRecord, candidates []privateCleanupCandidate) (plan pueue.PrivateQueueCleanupPlan, resultErr error) {
+	decisions := make([]privateCleanupDecision, len(candidates))
 	work := make(chan int, len(candidates))
 	for index := range candidates {
 		work <- index
@@ -114,38 +135,66 @@ func authorizePrivateSuccessfulCleanupCandidates(ctx context.Context, store *tas
 				if ctx.Err() != nil {
 					return
 				}
-				authorized[index] = inspectLegacyEndedJob(ctx, store, group, candidates[index]) == nil
+				candidate := candidates[index]
+				if candidate.settling {
+					decisions[index].settling = inspectPrivateSettlingInspection(ctx, store, group, candidate.taskID, candidate.job) == nil
+					continue
+				}
+				decisions[index].remove = inspectLegacyEndedJob(ctx, store, group, candidate.job) == nil
 			}
 		}()
 	}
 	groupWorkers.Wait()
-	for index, job := range candidates {
-		if authorized[index] {
-			ids = append(ids, job.ID)
+	for index, candidate := range candidates {
+		if decisions[index].remove {
+			plan.RemoveIDs = append(plan.RemoveIDs, candidate.job.ID)
 		}
+		plan.Settling = plan.Settling || decisions[index].settling
 	}
-	return ids, ctx.Err()
+	return plan, ctx.Err()
+}
+
+func inspectPrivateSettlingInspection(ctx context.Context, store *taskdir.Store, group inspection.GroupRequestRecord, taskID string, job pueue.Job) (resultErr error) {
+	operation, err := inspection.LoadOperationContext(ctx, store, taskID)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
+	if err = validateLegacyEndedInspectionBinding(ctx, store, group, operation, taskID, job); err != nil {
+		return err
+	}
+	_, _, terminal, decisionErr := recordedInspectionFacts(ctx, operation)
+	if !terminal {
+		if decisionErr != nil {
+			return decisionErr
+		}
+		return os.ErrNotExist
+	}
+	if decisionErr != nil && !errors.Is(decisionErr, errInspectionWorkerUnavailable) {
+		return decisionErr
+	}
+	return nil
 }
 
 // authorizePrivateSuccessfulCleanup selects exact terminal rows using the same
 // evidence validator as migration. Active or incomplete records are preserved
 // individually; they cannot veto cleanup of an unrelated validated result.
-func authorizePrivateSuccessfulCleanup(ctx context.Context, stateRoot string, supervisor task.SupervisorRef, jobs []pueue.Job) (ids []int64, resultErr error) {
+func authorizePrivateSuccessfulCleanup(ctx context.Context, stateRoot string, supervisor task.SupervisorRef, jobs []pueue.Job) (plan pueue.PrivateQueueCleanupPlan, resultErr error) {
 	if ctx == nil {
-		return nil, context.Canceled
+		return pueue.PrivateQueueCleanupPlan{}, context.Canceled
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return pueue.PrivateQueueCleanupPlan{}, err
 	}
 	store, err := taskdir.OpenStoreWithPredicatesContext(ctx, stateRoot, predicate.Default())
 	if err != nil {
-		return nil, err
+		return pueue.PrivateQueueCleanupPlan{}, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	group := privateInspectionGroup(store.RootID, supervisor)
 	candidates := privateSuccessfulCleanupCandidates(store.RootID, jobs)
-	ids, err = authorizePrivateSuccessfulCleanupCandidates(ctx, store, group, candidates)
-	return ids, err
+	plan, err = authorizePrivateSuccessfulCleanupCandidates(ctx, store, group, candidates)
+	return plan, err
 }
 
 func privateInspectionGroup(rootID string, supervisor task.SupervisorRef) inspection.GroupRequestRecord {

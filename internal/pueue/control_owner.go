@@ -708,8 +708,8 @@ type ControlLease interface {
 type controlLeaseContextKey struct{}
 
 type controlLeaseContext struct {
-	generation *bootstrapLock
-	extra      []ControlLease
+	locks []*bootstrapLock
+	extra []ControlLease
 }
 
 // WithControlLease adds a caller-owned lease that must outlive a supervisor
@@ -720,17 +720,26 @@ func WithControlLease(ctx context.Context, lease ControlLease) context.Context {
 		return ctx
 	}
 	current := controlLeaseContextFrom(ctx)
-	next := &controlLeaseContext{generation: current.generation, extra: append([]ControlLease(nil), current.extra...)}
+	next := &controlLeaseContext{locks: append([]*bootstrapLock(nil), current.locks...), extra: append([]ControlLease(nil), current.extra...)}
 	next.extra = append(next.extra, lease)
 	return context.WithValue(ctx, controlLeaseContextKey{}, next)
 }
 
-func withGenerationControlLease(ctx context.Context, lock *bootstrapLock) context.Context {
+// withControlLockLease appends one already-held supervisor lock to the set an
+// external command must inherit. Nested scopes compose; an inner queue lock
+// must never replace an outer supervisor-generation lease.
+func withControlLockLease(ctx context.Context, lock *bootstrapLock) context.Context {
 	if ctx == nil || lock == nil {
 		return ctx
 	}
 	current := controlLeaseContextFrom(ctx)
-	next := &controlLeaseContext{generation: lock, extra: append([]ControlLease(nil), current.extra...)}
+	next := &controlLeaseContext{locks: append([]*bootstrapLock(nil), current.locks...), extra: append([]ControlLease(nil), current.extra...)}
+	for _, currentLock := range next.locks {
+		if currentLock == lock {
+			return ctx
+		}
+	}
+	next.locks = append(next.locks, lock)
 	return context.WithValue(ctx, controlLeaseContextKey{}, next)
 }
 
@@ -747,11 +756,11 @@ func controlLeaseContextFrom(ctx context.Context) *controlLeaseContext {
 
 func duplicateControlLeaseFiles(ctx context.Context) ([]*os.File, error) {
 	leases := controlLeaseContextFrom(ctx)
-	files := make([]*os.File, 0, 1+len(leases.extra)*2)
-	if leases.generation != nil {
-		file, err := leases.generation.duplicateForControlOwner()
+	files := make([]*os.File, 0, len(leases.locks)+len(leases.extra)*2)
+	for _, lock := range leases.locks {
+		file, err := lock.duplicateForControlOwner()
 		if err != nil {
-			return nil, err
+			return nil, errors.Join(err, closeControlLeaseFiles(files))
 		}
 		files = append(files, file)
 	}
