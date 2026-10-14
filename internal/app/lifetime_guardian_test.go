@@ -96,6 +96,7 @@ type lifetimeGuardianTestRecords struct {
 	workerWaitErrors         []error
 	workerRecordEntered      chan struct{}
 	workerRecordRelease      <-chan struct{}
+	cleanupRelease           <-chan struct{}
 	launchErr                error
 	terminationErr           error
 	terminationErrors        []error
@@ -213,7 +214,10 @@ func (r *lifetimeGuardianTestRecords) RecordLifetimeWorker(facts taskdir.Lifetim
 		close(entered)
 	}
 	if release != nil {
-		<-release
+		select {
+		case <-release:
+		case <-r.cleanupRelease:
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -387,7 +391,7 @@ func (s *lifetimeGuardianTestScope) Terminate(ctx context.Context, _ []lifetime.
 	return err
 }
 
-func (s *lifetimeGuardianTestScope) EmptyContext(_ context.Context, _ []lifetime.LaunchRef) (bool, error) {
+func (s *lifetimeGuardianTestScope) EmptyContext(ctx context.Context, _ []lifetime.LaunchRef) (bool, error) {
 	s.mu.Lock()
 	s.emptyCalls++
 	call := s.emptyCalls
@@ -401,7 +405,11 @@ func (s *lifetimeGuardianTestScope) EmptyContext(_ context.Context, _ []lifetime
 	s.mu.Unlock()
 	if block {
 		close(entered)
-		result = <-release
+		select {
+		case result = <-release:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
 	}
 	return result, nil
 }
@@ -521,18 +529,20 @@ func (w *lifetimeGuardianTestWorker) counts() (start, wait int) {
 }
 
 type lifetimeGuardianTestFixture struct {
-	guardian   *lifetimeGuardian
-	client     *lifetimeCodec
-	clientConn net.Conn
-	serverConn net.Conn
-	worker     *lifetimeGuardianTestWorker
-	scope      *lifetimeGuardianTestScope
-	records    *lifetimeGuardianTestRecords
-	owner      *lifetimeGuardianTestOwner
-	timeline   *lifetimeGuardianTestTimeline
-	nowMu      sync.Mutex
-	now        time.Time
-	runDone    chan error
+	guardian       *lifetimeGuardian
+	client         *lifetimeCodec
+	clientConn     net.Conn
+	serverConn     net.Conn
+	worker         *lifetimeGuardianTestWorker
+	scope          *lifetimeGuardianTestScope
+	records        *lifetimeGuardianTestRecords
+	owner          *lifetimeGuardianTestOwner
+	timeline       *lifetimeGuardianTestTimeline
+	nowMu          sync.Mutex
+	now            time.Time
+	runDone        chan error
+	runExited      chan struct{}
+	cleanupRelease chan struct{}
 }
 
 func newLifetimeGuardianTestFixture(t *testing.T) *lifetimeGuardianTestFixture {
@@ -606,16 +616,19 @@ func newLifetimeGuardianTestFixtureWithOptionsAndContext(
 		waitEntered: make(chan struct{}),
 		timeline:    timeline,
 	}
+	cleanupRelease := make(chan struct{})
+	records.cleanupRelease = cleanupRelease
 	deadline := time.Now().Add(time.Hour)
 	f := &lifetimeGuardianTestFixture{
-		clientConn: clientConn,
-		serverConn: serverConn,
-		worker:     worker,
-		scope:      scope,
-		records:    records,
-		owner:      owner,
-		timeline:   timeline,
-		now:        deadline.Add(-time.Minute),
+		clientConn:     clientConn,
+		serverConn:     serverConn,
+		worker:         worker,
+		scope:          scope,
+		records:        records,
+		owner:          owner,
+		timeline:       timeline,
+		now:            deadline.Add(-time.Minute),
+		cleanupRelease: cleanupRelease,
 	}
 	ownerKind := task.LifetimeOwnerTask
 	if callback != nil {
@@ -656,7 +669,7 @@ func newLifetimeGuardianTestFixtureWithOptionsAndContext(
 		observeWorker: func(*exec.Cmd) (lifetime.ProcessRef, error) {
 			return lifetime.NewProcessRef(303, "worker-start-token")
 		},
-		controlTimeout: time.Second,
+		cleanupTimeout: time.Second,
 		finalizationBackoff: func(ctx context.Context, delay time.Duration) error {
 			timeline.addBackoff(delay)
 			return waitLifetimeFinalizationBackoff(ctx, delay)
@@ -680,14 +693,27 @@ func newLifetimeGuardianTestFixtureWithOptionsAndContext(
 		t.Fatal(err)
 	}
 	f.runDone = make(chan error, 1)
-	go func() { f.runDone <- g.Run(runContext) }()
+	f.runExited = make(chan struct{})
+	go func() {
+		f.runDone <- g.Run(runContext)
+		close(f.runExited)
+	}()
 	t.Cleanup(func() {
 		worker.release()
+		close(f.cleanupRelease)
 		if err := f.client.Close(); err != nil {
 			t.Errorf("close client: %v", err)
 		}
 		if err := serverConn.Close(); err != nil {
 			t.Errorf("close server connection: %v", err)
+		}
+		select {
+		case <-f.runExited:
+		case <-time.After(2 * time.Second):
+			t.Error("lifetime guardian test fixture did not stop during cleanup")
+			// Retain fixture ownership until Run exits. Returning here would let
+			// later cleanups mutate or close the store while the guardian uses it.
+			<-f.runExited
 		}
 	})
 	return f
@@ -1303,7 +1329,7 @@ func TestLifetimeGuardianWorkerWaitRetriesLaterScopeReleaseFailure(t *testing.T)
 func TestLifetimeGuardianWorkerWaitRecordWaitsForExactWorkerExit(t *testing.T) {
 	f := newLifetimeGuardianTestFixture(t)
 	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
-	f.guardian.options.controlTimeout = 100 * time.Millisecond
+	f.guardian.options.cleanupTimeout = 100 * time.Millisecond
 	f.callMust(t, "close", f.message(lifetimeMessageClose, 0, 0))
 	select {
 	case err := <-f.runDone:
@@ -1359,6 +1385,33 @@ func TestLifetimeGuardianOwnsWaitBeforeWorkerRecordPersistence(t *testing.T) {
 	}
 	if waits := f.records.recordedWorkerWaits(); len(waits) != 1 || waits[0].WorkerSHA256 == "" {
 		t.Fatalf("exact worker Wait was not durably qualified: %+v", waits)
+	}
+}
+
+func TestLifetimeGuardianFixtureCleanupReleasesBlockedWorkerRecord(t *testing.T) {
+	entered := make(chan struct{})
+	blocked := make(chan struct{})
+	if ok := t.Run("blocked-worker-record", func(t *testing.T) {
+		newLifetimeGuardianTestFixtureWithOptions(
+			t,
+			nil,
+			lifetime.KindProcessGroup,
+			lifetime.AssuranceCooperative,
+			nil,
+			nil,
+			func(options *lifetimeGuardianOptions) {
+				records := lifetimeGuardianTestRecordsFromOptions(t, options)
+				records.workerRecordEntered = entered
+				records.workerRecordRelease = blocked
+			},
+		)
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("worker record persistence did not start")
+		}
+	}); !ok {
+		t.Fatal("fixture cleanup did not release its blocked worker record")
 	}
 }
 
@@ -1467,7 +1520,7 @@ func TestLifetimeGuardianDeadlineRetriesTerminationBeforeWorkerWait(t *testing.T
 		func(options *lifetimeGuardianOptions) {
 			options.deadline = time.Now().Add(500 * time.Millisecond)
 			options.now = time.Now
-			options.controlTimeout = 100 * time.Millisecond
+			options.cleanupTimeout = 100 * time.Millisecond
 		},
 	)
 	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
@@ -2413,6 +2466,95 @@ func TestLifetimeGuardianDoesNotAckBeforeEmptyProof(t *testing.T) {
 	}
 	if err := f.call(t, f.message(lifetimeMessageClose, 0, 0)); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+	f.worker.release()
+	if err := f.waitRun(t); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+func TestLifetimeGuardianFinishUsesImmutableWorkDeadline(t *testing.T) {
+	emptyEntered := make(chan struct{})
+	emptyRelease := make(chan bool, 1)
+	f := newLifetimeGuardianTestFixtureWithOptions(
+		t,
+		nil,
+		lifetime.KindProcessGroup,
+		lifetime.AssuranceCooperative,
+		nil,
+		func(scope *lifetimeGuardianTestScope) {
+			scope.blockEmptyCall = 1
+			scope.emptyEntered = emptyEntered
+			scope.emptyRelease = emptyRelease
+		},
+		func(options *lifetimeGuardianOptions) {
+			options.cleanupTimeout = 20 * time.Millisecond
+			options.deadline = time.Now().Add(time.Second)
+			options.now = time.Now
+		},
+	)
+	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
+	f.callMust(t, "begin", f.message(lifetimeMessageBegin, 1, 0))
+	f.callMust(t, "started", f.message(lifetimeMessageStarted, 1, 303))
+	finishDone := make(chan error, 1)
+	go func() { finishDone <- f.call(t, f.message(lifetimeMessageFinish, 1, 0)) }()
+	select {
+	case <-emptyEntered:
+	case <-time.After(time.Second):
+		t.Fatal("finish did not reach empty observation")
+	}
+	select {
+	case err := <-finishDone:
+		t.Fatalf("finish used the shorter cleanup fallback: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	emptyRelease <- true
+	if err := <-finishDone; err != nil {
+		t.Fatalf("finish after empty proof: %v", err)
+	}
+	f.callMust(t, "close", f.message(lifetimeMessageClose, 0, 0))
+	f.worker.release()
+	if err := f.waitRun(t); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+func TestLifetimeGuardianCloseUsesImmutableWorkDeadline(t *testing.T) {
+	emptyEntered := make(chan struct{})
+	emptyRelease := make(chan bool, 1)
+	f := newLifetimeGuardianTestFixtureWithOptions(
+		t,
+		nil,
+		lifetime.KindProcessGroup,
+		lifetime.AssuranceCooperative,
+		nil,
+		func(scope *lifetimeGuardianTestScope) {
+			scope.blockEmptyCall = 1
+			scope.emptyEntered = emptyEntered
+			scope.emptyRelease = emptyRelease
+		},
+		func(options *lifetimeGuardianOptions) {
+			options.cleanupTimeout = 100 * time.Millisecond
+			options.deadline = time.Now().Add(2 * time.Second)
+			options.now = time.Now
+		},
+	)
+	f.callMust(t, "hello", f.message(lifetimeMessageHello, 0, 0))
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- f.call(t, f.message(lifetimeMessageClose, 0, 0)) }()
+	select {
+	case <-emptyEntered:
+	case <-time.After(time.Second):
+		t.Fatal("close did not reach empty observation")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("close used the shorter cleanup fallback: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	emptyRelease <- true
+	if err := <-closeDone; err != nil {
+		t.Fatalf("close after empty proof: %v", err)
 	}
 	f.worker.release()
 	if err := f.waitRun(t); err != nil {

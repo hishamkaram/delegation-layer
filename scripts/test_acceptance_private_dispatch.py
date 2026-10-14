@@ -218,7 +218,9 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             return {"outcome": {"verdict": "committed"}}
 
         def upgrade(*args, **kwargs):
-            self.assertFalse(args[4].exists(), "gate opened before concurrency proof")
+            self.assertIsInstance(args[4], private_cli.LockedReleaseGate)
+            self.assertEqual(args[4].path, base / "blocker-gate")
+            self.assertGreaterEqual(args[4].descriptor, 0, "gate opened before concurrency proof")
             self.assertEqual(args[5], base / "provider-waiters")
             self.assertEqual(kwargs["client_call_log"], base / "old-client-starts-calls")
             requested_workers = args[12]
@@ -264,6 +266,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                     task_count=73, running_count=64, status_bytes=4096,
                 )
                 raise RuntimeError("SECRET prompt credential unrestricted log")
+            args[4].release()
             return ["upgraded", "restarted"], 1024 * 1024 + 1
 
         def remove_root(root_token, entries, **_kwargs):
@@ -729,6 +732,8 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         waiters = self.root / "waiters"
         waiters.mkdir()
         gate = self.root / "gate"
+        release_gate = private_cli.LockedReleaseGate.acquire(gate)
+        self.addCleanup(release_gate.release)
         private_cli.install_pi_fixture(install, gate, waiters, self.nonce)
         process = subprocess.Popen(
             [str(install / "pi"), "--mode", "json"],
@@ -753,7 +758,7 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         try:
             self.assertIsNone(process.poll())
             lease.assert_live()
-            gate.touch()
+            release_gate.release()
             stdout, stderr = process.communicate(timeout=3)
             self.assertEqual(process.returncode, 0, stderr.decode(errors="replace"))
             self.assertIn(b"private supervisor acceptance passed", stdout)
@@ -767,6 +772,8 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         waiters = self.root / "waiters"
         waiters.mkdir()
         gate = self.root / "gate"
+        release_gate = private_cli.LockedReleaseGate.acquire(gate)
+        self.addCleanup(release_gate.release)
         private_cli.install_pi_fixture(install, gate, waiters, self.nonce)
         process = subprocess.Popen(
             [str(install / "pi"), "--mode", "json"],
@@ -785,7 +792,7 @@ class PrivateLiveLeaseTests(unittest.TestCase):
             private_cli.time.sleep(0.01)
         self.assertTrue(fifo.exists(), "fixture did not create its lease FIFO")
 
-        gate.touch()
+        release_gate.release()
         stdout, stderr = process.communicate(timeout=3)
         self.assertEqual(process.returncode, 0, stderr.decode(errors="replace"))
         self.assertIn(b"private supervisor acceptance passed", stdout)
@@ -916,6 +923,14 @@ class PackagedDefaultPathTests(unittest.TestCase):
             )
 
 
+class RecordingReleaseGate:
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def release(self):
+        self.path.touch(mode=0o600, exist_ok=True)
+
+
 class PrivateDispatchConcurrencyTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-dispatch-proof-")
@@ -925,6 +940,7 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         self.brief = self.root / "brief.md"
         self.brief.write_text("ordinary fixture turn\n")
         self.gate = self.root / "gate"
+        self.release_gate = RecordingReleaseGate(self.gate)
         self.waiters = self.root / "waiters"
         self.waiters.mkdir()
         self.old_layout = self.root / "old"
@@ -1148,7 +1164,7 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
                 patch.object(private_cli, "shutdown_private_supervisor", side_effect=self.stop), \
                 patch.object(private_cli.time, "sleep"), redirect_stdout(io.StringIO()):
             return private_cli.verify_current_installation_upgrade(
-                Path("/fixture/delegate"), self.state, self.root, self.brief, self.gate,
+                Path("/fixture/delegate"), self.state, self.root, self.brief, self.release_gate,
                 self.waiters, {},
                 self.old_layout, self.old_layout_owned,
                 Path("/fixture/pueue"), Path("/fixture/pueue.yml"),

@@ -201,6 +201,10 @@ func TestPrepareStateTerminalEventRunnerReadyPathDoesNotWaitForTransition(t *tes
 	}()
 	<-transitionHeld
 	probeContext, cancelProbe := context.WithCancel(t.Context())
+	// This test owns transition ordering. Directory-sync behavior has dedicated
+	// coverage below and must not turn the deadlock watchdog into a disk-latency
+	// assertion when every ready-path caller reaches the same durable directory.
+	syncDirectory := func(string) error { return nil }
 	var probes sync.WaitGroup
 	var releaseOnce sync.Once
 	var transitionErr error
@@ -235,7 +239,9 @@ func TestPrepareStateTerminalEventRunnerReadyPathDoesNotWaitForTransition(t *tes
 	for range callers {
 		go func() {
 			defer probes.Done()
-			ready, probeErr := prepareStateTerminalEventRunnerRevision(probeContext, root, source, 1)
+			ready, probeErr := prepareStateTerminalEventRunnerRevisionWithSync(
+				probeContext, root, source, 1, syncDirectory,
+			)
 			results <- probeResult{path: ready, err: probeErr}
 		}()
 	}

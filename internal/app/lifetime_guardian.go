@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultLifetimeGuardianControlTimeout = 5 * time.Second
+	defaultLifetimeGuardianCleanupTimeout = 5 * time.Second
 	defaultLifetimeGuardianStopPoll       = 100 * time.Millisecond
 	defaultLifetimeWorkerWaitRetry        = 100 * time.Millisecond
 	defaultLifetimeFinalizationBackoff    = 100 * time.Millisecond
@@ -96,7 +96,7 @@ type lifetimeGuardianOptions struct {
 	waitRecordRetry        func(context.Context) error
 	terminationRecordRetry func(context.Context) error
 	finalizationBackoff    func(context.Context, time.Duration) error
-	controlTimeout         time.Duration
+	cleanupTimeout         time.Duration
 	now                    func() time.Time
 	userStop               func() (bool, error)
 	stopPoll               time.Duration
@@ -162,8 +162,8 @@ type lifetimeGuardianServeResult struct {
 // seam keeps the state machine deterministic without replacing taskdir or
 // lifetime owners.
 func newLifetimeGuardian(options lifetimeGuardianOptions) (*lifetimeGuardian, error) {
-	if options.controlTimeout == 0 {
-		options.controlTimeout = defaultLifetimeGuardianControlTimeout
+	if options.cleanupTimeout == 0 {
+		options.cleanupTimeout = defaultLifetimeGuardianCleanupTimeout
 	}
 	if options.userStop != nil && options.stopPoll == 0 {
 		options.stopPoll = defaultLifetimeGuardianStopPoll
@@ -257,8 +257,8 @@ func validateLifetimeGuardianRuntime(options lifetimeGuardianOptions) error {
 }
 
 func validateLifetimeGuardianTiming(options lifetimeGuardianOptions) error {
-	if options.controlTimeout < 0 {
-		return fmt.Errorf("%w: control timeout must be positive", errLifetimeGuardianInvalid)
+	if options.cleanupTimeout < 0 {
+		return fmt.Errorf("%w: cleanup timeout must be positive", errLifetimeGuardianInvalid)
 	}
 	if options.stopPoll < 0 || (options.userStop != nil && options.stopPoll == 0) || (options.userStop == nil && options.stopPoll != 0) {
 		return fmt.Errorf("%w: user stop polling is invalid", errLifetimeGuardianInvalid)
@@ -1125,7 +1125,7 @@ func (g *lifetimeGuardian) handleStarted(ctx context.Context, message lifetimeMe
 	if err := g.requireReady(message, false); err != nil || g.authorizedSequence != message.Sequence {
 		return g.reject(ctx, message, lifetimeGuardianCodeInvalidOrder)
 	}
-	controlCtx, cancel := g.controlContext(ctx)
+	controlCtx, cancel := g.workContext(ctx)
 	defer cancel()
 	launchRef, err := observeLifetimeLaunch(controlCtx, g.scope, message.PID)
 	if err != nil {
@@ -1151,7 +1151,7 @@ func (g *lifetimeGuardian) handleStarted(ctx context.Context, message lifetimeMe
 }
 
 func (g *lifetimeGuardian) rejectStartedLaunch(ctx context.Context, message lifetimeMessage, cause error) error {
-	controlCtx, cancel := g.controlContext(ctx)
+	controlCtx, cancel := g.cleanupContext(ctx)
 	cleanupErr := finalizeLifetimeScope(controlCtx, g.scope, g.launchRefs)
 	cancel()
 	if cleanupErr != nil {
@@ -1176,7 +1176,7 @@ func (g *lifetimeGuardian) handleFinish(ctx context.Context, message lifetimeMes
 	if err := g.requireReady(message, false); err != nil || g.activeSequence != message.Sequence {
 		return g.reject(ctx, message, lifetimeGuardianCodeInvalidOrder)
 	}
-	controlCtx, cancel := g.controlContext(ctx)
+	controlCtx, cancel := g.workContext(ctx)
 	defer cancel()
 	if err := g.ensureScopeEmpty(controlCtx, g.launchRefs); err != nil {
 		replyErr := g.reject(ctx, message, lifetimeGuardianCodeFinish)
@@ -1191,7 +1191,7 @@ func (g *lifetimeGuardian) handleTermination(ctx context.Context, message lifeti
 		return false, g.reject(ctx, message, lifetimeGuardianCodeInvalidOrder)
 	}
 	g.fenced = true
-	controlCtx, cancel := g.controlContext(ctx)
+	controlCtx, cancel := g.terminationContext(ctx, cause)
 	defer cancel()
 	if err := g.terminateAndRecord(controlCtx, cause); err != nil {
 		replyErr := g.reject(ctx, message, lifetimeGuardianCodeTermination)
@@ -1434,7 +1434,7 @@ func (g *lifetimeGuardian) reply(ctx context.Context, message lifetimeMessage, a
 	if g.codec == nil {
 		return errLifetimeGuardianInvalid
 	}
-	controlCtx, cancel := g.controlContext(ctx)
+	controlCtx, cancel := g.replyContext(ctx, message)
 	defer cancel()
 	return replyLifetimeWithContext(controlCtx, g.codec, message, accepted, code)
 }
@@ -1471,18 +1471,37 @@ func (g *lifetimeGuardian) cleanupContext(parent context.Context) (context.Conte
 	if parent == nil {
 		parent = context.Background()
 	}
-	return context.WithTimeout(context.WithoutCancel(parent), g.options.controlTimeout)
+	return context.WithTimeout(context.WithoutCancel(parent), g.options.cleanupTimeout)
 }
 
 func (g *lifetimeGuardian) recoveryContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), lifetimeRecoveryTimeout)
 }
 
-func (g *lifetimeGuardian) controlContext(parent context.Context) (context.Context, context.CancelFunc) {
+// workContext keeps native start and finish proof under the immutable business
+// deadline. cleanupContext is the sole shorter fallback after work has ended.
+func (g *lifetimeGuardian) workContext(parent context.Context) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		return nil, func() {}
 	}
-	return context.WithTimeout(parent, g.options.controlTimeout)
+	return context.WithDeadline(parent, g.options.deadline)
+}
+
+func (g *lifetimeGuardian) replyContext(parent context.Context, message lifetimeMessage) (context.Context, context.CancelFunc) {
+	if message.Type == lifetimeMessageStop || g.deadlineReached() {
+		return g.cleanupContext(parent)
+	}
+	return g.workContext(parent)
+}
+
+// terminationContext keeps a normal completed transition inside the original
+// work budget. Stop and recovery remain independently bounded because they run
+// after work has been fenced or its deadline has already elapsed.
+func (g *lifetimeGuardian) terminationContext(parent context.Context, cause string) (context.Context, context.CancelFunc) {
+	if cause == task.LifetimeTerminationCompleted && !g.deadlineReached() {
+		return g.workContext(parent)
+	}
+	return g.cleanupContext(parent)
 }
 
 func (g *lifetimeGuardian) stopReader(parent context.Context, reader *lifetimeGuardianReader) error {

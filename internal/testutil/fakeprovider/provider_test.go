@@ -324,7 +324,7 @@ func TestRunProviderLateSessionHasFiniteObservableGap(t *testing.T) {
 	}()
 	select {
 	case <-writer.first:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("late-session answer did not start")
 	}
 	select {

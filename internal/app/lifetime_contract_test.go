@@ -78,11 +78,15 @@ func newProductionRecordGuardianFixture(
 
 func callProductionRecordGuardian(t *testing.T, fixture *lifetimeGuardianTestFixture, taskID, kind string) {
 	t.Helper()
-	fixture.callMust(t, kind, lifetimeMessage{
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := fixture.client.callContext(ctx, lifetimeMessage{
 		Version: lifetimeProtocolVersion,
 		Type:    kind,
 		TaskID:  taskID,
-	})
+	}); err != nil {
+		t.Fatalf("%s: %v", kind, err)
+	}
 }
 
 func TestLifetimeGuardianTaskStoreAmbiguousWorkerWriteReachesStopConsumer(t *testing.T) {

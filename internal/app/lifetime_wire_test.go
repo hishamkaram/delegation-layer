@@ -323,14 +323,13 @@ func TestLifetimeWorkerClientTerminationUsesIndependentControlDeadline(t *testin
 	}
 }
 
-func TestLifetimeWorkerClientFinishUsesIndependentControlDeadline(t *testing.T) {
+func TestLifetimeWorkerClientFinishHonorsImmutableDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
 	taskID := strings.Repeat("8", 32)
 	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
 		{kind: lifetimeMessageBegin, sequence: 1, accepted: true},
 		{kind: lifetimeMessageStarted, sequence: 1, pid: 123, accepted: true},
-		{kind: lifetimeMessageFinish, sequence: 1, accepted: true},
 	})
 
 	scope := &lifetimeWireScope{}
@@ -346,8 +345,8 @@ func TestLifetimeWorkerClientFinishUsesIndependentControlDeadline(t *testing.T) 
 		t.Fatal(err)
 	}
 	client.deadline = time.Now().Add(-time.Second)
-	if err = client.FinishCommand(t.Context(), cmd); err != nil {
-		t.Fatalf("finish after task deadline: %v", err)
+	if err = client.FinishCommand(t.Context(), cmd); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("finish after task deadline = %v, want context deadline exceeded", err)
 	}
 	if err = client.Close(); err != nil {
 		t.Fatal(err)
@@ -357,12 +356,11 @@ func TestLifetimeWorkerClientFinishUsesIndependentControlDeadline(t *testing.T) 
 	}
 }
 
-func TestLifetimeWorkerClientCloseUsesIndependentControlDeadline(t *testing.T) {
+func TestLifetimeWorkerClientCloseHonorsImmutableDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
 	taskID := strings.Repeat("9", 32)
 	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
 		{kind: lifetimeMessageHello, accepted: true},
-		{kind: lifetimeMessageClose, accepted: true},
 	})
 
 	scope := &lifetimeWireScope{}
@@ -371,8 +369,8 @@ func TestLifetimeWorkerClientCloseUsesIndependentControlDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.deadline = time.Now().Add(-time.Second)
-	if err = client.CloseTask(t.Context()); err != nil {
-		t.Fatalf("close after task deadline: %v", err)
+	if err = client.CloseTask(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("close after task deadline = %v, want context deadline exceeded", err)
 	}
 	if err = client.Close(); err != nil {
 		t.Fatal(err)
@@ -409,7 +407,7 @@ func TestLifetimeWorkerClientBindsHelloToImmutableDeadline(t *testing.T) {
 	}
 }
 
-func TestLifetimeWorkerClientBoundsHelloByControlTimeout(t *testing.T) {
+func TestLifetimeWorkerClientBindsHelloToLongImmutableDeadline(t *testing.T) {
 	workerConn, guardianConn := net.Pipe()
 	deadlineConn := &lifetimeGuardianDeadlineConn{Conn: workerConn, deadline: make(chan time.Time, 1)}
 	taskID := strings.Repeat("0", 32)
@@ -417,7 +415,6 @@ func TestLifetimeWorkerClientBoundsHelloByControlTimeout(t *testing.T) {
 		{kind: lifetimeMessageHello, accepted: true},
 	})
 	taskDeadline := time.Now().Add(2 * time.Minute)
-	started := time.Now()
 	client, err := newLifetimeWorkerClient(
 		deadlineConn, &lifetimeWireScope{}, taskID, taskDeadline,
 		lifetimeWireNoopLaunchGateFactory,
@@ -426,9 +423,110 @@ func TestLifetimeWorkerClientBoundsHelloByControlTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := <-deadlineConn.deadline
-	if got.Before(started.Add(lifetimeControlTimeout-time.Second)) ||
-		got.After(time.Now().Add(lifetimeControlTimeout)) || !got.Before(taskDeadline) {
-		t.Fatalf("hello deadline = %v, want bounded by %v and before task deadline %v", got, lifetimeControlTimeout, taskDeadline)
+	if !got.Equal(taskDeadline) {
+		t.Fatalf("hello deadline = %v, want immutable task deadline %v", got, taskDeadline)
+	}
+	if err = client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
+type lifetimeWireDeadlineHistoryConn struct {
+	net.Conn
+	mu        sync.Mutex
+	deadlines []time.Time
+}
+
+func (c *lifetimeWireDeadlineHistoryConn) SetDeadline(deadline time.Time) error {
+	if !deadline.IsZero() {
+		c.mu.Lock()
+		c.deadlines = append(c.deadlines, deadline)
+		c.mu.Unlock()
+	}
+	return c.Conn.SetDeadline(deadline)
+}
+
+func (c *lifetimeWireDeadlineHistoryConn) snapshot() []time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]time.Time(nil), c.deadlines...)
+}
+
+func TestLifetimeWorkerClientBindsFinishToImmutableDeadline(t *testing.T) {
+	workerConn, guardianConn := net.Pipe()
+	deadlineConn := &lifetimeWireDeadlineHistoryConn{Conn: workerConn}
+	taskID := strings.Repeat("1", 32)
+	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+		{kind: lifetimeMessageHello, accepted: true},
+		{kind: lifetimeMessageBegin, sequence: 1, accepted: true},
+		{kind: lifetimeMessageStarted, sequence: 1, pid: 456, accepted: true},
+		{kind: lifetimeMessageFinish, sequence: 1, accepted: true},
+	})
+	taskDeadline := time.Now().Add(2 * time.Minute)
+	client, err := newLifetimeWorkerClient(
+		deadlineConn, &lifetimeWireScope{}, taskID, taskDeadline,
+		lifetimeWireNoopLaunchGateFactory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("provider")
+	if err = client.StartCommand(cmd, func() error {
+		cmd.Process = &os.Process{Pid: 456}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = client.FinishCommand(t.Context(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	deadlines := deadlineConn.snapshot()
+	if len(deadlines) != 4 {
+		t.Fatalf("work transition deadlines = %d, want hello, begin, started, finish", len(deadlines))
+	}
+	for index, got := range deadlines {
+		if !got.Equal(taskDeadline) {
+			t.Fatalf("work transition %d deadline = %v, want immutable task deadline %v", index, got, taskDeadline)
+		}
+	}
+	if err = client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-serverErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLifetimeWorkerClientBindsCloseToImmutableDeadline(t *testing.T) {
+	workerConn, guardianConn := net.Pipe()
+	deadlineConn := &lifetimeWireDeadlineHistoryConn{Conn: workerConn}
+	taskID := strings.Repeat("2", 32)
+	serverErr := startLifetimeWireServer(guardianConn, taskID, []lifetimeWireExpectation{
+		{kind: lifetimeMessageHello, accepted: true},
+		{kind: lifetimeMessageClose, accepted: true},
+	})
+	taskDeadline := time.Now().Add(2 * time.Minute)
+	client, err := newLifetimeWorkerClient(
+		deadlineConn, &lifetimeWireScope{}, taskID, taskDeadline,
+		lifetimeWireNoopLaunchGateFactory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.CloseTask(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	deadlines := deadlineConn.snapshot()
+	if len(deadlines) != 2 {
+		t.Fatalf("close transition deadlines = %d, want hello and close", len(deadlines))
+	}
+	for index, got := range deadlines {
+		if !got.Equal(taskDeadline) {
+			t.Fatalf("close transition %d deadline = %v, want immutable task deadline %v", index, got, taskDeadline)
+		}
 	}
 	if err = client.Close(); err != nil {
 		t.Fatal(err)

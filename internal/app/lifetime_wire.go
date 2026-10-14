@@ -373,7 +373,7 @@ func (c *lifetimeWorkerClient) cleanupUnacknowledgedStart(pid int) error {
 	if err != nil {
 		return fmt.Errorf("observe unacknowledged lifetime start: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), defaultLifetimeGuardianControlTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultLifetimeGuardianCleanupTimeout)
 	defer cancel()
 	refs := []lifetime.LaunchRef{launchRef}
 	if err = c.scope.Terminate(ctx, refs); err != nil {
@@ -410,7 +410,7 @@ func (c *lifetimeWorkerClient) FinishCommand(ctx context.Context, cmd *exec.Cmd)
 		c.activePID = 0
 		return nil
 	}
-	err := c.controlCall(ctx, c.message(lifetimeMessageFinish, c.sequence, 0))
+	err := c.call(ctx, c.message(lifetimeMessageFinish, c.sequence, 0))
 	c.activePID = 0
 	c.controlErr = errors.Join(c.controlErr, err)
 	return err
@@ -447,7 +447,7 @@ func (c *lifetimeWorkerClient) CloseTask(ctx context.Context) error {
 	if c.terminal {
 		return nil
 	}
-	err := c.controlCall(ctx, c.message(lifetimeMessageClose, 0, 0))
+	err := c.call(ctx, c.message(lifetimeMessageClose, 0, 0))
 	if err == nil {
 		c.terminal = true
 	}
@@ -465,20 +465,21 @@ func (c *lifetimeWorkerClient) message(kind string, sequence uint64, pid int) li
 	return lifetimeMessage{Version: lifetimeProtocolVersion, Type: kind, TaskID: c.taskID, Sequence: sequence, PID: pid}
 }
 
+// call keeps hello, native command transitions, and normal completion under
+// the immutable task or inspection deadline. controlCall owns the finite
+// stop fallback after work can no longer continue.
 func (c *lifetimeWorkerClient) call(parent context.Context, message lifetimeMessage) error {
 	if c == nil || c.codec == nil || c.deadline.IsZero() || parent == nil {
 		return task.ErrEvidenceFault
 	}
-	controlCtx, cancelControl := context.WithTimeout(parent, lifetimeControlTimeout)
-	defer cancelControl()
-	ctx, cancelDeadline := context.WithDeadline(controlCtx, c.deadline)
-	defer cancelDeadline()
+	ctx, cancel := context.WithDeadline(parent, c.deadline)
+	defer cancel()
 	return c.codec.callContext(ctx, message)
 }
 
-// controlCall gives terminal control messages their own bounded lifetime.
+// controlCall gives stop messages their own bounded lifetime.
 // The immutable task deadline gates new provider work; it must not prevent the
-// already-started worker from asking the guardian to stop or close that work.
+// already-started worker from asking the guardian to stop that work.
 func (c *lifetimeWorkerClient) controlCall(parent context.Context, message lifetimeMessage) error {
 	if c == nil || c.codec == nil || parent == nil {
 		return task.ErrEvidenceFault

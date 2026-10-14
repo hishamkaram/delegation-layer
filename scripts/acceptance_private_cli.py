@@ -104,15 +104,16 @@ esac
 {"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}]}
 EOF
 '''
-PI_WAIT_PROGRAM = r"""import errno
+PI_WAIT_PROGRAM = r"""import fcntl
 import os
 import signal
+import stat
 import sys
-import time
 
 gate_path, waiter_directory, lease_nonce = sys.argv[1:]
 lease_fifo = os.path.join(waiter_directory, lease_nonce + "-" + str(os.getpid()) + ".fifo")
 descriptor = -1
+gate_descriptor = -1
 
 def stop(signum, _frame):
     raise SystemExit(128 + signum)
@@ -122,24 +123,26 @@ for handled in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
 
 try:
     os.mkfifo(lease_fifo, 0o600)
-    flags = os.O_WRONLY | os.O_NONBLOCK
+    # Linux and Darwin both allow one process to keep a FIFO's read and write
+    # ends open. This preserves the live-writer lease while also letting failed
+    # orchestration release the fixture before a lease reader has attached.
+    flags = os.O_RDWR | os.O_NONBLOCK
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    while descriptor < 0:
-        try:
-            descriptor = os.open(lease_fifo, flags)
-        except OSError as error:
-            if error.errno != errno.ENXIO:
-                raise
-            if os.path.exists(gate_path):
-                break
-            time.sleep(0.05)
-    if descriptor >= 0:
-        handshake = lease_nonce + "\t" + str(os.getpid()) + "\n"
-        os.write(descriptor, handshake.encode())
-    while not os.path.exists(gate_path):
-        time.sleep(0.05)
+    descriptor = os.open(lease_fifo, flags)
+    handshake = lease_nonce + "\t" + str(os.getpid()) + "\n"
+    os.write(descriptor, handshake.encode())
+    gate_flags = os.O_RDONLY
+    gate_flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    gate_descriptor = os.open(gate_path, gate_flags)
+    gate_identity = os.fstat(gate_descriptor)
+    if not stat.S_ISREG(gate_identity.st_mode) or gate_identity.st_uid != os.getuid():
+        raise RuntimeError("capacity fixture gate is unsafe")
+    fcntl.flock(gate_descriptor, fcntl.LOCK_SH)
+    fcntl.flock(gate_descriptor, fcntl.LOCK_UN)
     sys.stdout.write('''{"type":"session","id":"00000000-0000-4000-8000-000000000001"}\n{"type":"agent_start"}\n{"type":"turn_start"}\n{"type":"message_start","message":{"role":"assistant","content":[]}}\n{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}}\n{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"},"toolResults":[]}\n{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"private supervisor acceptance passed"}],"stopReason":"stop"}]}\n''')
 finally:
+    if gate_descriptor >= 0:
+        os.close(gate_descriptor)
     if descriptor >= 0:
         os.close(descriptor)
     try:
@@ -323,6 +326,40 @@ def lease_fifo_path(waiter_directory, nonce, pid):
     if not isinstance(pid, int) or pid <= 0:
         raise RuntimeError("capacity lease PID is invalid")
     return Path(waiter_directory) / (nonce + "-" + str(pid) + ".fifo")
+
+
+class LockedReleaseGate:
+    """One owner lock that releases every blocked capacity fixture together."""
+
+    def __init__(self, path, descriptor):
+        self.path = Path(path)
+        self.descriptor = descriptor
+
+    @classmethod
+    def acquire(cls, path):
+        path = Path(path)
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags, 0o600)
+        try:
+            identity = os.fstat(descriptor)
+            if not stat.S_ISREG(identity.st_mode) or identity.st_uid != os.getuid():
+                raise RuntimeError("capacity fixture gate is unsafe")
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return cls(path, descriptor)
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def release(self):
+        if self.descriptor < 0:
+            return
+        descriptor = self.descriptor
+        self.descriptor = -1
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 class LiveFIFOLease:
@@ -1320,7 +1357,7 @@ def prove_lifetime_owner_cohort(specifications, lease_cohort):
     }
 
 
-def verify_current_installation_upgrade(delegate, state, workspace, brief, gate, waiter_directory,
+def verify_current_installation_upgrade(delegate, state, workspace, brief, release_gate, waiter_directory,
                                         env, old_layout,
                                         old_layout_owned,
                                         client, config, parallel_tasks, dispatch_workers,
@@ -1617,7 +1654,7 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, gate,
         )
         evidence["status_coalescing"] = status_coalescing
         lease_cohort.assert_live()
-        gate.touch(mode=0o600, exist_ok=True)
+        release_gate.release()
         capacity_proof["gate_opened_after_proof"] = True
         (receipts / "capacity-proof.json").write_text(
             json.dumps(capacity_proof, sort_keys=True) + "\n"
@@ -1761,6 +1798,7 @@ def main():
     env = {}
     private_config = None
     gate = None
+    release_gate = None
     waiter_directory = None
     old_install = None
     old_libexec = None
@@ -1939,6 +1977,7 @@ def main():
             ] != ["openai/gpt-4.1"]:
                 raise RuntimeError("legacy CLI could not complete its initial model inspection")
         if not legacy_mode:
+            release_gate = LockedReleaseGate.acquire(gate)
             default_group = pueue_snapshot(
                 old_libexec / "pueue", private_config, env,
                 phase="supervisor-observation").get("groups", {}).get("default", {})
@@ -1946,7 +1985,7 @@ def main():
                 raise RuntimeError("private ordinary supervisor did not enable unlimited parallelism")
             acceptance_evidence = {}
             upgraded_tasks, status_bytes = verify_current_installation_upgrade(
-                upgraded_install / "delegate", state, workspace, brief, gate, waiter_directory, env,
+                upgraded_install / "delegate", state, workspace, brief, release_gate, waiter_directory, env,
                 base / "old", old_layout_owned, initial_pair_directory / "pueue", private_config,
                 args.parallel_tasks,
                 dispatch_workers, response_directory, acceptance_evidence,
@@ -2314,7 +2353,14 @@ def main():
         cleanup_errors = []
         primary_closure_ready = True
         run_receipt.phase("cleanup")
-        if gate is not None and base is not None:
+        if release_gate is not None:
+            try:
+                release_gate.release()
+            except BaseException as cleanup_error:
+                cleanup_errors.append(RuntimeError(
+                    "could not release the locked fixture gate: " + str(cleanup_error)
+                ))
+        elif gate is not None and base is not None:
             try:
                 gate.touch(mode=0o600, exist_ok=True)
             except BaseException as cleanup_error:

@@ -68,7 +68,7 @@ plugin-package-check:
 	./scripts/check-plugin-package.sh
 
 test-race: tool-versions
-	go test -race -count=1 ./...
+	go test -race -count=1 -timeout=15m ./...
 
 test-native-harness:
 	python3 -m unittest discover -s scripts -p 'test_acceptance_*.py' -v

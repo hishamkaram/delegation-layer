@@ -251,6 +251,12 @@ the guardian's scope handle and owner lease. A live guardian retries its current
 with bounded attempts and capped backoff; it does not release reconstructable
 authority while native cleanup remains unresolved. User cancellation first
 persists its stop request.
+Provider-start, provider-finish, and normal provider-close control use the
+immutable task or inspection deadline, including native process-scope
+observation. They do not replace that deadline with a shorter local control
+timeout. Terminal stop and recovery after the work deadline use the guardian's
+separate finite cleanup fallback because they must finish already-started
+lifecycle work.
 When the guardian owns the lease, it observes that request and performs the
 same native finalization; cancellation never kills the Pueue row out from under
 that owner. A canceller may remove or stop the queue row directly only after it

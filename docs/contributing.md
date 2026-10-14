@@ -28,7 +28,7 @@ repository and run the local checks before editing:
 
 ```sh
 go test ./...
-go test -race ./...
+make test-race
 python3 -m unittest discover -s scripts -p 'test_*.py'
 make check
 make skill-package-check

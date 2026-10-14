@@ -55,7 +55,6 @@ func TestPrivateMaintenanceReleasesQueueIdentityWhileSettling(t *testing.T) {
 	// race instrumentation on slower builders.
 	client.options.ObservationTimeout = time.Second
 	firstAuthorization := make(chan struct{})
-	leaseAttempted := make(chan struct{})
 	leaseEntered := make(chan struct{})
 	leaseRelease := make(chan struct{})
 	var authorizations atomic.Int64
@@ -63,7 +62,7 @@ func TestPrivateMaintenanceReleasesQueueIdentityWhileSettling(t *testing.T) {
 		if authorizations.Add(1) == 1 {
 			close(firstAuthorization)
 			select {
-			case <-leaseAttempted:
+			case <-leaseEntered:
 			case <-ctx.Done():
 				return PrivateQueueCleanupPlan{}, ctx.Err()
 			}
@@ -82,7 +81,6 @@ func TestPrivateMaintenanceReleasesQueueIdentityWhileSettling(t *testing.T) {
 	<-firstAuthorization
 	leaseDone := make(chan error, 1)
 	go func() {
-		close(leaseAttempted)
 		leaseDone <- client.withPrivateQueueIdentityLease(t.Context(), func(context.Context) error {
 			close(leaseEntered)
 			<-leaseRelease
@@ -230,14 +228,17 @@ func TestRequestedPrivateMaintenanceCoalescesBurstWithoutWaiting(t *testing.T) {
 	}()
 	waitForPrivateFixtureMarker(t, scenario.startedPath)
 
-	results, contendersDone := startRequestedPrivateMaintenanceContenders(
+	batch := startRequestedPrivateMaintenanceContenders(
 		ctx,
 		scenario.client,
 		scenario.fixture.stateRoot,
 		contenderCount,
 	)
-	waitForRequestedPrivateMaintenanceContenders(t, scenario, contendersDone, ownerDone)
-	assertRequestedPrivateMaintenanceContenders(t, results, 2, contenderCount+1)
+	defer batch.release()
+	waitForRequestedPrivateMaintenanceRequests(t, scenario, batch.requestsDone, ownerDone)
+	batch.release()
+	waitForRequestedPrivateMaintenanceContenders(t, scenario, batch.contendersDone, ownerDone)
+	assertRequestedPrivateMaintenanceContenders(t, batch.results, 2, contenderCount+1)
 	if got := scenario.statusCommands.Load(); got != 1 {
 		t.Fatalf("maintenance burst issued %d queue snapshots before release, want one active owner", got)
 	}
@@ -951,21 +952,33 @@ type requestedPrivateMaintenanceResult struct {
 	err        error
 }
 
+type requestedPrivateMaintenanceBatch struct {
+	results        <-chan requestedPrivateMaintenanceResult
+	requestsDone   <-chan struct{}
+	contendersDone <-chan struct{}
+	release        func()
+}
+
 func startRequestedPrivateMaintenanceContenders(
 	ctx context.Context,
 	client *Client,
 	stateRoot string,
 	contenderCount int,
-) (<-chan requestedPrivateMaintenanceResult, <-chan struct{}) {
+) requestedPrivateMaintenanceBatch {
 	start := make(chan struct{})
+	run := make(chan struct{})
 	results := make(chan requestedPrivateMaintenanceResult, contenderCount)
+	var requests sync.WaitGroup
 	var contenders sync.WaitGroup
+	requests.Add(contenderCount)
 	contenders.Add(contenderCount)
 	for range contenderCount {
 		go func() {
 			defer contenders.Done()
 			<-start
 			generation, requestErr := requestPrivateQueueMaintenance(ctx, stateRoot)
+			requests.Done()
+			<-run
 			started := requestErr == nil && client.RunRequestedPrivateQueueMaintenance(ctx)
 			results <- requestedPrivateMaintenanceResult{
 				generation: generation,
@@ -974,14 +987,44 @@ func startRequestedPrivateMaintenanceContenders(
 			}
 		}()
 	}
-	done := make(chan struct{})
+	requestsDone := make(chan struct{})
+	go func() {
+		requests.Wait()
+		close(requestsDone)
+	}()
+	contendersDone := make(chan struct{})
 	go func() {
 		contenders.Wait()
 		close(results)
-		close(done)
+		close(contendersDone)
 	}()
 	close(start)
-	return results, done
+	return requestedPrivateMaintenanceBatch{
+		results:        results,
+		requestsDone:   requestsDone,
+		contendersDone: contendersDone,
+		release:        sync.OnceFunc(func() { close(run) }),
+	}
+}
+
+func waitForRequestedPrivateMaintenanceRequests(
+	t *testing.T,
+	scenario *privateTerminalTriggerScenario,
+	requestsDone <-chan struct{},
+	ownerDone <-chan bool,
+) {
+	t.Helper()
+	waitContext, cancelWait := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancelWait()
+	select {
+	case <-requestsDone:
+	case ownerStarted := <-ownerDone:
+		scenario.releaseStatus(t)
+		t.Fatalf("elected maintenance owner returned before status release: started=%t", ownerStarted)
+	case <-waitContext.Done():
+		scenario.releaseStatus(t)
+		t.Fatalf("durable maintenance requests did not finish: %v", waitContext.Err())
+	}
 }
 
 func waitForRequestedPrivateMaintenanceContenders(

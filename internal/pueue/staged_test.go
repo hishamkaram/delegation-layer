@@ -693,11 +693,14 @@ func TestSubmitStagedUnresolvedAddRetainsSubmissionPending(t *testing.T) {
 	if !errors.Is(err, ErrSubmissionUncertain) || !errors.Is(err, ErrInFlight) || observation.Matched || observation.Pending == nil {
 		t.Fatalf("unresolved add was not reported safely: observation=%+v err=%v", observation, err)
 	}
-	if got := len(stagedInvocations(t, fake, "add")); got != 1 || len(stagedInvocations(t, fake, "enqueue")) != 0 {
-		t.Fatalf("unresolved add was retried or enqueued: adds=%d enqueues=%d", got, len(stagedInvocations(t, fake, "enqueue")))
+	if got := len(stagedInvocations(t, fake, "add")); got > 1 || len(stagedInvocations(t, fake, "enqueue")) != 0 {
+		t.Fatalf("unresolved add was retried or enqueued while pending: adds=%d enqueues=%d", got, len(stagedInvocations(t, fake, "enqueue")))
 	}
 	if !awaitPendingNaturally(observation.Pending, 2*time.Second) {
 		t.Fatal("unresolved add Pending did not settle")
+	}
+	if got := len(stagedInvocations(t, fake, "add")); got != 1 || len(stagedInvocations(t, fake, "enqueue")) != 0 {
+		t.Fatalf("settled unresolved add was retried or enqueued: adds=%d enqueues=%d", got, len(stagedInvocations(t, fake, "enqueue")))
 	}
 }
 
