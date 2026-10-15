@@ -1,8 +1,10 @@
 # Delegation Layer
 
 <p align="center">
-  <a href="#install"><img src="docs/assets/delegation-layer-hero.jpg" alt="A lead AI model coordinating several specialist coding agents through Delegation Layer" width="1400"></a>
+  <a href="#install"><img src="docs/assets/delegation-layer-hero.jpg" alt="One lead AI sends briefs through Delegate to three specialist agents and collects their findings" width="1400"></a>
 </p>
+
+Briefs out. Findings back. One place to track the work.
 
 Give your lead AI agent a reliable way to delegate bounded coding work to the
 provider that fits the task.
@@ -25,7 +27,7 @@ already use instead of replacing them.
 - **Resumable turns** — a durable timeout can continue the exact provider
   session through a linked successor task.
 - **Runtime compatibility** — the selected provider's executable and advertised
-  capabilities are checked when the task is prepared.
+  capabilities are checked before provider execution.
 - **Model choice when needed** — native model and effort discovery is available
   without turning discovery into an admission allowlist.
 - **Native authentication** — provider login stays with the provider CLI; task
@@ -205,9 +207,11 @@ delegate --root "$HOME/delegation-state" collect TASK_ID --watch 5s --json
 Use `delegate providers --json` for the compiled provider catalog and
 `delegate capabilities --provider PROFILE --json` for a provider-neutral
 capability response. `delegate preflight --provider PROFILE --cwd ABS --json`
-checks static admission without creating a task. Dispatch still performs the
-host-specific runtime probe; catalog discovery alone does not prove
-authentication or supervisor readiness.
+checks static admission without creating a task. Managed runtime-only tasks
+perform the fresh runtime probe inside their supervised worker before provider
+execution; inspection-backed paths retain admission checks. See
+[architecture](docs/architecture.md#ownership-boundaries). Catalog discovery
+alone does not prove authentication or supervisor readiness.
 
 When an explicit model or effort choice is needed, query the implemented native
 discovery command:
@@ -229,18 +233,35 @@ Discovery exits `0` for `available` or `partial`, `2` for `blocked` or
 `unavailable`, and `1` for `failed`.
 
 For Codex's native read-only review command, select `codex:review` and make
-the Git state explicit:
+the Git state explicit. Run this from an existing Git checkout outside the
+Delegate state root, with the changes you want reviewed:
 
 ```sh
-delegate --root "$HOME/delegation-state" dispatch \
+(
+REVIEW_WORKSPACE="$(git rev-parse --show-toplevel)" || exit 1
+REVIEW_BRIEF="$(mktemp)" || exit 1
+REVIEW_RESPONSE="$(mktemp)" || exit 1
+printf '%s\n' 'Review the uncommitted changes in this Git checkout.' >"$REVIEW_BRIEF"
+if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch \
   --provider codex:review \
   --review-target uncommitted \
-  --brief "$PWD/review-brief.txt" \
-  --cwd "$HOME/delegation-workspace" \
+  --brief "$REVIEW_BRIEF" \
+  --cwd "$REVIEW_WORKSPACE" \
   --permission read-only \
-  --budget 30m \
-  --json
+  --budget 1h \
+  --json >"$REVIEW_RESPONSE"; then
+  review_exit=0
+else
+  review_exit=$?
+fi
+cat "$REVIEW_RESPONSE"
+printf '\nDispatch exit: %s; saved response: %s\n' "$review_exit" "$REVIEW_RESPONSE"
+)
 ```
+
+When that response says `task_record: "created"`, observe its exact `task_id`
+with the `status` and `collect` commands above, using the same state root.
+Otherwise follow the returned failure; do not dispatch again to recover output.
 
 Use `base:BRANCH` or `commit:SHA` for a different review target. Review tasks
 are persisted as read-only tasks and do not support continuation or active-turn

@@ -446,7 +446,13 @@ func TestOrdinaryTerminalCallbackRequestsFullQueueMaintenance(t *testing.T) {
 
 func TestConcurrentCompletedInspectionsUseExactQueueObservations(t *testing.T) {
 	store := newBareInspectionStore(t)
-	supervisor, statusCalls, unfilteredStatusCalls := newTerminalEventInspectionSupervisorWithEnvironment(t, store)
+	// Publish both wakes before running maintenance so exact batch counts do
+	// not depend on the scheduler's bounded quiet window.
+	var requestedLaunches atomic.Int32
+	supervisor, statusCalls, unfilteredStatusCalls := newTerminalEventInspectionSupervisorWithLauncher(t, store, func(context.Context, string, string) error {
+		requestedLaunches.Add(1)
+		return nil
+	})
 	// Fixture journals are fsync-heavy and created serially before observation.
 	// Two operations prove concurrent exact reconciliation deterministically;
 	// the native private-CLI acceptance proves 200-task production capacity.
@@ -494,8 +500,8 @@ func TestConcurrentCompletedInspectionsUseExactQueueObservations(t *testing.T) {
 			t.Fatalf("coalesced admissions did not finish: %v", ctx.Err())
 		}
 	}
+	runInspectionMaintenanceBatch(t, ctx, supervisor, requestedLaunches.Load(), count)
 	removals := filepath.Join(store.Root, ".supervisor", "terminal-event-removals")
-	waitForTestPath(t, removals)
 	removed, err := os.ReadFile(removals)
 	if err != nil {
 		t.Fatal(err)
@@ -508,10 +514,20 @@ func TestConcurrentCompletedInspectionsUseExactQueueObservations(t *testing.T) {
 	if total, unfiltered := statusCalls.Load(), unfilteredStatusCalls.Load(); total != count*2+2 || unfiltered != 2 {
 		t.Fatalf("%d completed inspections made status_calls=%d unfiltered_status_calls=%d, want one admission observation and one candidate revalidation per inspection plus one streamed cleanup authorization/revalidation pair", count, total, unfiltered)
 	}
-	waitForPrivateQueueMaintenanceIdle(t, t.Context(), supervisor)
 	if closeErr := supervisor.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
+}
+
+func runInspectionMaintenanceBatch(t *testing.T, ctx context.Context, supervisor *pueue.Client, launches, want int32) {
+	t.Helper()
+	if launches != want {
+		t.Fatalf("maintenance launch requests=%d, want %d", launches, want)
+	}
+	if !supervisor.RunRequestedPrivateQueueMaintenance(ctx) {
+		t.Fatal("persisted maintenance did not start")
+	}
+	waitForPrivateQueueMaintenanceIdle(t, ctx, supervisor)
 }
 
 func TestAwaitInspectionDoesNotWaitForBlockedPrivateCleanup(t *testing.T) {
@@ -932,6 +948,11 @@ func newTerminalEventInspectionSupervisor(t *testing.T, store *taskdir.Store) (*
 
 func newTerminalEventInspectionSupervisorWithEnvironment(t *testing.T, store *taskdir.Store, extraEnvironment ...string) (*pueue.Client, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
+	return newTerminalEventInspectionSupervisorWithLauncher(t, store, nil, extraEnvironment...)
+}
+
+func newTerminalEventInspectionSupervisorWithLauncher(t *testing.T, store *taskdir.Store, launcher func(context.Context, string, string) error, extraEnvironment ...string) (*pueue.Client, *atomic.Int32, *atomic.Int32) {
+	t.Helper()
 	bundle := canonicalAppTestTempDir(t)
 	clientPath := filepath.Join(bundle, "pueue")
 	daemonPath := filepath.Join(bundle, "pueued")
@@ -997,6 +1018,7 @@ printf '%s\n' "$$" > "$base/run/pueue.pid"
 	options := pueue.Options{
 		ObservationTimeout:          inspection.AdmissionTimeout,
 		SuccessfulCleanupAuthorizer: authorizePrivateSuccessfulCleanup,
+		PrivateMaintenanceLauncher:  launcher,
 		Environment:                 append(os.Environ(), extraEnvironment...),
 		Observer: func(event pueue.CommandEvent) {
 			if event.Stage == "entry" && slices.Contains(event.Argv, "status") {

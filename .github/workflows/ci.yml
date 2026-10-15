@@ -64,12 +64,16 @@ jobs:
         run: make check
 
       - name: Prove selected native lifetime backend
+        id: native_lifetime
         env:
           DELEGATE_NATIVE_LIFETIME_RECEIPT: bin/native-lifetime-proof/receipt.json
         run: make acceptance-native-lifetime
 
       - name: Retain native lifetime proof receipt
-        if: always()
+        if: >-
+          always() && (steps.native_lifetime.outcome == 'success' ||
+          steps.native_lifetime.outcome == 'failure' ||
+          steps.native_lifetime.outcome == 'cancelled')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: native-lifetime-${{ runner.os }}-${{ github.run_attempt }}
@@ -161,12 +165,16 @@ jobs:
         run: make check
 
       - name: Prove selected native lifetime backend
+        id: native_lifetime
         env:
           DELEGATE_NATIVE_LIFETIME_RECEIPT: bin/native-lifetime-proof/receipt.json
         run: make acceptance-native-lifetime
 
       - name: Retain native lifetime proof receipt
-        if: always()
+        if: >-
+          always() && (steps.native_lifetime.outcome == 'success' ||
+          steps.native_lifetime.outcome == 'failure' ||
+          steps.native_lifetime.outcome == 'cancelled')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: native-lifetime-${{ runner.os }}-${{ github.run_attempt }}

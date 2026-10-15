@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills verify-acceptance-ownership skill-package-check plugin-package-check test-race test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
 
 tools:
 	./scripts/install-tools.sh
@@ -56,6 +56,17 @@ verify-gates: tool-versions
 verify-skills:
 	python3 scripts/verify_skills.py
 	python3 -m unittest discover -s scripts -p 'test_verify_skills.py' -v
+	python3 -m unittest discover -s scripts -p 'test_skill_examples.py' -v
+
+verify-diagram-checksums:
+	@if command -v sha256sum >/dev/null 2>&1; then \
+		cd diagrams && sha256sum -c SHA256SUMS; \
+	elif command -v shasum >/dev/null 2>&1; then \
+		cd diagrams && shasum -a 256 -c SHA256SUMS; \
+	else \
+		echo "ERROR: sha256sum or shasum is required to verify diagram integrity." >&2; \
+		exit 1; \
+	fi
 
 verify-acceptance-ownership:
 	python3 scripts/verify_acceptance_ownership.py
@@ -200,6 +211,7 @@ vuln: tool-versions
 check:
 	$(MAKE) tool-versions
 	$(MAKE) verify-skills
+	$(MAKE) verify-diagram-checksums
 	$(MAKE) verify-acceptance-ownership
 	$(MAKE) plugin-package-check
 	$(MAKE) fmt-check

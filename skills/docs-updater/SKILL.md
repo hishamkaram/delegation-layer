@@ -38,7 +38,21 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
    documents.
 4. Remove stale acceptance claims, future commands presented as available, and
    receipts that expose credentials, tokens, private paths, or raw output.
-5. Run `make verify-skills` for skill/link/command changes and the affected
+5. Compare provider tables against the native catalog and execute changed shell
+   examples, including nonzero exits with errexit enabled. Keep detailed agent
+   response decisions in the canonical result-handling reference and synchronize
+   the plugin skill distribution; do not add another decision list.
+6. For repository diagrams, pin a reachable implementation commit and refresh
+   source ranges from that snapshot. Finalize each canonical JSON/HTML through
+   Archify, then capture both themes at the required viewport sizes. Inspect
+   every capture before claiming visual acceptance. Keep raw receipts unchanged
+   in the ignored local archive: their absolute paths and hashes bind exact
+   artifacts. Archive obsolete contact sheets and proof only after replacement
+   captures pass. Publish the canonical specs, HTML, and accepted PNGs, then
+   generate `diagrams/SHA256SUMS` last. Run `make verify-diagram-checksums`.
+   Checksums prove byte integrity only; they do not prove capture freshness or
+   visual correctness. Do not rewrite receipt paths to make proof publishable.
+7. Run `make verify-skills` for skill/link/command changes and the affected
    documentation or code checks. Report the exact evidence and leave root to
    integrate the final documentation changes.
 

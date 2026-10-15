@@ -8,3 +8,11 @@
 /tmp/
 __pycache__/
 /.local/
+
+# Archify proof retains machine-local paths; publish canonical assets and checksums.
+/diagrams/*.delivery.json
+/diagrams/*.visual-check.json
+/diagrams/*.visual-check.html
+/diagrams/*.browser-check.json
+/diagrams/*.finalize.json
+/diagrams/*.finalize-summary.json
