@@ -135,6 +135,12 @@ runtime metadata. Read the command output for the current complete contract:
 }
 ```
 
+Catalog entries expose `supported_options` and any `required_options` using
+Delegate's public request names. `interaction` describes native clarification
+and steering support. `runtime` identifies the version/help commands and
+required public flags; these are requirements, not observations of this host.
+See the [provider guide](providers.md) for the current profile table.
+
 The catalog describes compiled support. It does not claim that the executable
 is installed, authenticated, or compatible on the current host. Managed
 runtime-only dispatch records the static contract; the supervised worker

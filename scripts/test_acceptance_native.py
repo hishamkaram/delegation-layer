@@ -3359,7 +3359,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         self.assertIn("Codex, CCR, Claude, AGY, Pi, or OpenCode", cli_reference)
         self.assertIn("`ccr:print` requires a configured CCR alias", cli_reference)
         self.assertIn("CCR, Claude, and AGY pass their native effort flag", cli_reference)
-        self.assertIn("Codex, CCR, and Claude support both modes plus `model` and `effort`", troubleshooting)
+        self.assertIn("`codex:exec`, CCR, and Claude support both modes plus `model` and `effort`", troubleshooting)
+        self.assertIn("`codex:review` is read-only and requires a review target.", troubleshooting)
         self.assertIn("`ccr:print`\nrequires `--model` to be a configured CCR alias", troubleshooting)
         self.assertIn("CCR, Claude, and AGY pass native effort", troubleshooting)
 
