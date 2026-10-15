@@ -53,3 +53,18 @@ terminal outcome or a durable Pueue-ended observation backed by a guardian
 lifetime-termination record with independently proven empty scope for the
 session handoff; without one of those proofs it refuses continuation. Inspect
 the predecessor again rather than bypassing that boundary.
+
+
+## Follow up after normal completion
+
+A validated terminal outcome, committed or rejected, can also support a new
+turn when the provider supports continuation, its exact session was recorded,
+and the runner/session reservation has been released. Not every rejection has
+a usable session. A normal completion without a budget stop need not expose
+`continuation.resumable` in `status` or `collect`. Use `continue` with the exact
+predecessor and a finite budget, then apply its task-creation and failure
+response as described in [result handling](result-handling.md).
+
+If the response says `stop_and_report`, stop that attempt; do not automatically
+retry it. A caller may make a later request after observing the predecessor.
+Native `codex:review` tasks cannot be continued.

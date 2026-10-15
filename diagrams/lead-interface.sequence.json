@@ -55,7 +55,7 @@
     "output": "diagrams/lead-interface.html",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "94779b5a60aa2c95ed5f98bda85ef1308b83b8e6",
+      "revision": "10c0c5c24286f8be75c3475d40c12d8ed073d381",
       "link_mode": "local-only"
     }
   },
@@ -84,13 +84,13 @@
         },
         {
           "path": "internal/app/runtime.go",
-          "line": 339,
-          "end_line": 419
+          "line": 341,
+          "end_line": 424
         },
         {
           "path": "internal/app/runtime.go",
-          "line": 552,
-          "end_line": 585
+          "line": 557,
+          "end_line": 590
         }
       ]
     },
@@ -145,8 +145,8 @@
       "sources": [
         {
           "path": "internal/app/runtime.go",
-          "line": 823,
-          "end_line": 859
+          "line": 828,
+          "end_line": 864
         },
         {
           "path": "internal/pueue/private.go",
@@ -630,7 +630,7 @@
       "dot": "slate",
       "title": "Committed source snapshot",
       "items": [
-        "Source revision: 94779b5a60aa",
+        "Source revision: 10c0c5c24286",
         "Node source links identify committed code",
         "Admission and runtime preflight retain separate owners"
       ]

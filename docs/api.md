@@ -113,8 +113,9 @@ exposing state paths or provider output. They are diagnostic evidence only;
 
 ## Discovery API
 
-`delegate providers --json` returns a separate bounded response (the example
-shows one catalog entry):
+`delegate providers --json` returns a separate bounded response. This structural
+example is abbreviated: it shows one entry and omits options, interaction, and
+runtime metadata. Read the command output for the current complete contract:
 
 ```json
 {
@@ -123,23 +124,11 @@ shows one catalog entry):
     {
       "id": "codex:exec",
       "supported_modes": ["read-only", "workspace-write"],
-      "supported_options": ["continuation", "effort", "model"],
       "continuation": "native",
       "read_only": {
         "supported": true,
         "mechanism": "native-sandbox",
         "containment": "provider-owned"
-      },
-      "runtime": {
-        "help_args": ["exec"],
-        "required_flags": [
-          "--cd",
-          "--color",
-          "--json",
-          "--output-last-message",
-          "--sandbox",
-          "-c"
-        ]
       }
     }
   ]
@@ -147,9 +136,13 @@ shows one catalog entry):
 ```
 
 The catalog describes compiled support. It does not claim that the executable
-is installed, authenticated, or compatible on the current host. Dispatch does
-that runtime capability check and records the observed executable identity and
-version. The version is descriptive evidence; flags, executable identity, and
+is installed, authenticated, or compatible on the current host. Managed
+runtime-only dispatch records the static contract; the supervised worker
+checks the current executable before provider execution. Inspection-backed
+admission retains its runtime checks. See
+[ownership boundaries](architecture.md#ownership-boundaries). The started and
+sealed evidence records the final executable identity and observed version.
+The version is descriptive evidence; flags, executable identity, and
 behavior predicates establish compatibility without a web release lookup or
 semver allowlist.
 
@@ -245,15 +238,19 @@ acceptance boundary observes it.
 }
 ```
 
-After successful runtime preparation, a dispatch JSON response contains the
-same `capability` object with `status: "ready"`,
+For inspection-backed admission, successful runtime preparation can return a
+dispatch `capability` object with `status: "ready"`,
 `verification: "runtime"`, the observed version, and the executable digest.
+Managed runtime-only admission instead returns `status: "unknown"` with
+`verification: "catalog"`; its fresh probe runs in the supervised worker, so
+collect the task outcome to establish execution and completion.
 The observed version is omitted from this projection if its diagnostic text is
 unusually large. Terminal launch evidence has its own bounded storage field;
-if a refreshed version cannot fit that field, dispatch rejects it before the
-provider starts. This is a record-size safeguard, not a release-version
+if a refreshed version cannot fit that field, runtime preparation rejects it
+before the provider starts. This is a record-size safeguard, not a release-version
 compatibility check.
-This proves only the bounded compatibility probe for that admission boundary.
+A ready runtime projection proves only the bounded compatibility probe for
+that admission boundary. A catalog projection proves no host verification.
 Live acceptance remains separate: `passed` requires authenticated provider
 evidence, while missing authentication is `blocked` and neutral.
 
@@ -280,8 +277,16 @@ After durable budget termination, task responses add:
 }
 ```
 
-Only a response with `resumable: true` may be passed to `continue`. The
+For a budget-stopped turn, continue only when `continuation.resumable` is true.
+A normal terminal outcome, committed or rejected, can also be continued when
+the provider supports it, the exact session was recorded, and the runner/session
+reservation has been released. Not every rejection records a usable session.
+Normal completion without budget-stop evidence need not include this projection
+in `status` or `collect`; the `continue` admission response has its own
+continuation fields. `codex:review` does not support continuation. Every
 continuation creates a new task and preserves the exact provider session.
+Follow the returned failure action when continuation is unavailable; do not
+automatically retry a `stop_and_report` response.
 
 ## Collection contract
 

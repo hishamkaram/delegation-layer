@@ -11,7 +11,7 @@ This document specifies the non-negotiable engineering floor for the repository.
   - `gofumpt`: `v0.12.0`
   - `govulncheck`: `v1.8.0`
   - `goreleaser`: `v2.18.1`
-- **Isolation**: All tools install into repository-local, git-ignored `./bin/` via `make tools` with pinned SHA-256 archive validation. System/Homebrew environments are never mutated.
+- **Isolation**: All tools install into repository-local, git-ignored `./bin/` via `make tools`. Downloaded archives use pinned SHA-256 validation; gofumpt and govulncheck use version-pinned `go install` module builds. System/Homebrew environments are never mutated.
 
 ## 2. Static Analysis & Linter Policy
 - Configuration in `.golangci.yml` using schema `version: "2"`, `linters.default: none`, and explicit linters:

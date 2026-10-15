@@ -14,19 +14,20 @@ flowchart TD
     D --> I{Supervisor selection}
     I -->|default| J[Create or reuse private bundled Pueue]
     I -->|explicit config| J2[Bind compatible external Pueue]
-    J --> E{Native policy facts required?}
+    J --> E{Admission inspection required?}
     J2 --> E
-    E -->|yes| F[Supervised policy inspection]
+    E -->|yes| F[Supervised admission inspection]
     E -->|runtime only| G[Prepare static contract]
     F --> G
     G --> H[Persist immutable task records]
     H --> K[Stage one Pueue row]
     K --> K2[Persist exact receipt]
     K2 --> K3[Enqueue exact numeric row]
-    K3 --> L[delegate-run reconstructs and rechecks]
-    L --> M[Start per-task guardian]
-    M --> M2[Register scope and run fresh capability preflight]
-    M2 --> M3[Start provider after preflight succeeds]
+    K3 --> M[Enter per-task guardian]
+    M --> M2[Create and register scope; start exact managed worker]
+    M2 --> L[Worker reconstructs and rechecks provider profile]
+    L --> L2[Run fresh runtime capability preflight]
+    L2 --> M3[Start provider after preflight succeeds]
     M3 --> N[Bounded stdout/stderr capture]
     N --> O[Seal artifacts and validate behavior]
     O --> P[Publish outcome.json]

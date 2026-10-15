@@ -68,7 +68,8 @@ failure.
 
 Compare the request with the catalog entry. `antigravity:print` supports
 both permission modes, `continuation`, `model`, `effort`, and `native-timeout`;
-Codex, CCR, and Claude support both modes plus `model` and `effort`; Pi and OpenCode
+`codex:exec`, CCR, and Claude support both modes plus `model` and `effort`;
+`codex:review` is read-only and requires a review target. Pi and OpenCode
 support both modes plus their documented model and effort options. `ccr:print`
 requires `--model` to be a configured CCR alias. AGY
 read-only uses native `--sandbox --mode plan` without a bypass; authorized
@@ -305,9 +306,17 @@ provider failure.
 ## A continuation is busy
 
 The predecessor still owns its conversation reservation, or its runner has not
-released it after a completed outcome or durable budget-stop termination. Use
-`status` or `collect` until the response exposes `continuation.resumable: true`,
-then retry the continuation with the exact predecessor ID.
+released it after a validated terminal outcome or durable budget-stop termination.
+Observe the exact predecessor with `status` or `collect`. Normal terminal
+outcomes, committed or rejected, do not need a `continuation` projection: the
+provider must support continuation, a session must have been recorded, and the
+runner/session reservation must be released. Not every rejection has a session.
+For budget stops, use `continuation.resumable` and its reported reason.
+
+If `continue` returns `continuation_unavailable` with `stop_and_report`, report
+that attempt and stop; do not automatically retry it. A caller can make a later
+continuation request after observing the predecessor. See the
+[continuation contract](api.md#idempotency-and-continuation).
 
 ## A result is rejected
 

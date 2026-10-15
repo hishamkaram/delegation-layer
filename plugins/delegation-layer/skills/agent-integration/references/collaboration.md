@@ -19,18 +19,26 @@ RECEIPTS="$(mktemp -d)" || exit 1
 # Set these absolute paths and catalog IDs in this same tool invocation.
 # BRIEF_A and BRIEF_B contain the real independent assignments.
 (
-  delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --provider "$PROVIDER_A" \
+  if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --provider "$PROVIDER_A" \
     --brief "$BRIEF_A" --cwd "$WORKSPACE_A" \
     --permission read-only --budget 30m --json \
-    >"$RECEIPTS/review-a.json" 2>"$RECEIPTS/review-a.stderr"
-  printf '%s\n' "$?" >"$RECEIPTS/review-a.exit"
+    >"$RECEIPTS/review-a.json" 2>"$RECEIPTS/review-a.stderr"; then
+    dispatch_exit=0
+  else
+    dispatch_exit=$?
+  fi
+  printf '%s\n' "$dispatch_exit" >"$RECEIPTS/review-a.exit"
 ) &
 (
-  delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --provider "$PROVIDER_B" \
+  if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --provider "$PROVIDER_B" \
     --brief "$BRIEF_B" --cwd "$WORKSPACE_B" \
     --permission read-only --budget 30m --json \
-    >"$RECEIPTS/review-b.json" 2>"$RECEIPTS/review-b.stderr"
-  printf '%s\n' "$?" >"$RECEIPTS/review-b.exit"
+    >"$RECEIPTS/review-b.json" 2>"$RECEIPTS/review-b.stderr"; then
+    dispatch_exit=0
+  else
+    dispatch_exit=$?
+  fi
+  printf '%s\n' "$dispatch_exit" >"$RECEIPTS/review-b.exit"
 ) &
 wait
 printf 'Read each response separately in %s\n' "$RECEIPTS"

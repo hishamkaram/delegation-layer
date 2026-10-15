@@ -112,10 +112,13 @@ CLI to repair this state.
 
 ## Dispatch
 
-`dispatch` validates and persists the request before it contacts Pueue. Use
-`--auto` to let the catalog try static provider admission in deterministic
-provider-ID order. The first statically ready candidate is selected; the
-normal runtime probe remains the final admission boundary. If the selected
+`dispatch` validates the request and prepares its supervisor, then persists
+the immutable task before enqueueing its exact supervisor row. Use `--auto`
+to try static provider admission in deterministic provider-ID order. The first
+statically ready candidate is selected. Managed runtime-only tasks run the
+fresh probe inside their guardian-owned worker before provider execution;
+inspection-backed paths retain their admission checks. See the
+[ownership boundaries](architecture.md#ownership-boundaries). If the selected
 provider fails after dispatch starts, the CLI returns that result and does not
 silently fall back to another provider. `--provider` and `--auto` are
 mutually exclusive.
@@ -206,14 +209,17 @@ behavior without creating an independent delegate-owned sandbox. This metadata
 is separate from guardian-owned process-lifetime containment.
 
 Discovery is metadata only. It does not inspect the host, authenticate a
-provider, contact Pueue, create state, or launch a process. During dispatch,
-the selected adapter locates its executable, verifies that it is a regular
-executable file, runs its version command, then runs its help command and
-checks the required public flags. Interactive protocols additionally validate their native handshake and event contract. Any valid nonempty version is
-accepted; valid means trimmed UTF-8 text without control characters, not a
-particular semantic-version pattern. A missing executable or required flag
-rejects the request. The
-executable is fingerprinted again before launch so a replacement cannot be
+provider, contact Pueue, create state, or launch a process. Static preparation
+locates a regular executable and records its identity and required capability
+contract. The supervised runtime check runs the version and help commands and
+checks the required public flags before provider execution. Interactive
+protocols additionally validate their native handshake and event contract.
+Any valid nonempty version is accepted; valid means trimmed UTF-8 text without
+control characters, not a
+particular semantic-version pattern. A missing executable rejects static
+preparation. A missing required flag rejects inspection-backed admission; for
+managed runtime-only tasks it seals a rejected outcome before provider start.
+The executable is fingerprinted again before launch so a replacement cannot be
 silently substituted.
 
 The observed version is descriptive task evidence, not a release authorization.
@@ -221,9 +227,10 @@ The compatibility check does not use a web release lookup, semver allowlist, or
 hardcoded provider version. Probe diagnostics expose bounded reason classes;
 provider output and process diagnostics are not copied into control fields.
 
-The runner repeats the capability check immediately before launch and uses the
-returned current launch plan. This permits a provider relink or upgrade after
-admission when the new CLI preserves the adapter contract, while the task's
+The runner performs a fresh capability check immediately before launch and
+uses the returned current launch plan. This permits a provider relink or
+upgrade after admission when the new CLI preserves the adapter contract, while
+the task's
 permission, policy, workspace, predicate, and artifact contract remain fixed.
 
 The compatibility probe is only a startup check. Provider output shape,

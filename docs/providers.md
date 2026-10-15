@@ -7,10 +7,10 @@ identity observer, input transport, output interpreter, and supported options.
 | Profile | Permission mode | Read-only mechanism | Request options | Native command |
 | --- | --- | --- | --- | --- |
 | `antigravity:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort`, `native-timeout` | `agy` |
-| `codex:exec` | `read-only`, `workspace-write` | `native-sandbox` | `continuation`, `model`, `effort` | `codex exec` |
+| `codex:exec` | `read-only`, `workspace-write` | `native-sandbox` | `continuation`, `model`, `effort`, `interactive` | `codex exec` |
 | `codex:review` | `read-only` | `native-sandbox` | `review-target`, `model`, `effort` | `codex exec review` |
 | `ccr:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model` (required alias), `effort` | CCR foreground launch |
-| `claude:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `claude` print mode |
+| `claude:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort`, `interactive` | `claude` print mode |
 | `pi:json` | `read-only`, `workspace-write` | `tool-allowlist` plus disabled extensions for read-only | `continuation`, `model`, `effort` | `pi --mode json` |
 | `opencode:run` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `opencode run --format json` |
 
@@ -29,12 +29,14 @@ documented in each provider section below.
 
 Agents can request one provider's provider-neutral contract with
 `delegate capabilities --provider PROFILE --json`. This command is
-side-effect-free and reports `status: "unknown"` until dispatch performs the
-supervised runtime probe. It does not claim authentication or live acceptance.
+side-effect-free and reports the catalog contract with `status: "unknown"`.
+Runtime checks happen inside the supervised task or an admission inspection,
+as described in [architecture](architecture.md#ownership-boundaries). Static
+discovery does not claim authentication or live acceptance.
 
 Use `delegate models --provider PROFILE [--cwd ABS] --json` when an explicit
-model or effort choice is needed. Model discovery is implemented for all six
-profiles. It uses the state-rooted supervisor and the `model-discovery-v1`
+model or effort choice is needed. Six of the seven launchable profiles support
+model discovery; `codex:review` does not. It uses the state-rooted supervisor and the `model-discovery-v1`
 five-minute native inspection to allow first-run provider model/cache
 initialization; it creates inspection evidence without admitting
 a provider task.
@@ -50,8 +52,11 @@ does not prove the account can execute it. `available` and `partial` exit 0,
 
 The released binaries target Darwin and Linux. Provider CLIs own authentication,
 configuration, MCP servers, hooks, plugins, skills, and native permissions.
-Delegation Layer passes the requested native permission mode without inspecting
-or rejecting personal configuration. `workspace-write` requests unattended native
+Delegation Layer passes the requested native permission mode. It does not
+inventory personal configuration; a provider contract can read narrow startup
+state needed to make that mode effective. For example, Pi read-only preparation
+resolves `sessionDir` from settings when no explicit session directory was
+supplied, and rejects malformed settings or an overlapping location. `workspace-write` requests unattended native
 execution, including command execution; native approval bypass may permit access
 beyond the workspace. It does not provide an independent sandbox.
 Missing executables or declared runtime flags, unsupported request options, and
