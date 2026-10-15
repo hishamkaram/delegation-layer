@@ -151,6 +151,7 @@ esac
                 (case_directory / "success.json").write_text(json.dumps({
                     "gate": "acceptance-native", "status": "passed", "provider": case.provider,
                     "mode": case.permission, "scenario": case.scenario,
+                    "requested_model": None, "requested_effort": None,
                     "tasks": tasks,
                     "provider_sessions": {alias: session for alias in aliases},
                     "provider_versions": {
@@ -165,6 +166,7 @@ esac
                     "scenario": case.scenario,
                     "provider_identity_scope": "first-admitted-task",
                     "provider_task_id": first_task_id,
+                    "requested_model": None, "requested_effort": None,
                     "provider_executable": first_runtime["executable"],
                     "provider_version": first_runtime["version"],
                     "provider_sha256": first_runtime["sha256"],
@@ -186,7 +188,8 @@ esac
             elif status == "BLOCKED":
                 (case_directory / "failure.json").write_text(json.dumps({
                     "gate": "acceptance-native", "status": "BLOCKED", "provider": case.provider,
-                    "scenario": case.scenario,
+                    "scenario": case.scenario, "requested_model": None,
+                    "requested_effort": None,
                 }), encoding="utf-8")
                 matrix.append("\t".join((case.case_id, case.provider, case.permission,
                                          case.scenario, "2", "BLOCKED", case.case_output)) + "\n")

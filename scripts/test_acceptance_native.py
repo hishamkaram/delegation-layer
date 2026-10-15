@@ -43,15 +43,19 @@ case "$1" in
         provider=
         mode=
         scenario=
+        model=
+        model_set=absent
         while [ "$#" -gt 0 ]; do
             case "$1" in
                 --output) output=$2; shift 2 ;;
                 --provider) provider=$2; shift 2 ;;
                 --permission) mode=$2; shift 2 ;;
                 --scenario) scenario=$2; shift 2 ;;
+                --model) model=$2; model_set=present; shift 2 ;;
                 *) shift ;;
             esac
         done
+        model_json=$("$REAL_PYTHON" -c 'import json, sys; print(json.dumps(sys.argv[2] if sys.argv[1] == "present" else None))' "$model_set" "$model")
         code=2
         case "${FAKE_NATIVE_RESULT:-blocked}" in
             mixed)
@@ -90,13 +94,13 @@ case "$1" in
                 versions='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":"1.0","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":"1.1"}'
                 runtimes='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"executable":"/fixture/provider","version":"1.0","sha256":"1111111111111111111111111111111111111111111111111111111111111111"},"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":{"executable":"/fixture/provider","version":"1.1","sha256":"6666666666666666666666666666666666666666666666666666666666666666"}}'
             fi
-            printf '{"gate":"acceptance-native","status":"passed","provider":"%s","mode":"%s","scenario":"%s","tasks":%s,"provider_sessions":%s,"provider_versions":%s,"provider_runtime_identities":%s,"natural_daemon_shutdown":true}\\n' "$provider" "$mode" "$scenario" "$tasks" "$sessions" "$versions" "$runtimes" >"$output/success.json"
-            printf '{"provider":"%s","mode":"%s","scenario":"%s","provider_identity_scope":"first-admitted-task","provider_task_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","provider_executable":"/fixture/provider","provider_version":"1.0","provider_sha256":"1111111111111111111111111111111111111111111111111111111111111111","delegate_sha256":"2222222222222222222222222222222222222222222222222222222222222222","runner_sha256":"3333333333333333333333333333333333333333333333333333333333333333","pueue_sha256":"4444444444444444444444444444444444444444444444444444444444444444","pueued_sha256":"5555555555555555555555555555555555555555555555555555555555555555"}\\n' "$provider" "$mode" "$scenario" >"$output/binding.json"
+            printf '{"gate":"acceptance-native","status":"passed","requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s","tasks":%s,"provider_sessions":%s,"provider_versions":%s,"provider_runtime_identities":%s,"natural_daemon_shutdown":true}\\n' "$model_json" "$provider" "$mode" "$scenario" "$tasks" "$sessions" "$versions" "$runtimes" >"$output/success.json"
+            printf '{"requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s","provider_identity_scope":"first-admitted-task","provider_task_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","provider_executable":"/fixture/provider","provider_version":"1.0","provider_sha256":"1111111111111111111111111111111111111111111111111111111111111111","delegate_sha256":"2222222222222222222222222222222222222222222222222222222222222222","runner_sha256":"3333333333333333333333333333333333333333333333333333333333333333","pueue_sha256":"4444444444444444444444444444444444444444444444444444444444444444","pueued_sha256":"5555555555555555555555555555555555555555555555555555555555555555"}\\n' "$model_json" "$provider" "$mode" "$scenario" >"$output/binding.json"
             printf '{"status":"removed","supervisor_shutdown_observed":true,"raw_process_captures":"removed"}\\n' >"$output/cleanup.json"
         elif [ "$code" -eq 2 ]; then
-            printf '{"gate":"acceptance-native","status":"BLOCKED","provider":"%s","mode":"%s","scenario":"%s"}\\n' "$provider" "$mode" "$scenario" >"$output/failure.json"
+            printf '{"gate":"acceptance-native","status":"BLOCKED","requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s"}\\n' "$model_json" "$provider" "$mode" "$scenario" >"$output/failure.json"
         else
-            printf '{"gate":"acceptance-native","status":"failed","provider":"%s","mode":"%s","scenario":"%s"}\\n' "$provider" "$mode" "$scenario" >"$output/failure.json"
+            printf '{"gate":"acceptance-native","status":"failed","requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s"}\\n' "$model_json" "$provider" "$mode" "$scenario" >"$output/failure.json"
             printf 'unresolved raw evidence\\n' >"$output/raw-provider-output"
         fi
         exit "$code"
@@ -2865,6 +2869,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 physical_test_root(directory) / "aggregate")
             environment["REAL_PYTHON"] = sys.executable
             environment["FAKE_NATIVE_RESULT"] = "blocked"
+            environment.pop("CCR_LIVE_MODEL", None)
             environment.pop("DELEGATION_REQUIRE_LIVE_ACCEPTANCE", None)
             blocked = subprocess.run(
                 ["sh", str(wrapper)], cwd=Path(__file__).parents[1], env=environment,
@@ -2873,6 +2878,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertEqual(blocked.returncode, 0)
             self.assertIn("status=BLOCKED passed=0 blocked=14 failed=0", blocked.stdout)
             self.assertIn("auth_blocks_neutral=true", blocked.stdout)
+            aggregate = json.loads((Path(environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"])
+                                    / "aggregate-receipt.json").read_text())
+            ccr_cases = [case for case in aggregate["cases"] if case["provider"] == "ccr:print"]
+            self.assertEqual(len(ccr_cases), 2)
+            for case in ccr_cases:
+                compact = json.loads(Path(case["receipt_path"]).read_text())
+                self.assertEqual(compact["source_proof"]["requested_options_state"], "recorded")
+                self.assertIsNone(compact["source_proof"]["requested_model"])
 
             environment["DELEGATION_REQUIRE_LIVE_ACCEPTANCE"] = "1"
             environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"] = str(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -72,7 +73,8 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
 
     def make_matrix(
             self, root: Path, *, status: str = "BLOCKED", failed_index: int | None = None,
-            with_cleanup: bool = True) -> Path:
+            with_cleanup: bool = True, requested_model: str | None = None,
+            requested_effort: str | None = None) -> Path:
         (root / evidence.CASE_ROOT_NAME).mkdir(parents=True, exist_ok=True)
         (root / evidence.COMPACT_RECEIPT_ROOT_NAME).mkdir(parents=True, exist_ok=True)
         lines = [evidence.MATRIX_HEADER]
@@ -84,7 +86,8 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                 row_status, exit_code = "FAIL", 1
                 (case_directory / "failure.json").write_text(json.dumps({
                     "gate": "acceptance-native", "status": "failed", "provider": case.provider,
-                    "scenario": case.scenario,
+                    "scenario": case.scenario, "requested_model": requested_model,
+                    "requested_effort": requested_effort,
                 }), encoding="utf-8")
                 (case_directory / "raw-provider-output").write_text(
                     "provider secret must remain in unresolved raw evidence", encoding="utf-8")
@@ -109,6 +112,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                 (case_directory / "success.json").write_text(json.dumps({
                     "gate": "acceptance-native", "status": "passed", "provider": case.provider,
                     "mode": case.permission, "scenario": case.scenario,
+                    "requested_model": requested_model, "requested_effort": requested_effort,
                     "tasks": tasks,
                     "provider_sessions": {alias: session for alias in aliases},
                     "provider_versions": {
@@ -123,6 +127,8 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                     "scenario": case.scenario,
                     "provider_identity_scope": "first-admitted-task",
                     "provider_task_id": first_task,
+                    "requested_model": requested_model,
+                    "requested_effort": requested_effort,
                     "provider_executable": first_runtime["executable"],
                     "provider_version": first_runtime["version"],
                     "provider_sha256": first_runtime["sha256"],
@@ -132,7 +138,8 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             else:
                 (case_directory / "failure.json").write_text(json.dumps({
                     "gate": "acceptance-native", "status": "BLOCKED", "provider": case.provider,
-                    "scenario": case.scenario, "error": "do not copy this detail",
+                    "scenario": case.scenario, "requested_model": requested_model,
+                    "requested_effort": requested_effort, "error": "do not copy this detail",
                 }), encoding="utf-8")
             if with_cleanup and row_status == "PASS":
                 (case_directory / "cleanup.json").write_text(json.dumps({
@@ -147,10 +154,12 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         return matrix
 
     def build(self, *, status="BLOCKED", require_pass=False, failed_index=None,
-              root=None, with_cleanup=True, retention_count=None):
+              root=None, with_cleanup=True, retention_count=None,
+              requested_model=None, requested_effort=None):
         target = root or self.root / "native-aggregate-current"
         matrix = self.make_matrix(
             target, status=status, failed_index=failed_index, with_cleanup=with_cleanup,
+            requested_model=requested_model, requested_effort=requested_effort,
         )
         return evidence.build_aggregate(
             target, matrix, target / evidence.AGGREGATE_RECEIPT_NAME,
@@ -203,6 +212,147 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual(len(list(compact_root.glob("*.cleanup.json"))), 14)
         self.assertEqual(len(list(compact_root.glob("*.cleanup.json.lock"))), 14)
         self.assertEqual(list((root / evidence.CASE_ROOT_NAME).iterdir()), [])
+        compact = json.loads(Path(value["cases"][0]["receipt_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(compact["source_proof"]["requested_options_state"], "recorded")
+        self.assertIsNone(compact["source_proof"]["requested_model"])
+        self.assertIsNone(compact["source_proof"]["requested_effort"])
+
+    def test_requested_model_and_effort_survive_raw_cleanup_and_replay(self):
+        root = self.root / "native-aggregate-requested-options"
+        value, code = self.build(
+            root=root, status="PASS", requested_model="openrouter/openai/gpt-5",
+            requested_effort="high",
+        )
+        self.assertEqual(code, 0)
+        compact_path = Path(value["cases"][0]["receipt_path"])
+        compact = json.loads(compact_path.read_text(encoding="utf-8"))
+        proof = compact["source_proof"]
+        self.assertEqual(proof["requested_options_state"], "recorded")
+        self.assertEqual(proof["requested_model"], "openrouter/openai/gpt-5")
+        self.assertEqual(proof["requested_effort"], "high")
+        for key in ("requested_options_state", "requested_model", "requested_effort"):
+            self.assertNotIn(key, compact)
+        self.assertEqual(compact["cleanup"]["raw_after"]["file_count"], 0)
+        replayed, replay_code = evidence.validate_aggregate_receipt(
+            root / evidence.AGGREGATE_RECEIPT_NAME,
+        )
+        self.assertRegex(replay_code, r"^[0-9a-f]{64}$")
+        replayed_compact = json.loads(
+            Path(replayed["cases"][0]["receipt_path"]).read_text(encoding="utf-8"),
+        )
+        self.assertEqual(replayed_compact["source_proof"]["requested_model"], proof["requested_model"])
+        self.assertEqual(replayed_compact["source_proof"]["requested_effort"], proof["requested_effort"])
+
+    def test_missing_or_invalid_requested_options_refuse_cleanup(self):
+        cases = (
+            ("missing", lambda value: value.pop("requested_effort")),
+            ("invalid", lambda value: value.__setitem__("requested_model", {"bad": True})),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label):
+                root = self.root / f"native-aggregate-requested-options-{label}"
+                matrix = self.make_matrix(root, status="PASS")
+                source = root / evidence.EXPECTED_CASES[0].case_output / "success.json"
+                value = json.loads(source.read_text(encoding="utf-8"))
+                mutate(value)
+                source.write_text(json.dumps(value), encoding="utf-8")
+
+                aggregate, code = evidence.build_aggregate(
+                    root, matrix, root / evidence.AGGREGATE_RECEIPT_NAME,
+                    tag="v1.2.3", source_revision="a" * 40,
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(aggregate["status"], "FAIL")
+                self.assertEqual(aggregate["cases"][0]["evidence_status"], "UNRESOLVED")
+                case_directory = root / evidence.EXPECTED_CASES[0].case_output
+                self.assertTrue((case_directory / "success.json").is_file())
+                compact = json.loads(Path(aggregate["cases"][0]["receipt_path"]).read_text())
+                self.assertEqual(compact["source_proof"]["requested_options_state"], label)
+                self.assertIsNone(compact["source_proof"]["requested_model"])
+                self.assertIsNone(compact["source_proof"]["requested_effort"])
+                self.assertEqual(compact["evidence_error"],
+                                 f"source_requested_options_{label}")
+
+    def test_requested_option_provenance_tampering_is_rejected(self):
+        root = self.root / "native-aggregate-requested-options-tamper"
+        value, code = self.build(root=root, status="PASS", requested_model="model-a")
+        self.assertEqual(code, 0)
+        aggregate_path = root / evidence.AGGREGATE_RECEIPT_NAME
+        aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+        compact_path = Path(aggregate["cases"][0]["receipt_path"])
+        compact = json.loads(compact_path.read_text(encoding="utf-8"))
+        compact["source_proof"]["requested_model"] = "model-b"
+        compact_path.write_text(json.dumps(compact), encoding="utf-8")
+        aggregate["cases"][0]["receipt_sha256"] = hashlib.sha256(
+            compact_path.read_bytes(),
+        ).hexdigest()
+        aggregate_path.write_text(json.dumps(aggregate), encoding="utf-8")
+
+        with self.assertRaisesRegex(evidence.EvidenceError,
+                                   "aggregate_case_cleanup_journal_invalid"):
+            evidence.validate_aggregate_receipt(aggregate_path)
+
+    def test_requested_options_must_match_binding_before_cleanup(self):
+        root = self.root / "native-aggregate-requested-options-binding-mismatch"
+        matrix = self.make_matrix(root, status="PASS", requested_model="model-a")
+        binding_path = root / evidence.EXPECTED_CASES[0].case_output / "binding.json"
+        binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        binding["requested_model"] = "model-b"
+        binding_path.write_text(json.dumps(binding), encoding="utf-8")
+
+        aggregate, code = evidence.build_aggregate(
+            root, matrix, root / evidence.AGGREGATE_RECEIPT_NAME,
+            tag="v1.2.3", source_revision="a" * 40,
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(aggregate["cases"][0]["evidence_status"], "UNRESOLVED")
+        compact = json.loads(
+            Path(aggregate["cases"][0]["receipt_path"]).read_text(encoding="utf-8"),
+        )
+        self.assertEqual(compact["source_proof"]["requested_options_state"], "invalid")
+        self.assertEqual(compact["evidence_error"], "source_requested_options_invalid")
+        self.assertTrue(binding_path.is_file())
+
+    def test_interrupted_replay_binds_requested_options_before_raw_deletion(self):
+        root = self.root / "native-aggregate-requested-options-pending"
+        matrix = self.make_matrix(root, status="PASS", requested_model="model-a")
+        definition = evidence.EXPECTED_CASES[0]
+        case_directory = root / definition.case_output
+        source = case_directory / "success.json"
+        original_source = source.read_bytes()
+        with patch.object(evidence, "resume_directory_cleanup",
+                          side_effect=RuntimeError("interrupted before cleanup")):
+            with self.assertRaisesRegex(evidence.EvidenceError, "case_cleanup_journal_invalid"):
+                evidence.build_aggregate(
+                    root, matrix, root / evidence.AGGREGATE_RECEIPT_NAME,
+                    tag="v1.2.3", source_revision="a" * 40,
+                )
+
+        compact_path = root / evidence.COMPACT_RECEIPT_ROOT_NAME / f"{definition.case_id}.json"
+        compact_bytes = compact_path.read_bytes()
+        compact = json.loads(compact_bytes)
+        self.assertNotIn("requested_model", compact)
+        compact["source_proof"]["requested_model"] = "model-b"
+        compact_path.write_text(json.dumps(compact), encoding="utf-8")
+        row = evidence.MatrixRow(definition, 0, "PASS")
+        with patch.object(evidence, "resume_directory_cleanup") as cleanup:
+            replayed = evidence._replay_prepared_case(
+                compact_path, case_directory, root / evidence.CASE_ROOT_NAME,
+                root / evidence.CASE_CLEANUP_ROOT_NAME, row,
+            )
+        self.assertIsNone(replayed)
+        cleanup.assert_not_called()
+        self.assertEqual(source.read_bytes(), original_source)
+
+        compact_path.write_bytes(compact_bytes)
+        replayed = evidence._replay_prepared_case(
+            compact_path, case_directory, root / evidence.CASE_ROOT_NAME,
+            root / evidence.CASE_CLEANUP_ROOT_NAME, row,
+        )
+        self.assertIsNotNone(replayed)
+        self.assertFalse(case_directory.exists())
+        final = json.loads(compact_path.read_text(encoding="utf-8"))
+        self.assertEqual(final["source_proof"]["requested_model"], "model-a")
 
     def test_compact_terminal_receipt_is_published_before_cleanup(self):
         root = self.root / "native-aggregate-order"

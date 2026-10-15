@@ -34,7 +34,7 @@ run_case() {
     python3 "$repo_root/scripts/native_acceptance_evidence.py" prepare-case \
         --aggregate-root "$aggregate_output_root" --case-id "$case_id" >/dev/null
     set --
-    if [ "$case_provider" = ccr:print ]; then
+    if [ "$case_provider" = ccr:print ] && [ -n "${CCR_LIVE_MODEL:-}" ]; then
         set -- --model "${CCR_LIVE_MODEL:-}"
     fi
     if [ "$case_provider" = opencode:run ] && [ -n "${OPENCODE_LIVE_MODEL:-}" ]; then

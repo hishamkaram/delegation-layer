@@ -462,6 +462,12 @@ the transition-row tests:
   lifetime-closure result, cleanup result, retained evidence, and unresolved
   facts. A missing or incomplete receipt is failed evidence, never a passing or
   silently skipped run.
+- **Model-scoped proof after compaction**: the evidence-compaction owner
+  validates and retains the exact requested model and effort in the compact
+  receipt's canonical `source_proof` before deleting source receipts. An
+  explicit null records no requested override; missing,
+  invalid, or contradictory option evidence does not. A passing case proves
+  only the recorded request options, not every model exposed by that provider.
 - **Native failure disposition and retention**: native acceptance owns the
   terminal classification; the shared cleanup owner alone retains or removes
   identity-owned directories. Success and neutral authentication/prerequisite

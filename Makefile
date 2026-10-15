@@ -75,6 +75,7 @@ test-native-harness:
 
 test-evidence-tools:
 	python3 -m unittest discover -s scripts -p 'test_handoff_evidence.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_acceptance_evidence.py' -v
 	python3 -m unittest discover -s scripts -p 'test_verify_release_archive.py' -v
 
 build: tool-versions

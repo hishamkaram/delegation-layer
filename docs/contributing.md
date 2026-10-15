@@ -280,8 +280,8 @@ links the archive receipt digest, the aggregate case matrix, and every compact
 case-receipt digest. The matrix covers all 14 provider, permission, and scenario
 cases; each case has an explicit output directory under the aggregate root. Each
 compact receipt binds the final status and gate, provider, permission and mode,
-scenario, task and session identity fields, binary identities, lifecycle proof,
-and the source receipt digest. Successful and
+requested model and effort, scenario, task and session identity fields, binary
+identities, lifecycle proof, and the source receipt digest. Successful and
 authentication/prerequisite-blocked cases retain only their sanitized case
 receipts after identity-pinned cleanup; the compact receipt is fsynced before
 raw deletion and records the creation-time directory and parent identities.
