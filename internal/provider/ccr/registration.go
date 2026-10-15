@@ -14,10 +14,12 @@ import (
 const Provider = "ccr:print"
 
 const (
-	currentPredicateVersion    = "ccr-foreground-v3"
-	modeledPredicateVersion    = "ccr-foreground-v3-modeled"
-	previousPredicateVersion   = "ccr-foreground-v2"
-	historicalPredicateVersion = "ccr-foreground-v1"
+	currentPredicateVersion              = "ccr-foreground-v4"
+	modeledPredicateVersion              = "ccr-foreground-v4-modeled"
+	preCredentialPredicateVersion        = "ccr-foreground-v3"
+	preCredentialModeledPredicateVersion = "ccr-foreground-v3-modeled"
+	previousPredicateVersion             = "ccr-foreground-v2"
+	historicalPredicateVersion           = "ccr-foreground-v1"
 )
 
 type preparationRevision uint8
@@ -62,6 +64,18 @@ func modeledReference(mode string) task.PredicateRef {
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: modeledPredicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
 }
 
+func preCredentialReference(mode string, preservesRoute bool) task.PredicateRef {
+	version := preCredentialModeledPredicateVersion
+	if preservesRoute {
+		version = preCredentialPredicateVersion
+	}
+	contract := ccrContract(version, claude.ContractForMode(mode), preservesRoute)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
 // previousReference identifies tasks admitted before CCR gained its dedicated
 // route-preserving continuation flag. Their launch contract remains intact on
 // reconstruction, including the original model and provider-only auth flags.
@@ -91,6 +105,9 @@ func ccrContract(version, claudeContract string, preservesRoute bool) string {
 	if preservesRoute {
 		contract += "; exact continuations retain the recorded CCR route"
 	}
+	if version == currentPredicateVersion || version == modeledPredicateVersion {
+		contract += "; native credential resolution failure exits 77 and becomes authentication-unavailable without a session"
+	}
 	return contract + "\n" + claudeContract
 }
 
@@ -110,9 +127,9 @@ func preparationForReference(reference task.PredicateRef, mode string) (preparat
 		return preparationContract{}, err
 	}
 	switch {
-	case reference.Equal(Reference(mode)):
+	case reference.Equal(Reference(mode)), reference.Equal(preCredentialReference(mode, true)):
 		return preparationContract{launch: resumeRoutePreparation, inspection: routeInspection}, nil
-	case reference.Equal(modeledReference(mode)):
+	case reference.Equal(modeledReference(mode)), reference.Equal(preCredentialReference(mode, false)):
 		return preparationContract{launch: legacyPreparation, inspection: routeInspection}, nil
 	case reference.Equal(previousReference(mode)), reference.Equal(HistoricalReference(mode)):
 		return preparationContract{launch: legacyPreparation, inspection: legacyInspection}, nil
@@ -122,16 +139,30 @@ func preparationForReference(reference task.PredicateRef, mode string) (preparat
 }
 
 func Registration() commonprovider.Registration {
-	interpreters := make([]predicate.Interpreter, 0, 8)
+	interpreters := make([]predicate.Interpreter, 0, 12)
 	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		interpreter, err := claude.NewStreamInterpreterWithRecovery(Reference(mode), modeledReference(mode))
+		interpreter, err := newCredentialInterpreter(Reference(mode), modeledReference(mode))
 		if err != nil {
 			panic(err)
 		} // Immutable compiled contract.
 		interpreters = append(interpreters, interpreter)
 	}
 	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		interpreter, err := claude.NewStreamInterpreterWithRecovery(modeledReference(mode), previousReference(mode))
+		interpreter, err := newCredentialInterpreter(modeledReference(mode), preCredentialReference(mode, true))
+		if err != nil {
+			panic(err)
+		} // Immutable compiled contract.
+		interpreters = append(interpreters, interpreter)
+	}
+	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
+		interpreter, err := claude.NewStreamInterpreterWithRecovery(preCredentialReference(mode, true), preCredentialReference(mode, false))
+		if err != nil {
+			panic(err)
+		} // Immutable compiled contract.
+		interpreters = append(interpreters, interpreter)
+	}
+	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
+		interpreter, err := claude.NewStreamInterpreterWithRecovery(preCredentialReference(mode, false), previousReference(mode))
 		if err != nil {
 			panic(err)
 		} // Immutable compiled contract.

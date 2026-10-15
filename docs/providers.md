@@ -154,7 +154,12 @@ written. Authentication blocks require a structured Delegate admission state,
 a supported native authentication-status response, or a structured provider
 authorization response such as HTTP 401 or 403. An adapter may instead emit a
 stable, sanitized reason code from an exact structured envelope;
-Antigravity emits `authentication-unavailable`. Free-form provider output is
+Antigravity emits `authentication-unavailable`. CCR also emits this code when
+its foreground process reports the reserved credential-unavailable exit status
+with no Claude output. Pi's default-model control first uses Delegate model
+discovery: an explicit empty native available-model catalog is a blocked
+prerequisite; malformed discovery remains a failure. An explicitly selected Pi
+model still goes through the ordinary provider turn. Free-form provider output is
 never used as an authentication oracle. The aggregate
 `acceptance-native` target reports passed, blocked, and failed counts. It
 keeps authentication blocks neutral for development and still fails on a real
@@ -259,6 +264,11 @@ and require a successful final result; an unfinished or failed final cycle
 cannot publish success. Delegate does not relaunch the provider for these
 internal cycles.
 
+For model discovery, Pi lists models available under its native authentication
+and provider filters. Its documented empty-list response maps to
+`unavailable` / `models_unavailable`, rather than malformed output. A nonempty
+listing does not prove remote authorization or quota.
+
 ## OpenCode
 
 `opencode:run` uses JSON event mode in the requested workspace. `read-only`
@@ -317,6 +327,11 @@ route-preserving continuation therefore rejects a model override that would
 change the recorded route.
 
 CCR's foreground exit and sealed Claude stream must both indicate success.
+CCR reserves exit status `77` for unavailable configured provider credentials.
+With an empty sealed stdout stream and no capture error, Delegate reports
+`authentication-unavailable`; it does not infer an HTTP status or repair the
+credential. Other nonzero exits remain provider failures. Earlier CCR builds
+that return a generic exit status retain their generic failure classification.
 The requested alias is recorded; it is not independent proof of upstream model
 identity. CCR detached jobs are not used by this adapter.
 

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 import acceptance_native as gate
@@ -1129,6 +1129,122 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.publish_success()
             self.assertEqual(gate.read_json(Path(directory) / "success.json")["discovery_exit_code"], 0)
 
+    def test_pi_empty_native_catalog_blocks_before_task_dispatch(self):
+        with tempfile.TemporaryDirectory(prefix="native-pi-prerequisite-") as directory:
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.provider = "pi:json"
+            operation.mode = "read-only"
+            operation.scenario = "read-only"
+            operation.args = SimpleNamespace(model=None)
+            operation.discover_models_only = False
+            operation.setup = Mock()
+            operation.workspace = Path(directory)
+            operation.brief = Mock(return_value=Path(directory) / "brief")
+            operation.dispatch = Mock(side_effect=AssertionError("paid task must not start"))
+            operation.discover_models = Mock()
+            operation.model_discovery = {
+                "status": "unavailable", "reason_code": "models_unavailable", "models": [],
+            }
+            with self.assertRaisesRegex(gate.BlockedFailure, "no locally available model"):
+                operation.run()
+            operation.setup.assert_called_once()
+            operation.discover_models.assert_called_once()
+            operation.dispatch.assert_not_called()
+
+    def test_pi_model_prerequisite_preserves_explicit_choices_and_unknown_readiness(self):
+        for provider, model in (("pi:json", "chosen/model"), ("pi:json", ""),
+                                ("codex:exec", None)):
+            with self.subTest(provider=provider, model=model):
+                operation = object.__new__(gate.NativeAcceptance)
+                operation.provider = provider
+                operation.args = SimpleNamespace(model=model)
+                operation.discover_models = Mock()
+                operation.require_default_model_prerequisite()
+                operation.discover_models.assert_not_called()
+        for status, reason in (("available", "ok"),
+                               ("unavailable", "interface_unavailable")):
+            with self.subTest(status=status):
+                operation = object.__new__(gate.NativeAcceptance)
+                operation.provider = "pi:json"
+                operation.args = SimpleNamespace(model=None)
+                operation.discover_models = Mock()
+                operation.model_discovery = {"status": status, "reason_code": reason}
+                operation.require_default_model_prerequisite()
+                operation.discover_models.assert_called_once()
+
+    def test_pi_model_prerequisite_keeps_discovery_failure_failed(self):
+        operation = object.__new__(gate.NativeAcceptance)
+        operation.provider = "pi:json"
+        operation.args = SimpleNamespace(model=None)
+        operation.discover_models = Mock()
+        operation.model_discovery = {"status": "failed", "reason_code": "invalid_native_output"}
+        with self.assertRaisesRegex(gate.AcceptanceFailure, "default-model discovery failed") as raised:
+            operation.require_default_model_prerequisite()
+        self.assertNotIsInstance(raised.exception, gate.BlockedFailure)
+
+    def test_pi_model_prerequisite_consumes_structured_authentication_block(self):
+        operation = object.__new__(gate.NativeAcceptance)
+        operation.provider = "pi:json"
+        operation.args = SimpleNamespace(model=None)
+        operation.discover_models = Mock()
+        operation.model_discovery = {"status": "blocked", "reason_code": "authentication_unavailable"}
+        with self.assertRaisesRegex(gate.BlockedFailure, "authentication"):
+            operation.require_default_model_prerequisite()
+
+    def test_pi_model_prerequisite_rejects_non_authentication_block(self):
+        operation = object.__new__(gate.NativeAcceptance)
+        operation.provider = "pi:json"
+        operation.args = SimpleNamespace(model=None)
+        operation.discover_models = Mock()
+        operation.model_discovery = {"status": "blocked", "reason_code": "supervisor_upgrade_required"}
+        with self.assertRaisesRegex(gate.AcceptanceFailure, "supervisor_upgrade_required") as raised:
+            operation.require_default_model_prerequisite()
+        self.assertNotIsInstance(raised.exception, gate.BlockedFailure)
+
+    def test_default_model_failure_receipt_retains_sanitized_discovery_reason(self):
+        cases = (
+            (gate.BlockedFailure("Pi model discovery authentication is unavailable"),
+             "blocked", "authentication_unavailable", 2, "BLOCKED"),
+            (gate.AcceptanceFailure("Pi default-model discovery is blocked: supervisor_upgrade_required"),
+             "blocked", "supervisor_upgrade_required", 1, "failed"),
+        )
+        for error, status, reason, expected_code, expected_status in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory(
+                    prefix="native-default-model-receipt-") as directory:
+                output = Path(directory) / "evidence"
+                output.mkdir()
+
+                class Run:
+                    model_discovery_summary = {
+                        "status": status, "reason_code": reason, "complete": False,
+                        "model_count": 0, "effort_count": None,
+                        "raw_error": "must not be copied",
+                    }
+
+                    def run(self):
+                        raise error
+
+                    def finalize(self, _success, *, blocked=False):
+                        return True
+
+                    def publish_success(self):
+                        raise AssertionError("default-model failure published success")
+
+                with patch.object(gate, "choose_output", return_value=output), \
+                        patch.object(gate, "NativeAcceptance", return_value=Run()):
+                    code = gate.main([
+                        "--provider", "pi:json", "--permission", "read-only",
+                        "--output", str(output),
+                    ])
+
+                self.assertEqual(code, expected_code)
+                receipt = gate.read_json(output / "failure.json")
+                self.assertEqual(receipt["status"], expected_status)
+                self.assertEqual(receipt["model_discovery"], {
+                    "status": status, "reason_code": reason, "complete": False,
+                    "model_count": 0, "effort_count": None,
+                })
+
     def test_native_discovery_environment_reaches_process_without_credentials(self):
         selectors = {name: "/native/" + name.lower() for name in (
             "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR",
@@ -1283,6 +1399,13 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation._inspection_queue_records = lambda: {}
         return operation, {"tasks": rows, "groups": groups}
 
+    @staticmethod
+    def _acceptance_task_ops(operation, root: Path):
+        operation.base = root
+        operation.models_state = root / "models-state"
+        operation.scenario = "read-only"
+        return gate.NativeAcceptanceTaskOps(operation)
+
     def test_write_digest_command_and_optional_final_newline(self):
         with tempfile.TemporaryDirectory(prefix="native-write-unit-") as directory:
             root = Path(directory)
@@ -1318,6 +1441,50 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             status["tasks"]["9"]["id"] = 9
             self.assertFalse(operation.terminal_private_queue(status))
 
+    def test_write_continuation_command_preserves_content_and_line_boundary(self):
+        with tempfile.TemporaryDirectory(prefix="native-write-continuation-") as directory:
+            root = Path(directory)
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.mode = "workspace-write"
+            operation.briefs = root / "briefs"
+            operation.briefs.mkdir()
+            command = gate.shell_append_continuation_command()
+            self.assertIn("`" + command + "`", operation.brief("resume", continuation=True).read_text())
+            target = root / "acceptance-write-target.txt"
+            artifact = root / "acceptance-write-continue-check.txt"
+            nonce = "a" * 48
+            for ending in (b"", b"\n"):
+                with self.subTest(ending=ending):
+                    target.write_bytes(f"edited:{nonce}".encode() + ending)
+                    subprocess.run(["/bin/sh", "-c", command], cwd=root, check=True,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    subprocess.run(["/bin/sh", "-c", gate.shell_digest_command(artifact.name)],
+                                   cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    self.assertEqual(target.read_bytes(), f"edited:{nonce}\ncontinued\n".encode())
+                    gate.verify_write_artifacts(nonce, target, artifact, continuation=True)
+
+    def test_write_continuation_does_not_repair_invalid_content(self):
+        with tempfile.TemporaryDirectory(prefix="native-write-continuation-invalid-") as directory:
+            root = Path(directory)
+            target = root / "acceptance-write-target.txt"
+            artifact = root / "acceptance-write-continue-check.txt"
+            nonce = "a" * 48
+            for initial in (f"corrupt:{nonce}".encode(), f"edited:{nonce}\n\n".encode()):
+                with self.subTest(initial=initial):
+                    target.write_bytes(initial)
+                    subprocess.run(["/bin/sh", "-c", gate.shell_append_continuation_command()],
+                                   cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    self.assertTrue(target.read_bytes().startswith(initial))
+                    subprocess.run(["/bin/sh", "-c", gate.shell_digest_command(artifact.name)],
+                                   cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    with self.assertRaisesRegex(gate.AcceptanceFailure, "exact edited target"):
+                        gate.verify_write_artifacts(nonce, target, artifact, continuation=True)
+            target.write_bytes(f"edited:{nonce}continued\n".encode())
+            subprocess.run(["/bin/sh", "-c", gate.shell_digest_command(artifact.name)],
+                           cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "exact edited target"):
+                gate.verify_write_artifacts(nonce, target, artifact, continuation=True)
+
     def test_model_discovery_group_is_filtered_by_its_distinct_root(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
             operation, status = self._queue_oracle(Path(directory), with_inspection=False)
@@ -1328,9 +1495,15 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 "id": 8, "label": group + "-" + "d" * 32, "group": group,
                 "status": {"Done": {"result": "Success"}},
             }
+            operation._validate_model_discovery_evidence = Mock()
             filtered = operation._without_model_discovery_queue(status)
             self.assertEqual(set(filtered["tasks"]), {"7"})
             self.assertEqual(set(filtered["groups"]), {"default"})
+            operation._validate_model_discovery_evidence.assert_called_once()
+            projected, projected_group = operation._validate_model_discovery_evidence.call_args.args
+            self.assertEqual(projected_group, group)
+            self.assertEqual(set(projected["tasks"]), {"8"})
+            self.assertEqual(set(projected["groups"]), {"default", group})
 
     def test_standalone_model_shutdown_rejects_terminal_row_without_journal(self):
         with tempfile.TemporaryDirectory(prefix="native-model-queue-unit-") as directory:
@@ -1352,6 +1525,123 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             }
             with self.assertRaises(gate.AcceptanceFailure):
                 operation._without_model_discovery_queue(status)
+
+    def test_model_prerequisite_shutdown_requires_its_own_journal(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-prerequisite-queue-") as directory:
+            root = Path(directory)
+            operation, status = self._queue_oracle(root, with_inspection=False)
+            operation.discover_models_only = False
+            operation.models_state = root / "models-state"
+            operation.models_state.mkdir()
+            operation.models_root_id = "c" * 32
+            group = gate.INSPECTION_GROUP_PREFIX + operation.models_root_id
+            status["groups"][group] = {"status": "Running", "parallel_tasks": 1}
+            status["tasks"]["8"] = {
+                "id": 8, "label": group + "-" + "d" * 32, "group": group,
+                "status": {"Done": {"result": "Success"}},
+            }
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "inspection journal is absent"):
+                operation._without_model_discovery_queue(status)
+
+    def test_default_model_failure_uses_model_owner_before_ordinary_dispatch(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-owner-selection-") as directory:
+            root = Path(directory)
+            operation, status = self._queue_oracle(root, with_inspection=False)
+            operation.root_id = None
+            operation.tasks = {}
+            operation.models_root_id = "c" * 32
+            operation.discover_models_only = False
+            daemon = object()
+            operation.daemon = daemon
+            ops = self._acceptance_task_ops(operation, root)
+            def assert_model_owner_bound(model_owner, observed_status):
+                self.assertEqual(model_owner.pueue_config, operation.config)
+                self.assertIs(model_owner.daemon, daemon)
+                self.assertIs(observed_status, status)
+                return True
+
+            with patch.object(provider_common.NativeTaskOps, "failure_queue_finished",
+                              autospec=True, side_effect=assert_model_owner_bound) as canonical:
+                self.assertTrue(ops.failure_queue_finished(status))
+            canonical.assert_called_once()
+
+    def test_replay_membership_projects_model_group_before_canonical_validation(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-replay-membership-") as directory:
+            root = Path(directory)
+            operation, status = self._queue_oracle(root, with_inspection=False)
+            operation.models_root_id = "c" * 32
+            group = gate.INSPECTION_GROUP_PREFIX + operation.models_root_id
+            status["groups"][group] = {"status": "Running", "parallel_tasks": 1}
+            status["tasks"]["8"] = {
+                "id": 8, "label": group + "-" + "d" * 32, "group": group,
+                "status": {"Done": {"result": "Success"}},
+            }
+            status["groups"]["foreign"] = {"status": "Running", "parallel_tasks": 1}
+            status["tasks"]["9"] = {
+                "id": 9, "label": "foreign-row", "group": "foreign",
+                "status": {"Done": {"result": "Success"}},
+            }
+            operation._validate_model_discovery_evidence = Mock()
+            ops = self._acceptance_task_ops(operation, root)
+            task = next(iter(operation.tasks.values()))
+            row = status["tasks"]["7"]
+            ops.tasks = {"fresh": task}
+            ops.labels = {"fresh": row["label"]}
+            ops.numbers = {"fresh": 7}
+            ops.expected_results = {"fresh": "Success"}
+            ops.dispatch_attempts = {task}
+            ops.inspection_attempts = set()
+            result = b"replay proof\n"
+            payload = {"basename": "result.txt", "length": len(result),
+                       "sha256": provider_common.sha(result)}
+            outcome = {"verdict": "committed", "payload": payload,
+                       "evidence_sha256": "a" * 64}
+            task_directory = ops.state / "tasks" / task
+            (task_directory / "result.txt").write_bytes(result)
+            gate.write_json(task_directory / "outcome.json", outcome)
+            ops.queue_status = Mock(side_effect=(status, status))
+            ops._inspection_snapshot = Mock(return_value={})
+            ops.collect = Mock(return_value={
+                "outcome": outcome, "payload": payload,
+                "evidence_sha256": outcome["evidence_sha256"],
+            })
+            with patch.object(provider_common.NativeTaskOps, "_validate_queue_membership") as canonical:
+                ops.replay({
+                    "fresh": {"directory": task_directory, "outcome": outcome,
+                              "payload": payload},
+                }, names=("fresh",))
+            self.assertEqual(canonical.call_count, 2)
+            for call in canonical.call_args_list:
+                projected = call.args[0]
+                self.assertEqual(set(projected["tasks"]), {"7", "9"})
+                self.assertEqual(set(projected["groups"]), {"default", "foreign"})
+            self.assertEqual(ops.queue_status.call_count, 2)
+            self.assertEqual(ops.collect.call_count, 1)
+            operation._validate_model_discovery_evidence.assert_called()
+
+    def test_mixed_failure_projects_model_group_before_canonical_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix="native-model-mixed-failure-") as directory:
+            root = Path(directory)
+            operation, status = self._queue_oracle(root, with_inspection=False)
+            operation.models_root_id = "c" * 32
+            group = gate.INSPECTION_GROUP_PREFIX + operation.models_root_id
+            status["groups"][group] = {"status": "Running", "parallel_tasks": 1}
+            status["tasks"]["8"] = {
+                "id": 8, "label": group + "-" + "d" * 32, "group": group,
+                "status": {"Done": {"result": {"Failed": 1}}},
+            }
+            operation._validate_model_discovery_evidence = Mock()
+            ops = self._acceptance_task_ops(operation, root)
+            task = next(iter(operation.tasks.values()))
+            ops.tasks = {"fresh": task}
+            ops.dispatch_attempts = {task}
+            with patch.object(provider_common.NativeTaskOps, "failure_queue_finished",
+                              return_value=True) as canonical:
+                self.assertTrue(ops.failure_queue_finished(status))
+            canonical.assert_called_once()
+            projected = canonical.call_args.args[0]
+            self.assertEqual(set(projected["tasks"]), {"7"})
+            self.assertEqual(set(projected["groups"]), {"default"})
 
     def test_terminal_queue_rejects_malformed_inspection_record(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:

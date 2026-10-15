@@ -2243,17 +2243,15 @@ class NativeTaskOps:
         if "policy" in effective:
             require(isinstance(effective["policy"], dict),
                     f"ordinary task policy is invalid for {task}")
-        for key in ("provider_executable", "runner_executable"):
-            if key == "runner_executable" and key not in meta:
-                continue
-            executable = meta.get(key)
+        if "runner_executable" in meta:
+            executable = meta["runner_executable"]
             require(isinstance(executable, str) and Path(executable).is_absolute() and
                     Path(executable) == Path(os.path.normpath(executable)),
-                    f"ordinary task {key} is invalid for {task}")
+                    f"ordinary task runner_executable is invalid for {task}")
         if "runner_ownership" in meta:
             require(meta["runner_ownership"] in {"managed", "custom"},
                     f"ordinary task runner ownership is invalid for {task}")
-        for key in ("provider_version", "publisher_build", "publisher_version"):
+        for key in ("publisher_build", "publisher_version"):
             require(isinstance(meta.get(key), str) and bool(meta[key].strip()),
                     f"ordinary task {key} is invalid for {task}")
         if "environment" in meta:
@@ -2262,9 +2260,6 @@ class NativeTaskOps:
                     all(isinstance(item, str) and "=" in item and item.split("=", 1)[0]
                         for item in environment),
                     f"ordinary task environment is invalid for {task}")
-        if "environment_recorded" in meta:
-            require(type(meta["environment_recorded"]) is bool,
-                    f"ordinary task environment marker is invalid for {task}")
         for key in ("input_files", "output_artifacts"):
             if key in meta:
                 require(isinstance(meta[key], list),

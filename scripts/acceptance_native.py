@@ -807,6 +807,13 @@ def shell_digest_command(artifact: str) -> str:
     return f"python3 -c {shlex.quote(program)} > {shlex.quote(artifact)}"
 
 
+def shell_append_continuation_command() -> str:
+    program = ('from pathlib import Path; p = Path("acceptance-write-target.txt"); '
+               'data = p.read_bytes(); '
+               'p.write_bytes(data + (b"" if data.endswith(b"\\n") else b"\\n") + b"continued\\n")')
+    return f"python3 -c {shlex.quote(program)}"
+
+
 def require_same_session(first: str, second: str) -> None:
     require(first == second, "continuation changed the provider session")
 
@@ -843,6 +850,30 @@ class ModelDiscoveryCleanupOps(NativeTaskOps):
     def failure_queue_finished(self, status: dict[str, object]) -> bool:
         self.owner._sync_model_cleanup(self)
         return super().failure_queue_finished(status)
+
+
+class NativeAcceptanceTaskOps(NativeTaskOps):
+    """Keep ordinary task lifecycle validation scoped to the two owned roots."""
+
+    def __init__(self, owner: "NativeAcceptance") -> None:
+        super().__init__(owner.processes, owner.delegate, owner.runner, owner.pueue,
+                         owner.base, owner.state, owner.output,
+                         watch_seconds=WATCH_SECONDS,
+                         expected_inspection_binding_required=False,
+                         managed_runner=owner.scenario == "timeout-resume")
+        self.owner = owner
+
+    def _validate_queue_membership(self, status: dict[str, object], allow_failure: bool) -> None:
+        filtered = self.owner._without_model_discovery_queue(status)
+        super()._validate_queue_membership(filtered, allow_failure)
+
+    def failure_queue_finished(self, status: dict[str, object]) -> bool:
+        if self.owner.root_id is None and not self.tasks and not self.dispatch_attempts:
+            model_ops = ModelDiscoveryCleanupOps(self.owner)
+            model_ops.bind_supervisor(self.owner.config, self.owner.daemon)
+            return model_ops.failure_queue_finished(status)
+        filtered = self.owner._without_model_discovery_queue(status)
+        return super().failure_queue_finished(filtered)
 
 
 class NativeAcceptance:
@@ -966,11 +997,7 @@ class NativeAcceptance:
         self.processes = Processes(
             self.output / "processes", self.environment,
             owner=self._constructor_ownership)
-        self.ops = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
-                                 self.base, self.state, self.output,
-                                 watch_seconds=WATCH_SECONDS,
-                                 expected_inspection_binding_required=False,
-                                 managed_runner=self.scenario == "timeout-resume")
+        self.ops = NativeAcceptanceTaskOps(self)
         self.daemon = None
         self.closed = False
         self.model_discovery: dict[str, object] | None = None
@@ -1581,12 +1608,13 @@ class NativeAcceptance:
                                            model_group: str) -> None:
         """Validate the standalone inspection before excluding its queue row."""
         require(self.models_root_id is not None, "model discovery root identity is unavailable")
-        require(self.root_id is None and not self.tasks and not self.numeric_ids and
-                not self.ops.dispatch_attempts and not self.ops.inspection_attempts,
-                "model discovery admitted an ordinary provider task")
-        require(not (self.state / "tasks").exists() and
-                not (self.state / "inspections").exists(),
-                "model discovery created ordinary provider state")
+        if getattr(self, "discover_models_only", True):
+            require(self.root_id is None and not self.tasks and not self.numeric_ids and
+                    not self.ops.dispatch_attempts and not self.ops.inspection_attempts,
+                    "model discovery admitted an ordinary provider task")
+            require(not (self.state / "tasks").exists() and
+                    not (self.state / "inspections").exists(),
+                    "model discovery created ordinary provider state")
         model_tasks = self.models_state / "tasks"
         require(not model_tasks.exists() and not model_tasks.is_symlink(),
                 "model discovery created an ordinary task record")
@@ -1706,6 +1734,22 @@ class NativeAcceptance:
         require(process.result.get("exit_code") == 0,
                 f"{self.provider} authenticated status exited unsuccessfully")
 
+    def require_default_model_prerequisite(self) -> None:
+        """Gate Pi's default control on its native locally available catalog."""
+        if self.provider != "pi:json" or getattr(self.args, "model", None) is not None:
+            return
+        self.discover_models()
+        response = self.model_discovery
+        require(isinstance(response, dict), "Pi model discovery response is unavailable")
+        status, reason = response.get("status"), response.get("reason_code")
+        if status == "blocked":
+            if reason == "authentication_unavailable":
+                raise BlockedFailure("Pi model discovery authentication is unavailable")
+            raise AcceptanceFailure(f"Pi default-model discovery is blocked: {reason}")
+        if status == "unavailable" and reason == "models_unavailable":
+            raise BlockedFailure("Pi has no locally available model after native authentication and filtering")
+        require(status != "failed", f"Pi default-model discovery failed: {reason}")
+
     def _adopt_daemon(self, process: object) -> None:
         require(self.daemon is None, "private daemon handle was assigned twice")
         self.daemon = process
@@ -1717,7 +1761,8 @@ class NativeAcceptance:
                 text = (
                     "Continue the exact previous conversation and complete this workspace integration test. "
                     "Use native file and shell tools in the current workspace. Verify the existing target, "
-                    "then append exactly `continued` as a second line to acceptance-write-target.txt. "
+                    f"then execute `{shell_append_continuation_command()}` to append exactly `continued` "
+                    "as a second line to acceptance-write-target.txt without replacing its existing content. "
                     f"Execute `{shell_digest_command('acceptance-write-continue-check.txt')}` "
                     "after the edit. Reply exactly `DELEGATION_LIVE_WRITE_CONTINUED` after completing the test. "
                     "Do not modify any other file, implement source code, change configuration, "
@@ -2164,6 +2209,7 @@ class NativeAcceptance:
         if model_group not in groups:
             return status
         retained_rows: dict[object, object] = {}
+        model_rows: dict[object, object] = {}
         for numeric_id, row in rows.items():
             require(isinstance(row, dict), "private queue contains a malformed row")
             if row.get("group") == model_group:
@@ -2172,10 +2218,15 @@ class NativeAcceptance:
                         "model discovery queue label is invalid")
                 require(done_result(row) is not None,
                         "model discovery queue row is not terminal")
+                model_rows[numeric_id] = row
                 continue
             retained_rows[numeric_id] = row
-        if getattr(self, "discover_models_only", False):
-            self._validate_model_discovery_evidence(status, model_group)
+        model_groups = {name: group for name, group in groups.items()
+                        if name in {"default", model_group}}
+        model_status = {"tasks": model_rows, "groups": model_groups}
+        self._validate_model_discovery_evidence(
+            status if getattr(self, "discover_models_only", False) else model_status,
+            model_group)
         retained_groups = {name: group for name, group in groups.items()
                            if name != model_group}
         return {"tasks": retained_rows, "groups": retained_groups}
@@ -2833,6 +2884,7 @@ class NativeAcceptance:
             require(isinstance(self.model_discovery_exit_code, int),
                     "model discovery exit code is unavailable")
             return self.model_discovery_exit_code
+        self.require_default_model_prerequisite()
         if self.scenario == "timeout-resume":
             return self.run_timeout_resume()
         if self.scenario == "interactive":
@@ -2965,8 +3017,7 @@ def _finalize_run(run: NativeAcceptance | None, success: bool, *, blocked: bool 
     return finalized
 
 
-def _model_discovery_failure_receipt(args: argparse.Namespace, run: NativeAcceptance,
-                                     code: int) -> dict[str, object]:
+def _sanitized_model_discovery_summary(run: NativeAcceptance | None) -> dict[str, object] | None:
     summary = getattr(run, "model_discovery_summary", None)
     sanitized: dict[str, object] = {}
     if isinstance(summary, dict):
@@ -2978,6 +3029,11 @@ def _model_discovery_failure_receipt(args: argparse.Namespace, run: NativeAccept
                 sanitized[key] = value
             elif key in {"model_count", "effort_count"} and (value is None or type(value) is int):
                 sanitized[key] = value
+    return sanitized or None
+
+
+def _model_discovery_failure_receipt(args: argparse.Namespace, run: NativeAcceptance,
+                                     code: int) -> dict[str, object]:
     return {
         "gate": "acceptance-native",
         "status": "BLOCKED" if code == 2 else "failed",
@@ -2989,7 +3045,7 @@ def _model_discovery_failure_receipt(args: argparse.Namespace, run: NativeAccept
         "requested_effort": args.effort,
         "discover_models": True,
         "discovery_exit_code": code,
-        "model_discovery": sanitized or None,
+        "model_discovery": _sanitized_model_discovery_summary(run),
         "no_retry": True,
         "credentials_in_receipt": False,
     }
@@ -3018,7 +3074,9 @@ def main(argv: list[str] | None = None) -> int:
                         "gate": "acceptance-native", "status": "BLOCKED" if code == 2 else "failed",
                         "provider": args.provider, "mode": args.mode, "scenario": args.scenario,
                         "task_budget": TASK_BUDGET, "requested_model": args.model,
-                        "requested_effort": args.effort, "no_retry": True,
+                        "requested_effort": args.effort,
+                        "model_discovery": _sanitized_model_discovery_summary(run),
+                        "no_retry": True,
                         "credentials_in_receipt": False}):
                     return 1
         else:
@@ -3034,6 +3092,7 @@ def main(argv: list[str] | None = None) -> int:
                                                        "requested_model": args.model,
                                                        "requested_effort": args.effort,
                                                        "discover_models": args.discover_models,
+                                                       "model_discovery": _sanitized_model_discovery_summary(run),
                                                        "error": str(error),
                                                        "no_retry": True, "credentials_in_receipt": False})
         cleanup_ok = _finalize_run(run, False, blocked=True)
@@ -3048,6 +3107,7 @@ def main(argv: list[str] | None = None) -> int:
                                           "requested_model": args.model,
                                           "requested_effort": args.effort,
                                           "discover_models": args.discover_models,
+                                          "model_discovery": _sanitized_model_discovery_summary(run),
                                           "error": str(error),
                                           "no_retry": True, "credentials_in_receipt": False})
         _finalize_run(run, False)
@@ -3060,6 +3120,7 @@ def main(argv: list[str] | None = None) -> int:
                                           "requested_model": args.model,
                                           "requested_effort": args.effort,
                                           "discover_models": args.discover_models,
+                                          "model_discovery": _sanitized_model_discovery_summary(run),
                                           "error": str(error),
                                           "traceback": traceback.format_exc(), "no_retry": True,
                                           "credentials_in_receipt": False})

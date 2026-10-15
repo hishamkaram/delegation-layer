@@ -463,7 +463,8 @@ class InspectionHarnessTests(unittest.TestCase):
         })
 
     def durable_ordinary_admission(self, numeric_task_id: int = 7,
-                                   runner_ownership: str | None = None) -> Path:
+                                   runner_ownership: str | None = None,
+                                   runtime_pending: bool = False) -> Path:
         directory = self.state / "tasks" / TASK
         request = read_json(self.state / "inspections" / TASK / "request.json")
         supervisor = request["binding"]["supervisor"]
@@ -492,6 +493,12 @@ class InspectionHarnessTests(unittest.TestCase):
             meta.update({
                 "runner_executable": str(self.runner),
                 "runner_ownership": runner_ownership,
+            })
+        if runtime_pending:
+            meta.update({
+                "provider_version": "",
+                "runtime_preflight_sha256": "a" * 64,
+                "environment_recorded": True,
             })
         if runner_ownership == "managed":
             self.ops.managed_runner = True
@@ -588,13 +595,23 @@ class InspectionHarnessTests(unittest.TestCase):
             write_json(lifetime / "worker-wait.json", wait)
         return lifetime
 
-    def ordinary_only_admission(self, runner_ownership: str | None = None) -> Path:
+    def ordinary_only_admission(self, runner_ownership: str | None = None,
+                                runtime_pending: bool = False) -> Path:
         self.inspection_records()
-        directory = self.durable_ordinary_admission(runner_ownership=runner_ownership)
+        directory = self.durable_ordinary_admission(
+            runner_ownership=runner_ownership, runtime_pending=runtime_pending)
         shutil.rmtree(self.state / "inspections")
         self.ops.inspection_attempts.clear()
         self.ops.inspection_bindings.clear()
         return directory
+
+    @staticmethod
+    def rebind_ordinary_metadata(directory: Path) -> None:
+        meta_sha256 = digest(directory / "meta.json")
+        for name in ("submit.json", "supervisor.ref.json"):
+            record = read_json(directory / name)
+            record["meta_sha256"] = meta_sha256
+            write_json(directory / name, record, replace=True)
 
     @staticmethod
     def refresh_request_links(directory: Path) -> None:
@@ -1089,6 +1106,45 @@ class InspectionHarnessTests(unittest.TestCase):
         }
 
         self.assertIsNone(provider_common.validate_provider_runtime_metadata(meta))
+
+    def test_ordinary_task_evidence_accepts_pending_runtime_metadata(self):
+        directory = self.ordinary_only_admission(runtime_pending=True)
+
+        ordinary = self.ops._durable_ordinary_admission(TASK, None)
+
+        self.assertEqual(ordinary["task_id"], TASK)
+        self.assertEqual(
+            read_json(directory / "meta.json")["provider_version"], "")
+
+    def test_ordinary_task_evidence_rejects_pending_runtime_digest(self):
+        directory = self.ordinary_only_admission(runtime_pending=True)
+        meta = read_json(directory / "meta.json")
+        meta["runtime_preflight_sha256"] = "invalid"
+        write_json(directory / "meta.json", meta, replace=True)
+        self.rebind_ordinary_metadata(directory)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "preflight digest is invalid"):
+            self.ops._durable_ordinary_admission(TASK, None)
+
+    def test_ordinary_task_evidence_rejects_pending_runtime_version(self):
+        directory = self.ordinary_only_admission(runtime_pending=True)
+        meta = read_json(directory / "meta.json")
+        meta["provider_version"] = "fixture-v2"
+        write_json(directory / "meta.json", meta, replace=True)
+        self.rebind_ordinary_metadata(directory)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "pending version is not empty"):
+            self.ops._durable_ordinary_admission(TASK, None)
+
+    def test_ordinary_task_evidence_rejects_pending_environment_marker(self):
+        directory = self.ordinary_only_admission(runtime_pending=True)
+        meta = read_json(directory / "meta.json")
+        meta["environment_recorded"] = False
+        write_json(directory / "meta.json", meta, replace=True)
+        self.rebind_ordinary_metadata(directory)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "pending environment is not recorded"):
+            self.ops._durable_ordinary_admission(TASK, None)
 
     def test_provider_runtime_metadata_rejects_invalid_pending_contract(self):
         base = {
