@@ -500,13 +500,7 @@ func TestConcurrentCompletedInspectionsUseExactQueueObservations(t *testing.T) {
 			t.Fatalf("coalesced admissions did not finish: %v", ctx.Err())
 		}
 	}
-	if got := requestedLaunches.Load(); got != count {
-		t.Fatalf("maintenance launch requests=%d, want %d", got, count)
-	}
-	if !supervisor.RunRequestedPrivateQueueMaintenance(ctx) {
-		t.Fatal("persisted maintenance did not start")
-	}
-	waitForPrivateQueueMaintenanceIdle(t, t.Context(), supervisor)
+	runInspectionMaintenanceBatch(t, ctx, supervisor, requestedLaunches.Load(), count)
 	removals := filepath.Join(store.Root, ".supervisor", "terminal-event-removals")
 	removed, err := os.ReadFile(removals)
 	if err != nil {
@@ -523,6 +517,17 @@ func TestConcurrentCompletedInspectionsUseExactQueueObservations(t *testing.T) {
 	if closeErr := supervisor.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}
+}
+
+func runInspectionMaintenanceBatch(t *testing.T, ctx context.Context, supervisor *pueue.Client, launches, want int32) {
+	t.Helper()
+	if launches != want {
+		t.Fatalf("maintenance launch requests=%d, want %d", launches, want)
+	}
+	if !supervisor.RunRequestedPrivateQueueMaintenance(ctx) {
+		t.Fatal("persisted maintenance did not start")
+	}
+	waitForPrivateQueueMaintenanceIdle(t, ctx, supervisor)
 }
 
 func TestAwaitInspectionDoesNotWaitForBlockedPrivateCleanup(t *testing.T) {
