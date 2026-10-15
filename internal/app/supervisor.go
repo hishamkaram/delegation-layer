@@ -385,7 +385,7 @@ func supervisorStatus(root string, deps Dependencies, response Response) (result
 
 func supervisorStatusFromStore(ctx context.Context, root string, deps Dependencies, options pueue.Options, response Response, store *taskdir.Store) commandResult {
 	controlContext := ctx
-	seed, err := inspection.ReadGroupRequest(controlContext, store)
+	seed, _, err := inspection.ReadGroupHead(controlContext, store)
 	if errors.Is(err, os.ErrNotExist) {
 		return supervisorStatusWithoutInspectionGroup(controlContext, root, deps, options, response)
 	}
@@ -396,8 +396,8 @@ func supervisorStatusFromStore(ctx context.Context, root string, deps Dependenci
 		response.SupervisorControl.State = "external"
 		response.SupervisorControl.LegacyReachability = "not_managed"
 		response.SupervisorControl.ActiveWork = "unknown"
-		response.SupervisorControl.NextAction = "stop_and_report"
-		return commandResult{response: response, code: 1, err: errors.New("inspection group uses an external supervisor")}
+		response.SupervisorControl.NextAction = "run_supervisor_migrate"
+		return commandResult{response: response, code: 0}
 	}
 	resolution, err := resolvePrivateSupervisorGeneration(controlContext, store, seed.Supervisor)
 	if err != nil {
@@ -718,8 +718,14 @@ func inspectSupervisorMigration(ctx context.Context, root string, deps Dependenc
 		return state, fmt.Errorf("private supervisor state could not be inspected: %w", err)
 	}
 	if !present {
-		state.notInitialized = true
-		return state, nil
+		_, _, groupErr := inspection.ReadGroupHead(ctx, store)
+		if task.RecordAbsent(groupErr) {
+			state.notInitialized = true
+			return state, nil
+		}
+		if groupErr != nil {
+			return state, fmt.Errorf("inspection supervisor journal could not be inspected: %w", groupErr)
+		}
 	}
 	observationTimeout := options.ObservationTimeout
 	if observationTimeout <= 0 {
@@ -753,15 +759,23 @@ func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dep
 	if journalErr != nil {
 		return fmt.Errorf("supervisor migration journal could not be read: %w", journalErr)
 	}
-	if !pueue.IsPrivateConfig(root, legacy.Supervisor.ConfigPath) {
-		state.externalInspectionGroup = true
-		return nil
+	state.externalInspectionGroup = !pueue.IsPrivateConfig(root, legacy.Supervisor.ConfigPath)
+	var current *pueue.Client
+	var err error
+	if state.externalInspectionGroup {
+		current, err = prepareInspectionHandoffSupervisor(ctx, root, deps, options)
+	} else {
+		current, err = prepareCurrentPrivateSupervisor(ctx, root, deps, options)
 	}
-	current, err := prepareCurrentPrivateSupervisor(ctx, root, deps, options)
+	state.current = current
 	if err != nil {
 		return err
 	}
-	state.current = current
+	if state.externalInspectionGroup {
+		if err = migrateInspectionGroup(ctx, store, current, observationTimeout, legacy); err != nil {
+			return err
+		}
+	}
 	return ensureInspectionGroupLocked(ctx, store, current, observationTimeout, true)
 }
 
@@ -788,18 +802,14 @@ func inspectSupervisorWithoutGroup(ctx context.Context, root string, deps Depend
 }
 
 func finishSupervisorMigration(response Response, state supervisorMigrationState, err error) commandResult {
-	if state.externalInspectionGroup {
-		response.SupervisorControl.State = "external"
-		response.SupervisorControl.LegacyReachability = "not_managed"
-		response.SupervisorControl.ActiveWork = "unknown"
-		response.SupervisorControl.NextAction = "stop_and_report"
-		return commandResult{response: response, code: 1, err: errors.New("inspection group uses an external supervisor")}
-	}
 	if err != nil {
 		return supervisorMigrationFailure(response, err)
 	}
 	response.SupervisorControl.State = "migrated"
-	if state.noInspectionGroup {
+	if state.externalInspectionGroup {
+		response.SupervisorControl.LegacyReachability = "not_managed"
+		response.SupervisorControl.ActiveWork = "unknown"
+	} else if state.noInspectionGroup {
 		response.SupervisorControl.LegacyReachability = "not_present"
 		response.SupervisorControl.ActiveWork = state.activeWork
 	} else {

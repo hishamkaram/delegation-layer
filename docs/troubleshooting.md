@@ -163,10 +163,17 @@ after graceful shutdown, then starts the current bundled daemon when the old
 and current bindings share that endpoint.
 The legacy journal remains unchanged for audit. A prepare/complete migration
 journal makes a crash during this sequence safe to resume.
-Only Delegate-owned private supervisors are eligible for this transition;
-external Pueue configurations are never stopped by migration. A journal bound
-to an external supervisor reports `supervisor_migration_unsupported` and
-`stop_and_report`; it does not suggest the private migration command.
+Only Delegate-owned private supervisors are eligible for the daemon transition;
+external Pueue configurations are never stopped by migration.
+
+An older state root may retain an inspection journal bound to an external
+supervisor. Default private admission and model discovery reconcile that
+routing automatically after verifying the private target. The same-root
+`supervisor migrate` command above can perform the same journal handoff.
+This changes only the inspection journal. Existing work retains its original
+bindings; neither external tasks nor either daemon needs to be stopped.
+The original journal and task history remain intact. Do not delete journal
+files or configure Pueue manually.
 
 Delegate reads supervisor status one bounded record at a time, so a large
 queue does not inherit the 1 MiB limit for an individual control record.

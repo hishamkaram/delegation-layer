@@ -12,6 +12,10 @@ executable fixture and a real private supervisor on macOS and Linux. This gate
 checks startup, dispatch, status, collection, model discovery, and
 ordinary-task parallelism; it does not build historical releases. The unit and
 hermetic acceptance suites provide their own supervisor fixtures. The private
+inspection-journal handoff is covered by `make acceptance-supervisor-handoff`
+on Linux and native macOS CI. It uses fixture providers and real supervisors
+to check automatic and explicit handoff while existing external work continues;
+it does not use provider credentials or claim live model acceptance. The private
 CLI capacity proof establishes 200 counted tasks Running while live provider
 leases, durable native-scope registrations, and contended lifetime-owner locks
 overlap. Its four concurrent dispatch callers are a recorded load-generator

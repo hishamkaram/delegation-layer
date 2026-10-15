@@ -938,7 +938,7 @@ func repairLivePrivateAdmissionTransition(ctx context.Context, store *taskdir.St
 	if err != nil || !ready {
 		return supervisor, ready, err
 	}
-	if err = rejectPrivateAdmissionMigrationAfterEndpointProbe(ctx, store, supervisor, configExisted); err != nil {
+	if err = resolvePrivateAdmissionMigrationWithBootstrapLock(ctx, store, supervisor, configExisted, true); err != nil {
 		return supervisor, true, err
 	}
 	configured, err := privateOrdinarySchedulingConfiguredGroups(store.Root, supervisor.Binding(), groups)
@@ -953,7 +953,7 @@ func restartPublishedPrivateAdmission(ctx context.Context, store *taskdir.Store,
 	if supervisor == nil {
 		return nil, pueue.ErrConfiguration
 	}
-	if err := rejectPrivateAdmissionMigration(ctx, store, supervisor, configExisted); err != nil {
+	if err := resolvePrivateAdmissionMigrationWithBootstrapLock(ctx, store, supervisor, configExisted, false); err != nil {
 		return supervisor, err
 	}
 	if err := supervisor.StartPrivate(ctx, store.Root); err != nil {
@@ -971,7 +971,7 @@ func bootstrapPrivateAdmission(ctx context.Context, deps Dependencies, store *ta
 	if err != nil {
 		return nil, err
 	}
-	if err = rejectPrivateAdmissionMigration(ctx, store, supervisor, configExisted); err != nil {
+	if err = resolvePrivateAdmissionMigrationWithBootstrapLock(ctx, store, supervisor, configExisted, false); err != nil {
 		return supervisor, err
 	}
 	if err = supervisor.StartPrivate(ctx, store.Root); err != nil {
@@ -993,6 +993,9 @@ func closePrivateAdmissionTransition(supervisor *pueue.Client, err error) error 
 func probePrivateAdmissionSupervisor(ctx context.Context, store *taskdir.Store, clientExecutable, daemonExecutable string, options pueue.Options) (*pueue.Client, error) {
 	client, ready, err := pueue.ProbePrivateEndpointWithGate(ctx, clientExecutable, daemonExecutable, store.Root, options, func(checkContext context.Context, current *pueue.Client) (bool, error) {
 		if err := rejectPrivateAdmissionMigrationAfterEndpointProbe(checkContext, store, current, true); err != nil {
+			if errors.Is(err, errExternalInspectionHandoffRequired) {
+				return false, nil
+			}
 			return false, err
 		}
 		observationReady, err := pueue.PrivateTaskObservationReady(store.Root)
@@ -1136,7 +1139,7 @@ func prepareInspectionGroupSupervisor(ctx context.Context, store *taskdir.Store,
 		return err
 	}
 	if present && matches {
-		if err := pueue.PublishPrivateSupervisorBindingIfAbsent(store.Root, supervisor.Binding()); err != nil {
+		if err := pueue.PublishPrivateSupervisorBindingIfAbsentContext(ctx, store.Root, supervisor.Binding()); err != nil {
 			return err
 		}
 		// A completed logical migration is the durable proof that the
@@ -1192,6 +1195,9 @@ func migrateInspectionGroup(ctx context.Context, store *taskdir.Store, superviso
 	if complete {
 		return nil
 	}
+	if !pueue.IsPrivateConfig(store.Root, legacy.Supervisor.ConfigPath) && pueue.IsPrivateConfig(store.Root, successor.Supervisor.ConfigPath) {
+		return handoffExternalInspectionGroup(ctx, store, supervisor, legacy, successor)
+	}
 	if !pueue.IsPrivateConfig(store.Root, legacy.Supervisor.ConfigPath) || !pueue.IsPrivateConfig(store.Root, successor.Supervisor.ConfigPath) {
 		return fmt.Errorf("%w: only Delegate private supervisors can be migrated", inspection.ErrGroupMigrationUnsupported)
 	}
@@ -1223,7 +1229,7 @@ func ensureInspectionPrivateMigration(ctx context.Context, stateRoot string, sup
 		return fmt.Errorf("%w: verify published private supervisor migration: %w", inspection.ErrGroupMigrationRequired, err)
 	}
 	if !published {
-		if err = pueue.PublishPrivateSupervisorBindingIfAbsent(stateRoot, predecessor); err != nil {
+		if err = pueue.PublishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, predecessor); err != nil {
 			return fmt.Errorf("%w: preserve legacy supervisor binding: %w", inspection.ErrGroupMigrationRequired, err)
 		}
 	}

@@ -41,6 +41,37 @@ class PrivateCaptureRootMixin:
 
 
 class PrivateDispatchArgumentsTests(unittest.TestCase):
+    def test_handoff_task_binding_accepts_exact_packaged_supervisor(self):
+        binding = {
+            "config_path": "/state/.supervisor/pueue.yml",
+            "client_executable": "/package/libexec/pueue",
+            "client_sha256": "a" * 64,
+            "daemon_executable": "/package/libexec/pueued",
+            "daemon_sha256": "b" * 64,
+        }
+        private_cli.require_handoff_task_binding(
+            json.dumps({"supervisor_config": binding}).encode(), binding,
+        )
+
+    def test_handoff_task_binding_rejects_drift_and_unrelated_path_text(self):
+        binding = {
+            "config_path": "/state/.supervisor/pueue.yml",
+            "client_executable": "/package/libexec/pueue",
+            "client_sha256": "a" * 64,
+            "daemon_executable": "/package/libexec/pueued",
+            "daemon_sha256": "b" * 64,
+        }
+        for key in binding:
+            with self.subTest(changed=key):
+                changed = {**binding, key: "different"}
+                metadata = {"supervisor_config": changed, "unrelated": binding}
+                with self.assertRaisesRegex(RuntimeError, "inspection journal supervisor"):
+                    private_cli.require_handoff_task_binding(json.dumps(metadata).encode(), binding)
+        for metadata in ({}, [], {"supervisor_config": None}):
+            with self.subTest(invalid=metadata):
+                with self.assertRaises(RuntimeError):
+                    private_cli.require_handoff_task_binding(json.dumps(metadata).encode(), binding)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-dispatch-args-")
         self.addCleanup(temporary.cleanup)
@@ -57,8 +88,9 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
         args = ["acceptance_private_cli.py"]
         for name in ("delegate", "runner", "pueue", "pueued"):
             args.extend(["--" + name, str(self.sources[name])])
-        args.extend(["--output", str(output),
-                     "--parallel-tasks", str(total), "--runtime-only"])
+        args.extend(["--output", str(output), "--parallel-tasks", str(total)])
+        if scenario != private_cli.EXTERNAL_INSPECTION_HANDOFF_SCENARIO:
+            args.append("--runtime-only")
         if scenario != "capacity":
             args.extend(["--scenario", scenario])
         if workers is not None:
@@ -161,6 +193,424 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 self.assertEqual(raised.exception.code, 2)
                 self.assertIn("must be exactly 2", errors.getvalue())
                 setup.assert_not_called()
+
+    def test_external_handoff_requires_exact_two_tasks_before_fixture_setup(self):
+        for total in (0, 1, 3, 200):
+            with self.subTest(total=total):
+                errors = io.StringIO()
+                with patch.object(
+                        sys, "argv",
+                        self.arguments(
+                            total, 2,
+                            scenario=private_cli.EXTERNAL_INSPECTION_HANDOFF_SCENARIO,
+                        )), \
+                        patch.object(private_cli.tempfile, "mkdtemp") as setup, \
+                        redirect_stderr(errors):
+                    with self.assertRaises(SystemExit) as raised:
+                        private_cli.main()
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("must be exactly 2", errors.getvalue())
+                setup.assert_not_called()
+
+    def test_external_handoff_rejects_runtime_only_before_fixture_setup(self):
+        arguments = self.arguments(
+            2, 2, scenario=private_cli.EXTERNAL_INSPECTION_HANDOFF_SCENARIO,
+        ) + ["--runtime-only"]
+        errors = io.StringIO()
+        with patch.object(sys, "argv", arguments), \
+                patch.object(private_cli.tempfile, "mkdtemp") as setup, \
+                redirect_stderr(errors):
+            with self.assertRaises(SystemExit) as raised:
+                private_cli.main()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("cannot be runtime-only", errors.getvalue())
+        setup.assert_not_called()
+
+    def test_external_supervisor_start_has_configured_parent_directories(self):
+        owner = private_cli.DirectoryOwner()
+        started = []
+        self.addCleanup(owner.rollback)
+
+        for case_label in ("explicit-migrate", "automatic-models", "automatic-dispatch"):
+            with self.subTest(case=case_label):
+                case_root = owner.create(
+                    "external handoff case " + case_label,
+                    self.root / ("case-" + case_label), self.root,
+                )
+                external_root = owner.create(
+                    "external supervisor " + case_label,
+                    case_root.directory / "external-supervisor", case_root.directory,
+                )
+                private_cli.prepare_external_supervisor_directories(
+                    owner, external_root, case_label,
+                )
+                config = private_cli.config_for(external_root.directory)
+                configured = config["shared"]
+                required_directories = tuple(
+                    Path(configured[name])
+                    for name in ("pueue_directory", "runtime_directory")
+                )
+
+                process_root = owner.create(
+                    "external supervisor process capture " + case_label,
+                    case_root.directory / "external-supervisor-processes", case_root.directory,
+                )
+                processes = common.Processes(
+                    process_root.directory, environment={}, capture_root=process_root,
+                    return_result=True,
+                )
+                test_case = self
+
+                class FakePopen:
+                    def __init__(self, argv, **_kwargs):
+                        self.pid = 8000 + len(started)
+                        self.returncode = 0
+                        self.asserted_argv = tuple(argv)
+                        test_case.assertTrue(all(path.is_dir() for path in required_directories))
+                        started.append(case_label)
+
+                    @staticmethod
+                    def poll():
+                        return 0
+
+                    @staticmethod
+                    def wait():
+                        return 0
+
+                with patch.object(common.subprocess, "Popen", FakePopen):
+                    process = processes.start(
+                        "external-daemon",
+                        [str(self.sources["pueued"]), "-c",
+                         str(external_root.directory / "pueue.yml")],
+                        external_root.directory,
+                    )
+                    result = process.wait(timeout=1, expected=0)
+                self.assertEqual(result["exit_code"], 0)
+
+        self.assertEqual(started, [
+            "explicit-migrate", "automatic-models", "automatic-dispatch",
+        ])
+
+    def test_external_handoff_success_writes_pass_receipt(self):
+        receipt, error = self.execute_external_handoff_scenario()
+        self.assertIsNone(error)
+        self.assertEqual(receipt["result"], "PASS")
+        self.assertEqual(receipt["status"], "passed")
+        self.assertEqual(receipt["scenario"], private_cli.EXTERNAL_INSPECTION_HANDOFF_SCENARIO)
+        cases = receipt["external_inspection_handoff"]
+        self.assertEqual(set(cases), {
+            "explicit-migrate", "automatic-models", "automatic-dispatch",
+        })
+        for label, case in cases.items():
+            self.assertEqual(case["case"], label)
+            self.assertEqual(case["handoff_action"], label)
+            self.assertEqual(case["cleanup"], {
+                "fixture_waiter_entries": "pending",
+                "lifetime_closure": "canonical-managed-validator",
+                "external_daemon": "pending",
+                "private_daemon": "pending",
+            })
+        self.assertEqual(receipt["external_inspection_handoff_case_count"], 3)
+
+    def test_external_handoff_closure_failure_writes_fail_receipt(self):
+        receipt, error = self.execute_external_handoff_scenario(
+            failure=RuntimeError("managed lifetime closure failed"),
+        )
+        self.assertIsInstance(error, RuntimeError)
+        self.assertEqual(receipt["result"], "FAIL")
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["failure"]["phase"], "external_inspection_explicit_migrate")
+        self.assertEqual(receipt["cleanup"]["private_root"]["status"], "retained")
+
+    def test_external_handoff_closure_requires_empty_scope(self):
+        closure = {
+            "intent": {"deadline": "2030-01-01T00:00:00Z", "created_at": "2029-01-01T00:00:00Z"},
+            "registration": {
+                "created_at": "2029-01-01T00:00:01Z",
+                "scope_kind": "process-group",
+                "assurance": "fixture",
+            },
+            "worker_wait": {"child_pid": 123, "result": "exited", "exit_code": 0},
+            "termination": {"cause": "completed", "scope_empty": True},
+            "launches": [{"pid": 123}],
+        }
+        evidence = private_cli.external_handoff_closure_evidence(closure, "a" * 32)
+        self.assertEqual(evidence["termination"]["scope_empty"], True)
+        self.assertEqual(evidence["launch_count"], 1)
+        invalid = dict(closure)
+        invalid["termination"] = {"cause": "completed", "scope_empty": False}
+        with self.assertRaises(RuntimeError):
+            private_cli.external_handoff_closure_evidence(invalid, "a" * 32)
+
+    def test_post_start_receipt_failure_retains_canonical_process_registry_entry(self):
+        registered = []
+
+        class FakeProcess:
+            def __init__(self, directory, argv, _cwd, _environment, _capture_root, **kwargs):
+                self.pid = 7101
+                self.argv = [str(argument) for argument in argv]
+                self.directory = directory
+                self.result = None
+                registered.append(self)
+                kwargs["on_started"](self)
+
+            def poll(self):
+                return None
+
+        with tempfile.TemporaryDirectory(prefix="delegate-start-receipt-") as directory:
+            root = Path(directory)
+            owner = private_cli.DirectoryOwner()
+            capture_root = owner.create("capture root", root / "capture", root)
+            try:
+                processes = common.Processes(
+                    capture_root.directory, environment={}, capture_root=capture_root,
+                )
+                with patch.object(common, "Process", FakeProcess), \
+                        patch.object(common, "write_json", side_effect=OSError("receipt unavailable")):
+                    with self.assertRaisesRegex(OSError, "receipt unavailable"):
+                        processes.start(
+                            "external-daemon", ["/fixture/pueued", "-c", "/fixture/pueue.yml"],
+                            root,
+                        )
+
+                self.assertEqual(len(registered), 1)
+                self.assertIs(private_cli.registered_process_handle(processes), registered[0])
+                self.assertEqual(processes.pending(), [{
+                    "pid": 7101,
+                    "argv": ["/fixture/pueued", "-c", "/fixture/pueue.yml"],
+                    "directory": str(capture_root.directory / "001-external-daemon"),
+                }])
+            finally:
+                owner.rollback()
+
+    def test_failed_lifetime_closure_retains_fixture_fifos(self):
+        class Cohort:
+            def __init__(self):
+                self.removed = 0
+                self.closed = 0
+
+            def remove_closed_fifos(self):
+                self.removed += 1
+
+            def close(self):
+                self.closed += 1
+
+        cohort = Cohort()
+        evidence = {"cleanup": {"fixture_waiter_entries": "pending"}}
+        cleanup_errors = []
+        with patch.object(
+                private_cli, "await_managed_lifetime_closure",
+                side_effect=RuntimeError("closure is not proven")):
+            closure_proven = private_cli.cleanup_external_handoff_cohorts(
+                Path("/fixture/state"), ("a" * 32,), Path("/fixture/waiters"),
+                (cohort,), evidence, cleanup_errors,
+            )
+
+        self.assertFalse(closure_proven)
+        self.assertEqual(cohort.removed, 0)
+        self.assertEqual(cohort.closed, 1)
+        self.assertEqual(evidence["cleanup"]["fixture_waiter_entries"],
+                         "retained-unproven-closure")
+        self.assertEqual(cleanup_errors, ["managed lifetime closure failed: closure is not proven"])
+
+    def test_admitted_task_before_cohort_acquisition_retains_unproven_work(self):
+        evidence = {"cleanup": {"fixture_waiter_entries": "pending"}}
+        cleanup_errors = []
+        state = Path("/fixture/state")
+        task_ids = ("a" * 32,)
+        with patch.object(
+                private_cli, "await_managed_lifetime_closure",
+                side_effect=RuntimeError("task closure is not proven")) as await_closure, \
+                patch.object(private_cli, "require_empty_fixture_waiters") as empty:
+            closure_proven = private_cli.cleanup_external_handoff_cohorts(
+                state, task_ids, Path("/fixture/waiters"), (None, None),
+                evidence, cleanup_errors,
+            )
+
+        self.assertFalse(closure_proven)
+        await_closure.assert_called_once_with(state, task_ids, timeout=45)
+        empty.assert_not_called()
+        self.assertEqual(evidence["cleanup"]["fixture_waiter_entries"],
+                         "retained-unproven-closure")
+        self.assertEqual(cleanup_errors, ["managed lifetime closure failed: task closure is not proven"])
+
+    def test_post_start_failure_without_created_work_checks_empty_waiters(self):
+        evidence = {"cleanup": {"fixture_waiter_entries": "pending"}}
+        cleanup_errors = []
+        with patch.object(private_cli, "await_managed_lifetime_closure") as await_closure, \
+                patch.object(private_cli, "require_empty_fixture_waiters") as empty:
+            closure_proven = private_cli.cleanup_external_handoff_cohorts(
+                Path("/fixture/state"), (), Path("/fixture/waiters"), (None, None),
+                evidence, cleanup_errors,
+            )
+
+        self.assertTrue(closure_proven)
+        await_closure.assert_not_called()
+        empty.assert_called_once_with(Path("/fixture/waiters"))
+        self.assertEqual(cleanup_errors, [])
+
+    def test_started_inspection_without_task_id_requires_lifetime_closure(self):
+        evidence = {"cleanup": {"fixture_waiter_entries": "pending"}}
+        cleanup_errors = []
+        state = Path("/fixture/state")
+        with patch.object(
+                private_cli, "await_managed_lifetime_closure",
+                side_effect=RuntimeError("inspection closure is not proven"),
+        ) as await_closure, patch.object(
+                private_cli, "require_empty_fixture_waiters",
+        ) as empty:
+            closure_proven = private_cli.cleanup_external_handoff_cohorts(
+                state, (), Path("/fixture/waiters"), (None, None), evidence,
+                cleanup_errors, delegate_control_started=True,
+            )
+
+        self.assertFalse(closure_proven)
+        await_closure.assert_called_once_with(state, (), timeout=45)
+        empty.assert_not_called()
+        self.assertEqual(evidence["cleanup"]["fixture_waiter_entries"],
+                         "retained-unproven-closure")
+        self.assertEqual(
+            cleanup_errors,
+            ["managed lifetime closure failed: inspection closure is not proven"],
+        )
+
+    def test_successful_lifetime_closure_removes_fixture_fifos(self):
+        class Cohort:
+            def __init__(self):
+                self.removed = 0
+                self.closed = 0
+
+            def remove_closed_fifos(self):
+                self.removed += 1
+
+            def close(self):
+                self.closed += 1
+
+        cohort = Cohort()
+        evidence = {"cleanup": {"fixture_waiter_entries": "pending"}}
+        cleanup_errors = []
+        with patch.object(private_cli, "await_managed_lifetime_closure", return_value={}), \
+                patch.object(private_cli, "require_empty_fixture_waiters") as empty:
+            closure_proven = private_cli.cleanup_external_handoff_cohorts(
+                Path("/fixture/state"), ("a" * 32,), Path("/fixture/waiters"),
+                (cohort,), evidence, cleanup_errors,
+            )
+
+        self.assertTrue(closure_proven)
+        self.assertEqual(cohort.removed, 1)
+        self.assertEqual(cohort.closed, 1)
+        empty.assert_called_once_with(Path("/fixture/waiters"))
+        self.assertEqual(cleanup_errors, [])
+
+    def execute_external_handoff_scenario(self, failure=None, failure_case=None,
+                                          return_cleanup=False):
+        base = Path(tempfile.mkdtemp(prefix=".dl-external-handoff-", dir=self.root)).resolve(strict=True)
+        output_name = "failure" if failure else "success"
+        if failure_case is not None:
+            output_name += "-" + failure_case
+        output = self.root / ("external-handoff-%s.json" % output_name)
+        owners = []
+        closure_calls = []
+        shutdown_calls = []
+        real_owner = private_cli.DirectoryOwner
+
+        def tracked_owner(*args, **kwargs):
+            owner = real_owner(*args, **kwargs)
+            owners.append(owner)
+            return owner
+
+        def run_handoff(*args, **kwargs):
+            case_label = kwargs["case_label"]
+            case_config = args[7]
+            case_task_ids = args[13]
+            case_config.parent.mkdir(parents=True, exist_ok=True)
+            case_config.write_text("fixture private config\n")
+            case_task_ids.extend([case_label + "-task-a", case_label + "-task-b"])
+            if failure is not None and (failure_case is None or case_label == failure_case):
+                raise failure
+            return {
+                "scenario": private_cli.EXTERNAL_INSPECTION_HANDOFF_SCENARIO,
+                "case": case_label,
+                "handoff_action": kwargs["handoff_action"],
+                "cleanup": {
+                    "fixture_waiter_entries": "pending",
+                    "lifetime_closure": "canonical-managed-validator",
+                    "external_daemon": "pending",
+                    "private_daemon": "pending",
+                },
+            }
+
+        def remove_root(_root_token, entries, **_kwargs):
+            private_cli.rollback_owned_directories(entries)
+
+        def record_closure(state, task_ids, **_kwargs):
+            closure_calls.append((state, tuple(task_ids)))
+            return {}
+
+        def record_shutdown(client, config, _env, *, state, task_ids, **_kwargs):
+            shutdown_calls.append((client, config, state, tuple(task_ids)))
+
+        arguments = self.arguments(
+            2, 2, output, scenario=private_cli.EXTERNAL_INSPECTION_HANDOFF_SCENARIO,
+        )
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, "argv", arguments))
+            stack.enter_context(patch.object(private_cli.tempfile, "mkdtemp",
+                                             return_value=str(base)))
+            stack.enter_context(patch.object(private_cli.Path, "home",
+                                             return_value=self.root))
+            stack.enter_context(patch.object(private_cli, "DirectoryOwner",
+                                             side_effect=tracked_owner))
+            stack.enter_context(patch.object(
+                private_cli, "run_external_inspection_handoff_acceptance",
+                side_effect=run_handoff,
+            ))
+            stack.enter_context(patch.object(
+                private_cli, "remove_private_acceptance_root", side_effect=remove_root,
+            ))
+            stack.enter_context(patch.object(
+                private_cli, "await_managed_lifetime_closure", side_effect=record_closure,
+            ))
+            stack.enter_context(patch.object(
+                private_cli, "shutdown_private_supervisor", side_effect=record_shutdown,
+            ))
+            stack.enter_context(redirect_stdout(io.StringIO()))
+            error = None
+            try:
+                private_cli.main()
+            except RuntimeError as raised:
+                error = raised
+            finally:
+                for owner in reversed(owners):
+                    if not getattr(owner, "_transferred", False):
+                        owner.release()
+        result = (json.loads(output.read_text()), error)
+        if return_cleanup:
+            return (*result, closure_calls, shutdown_calls)
+        return result
+
+    def test_later_case_failure_binds_cleanup_to_each_current_case(self):
+        for failure_case in ("automatic-models", "automatic-dispatch"):
+            with self.subTest(failure_case=failure_case):
+                receipt, error, closure_calls, shutdown_calls = self.execute_external_handoff_scenario(
+                    failure=RuntimeError("case failed"), failure_case=failure_case,
+                    return_cleanup=True,
+                )
+                self.assertIsInstance(error, RuntimeError)
+                self.assertEqual(receipt["result"], "FAIL")
+                self.assertEqual(len(closure_calls), 1)
+                self.assertEqual(len(shutdown_calls), 1)
+                closure_state, closure_task_ids = closure_calls[0]
+                shutdown_client, shutdown_config, shutdown_state, shutdown_task_ids = shutdown_calls[0]
+                self.assertEqual(closure_state, shutdown_state)
+                self.assertEqual(closure_task_ids, shutdown_task_ids)
+                self.assertEqual(closure_state.name, "state")
+                self.assertEqual(closure_state.parent.name, "external-handoff-" + failure_case)
+                self.assertEqual(closure_task_ids, (
+                    failure_case + "-task-a", failure_case + "-task-b",
+                ))
+                self.assertEqual(shutdown_config, closure_state / ".supervisor" / "pueue.yml")
+                self.assertEqual(shutdown_client.name, "pueue")
 
     def test_invalid_workers_are_rejected_before_fixture_setup(self):
         for workers in (0, -1, "1.5", "not-an-integer"):

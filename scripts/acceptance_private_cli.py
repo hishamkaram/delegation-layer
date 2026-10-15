@@ -30,8 +30,11 @@ from acceptance_provider_common import (
 from acceptance_supervisor_common import (
     _close_parent_descriptor,
     _open_parent_directory,
+    config_for,
     DirectoryOwner,
+    DirectoryOwner as SupervisorDirectoryOwner,
     OwnedDirectory,
+    Processes,
     remove_exact_owned_fifo,
     remove_owned_directory,
     require,
@@ -50,7 +53,10 @@ COLLECT_TIMEOUT_SECONDS = 165
 CAPACITY_TASK_BUDGET = "30m"
 CAPACITY_TARGET_TASKS = 200
 DEFAULT_STOP_SCENARIO = "default-stop"
+EXTERNAL_INSPECTION_HANDOFF_SCENARIO = "external-inspection-handoff"
 DEFAULT_STOP_TASK_COUNT = 2
+EXTERNAL_INSPECTION_HANDOFF_TASK_COUNT = 2
+EXTERNAL_INSPECTION_HANDOFF_TASK_BUDGET = "5m"
 DEFAULT_STOP_TASK_BUDGET = "5s"
 DEFAULT_STOP_BUDGET = "900ms"
 DEFAULT_DISPATCH_WORKERS = 16
@@ -837,8 +843,9 @@ def install_fixture(source, destination):
 
 
 def observe_created_admission(delegate, state, env, response, receipt, timeout=60,
-                              phase="admission-observation", *, capture_root):
-    """Confirm one created task after uncertain or failed dispatch; never retry it."""
+                              phase="admission-observation", *, capture_root,
+                              command_prefix=()):
+    """Confirm one created task after uncertain dispatch; never retry it."""
     failure = response.get("failure", {})
     uncertain = (failure.get("code") == "task_submission_uncertain"
                  and failure.get("next_action") == "check_status")
@@ -858,10 +865,12 @@ def observe_created_admission(delegate, state, env, response, receipt, timeout=6
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError("created fixture task admission remained uncertain: " + task_id)
-        observed = run_json(delegate, env, ["--root", str(state), "status", task_id, "--json"],
-                            timeout=min(45, remaining),
-                            receipt=receipt.with_name("observation-" + receipt.stem + "-%03d.json" % attempt),
-                            phase=phase, capture_root=capture_root)
+        observed = run_json(
+            delegate, env,
+            [*command_prefix, "--root", str(state), "status", task_id, "--json"],
+            timeout=min(45, remaining),
+            receipt=receipt.with_name("observation-" + receipt.stem + "-%03d.json" % attempt),
+            phase=phase, capture_root=capture_root)
         if observed.get("task_id") != task_id:
             raise RuntimeError("admission observation returned a different task")
         # status uses exit zero for a valid uncertain observation, including
@@ -2331,6 +2340,607 @@ def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
             release_gate.release()
 
 
+def read_external_inspection_handoff_journal(state, private_config):
+    """Read the immutable external-to-private inspection edge from a fixture root."""
+    root = Path(state)
+    journal = root / "inspection-group"
+    request_path = journal / "request.json"
+    migration_path = journal / "migration-complete.json"
+    require(request_path.is_file() and not request_path.is_symlink(),
+            "external inspection journal request is missing")
+    legacy = json.loads(request_path.read_text(encoding="utf-8"))
+    require(isinstance(legacy, dict), "external inspection journal request is invalid")
+    require(migration_path.is_file() and not migration_path.is_symlink(),
+            "inspection handoff completion marker is missing")
+    migration = json.loads(migration_path.read_text(encoding="utf-8"))
+    require(isinstance(migration, dict), "inspection handoff completion marker is invalid")
+    generations = []
+    for generation in sorted(root.glob("inspection-group-*")):
+        if generation.is_symlink() or not generation.is_dir():
+            raise RuntimeError("inspection journal generation is unsafe: " + str(generation))
+        generation_request = generation / "request.json"
+        if generation_request.is_file() and not generation_request.is_symlink():
+            record = json.loads(generation_request.read_text(encoding="utf-8"))
+            require(isinstance(record, dict), "inspection journal generation is invalid")
+            generations.append(record)
+    successor = migration.get("successor")
+    require(isinstance(successor, dict), "inspection handoff omitted its successor")
+    legacy_supervisor = legacy.get("supervisor")
+    successor_supervisor = successor.get("supervisor")
+    require(isinstance(legacy_supervisor, dict) and isinstance(successor_supervisor, dict),
+            "inspection handoff omitted supervisor bindings")
+    require(legacy_supervisor.get("config_path") != str(private_config),
+            "external inspection journal was already private")
+    require(successor_supervisor.get("config_path") == str(private_config),
+            "inspection handoff successor is not the private state-root supervisor")
+    require(any(
+        isinstance(record.get("supervisor"), dict)
+        and record["supervisor"].get("config_path") == str(private_config)
+        for record in generations
+    ), "private inspection generation record is missing")
+    return {
+        "legacy": legacy,
+        "migration": migration,
+        "successor": successor,
+        "generations": generations,
+    }
+
+
+def require_handoff_task_binding(metadata_bytes, expected_binding):
+    """Compare task metadata to its authoritative inspection journal binding."""
+    require(isinstance(expected_binding, dict) and expected_binding,
+            "inspection journal supervisor binding is missing")
+    metadata = json.loads(metadata_bytes)
+    require(isinstance(metadata, dict), "handoff task metadata is not an object")
+    require(metadata.get("supervisor_config") == expected_binding,
+            "handoff task metadata did not bind the inspection journal supervisor")
+
+
+def external_handoff_closure_evidence(closure, task_id):
+    """Require normal completion to retain the same lifetime proof as stop tests."""
+    require(isinstance(closure, dict), "lifetime closure is invalid: " + task_id)
+    worker_wait = closure.get("worker_wait")
+    termination = closure.get("termination")
+    require(isinstance(worker_wait, dict) and isinstance(termination, dict),
+            "lifetime closure omitted required evidence: " + task_id)
+    cause = termination.get("cause")
+    require(isinstance(cause, str) and cause,
+            "lifetime closure omitted its termination cause: " + task_id)
+    return default_stop_closure_evidence(closure, task_id, cause)
+
+
+def registered_process_handle(processes, assigned=None):
+    """Resolve the one owned process from the canonical Processes registry."""
+    entries = tuple(processes.entries)
+    require(len(entries) <= 1, "external supervisor process registry has multiple entries")
+    if assigned is not None:
+        require(any(entry is assigned for entry in entries),
+                "external supervisor process was not retained by its canonical registry")
+    return entries[0] if entries else None
+
+
+def prepare_external_supervisor_directories(ownership, external_root_token, case_label):
+    """Create every configured external-supervisor parent under one owner."""
+    require(isinstance(ownership, SupervisorDirectoryOwner),
+            "external supervisor directory owner is required")
+    require(isinstance(external_root_token, OwnedDirectory),
+            "external supervisor root identity token is required")
+    external_root_token.assert_live()
+    external_root = external_root_token.directory
+    ownership.create(
+        "external inspection supervisor state " + case_label,
+        external_root / "state", external_root,
+    )
+    ownership.create(
+        "external inspection supervisor runtime " + case_label,
+        external_root / "run", external_root,
+    )
+
+
+def cleanup_external_handoff_cohorts(
+        state, task_ids, waiter_directory, cohorts, evidence, cleanup_errors,
+        *, delegate_control_started=False):
+    """Remove fixture FIFOs only after the canonical lifetime proof succeeds."""
+    active_cohorts = tuple(cohort for cohort in cohorts if cohort is not None)
+    requested_task_ids = tuple(task_ids)
+    closure_proven = False
+    if not active_cohorts and not requested_task_ids and not delegate_control_started:
+        # A post-start failure before any Delegate control begins has no
+        # managed work or fixture lease to close. The external daemon is still
+        # reaped by the caller after the waiter directory is checked.
+        closure_proven = True
+    else:
+        try:
+            await_managed_lifetime_closure(state, requested_task_ids, timeout=45)
+        except BaseException as error:
+            evidence["cleanup"]["fixture_waiter_entries"] = "retained-unproven-closure"
+            cleanup_errors.append("managed lifetime closure failed: " + str(error))
+        else:
+            closure_proven = True
+    for cohort in active_cohorts:
+        if closure_proven:
+            try:
+                cohort.remove_closed_fifos()
+            except BaseException as error:
+                cleanup_errors.append("fixture FIFO cleanup failed: " + str(error))
+        try:
+            cohort.close()
+        except BaseException as error:
+            cleanup_errors.append("fixture lease close failed: " + str(error))
+    if closure_proven:
+        try:
+            require_empty_fixture_waiters(waiter_directory)
+        except BaseException as error:
+            cleanup_errors.append("fixture waiter cleanup failed: " + str(error))
+    return closure_proven
+
+
+def run_external_inspection_handoff_acceptance(
+        delegate, client, pueued, state, workspace, gate, waiter_directory, private_config,
+        env, response_directory, provider_fixture, lease_nonce, run_receipt,
+        attempted_task_ids, external_root_token, external_process_root_token, *, capture_root,
+        handoff_action, case_label, handoff_cases):
+    """Prove one external inspection handoff entrypoint and its private successor."""
+    require(handoff_action in ("explicit-migrate", "automatic-models", "automatic-dispatch"),
+            "external inspection handoff action is unsupported: " + str(handoff_action))
+    require(case_label not in handoff_cases,
+            "external inspection handoff case is duplicated: " + case_label)
+    receipts = Path(response_directory)
+    external_root_token.assert_live()
+    external_process_root_token.assert_live()
+    external_root = external_root_token.directory
+    external_config = external_root / "pueue.yml"
+    external_config.write_text(json.dumps(config_for(external_root), indent=2) + "\n")
+    external_config.chmod(0o600)
+    external_endpoint = external_root / "run" / "p.sock"
+    external_pid_path = external_root / "run" / "p.pid"
+    external_processes = Processes(
+        external_process_root_token.directory,
+        environment=env,
+        capture_root=external_process_root_token,
+        return_result=True,
+    )
+    external_process = None
+    release_gate = None
+    old_cohort = None
+    new_cohort = None
+    primary_error = None
+    cleanup_errors = []
+    old_response = None
+    new_response = None
+    delegate_control_started = False
+    evidence = {
+        "scenario": EXTERNAL_INSPECTION_HANDOFF_SCENARIO,
+        "case": case_label,
+        "handoff_action": handoff_action,
+        "requested_task_count": EXTERNAL_INSPECTION_HANDOFF_TASK_COUNT,
+        "task_budget": EXTERNAL_INSPECTION_HANDOFF_TASK_BUDGET,
+        "provider": "pi:json",
+        "fixture": "fake-pi-live-fifo",
+        "provider_fixture": file_fingerprint(provider_fixture),
+        "source_fingerprints": {
+            "acceptance_private_cli.py": file_fingerprint(Path(__file__)),
+            "acceptance_supervisor_common.py": file_fingerprint(
+                REPOSITORY / "scripts" / "acceptance_supervisor_common.py"
+            ),
+        },
+        "supervisors": {
+            "external": {
+                "config": str(external_config),
+                "config_fingerprint": file_fingerprint(external_config),
+                "endpoint": str(external_endpoint),
+                "pid_path": str(external_pid_path),
+                "daemon_shutdown": "pending",
+            },
+            "private": {
+                "config": str(private_config),
+                "daemon_shutdown": "pending",
+            },
+        },
+        "tasks": {},
+        "journal": {},
+        "cleanup": {
+            "fixture_waiter_entries": "pending",
+            "lifetime_closure": "canonical-managed-validator",
+            "external_daemon": "pending",
+            "private_daemon": "pending",
+        },
+    }
+
+    def record_evidence():
+        handoff_cases[case_label] = evidence
+        run_receipt.add_details(external_inspection_handoff=handoff_cases)
+
+    record_evidence()
+
+    external_prefix = ["--root", str(state), "--pueue-config", str(external_config)]
+    private_prefix = ["--root", str(state)]
+
+    def write_snapshot(name, snapshot):
+        path = receipts / name
+        path.write_text(json.dumps(snapshot, sort_keys=True, indent=2) + "\n")
+        return path.name
+
+    def external_client_calls():
+        calls = wrapper_call_records(
+            capture_root.directory / "old-client-starts-calls", "client", "old",
+        )
+        return [record for record in calls if str(external_config) in json.dumps(record, sort_keys=True)]
+
+    def wait_external_ready():
+        process = registered_process_handle(external_processes, external_process)
+        require(process is not None, "fixture external supervisor process was not registered")
+        if process.poll() is not None:
+            raise RuntimeError("fixture external supervisor exited before readiness")
+        try:
+            snapshot = pueue_snapshot(
+                client, external_config, env, phase="external-supervisor-observation",
+                capture_root=capture_root,
+            )
+        except (OSError, RuntimeError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        return isinstance(snapshot.get("groups"), dict)
+
+    def dispatch_fixture(task_id, command_prefix, receipt_name):
+        response = run_json(
+            delegate, env, [*command_prefix, "dispatch", "--provider", "pi:json",
+                            "--brief", str(waiting_brief), "--cwd", str(workspace),
+                            "--id", task_id, "--permission", "read-only",
+                            "--budget", EXTERNAL_INSPECTION_HANDOFF_TASK_BUDGET, "--json"],
+            expected=(0, 1), receipt=receipts / receipt_name,
+            phase="external-handoff-dispatch", capture_root=capture_root,
+        )
+        if response.get("task_id") != task_id or response.get("task_record") != "created":
+            raise RuntimeError("external handoff dispatch did not create the requested task")
+        if response.get("admission") != "admitted":
+            response = observe_created_admission(
+                delegate, state, env, response, receipts / receipt_name,
+                phase="external-handoff-admission-observation",
+                command_prefix=command_prefix, capture_root=capture_root,
+            )
+        if response.get("task_id") != task_id or response.get("admission") != "admitted":
+            raise RuntimeError("external handoff admission did not confirm the same task")
+        run_receipt.increment("dispatch_completed_count")
+        run_receipt.increment("admitted_task_count")
+        return response
+
+    def live_cohort(response, supervisor_client, supervisor_config, phase):
+        label = "delegate:" + response["root_id"] + ":" + response["task_id"]
+        wait_for_pueue_state(
+            supervisor_client, supervisor_config, env, label, "Running", phase=phase,
+            capture_root=capture_root,
+        )
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            specifications = capacity_lease_specifications(
+                state, [response], waiter_directory, lease_nonce,
+            )
+            if len(specifications) == 1 and specifications[0]["path"].exists():
+                cohort = LiveFIFOLeaseCohort.acquire(specifications, lease_nonce)
+                cohort.assert_live()
+                return specifications, cohort
+            time.sleep(0.05)
+        raise RuntimeError("fixture task did not reach a live lease: " + response["task_id"])
+
+    def task_meta(task_id):
+        path = state / "tasks" / task_id / "meta.json"
+        require(path.is_file() and not path.is_symlink(), "task metadata is missing: " + task_id)
+        data = path.read_bytes()
+        return path, data, hashlib.sha256(data).hexdigest()
+
+    def remember_external_process(process):
+        nonlocal external_process
+        external_process = process
+
+    def record_external_process_registry():
+        entries = tuple(external_processes.entries)
+        pending = external_processes.pending()
+        evidence["cleanup"]["external_processes"] = {
+            "registered_count": len(entries),
+            "pending": pending,
+        }
+        return pending
+
+    def shutdown_external():
+        process = registered_process_handle(external_processes, external_process)
+        if process is None:
+            return
+        if process.poll() is None:
+            pueue_command(
+                client, external_config, env, ["shutdown"], phase="external-supervisor-shutdown",
+                capture_root=capture_root,
+            )
+            process.wait(timeout=30, expected=0)
+        require(process.result is not None and process.result["natural_wait"],
+                "fixture external supervisor did not exit naturally")
+        require(not external_endpoint.exists() and not external_pid_path.exists(),
+                "fixture external supervisor endpoint remained after shutdown")
+        evidence["supervisors"]["external"].update({
+            "daemon_pid": process.result["pid"],
+            "process": process.result,
+            "daemon_shutdown": "verified",
+        })
+        evidence["cleanup"]["external_daemon"] = "verified"
+        record_external_process_registry()
+
+    waiting_brief = Path(state).parent / "external-handoff-waiting-brief.md"
+    waiting_brief.write_text("DELEGATE_PRIVATE_UPGRADE_WAIT\n")
+    waiting_brief.chmod(0o600)
+    run_receipt.phase("external_inspection_setup")
+    try:
+        external_process = external_processes.start(
+            "external-daemon", [str(pueued), "-c", str(external_config)], external_root,
+            on_spawned=remember_external_process,
+        )
+        wait_until(wait_external_ready, timeout=30, description="fixture external supervisor readiness")
+        require(external_pid_path.is_file(), "fixture external supervisor PID record is missing")
+        external_pid = int(external_pid_path.read_text().strip())
+        require(external_pid == external_process.pid, "fixture external PID identity changed at startup")
+        evidence["supervisors"]["external"].update({
+            "daemon_pid": external_pid,
+            "pid_identity": {"pid": external_pid},
+        })
+
+        delegate_control_started = True
+        models = run_json(
+            delegate, env, [*external_prefix, "models", "--provider", "pi:json",
+                            "--cwd", str(workspace), "--json"],
+            timeout=120, receipt=receipts / "models-external.json",
+            phase="external-inspection-worker", capture_root=capture_root,
+        )
+        if models.get("status") != "available" or [
+                model.get("id") for model in models.get("models", [])
+        ] != ["openai/gpt-4.1"]:
+            raise RuntimeError("external fixture model inspection did not complete")
+        require(not private_config.parent.exists(),
+                "external-only inspection unexpectedly created private supervisor state")
+        journal_request = state / "inspection-group" / "request.json"
+        require(journal_request.is_file(), "external inspection journal was not created")
+        legacy_request = json.loads(journal_request.read_text())
+        require(legacy_request.get("supervisor", {}).get("config_path") == str(external_config),
+                "inspection journal was not bound to the external supervisor")
+        evidence["journal"]["external_request"] = legacy_request
+        evidence["journal"]["external_request_sha256"] = hashlib.sha256(
+            journal_request.read_bytes()
+        ).hexdigest()
+        evidence["journal"]["creation_command"] = "models"
+
+        release_gate = LockedReleaseGate.acquire(gate)
+        old_task_id = uuid.uuid4().hex
+        attempted_task_ids.append(old_task_id)
+        old_response = dispatch_fixture(old_task_id, external_prefix, "dispatch-external.json")
+        old_specs, old_cohort = live_cohort(
+            old_response, client, external_config, "external-supervisor-observation",
+        )
+        run_receipt.update_counts(running_task_count=1, live_lease_count=1)
+        old_meta_path, old_meta_bytes, old_meta_sha256 = task_meta(old_task_id)
+        require_handoff_task_binding(old_meta_bytes, legacy_request["supervisor"])
+        external_before = pueue_snapshot(
+            client, external_config, env, phase="external-supervisor-observation",
+            capture_root=capture_root,
+        )
+        external_before_name = write_snapshot("pueue-external-before-migrate.json", external_before)
+        old_label = "delegate:" + old_response["root_id"] + ":" + old_task_id
+        old_row_before = task_row_by_label(external_before, old_label)
+        require(old_row_before is not None and pueue_state(old_row_before) == "Running",
+                "external task was not running before migration")
+        external_calls_before = external_client_calls()
+
+        run_receipt.phase("external_inspection_handoff")
+        automatic_response = None
+        if handoff_action == "explicit-migrate":
+            migration = run_json(
+                delegate, env, [*private_prefix, "supervisor", "migrate", "--json"],
+                timeout=120, receipt=receipts / "supervisor-migrate.json",
+                phase="supervisor-migration", capture_root=capture_root,
+            )
+            control = migration.get("supervisor_control") or {}
+            if control.get("state") != "migrated":
+                raise RuntimeError("supervisor migrate did not publish a migrated state")
+            evidence["handoff_trigger"] = {
+                "kind": "explicit-command",
+                "command": "supervisor migrate",
+                "state": control.get("state"),
+            }
+        elif handoff_action == "automatic-models":
+            automatic_models = run_json(
+                delegate, env, [*private_prefix, "models", "--provider", "pi:json",
+                                "--cwd", str(workspace), "--json"],
+                timeout=120, receipt=receipts / "models-automatic.json",
+                phase="automatic-inspection-worker", capture_root=capture_root,
+            )
+            if automatic_models.get("status") != "available" or [
+                    model.get("id") for model in automatic_models.get("models", [])
+            ] != ["openai/gpt-4.1"]:
+                raise RuntimeError("automatic model discovery did not complete")
+            evidence["handoff_trigger"] = {
+                "kind": "automatic-default-path",
+                "command": "models",
+                "status": automatic_models.get("status"),
+                "model_ids": [model.get("id") for model in automatic_models.get("models", [])],
+            }
+        else:
+            automatic_task_id = uuid.uuid4().hex
+            attempted_task_ids.append(automatic_task_id)
+            automatic_response = dispatch_fixture(
+                automatic_task_id, private_prefix, "dispatch-automatic.json",
+            )
+            evidence["handoff_trigger"] = {
+                "kind": "automatic-default-path",
+                "command": "dispatch",
+                "task_id": automatic_task_id,
+                "task_record": automatic_response.get("task_record"),
+                "admission": automatic_response.get("admission"),
+            }
+        external_calls_after = external_client_calls()
+        if external_calls_after != external_calls_before:
+            raise RuntimeError("private handoff issued a control call to the external supervisor")
+        external_after = pueue_snapshot(
+            client, external_config, env, phase="external-supervisor-observation",
+            capture_root=capture_root,
+        )
+        external_after_name = write_snapshot("pueue-external-after-migrate.json", external_after)
+        old_row_after = task_row_by_label(external_after, old_label)
+        require(old_row_after == old_row_before and pueue_state(old_row_after) == "Running",
+                "external task or queue row changed during private handoff")
+        require(external_process.poll() is None, "external daemon stopped during private handoff")
+        require(external_pid_path.read_text().strip() == str(external_pid),
+                "external daemon PID changed during private handoff")
+        require(file_fingerprint(external_config) == evidence["supervisors"]["external"]["config_fingerprint"],
+                "external supervisor config changed during private handoff")
+        journal = read_external_inspection_handoff_journal(state, private_config)
+        evidence["journal"].update({
+            "handoff": journal["migration"],
+            "private_successor": journal["successor"],
+            "generation_count": len(journal["generations"]),
+        })
+        evidence["external_immutability"] = {
+            "task_row_unchanged": True,
+            "daemon_pid_unchanged": True,
+            "config_unchanged": True,
+            "external_control_calls_during_migration": 0,
+            "snapshots": [external_before_name, external_after_name],
+        }
+
+        private_pair = assert_state_supervisor_pair(state, client.parent)
+        if automatic_response is None:
+            new_task_id = uuid.uuid4().hex
+            attempted_task_ids.append(new_task_id)
+            new_response = dispatch_fixture(new_task_id, private_prefix, "dispatch-private.json")
+        else:
+            new_task_id = automatic_response["task_id"]
+            new_response = automatic_response
+        new_specs, new_cohort = live_cohort(
+            new_response, client, private_config, "private-supervisor-observation",
+        )
+        run_receipt.update_counts(running_task_count=2, live_lease_count=2)
+        new_meta_path, new_meta_bytes, new_meta_sha256 = task_meta(new_task_id)
+        require_handoff_task_binding(new_meta_bytes, journal["successor"]["supervisor"])
+        private_pid_path = private_config.parent / "run" / "pueue.pid"
+        require(private_pid_path.is_file(), "private supervisor PID record is missing")
+        private_pid = int(private_pid_path.read_text().strip())
+        require(private_pid != external_pid, "private handoff reused the external daemon PID")
+        evidence["supervisors"]["private"].update({
+            "daemon_pid": private_pid,
+            "pair": str(private_pair),
+        })
+        old_owner_proof = prove_lifetime_owner_cohort(old_specs, old_cohort)
+        new_owner_proof = prove_lifetime_owner_cohort(new_specs, new_cohort)
+        evidence["tasks"]["external"] = {
+            "dispatch": default_stop_dispatch_evidence(old_response),
+            "meta_sha256_before_migrate": old_meta_sha256,
+            "meta_binding": "external",
+            "owner_proof": old_owner_proof,
+        }
+        evidence["tasks"]["private"] = {
+            "dispatch": default_stop_dispatch_evidence(new_response),
+            "meta_sha256_before_collect": new_meta_sha256,
+            "meta_binding": "private",
+            "owner_proof": new_owner_proof,
+        }
+
+        release_gate.release()
+        release_gate = None
+        closures = await_managed_lifetime_closure(
+            state, tuple(attempted_task_ids), timeout=45,
+        )
+        for role, task_id in (("external", old_task_id), ("private", new_task_id)):
+            closure = closures.get("tasks", {}).get(task_id)
+            evidence["tasks"][role]["closure"] = external_handoff_closure_evidence(closure, task_id)
+        old_cleanup = old_cohort.remove_closed_fifos()
+        new_cleanup = new_cohort.remove_closed_fifos()
+        evidence["tasks"]["external"]["fixture_lease_cleanup"] = old_cleanup
+        evidence["tasks"]["private"]["fixture_lease_cleanup"] = new_cleanup
+        old_cohort.close()
+        old_cohort = None
+        new_cohort.close()
+        new_cohort = None
+        require_empty_fixture_waiters(waiter_directory)
+        evidence["cleanup"]["fixture_waiter_entries"] = 0
+        run_receipt.update_counts(running_task_count=0, live_lease_count=0)
+
+        old_collected = run_json(
+            delegate, env, [*external_prefix, "collect", old_task_id,
+                            "--watch", COLLECT_WATCH, "--json"],
+            timeout=COLLECT_TIMEOUT_SECONDS, receipt=receipts / "collect-external.json",
+            phase="external-task-collection", capture_root=capture_root,
+        )
+        new_collected = run_json(
+            delegate, env, [*private_prefix, "collect", new_task_id,
+                            "--watch", COLLECT_WATCH, "--json"],
+            timeout=COLLECT_TIMEOUT_SECONDS, receipt=receipts / "collect-private.json",
+            phase="private-task-collection", capture_root=capture_root,
+        )
+        for role, collected in (("external", old_collected), ("private", new_collected)):
+            if collected.get("outcome", {}).get("verdict") != "committed":
+                raise RuntimeError(role + " handoff task did not publish a committed outcome")
+        require(old_meta_path.read_bytes() == old_meta_bytes,
+                "external task metadata changed after handoff and collection")
+        require(hashlib.sha256(new_meta_path.read_bytes()).hexdigest() == new_meta_sha256,
+                "private task metadata changed after collection")
+        run_receipt.increment("collected_task_count", 2)
+        shutdown_external()
+        shutdown_private_supervisor(
+            client, private_config, env, state=state, task_ids=tuple(attempted_task_ids),
+            capture_root=capture_root,
+        )
+        evidence["supervisors"]["private"]["daemon_shutdown"] = "verified"
+        evidence["cleanup"]["private_daemon"] = "verified"
+        evidence["tasks"]["external"].update({
+            "meta_sha256_after_collect": hashlib.sha256(old_meta_path.read_bytes()).hexdigest(),
+            "collection": "external-binding",
+        })
+        evidence["tasks"]["private"]["collection"] = "private-binding"
+        record_evidence()
+        run_receipt.stage("external-inspection-handoff-proved")
+        return evidence
+    except BaseException as error:
+        primary_error = error
+        record_evidence()
+        raise
+    finally:
+        if release_gate is not None:
+            try:
+                release_gate.release()
+            except BaseException as error:
+                cleanup_errors.append("fixture gate release failed: " + str(error))
+        closure_proven = cleanup_external_handoff_cohorts(
+            state, tuple(attempted_task_ids), waiter_directory,
+            (old_cohort, new_cohort), evidence, cleanup_errors,
+            delegate_control_started=delegate_control_started,
+        )
+        if closure_proven:
+            try:
+                if registered_process_handle(external_processes, external_process) is not None:
+                    shutdown_external()
+            except BaseException as error:
+                cleanup_errors.append("external supervisor cleanup failed: " + str(error))
+        else:
+            evidence["supervisors"]["external"]["daemon_shutdown"] = (
+                "retained-unproven-lifetime-closure"
+            )
+            evidence["cleanup"]["external_daemon"] = (
+                "retained-unproven-lifetime-closure"
+            )
+            cleanup_errors.append(
+                "external supervisor retained because managed lifetime closure is unproven"
+            )
+        try:
+            pending = record_external_process_registry()
+            if pending:
+                cleanup_errors.append(
+                    "external supervisor process registry still has pending entries: "
+                    + repr(pending)
+                )
+        except BaseException as error:
+            cleanup_errors.append("external supervisor registry observation failed: " + str(error))
+        if cleanup_errors:
+            evidence["cleanup"]["errors"] = cleanup_errors
+            record_evidence()
+            if primary_error is None:
+                raise RuntimeError("external inspection handoff cleanup failed: " + "; ".join(cleanup_errors))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--delegate", type=Path, required=True)
@@ -2340,7 +2950,11 @@ def main():
     parser.add_argument("--pueue", type=Path, required=True)
     parser.add_argument("--pueued", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--scenario", choices=("capacity", DEFAULT_STOP_SCENARIO), default="capacity")
+    parser.add_argument(
+        "--scenario",
+        choices=("capacity", DEFAULT_STOP_SCENARIO, EXTERNAL_INSPECTION_HANDOFF_SCENARIO),
+        default="capacity",
+    )
     parser.add_argument("--parallel-tasks", type=int, default=CAPACITY_TARGET_TASKS)
     parser.add_argument("--dispatch-workers", type=int,
                         help="concurrent dispatch callers (defaults to 16; capped at --parallel-tasks; this load-generator setting is not a product task limit)")
@@ -2356,6 +2970,17 @@ def main():
         if args.upgraded_delegate is not None or args.upgraded_runner is not None:
             parser.error("--scenario %s does not accept upgraded installation arguments" %
                          DEFAULT_STOP_SCENARIO)
+    elif args.scenario == EXTERNAL_INSPECTION_HANDOFF_SCENARIO:
+        if args.parallel_tasks != EXTERNAL_INSPECTION_HANDOFF_TASK_COUNT:
+            parser.error("--parallel-tasks must be exactly %d for the %s scenario" %
+                         (EXTERNAL_INSPECTION_HANDOFF_TASK_COUNT,
+                          EXTERNAL_INSPECTION_HANDOFF_SCENARIO))
+        if args.runtime_only:
+            parser.error("--scenario %s requires an inspection journal and cannot be runtime-only" %
+                         EXTERNAL_INSPECTION_HANDOFF_SCENARIO)
+        if args.upgraded_delegate is not None or args.upgraded_runner is not None:
+            parser.error("--scenario %s does not accept upgraded installation arguments" %
+                         EXTERNAL_INSPECTION_HANDOFF_SCENARIO)
     elif args.parallel_tasks != CAPACITY_TARGET_TASKS:
         parser.error("--parallel-tasks must be exactly %d for the capacity proof" % CAPACITY_TARGET_TASKS)
     if args.dispatch_workers is not None and args.dispatch_workers <= 0:
@@ -2413,8 +3038,11 @@ def main():
     old_install = None
     old_libexec = None
     upgraded_libexec = None
+    external_root_token = None
+    external_process_root_token = None
     supervisor_cleanups = []
     managed_state_roots = []
+    handoff_cleanup_bindings = []
     attempted_task_ids = []
     lease_nonce = uuid.uuid4().hex
     try:
@@ -2453,7 +3081,8 @@ def main():
         state = ownership.create("private CLI state", base / "state", base).directory
         waiter_directory = ownership.create(
             "provider waiter directory", base / "provider-waiters", base).directory
-        managed_state_roots.append((state, attempted_task_ids))
+        if args.scenario != EXTERNAL_INSPECTION_HANDOFF_SCENARIO:
+            managed_state_roots.append((state, attempted_task_ids))
         upgraded_install, upgraded_bin, upgraded_libexec = install_package_layout(
             ownership, upgraded_delegate_binary,
             upgraded_runner_binary,
@@ -2507,6 +3136,91 @@ def main():
                 ],
             )
             run_receipt.stage("default-stop-proved")
+            success = True
+            return
+
+        if args.scenario == EXTERNAL_INSPECTION_HANDOFF_SCENARIO:
+            handoff_cases = {}
+            case_specs = (
+                ("explicit-migrate", "explicit-migrate"),
+                ("automatic-models", "automatic-models"),
+                ("automatic-dispatch", "automatic-dispatch"),
+            )
+            for case_index, (case_label, handoff_action) in enumerate(case_specs):
+                if case_index == 0:
+                    case_root = base
+                    case_state = state
+                    case_gate = gate
+                    case_waiters = waiter_directory
+                    case_private_config = private_config
+                    case_nonce = lease_nonce
+                else:
+                    case_root = ownership.create(
+                        "external inspection case " + case_label,
+                        base / ("external-handoff-" + case_label), base,
+                    ).directory
+                    case_state = ownership.create(
+                        "external inspection state " + case_label,
+                        case_root / "state", case_root,
+                    ).directory
+                    case_gate = case_root / "blocker-gate"
+                    case_waiters = ownership.create(
+                        "external inspection waiters " + case_label,
+                        case_root / "provider-waiters", case_root,
+                    ).directory
+                    case_private_config = case_state / ".supervisor" / "pueue.yml"
+                    case_nonce = uuid.uuid4().hex
+                external_root_token = ownership.create(
+                    "external inspection supervisor " + case_label,
+                    case_root / "external-supervisor", case_root,
+                )
+                prepare_external_supervisor_directories(
+                    ownership, external_root_token, case_label,
+                )
+                external_process_root_token = ownership.create(
+                    "external inspection supervisor process capture " + case_label,
+                    case_root / "external-supervisor-processes", case_root,
+                )
+                case_task_ids = []
+                managed_state_roots.append((case_state, case_task_ids))
+                handoff_cleanup_bindings.append({
+                    "client": old_libexec / "pueue",
+                    "config": case_private_config,
+                    "env": env,
+                    "state": case_state,
+                    "task_ids": case_task_ids,
+                })
+                case_responses = response_directory / ("external-handoff-" + case_label)
+                case_responses.mkdir(mode=0o700)
+                install_pi_fixture(provider_bin, case_gate, case_waiters, case_nonce)
+                state = case_state
+                private_config = case_private_config
+                run_receipt.phase("external_inspection_" + case_label.replace("-", "_"))
+                handoff = run_external_inspection_handoff_acceptance(
+                    old_install / "delegate", old_libexec / "pueue", old_libexec / "pueued",
+                    case_state, workspace, case_gate, case_waiters, case_private_config, env,
+                    case_responses, provider_bin / "pi", case_nonce, run_receipt,
+                    case_task_ids, external_root_token, external_process_root_token,
+                    capture_root=base_token, handoff_action=handoff_action,
+                    case_label=case_label, handoff_cases=handoff_cases,
+                )
+                handoff_cases[case_label] = handoff
+                attempted_task_ids.extend(case_task_ids)
+            run_receipt.add_details(
+                external_inspection_handoff=handoff_cases,
+                external_inspection_handoff_case_count=len(handoff_cases),
+                external_inspection_handoff_task_count=len(attempted_task_ids),
+                checks=[
+                    "the empty Delegate state root created its inspection journal on the external supervisor",
+                    "an active external task remained bound and running during explicit private handoff",
+                    "private migration published the exact inspection journal successor without external control",
+                    "automatic model discovery handed off an external-only root without a private pre-bootstrap",
+                    "automatic dispatch handed off a separate external-only root without a private pre-bootstrap",
+                    "fresh tasks used the private supervisor after each handoff",
+                    "all immutable task bindings survived collection and canonical lifetime closure",
+                ],
+            )
+            run_receipt.stage("external-inspection-handoff-all-cases-proved")
             success = True
             return
 
@@ -3018,11 +3732,24 @@ def main():
                 cleanup_errors.append(RuntimeError(
                     "could not release the fixture gate: " + str(cleanup_error)
                 ))
-        if (not success and private_config is not None and private_config.is_file()
-                and managed_state_roots):
+        current_handoff_binding = (
+            handoff_cleanup_bindings[-1]
+            if args.scenario == EXTERNAL_INSPECTION_HANDOFF_SCENARIO
+            and handoff_cleanup_bindings else None
+        )
+        if current_handoff_binding is not None:
+            closure_state = current_handoff_binding["state"]
+            closure_task_ids = tuple(current_handoff_binding["task_ids"])
+            closure_config = current_handoff_binding["config"]
+        else:
+            closure_state = managed_state_roots[0][0] if managed_state_roots else None
+            closure_task_ids = tuple(managed_state_roots[0][1]) if managed_state_roots else ()
+            closure_config = private_config
+        if (not success and closure_config is not None and closure_config.is_file()
+                and (current_handoff_binding is not None or managed_state_roots)):
             try:
                 await_managed_lifetime_closure(
-                    managed_state_roots[0][0], tuple(managed_state_roots[0][1]), timeout=45,
+                    closure_state, closure_task_ids, timeout=45,
                 )
             except BaseException as cleanup_error:
                 primary_closure_ready = False
@@ -3051,18 +3778,32 @@ def main():
                         "packaged default supervisor shutdown remained unverified: "
                         + str(cleanup_error)
                     ))
+        if current_handoff_binding is not None:
+            cleanup_client = current_handoff_binding["client"]
+            cleanup_config = current_handoff_binding["config"]
+            cleanup_env = current_handoff_binding["env"]
+            cleanup_state = current_handoff_binding["state"]
+            cleanup_task_ids = tuple(current_handoff_binding["task_ids"])
+        else:
+            cleanup_config = private_config
+            cleanup_env = env
+            cleanup_state = (
+                state if private_config is not None and private_config.is_file() else None
+            )
+            cleanup_task_ids = tuple(attempted_task_ids)
+            cleanup_client = next((candidate for candidate in
+                                   ((upgraded_libexec / "pueue" if upgraded_libexec is not None else None),
+                                    (old_libexec / "pueue" if old_libexec is not None else None),
+                                    args.pueue)
+                                   if candidate is not None and candidate.is_file()), None)
         if ((not success or cleanup_errors) and primary_closure_ready
-                and private_config is not None and private_config.is_file()):
-            client = next((candidate for candidate in
-                           ((upgraded_libexec / "pueue" if upgraded_libexec is not None else None),
-                            (old_libexec / "pueue" if old_libexec is not None else None),
-                            args.pueue)
-                           if candidate is not None and candidate.is_file()), None)
+                and cleanup_config is not None and cleanup_config.is_file()):
+            client = cleanup_client
             if client is not None:
                 try:
                     shutdown_private_supervisor(
-                        client, private_config, env, state=state,
-                        task_ids=tuple(attempted_task_ids), capture_root=base_token)
+                        client, cleanup_config, cleanup_env, state=cleanup_state,
+                        task_ids=cleanup_task_ids, capture_root=base_token)
                 except BaseException as cleanup_error:
                     cleanup_errors.append(RuntimeError(
                         "primary private supervisor shutdown remained unverified: "

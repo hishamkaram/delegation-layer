@@ -70,12 +70,14 @@ older inspection binding, whether that exact legacy endpoint is reachable, and
 whether any queued or running work prevents migration. It does not start or
 stop a supervisor. After a completed migration it reports `state: "migrated"`
 and `next_action: "none"`; the retained legacy journal is historical evidence,
-not pending work. An inspection journal bound to an external Pueue
-configuration reports `state: "external"` and `next_action: "stop_and_report"`;
-Delegate never migrates or stops that supervisor.
+not pending work. An inspection journal still bound to an external Pueue
+configuration reports `state: "external"` and
+`next_action: "run_supervisor_migrate"`. The repair changes Delegate's
+inspection routing; it does not operate on that external supervisor.
 
 `supervisor migrate` runs Delegate-owned repair under the state-root
-bootstrap lock. It reopens the recorded legacy binding, inspects its exact
+bootstrap lock. For a private daemon migration, it reopens the recorded legacy
+binding, inspects its exact
 queue, refuses to stop it while queued or running work exists, and
 otherwise shuts it down through its own client and watches for the endpoint to
 become unavailable after graceful shutdown. If it was the same private endpoint
@@ -86,6 +88,16 @@ resumed from the immutable migration journal. A successful JSON response has
 `supervisor_control.state: "migrated"` and
 `supervisor_control.next_action: "retry_dispatch"`. The command never
 migrates or stops an external Pueue configuration.
+
+When the inspection journal points to an external supervisor, the same command
+prepares or reuses Delegate's verified private supervisor and records the
+inspection handoff. Existing tasks and inspections keep their saved supervisor
+bindings and can finish there. Both daemons and queues remain independent.
+The completed journal marker selects the new inspection head; a retry resumes
+that recorded private generation rather than choosing an unconnected directory.
+Default private dispatch and model discovery perform this same safe journal
+handoff automatically under the existing bootstrap lock. Private daemon or
+configuration migrations still require the explicit recovery command.
 
 When an admission command (`dispatch` or `continue`) returns
 `failure.code: "supervisor_upgrade_required"` with

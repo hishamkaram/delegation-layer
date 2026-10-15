@@ -226,7 +226,7 @@ var dispatchFailureMessages = map[string]string{
 	"task_identity_mismatch":             "Delegate could not verify the saved task identity.",
 	"supervisor_migration_blocked":       "Delegate found active work on an older private supervisor and could not migrate it safely.",
 	"supervisor_migration_unsupported":   "Delegate found an external supervisor binding that it must not stop or migrate.",
-	"supervisor_upgrade_required":        "Delegate found an older private supervisor binding that requires safe migration before dispatch.",
+	"supervisor_upgrade_required":        "Delegate found supervisor state that requires safe migration before dispatch.",
 	"supervisor_setup_failed":            "Delegate could not prepare its private task supervisor.",
 	"provider_preflight_failed":          "Delegate could not complete provider preflight.",
 	"delegate_installation_incomplete":   "The Delegation Layer installation is incomplete.",

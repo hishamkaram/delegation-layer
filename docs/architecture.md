@@ -229,8 +229,26 @@ installation. Normal execution and recovery share successor publication and
 cleanup; they remove the journal only after identity and recovery alias are
 settled. The process starting a daemon owns an asynchronous waiter so exited
 children are reaped without blocking startup. An explicit
-`--pueue-config` can bind an existing compatible supervisor. `delegate-run`
-receives the saved root and task ID plus an internal supervised-launch marker.
+`--pueue-config` can bind an existing compatible supervisor.
+
+An external inspection journal can move its future routing to the private
+supervisor during default private admission or model discovery, or through
+the explicit `supervisor migrate` command. These paths use the same
+application-owned journal handoff, separate from private daemon migration.
+The private lifecycle first proves its live target and publishes its logical
+binding without replacing an existing daemon identity. The existing inspection
+prepare/complete journal then commits the exact successor. Publishing the
+private binding first pins that target across a crash or installation upgrade.
+Status follows completed edges from the original journal rather than rejecting
+an external seed whose handoff is already complete. Old tasks and inspections
+continue using their immutable saved bindings; no external daemon, queue, or
+operational record is changed or removed. Active work can continue on either
+supervisor, so this routing handoff needs no queue drain or admission fence.
+The warm shared probe only elects repair; the existing exclusive bootstrap
+owner commits it. Other migration errors remain explicit failures.
+
+`delegate-run` receives the saved root and task ID plus an internal
+supervised-launch marker.
 Dispatch uses `add --stashed --print-task-id` so the exact row cannot run while
 its receipt is being published. It records that numeric receipt against the
 immutable task and only then issues `enqueue` for that ID. A receipt-write or
@@ -360,8 +378,10 @@ the ordinary task's finite budget. Required admission inspections retain their
 immutable deadlines, including historical 20-second journals. Dispatch prepares
 this scheduling policy before admission; this can release previously admitted
 queued tasks even if a new request fails. Observation and recovery do not
-change scheduling. Saved inspections retain their recorded group and deadline;
-model discovery and external supervisors retain the separate single-slot group.
+change scheduling. Saved inspections retain their recorded group and deadline.
+Admission and model-discovery inspections use a separate single-slot group.
+Default model discovery shares dispatch's private routing handoff; explicitly
+selected external supervisors retain their recorded inspection group.
 The operating system, provider, authentication, and available resources remain
 the practical limits.
 

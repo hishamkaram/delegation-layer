@@ -2347,6 +2347,275 @@ func TestPreparePrivateDefersDaemonStartUntilBootstrapLock(t *testing.T) {
 	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
 }
 
+func TestEnsurePrivateSupervisorBindingAdoptsLiveDaemonWithoutReplacingIdentity(t *testing.T) {
+	fixture := newPrivateSupervisorTestFixture(t)
+	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	binding := client.Binding()
+	identityPath := privateDaemonIdentityPath(filepath.Dir(binding.ConfigPath))
+	writePrivateSuccessorTestRecord(t, identityPath, privateDaemonIdentity{Executable: binding.DaemonExecutable, SHA256: binding.DaemonSHA256})
+	if err := os.Remove(privateSupervisorBindingPath(fixture.stateRoot)); err != nil {
+		t.Fatal(err)
+	}
+	identityBefore := readPrivateSupervisorFile(t, identityPath)
+	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+		if startErr := client.StartPrivate(ctx, fixture.stateRoot); startErr != nil {
+			return startErr
+		}
+		if _, found, readErr := loadPrivateSupervisorBinding(fixture.stateRoot); readErr != nil {
+			return readErr
+		} else if found {
+			return errors.New("legacy ready branch unexpectedly published a binding")
+		}
+		return client.EnsurePrivateSupervisorBindingWithLock(ctx, fixture.stateRoot)
+	})
+	if err != nil {
+		t.Fatalf("adopt live daemon: %v", err)
+	}
+	published, found, err := loadPrivateSupervisorBinding(fixture.stateRoot)
+	if err != nil || !found || published != binding {
+		t.Fatalf("live owner not published exactly: found=%t binding=%+v err=%v", found, published, err)
+	}
+	if complete, checkErr := PrivateSupervisorMigrationComplete(fixture.stateRoot, binding); checkErr != nil || !complete {
+		t.Fatalf("adopted owner incomplete: complete=%t err=%v", complete, checkErr)
+	}
+	if got := readPrivateSupervisorFile(t, identityPath); !bytes.Equal(got, identityBefore) {
+		t.Fatal("adoption replaced daemon identity")
+	}
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
+}
+
+func TestEnsurePrivateSupervisorBindingRejectsUnprovenOwnerBeforePublication(t *testing.T) {
+	for _, fault := range []string{"provenance", "logical-config", "missing-identity", "malformed-identity", "unavailable"} {
+		t.Run(fault, func(t *testing.T) {
+			fixture := newPrivateSupervisorTestFixture(t)
+			client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+			t.Cleanup(func() {
+				if err := client.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			binding := client.Binding()
+			identityPath := privateDaemonIdentityPath(filepath.Dir(binding.ConfigPath))
+			injectPrivateBindingAdoptionFault(t, binding, fault)
+			if err := os.Remove(privateSupervisorBindingPath(fixture.stateRoot)); err != nil {
+				t.Fatal(err)
+			}
+			before := snapshotPrivateTestFiles(t, []string{identityPath, binding.ConfigPath})
+			err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+				return client.EnsurePrivateSupervisorBindingWithLock(ctx, fixture.stateRoot)
+			})
+			if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+				t.Fatalf("unproven owner accepted or misclassified: %v", err)
+			}
+			if _, found, readErr := loadPrivateSupervisorBinding(fixture.stateRoot); readErr != nil || found {
+				t.Fatalf("failed adoption published identity: found=%t err=%v", found, readErr)
+			}
+			identityBefore, identityPresent := before[identityPath]
+			assertPrivateTestFileUnchanged(t, identityPath, identityBefore, identityPresent)
+			assertPrivateTestFileUnchanged(t, binding.ConfigPath, before[binding.ConfigPath], true)
+			assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
+		})
+	}
+}
+
+func injectPrivateBindingAdoptionFault(t *testing.T, binding task.SupervisorRef, fault string) {
+	t.Helper()
+	base := filepath.Dir(binding.ConfigPath)
+	identityPath := privateDaemonIdentityPath(base)
+	identity := privateDaemonIdentityForBinding(binding)
+	switch fault {
+	case "provenance":
+		identity.SHA256 = strings.Repeat("f", 64)
+		writePrivateSuccessorTestRecord(t, identityPath, identity)
+	case "logical-config":
+		identity.ConfigDigest = strings.Repeat("f", 64)
+		writePrivateSuccessorTestRecord(t, identityPath, identity)
+	case "missing-identity":
+		if err := os.Remove(identityPath); err != nil {
+			t.Fatal(err)
+		}
+	case "malformed-identity":
+		if err := os.WriteFile(identityPath, []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	case "unavailable":
+		if err := os.Remove(filepath.Join(base, "ready")); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("unknown adoption fault %q", fault)
+	}
+}
+
+func TestEnsurePrivateSupervisorBindingPreservesPublishedGeneration(t *testing.T) {
+	fixture := newPrivateSupervisorTestFixture(t)
+	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	published := client.Binding()
+	published.ClientSHA256 = strings.Repeat("f", 64)
+	path := privateSupervisorBindingPath(fixture.stateRoot)
+	writePrivateSuccessorTestRecord(t, path, privateSupervisorBindingRecord{SchemaVersion: task.SchemaVersion, Binding: published})
+	before := readPrivateSupervisorFile(t, path)
+	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+		return client.EnsurePrivateSupervisorBindingWithLock(ctx, fixture.stateRoot)
+	})
+	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("different published generation accepted: %v", err)
+	}
+	if got := readPrivateSupervisorFile(t, path); !bytes.Equal(got, before) {
+		t.Fatal("existing generation replaced")
+	}
+}
+
+func TestEnsurePrivateSupervisorBindingRejectsIncompleteLifecycle(t *testing.T) {
+	fixture := newPrivateSupervisorTestFixture(t)
+	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := markPrivateBootstrapPending(fixture.stateRoot); err != nil {
+		t.Fatal(err)
+	}
+	err := WithBootstrapLockContext(t.Context(), fixture.stateRoot, func(ctx context.Context) error {
+		return client.EnsurePrivateSupervisorBindingWithLock(ctx, fixture.stateRoot)
+	})
+	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("incomplete lifecycle accepted: %v", err)
+	}
+	if pending, readErr := PrivateBootstrapPending(fixture.stateRoot); readErr != nil || !pending {
+		t.Fatalf("observation cleared pending lifecycle: pending=%t err=%v", pending, readErr)
+	}
+}
+
+func TestEnsurePrivateSupervisorBindingPreservesCanceledContext(t *testing.T) {
+	var client *Client
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := client.EnsurePrivateSupervisorBindingWithLock(ctx, ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation not preserved before IO: %v", err)
+	}
+	var missing context.Context
+	if err := client.EnsurePrivateSupervisorBindingWithLock(missing, ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("nil context not rejected before IO: %v", err)
+	}
+}
+
+func TestEnsurePrivateSupervisorBindingRejectsCancellationAfterReady(t *testing.T) {
+	fixture := newPrivateSupervisorTestFixture(t)
+	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	bindingPath := privateSupervisorBindingPath(fixture.stateRoot)
+	if err := os.Remove(bindingPath); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := privateDaemonIdentityPath(filepath.Dir(bindingPath))
+	identityBefore := readPrivateSupervisorFile(t, identityPath)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	readyCompleted := false
+	err := WithBootstrapLockContext(ctx, fixture.stateRoot, func(lockedContext context.Context) error {
+		return client.ensurePrivateSupervisorBindingWithReady(lockedContext, fixture.stateRoot, func(probeContext context.Context) error {
+			if readyErr := client.Ready(probeContext); readyErr != nil {
+				return readyErr
+			}
+			readyCompleted = true
+			cancel()
+			return nil
+		})
+	})
+	if !readyCompleted {
+		t.Fatalf("fixture never completed its real readiness check: %v", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("adoption after completed readiness lost cancellation: %v", err)
+	}
+	assertPrivateTestFileUnchanged(t, bindingPath, nil, false)
+	assertPrivateTestFileUnchanged(t, identityPath, identityBefore, true)
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
+}
+
+func TestPublishPrivateSupervisorBindingHonorsContextBeforeStaging(t *testing.T) {
+	fixture := newPrivateSupervisorTestFixture(t)
+	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	bindingPath := privateSupervisorBindingPath(fixture.stateRoot)
+	if err := os.Remove(bindingPath); err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, release := context.WithDeadline(t.Context(), time.Unix(1, 0))
+	defer release()
+	for _, test := range []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{name: "canceled", ctx: canceled, want: context.Canceled},
+		{name: "expired", ctx: expired, want: context.DeadlineExceeded},
+		{name: "missing", want: context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := PublishPrivateSupervisorBindingIfAbsentContext(test.ctx, fixture.stateRoot, client.Binding()); !errors.Is(err, test.want) {
+				t.Fatalf("publication error=%v, want %v", err, test.want)
+			}
+			assertPrivateTestFileUnchanged(t, bindingPath, nil, false)
+			entries, err := os.ReadDir(filepath.Dir(bindingPath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), privateRecordStagePrefix) {
+					t.Fatalf("canceled publication staged a private record: %s", entry.Name())
+				}
+			}
+		})
+	}
+}
+
+func TestRestorePrivateSupervisorBindingHonorsCanceledContext(t *testing.T) {
+	fixture := newPrivateSupervisorTestFixture(t)
+	client := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	binding := client.Binding()
+	bindingPath := privateSupervisorBindingPath(fixture.stateRoot)
+	if err := os.Remove(bindingPath); err != nil {
+		t.Fatal(err)
+	}
+	identityPath := privateDaemonIdentityPath(filepath.Dir(bindingPath))
+	identityBefore := readPrivateSupervisorFile(t, identityPath)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := restoreExpectedPrivateSupervisorBinding(ctx, fixture.stateRoot, &binding); !errors.Is(err, context.Canceled) {
+		t.Errorf("restoration lost cancellation before publication: %v", err)
+	}
+	assertPrivateTestFileUnchanged(t, bindingPath, nil, false)
+	assertPrivateTestFileUnchanged(t, identityPath, identityBefore, true)
+}
+
 func TestBindPrivateBoundsSlowReadinessBeforeReturning(t *testing.T) {
 	base := canonicalTemp(t)
 	stateRoot := filepath.Join(base, "state")

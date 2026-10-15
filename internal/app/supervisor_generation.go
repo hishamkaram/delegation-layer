@@ -12,6 +12,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+var errExternalInspectionHandoffRequired = errors.New("external inspection journal requires private routing handoff")
+
 // privateSupervisorGeneration keeps one authoritative owner for the active
 // private generation. Pueue's completed lifecycle journal selects Active; the
 // inspection journal can only identify an exact edge that still needs its
@@ -136,6 +138,9 @@ func readPrivateInspectionGroupHead(ctx context.Context, store *taskdir.Store) (
 }
 
 func reconcilePrivateInspectionGroup(ctx context.Context, stateRoot string, resolve privateSuccessorResolver, privateInitialized bool, resolution privateSupervisorGeneration) (privateSupervisorGeneration, error) {
+	if !pueue.IsPrivateConfig(stateRoot, resolution.GroupHead.Supervisor.ConfigPath) {
+		return privateSupervisorGeneration{}, fmt.Errorf("%w: %w", inspection.ErrGroupMigrationRequired, errExternalInspectionHandoffRequired)
+	}
 	if !resolution.Found && privateInitialized {
 		// The caller's saved generation may predate retained history. Resolve the
 		// inspection predecessor against the same private authority before using
@@ -155,9 +160,6 @@ func reconcilePrivateInspectionGroup(ctx context.Context, stateRoot string, reso
 	}
 	if task.SameSupervisorIdentity(resolution.GroupHead.Supervisor, resolution.Active) {
 		return resolution, nil
-	}
-	if !pueue.IsPrivateConfig(stateRoot, resolution.GroupHead.Supervisor.ConfigPath) {
-		return privateSupervisorGeneration{}, fmt.Errorf("%w: inspection predecessor is external", inspection.ErrGroupMigrationUnsupported)
 	}
 
 	connected, connectedFound, connectedErr := resolve(ctx, stateRoot, resolution.GroupHead.Supervisor)

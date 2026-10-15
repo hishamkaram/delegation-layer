@@ -969,7 +969,7 @@ func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot 
 	if err = matchExpectedPrivateBinding(client, expected); err != nil {
 		return nil, err
 	}
-	if err = restoreExpectedPrivateSupervisorBinding(stateRoot, expected); err != nil {
+	if err = restoreExpectedPrivateSupervisorBinding(ctx, stateRoot, expected); err != nil {
 		return nil, err
 	}
 	if err = verifyPrivateSupervisorBinding(stateRoot, client.Binding(), ready); err != nil {
@@ -996,11 +996,11 @@ func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot 
 	return client, nil
 }
 
-func restoreExpectedPrivateSupervisorBinding(stateRoot string, expected *task.SupervisorRef) error {
+func restoreExpectedPrivateSupervisorBinding(ctx context.Context, stateRoot string, expected *task.SupervisorRef) error {
 	if expected == nil {
 		return nil
 	}
-	return restorePrivateSupervisorBindingFromSaved(stateRoot, *expected)
+	return restorePrivateSupervisorBindingFromSaved(ctx, stateRoot, *expected)
 }
 
 // Fresh bootstrap observes the supervisor once while binding the client, twice
@@ -2221,7 +2221,7 @@ func (c *Client) MigratePrivateSupervisorWithLock(ctx context.Context, stateRoot
 			if err != nil {
 				return err
 			}
-			if err = publishPrivateSupervisorBindingIfAbsent(stateRoot, persistedBinding); err != nil {
+			if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, persistedBinding); err != nil {
 				return fmt.Errorf("%w: persist recovered private supervisor binding: %w", ErrPrivateSupervisorMigrationRequired, err)
 			}
 			bindingFound = true
@@ -2236,7 +2236,7 @@ func (c *Client) MigratePrivateSupervisorWithLock(ctx context.Context, stateRoot
 		if err != nil {
 			return err
 		}
-		if err = publishPrivateSupervisorBindingIfAbsent(stateRoot, persistedBinding); err != nil {
+		if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, persistedBinding); err != nil {
 			return fmt.Errorf("%w: persist recovered private supervisor binding: %w", ErrPrivateSupervisorMigrationRequired, err)
 		}
 	}
@@ -2900,12 +2900,8 @@ func PreparePublishedPrivateWithLock(ctx context.Context, stateRoot string, opti
 	if err != nil || !found {
 		return nil, found, err
 	}
-	complete, err := PrivateSupervisorMigrationComplete(stateRoot, published)
-	if err != nil {
-		return nil, true, privatePublishedRecoveryError(err)
-	}
-	if !complete {
-		return nil, true, fmt.Errorf("%w: published private supervisor transition is incomplete", ErrPrivateSupervisorMigrationRequired)
+	if err = ensurePrivateSupervisorMigrationComplete(stateRoot, published); err != nil {
+		return nil, true, err
 	}
 	options, err = optionsForPublishedPrivateBinding(published, options)
 	if err != nil {
@@ -3357,6 +3353,16 @@ func ReadPrivateSupervisorBinding(stateRoot string) (task.SupervisorRef, bool, e
 // later generation may replace the logical binding only through the
 // readiness-gated identity publication transaction.
 func publishPrivateSupervisorBindingIfAbsent(stateRoot string, binding task.SupervisorRef) error {
+	return publishPrivateSupervisorBindingIfAbsentContext(context.Background(), stateRoot, binding)
+}
+
+func publishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRoot string, binding task.SupervisorRef) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !IsPrivateConfig(stateRoot, binding.ConfigPath) {
 		return ErrConfiguration
 	}
@@ -3375,6 +3381,11 @@ func publishPrivateSupervisorBindingIfAbsent(stateRoot string, binding task.Supe
 	if err != nil {
 		return fmt.Errorf("%w: marshal private supervisor binding: %w", ErrConfiguration, err)
 	}
+	// Cancellation can revoke publication before staging. Once staging starts,
+	// the canonical writer retains ownership through its barriers and cleanup.
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	return publishPrivateRecord(filepath.Join(stateRoot, privateSupervisorDirectory), privateSupervisorBindingPath(stateRoot), data)
 }
 
@@ -3385,7 +3396,70 @@ func PublishPrivateSupervisorBindingIfAbsent(stateRoot string, binding task.Supe
 	return publishPrivateSupervisorBindingIfAbsent(stateRoot, binding)
 }
 
-func restorePrivateSupervisorBindingFromSaved(stateRoot string, binding task.SupervisorRef) error {
+// PublishPrivateSupervisorBindingIfAbsentContext preserves caller cancellation
+// before the canonical create-once publisher starts staging the binding.
+func PublishPrivateSupervisorBindingIfAbsentContext(ctx context.Context, stateRoot string, binding task.SupervisorRef) error {
+	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding)
+}
+
+// EnsurePrivateSupervisorBindingWithLock adopts a live private daemon whose
+// launch identity predates the separate logical binding record. The caller
+// holds the root bootstrap lock. Existing identities are never replaced, and
+// success requires the canonical private lifecycle to be complete.
+func (c *Client) EnsurePrivateSupervisorBindingWithLock(ctx context.Context, stateRoot string) error {
+	return c.ensurePrivateSupervisorBindingWithReady(ctx, stateRoot, c.Ready)
+}
+
+// ready is a scoped test seam for cancellation after a completed observation.
+// Production always uses Ready and the same create-once publication owner.
+func (c *Client) ensurePrivateSupervisorBindingWithReady(ctx context.Context, stateRoot string, ready func(context.Context) error) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c == nil || !IsPrivateConfig(stateRoot, c.binding.ConfigPath) {
+		return ErrConfiguration
+	}
+	if c.binding != c.runtimeBinding {
+		return ErrPrivateSupervisorMigrationRequired
+	}
+	if err := ready(ctx); err != nil {
+		return privatePublishedRecoveryError(err)
+	}
+	identity, found, err := loadPrivateDaemonIdentity(filepath.Join(stateRoot, privateSupervisorDirectory))
+	if err != nil {
+		return privatePublishedRecoveryError(err)
+	}
+	if !found || !privateDaemonIdentityMatchesBinding(identity, c.binding) {
+		return fmt.Errorf("%w: private daemon identity does not match the live binding", ErrPrivateSupervisorMigrationRequired)
+	}
+	published, found, err := loadPrivateSupervisorBinding(stateRoot)
+	if err != nil {
+		return privatePublishedRecoveryError(err)
+	}
+	if found && !privateFullGenerationMatches(published, c.binding) {
+		return fmt.Errorf("%w: private supervisor is not the published generation", ErrPrivateSupervisorMigrationRequired)
+	}
+	if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, c.binding); err != nil {
+		return privatePublishedRecoveryError(err)
+	}
+	return ensurePrivateSupervisorMigrationComplete(stateRoot, c.binding)
+}
+
+func ensurePrivateSupervisorMigrationComplete(stateRoot string, binding task.SupervisorRef) error {
+	complete, err := PrivateSupervisorMigrationComplete(stateRoot, binding)
+	if err != nil {
+		return privatePublishedRecoveryError(err)
+	}
+	if !complete {
+		return fmt.Errorf("%w: published private supervisor transition is incomplete", ErrPrivateSupervisorMigrationRequired)
+	}
+	return nil
+}
+
+func restorePrivateSupervisorBindingFromSaved(ctx context.Context, stateRoot string, binding task.SupervisorRef) error {
 	if existing, found, err := loadPrivateSupervisorBinding(stateRoot); err != nil {
 		return err
 	} else if found {
@@ -3402,7 +3476,7 @@ func restorePrivateSupervisorBindingFromSaved(stateRoot string, binding task.Sup
 	// A saved task or inspection record is the validated logical owner of this
 	// state-rooted config. Recreate only that missing logical record; daemon
 	// provenance remains separate and is reconciled by the normal bootstrap.
-	return publishPrivateSupervisorBindingIfAbsent(stateRoot, binding)
+	return publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, binding)
 }
 
 func loadPrivateSupervisorBindingRaw(stateRoot string) (binding task.SupervisorRef, found bool, resultErr error) {

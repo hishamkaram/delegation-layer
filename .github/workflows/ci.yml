@@ -89,6 +89,12 @@ jobs:
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-private-cli
 
+      - name: Prove external inspection handoff through delegate CLI
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-supervisor-handoff
+
       - name: Retain allowlisted private CLI acceptance receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -176,6 +182,12 @@ jobs:
           DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
           DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
         run: make acceptance-private-cli
+
+      - name: Prove external inspection handoff through delegate CLI
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-supervisor-handoff
 
       - name: Retain allowlisted private CLI acceptance receipts
         if: always()
