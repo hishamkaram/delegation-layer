@@ -4,15 +4,18 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
 const modelDiscoverySource = "pi --list-models"
 
-// ModelDiscovery describes Pi's fixed six-column model table. Pi emits no
-// protocol exchange for this command, so the shared runner closes stdin.
+// ModelDiscovery describes Pi's six-column model table and native empty listing.
+// Pi emits no protocol exchange, so the shared runner closes stdin.
 func ModelDiscovery() commonprovider.ModelDiscoveryDefinition {
 	return commonprovider.ModelDiscoveryDefinition{
 		Arguments:  []string{"--list-models"},
@@ -33,6 +36,9 @@ func projectModels(stdout, stderr, help []byte, success bool) (commonprovider.Mo
 			status, reason = "unavailable", "interface_unavailable"
 		}
 		return finishCatalog(baseCatalog(status, reason, efforts, effortsListed))
+	}
+	if isNativeEmptyModelListing(stdout) {
+		return finishCatalog(baseCatalog("unavailable", "models_unavailable", efforts, effortsListed))
 	}
 	models, recognized, err := parseModelTable(stdout)
 	if err != nil {
@@ -55,6 +61,33 @@ func projectModels(stdout, stderr, help []byte, success bool) (commonprovider.Mo
 	catalog.Complete = true
 	catalog.Models = models
 	return finishCatalog(catalog)
+}
+
+func isNativeEmptyModelListing(data []byte) bool {
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner.Buffer(make([]byte, 4096), int(commonprovider.MaxInspectionOutput))
+	if !scanner.Scan() || scanner.Text() != "No models available. Use /login to log into a provider via OAuth or API key. See:" {
+		return false
+	}
+	if !scanner.Scan() {
+		return false
+	}
+	providersDirectory, valid := modelDocumentationDirectory(scanner.Text(), "providers.md")
+	if !valid || !scanner.Scan() {
+		return false
+	}
+	modelsDirectory, valid := modelDocumentationDirectory(scanner.Text(), "models.md")
+	return valid && modelsDirectory == providersDirectory && !scanner.Scan() && scanner.Err() == nil
+}
+
+func modelDocumentationDirectory(line, filename string) (string, bool) {
+	document, indented := strings.CutPrefix(line, "  ")
+	if !indented || !utf8.ValidString(document) || strings.IndexFunc(document, unicode.IsControl) >= 0 ||
+		!path.IsAbs(document) || path.Clean(document) != document || path.Base(document) != filename {
+		return "", false
+	}
+	directory := path.Dir(document)
+	return directory, path.Base(directory) == "docs"
 }
 
 func parseModelTable(data []byte) ([]commonprovider.ModelInfo, bool, error) {

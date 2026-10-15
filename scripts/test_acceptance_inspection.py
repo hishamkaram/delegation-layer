@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import acceptance_inspection as inspection_acceptance
+import acceptance_native as native_acceptance
 import acceptance_provider_common as provider_common
 import acceptance_supervisor_common as supervisor_common
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps, _inspection_group
@@ -463,7 +464,8 @@ class InspectionHarnessTests(unittest.TestCase):
         })
 
     def durable_ordinary_admission(self, numeric_task_id: int = 7,
-                                   runner_ownership: str | None = None) -> Path:
+                                   runner_ownership: str | None = None,
+                                   runtime_pending: bool = False) -> Path:
         directory = self.state / "tasks" / TASK
         request = read_json(self.state / "inspections" / TASK / "request.json")
         supervisor = request["binding"]["supervisor"]
@@ -492,6 +494,12 @@ class InspectionHarnessTests(unittest.TestCase):
             meta.update({
                 "runner_executable": str(self.runner),
                 "runner_ownership": runner_ownership,
+            })
+        if runtime_pending:
+            meta.update({
+                "provider_version": "",
+                "runtime_preflight_sha256": "a" * 64,
+                "environment_recorded": True,
             })
         if runner_ownership == "managed":
             self.ops.managed_runner = True
@@ -588,13 +596,23 @@ class InspectionHarnessTests(unittest.TestCase):
             write_json(lifetime / "worker-wait.json", wait)
         return lifetime
 
-    def ordinary_only_admission(self, runner_ownership: str | None = None) -> Path:
+    def ordinary_only_admission(self, runner_ownership: str | None = None,
+                                runtime_pending: bool = False) -> Path:
         self.inspection_records()
-        directory = self.durable_ordinary_admission(runner_ownership=runner_ownership)
+        directory = self.durable_ordinary_admission(
+            runner_ownership=runner_ownership, runtime_pending=runtime_pending)
         shutil.rmtree(self.state / "inspections")
         self.ops.inspection_attempts.clear()
         self.ops.inspection_bindings.clear()
         return directory
+
+    @staticmethod
+    def rebind_ordinary_metadata(directory: Path) -> None:
+        meta_sha256 = digest(directory / "meta.json")
+        for name in ("submit.json", "supervisor.ref.json"):
+            record = read_json(directory / name)
+            record["meta_sha256"] = meta_sha256
+            write_json(directory / name, record, replace=True)
 
     @staticmethod
     def refresh_request_links(directory: Path) -> None:
@@ -1090,6 +1108,45 @@ class InspectionHarnessTests(unittest.TestCase):
 
         self.assertIsNone(provider_common.validate_provider_runtime_metadata(meta))
 
+    def test_ordinary_task_evidence_accepts_pending_runtime_metadata(self):
+        directory = self.ordinary_only_admission(runtime_pending=True)
+
+        ordinary = self.ops._durable_ordinary_admission(TASK, None)
+
+        self.assertEqual(ordinary["task_id"], TASK)
+        self.assertEqual(
+            read_json(directory / "meta.json")["provider_version"], "")
+
+    def test_ordinary_task_evidence_rejects_pending_runtime_digest(self):
+        directory = self.ordinary_only_admission(runtime_pending=True)
+        meta = read_json(directory / "meta.json")
+        meta["runtime_preflight_sha256"] = "invalid"
+        write_json(directory / "meta.json", meta, replace=True)
+        self.rebind_ordinary_metadata(directory)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "preflight digest is invalid"):
+            self.ops._durable_ordinary_admission(TASK, None)
+
+    def test_ordinary_task_evidence_rejects_pending_runtime_version(self):
+        directory = self.ordinary_only_admission(runtime_pending=True)
+        meta = read_json(directory / "meta.json")
+        meta["provider_version"] = "fixture-v2"
+        write_json(directory / "meta.json", meta, replace=True)
+        self.rebind_ordinary_metadata(directory)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "pending version is not empty"):
+            self.ops._durable_ordinary_admission(TASK, None)
+
+    def test_ordinary_task_evidence_rejects_pending_environment_marker(self):
+        directory = self.ordinary_only_admission(runtime_pending=True)
+        meta = read_json(directory / "meta.json")
+        meta["environment_recorded"] = False
+        write_json(directory / "meta.json", meta, replace=True)
+        self.rebind_ordinary_metadata(directory)
+
+        with self.assertRaisesRegex(AcceptanceFailure, "pending environment is not recorded"):
+            self.ops._durable_ordinary_admission(TASK, None)
+
     def test_provider_runtime_metadata_rejects_invalid_pending_contract(self):
         base = {
             "provider_executable": "/fixture/provider",
@@ -1143,6 +1200,109 @@ class InspectionHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "runtime identities differ"):
             provider_common.validate_provider_runtime_metadata(
                 meta, launch_evidence=(started, exited))
+
+    def test_provider_runtime_metadata_accepts_started_only_interrupted_identity(self):
+        meta = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": "",
+            "runtime_preflight_sha256": "a" * 64,
+            "environment_recorded": True,
+        }
+        started = {
+            "provider_executable": "/fixture/provider-v2",
+            "provider_version": "fixture-v2",
+            "provider_sha256": "b" * 64,
+        }
+
+        self.assertEqual(
+            provider_common.validate_provider_runtime_metadata(
+                meta, started_evidence=started),
+            {"executable": "/fixture/provider-v2",
+             "version": "fixture-v2", "sha256": "b" * 64},
+        )
+        with self.assertRaisesRegex(AcceptanceFailure, "mutually exclusive"):
+            provider_common.validate_provider_runtime_metadata(
+                meta, launch_evidence=(started, started), started_evidence=started)
+
+    def test_provider_runtime_evidence_matches_go_identity_contract_for_both_modes(self):
+        meta = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": "",
+            "runtime_preflight_sha256": "a" * 64,
+            "environment_recorded": True,
+        }
+        valid = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": " fixture-v2 ",
+            "provider_sha256": "b" * 64,
+        }
+        for mode in ("started", "sealed"):
+            with self.subTest(mode=mode):
+                kwargs = ({"started_evidence": valid} if mode == "started" else
+                          {"launch_evidence": (valid, dict(valid))})
+                self.assertEqual(
+                    provider_common.validate_provider_runtime_metadata(meta, **kwargs),
+                    {"executable": "/fixture/provider", "version": " fixture-v2 ",
+                     "sha256": "b" * 64},
+                )
+                for name, value in (
+                        ("raw path", "/fixture//provider"),
+                        ("control", "fixture\nv2"),
+                        ("invalid utf8", "fixture\ud800v2"),
+                        ("oversized", "v" * (provider_common.MAX_PROVIDER_RUNTIME_EVIDENCE_VERSION_BYTES + 1))):
+                    with self.subTest(case=name):
+                        changed = dict(valid)
+                        if name == "raw path":
+                            changed["provider_executable"] = value
+                        else:
+                            changed["provider_version"] = value
+                        changed_kwargs = ({"started_evidence": changed} if mode == "started" else
+                                          {"launch_evidence": (changed, dict(changed))})
+                        with self.assertRaises(AcceptanceFailure):
+                            provider_common.validate_provider_runtime_metadata(
+                                meta, **changed_kwargs)
+
+    def test_provider_runtime_metadata_rejects_noncanonical_executable_path(self):
+        for executable in ("/fixture//provider", "//fixture/provider"):
+            with self.subTest(executable=executable), self.assertRaisesRegex(
+                    AcceptanceFailure, "executable is invalid"):
+                provider_common.validate_provider_runtime_metadata({
+                    "provider_executable": executable,
+                    "provider_version": "fixture-v1",
+                })
+
+    def test_native_terminal_queue_correlates_helper_with_admitted_runtime(self):
+        self.inspection_records()
+        ordinary = self.durable_ordinary_admission()
+        meta_path = ordinary / "meta.json"
+        meta = read_json(meta_path)
+        meta["effective_config"]["policy"] = {"runtime_sha256": "e" * 64}
+        write_json(meta_path, meta, replace=True)
+        self.rebind_ordinary_metadata(ordinary)
+
+        operation = object.__new__(native_acceptance.NativeAcceptance)
+        operation.config = self.config
+        operation.daemon = None
+        operation.root_id = ROOT
+        operation.state = self.state
+        operation.tasks = {"fresh": TASK}
+        operation.numeric_ids = {TASK: 7}
+        operation.provider_executable = Path(meta["provider_executable"])
+        operation.provider_version = "fixture-v1"
+        operation.provider_runtime_identities = {}
+        operation.ops = self.ops
+
+        operation._record_provider_runtime_identity(TASK, meta)
+        status = self.status(self.inspection_row())
+        self.assertFalse(operation.terminal_private_queue(status))
+
+        meta["provider_executable"] = str(self.base / "helper")
+        write_json(meta_path, meta, replace=True)
+        self.rebind_ordinary_metadata(ordinary)
+        operation.provider_executable = Path(meta["provider_executable"])
+        operation.provider_runtime_identities = {}
+        operation._record_provider_runtime_identity(TASK, meta)
+        self.assertTrue(operation.terminal_private_queue(status))
 
     def test_root_lifetime_closure_rejects_complete_task_with_incomplete_inspection(self):
         self.inspection_records(managed_exit_proof=True)

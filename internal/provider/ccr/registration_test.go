@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -46,38 +47,46 @@ func requireContinuationRegistration(t *testing.T, registration commonprovider.R
 
 func requireRegisteredReferences(t *testing.T, registration commonprovider.Registration) {
 	t.Helper()
-	if len(registration.Interpreters) != 8 {
-		t.Fatalf("interpreters=%d want=8", len(registration.Interpreters))
+	wanted := []task.PredicateRef{
+		Reference(config.ModeReadOnly), Reference(config.ModeWorkspaceWrite),
+		modeledReference(config.ModeReadOnly), modeledReference(config.ModeWorkspaceWrite),
+		preCredentialReference(config.ModeReadOnly, true), preCredentialReference(config.ModeWorkspaceWrite, true),
+		preCredentialReference(config.ModeReadOnly, false), preCredentialReference(config.ModeWorkspaceWrite, false),
+		previousReference(config.ModeReadOnly), previousReference(config.ModeWorkspaceWrite),
+		HistoricalReference(config.ModeReadOnly), HistoricalReference(config.ModeWorkspaceWrite),
 	}
-	if !registration.Interpreters[0].Reference().Equal(Reference(config.ModeReadOnly)) || !registration.Interpreters[1].Reference().Equal(Reference(config.ModeWorkspaceWrite)) {
-		t.Fatalf("current CCR refs are not first: %+v", registration.Interpreters)
+	if len(registration.Interpreters) != len(wanted) {
+		t.Fatalf("interpreters=%d want=%d", len(registration.Interpreters), len(wanted))
 	}
-	if !registration.Interpreters[2].Reference().Equal(modeledReference(config.ModeReadOnly)) || !registration.Interpreters[3].Reference().Equal(modeledReference(config.ModeWorkspaceWrite)) || !registration.Interpreters[4].Reference().Equal(previousReference(config.ModeReadOnly)) || !registration.Interpreters[5].Reference().Equal(previousReference(config.ModeWorkspaceWrite)) || !registration.Interpreters[6].Reference().Equal(HistoricalReference(config.ModeReadOnly)) || !registration.Interpreters[7].Reference().Equal(HistoricalReference(config.ModeWorkspaceWrite)) {
-		t.Fatalf("historical CCR refs are not retained: %+v", registration.Interpreters)
+	for index, ref := range wanted {
+		if !registration.Interpreters[index].Reference().Equal(ref) {
+			t.Fatalf("interpreter %d does not preserve reference %+v", index, ref)
+		}
 	}
 }
 
 func requireRecoveryChain(t *testing.T, registration commonprovider.Registration) {
 	t.Helper()
-	recoverable, ok := registration.Interpreters[0].(interface {
-		Target() task.PredicateRef
-		CanRecover(task.PredicateRef) bool
-	})
-	if !ok || !recoverable.Target().Equal(Reference(config.ModeReadOnly)) || !recoverable.CanRecover(modeledReference(config.ModeReadOnly)) || recoverable.CanRecover(previousReference(config.ModeReadOnly)) || recoverable.CanRecover(Reference(config.ModeReadOnly)) {
-		t.Fatal("CCR current interpreter recovery mapping is incorrect")
+	registry, err := predicate.New(registration.Interpreters...)
+	if err != nil {
+		t.Fatal(err)
 	}
-	modeled, ok := registration.Interpreters[2].(interface {
-		Target() task.PredicateRef
-		CanRecover(task.PredicateRef) bool
-	})
-	if !ok || !modeled.Target().Equal(modeledReference(config.ModeReadOnly)) || !modeled.CanRecover(previousReference(config.ModeReadOnly)) || modeled.CanRecover(HistoricalReference(config.ModeReadOnly)) {
-		t.Fatal("CCR modeled interpreter recovery mapping is incorrect")
-	}
-	previous, ok := registration.Interpreters[4].(interface {
-		Target() task.PredicateRef
-		CanRecover(task.PredicateRef) bool
-	})
-	if !ok || !previous.Target().Equal(previousReference(config.ModeReadOnly)) || !previous.CanRecover(HistoricalReference(config.ModeReadOnly)) || previous.CanRecover(Reference(config.ModeReadOnly)) {
-		t.Fatal("CCR previous interpreter recovery mapping is incorrect")
+	for _, pair := range []struct {
+		target task.PredicateRef
+		source task.PredicateRef
+	}{
+		{Reference(config.ModeReadOnly), modeledReference(config.ModeReadOnly)},
+		{modeledReference(config.ModeReadOnly), preCredentialReference(config.ModeReadOnly, true)},
+		{preCredentialReference(config.ModeReadOnly, true), preCredentialReference(config.ModeReadOnly, false)},
+		{preCredentialReference(config.ModeReadOnly, false), previousReference(config.ModeReadOnly)},
+		{previousReference(config.ModeReadOnly), HistoricalReference(config.ModeReadOnly)},
+	} {
+		interpreter, resolveErr := registry.ResolveRecovery(pair.source)
+		if resolveErr != nil || !interpreter.Target().Equal(pair.target) {
+			t.Fatalf("recovery from %+v did not select %+v: %v", pair.source, pair.target, resolveErr)
+		}
+		if interpreter.CanRecover(pair.target) {
+			t.Fatalf("recovery target accepts itself as a source: %+v", pair.target)
+		}
 	}
 }
