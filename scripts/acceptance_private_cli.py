@@ -608,10 +608,12 @@ def phase_environment(environment, phase):
 def run_captured_command(command, env, timeout):
     # Pipe capture retains two descriptors per live child. macOS commonly
     # gives this driver 256 descriptors, below a 200-caller burst. Close file
-    # handles immediately after Start; only the short spawn phase serializes.
-    with tempfile.TemporaryDirectory(prefix="delegate-cli-capture-") as directory:
-        stdout = Path(directory) / "stdout"
-        stderr = Path(directory) / "stderr"
+    # handles immediately after Start; only the short spawn and result
+    # read/cleanup phases serialize. Waiting never holds this lock.
+    temporary = tempfile.TemporaryDirectory(prefix="delegate-cli-capture-")
+    try:
+        stdout = Path(temporary.name) / "stdout"
+        stderr = Path(temporary.name) / "stderr"
         with CAPTURE_START_LOCK:
             with stdout.open("wb") as output, stderr.open("wb") as errors:
                 process = subprocess.Popen(command, env=env, stdout=output, stderr=errors)
@@ -628,10 +630,35 @@ def run_captured_command(command, env, timeout):
                 raise RuntimeError(
                     "captured command could not be reaped after timeout: %s" % cleanup_error
                 ) from cleanup_error
+            with CAPTURE_START_LOCK:
+                captured_stdout = stdout.read_bytes()
+                captured_stderr = stderr.read_bytes()
+                temporary.cleanup()
+                temporary = None
             raise subprocess.TimeoutExpired(
-                command, timeout, output=stdout.read_bytes(), stderr=stderr.read_bytes(),
+                command, timeout, output=captured_stdout, stderr=captured_stderr,
             ) from None
-        return subprocess.CompletedProcess(command, code, stdout.read_bytes(), stderr.read_bytes())
+        with CAPTURE_START_LOCK:
+            captured_stdout = stdout.read_bytes()
+            captured_stderr = stderr.read_bytes()
+            temporary.cleanup()
+            temporary = None
+        return subprocess.CompletedProcess(command, code, captured_stdout, captured_stderr)
+    finally:
+        if temporary is not None:
+            with CAPTURE_START_LOCK:
+                temporary.cleanup()
+
+
+def run_captured_text_command(command, env, timeout):
+    """Run one control command through the shared file-backed capture owner."""
+    captured = run_captured_command(command, env, timeout)
+    return subprocess.CompletedProcess(
+        captured.args,
+        captured.returncode,
+        captured.stdout.decode("utf-8"),
+        captured.stderr.decode("utf-8"),
+    )
 
 
 def reap_captured_process(process, timeout):
@@ -1107,9 +1134,9 @@ def install_pi_fixture(install_dir, gate_file, waiter_directory, lease_nonce):
 
 def pueue_snapshot(client, config, env, metrics=None, phase=None):
     command_env = phase_environment(env, phase) if phase is not None else env
-    result = subprocess.run(
+    result = run_captured_text_command(
         [str(client), "--config", str(config), "status", "--json"],
-        env=command_env, capture_output=True, text=True, timeout=10, check=False,
+        command_env, 10,
     )
     if result.returncode != 0:
         raise RuntimeError("isolated pueue status failed: " + result.stderr[-1000:])
@@ -1158,9 +1185,9 @@ def wait_for_queued_label_prefix(client, config, env, group, prefix, excluded_la
 
 def pueue_command(client, config, env, args, timeout=15, phase=None):
     command_env = phase_environment(env, phase) if phase is not None else env
-    result = subprocess.run(
+    result = run_captured_text_command(
         [str(client), "--config", str(config), *args],
-        env=command_env, capture_output=True, text=True, timeout=timeout, check=False,
+        command_env, timeout,
     )
     if result.returncode != 0:
         raise RuntimeError("isolated pueue command failed: %r: %s" % (args, result.stderr[-1000:]))
@@ -1182,10 +1209,10 @@ def private_daemon_process_gone(pid, deadline):
     except ProcessLookupError:
         # Darwin getpgid excludes zombies. Check PID presence without using
         # command names, which can change while a process becomes a zombie.
-        result = subprocess.run(
+        result = run_captured_text_command(
             ["/bin/ps", "-p", str(pid), "-o", "pid="],
-            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
-            capture_output=True, text=True, timeout=shutdown_remaining(deadline), check=False,
+            {"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            shutdown_remaining(deadline),
         )
         if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
             return True

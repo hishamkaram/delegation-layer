@@ -247,9 +247,9 @@ class PrivateShutdownTests(unittest.TestCase):
                 private_cli.private_daemon_process_gone(123, private_cli.time.monotonic() + 5)
 
     def test_failed_presence_probe_is_not_exit_proof(self):
-        failed = subprocess.CompletedProcess([], 1, stdout="", stderr="ps: malloc failed")
+        failed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"ps: malloc failed")
         with patch.object(private_cli.os, "getpgid", side_effect=ProcessLookupError()), \
-                patch.object(private_cli.subprocess, "run", return_value=failed):
+                patch.object(private_cli, "run_captured_command", return_value=failed):
             with self.assertRaisesRegex(RuntimeError, "PID presence is uncertain"):
                 private_cli.private_daemon_process_gone(123, private_cli.time.monotonic() + 5)
 

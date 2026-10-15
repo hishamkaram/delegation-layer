@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
+import errno
 import hashlib
 import io
 import json
@@ -17,6 +18,13 @@ from unittest.mock import patch
 
 import acceptance_private_cli as private_cli
 import acceptance_supervisor_common as common
+
+
+def _release_live_directory_tokens(entries):
+    """Release only unconsumed test authorities through the shared owner."""
+    for entry in reversed(tuple(entries)):
+        if not getattr(entry, "_consumed", False):
+            common.release_owned_directory(entry)
 
 
 class PrivateDispatchArgumentsTests(unittest.TestCase):
@@ -242,6 +250,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             self.assertEqual(args[5], base / "provider-waiters")
             self.assertEqual(kwargs["client_call_log"], base / "old-client-starts-calls")
             requested_workers = args[12]
+            old_layout_entries = tuple(args[8])
             args[14].update({
                 "capacity_proof": {
                     "requested_task_count": total,
@@ -272,6 +281,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 },
             })
             if upgrade_failure:
+                pending_old_layout.extend(old_layout_entries)
                 tracker = kwargs["run_receipt"]
                 tracker.phase("capacity_observation")
                 tracker.update_counts(
@@ -284,17 +294,28 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                     task_count=73, running_count=64, status_bytes=4096,
                 )
                 raise RuntimeError("SECRET prompt credential unrestricted log")
+            private_cli.rollback_owned_directories(old_layout_entries)
             args[4].release()
             return ["upgraded", "restarted"], 1024 * 1024 + 1
 
         def remove_root(root_token, entries, **_kwargs):
             if cleanup_failure:
+                _release_live_directory_tokens(entries)
                 raise RuntimeError("SECRET cleanup diagnostic")
             self.assertEqual(
                 [entry[0] for entry in _kwargs["managed_state_roots"]],
                 [base / "state"],
             )
             private_cli.rollback_owned_directories(entries)
+
+        owners = []
+        pending_old_layout = []
+        real_owner = private_cli.DirectoryOwner
+
+        def tracked_owner(*args, **kwargs):
+            owner = real_owner(*args, **kwargs)
+            owners.append(owner)
+            return owner
 
         with ExitStack() as stack:
             stack.enter_context(patch.object(sys, "argv", self.arguments(total, workers, output)))
@@ -307,6 +328,9 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 side_effect=AssertionError("private capacity acceptance must not require Node.js"),
             ))
             stack.enter_context(patch.object(private_cli, "run_json", side_effect=run_json))
+            stack.enter_context(patch.object(
+                private_cli, "DirectoryOwner", side_effect=tracked_owner,
+            ))
             stack.enter_context(patch.object(private_cli, "shutdown_private_supervisor"))
             stack.enter_context(patch.object(
                 private_cli, "remove_private_acceptance_root",
@@ -329,6 +353,11 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                 private_cli.main()
             except RuntimeError as raised:
                 error = raised
+            finally:
+                for owner in reversed(owners):
+                    if not getattr(owner, "_transferred", False):
+                        owner.release()
+                _release_live_directory_tokens(pending_old_layout)
         return json.loads(output.read_text()), observed_upgrade, error
 
 
@@ -679,6 +708,207 @@ class TaskStatusReceiptTests(unittest.TestCase):
                     Path("/fixture/delegate"), {}, ["providers", "--json"], receipt=receipt,
                 )
             self.assertNotIn("response", json.loads(receipt.read_text()))
+
+
+class PrivateControlCaptureTests(unittest.TestCase):
+    def test_pueue_snapshot_uses_shared_file_backed_capture(self):
+        completed = subprocess.CompletedProcess([], 0, b'{"tasks": {}}\n', b"")
+        metrics = {}
+        with patch.object(private_cli, "run_captured_command", return_value=completed) as capture:
+            snapshot = private_cli.pueue_snapshot(
+                Path("/fixture/pueue"), Path("/fixture/pueue.yml"), {"PATH": "/bin"},
+                metrics=metrics, phase="supervisor-observation",
+            )
+
+        self.assertEqual(snapshot, {"tasks": {}})
+        self.assertEqual(metrics["status_bytes"], len(b'{"tasks": {}}\n'))
+        capture.assert_called_once_with(
+            ["/fixture/pueue", "--config", "/fixture/pueue.yml", "status", "--json"],
+            {"PATH": "/bin", "DELEGATE_ACCEPTANCE_PHASE": "supervisor-observation"},
+            10,
+        )
+
+    def test_pueue_command_uses_shared_file_backed_capture(self):
+        completed = subprocess.CompletedProcess([], 0, b"ok\n", b"")
+        with patch.object(private_cli, "run_captured_command", return_value=completed) as capture:
+            output = private_cli.pueue_command(
+                Path("/fixture/pueue"), Path("/fixture/pueue.yml"), {"PATH": "/bin"},
+                ["shutdown"], timeout=7, phase="supervisor-shutdown",
+            )
+
+        self.assertEqual(output, "ok\n")
+        capture.assert_called_once_with(
+            ["/fixture/pueue", "--config", "/fixture/pueue.yml", "shutdown"],
+            {"PATH": "/bin", "DELEGATE_ACCEPTANCE_PHASE": "supervisor-shutdown"},
+            7,
+        )
+
+    def test_private_daemon_pid_fallback_uses_shared_file_backed_capture(self):
+        completed = subprocess.CompletedProcess([], 1, b"", b"")
+        with patch.object(private_cli.os, "getpgid", side_effect=ProcessLookupError), \
+                patch.object(private_cli, "shutdown_remaining", return_value=3.0), \
+                patch.object(private_cli, "run_captured_command", return_value=completed) as capture:
+            self.assertTrue(private_cli.private_daemon_process_gone(123, 9.0))
+
+        capture.assert_called_once_with(
+            ["/bin/ps", "-p", "123", "-o", "pid="],
+            {"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            3.0,
+        )
+
+    def test_file_capture_survives_soft_256_pressure_and_parallel_short_commands(self):
+        probe = r'''
+import concurrent.futures
+import errno
+import json
+import os
+from pathlib import Path
+import resource
+import subprocess
+import sys
+import tempfile
+import time
+
+import acceptance_private_cli as private_cli
+
+
+def fd_count(path):
+    return len(os.listdir(path))
+
+
+old_soft, old_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+if old_hard != resource.RLIM_INFINITY and old_hard < 256:
+    raise RuntimeError("fixture hard descriptor limit is below 256")
+resource.setrlimit(resource.RLIMIT_NOFILE, (256, old_hard))
+pins = []
+try:
+    with tempfile.TemporaryDirectory(prefix="delegate-low-fd-") as temporary:
+        root = Path(temporary)
+        waiter_directory = root / "provider-waiters"
+        waiter_directory.mkdir()
+        pin_paths = []
+        for index in range(200):
+            path = waiter_directory / ("entry-%03d" % index)
+            path.write_bytes(b"entry")
+            pin_paths.append(path)
+        control = root / "pueue-fixture.py"
+        control.write_text(
+            "#!" + sys.executable + "\n"
+            "import json, sys\n"
+            "if sys.argv[-2:] == ['status', '--json']:\n"
+            " print(json.dumps({'tasks': {}}))\n"
+            "elif sys.argv[-1] == 'shutdown':\n"
+            " print('control-ok')\n"
+            "else:\n"
+            " raise SystemExit(2)\n"
+        )
+        control.chmod(0o700)
+        config = root / "pueue.yml"
+        config.write_text("fixture: true\n")
+        client = control
+        command = [str(client)]
+        command_env = os.environ.copy()
+        directory_flags = os.O_RDONLY
+        directory_flags |= getattr(os, "O_DIRECTORY", 0)
+        directory_flags |= getattr(os, "O_CLOEXEC", 0)
+        parent_pin = os.open(waiter_directory, directory_flags)
+        pins.append(parent_pin)
+        for path in pin_paths:
+            pins.append(os.open(path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)))
+        if len(pins) != 201:
+            raise AssertionError("fixture did not hold the 200-entry plus shared-parent pins")
+
+        fd_directory = "/dev/fd" if Path("/dev/fd").exists() else "/proc/self/fd"
+        while fd_count(fd_directory) < 252:
+            pins.append(os.open(pin_paths[0], os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)))
+        held_fd_count = fd_count(fd_directory)
+
+        try:
+            subprocess.run(
+                command + ["--config", str(config), "status", "--json"],
+                env=command_env, capture_output=True, text=True, timeout=5, check=False,
+            )
+        except OSError as error:
+            pipe_probe_errno = error.errno
+        else:
+            raise AssertionError("pipe capture unexpectedly survived the controlled FD budget")
+        if pipe_probe_errno != errno.EMFILE:
+            raise AssertionError("pipe capture failed with unexpected errno %s" % pipe_probe_errno)
+
+        metrics = {}
+        snapshot = private_cli.pueue_snapshot(
+            Path(command[0]), config, command_env, metrics=metrics, phase="fd-probe",
+        )
+        control_output = private_cli.pueue_command(
+            Path(command[0]), config, command_env, ["shutdown"], timeout=5, phase="fd-probe",
+        )
+
+        marker_directory = root / "parallel-markers"
+        marker_directory.mkdir()
+        parallel_child = (
+            "import sys,time\n"
+            "from pathlib import Path\n"
+            "directory=Path(sys.argv[1]); expected=int(sys.argv[2])\n"
+            "(directory / str(__import__('os').getpid())).touch()\n"
+            "deadline=time.monotonic()+3\n"
+            "while len(tuple(directory.iterdir())) < expected and time.monotonic() < deadline:\n"
+            " time.sleep(0.005)\n"
+            "if len(tuple(directory.iterdir())) != expected:\n"
+            " raise SystemExit(3)\n"
+            "print('delegate-short-capture')\n"
+        )
+
+        def capture(index):
+            result = private_cli.run_captured_command(
+                [str(sys.executable), "-c", parallel_child, str(marker_directory), "16"],
+                command_env, 5,
+            )
+            if result.returncode != 0:
+                raise RuntimeError("parallel capture %d exited %d" % (index, result.returncode))
+            return result.stdout.decode("utf-8").strip()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as workers:
+            outputs = tuple(workers.map(capture, range(16)))
+
+        print(json.dumps({
+            "soft_limit": resource.getrlimit(resource.RLIMIT_NOFILE)[0],
+            "pinned_fds": len(pins[:201]),
+            "held_fd_count": held_fd_count,
+            "pipe_probe_errno": pipe_probe_errno,
+            "snapshot": snapshot,
+            "status_bytes": metrics["status_bytes"],
+            "control_output": control_output,
+            "parallel_markers": len(tuple(marker_directory.iterdir())),
+            "parallel_outputs": outputs,
+        }))
+finally:
+    for descriptor in reversed(pins):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+    resource.setrlimit(resource.RLIMIT_NOFILE, (old_soft, old_hard))
+'''
+        environment = os.environ.copy()
+        scripts = str(Path(__file__).resolve().parent)
+        environment["PYTHONPATH"] = os.pathsep.join(
+            item for item in (scripts, environment.get("PYTHONPATH", "")) if item
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            env=environment, capture_output=True, text=True, timeout=30, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        evidence = json.loads(result.stdout)
+        self.assertEqual(evidence["soft_limit"], 256)
+        self.assertEqual(evidence["pinned_fds"], 201)
+        self.assertGreaterEqual(evidence["held_fd_count"], 250)
+        self.assertEqual(evidence["pipe_probe_errno"], errno.EMFILE)
+        self.assertEqual(evidence["snapshot"], {"tasks": {}})
+        self.assertGreater(evidence["status_bytes"], 0)
+        self.assertEqual(evidence["control_output"], "control-ok\n")
+        self.assertEqual(evidence["parallel_markers"], 16)
+        self.assertEqual(evidence["parallel_outputs"], ["delegate-short-capture"] * 16)
 
 
 class CreatedAdmissionTests(unittest.TestCase):
@@ -1638,6 +1868,7 @@ class PackagedDefaultPathTests(unittest.TestCase):
             source.chmod(0o700)
             sources[name] = source
         owner = private_cli.DirectoryOwner()
+        self.addCleanup(owner.release)
 
         install = private_cli.install_adjacent_package(
             owner, sources, self.root / "package",
@@ -1678,8 +1909,9 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         self.old_layout = self.root / "old"
         self.old_layout.mkdir()
         owner = private_cli.DirectoryOwner()
-        self.old_layout_owned = (owner.adopt_created(
-            "old package root", self.old_layout, self.root),)
+        owner.adopt_created("old package root", self.old_layout, self.root)
+        self.old_layout_owned = owner.transfer()
+        self.addCleanup(self.release_old_layout)
         self.total = 200
         self.task_ids = ["%032x" % (index + 1) for index in range(self.total)]
         self.lease_candidates = [
@@ -1712,6 +1944,9 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         self.owner_proof_count = self.total
         self.failed_dispatch_index = None
         self.attempted_task_ids = []
+
+    def release_old_layout(self):
+        _release_live_directory_tokens(self.old_layout_owned)
 
     def test_orchestration_records_all_200_capacity_members_before_release(self):
         # This unit isolates receipt/orchestration logic. Live FIFO handshakes,
