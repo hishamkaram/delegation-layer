@@ -267,8 +267,10 @@ account availability; keep authenticated acceptance receipts separate.
 The tag workflow creates and verifies a draft release. Before promotion, run
 `release-native-acceptance.yml` from protected `main`, passing the exact draft
 tag as its input, on a project-owned runner labeled `delegation-native`. That
-runner must already have the provider CLIs and their native authentication; the
-workflow uses the current protected-main acceptance harness and the shared
+runner must already have the provider CLIs and their native authentication. The
+`opencode_model` input selects an available OpenCode control model explicitly.
+A passing control covers that model; it does not clear failures for other models.
+The workflow uses the current protected-main acceptance harness and the shared
 `scripts/verify_release_archive.py` verifier. The verifier checks the requested
 draft archive's checksum and attestation, exercises the released CLI through
 PATH and its isolated default state path, and records the absolute binary paths,
@@ -283,7 +285,10 @@ and the source receipt digest. Successful and
 authentication/prerequisite-blocked cases retain only their sanitized case
 receipts after identity-pinned cleanup; the compact receipt is fsynced before
 raw deletion and records the creation-time directory and parent identities.
-Failed or unresolved cases retain raw evidence. Resolved aggregate roots are
+Failed or unresolved cases retain their private task state and workspace for
+diagnosis under the shared contract's
+[native failure-retention rule](../agents/_data/maintainability-contract.md#live-acceptance-proof).
+Public artifacts contain only sanitized receipts. Resolved aggregate roots are
 pruned to the configured small retention count, with comparable before/after
 root, file, and byte totals recorded in the aggregate receipt.
 The verifier checks the attestation against `refs/tags/<tag>` and the tag's

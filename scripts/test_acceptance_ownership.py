@@ -688,6 +688,161 @@ class DirectoryOwnershipTests(unittest.TestCase):
             receipt = common.read_json(output / "cleanup.json")
             self.assertEqual(receipt["raw_process_captures"], "removed")
 
+    def test_failed_finalization_retains_selected_state_and_cleans_unselected_owned_directories(self):
+        with tempfile.TemporaryDirectory(prefix="acceptance-owner-retention-") as directory:
+            root = Path(directory)
+            output = root / "evidence"
+            output.mkdir()
+            owner = common.DirectoryOwner()
+            private = owner.create("private root", root / "private", root)
+            task_state = owner.create("task state", private.directory / "state",
+                                      private.directory)
+            workspace = owner.create("workspace", private.directory / "workspace",
+                                     private.directory)
+            (task_state.directory / "task.json").write_text("task", encoding="utf-8")
+            (workspace.directory / "payload.txt").write_text("payload", encoding="utf-8")
+            queue = owner.create("private queue", root / "queue", root)
+            briefs = owner.create("briefs", root / "briefs", root)
+            raw = owner.create("raw process captures", output / "processes", output)
+            (queue.directory / "queued.json").write_text("queue", encoding="utf-8")
+            (briefs.directory / "brief.txt").write_text("brief", encoding="utf-8")
+            (raw.directory / "stderr").write_text("raw", encoding="utf-8")
+            entries = owner.transfer()
+
+            self.assertTrue(common.finalize_acceptance_artifacts(
+                output, True, entries, False,
+                remove_failed_process_captures=True,
+                raw_process_captures_token=raw,
+                retained_owned_directories=(private, task_state, workspace),
+            ))
+            self.assertTrue(private.directory.is_dir())
+            self.assertEqual((task_state.directory / "task.json").read_text(), "task")
+            self.assertEqual((workspace.directory / "payload.txt").read_text(), "payload")
+            self.assertFalse(queue.directory.exists())
+            self.assertFalse(briefs.directory.exists())
+            self.assertFalse(raw.directory.exists())
+            receipt = common.read_json(output / "cleanup.json")
+            self.assertEqual(set(receipt["retained"]),
+                             {"private root", "task state", "workspace"})
+            self.assertEqual(
+                {record["path"] for record in receipt["retained_owned_directories"]},
+                {str(private.directory), str(task_state.directory), str(workspace.directory)},
+            )
+
+    def test_unclosed_finalization_retains_all_tokens_and_records_exact_identities(self):
+        with tempfile.TemporaryDirectory(prefix="acceptance-owner-unclosed-") as directory:
+            root = Path(directory)
+            output = root / "evidence"
+            output.mkdir()
+            owner = common.DirectoryOwner()
+            private = owner.create("private root", root / "private", root)
+            task_state = owner.create("task state", private.directory / "state",
+                                      private.directory)
+            entries = owner.transfer()
+
+            self.assertFalse(common.finalize_acceptance_artifacts(
+                output, False, entries, False,
+                retained_owned_directories=(private,),
+            ))
+            self.assertTrue(private.directory.is_dir())
+            self.assertTrue(task_state.directory.is_dir())
+            receipt = common.read_json(output / "cleanup.json")
+            self.assertEqual(set(receipt["retained"]), {"private root", "task state"})
+            self.assertEqual(
+                {record["path"] for record in receipt["retained_owned_directories"]},
+                {str(private.directory), str(task_state.directory)},
+            )
+            for entry in reversed(entries):
+                entry.consume()
+
+    def test_successful_finalization_rejects_selected_retention(self):
+        with tempfile.TemporaryDirectory(prefix="acceptance-owner-success-retention-") as directory:
+            root = Path(directory)
+            output = root / "evidence"
+            output.mkdir()
+            owner = common.DirectoryOwner()
+            private = owner.create("private root", root / "private", root)
+            entries = owner.transfer()
+
+            self.assertFalse(common.finalize_acceptance_artifacts(
+                output, True, entries, True,
+                retained_owned_directories=(private,),
+            ))
+            self.assertTrue(private.directory.is_dir())
+            private.consume()
+
+    def test_retention_rejects_duplicate_foreign_and_consumed_tokens(self):
+        with tempfile.TemporaryDirectory(prefix="acceptance-owner-invalid-retention-") as directory:
+            root = Path(directory)
+
+            duplicate_root = root / "duplicate"
+            duplicate_root.mkdir()
+            duplicate_output = duplicate_root / "evidence"
+            duplicate_output.mkdir()
+            duplicate_owner = common.DirectoryOwner()
+            duplicate = duplicate_owner.create("duplicate", duplicate_root / "owned",
+                                                duplicate_root)
+            duplicate_entries = duplicate_owner.transfer()
+            self.assertFalse(common.finalize_acceptance_artifacts(
+                duplicate_output, True, duplicate_entries, False,
+                retained_owned_directories=(duplicate, duplicate),
+            ))
+            self.assertTrue(duplicate.directory.is_dir())
+            duplicate.consume()
+
+            foreign_root = root / "foreign"
+            foreign_root.mkdir()
+            foreign_output = foreign_root / "evidence"
+            foreign_output.mkdir()
+            foreign_owner = common.DirectoryOwner()
+            foreign = foreign_owner.create("foreign", foreign_root / "foreign-owned",
+                                           foreign_root)
+            local_owner = common.DirectoryOwner()
+            local = local_owner.create("local", foreign_root / "local-owned", foreign_root)
+            local_entries = local_owner.transfer()
+            self.assertFalse(common.finalize_acceptance_artifacts(
+                foreign_output, True, local_entries, False,
+                retained_owned_directories=(foreign,),
+            ))
+            self.assertTrue(local.directory.is_dir())
+            self.assertTrue(foreign.directory.is_dir())
+            local.consume()
+            foreign.consume()
+
+            consumed_root = root / "consumed"
+            consumed_root.mkdir()
+            consumed_output = consumed_root / "evidence"
+            consumed_output.mkdir()
+            consumed_owner = common.DirectoryOwner()
+            consumed = consumed_owner.create("consumed", consumed_root / "owned",
+                                             consumed_root)
+            consumed_entries = consumed_owner.transfer()
+            consumed.consume()
+            self.assertFalse(common.finalize_acceptance_artifacts(
+                consumed_output, True, consumed_entries, False,
+                retained_owned_directories=(consumed,),
+            ))
+            self.assertTrue(consumed.directory.is_dir())
+
+    def test_retention_rejects_child_without_owned_ancestor(self):
+        with tempfile.TemporaryDirectory(prefix="acceptance-owner-retention-ancestor-") as directory:
+            root = Path(directory)
+            output = root / "evidence"
+            output.mkdir()
+            owner = common.DirectoryOwner()
+            parent = owner.create("private root", root / "private", root)
+            child = owner.create("task state", parent.directory / "state", parent.directory)
+            entries = owner.transfer()
+
+            self.assertFalse(common.finalize_acceptance_artifacts(
+                output, True, entries, False,
+                retained_owned_directories=(child,),
+            ))
+            self.assertTrue(parent.directory.is_dir())
+            self.assertTrue(child.directory.is_dir())
+            for entry in reversed(entries):
+                entry.consume()
+
     def test_child_transfer_consumes_its_descriptor_and_leaves_parent_authority(self):
         with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:
             root = Path(directory)

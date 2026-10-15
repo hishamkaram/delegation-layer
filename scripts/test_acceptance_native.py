@@ -1658,6 +1658,31 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 }) + "\n")
                 self.assertTrue(gate.authentication_unavailable(root))
 
+            (raw / "stdout").write_text("")
+            (raw / "stderr").write_text("")
+            for diagnostic in (
+                {"code": "authentication-unavailable", "event": 1,
+                 "message": "Provider authentication was unavailable."},
+            ):
+                (root / "outcome.json").write_text(json.dumps({
+                    "verdict": "rejected", "diagnostics": [diagnostic],
+                }))
+                self.assertTrue(gate.authentication_unavailable(root))
+
+            for diagnostic in (
+                {"code": "authentication_unavailable", "event": 1,
+                 "message": "Provider authentication was unavailable."},
+                {"code": "authentication-unavailable ", "event": 1,
+                 "message": "Provider authentication was unavailable."},
+                {"code": "provider-failed", "event": 1,
+                 "message": "Provider authentication was unavailable."},
+                {"code": "authentication-unavailable", "event": 1},
+            ):
+                (root / "outcome.json").write_text(json.dumps({
+                    "verdict": "rejected", "diagnostics": [diagnostic],
+                }))
+                self.assertFalse(gate.authentication_unavailable(root))
+
             (raw / "stdout").write_text(json.dumps({
                 "type": "error",
                 "error": {"name": "APIError", "data": {"statusCode": 500}},
@@ -2046,6 +2071,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.output = output
             operation.base = base.directory
             operation.base_parent = root
+            operation.state = base.directory / "state"
+            operation.workspace = base.directory / "workspace"
             operation.owned_directories = (base, raw)
             operation.processes = SimpleNamespace(capture_root=raw)
             calls = []
@@ -2058,6 +2085,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 operation.output, False, (base, raw), False,
                 remove_failed_process_captures=False,
                 raw_process_captures_token=raw,
+                retained_owned_directories=(base,),
             )
 
     def test_cleanup_removes_closed_owned_base_and_preserves_evidence(self):
@@ -2066,6 +2094,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation = object.__new__(gate.NativeAcceptance)
             operation.base_parent = root / "delegation-layer-live"
             operation.base = operation.base_parent / "run"
+            operation.state = operation.base / "state"
+            operation.workspace = operation.base / "workspace"
             operation.output = root / "evidence"
             operation.output.mkdir()
             owner = supervisor_common.DirectoryOwner()
@@ -2092,6 +2122,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation = object.__new__(gate.NativeAcceptance)
             operation.base_parent = root / "delegation-layer-live"
             operation.base = operation.base_parent / "run"
+            operation.state = operation.base / "state"
+            operation.workspace = operation.base / "workspace"
             operation.output = root / "evidence"
             operation.output.mkdir()
             owner = supervisor_common.DirectoryOwner()
@@ -2117,6 +2149,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.output = root / "evidence"
         operation.state = operation.base / "state"
         operation.workspace = operation.base / "workspace"
+        operation.briefs = operation.base / "briefs"
+        operation.pueue_base = operation.base / "pueue"
         operation.models_state = operation.base / "models-state"
         operation.output.mkdir()
         owner = supervisor_common.DirectoryOwner()
@@ -2124,6 +2158,10 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         base_token = owner.create("acceptance base", operation.base, operation.base_parent)
         state_token = owner.create("acceptance state", operation.state, operation.base)
         workspace_token = owner.create("acceptance workspace", operation.workspace, operation.base)
+        owner.create("acceptance briefs", operation.briefs, operation.base)
+        pueue_token = owner.create("private pueue", operation.pueue_base, operation.base)
+        owner.create("private pueue state", operation.pueue_base / "state", operation.pueue_base)
+        owner.create("private pueue runtime", operation.pueue_base / "run", operation.pueue_base)
         models_token = owner.create("model discovery state", operation.models_state, operation.base)
         raw_token = owner.create("raw process captures", operation.output / "processes", operation.output)
         operation.owned_directories = owner.transfer()
@@ -2167,7 +2205,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             "RAW PROCESS CAPTURE MUST NOT APPEAR")
         return operation, task, task_id
 
-    def test_failure_snapshot_is_compact_and_removes_closed_state_and_captures(self):
+    def test_failure_snapshot_retains_state_and_cleans_process_captures(self):
         with tempfile.TemporaryDirectory(prefix="native-diagnostic-unit-") as directory:
             operation, _task, task_id = self._failure_operation(Path(directory))
 
@@ -2183,8 +2221,16 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertEqual(value["task_ids"], [task_id])
             self.assertEqual(value["status"]["partial"], False)
             self.assertNotIn("RAW", data.decode())
-            self.assertFalse(operation.base.exists())
+            self.assertTrue(operation.base.exists())
+            self.assertTrue(operation.base_parent.exists())
+            self.assertTrue(operation.state.exists())
+            self.assertTrue(operation.workspace.exists())
+            self.assertFalse(operation.briefs.exists())
+            self.assertFalse(operation.pueue_base.exists())
+            self.assertFalse(operation.models_state.exists())
             self.assertFalse((operation.output / "processes").exists())
+            receipt = gate.read_json(operation.output / "cleanup.json")
+            self.assertEqual(receipt["raw_process_captures"], "removed")
 
             self.assertFalse(operation.finalize(False))
             self.assertEqual(snapshot.read_bytes(), data)
@@ -2222,7 +2268,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             snapshot = (operation.output / "failure-diagnostics.json").read_text()
             self.assertNotIn("UNRESTRICTED_REFUSAL_PAYLOAD", snapshot)
             self.assertNotIn("MUST NOT APPEAR", snapshot)
-            self.assertFalse(operation.base.exists())
+            self.assertTrue(operation.base.exists())
+            self.assertFalse((operation.output / "processes").exists())
 
     def test_failure_snapshot_is_bounded_and_marks_truncation(self):
         with tempfile.TemporaryDirectory(prefix="native-diagnostic-bound-unit-") as directory:
@@ -2245,21 +2292,46 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             value = gate.read_json(snapshot)
             self.assertTrue(value["status"]["partial"])
             self.assertTrue(value["status"]["truncated"])
-            self.assertFalse(operation.base.exists())
+            self.assertTrue(operation.base.exists())
             self.assertFalse((operation.output / "processes").exists())
 
-    def test_failure_snapshot_error_keeps_raw_captures_and_still_cleans_closed_state(self):
+    def test_failure_snapshot_error_retains_state_and_raw_captures(self):
         with tempfile.TemporaryDirectory(prefix="native-diagnostic-failure-unit-") as directory:
             operation, _task, _task_id = self._failure_operation(Path(directory))
             with patch.object(operation, "_failure_diagnostics",
                               side_effect=OSError("injected snapshot failure")):
                 self.assertTrue(operation.finalize(False))
 
+            self.assertTrue(operation.base.exists())
+            self.assertTrue((operation.output / "processes").is_dir())
+            self.assertFalse((operation.output / "failure-diagnostics.json").exists())
+            receipt = gate.read_json(operation.output / "cleanup.json")
+            self.assertEqual(receipt["raw_process_captures"], "retained")
+
+    def test_blocked_snapshot_error_retains_raw_captures_after_state_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix="native-blocked-diagnostic-failure-unit-") as directory:
+            operation, _task, _task_id = self._failure_operation(Path(directory))
+            with patch.object(operation, "_failure_diagnostics",
+                              side_effect=OSError("injected snapshot failure")):
+                self.assertTrue(operation.finalize(False, blocked=True))
+
             self.assertFalse(operation.base.exists())
             self.assertTrue((operation.output / "processes").is_dir())
             self.assertFalse((operation.output / "failure-diagnostics.json").exists())
             receipt = gate.read_json(operation.output / "cleanup.json")
             self.assertEqual(receipt["raw_process_captures"], "retained")
+
+    def test_blocked_cleanup_removes_closed_state_and_raw_captures(self):
+        with tempfile.TemporaryDirectory(prefix="native-blocked-cleanup-unit-") as directory:
+            operation, _task, _task_id = self._failure_operation(Path(directory))
+
+            self.assertTrue(operation.finalize(False, blocked=True))
+
+            self.assertFalse(operation.base.exists())
+            self.assertFalse(operation.output.joinpath("processes").exists())
+            receipt = gate.read_json(operation.output / "cleanup.json")
+            self.assertEqual(receipt["status"], "removed")
+            self.assertEqual(receipt["raw_process_captures"], "removed")
 
     def test_main_finalizes_the_owned_acceptance_root_before_passing(self):
         with tempfile.TemporaryDirectory(prefix="native-main-cleanup-unit-") as directory:
@@ -2272,8 +2344,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     calls.append("run")
                     return 0
 
-                def finalize(self, success):
-                    calls.append(("finalize", success))
+                def finalize(self, success, *, blocked=False):
+                    calls.append(("finalize", success, blocked))
                     return True
 
                 def publish_success(self):
@@ -2287,7 +2359,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 ])
 
             self.assertEqual(code, 0)
-            self.assertEqual(calls, ["run", ("finalize", True), "publish"])
+            self.assertEqual(calls, ["run", ("finalize", True, False), "publish"])
 
     def test_main_treats_cleanup_failure_as_fatal(self):
         with tempfile.TemporaryDirectory(prefix="native-main-cleanup-failure-unit-") as directory:
@@ -2298,7 +2370,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 def run(self):
                     return 0
 
-                def finalize(self, _success):
+                def finalize(self, _success, *, blocked=False):
                     return False
 
                 def publish_success(self):
@@ -2331,8 +2403,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     def run(self):
                         return exit_code
 
-                    def finalize(self, success):
-                        calls.append(("finalize", success))
+                    def finalize(self, success, *, blocked=False):
+                        calls.append(("finalize", success, blocked))
                         return True
 
                     def publish_success(self):
@@ -2346,7 +2418,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     ])
 
                 self.assertEqual(code, exit_code)
-                self.assertEqual(calls, [("finalize", False)])
+                self.assertEqual(calls, [("finalize", False, exit_code == 2)])
                 self.assertFalse((output / "success.json").exists())
                 receipt = gate.read_json(output / "failure.json")
                 self.assertEqual(receipt["status"], status)
@@ -2354,6 +2426,42 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 self.assertEqual(receipt["model_discovery"]["reason_code"],
                                  Run.model_discovery_summary["reason_code"])
                 self.assertNotIn("raw_error", receipt["model_discovery"])
+
+    def test_main_exception_disposition_keeps_blocked_neutral_and_failures_failed(self):
+        cases = (
+            (gate.BlockedFailure("authentication unavailable"), 2, True, "BLOCKED"),
+            (gate.AcceptanceFailure("provider rejected the task"), 1, False, "failed"),
+            (RuntimeError("unexpected harness failure"), 1, False, "failed"),
+        )
+        for error, expected_code, expected_blocked, expected_status in cases:
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory(
+                    prefix="native-main-disposition-") as directory:
+                output = Path(directory) / "evidence"
+                output.mkdir()
+                calls = []
+
+                class Run:
+                    def run(self):
+                        raise error
+
+                    def finalize(self, success, *, blocked=False):
+                        calls.append(("finalize", success, blocked))
+                        return True
+
+                    def publish_success(self):
+                        raise AssertionError("failure published success")
+
+                with patch.object(gate, "choose_output", return_value=output), \
+                        patch.object(gate, "NativeAcceptance", return_value=Run()):
+                    code = gate.main([
+                        "--provider", "pi:json", "--permission", "read-only",
+                        "--output", str(output),
+                    ])
+
+                self.assertEqual(code, expected_code)
+                self.assertEqual(calls, [("finalize", False, expected_blocked)])
+                self.assertEqual(gate.read_json(output / "failure.json")["status"],
+                                 expected_status)
 
     def test_cleanup_preserves_preexisting_raw_process_captures(self):
         with tempfile.TemporaryDirectory(prefix="native-preexisting-captures-unit-") as directory:

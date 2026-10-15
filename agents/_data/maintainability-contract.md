@@ -462,6 +462,15 @@ the transition-row tests:
   lifetime-closure result, cleanup result, retained evidence, and unresolved
   facts. A missing or incomplete receipt is failed evidence, never a passing or
   silently skipped run.
+- **Native failure disposition and retention**: native acceptance owns the
+  terminal classification; the shared cleanup owner alone retains or removes
+  identity-owned directories. Success and neutral authentication/prerequisite
+  blocks clean their temporary state after verified closure. Genuine failures
+  retain the private task state and workspace needed to inspect sealed errors,
+  payloads, and session references. Hash-only diagnostics do not replace that
+  source evidence. Retained creation identities belong in the cleanup receipt;
+  private provider data never enters public artifacts. Recognize authentication
+  blocks from validated structured evidence, never free-form text matching.
 
 Fixture protocol, live provider, and native lifecycle/supervisor results are
 separate claims with separate verdicts and bound receipts. A pass in one class

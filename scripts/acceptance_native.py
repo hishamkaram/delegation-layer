@@ -217,6 +217,9 @@ def authentication_unavailable(directory: Path) -> bool:
         return False
     if not isinstance(outcome, dict) or outcome.get("verdict") != "rejected":
         return False
+    if any(diagnostic.get("code") == "authentication-unavailable"
+           for diagnostic in _diagnostic_output_diagnostics(outcome.get("diagnostics"))):
+        return True
     for relative in ("raw/stdout", "raw/stderr", "publish.reject"):
         path = directory / relative
         if not path.is_file() or path.is_symlink():
@@ -1307,8 +1310,8 @@ class NativeAcceptance:
                         "timeout liveness lease directory retained unexpected entries"))
         return not failures
 
-    def finalize(self, success: bool) -> bool:
-        """Complete natural cleanup, then remove only this test's private root."""
+    def finalize(self, success: bool, *, blocked: bool = False) -> bool:
+        """Finalize the run, retaining genuine-failure state for diagnosis."""
         failure_diagnostics_written = False
         if not success:
             # Diagnostics are independent evidence.  Persist them even when
@@ -1322,6 +1325,14 @@ class NativeAcceptance:
         leases_clean = True
         if self.closed:
             leases_clean = self._cleanup_timeout_leases()
+        retained_owned_directories = ()
+        if not success and not blocked:
+            retained_targets = (self.base, self.state, self.workspace)
+            retained_owned_directories = tuple(
+                entry for entry in self.owned_directories
+                if any(entry.directory == target or entry.directory in target.parents
+                       for target in retained_targets)
+            )
         artifacts_clean = finalize_acceptance_artifacts(
             self.output,
             self.closed,
@@ -1329,6 +1340,7 @@ class NativeAcceptance:
             success,
             remove_failed_process_captures=failure_diagnostics_written,
             raw_process_captures_token=self.processes.capture_root,
+            retained_owned_directories=retained_owned_directories,
         )
         return leases_clean and artifacts_clean
 
@@ -2938,11 +2950,11 @@ def _persist_failure_receipt(output: Path | None, value: dict[str, object]) -> b
         return False
 
 
-def _finalize_run(run: NativeAcceptance | None, success: bool) -> bool:
+def _finalize_run(run: NativeAcceptance | None, success: bool, *, blocked: bool = False) -> bool:
     if run is None:
         return True
     try:
-        finalized = run.finalize(success)
+        finalized = run.finalize(success, blocked=blocked)
     except BaseException as error:
         print("FAIL acceptance-native: test-owned runtime cleanup raised: " + str(error),
               file=sys.stderr, flush=True)
@@ -2995,7 +3007,7 @@ def main(argv: list[str] | None = None) -> int:
             raise BlockedFailure("OpenCode acceptance requires --model with a tool-capable configured route")
         run = NativeAcceptance(argparse.Namespace(**{**vars(args), "output": str(output)}))
         code = run.run()
-        if not _finalize_run(run, code == 0):
+        if not _finalize_run(run, code == 0, blocked=(code == 2)):
             return 1
         if code != 0:
             if args.discover_models:
@@ -3024,7 +3036,7 @@ def main(argv: list[str] | None = None) -> int:
                                                        "discover_models": args.discover_models,
                                                        "error": str(error),
                                                        "no_retry": True, "credentials_in_receipt": False})
-        cleanup_ok = _finalize_run(run, False)
+        cleanup_ok = _finalize_run(run, False, blocked=True)
         if not receipt_ok or not cleanup_ok:
             return 1
         print(f"BLOCKED acceptance-native: {error}", file=sys.stderr, flush=True)
