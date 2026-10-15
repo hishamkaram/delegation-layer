@@ -111,6 +111,8 @@ def expected_cases() -> tuple[CaseDefinition, ...]:
         definitions.append(_case_definition(index, provider, "read-only", "read-only"))
         index += 1
     definitions.append(_case_definition(index, "codex:review", "read-only", "read-only"))
+    definitions.append(_case_definition(index + 1, "codex:exec", "read-only", "non-git"))
+    definitions.append(_case_definition(index + 2, "codex:exec", "workspace-write", "non-git"))
     return tuple(definitions)
 
 
@@ -2545,6 +2547,7 @@ def _parse_optional_revision(value: str | None) -> str | None:
 def _command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("list-cases")
     prepare = commands.add_parser("prepare-case")
     prepare.add_argument("--aggregate-root", required=True)
     prepare.add_argument("--case-id", required=True)
@@ -2568,6 +2571,10 @@ def _command(argv: list[str]) -> int:
     stage.add_argument("--tag")
     stage.add_argument("--source-revision")
     args = parser.parse_args(argv)
+    if args.command == "list-cases":
+        for case in EXPECTED_CASES:
+            print("\t".join((case.case_id, case.provider, case.permission, case.scenario)))
+        return 0
     if args.command == "prepare-case":
         directory = prepare_case_directory(Path(args.aggregate_root), args.case_id)
         print(json.dumps({"case_id": args.case_id, "case_directory": str(directory)}, sort_keys=True))

@@ -441,7 +441,7 @@ esac
         self.assertEqual(receipt["archive_receipt_sha256"], hashlib.sha256(self.receipt_path.read_bytes()).hexdigest())
         self.assertEqual(receipt["aggregate_receipt_sha256"],
                          hashlib.sha256(aggregate_receipt.read_bytes()).hexdigest())
-        self.assertEqual(len(receipt["native_acceptance"]["case_receipt_hashes"]), 14)
+        self.assertEqual(len(receipt["native_acceptance"]["case_receipt_hashes"]), len(evidence.EXPECTED_CASES))
         self.assertTrue(all(len(item["receipt_sha256"]) == 64
                             for item in receipt["native_acceptance"]["case_receipt_hashes"]))
         self.assertEqual(receipt["cleanup"]["status"], "complete")
@@ -723,7 +723,7 @@ esac
         self.assertEqual(receipt["native_acceptance"]["aggregate_status"], "BLOCKED")
         self.assertEqual(receipt["native_acceptance"]["claims_scope"],
                          "provider-permission-scenario-case-results-only")
-        self.assertEqual(len(receipt["native_acceptance"]["case_receipt_hashes"]), 14)
+        self.assertEqual(len(receipt["native_acceptance"]["case_receipt_hashes"]), len(evidence.EXPECTED_CASES))
         self.assertTrue(all(item["status"] == "BLOCKED"
                             for item in receipt["native_acceptance"]["case_receipt_hashes"]))
         self.assertTrue(self.assets.exists())

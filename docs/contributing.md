@@ -277,8 +277,9 @@ PATH and its isolated default state path, and records the absolute binary paths,
 digests, build identity, native platform, commands, and exit codes. The live
 provider gate then uses that same extracted binary directory; its final receipt
 links the archive receipt digest, the aggregate case matrix, and every compact
-case-receipt digest. The matrix covers all 14 provider, permission, and scenario
-cases; each case has an explicit output directory under the aggregate root. Each
+case-receipt digest. The matrix is defined by `expected_cases()` in
+`scripts/native_acceptance_evidence.py` and covers provider, permission, and
+scenario cases, including non-Git Codex execution in both modes; each case has an explicit output directory under the aggregate root. Each
 compact receipt binds the final status and gate, provider, permission and mode,
 requested model and effort, scenario, task and session identity fields, binary
 identities, lifecycle proof, and the source receipt digest. Successful and
@@ -295,7 +296,7 @@ The verifier checks the attestation against `refs/tags/<tag>` and the tag's
 resolved release commit, while receipts record the release revision separately
 from the harness revision.
 
-The workflow stages the aggregate receipt, all 14 compact case receipts, the
+The workflow stages the aggregate receipt, every compact case receipt, the
 archive and final native receipts, and a digest manifest in the non-hidden
 `native-acceptance-evidence` directory before `upload-artifact`. The upload uses
 `if-no-files-found: error`; a missing case receipt or manifest is therefore a

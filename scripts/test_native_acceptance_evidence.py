@@ -181,7 +181,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(value["status"], "BLOCKED")
         self.assertTrue(value["matrix_complete"])
-        self.assertEqual(value["case_count"], 14)
+        self.assertEqual(value["case_count"], len(evidence.EXPECTED_CASES))
         self.assertEqual(value["blocked_scope"], "authentication-or-prerequisite-only")
         self.assertTrue(all(item["status"] == "BLOCKED" for item in value["cases"]))
         self.assertEqual(len(list((root / evidence.CASE_ROOT_NAME).iterdir())), 0)
@@ -205,12 +205,12 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         root = self.root / "native-aggregate-pass"
         value, code = self.build(root=root, status="PASS")
         self.assertEqual(code, 0)
-        self.assertEqual(value["evidence"]["case_raw"]["before"]["count"], 42)
+        self.assertEqual(value["evidence"]["case_raw"]["before"]["count"], 3 * len(evidence.EXPECTED_CASES))
         self.assertEqual(value["evidence"]["case_raw"]["after"]["count"], 0)
         compact_root = root / evidence.COMPACT_RECEIPT_ROOT_NAME
-        self.assertEqual(len(list(compact_root.glob("case-*.json"))), 28)
-        self.assertEqual(len(list(compact_root.glob("*.cleanup.json"))), 14)
-        self.assertEqual(len(list(compact_root.glob("*.cleanup.json.lock"))), 14)
+        self.assertEqual(len(list(compact_root.glob("case-*.json"))), 2 * len(evidence.EXPECTED_CASES))
+        self.assertEqual(len(list(compact_root.glob("*.cleanup.json"))), len(evidence.EXPECTED_CASES))
+        self.assertEqual(len(list(compact_root.glob("*.cleanup.json.lock"))), len(evidence.EXPECTED_CASES))
         self.assertEqual(list((root / evidence.CASE_ROOT_NAME).iterdir()), [])
         compact = json.loads(Path(value["cases"][0]["receipt_path"]).read_text(encoding="utf-8"))
         self.assertEqual(compact["source_proof"]["requested_options_state"], "recorded")
@@ -371,7 +371,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         with patch.object(evidence, "prepare_directory_cleanup", side_effect=prepare):
             value, code = self.build(root=root, status="PASS")
         self.assertEqual(code, 0)
-        self.assertEqual(observed, ["published-before-cleanup"] * 14)
+        self.assertEqual(observed, ["published-before-cleanup"] * len(evidence.EXPECTED_CASES))
         self.assertTrue(all(
             json.loads(Path(case["receipt_path"]).read_text(encoding="utf-8"))["source_proof"]
             ["binary_identities"]["state"] == "complete"
@@ -552,12 +552,12 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             root / evidence.AGGREGATE_RECEIPT_NAME, output,
             expected_tag="v1.2.3", expected_source_revision="a" * 40,
         )
-        self.assertEqual(manifest["case_count"], 14)
-        self.assertEqual(len(manifest["case_receipts"]), 14)
-        self.assertEqual(len(manifest["cleanup_journals"]), 14)
-        self.assertEqual(len(list((output / "case-receipts").glob("*.json"))), 14)
-        self.assertEqual(len(list((output / "cleanup-journals").glob("*.json"))), 14)
-        self.assertEqual(len(manifest["files"]), 30)
+        self.assertEqual(manifest["case_count"], len(evidence.EXPECTED_CASES))
+        self.assertEqual(len(manifest["case_receipts"]), len(evidence.EXPECTED_CASES))
+        self.assertEqual(len(manifest["cleanup_journals"]), len(evidence.EXPECTED_CASES))
+        self.assertEqual(len(list((output / "case-receipts").glob("*.json"))), len(evidence.EXPECTED_CASES))
+        self.assertEqual(len(list((output / "cleanup-journals").glob("*.json"))), len(evidence.EXPECTED_CASES))
+        self.assertEqual(len(manifest["files"]), 2 * len(evidence.EXPECTED_CASES) + 2)
         self.assertTrue((output / manifest["retention"]["plan"]["path"]).is_file())
         shutil.rmtree(root)
         for item in manifest["files"]:
@@ -842,7 +842,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         (old / evidence.AGGREGATE_RECEIPT_NAME).write_text(json.dumps({
             "kind": evidence.AGGREGATE_KIND, "status": "PASS",
             "aggregate_root": str(old), "unresolved_case_count": 0,
-            "matrix_complete": True, "expected_case_count": 14, "case_count": 14,
+            "matrix_complete": True, "expected_case_count": len(evidence.EXPECTED_CASES), "case_count": len(evidence.EXPECTED_CASES),
             "cases": [{"status": "PASS", "evidence_status": "RESOLVED"}
                       for _ in evidence.EXPECTED_CASES],
             "completed_at_ns": 1, "terminal_evidence_published": True,

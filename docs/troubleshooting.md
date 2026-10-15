@@ -320,6 +320,23 @@ user's settings are wrong: an obsolete adapter-supplied command override can
 also cause it. Preserve the evidence and check the installed delegate version;
 do not delete provider settings or MCP configuration as a generic repair.
 
+### Codex exits before producing structured events
+
+Older Delegate builds omitted Codex's non-Git launch option. An ordinary task
+outside a Git repository could therefore pass static preflight and then reject
+with `provider_failed`. Current builds supply the option automatically for new
+ordinary tasks in both permission modes. Use the intended directory directly;
+initializing Git or changing provider trust settings is unnecessary.
+
+`provider_startup_failed` means the process started, exited with a positive
+status, and emitted no structured task events. Delegate has no structured cause
+to report; it does not infer authentication or configuration failures from
+stderr. A static preflight result is not proof of live execution. Preserve the
+reported outcome and follow its `next_action`.
+
+An upgrade preserves already recorded outcomes and launch contracts. It does
+not turn an older rejected task into a successful result or a resumable session.
+
 ### Completed provider output rejected after a provider update
 
 Native providers can add large tool payloads, metadata, or duplicate fields in

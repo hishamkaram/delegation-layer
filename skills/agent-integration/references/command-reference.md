@@ -3,6 +3,11 @@
 All paths passed to `--root`, `--cwd`, and `--brief` must be absolute. Add
 `--json` to commands that return an agent-consumable response.
 
+Pass the intended workspace directly. Delegate handles provider launch options;
+do not initialize Git, change trust settings, or call a provider CLI as a
+workspace workaround. Ordinary Codex tasks support non-Git directories;
+Git-targeted native review requires a suitable repository.
+
 | Command | Purpose | Launches provider work? |
 | --- | --- | --- |
 | `delegate --version` | Confirm the installed control CLI | No |

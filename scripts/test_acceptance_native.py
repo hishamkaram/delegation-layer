@@ -36,9 +36,15 @@ case "$1" in
         if [ "${FAKE_HELPER_EXIT:-0}" -ne 0 ] && [ "$2" = aggregate ]; then
             exit "${FAKE_HELPER_EXIT}"
         fi
+        if [ "$2" = list-cases ] && [ "${FAKE_LIST_EXIT:-0}" -ne 0 ]; then
+            exit "$FAKE_LIST_EXIT"
+        fi
         exec "$REAL_PYTHON" "$@"
         ;;
     *acceptance_native.py)
+        if [ "${FAKE_READ_STDIN:-0}" -eq 1 ]; then
+            cat >/dev/null
+        fi
         output=
         provider=
         mode=
@@ -58,6 +64,11 @@ case "$1" in
         model_json=$("$REAL_PYTHON" -c 'import json, sys; print(json.dumps(sys.argv[2] if sys.argv[1] == "present" else None))' "$model_set" "$model")
         code=2
         case "${FAKE_NATIVE_RESULT:-blocked}" in
+            one-failure)
+                if [ "$provider" = codex:exec ] && [ "$scenario" = non-git ] && [ "$mode" = read-only ]; then
+                    code=1
+                fi
+                ;;
             mixed)
                 case "$provider" in
                     claude:print) code=0 ;;
@@ -2575,7 +2586,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "runtime setup failure"):
                     gate.NativeAcceptance(args)
 
-            self.assertFalse((home / "delegation-layer-live").exists())
+            self.assertTrue((home / "delegation-layer-live").is_dir())
+            self.assertEqual(list((home / "delegation-layer-live").iterdir()), [])
 
     def test_failure_diagnostics_do_not_skip_shutdown_or_finalization(self):
         with tempfile.TemporaryDirectory(prefix="native-finalize-call-unit-") as directory:
@@ -3353,8 +3365,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
     def test_aggregate_wrapper_runs_write_and_read_profiles(self):
         wrapper = Path(__file__).with_name("acceptance_native_all.sh").read_text()
-        for provider in ("antigravity:print", "claude:print", "ccr:print", "codex:exec", "codex:review", "pi:json", "opencode:run"):
-            self.assertIn(provider, wrapper)
+        self.assertIn("list-cases", wrapper)
+        self.assertIn('done <"$case_plan"', wrapper)
+        self.assertIn('--runner "$artifact_bin/delegate-run" </dev/null', wrapper)
         self.assertIn('--permission "$case_permission"', wrapper)
         self.assertIn('--scenario "$case_scenario"', wrapper)
         self.assertIn('if [ "$case_provider" = opencode:run ] && [ -n "${OPENCODE_LIVE_MODEL:-}" ]; then', wrapper)
@@ -3362,12 +3375,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         individual = Path(__file__).with_name("acceptance_native.sh").read_text()
         self.assertIn('if [ "$provider" = opencode:run ] && [ -n "${OPENCODE_LIVE_MODEL:-}" ]; then', individual)
         self.assertIn('set -- --model "$OPENCODE_LIVE_MODEL" "$@"', individual)
-        self.assertIn('run_case "$provider" workspace-write write', wrapper)
-        self.assertIn('run_case "$provider" read-only read-only', wrapper)
-        self.assertIn('run_case codex:exec workspace-write timeout-resume', wrapper)
         self.assertNotIn('timeout-process.json', wrapper)
-        self.assertIn('run_case codex:review read-only read-only', wrapper)
-        self.assertIn('for provider in antigravity:print claude:print ccr:print codex:exec pi:json opencode:run; do', wrapper)
         self.assertIn("2) # User-authorized authentication/prerequisite blocks remain neutral.", wrapper)
         self.assertIn("passed=%s blocked=%s failed=%s", wrapper)
         self.assertIn("aggregate_status=BLOCKED", wrapper)
@@ -3391,7 +3399,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 capture_output=True, text=True, check=False,
                 timeout=AGGREGATE_WRAPPER_TEST_TIMEOUT)
             self.assertEqual(blocked.returncode, 0)
-            self.assertIn("status=BLOCKED passed=0 blocked=14 failed=0", blocked.stdout)
+            self.assertIn(f"status=BLOCKED passed=0 blocked={len(native_evidence.EXPECTED_CASES)} failed=0", blocked.stdout)
             self.assertIn("auth_blocks_neutral=true", blocked.stdout)
             aggregate = json.loads((Path(environment["DELEGATE_ACCEPTANCE_OUTPUT_ROOT"])
                                     / "aggregate-receipt.json").read_text())
@@ -3410,7 +3418,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 capture_output=True, text=True, check=False,
                 timeout=AGGREGATE_WRAPPER_TEST_TIMEOUT)
             self.assertEqual(required.returncode, 2)
-            self.assertIn("status=BLOCKED passed=0 blocked=14 failed=0", required.stdout)
+            self.assertIn(f"status=BLOCKED passed=0 blocked={len(native_evidence.EXPECTED_CASES)} failed=0", required.stdout)
             environment.pop("DELEGATION_REQUIRE_LIVE_ACCEPTANCE")
 
             fake_python.write_text(fake_native_python_script())
@@ -3422,7 +3430,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 capture_output=True, text=True, check=False,
                 timeout=AGGREGATE_WRAPPER_TEST_TIMEOUT)
             self.assertEqual(mixed.returncode, 1)
-            self.assertIn("status=failed passed=2 blocked=9 failed=3", mixed.stdout)
+            self.assertIn(f"status=failed passed=2 blocked=9 failed={sum(case.provider == 'codex:exec' for case in native_evidence.EXPECTED_CASES)}", mixed.stdout)
 
             fake_python.write_text(fake_native_python_script())
             environment["FAKE_NATIVE_RESULT"] = "timeout"
@@ -3433,7 +3441,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 capture_output=True, text=True, check=False,
                 timeout=AGGREGATE_WRAPPER_TEST_TIMEOUT)
             self.assertEqual(successful_timeout.returncode, 0)
-            self.assertIn("status=passed passed=3 blocked=11 failed=0", successful_timeout.stdout)
+            self.assertIn(f"status=passed passed=3 blocked={len(native_evidence.EXPECTED_CASES) - 3} failed=0", successful_timeout.stdout)
 
     def test_aggregate_uses_each_case_exit_contract_without_a_second_receipt_oracle(self):
         wrapper = Path(__file__).with_name("acceptance_native_all.sh")
@@ -3454,7 +3462,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 timeout=AGGREGATE_WRAPPER_TEST_TIMEOUT)
 
             self.assertEqual(result.returncode, 0)
-            self.assertIn("status=passed passed=1 blocked=13 failed=0", result.stdout)
+            self.assertIn(f"status=passed passed=1 blocked={len(native_evidence.EXPECTED_CASES) - 1} failed=0", result.stdout)
 
     def test_aggregate_rejects_unexpected_evidence_helper_exit(self):
         wrapper = Path(__file__).with_name("acceptance_native_all.sh")

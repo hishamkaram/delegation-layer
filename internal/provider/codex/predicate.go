@@ -24,6 +24,7 @@ type interpreter struct {
 	mode              string
 	adapter           string
 	legacy            bool
+	historicalV3      bool
 	historicalCurrent bool
 	historicalRuntime bool
 }
@@ -40,6 +41,10 @@ func NewInterpreter(modes ...string) predicate.Interpreter {
 
 func newReviewInterpreter() predicate.Interpreter {
 	return interpreter{mode: Mode, adapter: ReviewProvider}
+}
+
+func newHistoricalV3Interpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, adapter: Provider, historicalV3: true}
 }
 
 func newLegacyInterpreter() predicate.Interpreter {
@@ -66,6 +71,9 @@ func (v interpreter) Reference() task.PredicateRef {
 	}
 	if v.legacy {
 		return LegacyReference()
+	}
+	if v.historicalV3 {
+		return historicalV3ReferenceForMode(v.mode)
 	}
 	if v.historicalCurrent {
 		return historicalCurrentRuntimeReferenceForMode(v.mode)

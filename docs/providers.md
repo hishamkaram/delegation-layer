@@ -197,6 +197,16 @@ native model option. `--effort` is encoded as the TOML setting
 `-c model_reasoning_effort="VALUE"`; an omitted or `default` effort is not
 added to native argv. Continuation uses the exact recorded provider session.
 
+New ordinary tasks work in Git and non-Git directories. Delegate supplies
+`--skip-git-repo-check` for both permission modes and exact-session continuation;
+the requested native sandbox remains selected. Existing tasks retain their
+recorded launch contract when reconstructed or continued after an upgrade.
+Native Git-targeted reviews still require a suitable repository.
+
+If a current ordinary task exits with a positive status before emitting any
+structured events, collection reports `provider_startup_failed`. This diagnosis
+uses sealed process facts and never copies or interprets stderr as a cause.
+
 With `--interactive`, Codex uses its native app-server over core-owned stdio
 instead of exec. Delegate enables `default_mode_request_user_input` only for that
 invocation, starts or resumes the exact thread, and starts one turn. Native
@@ -211,8 +221,8 @@ turn completion, and the selected agent answer remain validated. The optional
 last-message artifact is compared to the selected answer without buffering the
 whole answer.
 
-`codex:review` uses the same supervised executable and completion predicate for
-Codex's native `exec review` operation. It is always read-only and requires an
+`codex:review` uses the same supervised executable with a distinct completion
+contract for Codex's native `exec review` operation. It is always read-only and requires an
 explicit `--review-target`: `uncommitted`, `base:BRANCH`, or `commit:SHA`.
 The target is persisted with the immutable task request and is translated only
 by the adapter into the corresponding native review flag. Review tasks do not

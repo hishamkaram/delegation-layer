@@ -16,14 +16,14 @@ var ErrUnsupportedProfile = errors.New("unsupported-effective-config")
 // execArguments reserves the task-owned output path and places exec-only
 // options before the resume subcommand. The finite brief is always stdin.
 func execArguments(request task.TaskRecord) ([]string, int, error) {
-	return execArgumentsForProfile(request, true)
+	return execArgumentsForProfile(request, true, true)
 }
 
 func legacyExecArguments(request task.TaskRecord) ([]string, int, error) {
-	return execArgumentsForProfile(request, false)
+	return execArgumentsForProfile(request, false, false)
 }
 
-func execArgumentsForProfile(request task.TaskRecord, native bool) ([]string, int, error) {
+func execArgumentsForProfile(request task.TaskRecord, native, skipGitCheck bool) ([]string, int, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, 0, err
 	}
@@ -40,6 +40,9 @@ func execArgumentsForProfile(request task.TaskRecord, native bool) ([]string, in
 	arguments = appendModelArguments(arguments, request)
 	arguments = append(arguments, "--cd", request.CanonicalCwd, "--output-last-message", "")
 	outputIndex := len(arguments) - 1
+	if skipGitCheck {
+		arguments = append(arguments, "--skip-git-repo-check")
+	}
 	if prior := request.PriorSession; prior != nil {
 		if prior.Provider != Provider || !validThreadID(prior.ConversationID) || task.ValidateTaskID(prior.PredecessorTaskID) != nil {
 			return nil, 0, fmt.Errorf("%w: invalid exact continuation identity", ErrUnsupportedProfile)

@@ -365,6 +365,17 @@ def task_digest_snapshot(directory: Path) -> dict[str, dict[str, object]]:
     return snapshot(directory, ignored_prefixes=(".ack",))
 
 
+def has_git_ancestor(directory: Path) -> bool:
+    resolved = directory.resolve()
+    for parent in (resolved, *resolved.parents):
+        try:
+            (parent / ".git").lstat()
+        except FileNotFoundError:
+            continue
+        return True
+    return False
+
+
 def workspace_snapshot(directory: Path) -> dict[str, dict[str, object]]:
     """Record every workspace entry without opening special files."""
     directory = Path(directory)
@@ -935,12 +946,14 @@ class NativeAcceptance:
         scenario = getattr(args, "scenario", None)
         if scenario is None:
             scenario = "write" if requested_mode == "workspace-write" else "read-only"
-        if scenario not in {"read-only", "write", "timeout-resume", "interactive"}:
+        if scenario not in {"read-only", "write", "timeout-resume", "interactive", "non-git"}:
             raise AcceptanceFailure(f"unsupported native acceptance scenario: {scenario}")
         if scenario == "read-only" and requested_mode != "read-only":
             raise AcceptanceFailure("read-only scenario requires --permission read-only")
         if scenario == "write" and requested_mode != "workspace-write":
             raise AcceptanceFailure("write scenario requires --permission workspace-write")
+        if scenario == "non-git" and args.provider != "codex:exec":
+            raise AcceptanceFailure("non-git scenario requires codex:exec")
         if scenario == "timeout-resume" and (args.provider != "codex:exec" or
                                                 requested_mode != "workspace-write"):
             raise AcceptanceFailure("timeout-resume scenario requires codex:exec workspace-write")
@@ -981,15 +994,15 @@ class NativeAcceptance:
         # short enough for Darwin's Unix socket address limit.
         self.base_parent = Path.home() / "delegation-layer-live"
         self.base = self.base_parent / stamp
+        if self.scenario == "non-git" and has_git_ancestor(self.base):
+            raise BlockedFailure("non-Git acceptance requires a base outside Git repositories")
         try:
             reject_tmp(self.base, "live acceptance base")
-            if self.base_parent.exists() or self.base_parent.is_symlink():
-                require(self.base_parent.is_dir() and not self.base_parent.is_symlink(),
-                        "live acceptance base parent is unsafe")
-            else:
-                self.base_parent = self._constructor_ownership.create(
-                    "acceptance base parent", self.base_parent,
-                    self.base_parent.parent, mode=0o700, parents=True).directory
+            # This parent is shared by concurrent invocations, even when this
+            # invocation creates it. Only the unique child is disposable.
+            self.base_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            require(self.base_parent.is_dir() and not self.base_parent.is_symlink(),
+                    "live acceptance base parent is unsafe")
             self.base = self._constructor_ownership.create(
                 "acceptance base", self.base, self.base_parent).directory
             self._initialize_runtime_roots()
@@ -1578,6 +1591,10 @@ class NativeAcceptance:
 
     def _prepare_codex_workspace(self) -> None:
         if self.provider not in {"codex:exec", "codex:review"}:
+            return
+        if self.scenario == "non-git":
+            require(not has_git_ancestor(self.workspace),
+                    "non-Git acceptance workspace acquired a Git repository")
             return
         require(self.git is not None, "Codex git prerequisite is unavailable")
         process = self.processes.run(
@@ -2971,6 +2988,9 @@ class NativeAcceptance:
         self.collect("fresh-collect", first)
         self.task_binding(first)
         first_session = self.session_ref(first)
+        if self.scenario == "non-git":
+            require(not has_git_ancestor(self.workspace),
+                    "fresh execution created a Git repository")
         first_record = task_digest_snapshot(self.records["fresh-collect"]["directory"])
         first_check: bytes | None = None
         if self.mode == "workspace-write":
@@ -2985,6 +3005,9 @@ class NativeAcceptance:
         self.task_binding(second, first, first_session)
         second_session = self.session_ref(second)
         require_same_session(first_session, second_session)
+        if self.scenario == "non-git":
+            require(not has_git_ancestor(self.workspace),
+                    "continuation created a Git repository")
         require_replay_unchanged(first_record,
                                  task_digest_snapshot(self.records["fresh-collect"]["directory"]))
         if self.mode == "workspace-write":
@@ -3026,7 +3049,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider", required=True, choices=sorted(PROFILES))
     parser.add_argument("--permission", "--mode", dest="mode",
                         choices=("read-only", "workspace-write"), default=None)
-    parser.add_argument("--scenario", choices=("read-only", "write", "timeout-resume", "interactive"))
+    parser.add_argument("--scenario", choices=("read-only", "write", "timeout-resume", "interactive", "non-git"))
     parser.add_argument("--output")
     parser.add_argument("--delegate")
     parser.add_argument("--runner")

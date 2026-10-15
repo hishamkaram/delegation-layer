@@ -191,7 +191,7 @@ func TestHistoricalRuntimeReportedV2RemainsStrictAndRecoverable(t *testing.T) {
 	if err != nil || interpretation.Verdict != task.VerdictRejected || answer.Len() != 0 {
 		t.Fatalf("historical interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
 	}
-	recoverable, ok := NewInterpreter().(interface {
+	recoverable, ok := newHistoricalV3Interpreter(Mode).(interface {
 		CanRecover(task.PredicateRef) bool
 		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
 	})
@@ -604,7 +604,7 @@ func TestHistoricalRuntimeReferenceRemainsReplayableAndRecoverable(t *testing.T)
 	if err != nil || interp.Verdict != task.VerdictCommitted || answer.Len() == 0 {
 		t.Fatalf("historical interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 	}
-	recoverable, ok := NewInterpreter().(interface {
+	recoverable, ok := newHistoricalV3Interpreter(Mode).(interface {
 		CanRecover(task.PredicateRef) bool
 		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
 	})

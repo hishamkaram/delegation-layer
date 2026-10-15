@@ -22,14 +22,15 @@ mkdir -p "$case_root"
 chmod 700 "$case_root"
 printf 'case_id\tprovider\tpermission\tscenario\texit_code\tstatus\tcase_output\n' >"$matrix_path"
 case_number=0
+case_plan=$aggregate_output_root/case-plan.tsv
+python3 "$repo_root/scripts/native_acceptance_evidence.py" list-cases >"$case_plan"
+expected_case_count=$(wc -l <"$case_plan" | tr -d ' ')
 run_case() {
-    case_provider=$1
-    case_permission=$2
-    case_scenario=$3
+    case_id=$1
+    case_provider=$2
+    case_permission=$3
+    case_scenario=$4
     case_number=$((case_number + 1))
-    case_slug=$(printf '%s-%s-%s' "$case_provider" "$case_permission" "$case_scenario" |
-        tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//' | tr '[:upper:]' '[:lower:]')
-    case_id=$(printf 'case-%02d-%s' "$case_number" "$case_slug")
     case_output=$case_root/$case_id
     python3 "$repo_root/scripts/native_acceptance_evidence.py" prepare-case \
         --aggregate-root "$aggregate_output_root" --case-id "$case_id" >/dev/null
@@ -49,7 +50,7 @@ run_case() {
         --permission "$case_permission" \
         --scenario "$case_scenario" \
         --delegate "$artifact_bin/delegate" \
-        --runner "$artifact_bin/delegate-run"; then
+        --runner "$artifact_bin/delegate-run" </dev/null; then
         result=0
     else
         result=$?
@@ -73,14 +74,14 @@ run_case() {
         "$case_status" "$case_id" >>"$matrix_path"
 }
 
-for provider in antigravity:print claude:print ccr:print codex:exec pi:json opencode:run; do
-    run_case "$provider" workspace-write write
-done
-run_case codex:exec workspace-write timeout-resume
-for provider in antigravity:print claude:print ccr:print codex:exec pi:json opencode:run; do
-    run_case "$provider" read-only read-only
-done
-run_case codex:review read-only read-only
+tab=$(printf '\t')
+while IFS="$tab" read -r planned_id planned_provider planned_permission planned_scenario; do
+    run_case "$planned_id" "$planned_provider" "$planned_permission" "$planned_scenario"
+done <"$case_plan"
+if [ "$case_number" -ne "$expected_case_count" ] || [ "$case_number" -eq 0 ]; then
+    printf 'acceptance-native case plan was not completely consumed\n' >&2
+    exit 1
+fi
 evidence_status=0
 evidence_exit=0
 helper_python_version=
@@ -164,6 +165,6 @@ elif [ "$evidence_exit" -eq 2 ]; then
 fi
 printf 'acceptance-native aggregate status=%s passed=%s blocked=%s failed=%s auth_blocks_neutral=true\n' \
     "$aggregate_status" "$passed" "$blocked" "$failed"
-printf 'acceptance-native case-matrix=%s expected_cases=14\n' "$matrix_path"
+printf 'acceptance-native case-matrix=%s expected_cases=%s\n' "$matrix_path" "$expected_case_count"
 printf 'acceptance-native aggregate receipt=%s\n' "$aggregate_output_root/aggregate-receipt.json"
 exit "$aggregate_exit"
