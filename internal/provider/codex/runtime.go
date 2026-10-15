@@ -11,13 +11,21 @@ import (
 // RuntimeRequirements returns the command and flags used by the Codex launch
 // plan. It returns fresh slices so package metadata remains immutable.
 func RuntimeRequirements() commonprovider.RuntimeCapability {
-	return commonprovider.RuntimeCapability{
+	return nativeRuntimeRequirements(true)
+}
+
+func nativeRuntimeRequirements(skipGitCheck bool) commonprovider.RuntimeCapability {
+	requirements := commonprovider.RuntimeCapability{
 		HelpArgs: []string{"exec"},
 		RequiredFlags: []string{
 			"-c", "--sandbox", "--cd",
 			"--output-last-message", "--json", "--color",
 		},
 	}
+	if skipGitCheck {
+		requirements.RequiredFlags = append(requirements.RequiredFlags, "--skip-git-repo-check")
+	}
+	return requirements
 }
 
 func runtimeRequirementsForRequest(request task.TaskRecord, requirements commonprovider.RuntimeCapability) commonprovider.RuntimeCapability {

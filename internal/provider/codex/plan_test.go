@@ -22,7 +22,7 @@ func TestExecArgumentsUseNativePermissionsBeforeResume(t *testing.T) {
 	request := profileRequest()
 	want := []string{
 		"exec", "--json", "--color", "never", "--sandbox", "read-only", "-c", `approval_policy="never"`,
-		"--cd", request.CanonicalCwd, "--output-last-message", "", "-",
+		"--cd", request.CanonicalCwd, "--output-last-message", "", "--skip-git-repo-check", "-",
 	}
 	args, output, err := execArguments(request)
 	if err != nil || !slices.Equal(args, want) || output != 11 {
@@ -99,7 +99,7 @@ func TestExecArgumentsPassModelAndEffortWithNativeEncoding(t *testing.T) {
 	want := []string{
 		"exec", "--json", "--color", "never", "--sandbox", "read-only", "-c", `approval_policy="never"`,
 		"--model", "gpt-5.6", "-c", `model_reasoning_effort="high \"mode\""`,
-		"--cd", request.CanonicalCwd, "--output-last-message", "", "-",
+		"--cd", request.CanonicalCwd, "--output-last-message", "", "--skip-git-repo-check", "-",
 	}
 	args, output, err := execArguments(request)
 	if err != nil || !slices.Equal(args, want) || output != 15 {

@@ -62,8 +62,8 @@ APPROVAL = "never"
 # The predicate revision describes the adapter's output contract. It is
 # deliberately independent of the installed Codex CLI release, which is
 # admitted through the runtime capability probe.
-PREDICATE_VERSION = "runtime-reported-v3"
-PREDICATE_SHA256 = "2d549451e555032a58bdd46fbb48a31fd0b57d17df0a6aa267c1d7d8ee3a6d18"
+PREDICATE_VERSION = "runtime-reported-v4"
+PREDICATE_SHA256 = "04ed00ac78083189161565364b8cd9a8e0c01c7019d1fd1480c2a5f35631ff86"
 OUTPUT_NAME = "codex-last-message.txt"
 OUTPUT_WRITER_CONTRACT = "process-exit-eof-v1"
 TASK_BUDGET = "120s"
@@ -88,7 +88,7 @@ RUNTIME_INSPECTION_REVISION = "runtime-capability-v1"
 RUNTIME_HELP_ARGS = ["exec"]
 RUNTIME_REQUIRED_FLAGS = [
     "-c", "--sandbox", "--cd",
-    "--output-last-message", "--json", "--color",
+    "--output-last-message", "--json", "--color", "--skip-git-repo-check",
 ]
 CODEX_ENVIRONMENT_KEYS = (
     "HOME", "CODEX_HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",

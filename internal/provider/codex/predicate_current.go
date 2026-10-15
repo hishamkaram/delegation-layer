@@ -27,7 +27,7 @@ func evaluateCurrentInterpreterAgainst(v interpreter, input predicate.Input, raw
 	usage := currentUsageMetadata(state, task.UsageReliabilityUnreliable)
 	if refusal := currentRefusalFor(input, state, v.provider()); refusal != "" {
 		result := rejectedWithUsage(refusal, usage)
-		result.Diagnostics = append(result.Diagnostics, currentDiagnostic(state.semantic, refusal))
+		result.Diagnostics = append(result.Diagnostics, v.rejectionDiagnostic(input, state.semantic, refusal))
 		result.Diagnostics = append(result.Diagnostics, currentUsageWarning(state)...)
 		return result, nil
 	}
@@ -60,6 +60,22 @@ func evaluateCurrentInterpreterAgainst(v interpreter, input predicate.Input, raw
 	}
 	result.Diagnostics = currentUsageWarning(state)
 	return result, nil
+}
+
+func (v interpreter) rejectionDiagnostic(input predicate.Input, parseErr error, refusal string) task.OutputDiagnostic {
+	seal := input.Seal
+	if v.Reference().Equal(ReferenceForMode(v.mode)) &&
+		seal.InvocationState == task.InvocationStarted && seal.Error == "" && seal.ExitCode > 0 {
+		for _, entry := range seal.RawManifest {
+			if entry.Path == "raw/stdout" && entry.Size == 0 {
+				return task.OutputDiagnostic{
+					Code:    "provider_startup_failed",
+					Message: "Codex exited before emitting structured task events; no structured cause is available.",
+				}
+			}
+		}
+	}
+	return currentDiagnostic(parseErr, refusal)
 }
 
 func currentUsageWarning(state currentEventState) []task.OutputDiagnostic {
@@ -132,7 +148,7 @@ func validateCurrentEvaluationInput(input predicate.Input, raw predicate.Evidenc
 // CanRecover reports the same-wire revisions that the corrected current
 // interpreter can re-evaluate without changing the original sealed input.
 func (v interpreter) CanRecover(source task.PredicateRef) bool {
-	if v.legacy || v.historicalCurrent || v.historicalRuntime || v.mode != Mode && v.mode != WorkspaceWriteMode {
+	if v.provider() != Provider || !v.historicalV3 || v.mode != Mode && v.mode != WorkspaceWriteMode {
 		return false
 	}
 	if source.Equal(historicalCurrentRuntimeReferenceForMode(v.mode)) {

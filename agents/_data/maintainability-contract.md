@@ -75,6 +75,15 @@ bounded stdout behavior is supplied through their narrow options; a provider
 harness must not define another process class or registry. The ownership
 verifier enforces this boundary.
 
+Provider workspace preconditions must be explicit in the adapter contract and
+its acceptance scenarios. Generic fixtures must not erase a precondition by
+initializing Git for every workspace. A changed workspace launch policy needs
+fresh and continuation coverage in each affected permission mode, including
+Git and non-Git controls where applicable. Persisted tasks must reconstruct
+their recorded launch requirements and interpretation unchanged. The native
+acceptance matrix has one definition owner; runners and validators derive
+their case lists and counts from it.
+
 ## Durable transition matrix and composed tests
 
 Every lifecycle design, implementation, review, and handoff uses one canonical

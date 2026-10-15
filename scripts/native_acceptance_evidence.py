@@ -111,10 +111,14 @@ def expected_cases() -> tuple[CaseDefinition, ...]:
         definitions.append(_case_definition(index, provider, "read-only", "read-only"))
         index += 1
     definitions.append(_case_definition(index, "codex:review", "read-only", "read-only"))
+    definitions.append(_case_definition(index + 1, "codex:exec", "read-only", "non-git"))
+    definitions.append(_case_definition(index + 2, "codex:exec", "workspace-write", "non-git"))
     return tuple(definitions)
 
 
 EXPECTED_CASES = expected_cases()
+# One bounded case reference per matrix row, plus the aggregate envelope.
+MAX_AGGREGATE_BYTES = (len(EXPECTED_CASES) + 1) * MAX_RECEIPT_BYTES
 
 
 def canonical_json(value: object) -> bytes:
@@ -1143,7 +1147,7 @@ def _retention_count(value: int | None) -> int:
 
 def _resolved_receipt(path: Path) -> tuple[dict[str, object], int] | None:
     try:
-        value, _ = _read_json(path, MAX_RECEIPT_BYTES)
+        value, _ = _read_json(path, MAX_AGGREGATE_BYTES)
     except EvidenceError:
         return None
     if not isinstance(value, dict) or value.get("kind") != AGGREGATE_KIND:
@@ -1301,7 +1305,7 @@ def _reconcile_pending_retention(parent: Path, current_root: Path) -> None:
                     or plan.get("state") not in {"prepared", "partial", "complete"}):
                 raise EvidenceError("retention_plan_invalid")
             receipt_path = candidate / AGGREGATE_RECEIPT_NAME
-            receipt, _ = _read_json(receipt_path, MAX_RECEIPT_BYTES)
+            receipt, _ = _read_json(receipt_path, MAX_AGGREGATE_BYTES)
             configured = plan.get("configured_count")
             if not isinstance(receipt, dict) or type(configured) is not int:
                 raise EvidenceError("retention_plan_invalid")
@@ -1550,7 +1554,7 @@ def _publish_completed_retention_receipt(
         "after": _tree_summary(root / CASE_ROOT_NAME),
     }
     evidence["compact_receipts"] = _tree_summary(root / COMPACT_RECEIPT_ROOT_NAME)
-    _write_atomic(receipt_path, receipt)
+    _write_atomic(receipt_path, receipt, MAX_AGGREGATE_BYTES)
     validate_aggregate_receipt(
         receipt_path,
         expected_tag=receipt.get("tag") if isinstance(receipt.get("tag"), str) else None,
@@ -1625,7 +1629,7 @@ def _build_aggregate_locked(
     if receipt_path.exists() or receipt_path.is_symlink():
         if receipt_path.is_symlink():
             raise EvidenceError("aggregate_receipt_invalid")
-        existing_value, _ = _read_json(receipt_path, MAX_RECEIPT_BYTES)
+        existing_value, _ = _read_json(receipt_path, MAX_AGGREGATE_BYTES)
         existing_policy = (
             existing_value.get("policy") if isinstance(existing_value, dict) else None
         )
@@ -1857,7 +1861,7 @@ def _build_aggregate_locked(
         "credentials_in_receipt": False,
     }
     # The provisional receipt makes this aggregate visible to the retention scan.
-    _write_atomic(receipt_path, receipt)
+    _write_atomic(receipt_path, receipt, MAX_AGGREGATE_BYTES)
     retention_result = _enforce_retention(aggregate_root, receipt, retention)
     if retention_result["status"] != "complete":
         receipt["retention"] = retention_result
@@ -1871,7 +1875,7 @@ def _build_aggregate_locked(
             raise EvidenceError("aggregate_evidence_invalid")
         evidence["case_raw"] = {"before": raw_before, "after": _tree_summary(cases_root)}
         evidence["compact_receipts"] = _tree_summary(receipts_root)
-        _write_atomic(receipt_path, receipt)
+        _write_atomic(receipt_path, receipt, MAX_AGGREGATE_BYTES)
         raise EvidenceError("aggregate_retention_incomplete")
     receipt = _publish_completed_retention_receipt(
         aggregate_root, receipt_path, receipt, retention_result,
@@ -2173,7 +2177,7 @@ def validate_aggregate_receipt(
         *,
         expected_tag: str | None = None,
         expected_source_revision: str | None = None) -> tuple[dict[str, object], str]:
-    value, data = _read_json(path, MAX_RECEIPT_BYTES)
+    value, data = _read_json(path, MAX_AGGREGATE_BYTES)
     if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
         raise EvidenceError("aggregate_receipt_invalid")
     if value.get("kind") != AGGREGATE_KIND or value.get("claim") != "native-acceptance-case-results":
@@ -2361,8 +2365,8 @@ def _stage_evidence_locked(
     retention_output = output / "retention"
     retention_output.mkdir(mode=0o700)
     _write_bytes_atomic(output / AGGREGATE_RECEIPT_NAME, _bounded_file_bytes(
-        aggregate_path, MAX_RECEIPT_BYTES,
-    ))
+        aggregate_path, MAX_AGGREGATE_BYTES,
+    ), MAX_AGGREGATE_BYTES)
     files: list[dict[str, str]] = [{"path": AGGREGATE_RECEIPT_NAME, "sha256": aggregate_digest}]
     case_receipts: list[dict[str, str]] = []
     cleanup_journals: list[dict[str, str]] = []
@@ -2529,7 +2533,8 @@ def _stage_evidence_locked(
             or manifest_value.get("files") != files):
         raise EvidenceError("stage_manifest_invalid")
     for item in files:
-        if _digest_file(output / item["path"], MAX_RECEIPT_BYTES) != item["sha256"]:
+        limit = MAX_AGGREGATE_BYTES if item["path"] == AGGREGATE_RECEIPT_NAME else MAX_RECEIPT_BYTES
+        if _digest_file(output / item["path"], limit) != item["sha256"]:
             raise EvidenceError("stage_manifest_digest_mismatch")
     return manifest
 
@@ -2545,6 +2550,7 @@ def _parse_optional_revision(value: str | None) -> str | None:
 def _command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("list-cases")
     prepare = commands.add_parser("prepare-case")
     prepare.add_argument("--aggregate-root", required=True)
     prepare.add_argument("--case-id", required=True)
@@ -2568,6 +2574,10 @@ def _command(argv: list[str]) -> int:
     stage.add_argument("--tag")
     stage.add_argument("--source-revision")
     args = parser.parse_args(argv)
+    if args.command == "list-cases":
+        for case in EXPECTED_CASES:
+            print("\t".join((case.case_id, case.provider, case.permission, case.scenario)))
+        return 0
     if args.command == "prepare-case":
         directory = prepare_case_directory(Path(args.aggregate_root), args.case_id)
         print(json.dumps({"case_id": args.case_id, "case_directory": str(directory)}, sort_keys=True))

@@ -43,7 +43,16 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 		!storedPredicate.Equal(historicalInteractionReference(request.Mode)) {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: stored Codex predicate is not interactive", ErrUnsupportedProfile)
 	}
-	arguments, output, err := profileArguments(request, native, review)
+	predicateReference := profilePredicateReference(request.Mode, storedPredicate, providerID)
+	if request.RequestedConfig.Interactive {
+		if storedPredicate.Equal(task.PredicateRef{}) {
+			predicateReference = interactionReference(request.Mode)
+		} else {
+			predicateReference = storedPredicate
+		}
+	}
+	skipGitCheck := native && predicateReference.Equal(ReferenceForMode(request.Mode))
+	arguments, output, err := profileArguments(request, native, review, skipGitCheck)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -59,7 +68,7 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	requirements := profileRuntimeRequirements(request, native, review)
+	requirements := profileRuntimeRequirements(request, native, review, skipGitCheck)
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment.Values, requirements)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
@@ -67,14 +76,6 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 	capability, err := staticCapability(definition, native, allowStaticAdmit)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
-	}
-	predicateReference := profilePredicateReference(request.Mode, storedPredicate, providerID)
-	if request.RequestedConfig.Interactive {
-		if storedPredicate.Equal(task.PredicateRef{}) {
-			predicateReference = interactionReference(request.Mode)
-		} else {
-			predicateReference = storedPredicate
-		}
 	}
 	candidate := commonprovider.ProfileCandidate{
 		Directory:     request.CanonicalCwd,
@@ -111,17 +112,14 @@ func finalizePreparedCandidate(request task.TaskRecord, native bool, arguments [
 	return buildPreparedCandidate(request, native, arguments, output, environment, cli, legacyEffective, predicateReference, providerID, review, runtime.Version, runtime.SHA256, "")
 }
 
-func profileArguments(request task.TaskRecord, native, review bool) ([]string, int, error) {
+func profileArguments(request task.TaskRecord, native, review, skipGitCheck bool) ([]string, int, error) {
 	if review {
 		return reviewArguments(request)
 	}
 	if request.RequestedConfig.Interactive {
 		return []string{"app-server", "--listen", "stdio://", "--enable", "default_mode_request_user_input"}, -1, nil
 	}
-	if native {
-		return execArguments(request)
-	}
-	return legacyExecArguments(request)
+	return execArgumentsForProfile(request, native, skipGitCheck)
 }
 
 func historicalEffectiveConfig(request task.TaskRecord, environment profileEnvironment, runtimeSHA256 string, native bool) (task.EffectiveConfig, error) {
@@ -131,7 +129,7 @@ func historicalEffectiveConfig(request task.TaskRecord, environment profileEnvir
 	return effectivePolicy(request, environment, time.Now(), managedSources, runtimeSHA256)
 }
 
-func profileRuntimeRequirements(request task.TaskRecord, native, review bool) commonprovider.RuntimeCapability {
+func profileRuntimeRequirements(request task.TaskRecord, native, review, skipGitCheck bool) commonprovider.RuntimeCapability {
 	if review {
 		return reviewRuntimeRequirementsForRequest(request)
 	}
@@ -139,7 +137,7 @@ func profileRuntimeRequirements(request task.TaskRecord, native, review bool) co
 		return commonprovider.RuntimeCapability{HelpArgs: []string{"app-server"}, RequiredFlags: []string{"--listen", "--enable"}}
 	}
 	if native {
-		return runtimeRequirementsForRequest(request, RuntimeRequirements())
+		return runtimeRequirementsForRequest(request, nativeRuntimeRequirements(skipGitCheck))
 	}
 	return runtimeRequirementsForRequest(request, legacyRuntimeRequirements())
 }
