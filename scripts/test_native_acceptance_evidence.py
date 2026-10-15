@@ -564,6 +564,40 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             self.assertTrue((output / item["path"]).is_file())
         self.assertFalse(output.name.startswith("."))
 
+    def test_large_aggregate_replays_and_stages_with_long_native_paths(self):
+        root = self.root / ("native-path-" + "x" * 150) / ("nested-" + "y" * 150)
+        self.build(root=root, status="PASS")
+        receipt_path = root / evidence.AGGREGATE_RECEIPT_NAME
+        original = receipt_path.read_bytes()
+        self.assertGreater(len(original), evidence.MAX_RECEIPT_BYTES)
+        self.assertLessEqual(len(original), evidence.MAX_AGGREGATE_BYTES)
+
+        value, code = evidence.build_aggregate(
+            root, root / evidence.CASE_MATRIX_NAME, receipt_path,
+            tag="v1.2.3", source_revision="a" * 40,
+        )
+        self.assertEqual((code, value["status"]), (0, "PASS"))
+        self.assertEqual(receipt_path.read_bytes(), original)
+        output = self.root / "staged-long-paths"
+        manifest = evidence.stage_evidence(
+            receipt_path, output,
+            expected_tag="v1.2.3", expected_source_revision="a" * 40,
+        )
+        self.assertEqual((output / evidence.AGGREGATE_RECEIPT_NAME).read_bytes(), original)
+        self.assertEqual(manifest["case_count"], len(evidence.EXPECTED_CASES))
+
+    def test_oversized_aggregate_remains_bounded(self):
+        receipt_path = self.root / evidence.AGGREGATE_RECEIPT_NAME
+        receipt_path.write_bytes(b" " * (evidence.MAX_AGGREGATE_BYTES + 1))
+        with self.assertRaisesRegex(evidence.EvidenceError, "evidence_file_too_large"):
+            evidence.validate_aggregate_receipt(receipt_path)
+
+    def test_individual_receipt_write_bound_is_unchanged(self):
+        receipt_path = self.root / "individual.json"
+        with self.assertRaisesRegex(evidence.EvidenceError, "receipt_too_large"):
+            evidence._write_atomic(receipt_path, {"data": "x" * evidence.MAX_RECEIPT_BYTES})
+        self.assertFalse(receipt_path.exists())
+
     def test_unresolved_failure_preserves_raw_evidence(self):
         root = self.root / "native-aggregate-failure"
         value, code = self.build(root=root, status="PASS", failed_index=0)
@@ -820,7 +854,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         receipt = first / evidence.AGGREGATE_RECEIPT_NAME
         value = json.loads(receipt.read_text(encoding="utf-8"))
         del value["cases"][0]["binary_identities"]["task_ids"]
-        evidence._write_atomic(receipt, value)
+        evidence._write_atomic(receipt, value, evidence.MAX_AGGREGATE_BYTES)
         terminal_bytes = receipt.read_bytes()
         with self.assertRaises(evidence.EvidenceError):
             evidence.validate_aggregate_receipt(receipt)
