@@ -2368,6 +2368,9 @@ func retargetPrivateMigrationIfNeeded(base string, legacyBinding task.Supervisor
 	if !found || !privateDaemonIdentityMatchesBinding(identity, legacyBinding) || privateMigrationIdentityMatchesCurrent(pending.Successor, current, currentBinding) {
 		return pending, nil
 	}
+	if !privateMigrationMayRetarget(pending) {
+		return pending, ErrPrivateSupervisorMigrationRequired
+	}
 	// A migration can remain blocked while the installed CLI is upgraded
 	// again. The legacy endpoint is still the persisted identity, so the
 	// pending successor may be retargeted under the bootstrap lock. This is a
@@ -2977,6 +2980,18 @@ func preparePrivateWithLock(ctx context.Context, clientExecutable, daemonExecuta
 	}
 	if err = recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return nil, err
+	}
+	if published, found, readErr := loadPrivateSupervisorBinding(stateRoot); readErr != nil {
+		return nil, readErr
+	} else if found {
+		options, err = optionsForPublishedPrivateBinding(published, options)
+		if err != nil {
+			return nil, err
+		}
+		resolution, err = privateResolution(options)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return preparePrivateClient(bootstrapContext, stateRoot, options, resolution, clientPath, daemonPath, base, migrationOnly, true)
 }
@@ -3595,7 +3610,8 @@ func privateMigrationRecordPath(base string) string {
 }
 
 type privateBootstrapRecord struct {
-	SchemaVersion int `json:"schema_version"`
+	SchemaVersion int                       `json:"schema_version"`
+	Restart       *privatePairRestartIntent `json:"restart,omitempty"`
 }
 
 func privateBootstrapRecordPath(stateRoot string) string {
@@ -3607,24 +3623,34 @@ func privateBootstrapRecordPath(stateRoot string) string {
 // Delegate-owned startup interrupted before publication from an unrelated
 // pre-existing private config whose owner cannot be proven.
 func PrivateBootstrapPending(stateRoot string) (bool, error) {
+	_, found, err := readPrivateBootstrapRecord(stateRoot)
+	return found, err
+}
+
+func readPrivateBootstrapRecord(stateRoot string) (privateBootstrapRecord, bool, error) {
 	if !filepath.IsAbs(stateRoot) || filepath.Clean(stateRoot) != stateRoot {
-		return false, ErrConfiguration
+		return privateBootstrapRecord{}, false, ErrConfiguration
 	}
 	data, err := readRegular(privateBootstrapRecordPath(stateRoot), MaxControlBytes)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return privateBootstrapRecord{}, false, nil
 	}
 	if err != nil {
-		return false, err
+		return privateBootstrapRecord{}, false, err
 	}
 	var record privateBootstrapRecord
 	if err = task.DecodeStrict(data, &record); err != nil {
-		return false, errors.Join(ErrBinding, err)
+		return privateBootstrapRecord{}, false, errors.Join(ErrBinding, err)
 	}
 	if record.SchemaVersion != task.SchemaVersion {
-		return false, fmt.Errorf("%w: unsupported private bootstrap journal schema %d", task.ErrUnsupportedSchema, record.SchemaVersion)
+		return privateBootstrapRecord{}, false, fmt.Errorf("%w: unsupported private bootstrap journal schema %d", task.ErrUnsupportedSchema, record.SchemaVersion)
 	}
-	return true, nil
+	if record.Restart != nil {
+		if err = validatePrivatePairRestartIntent(stateRoot, *record.Restart); err != nil {
+			return privateBootstrapRecord{}, false, err
+		}
+	}
+	return record, true, nil
 }
 
 func markPrivateBootstrapPending(stateRoot string) error {

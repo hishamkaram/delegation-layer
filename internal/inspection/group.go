@@ -550,6 +550,67 @@ func HasCompletedGroupMigration(ctx context.Context, store *taskdir.Store) (comp
 	return complete, resultErr
 }
 
+// GroupMigrationPending observes the current head's prepare marker through the
+// journal owner. Alternate proposals always have a primary prepare marker.
+func GroupMigrationPending(ctx context.Context, store *taskdir.Store) (bool, error) {
+	successors, err := PreparedGroupMigrationSuccessors(ctx, store)
+	return len(successors) != 0, err
+}
+
+// PreparedGroupMigrationSuccessors reads primary and alternate proposals for
+// the current head. Selection cannot discard a valid later prepared edge.
+func PreparedGroupMigrationSuccessors(ctx context.Context, store *taskdir.Store) (successors []task.SupervisorRef, resultErr error) {
+	head, _, err := ReadGroupHead(ctx, store)
+	if task.RecordAbsent(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	control, err := openMigrationControl(ctx, store, head, false)
+	if task.RecordAbsent(err) {
+		return nil, nil // A completed edge may precede successor group creation.
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, control.Close()) }()
+	names, err := control.RecordNamesContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	primary := false
+	for _, name := range names {
+		if name == groupMigrationDoneName || !strings.HasPrefix(name, groupMigrationRecordPrefix) && name != groupMigrationRecordName {
+			continue
+		}
+		record, readErr := readPreparedGroupMigration(control, store.RootID, head, name)
+		if readErr != nil {
+			return nil, readErr
+		}
+		primary = primary || name == groupMigrationRecordName
+		successors = append(successors, record.Successor.Supervisor)
+	}
+	if len(successors) != 0 && !primary {
+		return nil, fmt.Errorf("%w: alternate inspection proposal lacks primary marker", task.ErrEvidenceFault)
+	}
+	return successors, nil
+}
+
+func readPreparedGroupMigration(control *taskdir.ControlDir, rootID string, head GroupRequestRecord, name string) (GroupMigrationRecord, error) {
+	var record GroupMigrationRecord
+	if err := control.Read(name, &record); err != nil {
+		return record, errors.Join(task.ErrEvidenceFault, err)
+	}
+	if err := validateMigrationRecord(record, rootID, head); err != nil {
+		return record, fmt.Errorf("%w: invalid pending group migration: %w", task.ErrEvidenceFault, err)
+	}
+	if name != groupMigrationRecordName && name != pendingMigrationRecordName(record.SuccessorSHA256) {
+		return record, fmt.Errorf("%w: inspection proposal name does not match its record", task.ErrEvidenceFault)
+	}
+	return record, nil
+}
+
 func readMigrationRecord(ctx context.Context, store *taskdir.Store, legacy GroupRequestRecord, name string) (record GroupMigrationRecord, found bool, resultErr error) {
 	control, err := openMigrationControl(ctx, store, legacy, false)
 	if err != nil {

@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills verify-acceptance-ownership skill-package-check plugin-package-check test-race test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-supervisor-handoff acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills verify-acceptance-ownership skill-package-check plugin-package-check test-race test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
 
 tools:
 	./scripts/install-tools.sh
@@ -136,6 +136,16 @@ acceptance-supervisor-handoff: build
 		--scenario external-inspection-handoff \
 		--parallel-tasks 2 \
 		--dispatch-workers 2 \
+		--output "$$receipt_dir/receipt.json"
+
+acceptance-supervisor-upgrade-recovery: build
+	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
+	echo "Supervisor upgrade recovery evidence: $$receipt_dir/receipt.json"; \
+	python3 scripts/acceptance_private_cli.py \
+		--delegate "$(BIN_DIR)/delegate" --runner "$(BIN_DIR)/delegate-run" \
+		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+		--scenario supervisor-upgrade-recovery --parallel-tasks 2 \
 		--output "$$receipt_dir/receipt.json"
 
 acceptance-agy: build test-native-harness

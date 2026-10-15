@@ -775,7 +775,7 @@ func ensureInspectionGroupWithMigrationContext(parent context.Context, store *ta
 			if err := rejectExternalInspectionMigration(ensureContext, store, supervisor); err != nil {
 				return err
 			}
-		} else if err := recoverInspectionGroupGenerationWithLock(ensureContext, store, supervisor); err != nil {
+		} else if err := recoverInspectionGroupGenerationWithLock(ensureContext, store, supervisor, true); err != nil {
 			return err
 		}
 		migrationCheck := inspectionGroupMigrationCheck(store, supervisor, timeout, allowMigration)
@@ -917,6 +917,9 @@ func preparePrivateAdmissionTransition(ctx context.Context, deps Dependencies, s
 		return nil, err
 	}
 	if err = pueue.EnsurePrivateTaskObservationWithBootstrapLock(store.Root); err != nil {
+		return nil, err
+	}
+	if err = reconcilePublishedSupervisorWithLock(ctx, store, options, false); err != nil {
 		return nil, err
 	}
 	supervisor, ready, err := repairLivePrivateAdmissionTransition(ctx, store, options, configExisted)
@@ -1083,9 +1086,17 @@ func migrateInspectionSupervisorLocked(ctx context.Context, store *taskdir.Store
 	if store == nil || supervisor == nil {
 		return errors.New("missing inspection supervisor")
 	}
+	if err := resumeInspectionSupervisorGenerationWithLock(ctx, store, supervisor); err != nil {
+		return err
+	}
 	present, matches, err := inspection.GroupHeadMatchesBinding(ctx, store, supervisor.Binding())
 	if err != nil {
 		return err
+	}
+	if present && matches {
+		if err = prepareInspectionGroupSupervisor(ctx, store, supervisor, true); err != nil {
+			return err
+		}
 	}
 	if !present || matches {
 		if migrationErr := supervisor.MigratePrivateSupervisorWithLock(ctx, store.Root); migrationErr != nil {
@@ -1104,9 +1115,22 @@ func migrateInspectionSupervisorLocked(ctx context.Context, store *taskdir.Store
 	return group.Close()
 }
 
+func resumeInspectionSupervisorGenerationWithLock(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client) error {
+	pending, err := pueue.PrivateSupervisorMigrationPending(store.Root)
+	if err != nil {
+		return err
+	}
+	if pending {
+		if err = supervisor.MigratePrivateSupervisorWithLock(ctx, store.Root); err != nil {
+			return err
+		}
+	}
+	return recoverInspectionGroupGenerationWithLock(ctx, store, supervisor, false)
+}
+
 func ensureInspectionGroupLocked(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, timeout time.Duration, allowMigration bool) (resultErr error) {
 	if pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
-		if err := recoverInspectionGroupGenerationWithLock(ctx, store, supervisor); err != nil {
+		if err := recoverInspectionGroupGenerationWithLock(ctx, store, supervisor, !allowMigration); err != nil {
 			return err
 		}
 	}
@@ -1139,7 +1163,11 @@ func prepareInspectionGroupSupervisor(ctx context.Context, store *taskdir.Store,
 		return err
 	}
 	if present && matches {
-		if err := pueue.PublishPrivateSupervisorBindingIfAbsentContext(ctx, store.Root, supervisor.Binding()); err != nil {
+		head, _, readErr := inspection.ReadGroupHead(ctx, store)
+		if readErr != nil {
+			return readErr
+		}
+		if err := pueue.PublishVerifiedPrivatePredecessorWithLock(ctx, store.Root, head.Supervisor); err != nil {
 			return err
 		}
 		// A completed logical migration is the durable proof that the
@@ -1217,7 +1245,7 @@ func migrateInspectionGroup(ctx context.Context, store *taskdir.Store, superviso
 }
 
 func ensureInspectionPrivateMigration(ctx context.Context, stateRoot string, supervisor *pueue.Client, predecessor, successor task.SupervisorRef) error {
-	complete, err := pueue.PrivateSupervisorMigrationEdgeCompleteWithLock(ctx, stateRoot, predecessor, successor)
+	predecessor, complete, err := inspectionPrivateMigrationPredecessorWithLock(ctx, stateRoot, predecessor, successor)
 	if err != nil {
 		return fmt.Errorf("%w: verify completed private supervisor migration: %w", inspection.ErrGroupMigrationRequired, err)
 	}
@@ -1229,14 +1257,14 @@ func ensureInspectionPrivateMigration(ctx context.Context, stateRoot string, sup
 		return fmt.Errorf("%w: verify published private supervisor migration: %w", inspection.ErrGroupMigrationRequired, err)
 	}
 	if !published {
-		if err = pueue.PublishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, predecessor); err != nil {
+		if err = pueue.PublishVerifiedPrivatePredecessorWithLock(ctx, stateRoot, predecessor); err != nil {
 			return fmt.Errorf("%w: preserve legacy supervisor binding: %w", inspection.ErrGroupMigrationRequired, err)
 		}
 	}
 	if err = supervisor.MigratePrivateSupervisorWithLock(ctx, stateRoot); err != nil {
 		return fmt.Errorf("%w: migrate private supervisor with legacy inspection evidence: %w", inspection.ErrGroupMigrationRequired, err)
 	}
-	complete, err = pueue.PrivateSupervisorMigrationEdgeCompleteWithLock(ctx, stateRoot, predecessor, successor)
+	_, complete, err = inspectionPrivateMigrationPredecessorWithLock(ctx, stateRoot, predecessor, successor)
 	if err != nil {
 		return fmt.Errorf("%w: verify reconciled private supervisor migration: %w", inspection.ErrGroupMigrationRequired, err)
 	}

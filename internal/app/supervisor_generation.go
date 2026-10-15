@@ -181,7 +181,7 @@ func completePendingGroupMigrationWithLock(ctx context.Context, store *taskdir.S
 		return nil
 	}
 	successor := privateInspectionGroup(store.RootID, resolution.Active)
-	complete, err := pueue.PrivateSupervisorMigrationEdgeCompleteWithLock(
+	_, complete, err := inspectionPrivateMigrationPredecessorWithLock(
 		ctx,
 		store.Root,
 		resolution.GroupHead.Supervisor,
@@ -199,7 +199,32 @@ func completePendingGroupMigrationWithLock(ctx context.Context, store *taskdir.S
 	return nil
 }
 
-func recoverInspectionGroupGenerationWithLock(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client) error {
+// An inspection head retains immutable launch provenance across same-logical
+// private upgrades. The canonical successor resolver selects the actual
+// predecessor or proves the completed target; the head need not name the
+// immediately preceding private history edge.
+func inspectionPrivateMigrationPredecessorWithLock(ctx context.Context, root string, predecessor, successor task.SupervisorRef) (task.SupervisorRef, bool, error) {
+	if task.SameSupervisorIdentity(predecessor, successor) {
+		complete, err := pueue.PrivateSupervisorMigrationEdgeCompleteWithLock(ctx, root, predecessor, successor)
+		return predecessor, complete, err
+	}
+	current, found, err := pueue.ResolvePrivateSupervisorSuccessorWithLock(ctx, root, predecessor)
+	if errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
+		return predecessor, false, nil // The existing private protocol owns resumption.
+	}
+	if err != nil || !found {
+		return predecessor, false, err
+	}
+	if current == successor {
+		return predecessor, true, nil
+	}
+	if task.SameSupervisorIdentity(current, predecessor) {
+		return current, false, nil
+	}
+	return task.SupervisorRef{}, false, fmt.Errorf("%w: prepared target is not the active inspection successor", inspection.ErrGroupMigrationRequired)
+}
+
+func recoverInspectionGroupGenerationWithLock(ctx context.Context, store *taskdir.Store, supervisor *pueue.Client, requireActiveClient bool) error {
 	if store == nil || supervisor == nil {
 		return errors.New("missing private inspection supervisor")
 	}
@@ -217,7 +242,7 @@ func recoverInspectionGroupGenerationWithLock(ctx context.Context, store *taskdi
 	if err != nil {
 		return err
 	}
-	if resolution.PrivateAuthority && resolution.Active != supervisor.Binding() {
+	if requireActiveClient && resolution.PrivateAuthority && resolution.Active != supervisor.Binding() {
 		return fmt.Errorf("%w: inspection client is not bound to the active private generation", inspection.ErrGroupMigrationRequired)
 	}
 	return completePendingGroupMigrationWithLock(ctx, store, resolution)

@@ -775,26 +775,37 @@ func probeStateSupervisorPair(ctx context.Context, root string, expected *stateS
 // installStateSupervisorPair requires exclusive supervisor ownership in
 // production. Migration already holds it; other callers use preparation above.
 func installStateSupervisorPair(ctx context.Context, root, clientExecutable, daemonExecutable string) error {
+	_, _, err := installStateSupervisorPairPaths(ctx, root, clientExecutable, daemonExecutable)
+	return err
+}
+
+// installStateSupervisorPairPaths returns the immutable pair just installed,
+// without rereading the mutable inventory pointer used to stage later upgrades.
+func installStateSupervisorPairPaths(ctx context.Context, root, clientExecutable, daemonExecutable string) (string, string, error) {
 	if ctx == nil {
-		return context.Canceled
+		return "", "", context.Canceled
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return "", "", err
 	}
 	base := filepath.Join(root, ".supervisor")
 	if err := ensureSupervisorDirectory(root, base); err != nil {
-		return err
+		return "", "", err
 	}
-	return installStateSupervisorPairContentAddressed(ctx, base, clientExecutable, daemonExecutable)
-}
-
-func installStateSupervisorPairContentAddressed(ctx context.Context, base, clientExecutable, daemonExecutable string) error {
 	record, err := stateSupervisorPairIdentity(ctx, clientExecutable, daemonExecutable)
 	if err != nil {
-		return err
+		return "", "", err
+	}
+	if err = installStateSupervisorPairContentAddressed(ctx, base, clientExecutable, daemonExecutable, record); err != nil {
+		return "", "", err
 	}
 	pairDirectory := filepath.Join(base, stateSupervisorPairDirectoryPrefix+record.PairSHA256)
-	if err = ensureStateSupervisorPairDirectory(base, pairDirectory); err != nil {
+	return filepath.Join(pairDirectory, "pueue"), filepath.Join(pairDirectory, "pueued"), nil
+}
+
+func installStateSupervisorPairContentAddressed(ctx context.Context, base, clientExecutable, daemonExecutable string, record stateSupervisorPairRecord) error {
+	pairDirectory := filepath.Join(base, stateSupervisorPairDirectoryPrefix+record.PairSHA256)
+	if err := ensureStateSupervisorPairDirectory(base, pairDirectory); err != nil {
 		return err
 	}
 	for _, executable := range []struct {
@@ -802,11 +813,11 @@ func installStateSupervisorPairContentAddressed(ctx context.Context, base, clien
 		name   string
 		digest string
 	}{{source: clientExecutable, name: "pueue", digest: record.ClientSHA256}, {source: daemonExecutable, name: "pueued", digest: record.DaemonSHA256}} {
-		if err = ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		destination := filepath.Join(pairDirectory, executable.name)
-		if err = installImmutableStateExecutable(pairDirectory, executable.source, destination, executable.digest); err != nil {
+		if err := installImmutableStateExecutable(pairDirectory, executable.source, destination, executable.digest); err != nil {
 			return err
 		}
 		installedDigest, digestErr := protectedStateExecutableDigest(destination)
@@ -814,10 +825,10 @@ func installStateSupervisorPairContentAddressed(ctx context.Context, base, clien
 			return errors.Join(fmt.Errorf("%w: state-root supervisor pair changed while being installed", pueue.ErrConfiguration), digestErr)
 		}
 	}
-	if err = syncRunnerDirectory(pairDirectory); err != nil {
+	if err := syncRunnerDirectory(pairDirectory); err != nil {
 		return err
 	}
-	if err = ctx.Err(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return publishStateSupervisorPairRecord(base, record)

@@ -390,7 +390,7 @@ func supervisorStatusFromStore(ctx context.Context, root string, deps Dependenci
 		return supervisorStatusWithoutInspectionGroup(controlContext, root, deps, options, response)
 	}
 	if err != nil {
-		return failedSupervisor(response, "supervisor migration journal could not be read", 1)
+		return failedSupervisorCause(response, "supervisor migration journal could not be read", err, 1)
 	}
 	if !pueue.IsPrivateConfig(root, seed.Supervisor.ConfigPath) {
 		response.SupervisorControl.State = "external"
@@ -401,7 +401,7 @@ func supervisorStatusFromStore(ctx context.Context, root string, deps Dependenci
 	}
 	resolution, err := resolvePrivateSupervisorGeneration(controlContext, store, seed.Supervisor)
 	if err != nil {
-		return failedSupervisor(response, "supervisor migration journal could not be resolved", 1)
+		return failedSupervisorCause(response, "supervisor migration journal could not be resolved", err, 1)
 	}
 	active := resolution.GroupHead
 	if !resolution.GroupPresent || active.Supervisor != resolution.Active {
@@ -666,7 +666,8 @@ func prepareCurrentPrivateSupervisor(ctx context.Context, root string, deps Depe
 	if err != nil {
 		return nil, err
 	}
-	if err = installStateSupervisorPair(ctx, root, clientExecutable, daemonExecutable); err != nil {
+	clientExecutable, daemonExecutable, err = installStateSupervisorPairPaths(ctx, root, clientExecutable, daemonExecutable)
+	if err != nil {
 		return nil, err
 	}
 	return pueue.PreparePrivateForMigrationWithLock(ctx, clientExecutable, daemonExecutable, root, options)
@@ -752,9 +753,15 @@ func privateSupervisorStatePresent(root string) (bool, error) {
 }
 
 func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dependencies, options pueue.Options, store *taskdir.Store, observationTimeout time.Duration, state *supervisorMigrationState) error {
+	if err := reconcilePublishedSupervisorWithLock(ctx, store, options, true); err != nil {
+		return err
+	}
 	legacy, _, journalErr := inspection.ReadGroupHead(ctx, store)
 	if errors.Is(journalErr, os.ErrNotExist) {
-		return inspectSupervisorWithoutGroup(ctx, root, deps, options, state)
+		if err := inspectSupervisorWithoutGroup(ctx, root, deps, options, state); err != nil || state.notInitialized {
+			return err
+		}
+		return verifyCommittedPrivateSupervisor(root, state.current)
 	}
 	if journalErr != nil {
 		return fmt.Errorf("supervisor migration journal could not be read: %w", journalErr)
@@ -765,7 +772,7 @@ func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dep
 	if state.externalInspectionGroup {
 		current, err = prepareInspectionHandoffSupervisor(ctx, root, deps, options)
 	} else {
-		current, err = prepareCurrentPrivateSupervisor(ctx, root, deps, options)
+		current, err = prepareInspectionMigrationSupervisorWithLock(ctx, store, deps, options)
 	}
 	state.current = current
 	if err != nil {
@@ -776,7 +783,26 @@ func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dep
 			return err
 		}
 	}
-	return ensureInspectionGroupLocked(ctx, store, current, observationTimeout, true)
+	if !state.externalInspectionGroup {
+		if err = migrateInspectionSupervisorLocked(ctx, store, current, observationTimeout); err != nil {
+			return err
+		}
+	}
+	if err = ensureInspectionGroupLocked(ctx, store, current, observationTimeout, false); err != nil {
+		return err
+	}
+	return verifyCommittedPrivateSupervisor(root, current)
+}
+
+func verifyCommittedPrivateSupervisor(root string, current *pueue.Client) error {
+	active, found, err := pueue.ReadPrivateSupervisorBinding(root)
+	if err != nil {
+		return err
+	}
+	if !found || active != current.Binding() {
+		return &pueue.PrivateRecoveryError{ReasonCode: "transition_pending", Err: pueue.ErrPrivateSupervisorMigrationRequired}
+	}
+	return nil
 }
 
 func inspectSupervisorWithoutGroup(ctx context.Context, root string, deps Dependencies, options pueue.Options, state *supervisorMigrationState) error {
@@ -822,15 +848,16 @@ func finishSupervisorMigration(response Response, state supervisorMigrationState
 }
 
 func supervisorMigrationFailure(response Response, err error) commandResult {
+	response.SupervisorControl.ReasonCode = supervisorFailureReason(err)
 	if errors.Is(err, inspection.ErrGroupMigrationBusy) || errors.Is(err, pueue.ErrPrivateSupervisorMigrationBusy) {
 		response.SupervisorControl.State = "blocked"
 		response.SupervisorControl.ActiveWork = "present"
 		response.SupervisorControl.NextAction = "wait_for_legacy_work"
-		return commandResult{response: response, code: 1, err: errors.New("legacy supervisor has active inspection work")}
+		return commandResult{response: response, code: 1, err: publicSupervisorError("Legacy supervisor has active work.", err)}
 	}
 	response.SupervisorControl.State = "unavailable"
 	response.SupervisorControl.NextAction = "stop_and_report"
-	return commandResult{response: response, code: 1, err: errors.New("delegate could not safely migrate the legacy supervisor")}
+	return commandResult{response: response, code: 1, err: publicSupervisorError("Delegate could not safely migrate the legacy supervisor.", err)}
 }
 
 func supervisorMigrateWithoutInspectionGroupLocked(ctx context.Context, root string, deps Dependencies, options pueue.Options) (*pueue.Client, error) {
@@ -862,6 +889,15 @@ func failedSupervisor(response Response, message string, code int) commandResult
 		response.SupervisorControl.State = "unavailable"
 	}
 	return commandResult{response: response, code: code, err: errors.New(message)}
+}
+
+func failedSupervisorCause(response Response, message string, cause error, code int) commandResult {
+	result := failedSupervisor(response, message, code)
+	result.err = publicSupervisorError(message, cause)
+	if result.response.SupervisorControl != nil {
+		result.response.SupervisorControl.ReasonCode = supervisorFailureReason(cause)
+	}
+	return result
 }
 
 func legacyActiveWork(snapshot pueue.QueueSnapshot) string {

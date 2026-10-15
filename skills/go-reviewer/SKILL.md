@@ -18,6 +18,8 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 
 For supervisor changes, apply the recovery and verification section of the
 [shared contract](../../agents/_data/maintainability-contract.md#recovery-and-verification).
+Check its [upgrade recovery verification](../../agents/_data/maintainability-contract.md#upgrade-recovery-verification)
+for changed installation or publication paths.
 For process, supervisor, endpoint, or cleanup changes, also apply its
 [native portability proof](../../agents/_data/maintainability-contract.md#native-portability-proof).
 
