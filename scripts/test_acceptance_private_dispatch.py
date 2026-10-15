@@ -845,30 +845,100 @@ try:
 
         marker_directory = root / "parallel-markers"
         marker_directory.mkdir()
+        release_path = root / "parallel-release"
+        startup_watchdog_seconds = 30
+        child_watchdog_seconds = 60
         parallel_child = (
             "import sys,time\n"
             "from pathlib import Path\n"
-            "directory=Path(sys.argv[1]); expected=int(sys.argv[2])\n"
+            "directory=Path(sys.argv[1]); release=Path(sys.argv[2])\n"
             "(directory / str(__import__('os').getpid())).touch()\n"
-            "deadline=time.monotonic()+3\n"
-            "while len(tuple(directory.iterdir())) < expected and time.monotonic() < deadline:\n"
+            "deadline=time.monotonic()+60\n"
+            "while not release.exists() and time.monotonic() < deadline:\n"
             " time.sleep(0.005)\n"
-            "if len(tuple(directory.iterdir())) != expected:\n"
-            " raise SystemExit(3)\n"
+            "if not release.exists():\n"
+            " raise SystemExit(4)\n"
             "print('delegate-short-capture')\n"
         )
 
         def capture(index):
             result = private_cli.run_captured_command(
-                [str(sys.executable), "-c", parallel_child, str(marker_directory), "16"],
-                command_env, 5,
+                [str(sys.executable), "-c", parallel_child,
+                 str(marker_directory), str(release_path)],
+                command_env, child_watchdog_seconds,
             )
-            if result.returncode != 0:
-                raise RuntimeError("parallel capture %d exited %d" % (index, result.returncode))
-            return result.stdout.decode("utf-8").strip()
+            return (result.returncode,
+                    result.stdout.decode("utf-8").strip(),
+                    result.stderr.decode("utf-8").strip())
+
+        def marker_names():
+            with private_cli.CAPTURE_START_LOCK:
+                return frozenset(
+                    path.name for path in marker_directory.iterdir() if path.is_file()
+                )
+
+        def publish_release():
+            with private_cli.CAPTURE_START_LOCK:
+                release_path.write_text("release\n")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as workers:
-            outputs = tuple(workers.map(capture, range(16)))
+            futures = tuple(workers.submit(capture, index) for index in range(16))
+            try:
+                startup_deadline = time.monotonic() + startup_watchdog_seconds
+                while True:
+                    markers_before_release = marker_names()
+                    completed_before_release = tuple(
+                        index for index, future in enumerate(futures) if future.done()
+                    )
+                    if len(markers_before_release) == 16:
+                        break
+                    if completed_before_release:
+                        raise AssertionError(
+                            "parallel capture completed before release: %s" %
+                            (completed_before_release,)
+                        )
+                    if time.monotonic() >= startup_deadline:
+                        raise AssertionError(
+                            "parallel capture startup watchdog expired with %d/16 markers" %
+                            len(markers_before_release)
+                        )
+                    time.sleep(0.005)
+                pending_before_release = sum(not future.done() for future in futures)
+                if pending_before_release != 16:
+                    raise AssertionError(
+                        "parallel capture was not pending before release: %d/16" %
+                        pending_before_release
+                    )
+                publish_release()
+                _done, not_done = concurrent.futures.wait(futures, timeout=70)
+                if not_done:
+                    raise AssertionError(
+                        "parallel capture join watchdog expired: %d incomplete" %
+                        len(not_done)
+                    )
+                results = []
+                join_errors = []
+                for future in futures:
+                    try:
+                        results.append(future.result())
+                    except Exception as error:
+                        join_errors.append(repr(error))
+                if join_errors:
+                    raise AssertionError(
+                        "parallel capture join errors=%s" % (join_errors,)
+                    )
+            finally:
+                publish_release()
+            markers_after_release = marker_names()
+            exit_codes = tuple(result[0] for result in results)
+            outputs = tuple(result[1] for result in results)
+            errors = tuple(result[2] for result in results)
+            if exit_codes != (0,) * 16:
+                raise AssertionError(
+                    "parallel capture exit codes=%s stderr=%s" % (exit_codes, errors)
+                )
+            if outputs != ("delegate-short-capture",) * 16:
+                raise AssertionError("parallel capture outputs=%s" % (outputs,))
 
         print(json.dumps({
             "soft_limit": resource.getrlimit(resource.RLIMIT_NOFILE)[0],
@@ -878,7 +948,12 @@ try:
             "snapshot": snapshot,
             "status_bytes": metrics["status_bytes"],
             "control_output": control_output,
-            "parallel_markers": len(tuple(marker_directory.iterdir())),
+            "parallel_startup_watchdog_seconds": startup_watchdog_seconds,
+            "parallel_child_watchdog_seconds": child_watchdog_seconds,
+            "parallel_markers_before_release": len(markers_before_release),
+            "parallel_pending_before_release": pending_before_release,
+            "parallel_markers_after_release": len(markers_after_release),
+            "parallel_exit_codes": exit_codes,
             "parallel_outputs": outputs,
         }))
 finally:
@@ -896,7 +971,7 @@ finally:
         )
         result = subprocess.run(
             [sys.executable, "-c", probe],
-            env=environment, capture_output=True, text=True, timeout=30, check=False,
+            env=environment, capture_output=True, text=True, timeout=120, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         evidence = json.loads(result.stdout)
@@ -907,7 +982,12 @@ finally:
         self.assertEqual(evidence["snapshot"], {"tasks": {}})
         self.assertGreater(evidence["status_bytes"], 0)
         self.assertEqual(evidence["control_output"], "control-ok\n")
-        self.assertEqual(evidence["parallel_markers"], 16)
+        self.assertEqual(evidence["parallel_startup_watchdog_seconds"], 30)
+        self.assertEqual(evidence["parallel_child_watchdog_seconds"], 60)
+        self.assertEqual(evidence["parallel_markers_before_release"], 16)
+        self.assertEqual(evidence["parallel_pending_before_release"], 16)
+        self.assertEqual(evidence["parallel_markers_after_release"], 16)
+        self.assertEqual(evidence["parallel_exit_codes"], [0] * 16)
         self.assertEqual(evidence["parallel_outputs"], ["delegate-short-capture"] * 16)
 
 

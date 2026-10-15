@@ -484,11 +484,12 @@ into every provider. Keep provider interpretation pure over sealed evidence and
 keep acceptance orchestration in the shipped dispatcher/runner and shared
 harness.
 
-Concurrency ordering tests must synchronize at the owner's entry and release
-boundaries instead of using short wall-clock waits as ordering evidence. Keep
-hang watchdogs separate from latency requirements, and release and join owned
-goroutines on assertion failures. Real deadline and native latency claims still
-require their recorded clocks and native evidence.
+Concurrency ordering tests, including subprocess cohorts, must synchronize at
+the owner's entry and release boundaries instead of using short wall-clock
+waits as ordering evidence. Keep hang watchdogs separate from latency
+requirements, and release and join owned goroutines and child processes on
+assertion failures. Real deadline and native latency claims still require their
+recorded clocks and native evidence.
 
 ### Handoff evidence
 
