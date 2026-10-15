@@ -18,9 +18,15 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 [adapter contract](../../agents/_data/adapter-contract.md), and
 [code-quality floor](../../agents/_data/code-quality-floor.md).
 
+For supervisor changes, apply the recovery and verification section of the
+[shared contract](../../agents/_data/maintainability-contract.md#recovery-and-verification).
+For process, supervisor, endpoint, or cleanup changes, also apply its
+[native portability proof](../../agents/_data/maintainability-contract.md#native-portability-proof).
+
 ## Inputs
 
-- the bounded implementation handoff and fixed interface contract;
+- the bounded implementation handoff, affected canonical transition row IDs,
+  and fixed interface contract;
 - exact owned files, affected consumers, and compatibility constraints;
 - existing error and persistence behavior;
 - deterministic fixtures or mocks for the relevant success and failure paths.
@@ -35,10 +41,16 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
    the provider and shared process/evidence/publication mechanics in the core.
 3. Preserve context propagation within each execution lifetime, wrapped error
    identity, durable record semantics, nullable usage values, and explicit
-   unsupported-option failures.
-4. Add or extend meaningful tests for observable behavior, error branches,
-   writer failures, malformed input, and compatibility. Avoid tests that only
-   mirror implementation branches.
+   unsupported-option failures. For every create-once record, apply the
+   invariants' [ambiguous-write
+   classifications](../../agents/_data/delegation-invariants.md#ambiguous-create-once-writes).
+4. Update the [canonical transition
+   rows](../../agents/_data/maintainability-contract.md#durable-transition-matrix-and-composed-tests)
+   and add their named composed tests through each affected production store and
+   real consumer. Use fakes only for isolated protocol ordering; avoid tests
+   that merely mirror implementation branches.
+   Keep shared lifecycle policy OS-neutral and isolate only primitives whose
+   semantics differ; do not emulate one supported kernel to claim another.
 5. Run `make fmt-check`, the affected focused tests, and `make verify-skills`;
    finish with the applicable project gate before handing off. Do not suppress
    a linter or weaken an assertion to obtain a pass.
@@ -47,14 +59,20 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 
 - the bounded Go implementation and any necessary fixtures;
 - tests that prove the changed behavior and important failure paths; and
-- a handoff naming the exact files, commands, results, and known limits.
+- the contract's [evidence
+  handoff](../../agents/_data/maintainability-contract.md#handoff-evidence),
+  naming the exact snapshot, binaries, commands, receipts, and known limits.
 
 ## Exit criteria
 
 - The implementation compiles and the affected tests pass with race detection
   where the project gate requires it.
-- No forbidden process primitive, global provider configuration mutation, paid
-  retry, or provider-specific core exception was introduced.
+- Every affected supported OS has native evidence for its changed runtime path;
+  cross-build success is recorded only as a build result.
+- The [canonical forbidden-signal
+  policy](../../agents/_data/delegation-invariants.md#forbidden-signal-policy),
+  global provider configuration boundary, paid-work at-most-once rule, and core
+  ownership boundary remain intact.
 - Error context, identity/session matching, sealing/publication authority, and
   backward compatibility are covered by evidence.
 - The worktree contains no planning-document, commit, PR, or merge mutation

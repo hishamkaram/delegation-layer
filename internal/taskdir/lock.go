@@ -46,6 +46,26 @@ type LockFile struct {
 	faultSource func() FaultInjector
 }
 
+type lockMode uint8
+
+const (
+	lockModeShared lockMode = iota
+	lockModeExclusive
+)
+
+type lockAttempt uint8
+
+const (
+	lockAttemptAcquired lockAttempt = iota
+	lockAttemptBusy
+	lockAttemptRetry
+)
+
+type lockWait struct {
+	ctx         context.Context
+	nonblocking bool
+}
+
 // OpenLockFile opens or creates a lock file with O_CLOEXEC, mode 0600,
 // syncs the lock file AND its parent directory, and verifies FD_CLOEXEC.
 func OpenLockFile(path string, level LockLevel) (*LockFile, error) {
@@ -167,6 +187,32 @@ func (l *LockFile) Fd() int {
 	return l.fd
 }
 
+// DuplicateHeldFile returns a close-on-exec descriptor for one currently held
+// lock. The duplicate shares the same open-file description, so a child can
+// retain the kernel lease if the current process exits unexpectedly.
+func (l *LockFile) DuplicateHeldFile(name string) (*os.File, error) {
+	if l == nil {
+		return nil, os.ErrInvalid
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return nil, os.ErrClosed
+	}
+	if !l.isEx && l.shCount == 0 {
+		return nil, ErrLockNotHeld
+	}
+	fd, err := unix.FcntlInt(uintptr(l.fd), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	duplicate := os.NewFile(uintptr(fd), name)
+	if duplicate == nil {
+		return nil, unix.Close(fd)
+	}
+	return duplicate, nil
+}
+
 func (l *LockFile) waitLockBusy(ctx context.Context) error {
 	if ctx == nil {
 		return task.ErrLockBusy
@@ -196,88 +242,111 @@ func (l *LockFile) flockUnlock() error {
 
 // LockSHNonblocking attempts to acquire a shared lock without blocking.
 func (l *LockFile) LockSHNonblocking() error {
-	return l.LockSH(nil) //nolint:staticcheck // nonblocking entrypoint purposefully passes nil context
+	return l.lock(lockWait{nonblocking: true}, lockModeShared)
 }
 
 // LockEXNonblocking attempts to acquire an exclusive lock without blocking.
 func (l *LockFile) LockEXNonblocking() error {
-	return l.LockEX(nil) //nolint:staticcheck // nonblocking entrypoint purposefully passes nil context
+	return l.lock(lockWait{nonblocking: true}, lockModeExclusive)
+}
+
+// LockSHNonblockingContext attempts a shared lock once after honoring caller
+// cancellation. It never waits for a conflicting lease.
+func (l *LockFile) LockSHNonblockingContext(ctx context.Context) error {
+	if ctx == nil {
+		return task.ErrInvalidPermit
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return l.lock(lockWait{ctx: ctx, nonblocking: true}, lockModeShared)
+}
+
+// LockEXNonblockingContext attempts an exclusive lock once after honoring
+// caller cancellation. It never waits for a conflicting lease.
+func (l *LockFile) LockEXNonblockingContext(ctx context.Context) error {
+	if ctx == nil {
+		return task.ErrInvalidPermit
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return l.lock(lockWait{ctx: ctx, nonblocking: true}, lockModeExclusive)
 }
 
 // LockSH acquires a shared advisory lease. If another shared lease is already held on this descriptor,
 // it increments the local lease count without calling unlock.
 func (l *LockFile) LockSH(ctx context.Context) error {
+	return l.lock(lockWait{ctx: ctx, nonblocking: ctx == nil}, lockModeShared)
+}
+
+func (l *LockFile) lock(wait lockWait, mode lockMode) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	for {
-		if l.closed {
-			return os.ErrClosed
+		attempt, err := l.tryLock(mode)
+		if err != nil {
+			return err
 		}
-		if l.isEx {
-			if err := l.waitLockBusy(ctx); err != nil {
+		switch attempt {
+		case lockAttemptAcquired:
+			return nil
+		case lockAttemptRetry:
+			continue
+		case lockAttemptBusy:
+			if wait.nonblocking {
+				return task.ErrLockBusy
+			}
+			if err = l.waitLockBusy(wait.ctx); err != nil {
 				return err
 			}
-			continue
 		}
-
-		if l.shCount > 0 {
-			l.shCount++
-			return nil
-		}
-
-		// First shared lease on this descriptor: acquire kernel flock
-		err := l.flock(unix.LOCK_SH | unix.LOCK_NB)
-		if err == nil {
-			l.shCount = 1
-			return nil
-		}
-		if errors.Is(err, unix.EINTR) {
-			continue
-		}
-		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			if wErr := l.waitLockBusy(ctx); wErr != nil {
-				return wErr
-			}
-			continue
-		}
-		return fmt.Errorf("flock SH %s: %w", l.path, err)
 	}
 }
 
 // LockEX acquires an exclusive advisory lock. It will not upgrade an active shared lease
 // and fails with ErrLockBusy if ctx is nil (nonblocking) or when timed out.
 func (l *LockFile) LockEX(ctx context.Context) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	return l.lock(lockWait{ctx: ctx, nonblocking: ctx == nil}, lockModeExclusive)
+}
 
-	for {
-		if l.closed {
-			return os.ErrClosed
-		}
-		if l.shCount > 0 || l.isEx {
-			if err := l.waitLockBusy(ctx); err != nil {
-				return err
-			}
-			continue
-		}
-
-		err := l.flock(unix.LOCK_EX | unix.LOCK_NB)
-		if err == nil {
-			l.isEx = true
-			return nil
-		}
-		if errors.Is(err, unix.EINTR) {
-			continue
-		}
-		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			if wErr := l.waitLockBusy(ctx); wErr != nil {
-				return wErr
-			}
-			continue
-		}
-		return fmt.Errorf("flock EX %s: %w", l.path, err)
+func (l *LockFile) tryLock(mode lockMode) (lockAttempt, error) {
+	if l.closed {
+		return lockAttemptAcquired, os.ErrClosed
 	}
+	if mode == lockModeShared {
+		if l.isEx {
+			return lockAttemptBusy, nil
+		}
+		if l.shCount > 0 {
+			l.shCount++
+			return lockAttemptAcquired, nil
+		}
+	} else if l.shCount > 0 || l.isEx {
+		return lockAttemptBusy, nil
+	}
+
+	operation, label := unix.LOCK_SH|unix.LOCK_NB, "SH"
+	if mode == lockModeExclusive {
+		operation, label = unix.LOCK_EX|unix.LOCK_NB, "EX"
+	}
+	err := l.flock(operation)
+	if err == nil {
+		if mode == lockModeExclusive {
+			l.isEx = true
+		} else {
+			l.shCount = 1
+		}
+		return lockAttemptAcquired, nil
+	}
+	if errors.Is(err, unix.EINTR) {
+		return lockAttemptRetry, nil
+	}
+	if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
+		return lockAttemptBusy, nil
+	}
+	return lockAttemptAcquired, fmt.Errorf("flock %s %s: %w", label, l.path, err)
 }
 
 // Unlock decrements a shared lease or releases an exclusive lock.

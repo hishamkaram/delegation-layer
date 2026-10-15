@@ -11,22 +11,25 @@ import (
 )
 
 const (
-	refusalInvalidOutput    = "invalid-output"
-	refusalIdentityMismatch = "identity-mismatch"
-	refusalIncompleteOutput = "incomplete-output"
-	refusalProviderFailed   = "provider-failed"
+	refusalInvalidOutput             = "invalid-output"
+	refusalIdentityMismatch          = "identity-mismatch"
+	refusalIncompleteOutput          = "incomplete-output"
+	refusalProviderFailed            = "provider-failed"
+	refusalAuthenticationUnavailable = "authentication-unavailable"
 )
 
 type printInterpreter struct {
 	mode                        string
 	classifyErrorBeforeIdentity bool
+	classifyAuthentication      bool
 }
 
 // NewPrintInterpreter returns the immutable agy print-envelope interpreter.
 func NewPrintInterpreter() predicate.Interpreter { return printInterpreter{mode: Mode} }
 
-// NewCurrentPrintInterpreter classifies known ERROR envelopes before requiring
-// a conversation UUID. The legacy constructor remains available for replay.
+// NewCurrentPrintInterpreter classifies the exact structured authentication
+// envelope before requiring a conversation UUID. The legacy constructor and
+// the historical current constructor remain available for replay.
 func NewCurrentPrintInterpreter() predicate.Interpreter {
 	return NewCurrentPrintInterpreterForMode(Mode)
 }
@@ -35,6 +38,14 @@ func NewCurrentPrintInterpreter() predicate.Interpreter {
 // requested containment mode so a read-only result cannot satisfy a write
 // profile and vice versa.
 func NewCurrentPrintInterpreterForMode(mode string) predicate.Interpreter {
+	return printInterpreter{mode: mode, classifyErrorBeforeIdentity: true, classifyAuthentication: true}
+}
+
+func newHistoricalCurrentPrintInterpreter() predicate.Interpreter {
+	return newHistoricalCurrentPrintInterpreterForMode(Mode)
+}
+
+func newHistoricalCurrentPrintInterpreterForMode(mode string) predicate.Interpreter {
 	return printInterpreter{mode: mode, classifyErrorBeforeIdentity: true}
 }
 
@@ -44,6 +55,9 @@ func (v printInterpreter) Reference() task.PredicateRef {
 		mode = Mode
 	}
 	if v.classifyErrorBeforeIdentity {
+		if v.classifyAuthentication {
+			return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "1.2.2-auth3", SHA256: task.ComputeSHA256([]byte(currentAuthPrintContract))}
+		}
 		return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "1.2.2-auth2", SHA256: task.ComputeSHA256([]byte(currentPrintContract))}
 	}
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: Version, SHA256: ContractDigest()}
@@ -77,10 +91,14 @@ func (v printInterpreter) Evaluate(input predicate.Input, raw predicate.Evidence
 	if err := errors.Join(stdoutReadErr, stderrReadErr); err != nil {
 		return task.Interpretation{}, err
 	}
-	return interpretEnvelope(input, stdout, timeout, v.classifyErrorBeforeIdentity), nil
+	return interpretEnvelopeWithOptions(input, stdout, timeout, v.classifyErrorBeforeIdentity, v.classifyAuthentication), nil
 }
 
 func interpretEnvelope(input predicate.Input, stdout stdoutResult, timeout, classifyErrorBeforeIdentity bool) task.Interpretation {
+	return interpretEnvelopeWithOptions(input, stdout, timeout, classifyErrorBeforeIdentity, false)
+}
+
+func interpretEnvelopeWithOptions(input predicate.Input, stdout stdoutResult, timeout, classifyErrorBeforeIdentity, classifyAuthentication bool) task.Interpretation {
 	if input.Seal.InvocationState == task.InvocationStartFailed {
 		return rejectedWithUsage(refusalProviderFailed+": start_failed", usageFromEnvelope(stdout.envelope, task.UsageReliabilityUnreliable))
 	}
@@ -94,6 +112,9 @@ func interpretEnvelope(input predicate.Input, stdout stdoutResult, timeout, clas
 		return rejectedWithUsage(refusalInvalidOutput, usageFromEnvelope(stdout.envelope, task.UsageReliabilityUnreliable))
 	}
 	if classifyErrorBeforeIdentity && stdout.envelope.status == StatusError {
+		if classifyAuthentication && isAuthenticationUnavailable(stdout.envelope) {
+			return rejectedWithUsage(refusalAuthenticationUnavailable, unreliableUsage(stdout.envelope))
+		}
 		return rejectedWithUsage(providerFailureRefusal(stdout.envelope), unreliableUsage(stdout.envelope))
 	}
 	if err := validateConversation(stdout.envelope.conversationID, input.ExpectedSession, input.RecordedSession); err != nil {
@@ -136,6 +157,16 @@ func providerFailureRefusal(envelope envelope) string {
 		return refusalProviderFailed + ": status=" + envelope.status
 	}
 	return refusalProviderFailed + ": status=" + envelope.status + ": " + envelope.errorText
+}
+
+func isAuthenticationUnavailable(envelope envelope) bool {
+	if envelope.status != StatusError || envelope.conversationID != "" || !envelope.responseEmpty || !envelope.errorSeen {
+		return false
+	}
+	if envelope.authenticationUnavailable {
+		return true
+	}
+	return envelope.errorText == authenticationErrorText
 }
 
 func validateConversation(id string, expected task.SessionExpectation, recorded *task.SessionIdentity) error {

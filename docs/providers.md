@@ -20,8 +20,10 @@ Its read-only metadata describes the native mechanism selected by the adapter;
 the containment value is `provider-owned` for the shipped profiles, so this
 mode is not an independent delegate-owned sandbox. Provider-native controls
 such as Pi read-only's `--no-extensions` remain part of that provider contract;
-they are capability-probed before admission rather than treated as delegate
+they are capability-probed before provider execution rather than treated as delegate
 owned policy.
+This provider containment metadata is separate from process-lifetime
+containment, which is guardian-owned and independently proven.
 The catalog uses public request option names; the native flag mapping is
 documented in each provider section below.
 
@@ -52,19 +54,24 @@ Delegation Layer passes the requested native permission mode without inspecting
 or rejecting personal configuration. `workspace-write` requests unattended native
 execution, including command execution; native approval bypass may permit access
 beyond the workspace. It does not provide an independent sandbox.
-Missing executables or required flags, unsupported request options, and invalid
-provider results still prevent successful delegation.
+Missing executables or declared runtime flags, unsupported request options, and
+invalid provider results still prevent successful delegation. Provider-specific
+launch options are validated by the supervised provider turn so help-output
+format changes do not become false admission failures.
 
 ## Shared compatibility behavior
 
 Before a task is admitted, the selected adapter resolves a canonical regular
-executable and records its observed identity. A supervised runtime probe then:
+executable and records its static identity and required capability contract.
+For managed runtime-only tasks, admission records that runtime verification is
+pending. The task's supervised runner performs the runtime probe before the
+provider task starts:
 
 1. invokes the provider-declared version command (defaulting to `--version`)
    and accepts any nonempty, valid
    reported version that fits the bounded durable evidence record;
 2. invokes the provider help command, including any profile-specific subcommand;
-3. checks the public flags required by the adapter; and
+3. checks the stable public flags declared by the adapter; and
 4. fingerprints the executable again before the profile is finalized.
 
 This detects missing commands, non-executable files, and incompatible flag
@@ -82,6 +89,11 @@ contract, and input/output declarations remain immutable and are still matched
 exactly before the process starts. The final executable, observed version, and
 digest are recorded in the started and sealed task evidence.
 
+Native policy projections, custom runners, and historical tasks retain their
+admission inspection requirements. Runtime-only tasks do not share capability
+observations: every task's fresh preflight is required, even when unchanged
+launcher bytes load an updated runtime payload.
+
 The same compatibility rule applies to the private Pueue boundary: delegate
 checks the required queue behavior and fields, accepts nonempty observed Pueue
 version output and additive status fields, and keeps the bundled artifact pin
@@ -91,10 +103,10 @@ The observed version is descriptive evidence stored with the task. It does not
 authorize a release by itself, and Delegation Layer does not query a web release
 list or maintain a semver allowlist. The version-size bound is a durable-record
 safety limit, not a release compatibility check; an observation that exceeds it
-is rejected before admission evidence is committed. Terminal launch evidence
+is rejected before provider execution. Terminal launch evidence
 uses the same bound so publication remains durable. The inspection definition and
-executable digest bind the capability result to the exact command that was checked; the runner
-repeats the check before launch. Probe failures expose only a bounded reason
+executable digest bind each capability result to the checked command. The runner
+checks the current runtime before launch. Probe failures expose only a bounded reason
 class, such as a missing required flag or executable identity drift, and never
 provider output or process diagnostics.
 
@@ -138,15 +150,23 @@ not install a separate supervisor. For an individual gate, exit `0` means it
 passed. Exit `2`
 means `BLOCKED`: a required executable, supervisor, or authentication
 prerequisite was unavailable and a sanitized `failure.json` receipt was
-written. Textual login refusals and
-structured provider authorization responses such as HTTP 401 or 403 are both
-classified as authentication prerequisites. The aggregate
+written. Authentication blocks require a structured Delegate admission state,
+a supported native authentication-status response, or a structured provider
+authorization response such as HTTP 401 or 403. An adapter may instead emit a
+stable, sanitized reason code from an exact structured envelope;
+Antigravity emits `authentication-unavailable`. Free-form provider output is
+never used as an authentication oracle. The aggregate
 `acceptance-native` target reports passed, blocked, and failed counts. It
 keeps authentication blocks neutral for development and still fails on a real
 acceptance failure. When no scenario passes, its reported status is `BLOCKED`,
 even though the neutral aggregate exit code is zero. Check the reported status
 before claiming authenticated live proof. The gate never copies credentials, retries a
 provider turn, or reports an authentication refusal as a pass.
+
+OpenCode live acceptance additionally requires `OPENCODE_LIVE_MODEL` to name a
+configured tool-capable route. The gate blocks before dispatch when it is
+absent; it never guesses a model or treats a provider's no-tool-endpoint
+response as a passing result.
 
 ## Antigravity
 
@@ -224,9 +244,12 @@ extension startup and session persistence cannot create project state before a
 read-only turn begins. A configured session directory that overlaps the
 workspace or Delegate state is rejected before admission. Provider configuration
 and authentication remain native. Continuation uses the exact recorded Pi
-session in the same workspace. `workspace-write` leaves the
-native tool selection to Pi, including its default shell, edit, and write tools;
-custom configuration can change that selection. It records `provider-native`
+session in the same workspace and reconstructs the predecessor's recorded
+preparation contract, including its effective session directory and historical
+flag mapping. `workspace-write` explicitly selects Pi's
+built-in `read`, `bash`, `edit`, and `write` tools, so an ambient custom tool
+selection cannot remove the capabilities needed for the requested work. Pi
+still owns extensions, authentication, and permission behavior. It records `provider-native`
 approval and does not add a filesystem sandbox. `model` is passed through, and
 `effort` maps to `--thinking` in both modes.
 
@@ -247,20 +270,23 @@ symlinks. Continuation and model use native options; `effort` maps to `--variant
 Previously admitted tasks retain their original preparation and output
 interpretation contracts. Dispatch a new task to use the simplified native
 profiles; upgrading does not silently change a queued task's launch settings.
-An explicit continuation creates a new task using the current mapping for its
-inherited permission mode, while retaining the exact provider session and
-leaving its predecessor immutable.
+An ordinary exact-session continuation creates a new task by reconstructing the
+predecessor's recorded OpenCode preparation contract, then applying the exact
+session continuation. It does not adopt a newer flag or policy mapping merely
+because the installed Delegate version changed. Fresh dispatches use the
+current mapping, and the predecessor remains immutable.
 
 ## Adding a provider
 
 An adapter should expose a small, explicit profile rather than leaking raw
 provider arguments into the public CLI. Register its ID, permission modes,
-options, help arguments, and required flags; implement static preparation and a
-finalizer; declare input and output artifacts; provide an identity observer; and
+options, help arguments, and stable runtime flags; implement static preparation
+and a finalizer; declare input and output artifacts; provide an identity observer; and
 register a strict predicate interpreter for the provider's output.
 
-Keep process lifetime, stopping, capture, sealing, collection, and publication
-in the shared core. The provider owns only its command construction, bounded
+Keep guardian-owned process lifetime and stopping, runner-owned capture, and
+core-owned sealing, collection, and publication outside adapters. The provider
+owns only its command construction, bounded
 environment and policy calculation, identity observation, and output
 interpretation. Add unit tests for capability drift and predicate failures,
 then document the profile here and in the discovery output. The development
@@ -282,7 +308,13 @@ Unknown effort choices remain null; an explicit `--effort` is forwarded to Claud
 Read-only selects `plan`; workspace-write selects `bypassPermissions`. These are
 provider-owned permission modes, not an independent sandbox. CCR loads its own
 configuration and extensions. Fresh sessions and exact continuations use Claude
-session UUIDs, while Delegate records the provider as `ccr:print`.
+session UUIDs, while Delegate records the provider as `ccr:print`. A fresh
+dispatch uses the current CCR mapping. An ordinary exact-session continuation
+reconstructs the predecessor's recorded CCR preparation revision: current
+route-preserving sessions use `--resume-route`, while historical modeled
+sessions retain their recorded model/provider-only launch shape. A
+route-preserving continuation therefore rejects a model override that would
+change the recorded route.
 
 CCR's foreground exit and sealed Claude stream must both indicate success.
 The requested alias is recorded; it is not independent proof of upstream model

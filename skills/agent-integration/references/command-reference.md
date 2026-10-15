@@ -21,6 +21,12 @@ All paths passed to `--root`, `--cwd`, and `--brief` must be absolute. Add
 | `delegate logs TASK --json` | Return validated output descriptors | No |
 | `delegate cancel TASK --json` | Record one explicit stop request | Stops, does not relaunch |
 
+`delegate supervisor migrate --json` is the single command-neutral recovery
+step for a `supervisor_upgrade_required` admission response. Run it once with
+the failed command's exact root. A successful response names its next action
+`retry_dispatch`, but the original command and argv remain authoritative:
+retry `dispatch` as `dispatch` or `continue` as `continue`, exactly once.
+
 The bundled supervisor is managed by the released CLI under the state root.
 Collection remains observational. Provider authentication remains the
 provider’s own responsibility and is never performed by this skill.
@@ -105,7 +111,8 @@ delegate preflight --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE \
 ```
 
 Use `read-only` for investigation or `workspace-write` for authorized edits.
-Supply any required provider options, including `--model ALIAS` for `ccr:print`.
+Supply any required provider options, including `--model ALIAS` for `ccr:print`
+and `--review-target TARGET` for `codex:review`.
 Preflight does not create a task, start the supervisor, or launch a provider.
 Its result is not proof of live authentication or successful execution. Report
 `blocked` or `unsupported` results; a readiness request does not authorize

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -16,6 +17,9 @@ const (
 	groupRequestRecordName     = "request.json"
 	groupCreationRecordName    = "creation.json"
 	groupObservationRecordName = "observation.json"
+	groupMigrationRecordName   = "migration.json"
+	groupMigrationDoneName     = "migration-complete.json"
+	groupMigrationRecordPrefix = "migration-"
 )
 
 var (
@@ -25,6 +29,9 @@ var (
 	// ErrGroupMigrationBusy means the old supervisor still owns queued or
 	// running inspection work, so a new generation must not be opened.
 	ErrGroupMigrationBusy = errors.New("inspection group migration has active work")
+	// ErrGroupMigrationUnsupported means the journal is bound to an external
+	// supervisor that Delegate must never stop or migrate automatically.
+	ErrGroupMigrationUnsupported = errors.New("inspection group migration is unsupported")
 )
 
 // GroupRequestRecord is the immutable root-scoped group binding. The group
@@ -36,6 +43,17 @@ type GroupRequestRecord struct {
 	Supervisor    task.SupervisorRef `json:"supervisor"`
 	Name          string             `json:"name"`
 	ParallelTasks uint64             `json:"parallel_tasks"`
+}
+
+// GroupMigrationRecord is an immutable prepare/complete marker for a
+// supervisor generation change. The old group request remains the authority;
+// these records only make a crash between supervisor transitions observable.
+type GroupMigrationRecord struct {
+	SchemaVersion   int                `json:"schema_version"`
+	RootID          string             `json:"root_id"`
+	LegacySHA256    string             `json:"legacy_sha256"`
+	SuccessorSHA256 string             `json:"successor_sha256"`
+	Successor       GroupRequestRecord `json:"successor"`
 }
 
 // GroupCreationRecord is the durable create-once intent for one supervisor
@@ -112,7 +130,547 @@ func (p *GroupPermit) Consume() error {
 // config and endpoint. Static validation happens before the journal directory
 // is opened or created.
 func OpenGroup(store *taskdir.Store, binding task.SupervisorRef) (journal *GroupJournal, resultErr error) {
-	return openGroup(context.Background(), store, binding)
+	return OpenGroupContext(context.Background(), store, binding)
+}
+
+// OpenGroupContext opens the root-scoped inspection group while preserving the
+// caller's bounded admission context.
+func OpenGroupContext(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef) (*GroupJournal, error) {
+	if ctx == nil {
+		return nil, errors.New("nil inspection context")
+	}
+	return openGroup(ctx, store, binding)
+}
+
+// OpenGroupGeneration opens the exact supervisor generation recorded by the
+// binding without consulting or changing the root migration head. Historical
+// continuations use this path after a successor generation has been published;
+// they must keep using their recorded journal generation.
+func OpenGroupGeneration(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef) (*GroupJournal, error) {
+	if ctx == nil {
+		return nil, errors.New("nil inspection context")
+	}
+	expected, err := expectedGroupRequest(store, binding)
+	if err != nil {
+		return nil, err
+	}
+	return openGroupGeneration(ctx, store, binding, expected)
+}
+
+// OpenGroupHistorical reopens the exact journal generation recorded by a
+// continuation. The initial generation is the root journal, including after
+// later migrations; only a published successor uses a generation directory.
+func OpenGroupHistorical(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef) (*GroupJournal, error) {
+	if ctx == nil {
+		return nil, errors.New("nil inspection context")
+	}
+	root, err := ReadGroupRequest(ctx, store)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: inspection group root journal is missing", task.ErrEvidenceFault)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if task.SameSupervisorIdentity(root.Supervisor, binding) {
+		return OpenGroupContext(ctx, store, binding)
+	}
+	expected, err := expectedGroupRequest(store, binding)
+	if err != nil {
+		return nil, err
+	}
+	published, err := groupGenerationPublished(ctx, store, root, expected)
+	if err != nil {
+		return nil, err
+	}
+	if !published {
+		return nil, fmt.Errorf("%w: historical inspection supervisor is not a published generation", task.ErrEvidenceFault)
+	}
+	return openExistingGroupGeneration(ctx, store, binding, expected)
+}
+
+func groupGenerationPublished(ctx context.Context, store *taskdir.Store, current, expected GroupRequestRecord) (bool, error) {
+	seen := map[string]struct{}{groupRequestDigest(current): {}}
+	for {
+		if sameGroupRequest(current, expected) {
+			return true, nil
+		}
+		record, found, err := readMigrationRecord(ctx, store, current, groupMigrationDoneName)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			return false, nil
+		}
+		if err := validateMigrationRecord(record, store.RootID, current); err != nil {
+			return false, fmt.Errorf("%w: invalid group migration chain: %w", task.ErrEvidenceFault, err)
+		}
+		digest := groupRequestDigest(record.Successor)
+		if _, exists := seen[digest]; exists {
+			return false, fmt.Errorf("%w: cyclic group migration chain", task.ErrEvidenceFault)
+		}
+		seen[digest] = struct{}{}
+		current = record.Successor
+	}
+}
+
+func openExistingGroupGeneration(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, expected GroupRequestRecord) (*GroupJournal, error) {
+	generation := groupGeneration(binding)
+	// A completed migration marker is the durable publication point for this
+	// generation. Materialize its directory on replay if a crash happened after
+	// the marker was synced but before the directory was created.
+	control, err := store.OpenInspectionGroupGenerationContext(ctx, generation, true)
+	if err != nil {
+		return nil, err
+	}
+	request, readErr := readGroupRequest(ctx, control)
+	if errors.Is(readErr, os.ErrNotExist) {
+		// The published marker is the authority for this successor. If the
+		// process crashed before its request record was materialized, establish
+		// the validated expected record in the newly recreated directory.
+		return openGroupControl(ctx, control, store.RootID, binding, expected)
+	}
+	if readErr != nil {
+		return nil, errors.Join(readErr, control.Close())
+	}
+	if !sameGroupRequest(request, expected) {
+		return nil, errors.Join(fmt.Errorf("%w: retained inspection generation does not match binding", task.ErrEvidenceFault), control.Close())
+	}
+	requestBytes, marshalErr := task.MarshalCanonical(request)
+	if marshalErr != nil {
+		return nil, errors.Join(marshalErr, control.Close())
+	}
+	return &GroupJournal{control: control, request: request, requestSHA: task.ComputeSHA256(requestBytes)}, nil
+}
+
+// ReadGroupRequest returns the immutable legacy group binding without creating
+// a journal or contacting the supervisor.
+func ReadGroupRequest(ctx context.Context, store *taskdir.Store) (record GroupRequestRecord, resultErr error) {
+	if store == nil {
+		return GroupRequestRecord{}, errors.New("nil inspection store")
+	}
+	control, err := store.OpenInspectionGroupContext(ctx, false)
+	if err != nil {
+		return GroupRequestRecord{}, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, control.Close()) }()
+	record, err = readGroupRequest(ctx, control)
+	if errors.Is(err, os.ErrNotExist) {
+		return GroupRequestRecord{}, fmt.Errorf("%w: inspection group request is missing", task.ErrEvidenceFault)
+	}
+	return record, err
+}
+
+// PrepareGroupMigration records that a legacy binding is being inspected.
+// Replays accept the identical marker. A different successor is recorded
+// under its own immutable pending name so a blocked migration cannot wedge a
+// later upgrade attempt.
+func PrepareGroupMigration(ctx context.Context, store *taskdir.Store, legacy, successor GroupRequestRecord) (resultErr error) {
+	if store == nil {
+		return errors.New("nil inspection store")
+	}
+	if err := validateStoredGroupRequest(legacy, store.RootID); err != nil {
+		return err
+	}
+	if err := validateStoredGroupRequest(successor, store.RootID); err != nil {
+		return err
+	}
+	control, err := openMigrationControl(ctx, store, legacy, true)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, control.Close()) }()
+	record, err := migrationRecord(store.RootID, legacy, successor)
+	if err != nil {
+		return err
+	}
+	return control.WithLock(ctx, func(tx *taskdir.ControlTransaction) error {
+		return prepareGroupMigrationLocked(tx, store.RootID, legacy, record)
+	})
+}
+
+func prepareGroupMigrationLocked(tx *taskdir.ControlTransaction, rootID string, legacy GroupRequestRecord, record GroupMigrationRecord) error {
+	existingRequest, err := ensureGroupRequest(tx, legacy)
+	if err != nil {
+		return err
+	}
+	if validateErr := validateStoredGroupRequest(existingRequest, rootID); validateErr != nil {
+		return fmt.Errorf("%w: invalid migration generation request: %w", task.ErrEvidenceFault, validateErr)
+	}
+	if !sameGroupRequest(existingRequest, legacy) {
+		return fmt.Errorf("%w: migration generation request changed", task.ErrEvidenceFault)
+	}
+	var existing GroupMigrationRecord
+	err = tx.Read(groupMigrationRecordName, &existing)
+	if errors.Is(err, os.ErrNotExist) {
+		_, putErr := tx.Put(groupMigrationRecordName, record)
+		return putErr
+	}
+	if err != nil {
+		return err
+	}
+	if validateErr := validateMigrationRecord(existing, rootID, legacy); validateErr != nil {
+		return fmt.Errorf("%w: invalid pending migration marker: %w", task.ErrEvidenceFault, validateErr)
+	}
+	if existing == record {
+		return nil
+	}
+	_, putErr := tx.Put(pendingMigrationRecordName(record.SuccessorSHA256), record)
+	return putErr
+}
+
+func ensureGroupRequest(tx *taskdir.ControlTransaction, legacy GroupRequestRecord) (GroupRequestRecord, error) {
+	var existing GroupRequestRecord
+	err := tx.Read(groupRequestRecordName, &existing)
+	if !errors.Is(err, os.ErrNotExist) {
+		return existing, err
+	}
+	created, putErr := tx.Put(groupRequestRecordName, legacy)
+	if putErr != nil {
+		return GroupRequestRecord{}, putErr
+	}
+	if created {
+		return legacy, nil
+	}
+	err = tx.Read(groupRequestRecordName, &existing)
+	if err != nil {
+		return GroupRequestRecord{}, err
+	}
+	return existing, nil
+}
+
+// CompleteGroupMigration records that the old binding passed inspection and
+// the successor generation may be used. It is written before successor group
+// creation so a crash after the old endpoint is stopped remains recoverable.
+func CompleteGroupMigration(ctx context.Context, store *taskdir.Store, legacy, successor GroupRequestRecord) (resultErr error) {
+	if store == nil {
+		return errors.New("nil inspection store")
+	}
+	if err := validateStoredGroupRequest(legacy, store.RootID); err != nil {
+		return err
+	}
+	if err := validateStoredGroupRequest(successor, store.RootID); err != nil {
+		return err
+	}
+	control, err := openMigrationControl(ctx, store, legacy, false)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, control.Close()) }()
+	record, err := migrationRecord(store.RootID, legacy, successor)
+	if err != nil {
+		return err
+	}
+	return control.WithLock(ctx, func(tx *taskdir.ControlTransaction) error {
+		return completeGroupMigrationLocked(tx, store.RootID, legacy, record)
+	})
+}
+
+func completeGroupMigrationLocked(tx *taskdir.ControlTransaction, rootID string, legacy GroupRequestRecord, want GroupMigrationRecord) error {
+	var completed GroupMigrationRecord
+	err := tx.Read(groupMigrationDoneName, &completed)
+	if err == nil {
+		if validateErr := validateMigrationRecord(completed, rootID, legacy); validateErr != nil {
+			return fmt.Errorf("%w: invalid completed group migration marker: %w", task.ErrEvidenceFault, validateErr)
+		}
+		if completed != want {
+			return fmt.Errorf("%w: completed group migration edge changed", task.ErrEvidenceFault)
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	prepared, err := exactPreparedGroupMigration(tx, rootID, legacy, want)
+	if err != nil {
+		return err
+	}
+	if !prepared {
+		return fmt.Errorf("%w: exact group migration edge was not prepared", task.ErrEvidenceFault)
+	}
+	created, err := tx.Put(groupMigrationDoneName, want)
+	if err != nil {
+		return err
+	}
+	if !created {
+		return fmt.Errorf("%w: completed group migration marker was not created", task.ErrEvidenceFault)
+	}
+	return nil
+}
+
+func exactPreparedGroupMigration(tx *taskdir.ControlTransaction, rootID string, legacy GroupRequestRecord, want GroupMigrationRecord) (bool, error) {
+	var primary GroupMigrationRecord
+	err := tx.Read(groupMigrationRecordName, &primary)
+	if err == nil {
+		if validateErr := validateMigrationRecord(primary, rootID, legacy); validateErr != nil {
+			return false, fmt.Errorf("%w: invalid pending group migration marker: %w", task.ErrEvidenceFault, validateErr)
+		}
+		if primary == want {
+			return true, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+
+	var alternate GroupMigrationRecord
+	err = tx.Read(pendingMigrationRecordName(want.SuccessorSHA256), &alternate)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if validateErr := validateMigrationRecord(alternate, rootID, legacy); validateErr != nil {
+		return false, fmt.Errorf("%w: invalid exact pending group migration marker: %w", task.ErrEvidenceFault, validateErr)
+	}
+	return alternate == want, nil
+}
+
+// ReadGroupHead follows completed migration markers from the original journal
+// to the latest known supervisor generation. The chain is append-only: each
+// source generation owns its own marker, so later upgrades never overwrite an
+// earlier migration record.
+func ReadGroupHead(ctx context.Context, store *taskdir.Store) (head GroupRequestRecord, migrated bool, resultErr error) {
+	if store == nil {
+		return GroupRequestRecord{}, false, errors.New("nil inspection store")
+	}
+	head, err := readGroupRoot(ctx, store)
+	if err != nil {
+		return GroupRequestRecord{}, false, err
+	}
+	return followGroupMigrationChain(ctx, store, head)
+}
+
+func readGroupRoot(ctx context.Context, store *taskdir.Store) (GroupRequestRecord, error) {
+	control, err := store.OpenInspectionGroupContext(ctx, false)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			retained, retainedErr := hasRetainedGroupGeneration(store)
+			if retainedErr != nil {
+				return GroupRequestRecord{}, retainedErr
+			}
+			if retained {
+				return GroupRequestRecord{}, fmt.Errorf("%w: inspection group root journal is missing", task.ErrEvidenceFault)
+			}
+		}
+		return GroupRequestRecord{}, err
+	}
+	head, readErr := readGroupRequest(ctx, control)
+	closeErr := control.Close()
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			readErr = fmt.Errorf("%w: inspection group request is missing", task.ErrEvidenceFault)
+		}
+		return GroupRequestRecord{}, errors.Join(readErr, closeErr)
+	}
+	if closeErr != nil {
+		return GroupRequestRecord{}, closeErr
+	}
+	if err = validateStoredGroupRequest(head, store.RootID); err != nil {
+		return GroupRequestRecord{}, fmt.Errorf("%w: invalid group head: %w", task.ErrEvidenceFault, err)
+	}
+	return head, nil
+}
+
+func followGroupMigrationChain(ctx context.Context, store *taskdir.Store, head GroupRequestRecord) (GroupRequestRecord, bool, error) {
+	migrated := false
+	seen := map[string]struct{}{groupRequestDigest(head): {}}
+	for {
+		record, found, readMigrationErr := readMigrationRecord(ctx, store, head, groupMigrationDoneName)
+		if readMigrationErr != nil {
+			return GroupRequestRecord{}, false, readMigrationErr
+		}
+		if !found {
+			return head, migrated, nil
+		}
+		if validateErr := validateMigrationRecord(record, store.RootID, head); validateErr != nil {
+			return GroupRequestRecord{}, false, fmt.Errorf("%w: invalid group migration chain: %w", task.ErrEvidenceFault, validateErr)
+		}
+		digest := groupRequestDigest(record.Successor)
+		if _, exists := seen[digest]; exists {
+			return GroupRequestRecord{}, false, fmt.Errorf("%w: cyclic group migration chain", task.ErrEvidenceFault)
+		}
+		seen[digest] = struct{}{}
+		head = record.Successor
+		migrated = true
+	}
+}
+
+// GroupHeadMatchesBinding reports whether an inspection journal exists and its
+// current logical supervisor is the supplied binding. Installation provenance
+// is intentionally ignored; callers use this distinction to reconcile a
+// daemon identity drift without stealing a journal whose config or endpoint
+// belongs to an older generation.
+func GroupHeadMatchesBinding(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef) (present, matches bool, resultErr error) {
+	if store == nil {
+		return false, false, errors.New("nil inspection store")
+	}
+	expected, err := expectedGroupRequest(store, binding)
+	if err != nil {
+		return false, false, err
+	}
+	head, _, err := ReadGroupHead(ctx, store)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return true, sameGroupRequest(head, expected), nil
+}
+
+// GroupMigrationComplete reports whether the exact legacy-to-successor change
+// has already passed its safety check.
+func GroupMigrationComplete(ctx context.Context, store *taskdir.Store, legacy, successor GroupRequestRecord) (complete bool, resultErr error) {
+	if store == nil {
+		return false, errors.New("nil inspection store")
+	}
+	record, found, err := readMigrationRecord(ctx, store, legacy, groupMigrationDoneName)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	want, err := migrationRecord(store.RootID, legacy, successor)
+	if err != nil {
+		return false, err
+	}
+	return record == want, nil
+}
+
+// HasCompletedGroupMigration reports whether this journal contains a valid
+// completed migration marker. The legacy request remains for audit, so callers
+// that only need read-only lifecycle status must distinguish retained history
+// from pending work without contacting either supervisor.
+func HasCompletedGroupMigration(ctx context.Context, store *taskdir.Store) (complete bool, resultErr error) {
+	_, complete, resultErr = ReadGroupHead(ctx, store)
+	return complete, resultErr
+}
+
+func readMigrationRecord(ctx context.Context, store *taskdir.Store, legacy GroupRequestRecord, name string) (record GroupMigrationRecord, found bool, resultErr error) {
+	control, err := openMigrationControl(ctx, store, legacy, false)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return GroupMigrationRecord{}, false, nil
+		}
+		return GroupMigrationRecord{}, false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, control.Close()) }()
+	if err = control.Read(name, &record); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return GroupMigrationRecord{}, false, nil
+		}
+		return GroupMigrationRecord{}, false, err
+	}
+	return record, true, nil
+}
+
+func openMigrationControl(ctx context.Context, store *taskdir.Store, legacy GroupRequestRecord, create bool) (*taskdir.ControlDir, error) {
+	if store == nil {
+		return nil, errors.New("nil inspection store")
+	}
+	base, err := store.OpenInspectionGroupContext(ctx, false)
+	if err == nil {
+		existing, readErr := readGroupRequest(ctx, base)
+		closeErr := base.Close()
+		if readErr == nil && closeErr == nil && sameGroupRequest(existing, legacy) {
+			return store.OpenInspectionGroupContext(ctx, create)
+		}
+		if errors.Is(readErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("%w: inspection group root journal is missing", task.ErrEvidenceFault)
+		}
+		if readErr != nil {
+			return nil, errors.Join(readErr, closeErr)
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w: inspection group root journal is missing", task.ErrEvidenceFault)
+	} else {
+		return nil, err
+	}
+	return store.OpenInspectionGroupGenerationContext(ctx, groupGeneration(legacy.Supervisor), create)
+}
+
+func hasRetainedGroupGeneration(store *taskdir.Store) (bool, error) {
+	if store == nil {
+		return false, errors.New("nil inspection store")
+	}
+	entries, err := os.ReadDir(store.Root)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "inspection-group-") || !validGroupGenerationSuffix(strings.TrimPrefix(name, "inspection-group-")) {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func validGroupGenerationSuffix(value string) bool {
+	if len(value) != 16 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func migrationRecord(rootID string, legacy, successor GroupRequestRecord) (GroupMigrationRecord, error) {
+	legacyBytes, legacyErr := task.MarshalCanonical(legacy)
+	successorBytes, successorErr := task.MarshalCanonical(successor)
+	if legacyErr != nil {
+		return GroupMigrationRecord{}, legacyErr
+	}
+	if successorErr != nil {
+		return GroupMigrationRecord{}, successorErr
+	}
+	return GroupMigrationRecord{
+		SchemaVersion:   task.SchemaVersion,
+		RootID:          rootID,
+		LegacySHA256:    task.ComputeSHA256(legacyBytes),
+		SuccessorSHA256: task.ComputeSHA256(successorBytes),
+		Successor:       successor,
+	}, nil
+}
+
+func pendingMigrationRecordName(successorSHA256 string) string {
+	return groupMigrationRecordPrefix + successorSHA256[:32] + ".json"
+}
+
+func validateMigrationRecord(record GroupMigrationRecord, rootID string, legacy GroupRequestRecord) error {
+	if record.SchemaVersion != task.SchemaVersion || record.RootID != rootID ||
+		task.ValidateSHA256(record.LegacySHA256) != nil || task.ValidateSHA256(record.SuccessorSHA256) != nil {
+		return errors.New("invalid migration marker")
+	}
+	if record.LegacySHA256 != groupRequestDigest(legacy) {
+		return errors.New("migration marker legacy binding does not match its source")
+	}
+	if err := validateStoredGroupRequest(record.Successor, rootID); err != nil {
+		return err
+	}
+	if record.SuccessorSHA256 != groupRequestDigest(record.Successor) {
+		return errors.New("migration marker successor binding does not match its digest")
+	}
+	return nil
+}
+
+func groupRequestDigest(record GroupRequestRecord) string {
+	data, err := task.MarshalCanonical(record)
+	if err != nil {
+		return ""
+	}
+	return task.ComputeSHA256(data)
 }
 
 func openGroup(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef) (journal *GroupJournal, resultErr error) {
@@ -130,8 +688,8 @@ func openGroup(ctx context.Context, store *taskdir.Store, binding task.Superviso
 // OpenGroupWithMigration rebinds a stale inspection journal without changing
 // its immutable records. A changed supervisor gets a deterministic successor
 // directory only after check confirms that the old derived group has no active
-// work. The check must perform a bounded read-only observation and must not
-// mutate either supervisor.
+// work. The check owns the bounded supervisor transition; callers must hold
+// the state-root bootstrap lock while invoking it.
 func OpenGroupWithMigration(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, check func(context.Context, GroupRequestRecord) error) (*GroupJournal, error) {
 	if ctx == nil {
 		return nil, errors.New("nil migration context")
@@ -140,38 +698,30 @@ func OpenGroupWithMigration(ctx context.Context, store *taskdir.Store, binding t
 	if err != nil {
 		return nil, err
 	}
-
-	legacy, err := store.OpenInspectionGroupContext(ctx, false)
+	legacy, migrated, err := ReadGroupHead(ctx, store)
 	if errors.Is(err, os.ErrNotExist) {
 		return openGroup(ctx, store, binding)
 	}
 	if err != nil {
 		return nil, err
 	}
-	existing, readErr := readGroupRequest(ctx, legacy)
-	closeErr := legacy.Close()
-	if readErr != nil {
-		if errors.Is(readErr, os.ErrNotExist) {
+	if sameGroupRequest(legacy, expected) {
+		if !migrated {
 			return openGroup(ctx, store, binding)
 		}
-		return nil, errors.Join(readErr, closeErr)
-	}
-	if closeErr != nil {
-		return nil, closeErr
-	}
-	if validateErr := validateStoredGroupRequest(existing, store.RootID); validateErr != nil {
-		return nil, fmt.Errorf("%w: invalid group request: %w", task.ErrEvidenceFault, validateErr)
-	}
-	if sameGroupRequest(existing, expected) {
-		return openGroup(ctx, store, binding)
+		return openGroupGeneration(ctx, store, binding, expected)
 	}
 	if check == nil {
 		return nil, fmt.Errorf("%w: changed supervisor identity", ErrGroupMigrationRequired)
 	}
-	checkErr := check(ctx, existing)
+	checkErr := check(ctx, legacy)
 	if checkErr != nil {
 		return nil, checkErr
 	}
+	return openGroupGeneration(ctx, store, binding, expected)
+}
+
+func openGroupGeneration(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, expected GroupRequestRecord) (*GroupJournal, error) {
 	generation := groupGeneration(binding)
 	control, err := store.OpenInspectionGroupGenerationContext(ctx, generation, true)
 	if err != nil {
@@ -449,27 +999,44 @@ func validateGroupCreation(record GroupCreationRecord, requestSHA string) error 
 // bounded positive facts. Existing observation bytes are never trusted in
 // place of the supplied snapshot.
 func (g *GroupJournal) Observe(snapshot pueue.QueueSnapshot) error {
+	return g.ObserveContext(context.Background(), snapshot)
+}
+
+// ObserveContext is the context-aware form of Observe used by bounded
+// admission paths.
+func (g *GroupJournal) ObserveContext(ctx context.Context, snapshot pueue.QueueSnapshot) error {
 	if g == nil || g.control == nil {
 		return os.ErrClosed
 	}
-	group, ok := snapshot.Groups[g.request.Name]
-	if !ok || group.Status != "Running" || group.ParallelTasks != 1 {
-		return pueue.ErrUnknown
+	if ctx == nil {
+		return errors.New("nil observation context")
 	}
-	record := GroupObservationRecord{
-		SchemaVersion: task.SchemaVersion,
-		RequestSHA256: g.requestSHA,
-		Name:          g.request.Name,
-		Status:        group.Status,
-		ParallelTasks: group.ParallelTasks,
-	}
-	if err := validateGroupObservation(record, g.requestSHA, g.request.Name); err != nil {
+	record, err := groupObservationForSnapshot(g.request, g.requestSHA, snapshot)
+	if err != nil {
 		return err
 	}
-	return withControlTransaction(g.control, func(tx *taskdir.ControlTransaction) error {
+	return withControlTransactionContext(ctx, g.control, func(tx *taskdir.ControlTransaction) error {
 		_, putErr := tx.Put(groupObservationRecordName, record)
 		return putErr
 	})
+}
+
+func groupObservationForSnapshot(request GroupRequestRecord, requestSHA string, snapshot pueue.QueueSnapshot) (GroupObservationRecord, error) {
+	group, ok := snapshot.Groups[request.Name]
+	if !ok || group.Status != "Running" || group.ParallelTasks != 1 {
+		return GroupObservationRecord{}, pueue.ErrUnknown
+	}
+	record := GroupObservationRecord{
+		SchemaVersion: task.SchemaVersion,
+		RequestSHA256: requestSHA,
+		Name:          request.Name,
+		Status:        group.Status,
+		ParallelTasks: group.ParallelTasks,
+	}
+	if err := validateGroupObservation(record, requestSHA, request.Name); err != nil {
+		return GroupObservationRecord{}, err
+	}
+	return record, nil
 }
 
 func validateGroupObservation(record GroupObservationRecord, requestSHA, name string) error {

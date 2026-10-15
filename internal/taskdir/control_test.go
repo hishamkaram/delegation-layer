@@ -260,6 +260,46 @@ func TestInspectionControlDrainsTransactionOperationsBeforeUnlock(t *testing.T) 
 	}
 }
 
+func TestControlTransactionPreservesFiniteCallerDeadline(t *testing.T) {
+	s := testStore(t)
+	d, err := s.OpenInspection(strings.Repeat("d", 32), true)
+	must(t, err)
+	t.Cleanup(func() { must(t, d.Close()) })
+
+	want := time.Now().Add(time.Hour).Round(0)
+	ctx, cancel := context.WithDeadline(context.Background(), want)
+	defer cancel()
+	err = d.WithLock(ctx, func(tx *ControlTransaction) error {
+		got, ok := tx.ctx.Deadline()
+		if !ok || !got.Equal(want) {
+			t.Fatalf("transaction deadline = %v, %v; want %v", got, ok, want)
+		}
+		return nil
+	})
+	must(t, err)
+}
+
+func TestControlTransactionBoundsBackgroundCaller(t *testing.T) {
+	s := testStore(t)
+	d, err := s.OpenInspection(strings.Repeat("e", 32), true)
+	must(t, err)
+	t.Cleanup(func() { must(t, d.Close()) })
+
+	started := time.Now()
+	err = d.WithLock(context.Background(), func(tx *ControlTransaction) error {
+		deadline, ok := tx.ctx.Deadline()
+		if !ok {
+			t.Fatal("background transaction has no local deadline")
+		}
+		remaining := deadline.Sub(started)
+		if remaining <= 0 || remaining > controlOperationTimeout+time.Second {
+			t.Fatalf("background transaction deadline = %v", deadline)
+		}
+		return nil
+	})
+	must(t, err)
+}
+
 func TestInspectionControlReplayCleansOnlyOwnedStage(t *testing.T) {
 	s := testStore(t)
 	d, err := s.OpenInspectionGroup(true)
@@ -390,6 +430,35 @@ func (f *cancelBeforeControlStage) OnBeforeStageCreate(stage, _ string) error {
 	f.stage = stage
 	f.cancel()
 	return nil
+}
+
+type cancelDuringControlDirectoryCreate struct {
+	BaseFaultInjector
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (f *cancelDuringControlDirectoryCreate) OnDirBarrier(_ string) error {
+	f.once.Do(f.cancel)
+	return nil
+}
+
+func TestOpenInspectionCancellationStopsDirectoryCreation(t *testing.T) {
+	s := testStore(t)
+	id := strings.Repeat("9", 32)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hook := &cancelDuringControlDirectoryCreate{cancel: cancel}
+	s.SetFaultInjector(hook)
+	t.Cleanup(func() { s.SetFaultInjector(nil) })
+
+	d, err := s.OpenInspectionContext(ctx, id, true)
+	if d != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled directory creation returned dir=%v err=%v", d, err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(s.Root, "inspections", id)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("cancelled directory creation reached the operation directory: %v", statErr)
+	}
 }
 
 func TestControlCancellationBeforeStageDoesNotConsumeGuard(t *testing.T) {

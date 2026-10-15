@@ -10,14 +10,15 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import sys
 import tempfile
 import time
 import traceback
 import uuid
 
 from acceptance_supervisor_common import (
-    Processes, config_for, digest, inherited_environment, read_json,
-    require, sha, write_json,
+    DirectoryOwner, Processes, config_for, digest, inherited_environment,
+    read_json, finalize_acceptance_artifacts, require, sha, write_json,
 )
 from acceptance_provider_common import (
     task_snapshot,
@@ -87,18 +88,26 @@ class ContributorAcceptance:
         self.pueued = Path(pueued).resolve(strict=True)
         self.output = Path(output).resolve()
         self.output.mkdir(mode=0o700, parents=True)
-        self.base = Path(tempfile.mkdtemp(prefix="dc-", dir="/tmp")).resolve()
-        self.root = self.base / "task-state"
-        self.work = self.base / "work space"
-        self.runtime = self.base / "provider-runtime"
-        self.queue = self.base / "queue"
-        self.bindir = self.base / "binaries"
-        for directory in (self.work, self.runtime, self.queue, self.bindir):
-            directory.mkdir(mode=0o700)
-        environment = inherited_environment()
-        environment["DELEGATE_TEST_PUEUE"] = str(self.pueue)
-        environment["DELEGATE_CONTRIBUTOR_RUNTIME"] = str(self.runtime)
-        self.processes = Processes(self.output / "processes", environment)
+        ownership = DirectoryOwner()
+        try:
+            allocated = Path(tempfile.mkdtemp(prefix="dc-", dir="/tmp"))
+            self.base = ownership.adopt_created(
+                "contributor private state", allocated, allocated.parent).directory.resolve()
+            self.root = ownership.create("contributor task state", self.base / "task-state", self.base).directory
+            self.work = ownership.create("contributor workspace", self.base / "work space", self.base).directory
+            self.runtime = ownership.create("contributor provider runtime", self.base / "provider-runtime", self.base).directory
+            self.queue = ownership.create("contributor queue", self.base / "queue", self.base).directory
+            self.bindir = ownership.create("contributor binaries", self.base / "binaries", self.base).directory
+            ownership.create("contributor queue state", self.queue / "state", self.queue)
+            ownership.create("contributor queue runtime", self.queue / "run", self.queue)
+            environment = inherited_environment()
+            environment["DELEGATE_TEST_PUEUE"] = str(self.pueue)
+            environment["DELEGATE_CONTRIBUTOR_RUNTIME"] = str(self.runtime)
+            self.processes = Processes(self.output / "processes", environment, owner=ownership)
+        except BaseException:
+            ownership.rollback()
+            raise
+        self.owned_directories = ownership.transfer()
         self.daemon = None
         self.tasks = {}
         self.rows = {}
@@ -106,8 +115,6 @@ class ContributorAcceptance:
         self.closed = False
 
     def setup(self):
-        for name in ("state", "run"):
-            (self.queue / name).mkdir(mode=0o700)
         (self.queue / "aliases.yml").write_text("{}\n")
         (self.queue / "aliases.yml").chmod(0o600)
         self.config = self.queue / "p.yml"
@@ -299,6 +306,16 @@ class ContributorAcceptance:
         self.daemon.wait(timeout=30, expected=0)
         self.closed = True
 
+    def finalize(self, success):
+        """Remove this run's disposable private state after verified shutdown."""
+        return finalize_acceptance_artifacts(
+            self.output,
+            self.closed,
+            self.owned_directories,
+            success,
+            raw_process_captures_token=self.processes.capture_root,
+        )
+
     def run(self):
         try:
             self.setup()
@@ -322,23 +339,73 @@ class ContributorAcceptance:
             self.verify_preflight_rejections()
             self.verify_replay()
             self.shutdown()
-            write_json(self.output / "success.json", {"cases": self.rows, "base": str(self.base),
-                       "preflight": self.preflight,
-                       "actual_provider_launches": len(self.tasks), "replay_launches": 0,
-                       "natural_daemon_shutdown": self.closed, "signals_sent": 0})
+            success_receipt = {"cases": self.rows, "base": str(self.base),
+                               "preflight": self.preflight,
+                               "actual_provider_launches": len(self.tasks), "replay_launches": 0,
+                               "natural_daemon_shutdown": self.closed, "signals_sent": 0}
+            if not self.finalize(True):
+                raise RuntimeError("completed contributor acceptance artifacts could not be cleaned")
+            write_json(self.output / "success.json", success_receipt, replace=True)
         except BaseException as error:
-            active = self.processes.drain(timeout=5, exclude=(() if self.daemon is None else (self.daemon,)))
-            cleanup_error = None
-            if self.daemon is not None and self.daemon.poll() is None and not active:
+            active = []
+            cleanup_errors = []
+            drain_failed = False
+            artifact_finalized = False
+            try:
+                (self.output / "success.json").unlink(missing_ok=True)
+            except BaseException as removal_error:
+                cleanup_errors.append(removal_error)
+            try:
+                active = self.processes.drain(
+                    timeout=5, exclude=(() if self.daemon is None else (self.daemon,)))
+            except BaseException as drain_error:
+                drain_failed = True
+                cleanup_errors.append(drain_error)
+
+            if self.daemon is not None and not drain_failed and not active:
                 try:
-                    self.shutdown()
-                except Exception as shutdown_error:
-                    cleanup_error = str(shutdown_error)
-            write_json(self.output / "failure.json", {"error": str(error), "traceback": traceback.format_exc(),
-                       "cleanup_error": cleanup_error, "natural_daemon_shutdown": self.closed,
-                       "base": str(self.base), "tasks": self.tasks, "owned_clients": active,
-                       "daemon_pid": None if self.daemon is None else self.daemon.pid,
-                       "unknown_termination_preserved": True, "signals_sent": 0})
+                    if self.daemon.poll() is None:
+                        self.shutdown()
+                except BaseException as shutdown_error:
+                    cleanup_errors.append(shutdown_error)
+            elif self.daemon is None and not drain_failed and not active:
+                self.closed = True
+
+            try:
+                write_json(self.output / "failure.json", {
+                    "error": str(error), "traceback": traceback.format_exc(),
+                    "cleanup_error": str(cleanup_errors[0]) if cleanup_errors else None,
+                    "natural_daemon_shutdown": self.closed,
+                    "base": str(self.base), "tasks": self.tasks, "owned_clients": active,
+                    "daemon_pid": None if self.daemon is None else self.daemon.pid,
+                    "unknown_termination_preserved": True, "signals_sent": 0})
+            except BaseException as diagnostic_error:
+                print("WARNING contributor acceptance diagnostics were not written: "
+                      + str(diagnostic_error), file=sys.stderr, flush=True)
+
+            try:
+                if not self.finalize(False):
+                    cleanup_errors.append(
+                        RuntimeError("acceptance artifact finalization was not completed"))
+                else:
+                    artifact_finalized = True
+            except BaseException as finalize_error:
+                cleanup_errors.append(finalize_error)
+            try:
+                write_json(self.output / "failure-cleanup.json", {
+                    "status": "completed" if not cleanup_errors else "failed",
+                    "natural_daemon_shutdown": self.closed,
+                    "owned_clients_remaining": len(active),
+                    "artifact_finalization_completed": artifact_finalized,
+                    "passed_receipt_absent": not (self.output / "success.json").exists(),
+                    "signals_sent": 0,
+                }, replace=True)
+            except BaseException as evidence_error:
+                print("WARNING contributor cleanup evidence was not written: "
+                      + str(evidence_error), file=sys.stderr, flush=True)
+            if cleanup_errors:
+                raise RuntimeError("contributor acceptance cleanup failed: "
+                                   + str(cleanup_errors[0])) from error
             raise
 
 

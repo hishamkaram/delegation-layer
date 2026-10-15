@@ -6,63 +6,116 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
+const runnerReceiptPollInterval = 10 * time.Millisecond
+
 type runnerArguments struct {
-	Root       string
-	TaskID     string
-	JSON       bool
-	Inspection bool
+	Root             string
+	TaskID           string
+	JSON             bool
+	Inspection       bool
+	Supervised       bool
+	Guardian         bool
+	QueueMaintenance bool
+	LifetimeChild    bool
+	LifetimeFD       int
+	TerminalEvent    bool
+	PueueID          int64
+	ExitCode         string
 }
 
 // RunRunner executes one saved task from the supervisor's exact root/task
 // command. It shares the public runtime and never accepts a provider argv.
 func RunRunner(args []string, stdout, stderr io.Writer, deps Dependencies) int {
+	if code, handled := pueue.RunControlOwnerMode(args); handled {
+		return code
+	}
+	if code, handled := lifetime.RunProcessGroupPinMode(args); handled {
+		return code
+	}
+	if code, handled := runLifetimeLaunchGateMode(args, stderr); handled {
+		return code
+	}
 	parsed, err := parseRunnerArguments(args)
 	if err != nil {
 		return writeCLIError(stderr, err, 2)
 	}
-	if parsed.Inspection {
-		if err = runInspectionWorker(parsed.Root, parsed.TaskID, deps.normalized()); err != nil {
-			return writeCLIError(stderr, errors.New("native inspection unavailable"), 1)
-		}
-		return 0
+	if code, handled := runRunnerControlMode(parsed, stderr, deps); handled {
+		return code
 	}
-	result := runRunner(parsed, deps.normalized())
+	return runRunnerOutput(parsed, stdout, stderr, deps.normalized())
+}
+
+func runRunnerControlMode(parsed runnerArguments, stderr io.Writer, deps Dependencies) (int, bool) {
+	switch {
+	case parsed.QueueMaintenance:
+		if err := runQueueMaintenance(parsed, deps.normalized()); err != nil {
+			return writeCLIError(stderr, errors.New("supervisor maintenance unavailable"), 1), true
+		}
+		return 0, true
+	case parsed.TerminalEvent:
+		if err := runTerminalEvent(parsed, deps.normalized()); err != nil {
+			return writeCLIError(stderr, errors.New("terminal event unavailable"), 1), true
+		}
+		return 0, true
+	case parsed.Guardian:
+		if err := runLifetimeGuardianMode(parsed, deps.normalized()); err != nil {
+			return writeCLIError(stderr, errors.New("task lifetime unavailable"), 1), true
+		}
+		return 0, true
+	case parsed.Inspection:
+		if err := runInspectionRunnerMode(parsed, deps.normalized()); err != nil {
+			return writeCLIError(stderr, inspectionWorkerPublicError(err), 1), true
+		}
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+func runInspectionRunnerMode(parsed runnerArguments, deps Dependencies) error {
+	if parsed.LifetimeChild {
+		return runInspectionLifetimeChildMode(parsed, deps)
+	}
+	return runInspectionWorkerMode(parsed.Root, parsed.TaskID, parsed.Supervised, deps)
+}
+
+func runRunnerOutput(parsed runnerArguments, stdout, stderr io.Writer, deps Dependencies) int {
+	result := runRunner(parsed, deps)
 	if parsed.JSON {
 		result.response.setError(result.err)
-		if err = writeJSON(stdout, result.response); err != nil {
+		if err := writeJSON(stdout, result.response); err != nil {
 			return 1
 		}
-	} else {
-		if err = writeHumanResponse(stdout, result.response); err != nil {
+		return result.code
+	}
+	if err := writeHumanResponse(stdout, result.response); err != nil {
+		return 1
+	}
+	if result.err != nil {
+		if _, err := fmt.Fprintf(stderr, "error: %v\n", result.err); err != nil {
 			return 1
-		}
-		if result.err != nil {
-			if _, err = fmt.Fprintf(stderr, "error: %v\n", result.err); err != nil {
-				return 1
-			}
 		}
 	}
 	return result.code
 }
 
 func parseRunnerArguments(args []string) (runnerArguments, error) {
-	var parsed runnerArguments
-	fs := flag.NewFlagSet("delegate-run", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&parsed.Root, "root", "", "absolute state root")
-	fs.BoolVar(&parsed.JSON, "json", false, "emit versioned JSON")
-	fs.BoolVar(&parsed.Inspection, "inspection", false, "run the saved internal inspection operation")
+	parsed := runnerArguments{LifetimeFD: -1}
+	fs := newRunnerFlagSet(&parsed)
 	ordered, err := orderRunnerFlags(fs, args)
 	if err != nil {
 		return runnerArguments{}, err
@@ -70,18 +123,192 @@ func parseRunnerArguments(args []string) (runnerArguments, error) {
 	if err = fs.Parse(ordered); err != nil {
 		return runnerArguments{}, err
 	}
-	positional := fs.Args()
+	return validateRunnerArguments(parsed, fs.Args())
+}
+
+func newRunnerFlagSet(parsed *runnerArguments) *flag.FlagSet {
+	fs := flag.NewFlagSet("delegate-run", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&parsed.Root, "root", "", "absolute state root")
+	fs.BoolVar(&parsed.JSON, "json", false, "emit versioned JSON")
+	fs.BoolVar(&parsed.Inspection, "inspection", false, "run the saved internal inspection operation")
+	fs.BoolVar(&parsed.Supervised, "supervised", false, "consume a saved supervisor receipt")
+	fs.BoolVar(&parsed.Guardian, "guardian", false, "own the saved task process lifetime")
+	fs.BoolVar(&parsed.QueueMaintenance, "queue-maintenance", false, "own requested private queue maintenance")
+	fs.BoolVar(&parsed.LifetimeChild, "lifetime-child", false, "run behind the saved task guardian")
+	fs.IntVar(&parsed.LifetimeFD, "lifetime-fd", -1, "private guardian control descriptor")
+	fs.BoolVar(&parsed.TerminalEvent, "terminal-event", false, "record one private supervisor terminal event")
+	fs.Int64Var(&parsed.PueueID, "pueue-id", -1, "private supervisor numeric task ID")
+	fs.StringVar(&parsed.ExitCode, "exit-code", "", "private supervisor terminal exit code")
+	return fs
+}
+
+func validateRunnerArguments(parsed runnerArguments, positional []string) (runnerArguments, error) {
+	if parsed.Root == "" || !filepath.IsAbs(parsed.Root) || filepath.Clean(parsed.Root) != parsed.Root {
+		return runnerArguments{}, errors.New("delegate-run requires a clean absolute --root")
+	}
+	if parsed.TerminalEvent {
+		if runnerTerminalEventHasUnexpectedArguments(parsed, positional) {
+			return runnerArguments{}, errors.New("delegate-run terminal event requires --root, --pueue-id and --exit-code only")
+		}
+		return parsed, nil
+	}
+	if parsed.QueueMaintenance {
+		if runnerQueueMaintenanceHasUnexpectedArguments(parsed, positional) {
+			return runnerArguments{}, errors.New("delegate-run queue maintenance requires --root only")
+		}
+		return parsed, nil
+	}
 	if len(positional) != 1 {
 		return runnerArguments{}, errors.New("delegate-run requires exactly one task ID")
 	}
 	parsed.TaskID = positional[0]
-	if err = task.ValidateTaskID(parsed.TaskID); err != nil {
+	if err := task.ValidateTaskID(parsed.TaskID); err != nil {
 		return runnerArguments{}, err
 	}
-	if parsed.Root == "" || !filepath.IsAbs(parsed.Root) || filepath.Clean(parsed.Root) != parsed.Root {
-		return runnerArguments{}, errors.New("delegate-run requires a clean absolute --root")
+	if err := validateRunnerModes(parsed); err != nil {
+		return runnerArguments{}, err
 	}
 	return parsed, nil
+}
+
+func runnerTerminalEventHasUnexpectedArguments(parsed runnerArguments, positional []string) bool {
+	if parsed.Inspection || parsed.Supervised || parsed.Guardian || parsed.QueueMaintenance || parsed.LifetimeChild {
+		return true
+	}
+	if parsed.LifetimeFD != -1 || parsed.JSON || len(positional) != 0 {
+		return true
+	}
+	return parsed.PueueID < 0 || parsed.ExitCode == ""
+}
+
+func runnerQueueMaintenanceHasUnexpectedArguments(parsed runnerArguments, positional []string) bool {
+	if parsed.Inspection || parsed.Supervised || parsed.Guardian || parsed.TerminalEvent || parsed.LifetimeChild {
+		return true
+	}
+	return parsed.LifetimeFD != -1 || parsed.JSON || parsed.PueueID >= 0 || parsed.ExitCode != "" || len(positional) != 0
+}
+
+func validateRunnerModes(parsed runnerArguments) error {
+	if parsed.Guardian && parsed.LifetimeChild {
+		return errors.New("delegate-run guardian and lifetime child modes are mutually exclusive")
+	}
+	if (parsed.Guardian || parsed.LifetimeChild) && !parsed.Supervised {
+		return errors.New("delegate-run lifetime modes require --supervised")
+	}
+	if parsed.LifetimeChild != (parsed.LifetimeFD >= 3) {
+		return errors.New("delegate-run lifetime child requires one private control descriptor")
+	}
+	return nil
+}
+
+func runTerminalEvent(parsed runnerArguments, deps Dependencies) error {
+	eventContext, cancelEvent := context.WithTimeout(context.Background(), pueue.DefaultObservationTimeout)
+	recorded, eventErr := pueue.RecordPrivateTerminalEventForMaintenance(eventContext, parsed.Root, parsed.PueueID, parsed.ExitCode)
+	cancelEvent()
+	if eventErr != nil {
+		// Candidate classification is a cleanup hint, not task authority. Keep a
+		// conservative full-scope wake durable even when its publication fails;
+		// application journals still decide whether any row may be removed.
+		log.Printf("delegate: terminal supervisor candidate deferred: %v", eventErr)
+	}
+	requestContext, cancelRequest := context.WithTimeout(context.Background(), pueue.DefaultObservationTimeout)
+	defer cancelRequest()
+	var requestErr error
+	if eventErr == nil && recorded {
+		requestErr = pueue.RequestPrivateCandidateQueueMaintenance(requestContext, parsed.Root)
+	} else {
+		// Legacy rows without a callback ticket and failed candidate publication
+		// take the conservative recovery scope. Current ordinary and inspection
+		// submissions both publish exact event-backed candidates.
+		requestErr = pueue.RequestPrivateQueueMaintenance(requestContext, parsed.Root)
+	}
+	if requestErr != nil {
+		if !recorded {
+			return errors.Join(eventErr, requestErr)
+		}
+		// The terminal event itself is a durable cleanup inbox entry. Continue
+		// with an elected pass even when the generation journal could not be
+		// advanced; a later root activation can recover the retained event too.
+		log.Printf("delegate: terminal supervisor cleanup request deferred: %v", requestErr)
+	}
+	// Pueue invokes this helper after a row reaches Done, so this process already
+	// outlives the task creator. It owns the persisted wake to completion; task
+	// and inspection journals remain the sole removal authority.
+	if err := runQueueMaintenance(parsed, deps); err != nil {
+		log.Printf("delegate: terminal supervisor cleanup deferred: %v", err)
+	}
+	return nil
+}
+
+func runQueueMaintenance(parsed runnerArguments, deps Dependencies) (resultErr error) {
+	binding, found, err := pueue.ReadPrivateSupervisorBinding(parsed.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return pueue.ErrBinding
+	}
+	supervisor, err := pueue.NewClient(binding, deps.SupervisorOptions)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, supervisor.Close())
+	}()
+	if !supervisor.RunRequestedPrivateQueueMaintenance(context.Background()) {
+		return pueue.ErrConfiguration
+	}
+	return nil
+}
+
+func launchPrivateQueueMaintenanceOwner(ctx context.Context, executable, root string) error {
+	_, err := startPrivateQueueMaintenanceOwner(ctx, executable, root)
+	return err
+}
+
+func startPrivateQueueMaintenanceOwner(ctx context.Context, executable, root string) (<-chan error, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(executable) || filepath.Clean(executable) != executable ||
+		!filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return nil, pueue.ErrConfiguration
+	}
+	resolved, err := filepath.EvalSymlinks(executable)
+	if err != nil || resolved != executable {
+		return nil, errors.Join(pueue.ErrConfiguration, err)
+	}
+	info, err := os.Stat(executable)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return nil, errors.Join(pueue.ErrConfiguration, err)
+	}
+	command := exec.Command(executable, "--queue-maintenance", "--root", root)
+	command.Dir = filepath.Dir(executable)
+	command.Env = pueue.DefaultEnvironment()
+	if err = lifetime.ConfigureIndependentSession(command); err != nil {
+		return nil, err
+	}
+	if err = command.Start(); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	// Start transfers durable ownership to the independent process. Keep one
+	// asynchronous Wait while this caller lives so an early helper exit cannot
+	// become a zombie. If the caller exits first, the OS adopts the independent
+	// session and reaps it after natural completion.
+	go func() {
+		waitErr := command.Wait()
+		if waitErr != nil {
+			log.Printf("delegate: maintenance process deferred: %v", waitErr)
+		}
+		done <- waitErr
+		close(done)
+	}()
+	return done, nil
 }
 
 func orderRunnerFlags(fs *flag.FlagSet, args []string) ([]string, error) {
@@ -157,15 +384,21 @@ func releaseContinuationSession(td *taskdir.TaskDir, req *task.TaskRecord, outco
 	return td.ReleaseSession(req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
 }
 
-func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string) (*pueue.Client, pueue.Observation, error) {
+func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string) (client *pueue.Client, observation pueue.Observation, resultErr error) {
 	submit, err := td.ReadSubmission()
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
-	client, err := newSupervisorClient(ctx, root, submit.Supervisor, supervisorOptions, true, initialSupervisorExecutable)
+	client, err = newSupervisorClient(ctx, root, submit.Supervisor, supervisorOptions, true, initialSupervisorExecutable)
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
+	defer func(owner *pueue.Client) {
+		if resultErr != nil {
+			closeSupervisorMaintenance(owner, resultErr)
+			client = nil
+		}
+	}(client)
 	spec, metaHash, err := preparedHashes(td)
 	if err != nil {
 		return nil, pueue.Observation{}, err
@@ -174,7 +407,21 @@ func reconcileRunner(ctx context.Context, root string, response *Response, td *t
 	if receiptErr != nil && !errors.Is(receiptErr, os.ErrNotExist) {
 		return nil, pueue.Observation{}, receiptErr
 	}
-	observation, reconcileErr := client.Reconcile(ctx, taskIdentity(req, meta, spec, metaHash, receipt))
+	// This runner owns startup until its finite caller deadline; a short
+	// watcher timeout must not abandon the admitted task. Keep the original
+	// client for stop control and migration cleanup.
+	observer := client
+	if deadline, bounded := ctx.Deadline(); bounded {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, pueue.Observation{}, context.DeadlineExceeded
+		}
+		observer, err = client.WithObservationTimeout(remaining)
+		if err != nil {
+			return nil, pueue.Observation{}, err
+		}
+	}
+	observation, reconcileErr := observer.Reconcile(ctx, taskIdentity(req, meta, spec, metaHash, receipt))
 	response.Supervisor = supervisorResponse(observation)
 	response.Liveness = mapPueueState(observation.State)
 	response.Pending = pendingResponse(observation)
@@ -185,17 +432,78 @@ func reconcileRunner(ctx context.Context, root string, response *Response, td *t
 		}
 		return client, observation, reconcileErr
 	}
-	response.Admission = task.AdmissionAdmitted.String()
-	positive, err := observation.Receipt()
-	if err != nil {
-		return client, observation, err
+	receiptErr = requireDurableSupervisorReceipt(td, observation)
+	if receiptErr == nil {
+		response.Admission = task.AdmissionAdmitted.String()
+	} else {
+		response.Admission = task.AdmissionUnknown.String()
 	}
-	reconcileErr = errors.Join(reconcileErr, td.RecordSupervisorReceiptContext(ctx, *positive))
+	reconcileErr = errors.Join(reconcileErr, receiptErr)
 	return client, observation, reconcileErr
 }
 
-func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, profile PreparedProfile, client *pueue.Client, deps Dependencies) commandResult {
-	stopper := &budgetStopper{client: client, taskDir: td}
+// resumeSupervisedRunner consumes the dispatcher's durable admission receipt.
+// The supervisor already started this process, so bootstrapping it again or
+// scanning its full queue cannot add authority and creates avoidable fan-out
+// when many tasks start together.
+func resumeSupervisedRunner(ctx context.Context, response *Response, td *taskdir.TaskDir, supervisorOptions pueue.Options) (*pueue.Client, pueue.Observation, error) {
+	receipt, err := waitRunnerSupervisorReceipt(ctx, td, pueue.PrivateControlTimeout(supervisorOptions))
+	if err != nil {
+		return nil, pueue.Observation{}, err
+	}
+	client, err := pueue.NewClient(receipt.SupervisorRef(), supervisorOptions)
+	if err != nil {
+		return nil, pueue.Observation{}, err
+	}
+	numericTaskID := receipt.NumericTaskID
+	observation := pueue.Observation{
+		Matched: true,
+		State:   pueue.StateRunning,
+		Identity: pueue.Identity{
+			RootID:        receipt.RootID,
+			TaskID:        receipt.TaskID,
+			SpecSHA256:    receipt.SpecSHA256,
+			MetaSHA256:    receipt.MetaSHA256,
+			NumericTaskID: &numericTaskID,
+		},
+		Binding:       receipt.SupervisorRef(),
+		NumericTaskID: numericTaskID,
+	}
+	response.Supervisor = supervisorResponse(observation)
+	response.Admission = task.AdmissionAdmitted.String()
+	response.Liveness = mapPueueState(observation.State)
+	response.Pending = nil
+	return client, observation, nil
+}
+
+func waitRunnerSupervisorReceipt(parent context.Context, td *taskdir.TaskDir, timeout time.Duration) (*task.SupervisorReceipt, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	for {
+		receipt, err := td.ReadSupervisorReceipt()
+		if err == nil {
+			return receipt, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		timer := time.NewTimer(runnerReceiptPollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, fmt.Errorf("%w: supervisor receipt unavailable: %w", pueue.ErrUnknown, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, profile PreparedProfile, client *pueue.Client, lifetimeChild *openedLifetimeChild, deps Dependencies) commandResult {
+	stopper := &budgetStopper{client: client, taskDir: td, lifetime: lifetimeChild.Lifetime()}
 	identityObserver, err := makeIdentityObserver(profile, *req, td)
 	if err != nil {
 		return failed(response, err, 1)
@@ -219,7 +527,11 @@ func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, p
 			return failed(response, errors.Join(err, permit.Release()), 1)
 		}
 	}
-	runResult := execution.Run(td, permit, profile.Plan, execution.Options{Interaction: interaction, PreflightPlan: preflight, Stopper: stopper, Identity: identityObserver, Hooks: deps.ExecutionHooks})
+	runResult := execution.Run(td, permit, profile.Plan, execution.Options{
+		Interaction: interaction, PreflightPlan: preflight, Stopper: stopper,
+		Lifetime: lifetimeChild.Lifetime(), Deadline: lifetimeChild.Deadline(),
+		Identity: identityObserver, Hooks: deps.ExecutionHooks,
+	})
 	if runResult.Outcome != nil {
 		response.Outcome = runResult.Outcome
 		response.Payload = &runResult.Outcome.Payload
@@ -254,6 +566,18 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
+	var lifetimeChild *openedLifetimeChild
+	if parsed.LifetimeChild {
+		lifetimeChild, err = openTaskLifetimeChild(parsed, td)
+		if err != nil {
+			return failed(response, err, 1)
+		}
+		defer func() { mergeCommandClose(&result, lifetimeChild.Close) }()
+	}
+	return runPreparedRunner(response, parsed, deps, root, store, td, lifetimeChild)
+}
+
+func runPreparedRunner(response Response, parsed runnerArguments, deps Dependencies, root string, store *taskdir.Store, td *taskdir.TaskDir, lifetimeChild *openedLifetimeChild) (result commandResult) {
 	response.RootID, response.TaskID = store.RootID, parsed.TaskID
 	inspection, err := td.Inspect()
 	fillInspection(&response, inspection)
@@ -290,7 +614,8 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 	taskSupervisorOptions := supervisorOptionsForMeta(supervisorOptions, *meta)
 	supervisorContext, cancelSupervisor := supervisorContextForRunner(req, taskSupervisorOptions)
 	defer cancelSupervisor()
-	client, observation, reconcileErr := reconcileRunner(supervisorContext, root, &response, td, req, meta, taskSupervisorOptions, deps.InitialSupervisorExecutable)
+	client, observation, reconcileErr := reconcileRunnerMode(supervisorContext, parsed, root, &response, td, req, meta, taskSupervisorOptions, deps.InitialSupervisorExecutable)
+	defer func() { closeSupervisorMaintenance(client, result.err) }()
 	if reconcileErr != nil {
 		return failed(response, reconcileErr, 1)
 	}
@@ -301,7 +626,14 @@ func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
-	return runProvider(response, td, req, profile, client, deps)
+	return runProvider(response, td, req, profile, client, lifetimeChild, deps)
+}
+
+func reconcileRunnerMode(ctx context.Context, parsed runnerArguments, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string) (*pueue.Client, pueue.Observation, error) {
+	if parsed.Supervised {
+		return resumeSupervisedRunner(ctx, response, td, supervisorOptions)
+	}
+	return reconcileRunner(ctx, root, response, td, req, meta, supervisorOptions, initialSupervisorExecutable)
 }
 
 func supervisorContextForRunner(req *task.TaskRecord, options pueue.Options) (context.Context, context.CancelFunc) {
@@ -374,7 +706,7 @@ func prepareRunnerProfile(deps Dependencies, root string, td *taskdir.TaskDir, s
 
 func runnerStartStateError(state pueue.State) error {
 	switch state {
-	case pueue.StateQueued, pueue.StateRunning:
+	case pueue.StateQueued, pueue.StateStashed, pueue.StateRunning:
 		return nil
 	case pueue.StateEnded:
 		return errors.New("supervisor task ended before runner start")
@@ -400,8 +732,9 @@ func makeIdentityObserver(profile PreparedProfile, req task.TaskRecord, td *task
 }
 
 type budgetStopper struct {
-	client  *pueue.Client
-	taskDir *taskdir.TaskDir
+	client   *pueue.Client
+	taskDir  *taskdir.TaskDir
+	lifetime execution.Lifetime
 }
 
 func (s *budgetStopper) PrepareBudget(deadline time.Time) (execution.BudgetRequest, error) {
@@ -411,10 +744,29 @@ func (s *budgetStopper) PrepareBudget(deadline time.Time) (execution.BudgetReque
 	}
 	return func(ctx context.Context) error {
 		requestCtx := execution.DetachBudgetRequestContext(ctx)
+		if s.lifetime != nil {
+			return s.stopLifetime(requestCtx, permit, request)
+		}
 		result, stopErr := s.client.Stop(requestCtx, permit)
 		releaseErr := permit.Release()
 		return errors.Join(stopErr, releaseErr, s.recordStopResult(requestCtx, request, result))
 	}, nil
+}
+
+func (s *budgetStopper) stopLifetime(ctx context.Context, permit *taskdir.StopPermit, request *task.StopRequestRecord) error {
+	if permit == nil || request == nil || request.NumericTaskID == nil {
+		return errors.Join(task.ErrInvalidPermit, permit.Release())
+	}
+	if err := permit.Consume(); err != nil {
+		return errors.Join(err, permit.Release())
+	}
+	terminateErr := s.lifetime.Terminate(ctx)
+	var recordErr error
+	if terminateErr == nil {
+		facts := task.StopReplyFacts{NumericTaskID: *request.NumericTaskID, Action: "terminate", Acknowledged: true}
+		recordErr = errors.Join(recordErr, s.taskDir.RecordStopReplyContext(ctx, request.RequestID, facts))
+	}
+	return errors.Join(terminateErr, recordErr, permit.Release())
 }
 
 func (s *budgetStopper) prepareStop(deadline time.Time) (*taskdir.StopPermit, *task.StopRequestRecord, error) {

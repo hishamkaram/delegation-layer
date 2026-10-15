@@ -30,9 +30,9 @@ const (
 	// SchemaVersion is the only supported fixture configuration schema.
 	SchemaVersion = 1
 
-	// MaxDelay bounds the finite helper lifetime.  The acceptance harness uses
-	// zero for natural completion and 30 seconds for the running-expiry case.
-	MaxDelay = 60 * time.Second
+	// MaxDelay bounds the finite helper lifetime while leaving enough room for
+	// the acceptance harness to prove expiry after the admission deadline.
+	MaxDelay = 2 * time.Minute
 
 	maxSentinelBytes = 64 * 1024
 )

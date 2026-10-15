@@ -15,8 +15,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import acceptance_codex as gate
-from acceptance_provider_common import wait_runner_done
-from acceptance_supervisor_common import sha
+from acceptance_provider_common import AcceptanceFailure, wait_runner_done
+from acceptance_supervisor_common import DirectoryOwner, sha
 
 
 THREAD = "0199a213-81c0-7800-8aa1-bbab2a035a53"
@@ -158,6 +158,59 @@ def resume_events(nonce: bytes, extra_type: str | None = None,
 
 
 class CodexOracleTests(unittest.TestCase):
+    def test_behavioral_success_is_not_published_when_finalization_fails(self):
+        for failure in (False, OSError("injected finalization failure")):
+            with self.subTest(failure=repr(failure)), \
+                    tempfile.TemporaryDirectory(prefix="codex-finalize-unit-") as temporary:
+                root = Path(temporary)
+                output = root / "evidence"
+                output.mkdir()
+                owner = object.__new__(gate.CodexAcceptance)
+                owner.output = output
+                owner.state = root / "state"
+                owner.workspace = root / "workspace"
+                owner.closed = True
+                owner.daemon = None
+                owner.dispatch_attempts = set()
+                owner.tasks = {"fresh": "a" * 32, "resume": "b" * 32}
+                owner.records = {}
+                for name in ("fresh", "resume"):
+                    directory = root / name
+                    directory.mkdir()
+                    (directory / "outcome.json").write_text("{}")
+                    owner.records[name] = {
+                        "reference": {"conversation_id": THREAD},
+                        "directory": directory,
+                        "outcome": {"evidence_sha256": "c" * 64},
+                    }
+                owner.setup = lambda: None
+                owner.run_fresh = lambda: owner.records["fresh"]
+                owner.run_resume = lambda _fresh: owner.records["resume"]
+                owner.replay = lambda: None
+                owner.shutdown = lambda: None
+                owner.safe_failure_shutdown = lambda: True
+                calls = []
+
+                def finalize(success):
+                    calls.append(success)
+                    if success and isinstance(failure, BaseException):
+                        raise failure
+                    return not success or failure is not False
+
+                owner.finalize = finalize
+                argv = ["--tools", str(root), "--pueue", "/pueue", "--pueued", "/pueued",
+                        "--output", str(output)]
+                with patch.object(gate, "CodexAcceptance", return_value=owner):
+                    code = gate.main(argv)
+
+                self.assertEqual(code, 1)
+                self.assertEqual(calls, [True, False])
+                self.assertFalse((output / "success.json").exists())
+                self.assertTrue((output / "failure.json").is_file())
+                cleanup = json.loads((output / "failure-cleanup.json").read_text())
+                self.assertTrue(cleanup["passed_receipt_absent"])
+                self.assertTrue(cleanup["artifact_finalization_completed"])
+
     def test_event_parser_selects_last_top_level_agent_message(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -533,34 +586,37 @@ class CodexOracleTests(unittest.TestCase):
         ]
         calls = []
 
-        def client(name, operation):
+        def client(name, operation, timeout):
             calls.append((name, operation))
+            self.assertGreater(timeout, 0)
             return SimpleNamespace(json=lambda: statuses.pop(0))
 
         with patch("acceptance_provider_common.time.sleep") as sleep:
             row = wait_runner_done(client, ROOT, TASK, timeout=150,
-                                   sleep_fn=sleep, monotonic_fn=iter([0, 0, 1, 1]).__next__)
+                                   sleep_fn=sleep, monotonic_fn=iter([0, 0, 0, 1, 1]).__next__)
         self.assertEqual(row["label"], f"delegate:{ROOT}:{TASK}")
         sleep.assert_called_once_with(0.1)
         self.assertEqual(len(calls), 2)
 
     def test_wait_runner_done_rejects_failed_or_unrelated_rows(self):
-        def failed_client(_name, _operation):
+        def failed_client(_name, _operation, timeout):
+            self.assertGreater(timeout, 0)
             return SimpleNamespace(json=lambda: {"tasks": {"0": {
                 "label": f"delegate:{ROOT}:{TASK}", "status": {"Done": {"result": "Failed"}}}}})
 
-        with self.assertRaisesRegex(RuntimeError, "failed runner"):
+        with self.assertRaisesRegex(AcceptanceFailure, "supervisor result"):
             wait_runner_done(failed_client, ROOT, TASK, timeout=1,
-                             monotonic_fn=iter([0, 0]).__next__)
+                             monotonic_fn=iter([0, 0, 0]).__next__)
 
-        def unrelated_client(_name, _operation):
+        def unrelated_client(_name, _operation, timeout):
+            self.assertGreater(timeout, 0)
             return SimpleNamespace(json=lambda: {"tasks": {"0": {
                 "label": "delegate:" + "c" * 32 + ":" + TASK,
                 "status": {"Done": {"result": "Success"}}}}})
 
         with self.assertRaisesRegex(RuntimeError, "no unique"):
             wait_runner_done(unrelated_client, ROOT, TASK, timeout=1,
-                             monotonic_fn=iter([0, 0]).__next__)
+                             monotonic_fn=iter([0, 0, 0]).__next__)
 
     def test_failure_shutdown_never_treats_unknown_queue_as_done(self):
         run = object.__new__(gate.CodexAcceptance)
@@ -594,6 +650,86 @@ class CodexOracleTests(unittest.TestCase):
         missing = {"tasks": {}, "groups": {}}
         self.assertFalse(run.failure_queue_finished(missing))
 
+    def test_diagnostic_failure_does_not_skip_codex_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "evidence"
+            output.mkdir()
+            calls = []
+            run = object.__new__(gate.CodexAcceptance)
+            run.output = output
+            run.state = root / "state"
+            run.workspace = root / "workspace"
+            run.tasks = {}
+            run.dispatch_attempts = set()
+            run.daemon = None
+            run.setup = lambda: (_ for _ in ()).throw(RuntimeError("primary failure"))
+            run.safe_failure_shutdown = lambda: calls.append("shutdown") or True
+            run.finalize = lambda success: calls.append(("finalize", success)) or True
+            with patch.object(gate, "write_json", side_effect=OSError("diagnostic disk full")):
+                with self.assertRaisesRegex(RuntimeError, "primary failure"):
+                    run.run()
+
+            self.assertEqual(calls, ["shutdown", ("finalize", False)])
+
+    def test_codex_cleanup_failure_is_fatal_after_primary_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "evidence"
+            output.mkdir()
+            calls = []
+            run = object.__new__(gate.CodexAcceptance)
+            run.output = output
+            run.state = root / "state"
+            run.workspace = root / "workspace"
+            run.tasks = {}
+            run.dispatch_attempts = set()
+            run.daemon = None
+            run.setup = lambda: (_ for _ in ()).throw(RuntimeError("primary failure"))
+            run.safe_failure_shutdown = lambda: calls.append("shutdown") or True
+            run.finalize = lambda success: calls.append(("finalize", success)) or False
+            with patch.object(gate, "write_json"):
+                with self.assertRaisesRegex(AcceptanceFailure, "cleanup failed"):
+                    run.run()
+
+            self.assertEqual(calls, ["shutdown", ("finalize", False)])
+
+    def test_constructor_rolls_back_every_root_created_before_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve(strict=True)
+            tools = root / "tools"
+            tools.mkdir()
+            executables = {}
+            for name in ("delegate", "delegate-run", "pueue", "pueued", "codex"):
+                executable = tools / name
+                executable.write_text("#!/bin/sh\n")
+                executable.chmod(0o700)
+                executables[name] = executable
+            state_parent = root / "states"
+            workspace_parent = root / "workspaces"
+            pueue_parent = root / "pueue"
+            output = root / "evidence"
+            args = SimpleNamespace(
+                tools=str(tools), delegate=str(executables["delegate"]),
+                runner=str(executables["delegate-run"]), pueue=str(executables["pueue"]),
+                pueued=str(executables["pueued"]), codex=str(executables["codex"]),
+                output=str(output),
+            )
+            with patch.object(gate, "DEFAULT_STATE_PARENT", state_parent), \
+                    patch.object(gate, "DEFAULT_WORKSPACE_PARENT", workspace_parent), \
+                    patch.object(gate, "PUEUE_PARENT", pueue_parent), \
+                    patch.object(gate, "reject_tmp"), \
+                    patch("acceptance_provider_common.reject_tmp"), \
+                    patch.object(gate, "reject_runtime_roots"), \
+                    patch.object(gate, "require_discovery"), \
+                    patch.object(gate, "write_bytes", side_effect=OSError("injected constructor failure")):
+                with self.assertRaisesRegex(OSError, "injected constructor failure"):
+                    gate.CodexAcceptance(args)
+
+            self.assertTrue(output.is_dir())
+            self.assertFalse(any(state_parent.glob("codex-*")))
+            self.assertFalse(any(workspace_parent.glob("codex-*")))
+
     def test_manifest_and_outcome_helpers_bind_exact_bytes(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -607,6 +743,48 @@ class CodexOracleTests(unittest.TestCase):
             self.assertEqual(data, payload)
             with self.assertRaisesRegex(RuntimeError, "sole outcome"):
                 gate.verify_collected_outcome({}, directory, "committed")
+
+    def test_finalize_removes_closed_private_roots_and_raw_process_captures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_parent = root / "states"
+            workspace_parent = root / "workspaces"
+            pueue_parent = root / "pueue"
+            output = root / "evidence"
+            state = state_parent / "codex-run"
+            workspace = workspace_parent / "codex-run"
+            sibling = workspace_parent / "codex-run-sibling"
+            pueue = pueue_parent / "codex-pueue"
+            state_parent.mkdir()
+            workspace_parent.mkdir()
+            pueue_parent.mkdir()
+            output.mkdir()
+            directory_owner = DirectoryOwner()
+            state_token = directory_owner.create("acceptance state", state, state_parent)
+            workspace_token = directory_owner.create("acceptance workspace", workspace, workspace_parent)
+            sibling_token = directory_owner.create("acceptance sibling", sibling, workspace_parent)
+            raw_token = directory_owner.create("raw process captures", output / "processes", output)
+            pueue_token = directory_owner.create("private pueue", pueue, pueue_parent)
+            owner = object.__new__(gate.CodexAcceptance)
+            owner.output = output
+            owner.closed = True
+            owner.state_parent = state
+            owner.workspace = workspace
+            owner.sibling = sibling
+            owner.pueue_base = pueue
+            owner.owned_directories = (state_token, workspace_token, sibling_token, raw_token)
+            owner.pueue_owned_directories = (pueue_token,)
+            owner.processes = type("Processes", (), {"capture_root": raw_token})()
+            with patch.object(gate, "DEFAULT_STATE_PARENT", state_parent), \
+                    patch.object(gate, "DEFAULT_WORKSPACE_PARENT", workspace_parent), \
+                    patch.object(gate, "PUEUE_PARENT", pueue_parent):
+                self.assertTrue(owner.finalize(True))
+
+            self.assertFalse(state.exists())
+            self.assertFalse(workspace.exists())
+            self.assertFalse(sibling.exists())
+            self.assertFalse(pueue.exists())
+            self.assertFalse((output / "processes").exists())
 
 
 if __name__ == "__main__":

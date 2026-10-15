@@ -180,6 +180,34 @@ func TestSupervisorReceiptRejectsEveryBindingChange(t *testing.T) {
 	}
 }
 
+func TestRecordSameDoesNotCreateAfterMarkedDependencyFailure(t *testing.T) {
+	td := supervisorTask(t, testStore(t))
+	name := "marked-dependency.json"
+	wantErr := errors.Join(task.ErrIdentityMismatch, os.ErrNotExist)
+
+	err := td.recordSame(name, map[string]string{"value": "candidate"}, func() (bool, error) {
+		return false, wantErr
+	})
+	if !errors.Is(err, task.ErrIdentityMismatch) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recordSame error = %v, want identity mismatch and os.ErrNotExist", err)
+	}
+	testAbsent(t, filepath.Join(td.Dir, name))
+}
+
+func TestRecordSameContextDoesNotCreateAfterMarkedDependencyFailure(t *testing.T) {
+	td := supervisorTask(t, testStore(t))
+	name := "marked-dependency-context.json"
+	wantErr := errors.Join(task.ErrIdentityMismatch, os.ErrNotExist)
+
+	err := td.recordSameContext(t.Context(), name, map[string]string{"value": "candidate"}, func() (bool, error) {
+		return false, wantErr
+	})
+	if !errors.Is(err, task.ErrIdentityMismatch) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recordSameContext error = %v, want identity mismatch and os.ErrNotExist", err)
+	}
+	testAbsent(t, filepath.Join(td.Dir, name))
+}
+
 func TestProviderIdentityRequiresLiveRunnerAndPrecedesEOF(t *testing.T) {
 	s := testStore(t)
 	td := supervisorTask(t, s)

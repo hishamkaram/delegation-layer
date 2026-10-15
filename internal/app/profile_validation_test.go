@@ -44,6 +44,7 @@ func TestDispatchExistingRefreshesProfileBeforeSubmission(t *testing.T) {
 func TestRunRunnerRefreshesProfileAfterSupervisorReconcile(t *testing.T) {
 	fixture := newRunnerRefreshFixture(t)
 	defer fixture.close(t)
+	recordRunnerSupervisorReceipt(t, fixture, 7)
 
 	var profileCalls int
 	providerStarted := false
@@ -85,6 +86,7 @@ func TestRunRunnerRefreshesProfileAfterSupervisorReconcile(t *testing.T) {
 func TestRunRunnerRefreshesProfileAtProcessStartBoundary(t *testing.T) {
 	fixture := newRunnerRefreshFixture(t)
 	defer fixture.close(t)
+	recordRunnerSupervisorReceipt(t, fixture, 7)
 
 	var profileCalls int
 	providerStarted := false
@@ -252,6 +254,23 @@ func writeRunnerStatus(t *testing.T, path, rootID, taskID string, numericID int6
 	job := map[string]any{
 		"id": numericID, "created_at": statusTime, "original_command": "runner", "command": "runner", "path": "/tmp", "envs": map[string]string{}, "group": "default", "dependencies": []int64{}, "priority": int32(0), "label": label,
 		"status": map[string]any{"Running": map[string]any{"enqueued_at": statusTime, "start": statusTime}},
+	}
+	data, err := json.Marshal(map[string]any{"tasks": map[string]any{"7": job}, "groups": map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeRunnerStashedStatus(t *testing.T, path, rootID, taskID string, numericID int64) {
+	t.Helper()
+	const statusTime = "2026-09-14T00:00:00.123456789Z"
+	label := fmt.Sprintf("delegate:%s:%s", rootID, taskID)
+	job := map[string]any{
+		"id": numericID, "created_at": statusTime, "original_command": "runner", "command": "runner", "path": "/tmp", "envs": map[string]string{}, "group": "default", "dependencies": []int64{}, "priority": int32(0), "label": label,
+		"status": map[string]any{"Stashed": map[string]any{"enqueue_at": nil}},
 	}
 	data, err := json.Marshal(map[string]any{"tasks": map[string]any{"7": job}, "groups": map[string]any{}})
 	if err != nil {

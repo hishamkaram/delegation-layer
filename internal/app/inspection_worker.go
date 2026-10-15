@@ -21,83 +21,183 @@ import (
 // neither those details nor supervisor command errors cross this boundary.
 var errInspectionWorkerUnavailable = errors.New("native inspection unavailable")
 
+type inspectionWorkerStageError struct {
+	stage string
+}
+
+func (e *inspectionWorkerStageError) Error() string {
+	return errInspectionWorkerUnavailable.Error() + ": stage=" + e.stage
+}
+
+func (*inspectionWorkerStageError) Unwrap() error {
+	return errInspectionWorkerUnavailable
+}
+
+func inspectionWorkerFailure(stage string) error {
+	return &inspectionWorkerStageError{stage: stage}
+}
+
+func inspectionWorkerFailureStage(err error, fallback string) string {
+	var staged *inspectionWorkerStageError
+	if errors.As(err, &staged) && staged.stage != "" {
+		return staged.stage
+	}
+	return fallback
+}
+
+func inspectionWorkerPublicError(err error) error {
+	var staged *inspectionWorkerStageError
+	if errors.As(err, &staged) && staged.stage != "" {
+		return staged
+	}
+	return errInspectionWorkerUnavailable
+}
+
 // runInspectionWorker executes one already-admitted inspection operation. It
 // opens only existing durable state, reconstructs the immutable candidate, and
 // performs native work inside the same finite supervisor lifetime as its stop
 // observer. The worker never records supervisor success; the admission
 // observer owns that independent proof.
 func runInspectionWorker(root, taskID string, deps Dependencies) (resultErr error) {
+	return runInspectionWorkerMode(root, taskID, false, deps)
+}
+
+func runInspectionWorkerMode(root, taskID string, supervised bool, deps Dependencies) (resultErr error) {
+	return runInspectionWorkerWithLifetime(root, taskID, supervised, nil, deps)
+}
+
+func runInspectionLifetimeChildMode(parsed runnerArguments, deps Dependencies) (resultErr error) {
+	return runInspectionWorkerWithLifetime(parsed.Root, parsed.TaskID, parsed.Supervised, &parsed, deps)
+}
+
+func runInspectionWorkerWithLifetime(root, taskID string, supervised bool, lifetimeArgs *runnerArguments, deps Dependencies) (resultErr error) {
 	if err := task.ValidateTaskID(taskID); err != nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure("validate-task")
 	}
 	canonicalRoot, err := resolveRoot(root)
 	if err != nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure("resolve-root")
 	}
 	deps = deps.normalized()
 	store, err := openStore(canonicalRoot, deps.storeDependencies(), false)
 	if err != nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure("open-store")
 	}
 	defer func() {
-		if closeErr := store.Close(); closeErr != nil {
-			resultErr = errInspectionWorkerUnavailable
+		if closeErr := store.Close(); closeErr != nil && resultErr == nil {
+			resultErr = inspectionWorkerFailure("close-store")
 		}
 	}()
-	return runInspectionWorkerOperation(canonicalRoot, taskID, deps, store)
+	return runInspectionWorkerOperationModeWithLifetime(canonicalRoot, taskID, supervised, lifetimeArgs, deps, store)
 }
 
 func runInspectionWorkerOperation(canonicalRoot, taskID string, deps Dependencies, store *taskdir.Store) (resultErr error) {
-	operation, err := inspection.LoadOperation(store, taskID)
+	return runInspectionWorkerOperationMode(canonicalRoot, taskID, false, deps, store)
+}
+
+func runInspectionWorkerOperationMode(canonicalRoot, taskID string, supervised bool, deps Dependencies, store *taskdir.Store) (resultErr error) {
+	return runInspectionWorkerOperationModeWithLifetime(canonicalRoot, taskID, supervised, nil, deps, store)
+}
+
+func runInspectionWorkerOperationModeWithLifetime(canonicalRoot, taskID string, supervised bool, lifetimeArgs *runnerArguments, deps Dependencies, store *taskdir.Store) (resultErr error) {
+	operation, err := loadInspectionOperationForWorker(store, taskID)
 	if err != nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure("load-operation")
 	}
 	defer func() {
-		if closeErr := operation.Close(); closeErr != nil {
-			resultErr = errInspectionWorkerUnavailable
+		if closeErr := operation.Close(); closeErr != nil && resultErr == nil {
+			resultErr = inspectionWorkerFailure("close-operation")
 		}
 	}()
+	lifetimeChild, err := openInspectionLifetimeChildIfRequested(lifetimeArgs, operation)
+	if err != nil {
+		return inspectionWorkerFailure("open-lifetime")
+	}
+	if lifetimeChild != nil {
+		defer func() {
+			if closeErr := lifetimeChild.Close(); closeErr != nil && resultErr == nil {
+				resultErr = inspectionWorkerFailure("close-lifetime")
+			}
+		}()
+	}
+	return runLoadedInspectionWorkerOperation(canonicalRoot, taskID, supervised, lifetimeChild, deps, store, operation)
+}
 
+func loadInspectionOperationForWorker(store *taskdir.Store, taskID string) (*inspection.Operation, error) {
+	// Loading cannot know the persisted revision until request.json is read.
+	// Use the largest supported inspection window, then let the loaded immutable
+	// deadline govern every action that follows.
+	ctx, cancel := context.WithTimeout(context.Background(), inspection.ModelDiscoveryTimeout)
+	defer cancel()
+	return inspection.LoadOperationContext(ctx, store, taskID)
+}
+
+func openInspectionLifetimeChildIfRequested(lifetimeArgs *runnerArguments, operation *inspection.Operation) (*openedLifetimeChild, error) {
+	if lifetimeArgs == nil {
+		return nil, nil
+	}
+	return openInspectionLifetimeChild(*lifetimeArgs, operation)
+}
+
+func runLoadedInspectionWorkerOperation(canonicalRoot, taskID string, supervised bool, lifetimeChild *openedLifetimeChild, deps Dependencies, store *taskdir.Store, operation *inspection.Operation) (resultErr error) {
 	record := operation.Request()
 	meta, err := loadInspectionWorkerMeta(store, taskID)
 	if err != nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure("load-task")
 	}
 	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
 	observeContext, cancel := context.WithDeadline(context.Background(), operation.Deadline())
 	defer cancel()
 	restoreEnvironment, err := prepareInspectionWorkerEnvironment(observeContext, canonicalRoot, operation, record.Binding)
 	if err != nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure("prepare-environment")
 	}
 	defer func() { resultErr = errors.Join(resultErr, restoreEnvironment()) }()
 
-	supervisor, identity, err := reconcileInspectionWorker(observeContext, canonicalRoot, operation, record.Binding.Supervisor, supervisorOptionsWithEnvironment(supervisorOptions, record.Binding.Environment), deps.InitialSupervisorExecutable)
+	workerOptions := supervisorOptionsWithEnvironment(supervisorOptions, record.Binding.Environment)
+	supervisor, identity, err := inspectionWorkerSupervisor(observeContext, operation, supervised, record.Binding, workerOptions)
 	if err != nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure("resume-supervisor")
 	}
+	var maintenanceErr error
+	defer func() { closeSupervisorMaintenance(supervisor, errors.Join(resultErr, maintenanceErr)) }()
 
-	startPermit, err := operation.ClaimStart(time.Now())
+	startPermit, err := operation.ClaimStartContext(observeContext, time.Now())
 	if err != nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure("claim-start")
 	}
 	if err = startPermit.Consume(); err != nil {
-		return completeInspectionFailure(operation)
+		return completeInspectionFailureContext(observeContext, operation, "consume-start")
 	}
 
-	facts, workErr, stopErr := runSupervisedInspection(operation, supervisor, identity, deps, canonicalRoot, record, meta)
+	facts, workErr, stopErr := runSupervisedInspection(operation, supervisor, identity, lifetimeChild.Lifetime(), deps, canonicalRoot, record, meta)
+	maintenanceErr = errors.Join(workErr, stopErr)
 	if workErr != nil || stopErr != nil {
-		return completeInspectionFailure(operation)
+		stage := inspectionWorkerFailureStage(workErr, "run-inspection")
+		if stopErr != nil {
+			stage = "stop-inspection"
+		}
+		return completeInspectionFailureContext(observeContext, operation, stage)
 	}
 
 	completedAt := time.Now()
 	if operation.Expired(completedAt) {
-		return completeInspectionFailure(operation)
+		return completeInspectionFailureAt(operation, "inspection-expired")
 	}
-	if err = operation.Complete(inspection.ResultEligible, facts, completedAt); err != nil {
-		return errInspectionWorkerUnavailable
+	if err = operation.CompleteContext(observeContext, inspection.ResultEligible, facts, completedAt); err != nil {
+		return inspectionWorkerFailure("complete-success")
 	}
 	return nil
+}
+
+func inspectionWorkerSupervisor(ctx context.Context, operation *inspection.Operation, supervised bool, binding inspection.Binding, options pueue.Options) (*pueue.Client, pueue.InspectionIdentity, error) {
+	// The argv marker is not launch authority by itself. Only the immutable
+	// managed binding may consume the add receipt; custom and historical
+	// bindings must prove their exact running row before they can claim start.
+	if supervised && binding.RunnerOwnership == task.RunnerOwnershipManaged {
+		return resumeSupervisedInspectionWorker(ctx, operation, binding.Supervisor, options)
+	}
+	return reconcileInspectionWorker(ctx, operation, binding.Supervisor, options)
 }
 
 func loadInspectionWorkerMeta(store *taskdir.Store, taskID string) (meta *task.MetaRecord, resultErr error) {
@@ -127,34 +227,105 @@ func prepareInspectionWorkerEnvironment(ctx context.Context, root string, operat
 	return applySavedEnvironment(binding.Environment, binding.EnvironmentRecorded)
 }
 
-func reconcileInspectionWorker(ctx context.Context, root string, operation *inspection.Operation, binding task.SupervisorRef, options pueue.Options, initialSupervisorExecutable string) (*pueue.Client, pueue.InspectionIdentity, error) {
-	supervisor, err := newSupervisorClient(ctx, root, binding, options, true, initialSupervisorExecutable)
+func reconcileInspectionWorker(ctx context.Context, operation *inspection.Operation, binding task.SupervisorRef, options pueue.Options) (supervisor *pueue.Client, identity pueue.InspectionIdentity, resultErr error) {
+	// This worker is already a task started by the saved private supervisor.
+	// Reopening that supervisor for lifecycle recovery would make every worker
+	// contend for bootstrap/readiness controls and could never safely restart
+	// the process that launched it. The worker only verifies and observes its
+	// own recorded row; admission and status own recovery.
+	supervisor, err := pueue.NewClient(binding, options)
 	if err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
-	identity, err := inspectionIdentityContext(ctx, operation)
+	defer func(owner *pueue.Client) {
+		if resultErr != nil {
+			closeSupervisorMaintenance(owner, resultErr)
+			supervisor = nil
+		}
+	}(supervisor)
+	identity, err = inspectionIdentityContext(ctx, operation)
 	if err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
-	observation, err := supervisor.ReconcileInspection(ctx, identity)
-	if err != nil || !observation.Matched || observation.Job.State != pueue.StateRunning {
+	// Admission and worker startup observe the same inspection deadline. Keep
+	// the original client for stop control and ownership of migration cleanup.
+	observer, err := supervisor.WithObservationTimeout(inspection.TimeoutForRevision(operation.Request().Binding.DefinitionRevision))
+	if err != nil {
+		return nil, pueue.InspectionIdentity{}, err
+	}
+	observation, err := observer.ReconcileInspection(ctx, identity)
+	if err != nil {
+		return nil, pueue.InspectionIdentity{}, err
+	}
+	if !observation.Matched || observation.Job.State != pueue.StateRunning {
 		return nil, pueue.InspectionIdentity{}, errInspectionWorkerUnavailable
 	}
 	if operation.Expired(time.Now()) {
 		return nil, pueue.InspectionIdentity{}, errInspectionWorkerUnavailable
 	}
 	observedID := observation.Job.ID
-	if err = operation.RecordReceiptContext(ctx, observedID); err != nil {
+	if err = requireInspectionReceipt(ctx, operation, observedID); err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
 	identity.NumericTaskID = &observedID
 	return supervisor, identity, nil
 }
 
-func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, deps Dependencies, root string, record inspection.RequestRecord, meta *task.MetaRecord) (json.RawMessage, error, error) {
-	stopper := &inspectionBudgetStopper{operation: operation, client: supervisor, identity: identity}
+// resumeSupervisedInspectionWorker consumes the numeric receipt persisted by
+// the admission owner after Pueue accepted this exact immutable operation.
+// The supervisor already started this process, so another queue-wide status
+// scan cannot add launch authority and makes concurrent admission scale with
+// the whole queue. Markerless custom and legacy workers retain conservative
+// queue reconciliation through reconcileInspectionWorker.
+func resumeSupervisedInspectionWorker(ctx context.Context, operation *inspection.Operation, binding task.SupervisorRef, options pueue.Options) (*pueue.Client, pueue.InspectionIdentity, error) {
+	if operation == nil {
+		return nil, pueue.InspectionIdentity{}, task.ErrEvidenceFault
+	}
+	receipt, err := waitInspectionSupervisorReceipt(ctx, operation)
+	if err != nil {
+		return nil, pueue.InspectionIdentity{}, err
+	}
+	supervisor, err := pueue.NewClient(binding, options)
+	if err != nil {
+		return nil, pueue.InspectionIdentity{}, err
+	}
+	identity := operation.Request().SupervisorIdentity()
+	numericTaskID := *receipt.NumericTaskID
+	identity.NumericTaskID = &numericTaskID
+	return supervisor, identity, nil
+}
+
+func waitInspectionSupervisorReceipt(ctx context.Context, operation *inspection.Operation) (inspection.ReceiptRecord, error) {
+	if ctx == nil || operation == nil {
+		return inspection.ReceiptRecord{}, task.ErrEvidenceFault
+	}
+	for {
+		receipt, err := operation.ReceiptContext(ctx)
+		if err == nil {
+			return receipt, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return inspection.ReceiptRecord{}, err
+		}
+		timer := time.NewTimer(runnerReceiptPollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return inspection.ReceiptRecord{}, errors.Join(inspection.ErrAdmissionExpired, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, lifetime execution.Lifetime, deps Dependencies, root string, record inspection.RequestRecord, meta *task.MetaRecord) (json.RawMessage, error, error) {
+	stopper := &inspectionBudgetStopper{operation: operation, client: supervisor, identity: identity, lifetime: lifetime}
 	var facts json.RawMessage
-	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: stopper}, func(scope execution.PreflightScope) error {
+	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: stopper, Lifetime: lifetime}, func(scope execution.PreflightScope) error {
 		return runInspectionCallback(scope, operation, deps, root, record, meta, &facts)
 	})
 	return facts, workErr, stopErr
@@ -172,21 +343,24 @@ func runInspectionCallback(scope execution.PreflightScope, operation *inspection
 		candidate, err = prepareInspectionWorkerCandidate(deps, root, record.Task, meta)
 	}
 	if err != nil {
-		return err
+		return inspectionWorkerFailure("prepare-candidate")
 	}
 	if err = validateInspectionCandidate(scope.Context(), operation, record.Task, candidate); err != nil {
-		return err
+		return inspectionWorkerFailure("validate-candidate")
 	}
 	inspected, err := inspection.Inspect(scope, *candidate.Inspection)
 	if err != nil {
-		return err
+		return inspectionWorkerFailure("inspect-provider")
 	}
 	*facts = append((*facts)[:0], inspected...)
 	if record.Binding.DefinitionRevision == commonprovider.ModelsRevision {
 		return nil
 	}
 	_, err = finalizeCandidate(candidate, record.Task, *facts)
-	return err
+	if err != nil {
+		return inspectionWorkerFailure("finalize-candidate")
+	}
+	return nil
 }
 
 // validateCurrentInspectionWorker accepts the immutable worker identity or a
@@ -207,7 +381,7 @@ func validateInspectionWorkerExecutable(ctx context.Context, root string, operat
 		return context.Canceled
 	}
 	saved := operation.Request().Binding
-	if saved.WorkerExecutable != binding.WorkerExecutable || saved.WorkerSHA256 != binding.WorkerSHA256 || saved.RunnerOwnership != binding.RunnerOwnership {
+	if !sameInspectionWorkerBinding(saved, binding) {
 		return task.ErrEvidenceFault
 	}
 	canonical, err := config.CanonicalizePath(current)
@@ -235,6 +409,13 @@ func validateInspectionWorkerExecutable(ctx context.Context, root string, operat
 		return task.ErrEvidenceFault
 	}
 	return nil
+}
+
+func sameInspectionWorkerBinding(saved, current inspection.Binding) bool {
+	return saved.WorkerExecutable == current.WorkerExecutable &&
+		saved.WorkerSHA256 == current.WorkerSHA256 &&
+		saved.RunnerOwnership == current.RunnerOwnership &&
+		saved.WorkerExitProof == current.WorkerExitProof
 }
 
 // validateProviderRunnerExecutable accepts the inspection worker pinned when
@@ -272,8 +453,12 @@ func managedInspectionWorkerBinding(saved, binding inspection.Binding) bool {
 // expired, while retaining the fixed worker error for its caller. It is only
 // called after the durable start guard exists.
 func completeInspectionFailure(operation *inspection.Operation) error {
+	return completeInspectionFailureAt(operation, "run-inspection")
+}
+
+func completeInspectionFailureAt(operation *inspection.Operation, stage string) error {
 	if operation == nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure(stage)
 	}
 	now := time.Now()
 	reason := inspection.ResultUnavailable
@@ -281,9 +466,28 @@ func completeInspectionFailure(operation *inspection.Operation) error {
 		reason = inspection.ResultExpired
 	}
 	if err := operation.Complete(reason, nil, now); err != nil {
-		return errInspectionWorkerUnavailable
+		return inspectionWorkerFailure("complete-failure")
 	}
-	return errInspectionWorkerUnavailable
+	return inspectionWorkerFailure(stage)
+}
+
+func completeInspectionFailureContext(ctx context.Context, operation *inspection.Operation, stage string) error {
+	if operation == nil || ctx == nil {
+		return inspectionWorkerFailure(stage)
+	}
+	now := time.Now()
+	reason := inspection.ResultUnavailable
+	if operation.Expired(now) {
+		reason = inspection.ResultExpired
+		// Expiry cancels the worker's observation context, but the worker still
+		// owns sealing that already-observed terminal fact. WithoutCancel keeps
+		// values while taskdir applies the single bounded persistence fallback.
+		ctx = context.WithoutCancel(ctx)
+	}
+	if err := operation.CompleteContext(ctx, reason, nil, now); err != nil {
+		return inspectionWorkerFailure("complete-failure")
+	}
+	return inspectionWorkerFailure(stage)
 }
 
 // inspectionBudgetStopper prepares one durable stop intent at expiry. The
@@ -293,6 +497,7 @@ type inspectionBudgetStopper struct {
 	operation *inspection.Operation
 	client    *pueue.Client
 	identity  pueue.InspectionIdentity
+	lifetime  execution.Lifetime
 }
 
 func (s *inspectionBudgetStopper) PrepareBudget(deadline time.Time) (execution.BudgetRequest, error) {
@@ -305,10 +510,33 @@ func (s *inspectionBudgetStopper) PrepareBudget(deadline time.Time) (execution.B
 	}
 	return func(ctx context.Context) error {
 		requestCtx := execution.DetachBudgetRequestContext(ctx)
+		if s.lifetime != nil {
+			return s.stopLifetime(requestCtx, permit)
+		}
 		result, stopErr := s.client.StopInspection(requestCtx, permit, s.identity)
 		recordErr := recordInspectionStop(requestCtx, s.operation, result)
 		return errors.Join(stopErr, recordErr)
 	}, nil
+}
+
+func (s *inspectionBudgetStopper) stopLifetime(ctx context.Context, permit *inspection.StopPermit) error {
+	if permit == nil {
+		return task.ErrInvalidPermit
+	}
+	if err := permit.Consume(); err != nil {
+		return err
+	}
+	if err := s.lifetime.Terminate(ctx); err != nil {
+		return err
+	}
+	numericTaskID := permit.InspectionStopNumericTaskID()
+	if numericTaskID == nil {
+		return task.ErrEvidenceFault
+	}
+	// The guardian acknowledgment proves the native lifetime is empty. The
+	// existing inspection observer remains the sole owner of the separate
+	// Pueue-ended observation after this worker exits.
+	return s.operation.RecordStopReplyContext(ctx, *numericTaskID, "terminate", true)
 }
 
 // recordInspectionStop keeps acknowledgment and termination as separate

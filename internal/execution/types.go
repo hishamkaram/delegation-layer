@@ -5,6 +5,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"time"
@@ -20,6 +21,10 @@ type Plan struct {
 	// provider inspection. Historical records may carry the same identity in
 	// effective policy details when this field is empty.
 	ExecutableSHA256 string
+	// RuntimePreflightSHA256 binds a pending plan to the immutable admission
+	// contract. Only a successful PreflightPlan may clear it before Start.
+	// While nonempty, ProviderRuntime must be empty.
+	RuntimePreflightSHA256 string
 	// ProviderRuntime is the identity observed for this plan. It is populated
 	// by the app after provider finalization and recorded at start/seal so a
 	// runtime upgrade remains reconstructable without mutating meta.json.
@@ -71,6 +76,16 @@ type Stopper interface {
 
 // BudgetRequest observes a prepared stop through the bound supervisor.
 type BudgetRequest func(context.Context) error
+
+// Lifetime is the worker-side control surface for the task guardian. It owns
+// native process containment and independently observed scope emptiness; the
+// execution package retains exactly one Wait and all stream ownership.
+type Lifetime interface {
+	StartCommand(*exec.Cmd, func() error) error
+	FinishCommand(context.Context, *exec.Cmd) error
+	Terminate(context.Context) error
+	CloseTask(context.Context) error
+}
 
 type budgetRequestContextKey struct{}
 
@@ -136,11 +151,18 @@ type Options struct {
 	// PreflightPlan performs the same finite validation and may return the
 	// current launch plan after runtime capability inspection. The returned
 	// plan is verified and materialized only after this callback succeeds.
+	// Pending runtime admission requires this callback to clear the preflight
+	// marker and supply a complete observed ProviderRuntime identity.
 	PreflightPlan func(PreflightScope, Plan) (Plan, error)
 	Clock         Clock
 	Stopper       Stopper
-	Identity      IdentityObserver
-	Hooks         Hooks
+	Lifetime      Lifetime
+	// Deadline is the immutable outer guardian deadline. A zero value retains
+	// the legacy duration-relative clock. A supplied deadline may shorten but
+	// never extend the admitted task budget.
+	Deadline time.Time
+	Identity IdentityObserver
+	Hooks    Hooks
 }
 
 type Result struct {
@@ -167,6 +189,9 @@ func (o Options) emit(name string) {
 func (o Options) preflight(budget *budgetOwner, plan Plan) (Plan, error) {
 	if o.PreflightPlan != nil {
 		return budget.runScopedPlan(o, plan, o.PreflightPlan)
+	}
+	if plan.RuntimePreflightSHA256 != "" {
+		return plan, errors.New("required runtime preflight has no plan callback")
 	}
 	if o.Preflight != nil {
 		return plan, budget.runScoped(o, o.Preflight)

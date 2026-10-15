@@ -45,6 +45,8 @@ type ResolvedConfig struct {
 	Port              string
 }
 
+var errUnixSocketPathTooLong = errors.New("unix socket path too long")
+
 // CurrentResolutionContext mirrors the supported Unix dirs defaults without
 // changing HOME/XDG or consulting a developer's pueue configuration.
 func CurrentResolutionContext() (ResolutionContext, error) {
@@ -219,14 +221,25 @@ func resolveRemaining(c *Config, r ResolutionContext, data, runtimeDir string) (
 		}
 		*p.target = v
 	}
-	limit := 103
-	if r.OS == "linux" {
-		limit = 107
+	limit, ok := unixSocketPathLimit(r.OS)
+	if !ok {
+		return ResolvedConfig{}, fmt.Errorf("%w: unsupported platform", ErrConfiguration)
 	}
 	if len(result.SocketPath) > limit {
-		return ResolvedConfig{}, fmt.Errorf("%w: Unix socket path too long", ErrConfiguration)
+		return ResolvedConfig{}, fmt.Errorf("%w: %w", ErrConfiguration, errUnixSocketPathTooLong)
 	}
 	return result, nil
+}
+
+func unixSocketPathLimit(goos string) (int, bool) {
+	switch goos {
+	case "darwin":
+		return 103, true
+	case "linux":
+		return 107, true
+	default:
+		return 0, false
+	}
 }
 
 func (r ResolvedConfig) Endpoint() string { return "unix:" + r.SocketPath }
@@ -256,8 +269,11 @@ func (r ResolvedConfig) ValidateIsolation(base string) error {
 			return err
 		}
 	}
-	if r.Client.ShowConfirmationQuestions || r.Daemon.Callback != nil || len(r.Daemon.EnvVars) != 0 {
-		return fmt.Errorf("%w: private fixture must disable confirmation, callbacks and environment overrides", ErrConfiguration)
+	if r.Client.ShowConfirmationQuestions || len(r.Daemon.EnvVars) != 0 {
+		return fmt.Errorf("%w: private fixture must disable confirmation and environment overrides", ErrConfiguration)
+	}
+	if r.Daemon.Callback != nil && !privateTerminalEventsConfigured(base, r.Daemon.Callback) {
+		return fmt.Errorf("%w: private fixture callback differs from Delegate terminal event contract", ErrConfiguration)
 	}
 	if r.Daemon.ShellCommand == nil || !slices.Equal(*r.Daemon.ShellCommand, []string{"/bin/sh", "-c", "{{ pueue_command_string }}"}) {
 		return fmt.Errorf("%w: private fixture requires pinned shell command", ErrConfiguration)

@@ -34,14 +34,27 @@ Do not inspect, authenticate, install, or repair provider CLIs to bypass a
 Delegate blocker.
 
 A reported blocker is a valid final response to a delegation request. It does
-not turn that request into an environment-repair task. When a response says
-`failure.next_action: "stop_and_report"`, that attempt is finished. Include its
-failure in your final response without opening a clarification dialog to choose
-a fallback. For `task_record: not_created`, identify the requested destination
-and include the saved JSON failure response verbatim. A `task_id` can be returned
-even when no task record was created. Do not infer that an unavailable provider
-is uninstalled or unauthenticated. Do not append inferred state paths or
-provider-setup diagnoses, run diagnostic commands, retry it, or use another integration.
+not turn that request into an environment-repair task. The one lifecycle
+exception is `failure.code: "supervisor_upgrade_required"` with
+`next_action: "run_supervisor_migrate"`: run Delegate's own
+`supervisor migrate` command once with the exact same state root, then retry the
+exact original admission command once only when migration succeeds. Preserve
+its argv and intent: `dispatch` remains `dispatch`, and `continue` remains
+`continue`. The migration response field `next_action: "retry_dispatch"` is a
+protocol name for this command-neutral retry; it never authorizes replacing a
+failed `continue` with a fresh dispatch. This is internal Delegate recovery,
+not Pueue administration. Never run `pueue`, `pueued`, socket inspection,
+process searches, root deletion, or a provider CLI during recovery. Executable
+path or hash drift alone is handled by normal adoption and does not require
+this command.
+When a response says `failure.next_action: "stop_and_report"`, that attempt is
+finished. Include its failure in your final response without opening a
+clarification dialog to choose a fallback. For `task_record: not_created`,
+identify the requested destination and include the saved JSON failure response
+verbatim. A `task_id` can be returned even when no task record was created. Do
+not infer that an unavailable provider is uninstalled or unauthenticated. Do
+not append inferred state paths or provider-setup diagnoses, run diagnostic
+commands, or use another integration.
 Troubleshooting requires a separate user request. Other independently requested
 tasks may proceed; the failed attempt must remain reported as failed or blocked.
 
@@ -77,12 +90,16 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
    foreground until all requested tasks reach a terminal result or an explicit
    blocker. Do not end a headless turn promising a background notification.
    Pending publication (exit 3) means keep waiting, not success. When the JSON
+   reports `pending.kind: "lifetime-finalization"`, the resident guardian still
+   owns cleanup; keep observing that same task without supervisor repair,
+   process commands, redispatch, or provider fallback. When the JSON
    includes an outstanding `interaction.pending_requests` batch, follow
    [active-task interaction](references/interaction.md) before waiting again. Only detach
    when the user explicitly requests it, retaining the exact task IDs.
-   Collection may recover the
-   saved supervisor only to observe an already-requested budget stop; it never
-   launches a provider or retries a task.
+   Collection may reconcile the saved Pueue binding and recover the guardian
+   lifetime only for an already-requested stop. A queue-row end alone cannot
+   publish terminal facts; collection never launches a provider or retries a
+   task.
 6. If `failure.next_action` is `recheck`, follow
    [offline recovery](references/result-handling.md#offline-recovery) once for
    that task. Rechecking saved evidence does not run the provider again.
@@ -149,7 +166,8 @@ normal task. For an explicitly requested readiness check, see
 The catalog and `capabilities` response expose supported permission modes,
 request options, continuation, native interaction, and the read-only mechanism. A read-only
 capability with `containment: "provider-owned"` selects the provider's native
-behavior but is not an independent delegate-owned sandbox. Static discovery
+behavior but is not an independent delegate-owned sandbox. This is separate
+from guardian-owned process-lifetime containment. Static discovery
 does not prove authentication or live acceptance; use the dispatch or live
 acceptance result for that evidence.
 
@@ -267,6 +285,7 @@ for **each attempt**, including requests issued together:
 | Response | Next action |
 |---|---|
 | Usage error, no JSON response | Correct the reported syntax using Delegate help or `providers --json`, then invoke that request again. Parsing failed before admission. |
+| `task_record: not_created`, `failure.code: supervisor_upgrade_required`, and `failure.next_action: run_supervisor_migrate` | Run `delegate --root "<the exact absolute state root used by the failed command>" supervisor migrate --json` once. Retry the exact original admission argv once only after `supervisor_control.state: migrated` and `supervisor_control.next_action: retry_dispatch`; otherwise stop and report the migration response. Preserve an explicit custom root exactly. A failed `continue` must be retried as the same `continue`; never replace it with a fresh `dispatch` or a direct provider call. |
 | `task_record: not_created` and `failure.next_action: correct_request` | Correct that request and retry it. |
 | `task_record: not_created` with any other next action | Report that attempt's failure and stop it. Do not diagnose provider setup or substitute an integration. |
 | `task_record: created` | Use `status` before taking any other action. Do not dispatch again. |

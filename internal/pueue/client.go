@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -20,15 +22,39 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Client has no mutable observation state; concurrent reads synchronize only
-// through their own command completion handles.
+// Client keeps immutable supervisor identity and owns only the bounded
+// background maintenance it admits. Observations synchronize through their
+// own command completion handles.
 type Client struct {
 	// binding is the durable supervisor reference used by task records and
 	// permits. runtimeBinding is the executable pair currently used to reach it.
 	binding        task.SupervisorRef
 	runtimeBinding task.SupervisorRef
 	options        Options
+	cleanup        func() error
+	workOwner      *clientWorkOwner
+	ownsWorkOwner  bool
 }
+
+type clientWorkOwner struct {
+	mu                     sync.Mutex
+	closing                bool
+	privateMaintenance     bool
+	privateMaintenanceDone chan struct{}
+	work                   sync.WaitGroup
+}
+
+// ErrStatusOperational identifies a completed status command that could not
+// produce a valid queue snapshot. ErrUnknown may still be joined for callers
+// that treat every non-match as uncertainty, but this sentinel distinguishes
+// malformed output, schema failures, and nonzero exits from a valid no-match.
+var ErrStatusOperational = errors.New("pueue status observation failed")
+
+// ErrStatusTransient marks a completed status command that failed before it
+// produced a usable snapshot for a reason that may clear on a later bounded
+// observation. Parser, schema, identity, binding, and output-limit failures do
+// not carry this sentinel.
+var ErrStatusTransient = errors.New("pueue status observation temporarily unavailable")
 
 // Bind validates an explicit config and executable before recording a binding.
 func Bind(ctx context.Context, executable, configPath string, options Options) (*Client, error) {
@@ -43,7 +69,12 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 	if !filepath.IsAbs(configPath) || filepath.Clean(configPath) != configPath {
 		return nil, ErrConfiguration
 	}
-	c := &Client{options: options, binding: task.SupervisorRef{ClientExecutable: path, ConfigPath: configPath}}
+	c := &Client{
+		options:       options,
+		binding:       task.SupervisorRef{ClientExecutable: path, ConfigPath: configPath},
+		workOwner:     &clientWorkOwner{},
+		ownsWorkOwner: true,
+	}
 	c.runtimeBinding = c.binding
 	current, err := c.readBinding()
 	if err != nil {
@@ -62,7 +93,8 @@ func Bind(ctx context.Context, executable, configPath string, options Options) (
 // BindSaved reopens a previously recorded supervisor for bounded, read-only
 // reconciliation. Its saved path-resolution context is pinned before the
 // executable is inspected, so migration does not silently bind a different
-// user configuration.
+// user configuration. When inspection remains in flight, the returned client
+// owns the pending command and must be closed with CloseAfterPending.
 func BindSaved(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, error) {
 	if err := task.ValidateFreshSupervisorRef(saved); err != nil {
 		return nil, err
@@ -71,7 +103,55 @@ func BindSaved(ctx context.Context, saved task.SupervisorRef, options Options) (
 	if err != nil {
 		return nil, err
 	}
-	return Bind(ctx, saved.ClientExecutable, saved.ConfigPath, resolved)
+	client, err := Bind(ctx, saved.ClientExecutable, saved.ConfigPath, resolved)
+	if err != nil {
+		return client, err
+	}
+	if !task.SameSupervisorIdentity(client.Binding(), saved) {
+		return client, ErrBinding
+	}
+	return client, nil
+}
+
+// BindSavedForMigration reopens a saved supervisor while permitting a logical
+// private-config drift to be inspected by the migration owner. It retains the
+// saved binding as durable authority and uses a separately verified runtime
+// binding for the bounded status/shutdown commands.
+func BindSavedForMigration(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, error) {
+	return BindSavedForMigrationWithClient(ctx, saved, saved.ClientExecutable, options)
+}
+
+// BindSavedForMigrationWithClient is the migration form of BindSaved with an
+// explicit verified client executable. It is used when an upgrade removed the
+// executable recorded in the legacy binding while the legacy endpoint remains
+// reachable.
+func BindSavedForMigrationWithClient(ctx context.Context, saved task.SupervisorRef, clientExecutable string, options Options) (*Client, error) {
+	if err := validateSavedSupervisorRef(saved); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBinding, err)
+	}
+	resolved, err := optionsForSavedBinding(saved, options)
+	if err != nil {
+		return nil, err
+	}
+	if clientExecutable == "" {
+		clientExecutable = saved.ClientExecutable
+	}
+	return bindSavedForMigrationWithClient(ctx, saved, clientExecutable, resolved)
+}
+
+func bindSavedForMigrationWithClient(ctx context.Context, saved task.SupervisorRef, clientExecutable string, options Options) (*Client, error) {
+	client, err := Bind(ctx, clientExecutable, saved.ConfigPath, options)
+	if err != nil {
+		return client, err
+	}
+	migration, migrationErr := bindSavedMigrationClient(ctx, saved, client)
+	if migration == nil && migrationErr != nil {
+		// Bind succeeded, so this client remains the stable owner for every
+		// later validation failure. Endpoint-migration staging owns its own
+		// temporary config cleanup and retains any pending command in the error.
+		return client, migrationErr
+	}
+	return migration, migrationErr
 }
 
 // NewClient constructs from saved identity without consulting external files.
@@ -96,7 +176,10 @@ func NewClient(saved task.SupervisorRef, options Options) (*Client, error) {
 			options.Environment = environmentForResolution(options.Environment, resolution)
 		}
 	}
-	return &Client{binding: saved, runtimeBinding: saved, options: options}, nil
+	return &Client{
+		binding: saved, runtimeBinding: saved, options: options,
+		workOwner: &clientWorkOwner{}, ownsWorkOwner: true,
+	}, nil
 }
 
 func normalizeOptions(options Options) (Options, error) {
@@ -118,6 +201,61 @@ func normalizeOptions(options Options) (Options, error) {
 
 func (c *Client) Binding() task.SupervisorRef { return c.binding }
 
+// RuntimeBinding returns the verified executable/configuration generation
+// currently used for control commands. It can differ from Binding during a
+// saved-task recovery, where the durable task reference remains unchanged.
+func (c *Client) RuntimeBinding() task.SupervisorRef { return c.runtimeBinding }
+
+// Close waits for admitted background maintenance, then removes any short-lived
+// migration configuration owned by this client.
+func (c *Client) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.closeBackgroundWork()
+	if c.cleanup == nil {
+		return nil
+	}
+	cleanup := c.cleanup
+	c.cleanup = nil
+	return cleanup()
+}
+
+// CloseAfterPending closes synchronously when no command is pending. When err
+// retains unfinished command ownership, it prevents new work and transfers
+// final cleanup to that existing work owner so the finite caller can return.
+// A timed-out command owns its process through Pending; removing a short-lived
+// migration config before that ownership ends can change the supervisor it
+// observes.
+func (c *Client) CloseAfterPending(err error) error {
+	if c == nil {
+		return nil
+	}
+	c.beginBackgroundClose()
+	cleanup := c.takeCleanup()
+	if len(pendingHandles(err)) == 0 {
+		c.waitBackgroundWork()
+		if cleanup == nil {
+			return nil
+		}
+		return cleanup()
+	}
+	if cleanup == nil {
+		return nil
+	}
+	owner := c.workOwner
+	owned := c.ownsWorkOwner
+	go func() {
+		if owned && owner != nil {
+			owner.work.Wait()
+		}
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			log.Printf("delegation-layer: deferred private supervisor cleanup failed: %v", cleanupErr)
+		}
+	}()
+	return nil
+}
+
 // WithObservationTimeout returns an independent client with the same bound
 // supervisor identity and a different finite command observation timeout. The
 // binding and runtime executable pair remain unchanged; this is used when a
@@ -133,7 +271,98 @@ func (c *Client) WithObservationTimeout(timeout time.Duration) (*Client, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &Client{binding: c.binding, runtimeBinding: c.runtimeBinding, options: options}, nil
+	return &Client{
+		binding: c.binding, runtimeBinding: c.runtimeBinding, options: options,
+		workOwner: c.workOwner,
+	}, nil
+}
+
+func (c *Client) closeBackgroundWork() {
+	c.beginBackgroundClose()
+	c.waitBackgroundWork()
+}
+
+func (c *Client) beginBackgroundClose() {
+	if c == nil || !c.ownsWorkOwner || c.workOwner == nil {
+		return
+	}
+	c.workOwner.mu.Lock()
+	c.workOwner.closing = true
+	c.workOwner.mu.Unlock()
+}
+
+func (c *Client) waitBackgroundWork() {
+	if c == nil || !c.ownsWorkOwner || c.workOwner == nil {
+		return
+	}
+	c.workOwner.work.Wait()
+}
+
+func (c *Client) takeCleanup() func() error {
+	if c == nil || c.cleanup == nil {
+		return nil
+	}
+	cleanup := c.cleanup
+	c.cleanup = nil
+	return cleanup
+}
+
+// backgroundClient runs commands covered by an already-admitted outer work
+// token. It must never be returned to a caller or closed independently.
+func (c *Client) backgroundClient() *Client {
+	if c == nil {
+		return nil
+	}
+	worker := *c
+	worker.cleanup = nil
+	worker.workOwner = nil
+	worker.ownsWorkOwner = false
+	return &worker
+}
+
+func (c *Client) beginCommandWork() (func(), error) {
+	if c == nil {
+		return nil, ErrConfiguration
+	}
+	if c.workOwner == nil {
+		return func() {}, nil
+	}
+	c.workOwner.mu.Lock()
+	defer c.workOwner.mu.Unlock()
+	if c.workOwner.closing {
+		return nil, ErrConfiguration
+	}
+	c.workOwner.work.Add(1)
+	return c.workOwner.work.Done, nil
+}
+
+func (c *Client) beginPrivateMaintenance() (finish func(), done <-chan struct{}, available bool) {
+	if c == nil || c.workOwner == nil {
+		return nil, nil, false
+	}
+	c.workOwner.mu.Lock()
+	if c.workOwner.closing {
+		c.workOwner.mu.Unlock()
+		return nil, nil, false
+	}
+	if c.workOwner.privateMaintenance {
+		done = c.workOwner.privateMaintenanceDone
+		c.workOwner.mu.Unlock()
+		return nil, done, true
+	}
+	doneChannel := make(chan struct{})
+	c.workOwner.privateMaintenance = true
+	c.workOwner.privateMaintenanceDone = doneChannel
+	c.workOwner.work.Add(1)
+	c.workOwner.mu.Unlock()
+	return func() {
+		c.workOwner.mu.Lock()
+		c.workOwner.privateMaintenance = false
+		c.workOwner.privateMaintenanceDone = nil
+		close(doneChannel)
+		c.workOwner.mu.Unlock()
+		c.workOwner.work.Done()
+	}, doneChannel, true
 }
 
 func canonicalExecutable(path string) (string, error) {
@@ -353,8 +582,7 @@ func (c *Client) verify(ctx context.Context) error {
 	if err := c.verifyBinding(); err != nil {
 		return err
 	}
-	_, err := c.checkVersion(ctx)
-	return err
+	return ctx.Err()
 }
 
 func (c *Client) verifyBinding() error {
@@ -372,9 +600,18 @@ func (c *Client) verifyBinding() error {
 func (c *Client) checkVersion(ctx context.Context) (string, error) {
 	result, err := c.command(ctx, nil, "--version")
 	if err != nil {
-		return "", errors.Join(ErrBinding, err)
+		return "", bindingProbeError(err)
 	}
 	return validateVersionResult(result)
+}
+
+// An unfinished probe has no result that can establish binding drift. Retain
+// its command owner and any independently established failure unchanged.
+func bindingProbeError(err error) error {
+	if err == nil || pendingFrom(err) != nil {
+		return err
+	}
+	return errors.Join(ErrBinding, err)
 }
 
 func validateVersionResult(result CommandResult) (string, error) {
@@ -401,36 +638,16 @@ func validateVersionResult(result CommandResult) (string, error) {
 func (c *Client) Ready(ctx context.Context) error {
 	result, err := c.readyCommand(ctx)
 	if err != nil {
-		return errors.Join(ErrBinding, err)
+		return bindingProbeError(err)
 	}
 	return c.validateReadyResult(result)
 }
 
 // readyCommand validates the binding immediately before the status probe.
-// A version probe that outlives observation remains owned by its Pending
-// handle; it is never mistaken for status data or waited on past the caller's
-// deadline.
+// Version discovery belongs to Bind; unchanged executable bytes do not need a
+// second version subprocess before the actual status command.
 func (c *Client) readyCommand(ctx context.Context) (CommandResult, error) {
-	if err := c.verify(ctx); err != nil {
-		if pending := pendingFrom(err); pending != nil {
-			result, waitErr := awaitPending(ctx, pending)
-			if waitErr != nil {
-				return CommandResult{}, errors.Join(err, waitErr)
-			}
-			if _, versionErr := validateVersionResult(result); versionErr != nil {
-				return CommandResult{}, versionErr
-			}
-			if contextErr := ctx.Err(); contextErr != nil {
-				return CommandResult{}, contextErr
-			}
-			if bindingErr := c.verifyBinding(); bindingErr != nil {
-				return CommandResult{}, bindingErr
-			}
-		} else {
-			return CommandResult{}, err
-		}
-	}
-	return c.command(ctx, nil, "status", "--json")
+	return c.statusAfterVerifiedVersion(ctx)
 }
 
 func (c *Client) statusAfterVerifiedVersion(ctx context.Context) (CommandResult, error) {
@@ -440,18 +657,39 @@ func (c *Client) statusAfterVerifiedVersion(ctx context.Context) (CommandResult,
 	if err := c.verifyBinding(); err != nil {
 		return CommandResult{}, err
 	}
-	return c.command(ctx, nil, "status", "--json")
+	result, err := c.command(ctx, nil, "status", "--json")
+	return classifyReadyStatus(result, err)
+}
+
+// groupAfterVerifiedBinding observes only Pueue's bounded group state after
+// verifying the saved executable and configuration binding. Private supervisor
+// lifecycle controls use this instead of a queue-wide status response when
+// they need liveness and ordinary-group scheduling facts, not task rows.
+func (c *Client) groupAfterVerifiedBinding(ctx context.Context) (CommandResult, error) {
+	if err := ctx.Err(); err != nil {
+		return CommandResult{}, err
+	}
+	if err := c.verifyBinding(); err != nil {
+		return CommandResult{}, err
+	}
+	return c.command(ctx, nil, "group", "--json")
+}
+
+func classifyReadyStatus(result CommandResult, err error) (CommandResult, error) {
+	if errors.Is(err, ErrControlLimit) {
+		return result, errors.Join(err, errStatusControlLimit)
+	}
+	if result.snapshot != nil && err != nil {
+		return result, errors.Join(ErrBinding, err)
+	}
+	return result, err
 }
 
 func (c *Client) validateReadyResult(result CommandResult) error {
 	if result.Err != nil {
 		return errors.Join(ErrBinding, result.Err)
 	}
-	status := strings.TrimSpace(string(result.Stdout))
-	if status == "" {
-		return fmt.Errorf("%w: supervisor returned an empty status response", ErrBinding)
-	}
-	if _, err := ParseQueueSnapshot([]byte(status), strings.TrimSpace(c.runtimeBinding.ObservedVersion)); err != nil {
+	if _, err := snapshotFromResult(result, c.runtimeBinding.ObservedVersion); err != nil {
 		return errors.Join(ErrBinding, err)
 	}
 	return nil
@@ -466,18 +704,62 @@ func (c *Client) command(ctx context.Context, consume func() error, args ...stri
 		return CommandResult{}, err
 	}
 	commandID := ""
-	if c.options.Observer != nil {
+	if c.options.Observer != nil || c.options.ControlOwnerExecutable != "" {
 		commandID, err = task.NewRandomID()
 		if err != nil {
 			return CommandResult{}, err
 		}
 	}
+	finishWork, err := c.beginCommandWork()
+	if err != nil {
+		return CommandResult{}, err
+	}
+	defer func() {
+		if finishWork != nil {
+			finishWork()
+		}
+	}()
 	if consume != nil {
 		if err := consume(); err != nil {
 			return CommandResult{}, err
 		}
 	}
-	return observeCommand(ctx, startOwnedObserved(cmd, commandID, c.options.Observer), c.options.ObservationTimeout)
+	statusVersion := ""
+	if isJSONStatusCommand(args) {
+		statusVersion = c.runtimeBinding.ObservedVersion
+	}
+	var pending *Pending
+	if c.options.ControlOwnerExecutable == "" {
+		pending = startOwnedCaptured(cmd, commandID, c.options.Observer, statusVersion)
+	} else {
+		pending = startControlOwnedCaptured(ctx, c.options.ControlOwnerExecutable, cmd, commandID, c.options.Observer, statusVersion)
+	}
+	finishPending := finishWork
+	finishWork = nil
+	go func() {
+		<-pending.Done()
+		finishPending()
+	}()
+	if statusVersion != "" {
+		pending.status = &pendingStatusIdentity{binding: c.runtimeBinding, version: statusVersion}
+	}
+	result, observeErr := observeCommand(ctx, pending, c.options.ObservationTimeout)
+	if statusVersion == "" {
+		return result, observeErr
+	}
+	return result, statusObservationError(observeErr)
+}
+
+func isJSONStatusCommand(args []string) bool {
+	if len(args) < 2 || args[0] != "status" {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if arg == "--json" {
+			return true
+		}
+	}
+	return false
 }
 
 // prepareCommand constructs the fully bound supervisor command without
@@ -529,16 +811,12 @@ func (c *Client) Reconcile(ctx context.Context, identity Identity) (Observation,
 		unknown.Pending = pendingFrom(err)
 		return unknown, err
 	}
-	result, err := c.command(ctx, nil, "status", "--json")
+	snapshot, err := c.snapshotAfterVerify(ctx, "label="+identity.Label())
 	if err != nil {
 		unknown.Pending = pendingFrom(err)
-		return unknown, errors.Join(ErrUnknown, err)
-	}
-	jobs, err := ParseStatus(result.Stdout, c.runtimeBinding.ObservedVersion)
-	if err != nil {
 		return unknown, err
 	}
-	return matchingObservation(jobs, identity, c.binding)
+	return matchingObservation(snapshot.Jobs, identity, c.binding)
 }
 
 func matchingObservation(jobs []Job, identity Identity, binding task.SupervisorRef) (Observation, error) {
@@ -550,7 +828,7 @@ func matchingObservation(jobs []Job, identity Identity, binding task.SupervisorR
 			continue
 		}
 		matches++
-		result.NumericTaskID, result.State = job.ID, job.State
+		result.NumericTaskID, result.State, result.Group = job.ID, job.State, job.Group
 	}
 	if matches != 1 || (identity.NumericTaskID != nil && *identity.NumericTaskID != result.NumericTaskID) {
 		result.State = StateUnknown

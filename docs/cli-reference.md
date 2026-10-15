@@ -16,7 +16,8 @@ delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
 delegate [--root ABS] providers [--json]
 delegate [--root ABS] capabilities --provider PROFILE [--json]
 delegate [--root ABS] models --provider PROFILE [--cwd ABS] [--json]
-delegate [--root ABS] preflight --provider PROFILE --cwd ABS [--json]
+delegate [--root ABS] preflight --provider PROFILE --cwd ABS \
+  [--review-target TARGET] [--json]
 delegate [--root ABS] continue --task PREDECESSOR_ID [--brief FILE] \
   [--budget DURATION] [--model MODEL] [--effort EFFORT] [--interactive] [--json]
 delegate [--root ABS] status TASK_ID [--json]
@@ -27,6 +28,8 @@ delegate [--root ABS] steer TASK_ID --brief FILE --id MESSAGE_ID [--json]
 delegate [--root ABS] events TASK_ID [--after SEQUENCE] [--watch DURATION] [--json]
 delegate [--root ABS] logs TASK_ID [--json]
 delegate [--root ABS] cancel TASK_ID [--json]
+delegate [--root ABS] supervisor status [--json]
+delegate [--root ABS] supervisor migrate [--json]
 delegate help
 delegate version
 ```
@@ -40,8 +43,72 @@ supervisor for advanced integrations.
 Private ordinary-task supervision uses Pueue's unlimited default group. The
 orchestrating model chooses fan-out by issuing multiple dispatches concurrently;
 tasks are still durably recorded and observable through `status` and `collect`.
-Inspection work uses separate single-slot groups. Use separate workspaces or
-read-only permissions when concurrent tasks could write the same files.
+Managed runtime-only tasks use static admission and check the provider inside
+their own supervised execution budget. An admitted task still needs that fresh
+check before provider execution; `collect` reports its terminal result. Required
+native policy inspections, custom runners, and saved inspections retain their
+recorded path. Model discovery retains its bounded inspection group. Dispatch
+prepares unlimited scheduling before admission and may release previously
+admitted queued work even if the new request fails.
+Use separate workspaces or read-only permissions when concurrent tasks could
+write the same files.
+
+## Supervisor recovery
+
+The default supervisor is private to the state root. Normal dispatch adopts a
+reachable compatible endpoint and starts one only when the endpoint is absent.
+The explicit commands are for inspecting or repairing a real logical/configuration
+migration:
+
+```sh
+delegate --root "$HOME/delegation-state" supervisor status --json
+delegate --root "$HOME/delegation-state" supervisor migrate --json
+```
+
+`supervisor status` is read-only. It reports whether the state root has an
+older inspection binding, whether that exact legacy endpoint is reachable, and
+whether any queued or running work prevents migration. It does not start or
+stop a supervisor. A completed migration reports `state: "migrated"` with
+`migration_phase: "complete"`; compatible live adoption reports `state: "ready"`
+with `migration_phase: "adopted"`. Both report `next_action: "none"`. The retained
+legacy journal is historical evidence, not pending work. An inspection journal still bound to an external Pueue
+configuration reports `state: "external"` and
+`next_action: "run_supervisor_migrate"`. The repair changes Delegate's
+inspection routing; it does not operate on that external supervisor.
+
+`supervisor migrate` runs Delegate-owned repair under the state-root
+bootstrap lock. For a private daemon migration, it reopens the recorded legacy
+binding, inspects its exact
+queue, refuses to stop it while queued or running work exists, and
+otherwise shuts it down through its own client and watches for the endpoint to
+become unavailable after graceful shutdown. If it was the same private endpoint
+used by the current bundled supervisor, Delegate starts that bundled daemon and
+waits for readiness before recording the completed migration. Normal admission
+then creates the successor inspection group. A crash between these steps is
+resumed from the immutable migration journal. A successful JSON response has
+`supervisor_control.state: "migrated"` and
+`supervisor_control.next_action: "retry_dispatch"`. The command never
+migrates or stops an external Pueue configuration.
+
+When the inspection journal points to an external supervisor, the same command
+prepares or reuses Delegate's verified private supervisor and records the
+inspection handoff. Existing tasks and inspections keep their saved supervisor
+bindings and can finish there. Both daemons and queues remain independent.
+The completed journal marker selects the new inspection head; a retry resumes
+that recorded private generation rather than choosing an unconnected directory.
+Default private dispatch and model discovery perform this same safe journal
+handoff automatically under the existing bootstrap lock. Private daemon or
+configuration migrations still require the explicit recovery command.
+
+When an admission command (`dispatch` or `continue`) returns
+`failure.code: "supervisor_upgrade_required"` with
+`failure.next_action: "run_supervisor_migrate"`, run the command once with the
+same `--root`, then retry the exact original command and argv once only after
+`supervisor_control.state: "migrated"` and
+`supervisor_control.next_action: "retry_dispatch"`. That response field is
+command-neutral: a failed `continue` remains `continue` and must not become a
+fresh dispatch. Do not run `pueue`, `pueued`, process searches, or a provider
+CLI to repair this state.
 
 ## Dispatch
 
@@ -66,8 +133,8 @@ paths must remain disjoint.
 | `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID. Omit to allocate one. |
 | `--permission MODE` | `read-only` (default) or authorized unattended `workspace-write`, including commands and edits. Native access can extend beyond the workspace. |
 | `--budget DURATION` | Positive Go duration; default `30m` for ordinary tasks and `1h` for `codex:review`. Queue time is excluded. |
-| `--model MODEL` | Model selector when the chosen profile advertises `model` (Codex, Claude, AGY, Pi, or OpenCode). |
-| `--effort EFFORT` | Provider effort selector when the chosen profile advertises it. Codex writes TOML `model_reasoning_effort`; Claude and AGY pass their native effort flag; Pi maps it to `--thinking`; OpenCode maps it to `--variant`. `default` keeps the provider default and is omitted from native argv. |
+| `--model MODEL` | Model selector when the chosen profile advertises `model` (Codex, CCR, Claude, AGY, Pi, or OpenCode). `ccr:print` requires a configured CCR alias; see [CCR](providers.md#claude-code-router). |
+| `--effort EFFORT` | Provider effort selector when the chosen profile advertises it. Codex writes TOML `model_reasoning_effort`; CCR, Claude, and AGY pass their native effort flag; Pi maps it to `--thinking`; OpenCode maps it to `--variant`. `default` keeps the provider default and is omitted from native argv. |
 | `--native-timeout DURATION` | Antigravity's native print timeout, no greater than `--budget`. |
 | `--resume-task TASK_ID` | Exact predecessor for a continuation; creates a new task. |
 | `--interactive` | Enable native clarification and supported active-turn steering. Unsupported providers reject this option before admission. |
@@ -85,12 +152,14 @@ Every task ID is single-use for the requested turn. Repeating a dispatch with
 the same ID requires the same immutable request and cannot grant another
 provider launch. A continuation is a separate task that names an exact
 predecessor and reserves the provider conversation until the predecessor has a
-validated terminal outcome or durable supervisor-ended budget-stop evidence.
+validated terminal outcome or a durable Pueue-ended observation backed by a
+lifetime-termination record with independently proven empty scope.
 
 ## Preflight and continuation
 
 `preflight --provider PROFILE --cwd ABS [--permission MODE] [--budget DURATION]
-[--model MODEL] [--effort EFFORT] [--native-timeout DURATION] --json` runs the selected adapter's
+[--model MODEL] [--effort EFFORT] [--native-timeout DURATION]
+[--review-target TARGET] --json` runs the selected adapter's
 static preparation and state-placement checks without creating a task,
 contacting Pueue, or launching a provider. It reports `verification:
 "preflight"`; a ready result still does not prove live authentication.
@@ -101,9 +170,22 @@ admission path. `--brief FILE` replaces the predecessor brief with a new
 follow-up instruction. `--budget`, `--model`, and `--effort` can override the
 corresponding requested values when the provider advertises them. The command
 refuses a missing, still-running, mismatched, or unsupported predecessor. A
-committed outcome or durable supervisor-ended budget stop makes the
+committed outcome or durable Pueue-ended budget stop backed by application-owned
+empty-scope termination proof makes the
 predecessor eligible for handoff; the budget stop does not establish task
-completion. The
+completion.
+
+Fresh dispatches compile the current provider mapping. Ordinary exact-session
+continuations reconstruct the predecessor's recorded preparation contract;
+this preserves historical OpenCode, Pi, and CCR mappings while creating a new
+turn around the recorded session. Provider-specific continuation validation
+still applies, such as Pi's same-workspace rule and CCR's route-preserving model
+rule. Interactive continuation is the current exception: Codex and Claude use
+the current interactive profile, retain the exact recorded session, and restore
+the predecessor environment needed for session discovery instead of reusing a
+noninteractive predecessor contract.
+
+The
 resolved `delegate-run` executable is saved with each new task, so generated
 continuation commands preserve an explicit custom `--runner` integration.
 
@@ -120,7 +202,8 @@ modes, supported request options, continuation mode, read-only mechanism and
 containment, and runtime metadata: optional help-command arguments plus the
 flags required by the adapter. The shipped profiles report
 `containment: "provider-owned"`, meaning the adapter selects provider-native
-behavior without creating an independent delegate-owned sandbox.
+behavior without creating an independent delegate-owned sandbox. This metadata
+is separate from guardian-owned process-lifetime containment.
 
 Discovery is metadata only. It does not inspect the host, authenticate a
 provider, contact Pueue, create state, or launch a process. During dispatch,
@@ -154,8 +237,9 @@ rejected task outcome if it violates those contracts.
 command is currently implemented. It uses the state-rooted supervisor and the
 shared bounded inspection path, whose `model-discovery-v1` native inspection
 window is five minutes to allow first-run provider model/cache initialization.
-Existing admission probes retain their historical
-20-second bounds.
+Required admission inspections use a one-minute queue-inclusive bound. Managed
+runtime-only tasks perform their checks within their own task budget. Existing
+20-second admission journals retain their recorded deadline.
 It creates inspection evidence but does not admit a provider task or launch a
 delegated turn. It may contact the selected provider CLI, so use it when an
 explicit model or effort choice is needed; provider defaults remain valid.
@@ -254,7 +338,9 @@ message with a new ID.
 Codex turn. It cannot change the task's model, permission, workspace, or budget.
 For a new user turn, wait for completion and use `continue --task TASK_ID`.
 Continuation inherits interactive mode; `--interactive` can also enable it on a
-continuation of an ordinary task.
+continuation of an ordinary task. Such an interactive successor uses the
+current interactive provider profile while retaining the predecessor's exact
+session and recorded session-discovery environment.
 
 Delivery states are `queued`, `unknown`, `sent`, `acknowledged`, and `rejected`.
 `unknown` means delivery was reserved but may or may not have reached the provider;
@@ -286,12 +372,18 @@ protocol, not a terminal or arbitrary provider command interface.
 `status` reports the saved admission, current liveness, and publication state.
 `collect` reads a committed outcome or waits for one observation interval when
 `--watch` is positive; `--watch` defaults to `0s` and never changes the task
-budget. For an existing budget stop, collection may reconnect to the saved
-supervisor binding to record a durable termination observation. It never
+budget. For an existing budget stop, collection may reconcile the saved Pueue
+binding and enter lifetime recovery. A queue-row end alone cannot publish
+terminal facts. It never
 launches, retries, or resumes provider work. `logs` returns validated
 descriptors for the raw stdout and stderr streams. `cancel` records one
 explicit stop request and observes its effect; it does not turn an uncertain
 process result into a successful outcome.
+
+When `pending.kind` is `lifetime-finalization`, the resident guardian still
+owns native cleanup or durable finalization. Liveness remains `running` and
+`collect` exits `3`. Continue observing the same task. Do not run supervisor or
+process commands, redispatch the brief, or switch to a provider CLI.
 
 When a task has a committed outcome, that outcome is the terminal authority.
 Payload and sealed raw streams are returned as descriptors with rooted paths,
@@ -355,17 +447,27 @@ queue status. Changing install paths, executable hashes, or observed version
 does not by itself invalidate a compatible private supervisor. The
 configuration parser accepts YAML and JSON-form YAML with strict fields and
 bounded depth, aliases, nodes, and document size.
+Fresh bootstrap may choose a shorter socket filename inside the same private
+supervisor directory when the ordinary name exceeds the host limit. This
+pre-publication choice does not alter a published generation; changing a
+published config or endpoint still requires the migration flow below.
 
 `delegate-run` normally resolves beside `delegate`. Use the absolute global
 `--runner` option for a source-build layout or a custom integration.
 
-When a saved binding points to the private state-rooted supervisor, `dispatch`,
-`status`, `cancel`, and continuation checks reuse it when a compatible daemon
-is already serving its endpoint. If that endpoint is unavailable, they restart
-the saved private executable pair when it is still available. Otherwise they
-use the verified state-root pair before falling back to the pair bundled with
-the current installation. Legacy bindings without daemon identity require a
-resolved executable pair and the normal config and endpoint checks; see
+When a saved binding points to the private state-rooted supervisor, `status`,
+`cancel`, and continuation checks reuse it when a compatible daemon is already
+serving its endpoint. If that endpoint is unavailable, they restart the saved
+private executable pair when it is still available. A different verified
+client may inspect a compatible live endpoint, but ordinary recovery cannot
+start or publish that client's daemon over a stopped active generation. If the
+active pair is unavailable, run the explicit `supervisor migrate` transaction
+described above. Dispatch uses the same adoption-first path; a changed daemon
+path or hash is provenance drift while the compatible endpoint remains live,
+and never grants authority to start a replacement. A real logical binding
+change uses the explicit repair flow described above. Legacy bindings without
+daemon identity require a resolved executable pair and the normal config and
+endpoint checks; see
 [Troubleshooting](troubleshooting.md#supervisor-configuration-fails).
 `collect` may recover that private daemon only to observe an already-requested
 budget stop; it never starts a provider or submits work.

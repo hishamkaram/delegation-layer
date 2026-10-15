@@ -17,7 +17,7 @@ func RuntimeRequirements(mode ...string) commonprovider.RuntimeCapability {
 	}
 	if selected == ModeWorkspaceWrite {
 		return commonprovider.RuntimeCapability{RequiredFlags: []string{
-			"--mode", "--model", "--thinking", "--session",
+			"--mode", "--tools", "--model", "--thinking", "--session",
 		}}
 	}
 	return commonprovider.RuntimeCapability{
@@ -30,9 +30,18 @@ func RuntimeRequirements(mode ...string) commonprovider.RuntimeCapability {
 
 func historicalNativeRuntimeRequirements() commonprovider.RuntimeCapability {
 	return commonprovider.RuntimeCapability{
-		HelpArgs: []string{},
+		HelpArgs:      []string{},
+		RequiredFlags: []string{"--mode", "--tools", "--model", "--thinking", "--session"},
+	}
+}
+
+// workspaceWriteV7RuntimeRequirements preserves the runtime probe bound to
+// workspace-write v7 tasks. Their recorded launch relied on Pi's native tool
+// default and therefore did not require the --tools flag.
+func workspaceWriteV7RuntimeRequirements() commonprovider.RuntimeCapability {
+	return commonprovider.RuntimeCapability{
 		RequiredFlags: []string{
-			"--mode", "--tools", "--model", "--thinking", "--session",
+			"--mode", "--model", "--thinking", "--session",
 		},
 	}
 }

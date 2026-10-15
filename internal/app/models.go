@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,14 +31,7 @@ func runModels(a Arguments, stdout io.Writer, deps Dependencies) int {
 	catalog, err := discoverModels(a, deps)
 	errorCode := 0
 	if err != nil {
-		errorCode = classifyCode(err, 1)
-		catalog = commonprovider.ModelCatalog{Status: "failed", ReasonCode: "discovery_failed", Source: "none", Models: []commonprovider.ModelInfo{}}
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) || errors.Is(err, commonprovider.ErrProfileUnavailable) {
-			catalog.Status, catalog.ReasonCode = "unavailable", "discovery_unavailable"
-		}
-		if errors.Is(err, inspection.ErrAdmissionExpired) {
-			catalog.ReasonCode = "discovery_timeout"
-		}
+		catalog, errorCode = modelDiscoveryFailureCatalog(err)
 	}
 	response := ModelsResponse{SchemaVersion: OutputSchemaVersion, Command: "models", Provider: a.Provider, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), ModelCatalog: catalog}
 	data, err := json.Marshal(response)
@@ -65,6 +57,30 @@ func runModels(a Arguments, stdout io.Writer, deps Dependencies) int {
 	default:
 		return 1
 	}
+}
+
+// modelDiscoveryFailureCatalog keeps a supervisor safety refusal distinct from
+// a provider-model failure. It reuses dispatch's canonical failure
+// classification so a new supervisor code cannot silently acquire a second
+// lifecycle policy here.
+func modelDiscoveryFailureCatalog(err error) (commonprovider.ModelCatalog, int) {
+	errorCode := classifyCode(err, 1)
+	catalog := commonprovider.ModelCatalog{Status: "failed", ReasonCode: "discovery_failed", Source: "none", Models: []commonprovider.ModelInfo{}}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) || errors.Is(err, commonprovider.ErrProfileUnavailable) {
+		catalog.Status, catalog.ReasonCode = "unavailable", "discovery_unavailable"
+	}
+	if errors.Is(err, inspection.ErrAdmissionExpired) {
+		catalog.ReasonCode = "discovery_timeout"
+	}
+
+	failure := dispatchFailure(err, "not_created")
+	switch failure.Code {
+	case "supervisor_migration_blocked", "supervisor_migration_unsupported", "supervisor_upgrade_required":
+		catalog.Status = "blocked"
+		catalog.ReasonCode = failure.Code
+		errorCode = 2
+	}
+	return catalog, errorCode
 }
 
 func writeModelsHuman(out io.Writer, response ModelsResponse) error {
@@ -107,7 +123,7 @@ func discoverModels(a Arguments, deps Dependencies) (catalog commonprovider.Mode
 	return discoverModelsInStore(a, deps, store, cwd, registration.Description.SupportedModes[0])
 }
 
-func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store, cwd, mode string) (commonprovider.ModelCatalog, error) {
+func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store, cwd, mode string) (result commonprovider.ModelCatalog, resultErr error) {
 	id, err := task.NewTaskID()
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
@@ -122,35 +138,66 @@ func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store,
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
 	}
-	a, queueRepairRunner, err := prepareModelDiscoveryExecutables(a, deps, store.Root)
+	a, supervisor, queueRepairRunner, prepareErr := prepareModelDiscoverySupervisor(a, deps, store, candidate)
+	supervisorOwner, err := acquireSupervisorClient(supervisor, prepareErr)
+	defer func() { resultErr = errors.Join(resultErr, supervisorOwner.CloseAfterPending(resultErr)) }()
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
 	}
-	options, err := supervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
-	if err != nil {
-		return commonprovider.ModelCatalog{}, err
-	}
-	supervisor, err := bindInitialWithOptions(a, deps, store.Root, options)
-	if err != nil {
-		return commonprovider.ModelCatalog{}, err
+	supervisor = supervisorOwner.Client()
+	inspectionGroupReady := false
+	if candidate.Inspection != nil {
+		if groupErr := ensureInspectionGroup(store, supervisor, inspection.ModelDiscoveryTimeout); groupErr != nil {
+			return commonprovider.ModelCatalog{}, fmt.Errorf("prepare inspection supervisor before model discovery: %w", groupErr)
+		}
+		inspectionGroupReady = true
 	}
 	if queueRepairRunner != "" {
-		repairContext, cancelRepair := context.WithTimeout(context.Background(), pueue.RunnerCommandUpgradeTimeout)
-		repairErr := repairQueuedRunnerCommands(repairContext, store, supervisor, queueRepairRunner)
-		cancelRepair()
-		if repairErr != nil {
+		if repairErr := ensurePrivateQueuedRunnerRepair(store, supervisor, queueRepairRunner); repairErr != nil {
 			return commonprovider.ModelCatalog{}, fmt.Errorf("repair queued task runner paths before model discovery: %w", repairErr)
 		}
 	}
-	facts, _, err := admissionInspectionFacts(a, deps, store, req, candidate, supervisor)
+	facts, _, err := admissionInspectionFacts(a, deps, store, req, candidate, supervisor, inspectionGroupReady)
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
 	}
-	var result commonprovider.ModelCatalog
 	if err = json.Unmarshal(facts, &result); err != nil {
 		return result, err
 	}
 	return result, commonprovider.ValidateModelCatalog(result)
+}
+
+func prepareModelDiscoverySupervisor(a Arguments, deps Dependencies, store *taskdir.Store, candidate commonprovider.ProfileCandidate) (Arguments, *pueue.Client, string, error) {
+	a, queueRepairRunner, err := prepareModelDiscoveryExecutables(a, deps, store.Root)
+	if err != nil {
+		return Arguments{}, nil, "", err
+	}
+	options, err := supervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
+	if err != nil {
+		return Arguments{}, nil, "", err
+	}
+	privateSupervisor, err := admissionUsesPrivateSupervisor(a, store.Root)
+	if err != nil {
+		return Arguments{}, nil, "", err
+	}
+	// Model discovery shares dispatch's private-supervisor bootstrap. A model
+	// probe may not create a task record, but it must still migrate a changed
+	// private daemon before it can inspect or start the queue.
+	var supervisor *pueue.Client
+	if privateSupervisor && a.savedSupervisor == nil {
+		supervisor, err = preparePrivateAdmissionSupervisor(deps, store, options)
+	} else {
+		supervisor, err = bindInitialForAdmission(a, deps, store.Root, options, candidate.Inspection != nil)
+	}
+	if err != nil {
+		return Arguments{}, supervisor, "", err
+	}
+	if a.savedSupervisor != nil && pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
+		if err = ensurePrivateAdmissionScheduling(store, supervisor, options); err != nil {
+			return Arguments{}, supervisor, "", err
+		}
+	}
+	return a, supervisor, queueRepairRunner, nil
 }
 
 func prepareModelDiscoveryExecutables(a Arguments, deps Dependencies, root string) (Arguments, string, error) {

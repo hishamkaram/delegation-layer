@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import acceptance_claude as gate
 from acceptance_provider_common import AcceptanceFailure, unique_object
-from acceptance_supervisor_common import sha
+from acceptance_supervisor_common import DirectoryOwner, sha
 
 
 SESSION = "0199a213-81c0-7800-8aa1-bbab2a035a53"
@@ -98,6 +98,59 @@ def native_numbered_read_stream(nonce_file: Path, workspace: Path, nonce: bytes 
 
 
 class ClaudeOracleTests(unittest.TestCase):
+    def test_behavioral_success_is_not_published_when_finalization_fails(self):
+        for failure in (False, OSError("injected finalization failure")):
+            with self.subTest(failure=repr(failure)), \
+                    tempfile.TemporaryDirectory(prefix="claude-finalize-unit-") as temporary:
+                root = Path(temporary)
+                output = root / "evidence"
+                output.mkdir()
+                owner = object.__new__(gate.ClaudeAcceptance)
+                owner.output = output
+                owner.state = root / "state"
+                owner.workspace = root / "workspace"
+                owner.closed = True
+                owner.daemon = None
+                owner.dispatch_attempts = set()
+                owner.tasks = {"fresh": "a" * 32, "resume": "b" * 32}
+                owner.records = {}
+                for name in ("fresh", "resume"):
+                    directory = root / name
+                    directory.mkdir()
+                    (directory / "outcome.json").write_text("{}")
+                    owner.records[name] = {
+                        "reference": {"conversation_id": SESSION},
+                        "directory": directory,
+                        "outcome": {"evidence_sha256": "c" * 64},
+                    }
+                owner.setup = lambda: None
+                owner.run_fresh = lambda: owner.records["fresh"]
+                owner.run_resume = lambda _fresh: owner.records["resume"]
+                owner.replay = lambda: None
+                owner.shutdown = lambda: None
+                owner.retain_failure_ownership = lambda: True
+                calls = []
+
+                def finalize(success):
+                    calls.append(success)
+                    if success and isinstance(failure, BaseException):
+                        raise failure
+                    return not success or failure is not False
+
+                owner.finalize = finalize
+                argv = ["--tools", str(root), "--pueue", "/pueue", "--pueued", "/pueued",
+                        "--output", str(output)]
+                with patch.object(gate, "ClaudeAcceptance", return_value=owner):
+                    code = gate.main(argv)
+
+                self.assertEqual(code, 1)
+                self.assertEqual(calls, [True, False])
+                self.assertFalse((output / "success.json").exists())
+                self.assertTrue((output / "failure.json").is_file())
+                cleanup = json.loads((output / "failure-cleanup.json").read_text())
+                self.assertTrue(cleanup["passed_receipt_absent"])
+                self.assertTrue(cleanup["artifact_finalization_completed"])
+
     def test_failure_diagnostic_write_cannot_skip_retained_cleanup(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -656,14 +709,43 @@ class ClaudeOracleTests(unittest.TestCase):
         home = Path("/Users/example")
         self.assertEqual(gate.pueue_parent_for_platform("darwin", home), Path("/Users/Shared"))
         self.assertEqual(gate.pueue_parent_for_platform("linux", home), home / ".dl-acceptance")
-        with tempfile.TemporaryDirectory(dir=str(Path.cwd())) as temporary:
+        with tempfile.TemporaryDirectory(dir=str(Path.home())) as temporary:
             root = Path(temporary)
+            owner = DirectoryOwner()
             with patch.object(gate, "PUEUE_PARENT", root / "parent"):
                 parent = gate.acceptance_temp_parent()
-                child = gate.private_mkdtemp("claude-", "test acceptance directory")
+                child = gate.private_mkdtemp("claude-", "test acceptance directory", owner)
             self.assertEqual(parent, (root / "parent").resolve())
-            self.assertEqual(child.parent, parent)
+            self.assertEqual(child.directory.parent, parent)
             self.assertEqual(parent.stat().st_mode & 0o077, 0)
+            owner.rollback()
+
+    def test_private_mkdtemp_rolls_back_a_child_that_fails_validation(self):
+        with tempfile.TemporaryDirectory(dir=str(Path.home())) as temporary:
+            root = Path(temporary)
+            parent = root / "parent"
+            child = parent / "claude-failed"
+
+            def allocate(**_kwargs):
+                child.mkdir()
+                return str(child)
+
+            original_chmod = gate.os.chmod
+
+            def fail_child_chmod(path, mode):
+                if Path(path) == child:
+                    raise OSError("injected validation failure")
+                return original_chmod(path, mode)
+
+            with patch.object(gate, "PUEUE_PARENT", parent), \
+                    patch.object(gate.tempfile, "mkdtemp", side_effect=allocate), \
+                    patch.object(gate.os, "chmod", side_effect=fail_child_chmod):
+                owner = DirectoryOwner()
+                with self.assertRaisesRegex(OSError, "validation failure"):
+                    gate.private_mkdtemp("claude-", "test acceptance directory", owner)
+                owner.rollback()
+            self.assertFalse(child.exists())
+            self.assertTrue(parent.is_dir())
 
     def test_live_profile_environment_is_task_owned(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -728,6 +810,43 @@ class ClaudeOracleTests(unittest.TestCase):
         self.assertEqual(gate.ACCEPTANCE_STATUS, "acceptance-passed")
         self.assertEqual(gate.PRELAUNCH_STATUS, "planned")
         self.assertNotIn("candidate", gate.ACCEPTANCE_STATUS.lower())
+
+    def test_finalize_removes_closed_private_roots_and_raw_process_captures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_parent = root / "states"
+            pueue_parent = root / "pueue"
+            output = root / "evidence"
+            state = state_parent / "claude-run"
+            workspace = pueue_parent / "workspace-run"
+            pueue = pueue_parent / "claude-pueue"
+            state_parent.mkdir()
+            pueue_parent.mkdir()
+            output.mkdir()
+            owner = DirectoryOwner()
+            state_token = owner.create("acceptance state", state, state_parent)
+            workspace_token = owner.create("acceptance workspace", workspace, pueue_parent)
+            raw_token = owner.create("raw process captures", output / "processes", output)
+            pueue_token = owner.create("private pueue", pueue, pueue_parent)
+            owner = object.__new__(gate.ClaudeAcceptance)
+            owner.output = output
+            owner.closed = True
+            owner.state_parent = state
+            owner.workspace_parent = workspace
+            owner.owned_directories = (
+                state_token, workspace_token, raw_token,
+            )
+            owner.pueue_base = pueue
+            owner.pueue_owned_directories = (pueue_token,)
+            owner.processes = type("Processes", (), {"capture_root": raw_token})()
+            with patch.object(gate, "DEFAULT_STATE_PARENT", state_parent), \
+                    patch.object(gate, "PUEUE_PARENT", pueue_parent):
+                self.assertTrue(owner.finalize(True))
+
+            self.assertFalse(state.exists())
+            self.assertFalse(workspace.exists())
+            self.assertFalse(pueue.exists())
+            self.assertFalse((output / "processes").exists())
 
 
 if __name__ == "__main__":

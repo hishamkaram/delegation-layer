@@ -56,6 +56,10 @@ func newHistoricalV5Interpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, version: currentPredicateVersion}
 }
 
+func newHistoricalV7Interpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, version: "7"}
+}
+
 func (i interpreter) Reference() task.PredicateRef {
 	return referenceForVersion(i.mode, i.version)
 }
@@ -155,13 +159,13 @@ func previousReferenceForMode(mode string) task.PredicateRef {
 	if mode == ModeReadOnly {
 		return readOnlyV5Reference()
 	}
-	return workspaceWriteV5Reference()
+	return workspaceWriteV7Reference()
 }
 
 func usesCurrentEvidence(mode, version string) bool {
 	return version == currentPredicateVersion ||
 		(mode == ModeReadOnly && version == currentReadOnlyVersion) ||
-		(mode == ModeWorkspaceWrite && version == currentWorkspaceVersion)
+		(mode == ModeWorkspaceWrite && (version == "7" || version == currentWorkspaceVersion))
 }
 
 func (i interpreter) Recover(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {

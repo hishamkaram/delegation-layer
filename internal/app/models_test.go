@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -37,8 +39,10 @@ func TestModelsArguments(t *testing.T) {
 }
 
 func TestModelsUnavailableProviderHasJSON(t *testing.T) {
+	root := canonicalAppTestTempDir(t)
+	cwd := canonicalAppTestTempDir(t)
 	var stdout, stderr bytes.Buffer
-	code := Run([]string{"models", "--provider", "missing:provider", "--json"}, &stdout, &stderr, Dependencies{})
+	code := Run([]string{"--root", root, "models", "--provider", "missing:provider", "--cwd", cwd, "--json"}, &stdout, &stderr, Dependencies{})
 	var response ModelsResponse
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
 		t.Fatalf("non-JSON response: %s (%v)", stdout.String(), err)
@@ -64,6 +68,25 @@ func TestModelsInvalidDirectoriesUseInvalidRequestExitCode(t *testing.T) {
 			}
 			if code != 2 || response.Status != "failed" || stderr.Len() != 0 {
 				t.Fatalf("invalid request result: code=%d response=%+v stderr=%s", code, response, stderr.String())
+			}
+		})
+	}
+}
+
+func TestModelDiscoverySupervisorFailuresRemainBlocked(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "active work", err: inspection.ErrGroupMigrationBusy, code: "supervisor_migration_blocked"},
+		{name: "external supervisor", err: inspection.ErrGroupMigrationUnsupported, code: "supervisor_migration_unsupported"},
+		{name: "private upgrade", err: pueue.ErrPrivateSupervisorMigrationRequired, code: "supervisor_upgrade_required"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			catalog, exitCode := modelDiscoveryFailureCatalog(test.err)
+			if exitCode != 2 || catalog.Status != "blocked" || catalog.ReasonCode != test.code || catalog.Complete || len(catalog.Models) != 0 || catalog.Source != "none" {
+				t.Fatalf("supervisor safety refusal was misclassified: exit=%d catalog=%+v", exitCode, catalog)
 			}
 		})
 	}

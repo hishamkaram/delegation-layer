@@ -56,6 +56,11 @@ func newHistoricalNativeInterpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, historicalNativeCurrent: true}
 }
 
+func newPreviousNativeProbeInterpreter(mode string) predicate.Interpreter {
+	reference := previousNativeProbeReferenceForMode(mode)
+	return interpreter{mode: mode, streamReference: &reference}
+}
+
 func newLegacyPortableInterpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, legacyPortable: true}
 }
@@ -163,7 +168,11 @@ func (v interpreter) CanRecover(source task.PredicateRef) bool {
 	if v.recoverySource != nil {
 		return source.Equal(*v.recoverySource)
 	}
-	return source.Equal(historicalNativeReferenceForMode(v.mode))
+	if v.streamReference != nil {
+		return false
+	}
+	return source.Equal(historicalNativeReferenceForMode(v.mode)) ||
+		source.Equal(previousNativeProbeReferenceForMode(v.mode))
 }
 
 // Recover re-evaluates the original sealed evidence with the current

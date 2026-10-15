@@ -30,20 +30,23 @@ const (
 
 	// predicateVersion identifies the pre-v5 interpreter contract, independent
 	// of the installed Pi CLI release. v5 is the historical native contract;
-	// fresh read-only tasks use v6 after the startup extension boundary was
-	// added, and fresh workspace-write tasks use v7 after its runtime probe was
-	// made mode-specific. Each mode keeps its prior bytes registered for replay.
+	// Fresh read-only tasks use v6 after the startup extension boundary was
+	// added. Fresh workspace-write tasks use v8 after selecting the documented
+	// built-in write tools. Each mode keeps its prior bytes registered for replay.
 	predicateVersion        = "4"
 	currentPredicateVersion = "5"
 	currentReadOnlyVersion  = "6"
-	currentWorkspaceVersion = "7"
+	currentWorkspaceVersion = "8"
 	historicalPredicateV3   = "3"
 	historicalPredicateV2   = "2"
 	legacyPredicateVersion  = "1"
 	Version                 = currentReadOnlyVersion
 )
 
-const readOnlyTools = "read,grep,find,ls"
+const (
+	readOnlyTools       = "read,grep,find,ls"
+	workspaceWriteTools = "read,bash,edit,write"
+)
 
 // readOnlyContractV2 retains the admitted read-only v2 bytes. Historical
 // interpreters use it when collecting already-admitted v2 evidence.
@@ -58,10 +61,8 @@ const readOnlyContractV3 = `{"adapter":"pi:json","mode":"read-only","version":"3
 // validates their lifecycle without reimplementing Pi's retry policy.
 const readOnlyContractV4 = `{"adapter":"pi:json","mode":"read-only","version":"4","native":"Pi JSON event stream","permissions":"read-only maps the native --tools allowlist to read,grep,find,ls; provider configuration, extensions, authentication, and startup behavior remain provider-owned","session":"one session event with a UUID id; native session discovery and continuation use the exact recorded id","events":"one or more sequential complete native agent cycles may occur within one CLI invocation for retries, compaction, or extension followups; each cycle has agent_start, one or more turn_start/turn_end pairs, and agent_end in order; auto_retry_start requires a subsequent complete cycle; auto_retry_end is accepted only within an active cycle, and a trailing marker after a successful agent_end is malformed; retry markers do not impose provider retry policy; unknown telemetry is tolerated while unknown lifecycle events reject","result":"the final cycle must complete successfully: its final turn_end.message and final assistant message in agent_end.messages must agree; assistant stopReason=toolUse is allowed only for an intermediate tool turn and stopReason=stop is required for the final turn; text content blocks are concatenated in order; agent_settled is optional for older native releases and terminal when present","failure":"malformed or oversized JSONL, invalid UTF-8, conflicting session identity, overlapping or incomplete cycles, an auto_retry_start without a subsequent complete cycle, unsuccessful final assistant stop reasons (length, error, or aborted), provider error, nonzero exit, empty final text, or more than 1024 retained usage rows reject","tools":"read,grep,find,ls"}` + "\n"
 
-// workspaceWriteContract is the immutable evidence policy for native
-// workspace-write execution. Pi owns the configured tools, extensions,
-// authentication, and permission behavior; the adapter does not impose an
-// independent tool allowlist or workspace boundary.
+// The v3 and v4 workspace-write contracts retain the immutable evidence
+// policy admitted before the adapter selected Pi's built-in write tools.
 const workspaceWriteContractV3 = `{"adapter":"pi:json","mode":"workspace-write","version":"3","native":"Pi JSON event stream","permissions":"workspace-write uses Pi's provider-native configured tools, extensions, authentication, and permission behavior; the adapter omits --tools and does not impose an independent workspace boundary","session":"one session event with a UUID id; native session discovery and continuation use the exact recorded id","events":"one or more sequential complete native agent cycles may occur within one CLI invocation for retries, compaction, or extension followups; each cycle has agent_start, one or more turn_start/turn_end pairs, and agent_end in order; auto_retry_start requires a subsequent complete cycle; auto_retry_end is completion telemetry and does not require another cycle; retry markers do not impose provider retry policy; unknown telemetry is tolerated while unknown lifecycle events reject","result":"the final cycle must complete successfully: its final turn_end.message and final assistant message in agent_end.messages must agree; assistant stopReason=toolUse is allowed only for an intermediate tool turn and stopReason=stop is required for the final turn; text content blocks are concatenated in order; agent_settled is optional for older native releases and terminal when present","failure":"malformed or oversized JSONL, invalid UTF-8, conflicting session identity, overlapping or incomplete cycles, an auto_retry_start without a subsequent complete cycle, unsuccessful final assistant stop reasons (length, error, or aborted), provider error, nonzero exit, empty final text, or more than 1024 retained usage rows reject","tools":"provider-native configured tools"}` + "\n"
 
 const workspaceWriteContractV4 = `{"adapter":"pi:json","mode":"workspace-write","version":"4","native":"Pi JSON event stream","permissions":"workspace-write uses Pi's provider-native configured tools, extensions, authentication, and permission behavior; the adapter omits --tools and does not impose an independent workspace boundary","session":"one session event with a UUID id; native session discovery and continuation use the exact recorded id","events":"one or more sequential complete native agent cycles may occur within one CLI invocation for retries, compaction, or extension followups; each cycle has agent_start, one or more turn_start/turn_end pairs, and agent_end in order; auto_retry_start requires a subsequent complete cycle; auto_retry_end is accepted only within an active cycle, and a trailing marker after a successful agent_end is malformed; retry markers do not impose provider retry policy; unknown telemetry is tolerated while unknown lifecycle events reject","result":"the final cycle must complete successfully: its final turn_end.message and final assistant message in agent_end.messages must agree; assistant stopReason=toolUse is allowed only for an intermediate tool turn and stopReason=stop is required for the final turn; text content blocks are concatenated in order; agent_settled is optional for older native releases and terminal when present","failure":"malformed or oversized JSONL, invalid UTF-8, conflicting session identity, overlapping or incomplete cycles, an auto_retry_start without a subsequent complete cycle, unsuccessful final assistant stop reasons (length, error, or aborted), provider error, nonzero exit, empty final text, or more than 1024 retained usage rows reject","tools":"provider-native configured tools"}` + "\n"
@@ -107,6 +108,14 @@ func workspaceContractV7Current() string {
 	return strings.Replace(workspaceContractV5Historical(), `"version":"5"`, `"version":"7"`, 1)
 }
 
+func workspaceContractV8Current() string {
+	contract := strings.Replace(workspaceContractV7Current(), `"version":"7"`, `"version":"8"`, 1)
+	contract = strings.Replace(contract,
+		"workspace-write uses Pi's provider-native configured tools, extensions, authentication, and permission behavior; the adapter omits --tools and does not impose an independent workspace boundary",
+		"workspace-write selects Pi's built-in read,bash,edit,write tools; provider extensions, authentication, and permission behavior remain provider-owned; the adapter does not impose an independent workspace boundary", 1)
+	return strings.Replace(contract, `"tools":"provider-native configured tools"`, `"tools":"read,bash,edit,write"`, 1)
+}
+
 func readOnlyContractV4Current() string {
 	return strings.Replace(readOnlyContractV4, "agent_end in order; auto_retry_start", "agent_end in order; message events may occur between turn_start and turn_end; auto_retry_start", 1)
 }
@@ -122,7 +131,7 @@ func Contract(mode ...string) string {
 	case ModeReadOnly:
 		return readOnlyContractV6Current()
 	case ModeWorkspaceWrite:
-		return workspaceContractV7Current()
+		return workspaceContractV8Current()
 	default:
 		return ""
 	}
@@ -186,7 +195,7 @@ func workspaceWriteV5Reference() task.PredicateRef {
 }
 
 func workspaceWriteV7Reference() task.PredicateRef {
-	return referenceForVersion(ModeWorkspaceWrite, currentWorkspaceVersion)
+	return referenceForVersion(ModeWorkspaceWrite, "7")
 }
 
 func referenceForVersion(mode, version string) task.PredicateRef {
@@ -205,8 +214,11 @@ func contractForVersion(mode, version string) string {
 		if version == currentPredicateVersion {
 			return workspaceContractV5Historical()
 		}
-		if version == currentWorkspaceVersion {
+		if version == "7" {
 			return workspaceContractV7Current()
+		}
+		if version == currentWorkspaceVersion {
+			return workspaceContractV8Current()
 		}
 		return workspaceContractForVersion(version)
 	default:

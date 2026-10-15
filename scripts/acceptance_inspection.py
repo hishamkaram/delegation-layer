@@ -17,7 +17,9 @@ from acceptance_provider_common import (
     verify_collected_outcome, write_bytes, write_json,
 )
 from acceptance_supervisor_common import (
-    Processes, config_for, digest, inherited_environment, read_json, sha,
+    DirectoryOwner, OwnedDirectory, Processes, config_for, digest,
+    failure_cleanup_deadline, finalize_acceptance_artifacts, inherited_environment,
+    read_json, rollback_owned_directories, sha, wait_for_failure_cleanup,
 )
 
 
@@ -41,7 +43,25 @@ def no_secret_bytes(paths: list[Path], sentinel: bytes) -> None:
                         carry = data[-overlap:] if overlap else b""
 
 
-BLOCKER_ARGV = ["/bin/sleep", "25"]
+def _owned_directory_path(token: OwnedDirectory) -> Path:
+    """Read the path from an ownership token without accepting path tuples."""
+    require(isinstance(token, OwnedDirectory), "owned directory token is invalid")
+    return token.directory
+
+
+def _token_for_directory(tokens: tuple[OwnedDirectory, ...] | list[OwnedDirectory],
+                         directory: Path) -> OwnedDirectory:
+    """Find one exact ownership token for a directory created by this run."""
+    matches = [token for token in tokens if _owned_directory_path(token) == directory]
+    require(len(matches) == 1, "owned directory token is missing or duplicated")
+    return matches[0]
+
+
+FRESH_INSPECTION_TIMEOUT_SECONDS = 60
+EXPIRY_MARGIN_SECONDS = 5
+ACCEPTANCE_WATCH_SECONDS = FRESH_INSPECTION_TIMEOUT_SECONDS + 60
+RUNNING_EXPIRY_DELAY_MS = (FRESH_INSPECTION_TIMEOUT_SECONDS + EXPIRY_MARGIN_SECONDS) * 1000
+BLOCKER_ARGV = ["/bin/sleep", str(FRESH_INSPECTION_TIMEOUT_SECONDS + EXPIRY_MARGIN_SECONDS)]
 
 
 def fixture_inspection_binding(helper: Path, helper_config: Path, workspace: Path,
@@ -69,6 +89,7 @@ def fixture_inspection_binding(helper: Path, helper_config: Path, workspace: Pat
         "worker_executable": str(runner),
         "worker_sha256": digest(runner),
         "runner_ownership": "custom",
+        "worker_exit_proof": "guardian-wait-v1",
         "environment": [key + "=" + environment[key] for key in sorted(environment)],
         "environment_recorded": True,
         "supervisor": supervisor,
@@ -243,21 +264,66 @@ def validate_concurrent_response(response: dict[str, object], exit_code: int, ta
     return root
 
 
+def validate_expired_inspection_response(
+        response: dict[str, object], exit_code: int, root_id: str, task_id: str) -> None:
+    require(exit_code == 1 and response.get("task_id") == task_id and
+            response.get("root_id") == root_id and response.get("task_record") == "unknown" and
+            response.get("admission") == "unknown" and
+            response.get("liveness") == "undetermined" and
+            response.get("publication") == "unknown" and
+            response.get("failure") == {
+                "code": "provider_preflight_failed",
+                "stage": "inspect-provider",
+                "next_action": "stop_and_report",
+                "inspection": {
+                    "class": "admission_deadline_expired",
+                    "deadline_state": "expired",
+                    "journal_task_id": task_id,
+                },
+            } and response.get("error") == "Delegate could not complete provider preflight.",
+            "expired inspection did not return the stable provider-preflight failure envelope")
+
+
 class InspectionAcceptance:
     def __init__(self, args: argparse.Namespace):
+        self._constructor_ownership = DirectoryOwner()
+        self._pueue_ownership = DirectoryOwner()
+        constructor_tokens: tuple[OwnedDirectory, ...] = ()
+        constructor_transferred = False
+        try:
+            self._initialize(args)
+            constructor_tokens = self._constructor_ownership.transfer()
+            constructor_transferred = True
+            self.owned_directories = constructor_tokens
+            self.raw_process_captures_token = _token_for_directory(
+                constructor_tokens, self.output / "processes")
+            self.pueue_directories: tuple[OwnedDirectory, ...] = ()
+        except BaseException:
+            if constructor_transferred:
+                rollback_owned_directories(constructor_tokens)
+            else:
+                self._constructor_ownership.rollback()
+            self._pueue_ownership.rollback()
+            raise
+
+    def _initialize(self, args: argparse.Namespace):
         self.tools = Path(args.tools).resolve(strict=True)
         self.pueue = Path(args.pueue).resolve(strict=True)
         self.pueued = Path(args.pueued).resolve(strict=True)
         self.output = Path(args.output).absolute()
         require(not self.output.exists(), "inspection evidence directory already exists")
         self.output = ensure_private_directory(self.output, "inspection evidence", create=True)
-        self.base = ensure_private_directory(self.output / "fixture", "fixture base", create=True)
+        self._constructor_ownership.create(
+            "fixture", self.output / "fixture", self.output, mode=0o700)
+        self.base = self.output / "fixture"
         self.state = self.base / "state"
         self.workspace = ensure_private_directory(self.base / "workspace", "fixture workspace", create=True)
         self.bindir = ensure_private_directory(self.base / "bin", "fixture binaries", create=True)
         self.inputs = ensure_private_directory(self.base / "inputs", "fixture inputs", create=True)
         self.events = ensure_private_directory(self.base / "events", "fixture events", create=True)
-        self.cases = ensure_private_directory(self.output / "cases", "case evidence", create=True)
+        self._constructor_ownership.create(
+            "case evidence", self.output / "cases", self.output, mode=0o700)
+        self.cases = self.output / "cases"
         for name in ("delegate", "delegate-run", "provider", "inspection-helper"):
             target = self.bindir / name
             shutil.copyfile(self.tools / name, target)
@@ -267,12 +333,17 @@ class InspectionAcceptance:
         self.provider = self.bindir / "provider"
         self.helper = self.bindir / "inspection-helper"
         self.environment = inherited_environment()
-        self.processes = Processes(self.output / "processes", self.environment)
+        process_directory = self.output / "processes"
+        self.processes = Processes(
+            process_directory, self.environment, owner=self._constructor_ownership)
         self.ops = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
-                                 self.base, self.state, self.output, watch_seconds=60)
+                                 self.base, self.state, self.output,
+                                 watch_seconds=ACCEPTANCE_WATCH_SECONDS)
         self.daemon = None
         self.config = None
         self.pueue_base = None
+        self.pueue_directories: tuple[OwnedDirectory, ...] = ()
+        self.pueue_parent = Path("/Users/Shared") if sys.platform == "darwin" else Path.home() / ".dl-acceptance"
         self.supervisor_config_digest = None
         self.pueue_version: str | None = None
         self.pueued_version: str | None = None
@@ -284,10 +355,15 @@ class InspectionAcceptance:
         self.blocker: tuple[int, str] | None = None
 
     def setup(self) -> None:
-        parent = Path("/Users/Shared") if sys.platform == "darwin" else Path.home() / ".dl-acceptance"
-        base = ensure_private_directory(parent / ("dl-inspect-" + secrets.token_hex(6)),
-                                        "private supervisor", create=True)
+        base = self.pueue_parent / ("dl-inspect-" + secrets.token_hex(6))
+        base = ensure_private_directory(base, "private supervisor", create=True)
         self.pueue_base = base
+        try:
+            self._pueue_ownership.adopt_created("private pueue", base, base.parent)
+            self.pueue_directories = self._pueue_ownership.transfer()
+        except BaseException:
+            self._pueue_ownership.rollback()
+            raise
         for name in ("state", "run"):
             ensure_private_directory(base / name, name, create=True)
         write_bytes(base / "aliases.yml", b"{}\n")
@@ -398,7 +474,7 @@ class InspectionAcceptance:
         self.ops.expect_inspection(task_id, self.expected_inspection_binding(helper_config))
         self.ops.dispatch_attempts.add(task_id)
         initial = self.processes.start("initial-dispatch", argv, self.base)
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + self.ops.watch_seconds
         while not list((case / "helper").rglob("started.json")):
             require(time.monotonic() < deadline, "initial helper did not start for reattachment")
             time.sleep(0.05)
@@ -413,7 +489,7 @@ class InspectionAcceptance:
         for index in range(7):
             callers.append(self.processes.start("concurrent-dispatch-" + str(index), argv, self.base))
         for caller in callers:
-            caller.wait(timeout=45, expected={0, 1})
+            caller.wait(timeout=self.ops.watch_seconds, expected={0, 1})
         responses = [(caller, parse_json_output(caller, "concurrent dispatch"))
                      for caller in callers]
         # Retain every positive identity before evaluating a losing caller's
@@ -469,19 +545,15 @@ class InspectionAcceptance:
         task_id, brief, case, helper_config = self.configure(name, delay_ms)
         self.ops.expect_inspection(task_id, self.expected_inspection_binding(helper_config))
         self.ops.dispatch_attempts.add(task_id)
-        proc = self.ops.direct(name, self.argv(task_id, brief), expected={1, 2}, timeout=45)
+        proc = self.ops.direct(
+            name, self.argv(task_id, brief), expected={0, 1, 2}, timeout=self.ops.watch_seconds)
         response = parse_json_output(proc, name)
-        require(proc.result["exit_code"] == 1 and response.get("task_id") == task_id and
-                response.get("root_id") == self.ops.root_id and
-                response.get("admission") == "unknown" and
-                response.get("liveness") == "undetermined" and
-                response.get("publication") == "unknown" and
-                response.get("failure") == {
-                    "code": "provider_preflight_failed",
-                    "stage": "inspect-provider",
-                    "next_action": "stop_and_report",
-                } and response.get("error") == "Delegate could not complete provider preflight.",
-                "expired inspection did not return the stable provider-preflight failure envelope")
+        # Retain an unexpected positive admission before asserting the expiry
+        # envelope. Failure cleanup must still own and reconcile that task.
+        if proc.result["exit_code"] == 0:
+            self.ops.record_admission(name, task_id, response)
+        validate_expired_inspection_response(
+            response, proc.result["exit_code"], self.ops.root_id, task_id)
         label = "delegation-inspection-" + str(self.ops.root_id) + "-" + task_id
         row = self.wait_row(label)
         require(done_result(row) != "Success", "expired inspection worker reported success")
@@ -509,7 +581,7 @@ class InspectionAcceptance:
         group = "delegation-inspection-" + str(self.ops.root_id)
         label = "inspection-fixture-bounded-blocker"
         proc = self.ops.client("queue-blocker", ["add", "--escape", "--group", group, "--label", label,
-                                                "--print-task-id", "--", "/bin/sleep", "25"])
+                                                "--print-task-id", "--", *BLOCKER_ARGV])
         numeric = int((proc.directory / "stdout").read_text().strip())
         require(numeric >= 0, "invalid blocker supervisor target")
         self.blocker = numeric, label
@@ -531,6 +603,7 @@ class InspectionAcceptance:
         if self.ops.root_id is None:
             return False
         group = "delegation-inspection-" + self.ops.root_id
+        deadline = failure_cleanup_deadline(ACCEPTANCE_WATCH_SECONDS)
         while True:
             if self.daemon is None or self.daemon.poll() is not None:
                 return False
@@ -540,7 +613,8 @@ class InspectionAcceptance:
                 require(len(rows) == 1, "bounded blocker disappeared during failure cleanup")
                 row = rows[0]
                 if row_state(row) != "Done":
-                    time.sleep(0.25)
+                    if not wait_for_failure_cleanup(deadline, 0.25):
+                        return False
                     continue
                 validate_blocker_row(row, numeric, group, label, "Done")
                 require(done_result(row) == "Success",
@@ -553,23 +627,49 @@ class InspectionAcceptance:
             except (AcceptanceFailure, OSError, RuntimeError, TypeError, ValueError):
                 return False
 
+    def finalize(self, success: bool) -> bool:
+        """Remove completed fixture state while retaining compact acceptance receipts."""
+        output = getattr(self, "output", None)
+        if not isinstance(output, Path) or not output.is_dir() or output.is_symlink():
+            return False
+        raw_token = getattr(self, "raw_process_captures_token", None)
+        all_tokens: list[OwnedDirectory] = list(getattr(self, "owned_directories", ()))
+        all_tokens.extend(getattr(self, "pueue_directories", ()))
+        ops = getattr(self, "ops", None)
+        return finalize_acceptance_artifacts(
+            output,
+            bool(getattr(ops, "closed", False)),
+            tuple(all_tokens),
+            success,
+            raw_process_captures_token=raw_token,
+        )
+
     def run(self) -> None:
         try:
             self.setup()
             self.success()
-            self.failed_inspection("running-expiry", 30000)
+            self.failed_inspection("running-expiry", RUNNING_EXPIRY_DELAY_MS)
             self.queued_expiry()
             require(self.ops.safe_failure_shutdown(), "exact terminal fixture queue was not safely shut down")
             no_secret_bytes([self.workspace, self.state, self.events, self.cases, self.output / "processes",
                              self.pueue_base / "state"], self.sentinel)
-            write_json(self.output / "success.json", {
+            success_receipt = {
                 "status": "passed", "native_ai_turns": 0, "cases": self.case_records,
                 "natural_daemon_shutdown": True, "signals_sent": 0,
                 "driver_sha256": digest(__file__), "sentinel_escaped": False,
-            })
+            }
+            if not self.finalize(True):
+                raise AcceptanceFailure("completed acceptance artifacts could not be cleaned")
+            write_json(self.output / "success.json", success_receipt, replace=True)
             print("PASS native inspection acceptance", flush=True)
         except BaseException as error:
             blocker_cleaned = False
+            artifact_finalized = False
+            finalization_error = None
+            try:
+                (self.output / "success.json").unlink(missing_ok=True)
+            except BaseException as removal_error:
+                finalization_error = "passed receipt removal failed: " + str(removal_error)
             try:
                 write_json(self.output / "failure.json", {"status": "failed", "cases": self.case_records,
                             "error": str(error),
@@ -580,11 +680,26 @@ class InspectionAcceptance:
                 try:
                     blocker_cleaned = self.cleanup_blocker_after_failure()
                 finally:
-                    cleaned = self.ops.retain_failure_ownership()
+                    retention_error = None
+                    try:
+                        cleaned = self.ops.retain_failure_ownership()
+                    except BaseException as retain_error:
+                        cleaned = False
+                        retention_error = f"{type(retain_error).__name__}: {retain_error}"
+                    try:
+                        artifact_finalized = self.finalize(False)
+                        if not artifact_finalized:
+                            finalization_error = finalization_error or "acceptance artifact finalization was not completed"
+                    except BaseException as finalize_error:
+                        finalization_error = finalization_error or str(finalize_error)
                     write_json(self.output / "failure-cleanup.json", {
                         "blocker_cleaned": blocker_cleaned, "natural_daemon_shutdown": cleaned,
                         "signals_sent": 0, "owned_processes_joined": True,
-                    })
+                        "artifact_finalization_completed": artifact_finalized,
+                        "artifact_finalization_error": finalization_error,
+                        "failure_ownership_error": retention_error,
+                        "passed_receipt_absent": not (self.output / "success.json").exists(),
+                    }, replace=True)
             raise
 
 

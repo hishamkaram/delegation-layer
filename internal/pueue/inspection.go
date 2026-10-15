@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -50,23 +52,38 @@ type InspectionIdentity struct {
 	RootID        string
 	TaskID        string
 	NumericTaskID *int64
+	// QueueGroup is copied from the immutable inspection request. Empty keeps
+	// the historical root-scoped group; new private runtime probes use default.
+	QueueGroup string
 }
 
-// Group returns the exact supervisor group derived from the complete root ID.
-func (i InspectionIdentity) Group() string { return inspectionGroup(i.RootID) }
+// Group returns the saved queue, defaulting to the historical root group.
+func (i InspectionIdentity) Group() string {
+	if i.QueueGroup != "" {
+		return i.QueueGroup
+	}
+	return inspectionGroup(i.RootID)
+}
 
 // Label returns the exact supervisor label derived from the task ID.
-func (i InspectionIdentity) Label() string { return i.Group() + "-" + i.TaskID }
+func (i InspectionIdentity) Label() string { return inspectionGroup(i.RootID) + "-" + i.TaskID }
 
 // InspectionObservation is positive only when one exact labeled job belongs
-// to the expected root group and that group is running with one worker slot.
+// to the saved group with its expected scheduling policy.
 type InspectionObservation struct {
-	Binding  task.SupervisorRef
-	Identity InspectionIdentity
-	Job      Job
-	Matched  bool
-	Pending  *Pending
+	Binding                        task.SupervisorRef
+	Identity                       InspectionIdentity
+	Job                            Job
+	Matched                        bool
+	Pending                        *Pending
+	TerminalEventRegistrationKnown bool
+	TerminalEventRegistered        bool
 }
+
+// InspectionObservationCommit is application-owned acceptance logic. Pueue
+// only guarantees that the callback runs while the inspected supervisor
+// generation is held under its verified shared lease.
+type InspectionObservationCommit func(InspectionObservation) error
 
 func inspectionGroup(rootID string) string { return inspectionGroupPrefix + rootID }
 
@@ -80,12 +97,29 @@ func (c *Client) Snapshot(ctx context.Context) (QueueSnapshot, error) {
 	return c.snapshotAfterVerify(ctx)
 }
 
-func (c *Client) snapshotAfterVerify(ctx context.Context) (QueueSnapshot, error) {
-	result, err := c.command(ctx, nil, "status", "--json")
+func (c *Client) snapshotAfterVerify(ctx context.Context, query ...string) (QueueSnapshot, error) {
+	return c.snapshotAfterVerifyCompletion(ctx, false, query...)
+}
+
+// snapshotAfterVerifySettled is reserved for asynchronous maintenance that
+// already owns an admitted command through natural completion. Interactive
+// observations keep snapshotAfterVerify's finite-return behavior.
+func (c *Client) snapshotAfterVerifySettled(ctx context.Context, query ...string) (QueueSnapshot, error) {
+	return c.snapshotAfterVerifyCompletion(ctx, true, query...)
+}
+
+func (c *Client) snapshotAfterVerifyCompletion(ctx context.Context, settle bool, query ...string) (QueueSnapshot, error) {
+	args := append([]string{"status", "--json"}, query...)
+	result, err := c.command(ctx, nil, args...)
+	if settle {
+		if pending := pendingFrom(err); pending != nil {
+			result, err = awaitPending(ctx, pending)
+		}
+	}
 	if err != nil {
 		return QueueSnapshot{}, errors.Join(ErrUnknown, err)
 	}
-	return ParseQueueSnapshot(result.Stdout, c.runtimeBinding.ObservedVersion)
+	return snapshotFromResult(result, c.runtimeBinding.ObservedVersion)
 }
 
 // CreateInspectionGroup creates exactly one derived group after static root
@@ -111,15 +145,138 @@ func (c *Client) CreateInspectionGroup(ctx context.Context, permit InspectionGro
 }
 
 // ReconcileInspection positively identifies exactly one worker in the
-// root-scoped running single-slot group. Duplicate, stale, malformed or
+// recorded running group. Duplicate, stale, malformed or
 // unknown rows remain unknown.
 func (c *Client) ReconcileInspection(ctx context.Context, identity InspectionIdentity) (InspectionObservation, error) {
+	return c.ReconcileInspectionWithLease(ctx, identity, nil)
+}
+
+// ReconcileInspectionWithLease reconciles one inspection and, when supplied,
+// runs the application commit callback before releasing the verified
+// supervisor-generation lease.
+func (c *Client) ReconcileInspectionWithLease(ctx context.Context, identity InspectionIdentity, commit InspectionObservationCommit) (InspectionObservation, error) {
 	identity = snapshotInspectionIdentity(identity)
 	unknown := InspectionObservation{Binding: c.binding, Identity: identity}
-	if err := validateInspectionIdentity(identity); err != nil {
+	if validationErr := validateInspectionIdentity(identity); validationErr != nil {
+		return unknown, validationErr
+	}
+	var observation InspectionObservation
+	err := c.withPrivateSupervisorLease(ctx, func(lockedContext context.Context) error {
+		var reconcileErr error
+		observation, reconcileErr = c.reconcileInspectionLocked(lockedContext, identity)
+		if reconcileErr != nil || commit == nil {
+			return reconcileErr
+		}
+		return commit(observation)
+	})
+	if observation.Binding.ConfigPath == "" {
+		observation = unknown
+	}
+	if observation.Pending == nil {
+		observation.Pending = pendingFrom(err)
+	}
+	return observation, err
+}
+
+// AwaitInspectionObservation consumes the result of an exact status command
+// retained by ReconcileInspection. It never launches another control command.
+func (c *Client) AwaitInspectionObservation(ctx context.Context, identity InspectionIdentity, pending *Pending) (InspectionObservation, error) {
+	return c.AwaitInspectionObservationWithLease(ctx, identity, pending, nil)
+}
+
+// AwaitInspectionObservationWithLease consumes a retained exact status result
+// and, when supplied, runs the application commit callback before releasing
+// the verified supervisor-generation lease.
+func (c *Client) AwaitInspectionObservationWithLease(ctx context.Context, identity InspectionIdentity, pending *Pending, commit InspectionObservationCommit) (InspectionObservation, error) {
+	identity = snapshotInspectionIdentity(identity)
+	unknown := InspectionObservation{Identity: identity}
+	if c == nil {
+		return unknown, ErrConfiguration
+	}
+	unknown.Binding = c.binding
+	if validationErr := validateInspectionIdentity(identity); validationErr != nil {
+		return unknown, validationErr
+	}
+	if !c.matchesInspectionPending(identity, pending) {
+		return unknown, fmt.Errorf("%w: pending status observation does not match inspection generation", task.ErrIdentityMismatch)
+	}
+	result, err := awaitPending(ctx, pending)
+	err = statusObservationError(err)
+	if err != nil {
+		unknown.Pending = pendingFrom(err)
+		return unknown, errors.Join(ErrUnknown, err)
+	}
+	var observation InspectionObservation
+	err = c.withPrivateSupervisorLease(ctx, func(lockedContext context.Context) error {
+		if verifyErr := c.verify(lockedContext); verifyErr != nil {
+			return verifyErr
+		}
+		snapshot, snapshotErr := snapshotFromResult(result, pending.status.version)
+		if snapshotErr != nil {
+			return errors.Join(ErrUnknown, ErrStatusOperational, snapshotErr)
+		}
+		observation, snapshotErr = matchingInspectionObservation(snapshot, identity, c.binding)
+		if snapshotErr != nil || commit == nil {
+			return snapshotErr
+		}
+		return commit(observation)
+	})
+	if observation.Binding.ConfigPath == "" {
+		observation = unknown
+	}
+	return observation, err
+}
+
+// CommitInspectionObservation runs application acceptance for a previously
+// matched observation while holding a freshly verified generation lease. It
+// does not reread the queue; the cached observation remains authoritative only
+// while its recorded binding is still the active generation.
+func (c *Client) CommitInspectionObservation(ctx context.Context, observation InspectionObservation, commit InspectionObservationCommit) error {
+	if c == nil || commit == nil {
+		return ErrConfiguration
+	}
+	if !observation.Matched || observation.Binding != c.binding {
+		return task.ErrIdentityMismatch
+	}
+	return c.withPrivateSupervisorLease(ctx, func(lockedContext context.Context) error {
+		if err := c.verify(lockedContext); err != nil {
+			return err
+		}
+		if observation.Binding != c.binding {
+			return task.ErrIdentityMismatch
+		}
+		return commit(observation)
+	})
+}
+
+func (c *Client) matchesInspectionPending(identity InspectionIdentity, pending *Pending) bool {
+	if pending == nil {
+		return false
+	}
+	want := []string{
+		c.runtimeBinding.ClientExecutable,
+		"-c", c.runtimeBinding.ConfigPath,
+		"status", "--json", "label=" + identity.Label(),
+	}
+	return pending.status != nil && pending.status.binding == c.runtimeBinding &&
+		pending.status.version == c.runtimeBinding.ObservedVersion && slices.Equal(pending.args, want)
+}
+
+// reconcileInspectionLocked reconciles one inspection task while the caller
+// holds the private supervisor lease or bootstrap lock. Keeping this separate
+// lets the public method retain a lease for an in-flight status command without
+// nesting a shared lease under an existing exclusive transition.
+func (c *Client) reconcileInspectionLocked(ctx context.Context, identity InspectionIdentity) (InspectionObservation, error) {
+	identity = snapshotInspectionIdentity(identity)
+	unknown := InspectionObservation{Binding: c.binding, Identity: identity}
+	if validationErr := validateInspectionIdentity(identity); validationErr != nil {
+		return unknown, validationErr
+	}
+	if err := c.verify(ctx); err != nil {
+		unknown.Pending = pendingFrom(err)
 		return unknown, err
 	}
-	snapshot, err := c.Snapshot(ctx)
+	snapshot, err := c.snapshotAfterVerify(ctx, "label="+identity.Label())
 	if err != nil {
 		unknown.Pending = pendingFrom(err)
 		return unknown, err
@@ -130,7 +287,10 @@ func (c *Client) ReconcileInspection(ctx context.Context, identity InspectionIde
 func matchingInspectionObservation(snapshot QueueSnapshot, identity InspectionIdentity, binding task.SupervisorRef) (InspectionObservation, error) {
 	identity = snapshotInspectionIdentity(identity)
 	unknown := InspectionObservation{Binding: binding, Identity: identity}
-	if err := validateInspectionIdentity(identity); err != nil {
+	if validationErr := validateInspectionIdentity(identity); validationErr != nil {
+		return unknown, validationErr
+	}
+	if err := validateInspectionQueueBinding(identity, binding); err != nil {
 		return unknown, err
 	}
 	if groupErr := validInspectionGroup(snapshot, identity); groupErr != nil {
@@ -155,7 +315,11 @@ func matchingInspectionObservation(snapshot QueueSnapshot, identity InspectionId
 
 func validInspectionGroup(snapshot QueueSnapshot, identity InspectionIdentity) error {
 	group, ok := snapshot.Groups[identity.Group()]
-	if !ok || group.Status != "Running" || group.ParallelTasks != 1 {
+	parallel := uint64(1)
+	if identity.Group() == "default" {
+		parallel = 0
+	}
+	if !ok || group.Status != "Running" || group.ParallelTasks != parallel {
 		return ErrUnknown
 	}
 	return nil
@@ -167,6 +331,9 @@ func validateInspectionIdentity(identity InspectionIdentity) error {
 	}
 	if err := task.ValidateTaskID(identity.TaskID); err != nil {
 		return err
+	}
+	if identity.Group() != inspectionGroup(identity.RootID) && identity.Group() != "default" {
+		return task.ErrIdentityMismatch
 	}
 	if identity.NumericTaskID != nil && *identity.NumericTaskID < 0 {
 		return ErrUnknown
@@ -183,24 +350,93 @@ func snapshotInspectionIdentity(identity InspectionIdentity) InspectionIdentity 
 }
 
 // SubmitInspection admits one fixed inspection worker only after the root and
-// worker are validated, the binding is fresh and the derived group is proven
-// running with one slot. Admission is create-once and is reconciled without a
+// worker are validated, the binding is fresh and the recorded group is proven
+// ready. Admission is create-once and is reconciled without a
 // retry after the supervisor response.
 func (c *Client) SubmitInspection(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch) (InspectionObservation, error) {
+	return c.SubmitInspectionWithGate(ctx, permit, identity, launch, nil)
+}
+
+// SubmitInspectionWithGate runs the application-owned generation gate under
+// the same lease as the inspection add.
+func (c *Client) SubmitInspectionWithGate(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch, gate SubmissionGate) (InspectionObservation, error) {
+	return c.submitInspection(ctx, permit, identity, launch, false, gate)
+}
+
+// SubmitConcurrentInspection admits a runtime inspection in the private
+// supervisor's already-configured default group. Its completed add response
+// is the task-specific submission receipt, so this path deliberately avoids a
+// queue-wide status snapshot. It does not establish worker completion: the
+// application still requires independently recorded terminal evidence.
+func (c *Client) SubmitConcurrentInspection(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch) (InspectionObservation, error) {
+	return c.SubmitConcurrentInspectionWithGate(ctx, permit, identity, launch, nil)
+}
+
+// SubmitConcurrentInspectionWithGate runs the application-owned generation
+// gate under the same lease as the concurrent inspection add.
+func (c *Client) SubmitConcurrentInspectionWithGate(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch, gate SubmissionGate) (InspectionObservation, error) {
+	return c.submitInspection(ctx, permit, identity, launch, true, gate)
+}
+
+func (c *Client) submitInspection(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch, concurrent bool, gate SubmissionGate) (InspectionObservation, error) {
 	identity = snapshotInspectionIdentity(identity)
+	if c == nil {
+		return InspectionObservation{Identity: identity}, ErrConfiguration
+	}
+	controlContext, cancel, err := c.privateControlContext(ctx)
+	if err != nil {
+		return InspectionObservation{Identity: identity}, err
+	}
+	defer cancel()
 	unknown := InspectionObservation{Binding: c.binding, Identity: identity}
-	if err := validateInspectionIdentity(identity); err != nil {
-		return unknown, err
+	if validationErr := validateInspectionIdentity(identity); validationErr != nil {
+		return unknown, validationErr
 	}
 	if permit == nil {
 		return unknown, task.ErrInvalidPermit
 	}
-	if err := validateInspectionSubmissionPermit(permit, identity, c.binding); err != nil {
-		return unknown, err
+	if validationErr := validateInspectionSubmissionPermit(permit, identity, c.binding); validationErr != nil {
+		return unknown, validationErr
 	}
-	if err := validateLaunch(launch, identity.RootID); err != nil {
-		return unknown, err
+	if validationErr := validateLaunch(launch, identity.RootID); validationErr != nil {
+		return unknown, validationErr
 	}
+	if concurrent {
+		if validationErr := validateConcurrentInspectionSubmission(c, identity, launch); validationErr != nil {
+			return unknown, validationErr
+		}
+	}
+	var observation InspectionObservation
+	err = c.withPrivateSupervisorLease(controlContext, func(lockedContext context.Context) error {
+		if concurrent {
+			observation, err = c.submitConcurrentInspectionLocked(lockedContext, permit, identity, launch, gate)
+		} else {
+			observation, err = c.submitInspectionLocked(lockedContext, permit, identity, launch, gate)
+		}
+		return err
+	})
+	if observation.Binding.ConfigPath == "" {
+		observation = unknown
+	}
+	return observation, err
+}
+
+func validateConcurrentInspectionSubmission(c *Client, identity InspectionIdentity, launch Launch) error {
+	if identity.Group() != "default" {
+		return task.ErrIdentityMismatch
+	}
+	stateRoot, private := privateStateRoot(c.binding.ConfigPath)
+	if !private {
+		return ErrConfiguration
+	}
+	if stateRoot != launch.RootPath {
+		return task.ErrIdentityMismatch
+	}
+	return nil
+}
+
+func (c *Client) submitInspectionLocked(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch, gate SubmissionGate) (InspectionObservation, error) {
+	unknown := InspectionObservation{Binding: c.binding, Identity: identity}
 	if err := c.verify(ctx); err != nil {
 		unknown.Pending = pendingFrom(err)
 		return unknown, err
@@ -213,23 +449,103 @@ func (c *Client) SubmitInspection(ctx context.Context, permit InspectionSubmissi
 	if groupErr := validInspectionGroup(snapshot, identity); groupErr != nil {
 		return unknown, groupErr
 	}
-	result, err := c.command(ctx, permit.ConsumeInspectionSubmission, "add", "--escape", "--group", identity.Group(), "--label", identity.Label(), "--print-task-id", "--", launch.RunnerExecutable, "--inspection", "--root", launch.RootPath, identity.TaskID)
+	if _, gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
+		return unknown, gateErr
+	}
+	id, terminalEventRegistered, terminalEventRegistrationKnown, err := c.addInspectionWorker(ctx, permit, identity, launch)
 	if err != nil {
 		unknown.Pending = pendingFrom(err)
-		return unknown, errors.Join(ErrUnknown, err)
-	}
-	id, err := parseID(strings.TrimSpace(string(result.Stdout)))
-	if err != nil {
 		return unknown, err
 	}
 	identity.NumericTaskID = &id
-	return c.ReconcileInspection(ctx, identity)
+	observation, reconcileErr := c.reconcileInspectionLocked(ctx, identity)
+	observation.TerminalEventRegistrationKnown = terminalEventRegistrationKnown
+	observation.TerminalEventRegistered = terminalEventRegistered
+	return observation, reconcileErr
+}
+
+func (c *Client) submitConcurrentInspectionLocked(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch, gate SubmissionGate) (InspectionObservation, error) {
+	unknown := InspectionObservation{Binding: c.binding, Identity: identity}
+	if err := c.verify(ctx); err != nil {
+		unknown.Pending = pendingFrom(err)
+		return unknown, err
+	}
+	if _, gateErr := c.checkSubmissionGate(ctx, gate); gateErr != nil {
+		return unknown, gateErr
+	}
+	id, terminalEventRegistered, terminalEventRegistrationKnown, err := c.addInspectionWorker(ctx, permit, identity, launch)
+	if err != nil {
+		unknown.Pending = pendingFrom(err)
+		return unknown, err
+	}
+	identity.NumericTaskID = &id
+	label := identity.Label()
+	return InspectionObservation{
+		Binding:                        c.binding,
+		Identity:                       identity,
+		Job:                            Job{ID: id, Label: &label, State: StateQueued, Group: identity.Group()},
+		Matched:                        true,
+		TerminalEventRegistrationKnown: terminalEventRegistrationKnown,
+		TerminalEventRegistered:        terminalEventRegistered,
+	}, nil
+}
+
+func (c *Client) addInspectionWorker(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch) (id int64, terminalEventRegistered, terminalEventRegistrationKnown bool, resultErr error) {
+	resultErr = c.withPrivateQueueIdentityLease(ctx, func(lockedContext context.Context) error {
+		id, terminalEventRegistered, terminalEventRegistrationKnown, resultErr = c.addInspectionWorkerWithIdentityLease(lockedContext, permit, identity, launch)
+		return resultErr
+	})
+	return id, terminalEventRegistered, terminalEventRegistrationKnown, resultErr
+}
+
+func (c *Client) addInspectionWorkerWithIdentityLease(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch) (id int64, terminalEventRegistered, terminalEventRegistrationKnown bool, resultErr error) {
+	runnerArguments := []string{launch.RunnerExecutable, "--inspection"}
+	if launch.Supervised {
+		runnerArguments = append(runnerArguments, "--guardian", "--supervised")
+	}
+	runnerArguments = append(runnerArguments, "--root", launch.RootPath, identity.TaskID)
+	arguments := []string{"add", "--escape", "--group", identity.Group(), "--label", identity.Label(), "--print-task-id", "--"}
+	result, err := c.command(ctx, permit.ConsumeInspectionSubmission, append(arguments, runnerArguments...)...)
+	if err != nil {
+		return 0, false, false, errors.Join(ErrUnknown, err)
+	}
+	id, err = parseID(strings.TrimSpace(string(result.Stdout)))
+	if err != nil {
+		return 0, false, false, err
+	}
+	terminalEventRegistrationKnown = true
+	enabled, eventErr := c.PrivateTerminalEventsEnabled(ctx)
+	if eventErr != nil {
+		// A terminal-event ticket is an optimization, never a second
+		// submission authority. Terminal evidence falls back to conservative
+		// queue reconciliation when its durable write is unavailable.
+		log.Printf("delegate: terminal event registration deferred: %v", eventErr)
+		return id, false, terminalEventRegistrationKnown, nil
+	}
+	if !enabled {
+		return id, false, terminalEventRegistrationKnown, nil
+	}
+	if eventErr = c.RegisterPrivateTerminalEvent(ctx, id); eventErr != nil {
+		// A terminal-event ticket is an optimization, never a second
+		// submission authority. Terminal evidence falls back to conservative
+		// queue reconciliation when its durable write is unavailable.
+		log.Printf("delegate: terminal event registration deferred: %v", eventErr)
+		return id, false, terminalEventRegistrationKnown, nil
+	}
+	return id, true, terminalEventRegistrationKnown, nil
 }
 
 // StopInspection routes one saved inspection target to remove or kill after a
 // fresh exact reconciliation. Ended workers are a no-op; uncertain routing
 // consumes no new authority and never broadens to a group action.
 func (c *Client) StopInspection(ctx context.Context, permit InspectionStopPermit, identity InspectionIdentity) (StopResult, error) {
+	identity = snapshotInspectionIdentity(identity)
+	return c.withPrivateStop(ctx, func(controlContext context.Context) (StopResult, error) {
+		return c.stopInspectionLocked(controlContext, permit, identity)
+	})
+}
+
+func (c *Client) stopInspectionLocked(ctx context.Context, permit InspectionStopPermit, identity InspectionIdentity) (StopResult, error) {
 	result := StopResult{ObservedState: StateUnknown}
 	if permit == nil {
 		return result, task.ErrInvalidPermit
@@ -247,8 +563,10 @@ func (c *Client) StopInspection(ctx context.Context, permit InspectionStopPermit
 	}
 	id := *identity.NumericTaskID
 	result.NumericTaskID = &id
-	observation, err := c.ReconcileInspection(ctx, identity)
-	result.Pending = observation.Pending
+	observation, err := settlePendingControlObservation(c, ctx, func(controlContext context.Context) (InspectionObservation, error) {
+		return c.reconcileInspectionLocked(controlContext, identity)
+	})
+	result.Pending = pendingFrom(err)
 	result.InFlight = result.Pending != nil
 	if err != nil {
 		return result, err
@@ -272,6 +590,15 @@ func (c *Client) stopInspectionMatched(ctx context.Context, permit InspectionSto
 	current, err := c.readBinding()
 	if err != nil || current != c.runtimeBinding {
 		return result, errors.Join(ErrBinding, err)
+	}
+	if action == "remove" {
+		// Removing a queued row can make its numeric ID immediately reusable and
+		// produces no terminal callback. Retire the old ID-scoped ticket first;
+		// the exclusive supervisor generation scope prevents a concurrent add
+		// between this clear and the remove command.
+		if err = c.ClearPrivateTerminalEvents(ctx, id); err != nil {
+			return result, err
+		}
 	}
 	consume := func() error {
 		if consumeErr := permit.ConsumeInspectionStop(); consumeErr != nil {
@@ -311,6 +638,9 @@ func validateInspectionSubmissionPermit(permit InspectionSubmissionPermit, ident
 	if identity.NumericTaskID != nil || permit.InspectionSubmissionRootID() != identity.RootID || permit.InspectionSubmissionTaskID() != identity.TaskID {
 		return task.ErrIdentityMismatch
 	}
+	if err := validateInspectionQueuePermit(permit, identity, binding); err != nil {
+		return err
+	}
 	return validateInspectionPermitSupervisor(permit.InspectionSubmissionSupervisor(), binding)
 }
 
@@ -322,12 +652,35 @@ func validateInspectionStopPermit(permit InspectionStopPermit, identity Inspecti
 	if permitTarget == nil || *permitTarget != *identity.NumericTaskID {
 		return task.ErrIdentityMismatch
 	}
+	if err := validateInspectionQueuePermit(permit, identity, binding); err != nil {
+		return err
+	}
 	return validateInspectionPermitSupervisor(permit.InspectionStopSupervisor(), binding)
+}
+
+func validateInspectionQueuePermit(permit any, identity InspectionIdentity, binding task.SupervisorRef) error {
+	group := inspectionGroup(identity.RootID)
+	if scoped, ok := permit.(interface{ InspectionQueueGroup() string }); ok {
+		group = scoped.InspectionQueueGroup()
+	}
+	if group != identity.Group() {
+		return task.ErrIdentityMismatch
+	}
+	return validateInspectionQueueBinding(identity, binding)
+}
+
+func validateInspectionQueueBinding(identity InspectionIdentity, binding task.SupervisorRef) error {
+	if identity.Group() == "default" {
+		if _, private := privateStateRoot(binding.ConfigPath); !private {
+			return ErrConfiguration
+		}
+	}
+	return nil
 }
 
 func inspectionStopAction(state State) (string, error) {
 	switch state {
-	case StateQueued:
+	case StateStashed, StateQueued:
 		return "remove", nil
 	case StateRunning:
 		return "kill", nil

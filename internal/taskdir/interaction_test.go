@@ -127,13 +127,28 @@ func TestInteractionDeadlineClosesObservationAndSubmission(t *testing.T) {
 func TestInteractionConcurrentRetryHasOneDurableMessage(t *testing.T) {
 	td := interactiveTask(t)
 	message := task.InteractionMessage{ID: strings.Repeat("d", 32), Kind: "steer", Text: "once"}
-	results := make(chan error, 8)
-	for range 8 {
-		go func() { _, err := td.SubmitInteraction(message); results <- err }()
+	const callers = 8
+	ready := make(chan struct{}, callers)
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			ready <- struct{}{}
+			<-start
+			_, err := td.SubmitInteraction(message)
+			results <- err
+		}()
 	}
-	for range 8 {
-		must(t, <-results)
+	for range callers {
+		<-ready
 	}
+	close(start)
+	// Join every submission before an assertion can release the fixture.
+	var submissionErrors [callers]error
+	for index := range submissionErrors {
+		submissionErrors[index] = <-results
+	}
+	must(t, errors.Join(submissionErrors[:]...))
 	events, _, err := td.InteractionEvents(0)
 	must(t, err)
 	count := 0

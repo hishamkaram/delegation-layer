@@ -5,18 +5,34 @@ provider differences explicit at the adapter boundary.
 
 ## Development setup
 
-Install Go 1.27.1, Node.js 22 or newer, and the repository's pinned verification
-tools. Node.js is required by `make acceptance-private-cli` because that gate
-executes the current build against a Pi-shaped executable fixture and a real
-private supervisor on macOS and Linux. This gate checks startup, dispatch,
-status, collection, model discovery, and ordinary-task parallelism; it does not
-build historical releases. The unit and hermetic acceptance suites provide their own
-supervisor fixtures. Clone the repository and run the local checks before
-editing:
+Install Go 1.27.2, Python 3, Node.js 22 or newer, and the repository's pinned
+verification tools. Node.js is used by the npm and plugin package checks.
+`make acceptance-private-cli` executes the current build against a Pi-shaped
+executable fixture and a real private supervisor on macOS and Linux. This gate
+checks startup, dispatch, status, collection, model discovery, and
+ordinary-task parallelism; it does not build historical releases. The unit and
+hermetic acceptance suites provide their own supervisor fixtures. The private
+inspection-journal handoff is covered by `make acceptance-supervisor-handoff`
+on Linux and native macOS CI. It uses fixture providers and real supervisors
+to check automatic and explicit handoff while existing external work continues;
+it does not use provider credentials or claim live model acceptance. The private
+CLI capacity proof establishes 200 counted tasks Running while live provider
+leases, durable native-scope registrations, and contended lifetime-owner locks
+overlap. Its four concurrent dispatch callers are a recorded load-generator
+setting, not a product task limit or a 200-call burst requirement; running
+capacity and dispatch throughput remain separate measurements. The Python
+orchestration unit tests validate receipt and gate ordering with fakes; they are
+never capacity evidence. Only the executable private CLI gate may make the
+200-running-task claim. Its process-level status burst must reduce the number of
+queue snapshots below the number of callers. Exact one-flight behavior is
+proved separately by the deterministic package test, which holds the first
+snapshot open until every counted caller has crossed the observation boundary;
+a process-launch barrier alone does not establish that overlap. Clone the
+repository and run the local checks before editing:
 
 ```sh
 go test ./...
-go test -race ./...
+make test-race
 python3 -m unittest discover -s scripts -p 'test_*.py'
 make check
 make skill-package-check
@@ -86,10 +102,18 @@ local evidence and must not be committed. Each attempt runs under an isolated Pu
 (`--budget-seconds` overrides it). Only that private queue may be stopped; the
 runner uses the existing acceptance process/evidence helpers. It replaces any
 inherited `DELEGATE_PUEUE_CONFIG` with that attempt’s private queue, so nested
-Delegate work is also observed and stopped before cleanup is declared complete. Pueue and pueued
+   Delegate work is observed before cleanup is declared complete. The routing
+   harness pauses new scheduling and removes only rows that never started. It
+   never signals running work; an unresolved row fails cleanup and retains the
+   evidence output and every owned root. It removes roots only after all rows
+   end naturally and the private Pueue daemon shuts down. Real Delegate task
+   records retain their own guardian evidence; the outer routing fixture's
+   Pueue state is not guardian empty-scope proof. Pueue and pueued
 must be on the test PATH. Delegate state roots are separate private directories
 under `~/delegation-routing-acceptance`, outside provider-writable `/tmp` and
-cache directories. A shell that bypasses the PATH fixture cannot establish
+cache directories. Each disposable root is identity-pinned with its parent at
+creation; cleanup rejects replacement and never removes that shared parent. A
+shell that bypasses the PATH fixture cannot establish
 routing-only proof; inspect the recorded fixture calls and use live mode when
 needed. The receipt distinguishes routing fixtures from live execution; fixture
 results are never live-provider proof. The runner returns `2` until reviewed;
@@ -145,8 +169,11 @@ An adapter is responsible for:
 - interpreting the provider's output with a strict predicate.
 
 The shared core remains responsible for request validation, task storage,
-runtime capability inspection, supervisor admission, process lifetime,
-capture, artifact sealing, publication, cancellation, and collection. Do not
+runtime capability inspection, supervisor admission, and lifecycle policy.
+The application lifetime state machine owns native-lifetime transition policy
+for both the live guardian and recovery. The execution runner owns provider
+`Start`/`Wait`, capture, and local handle release; task storage owns durable
+evidence. Do not
 add provider-specific process control or raw argument passthrough to the core.
 
 ## Adding or changing a provider
@@ -156,8 +183,10 @@ existing adapters under `internal/provider/`. Keep preparation free of
 provider-process launches and writes. It may perform bounded executable
 discovery and policy metadata reads; provider version/help probes and other
 native inspection work must run through the shared core. Define the help
-command and every complete flag the adapter puts in argv so future CLI
-releases can be checked dynamically.
+command and the stable runtime flags the adapter can observe reliably. Keep
+rapidly changing or pipe-truncated forwarded options in the provider launch
+and live acceptance contract rather than turning them into a stale admission
+allowlist.
 
 When an output format changes, add a versioned predicate interpreter only when
 the old format must remain collectible. Preserve strict task/session identity,
@@ -174,7 +203,7 @@ adapter only projects bounded nonsecret facts.
 ## Validation expectations
 
 Use fake executable fixtures to prove that a newer arbitrary version is accepted
-when required flags exist, and that missing flags, missing executables, and
+when declared runtime flags exist, and that missing flags, missing executables, and
 non-executable files are rejected. Test malformed or conflicting output at the
 predicate boundary, including model discovery status, null effort metadata,
 empty effort lists, duplicate model IDs, and exit-code mapping. Run the
@@ -193,7 +222,9 @@ When native provider credentials are available, run the relevant live gate with
 a disposable workspace. `make acceptance-native` covers the shipped native
 profiles, including `codex:review`, AGY read-only, positive unattended writes,
 continuation, and replay. Set `CCR_LIVE_MODEL` to a configured CCR alias for
-the aggregate; without it, CCR is explicitly blocked. `make acceptance-agy`, `make acceptance-codex`,
+the aggregate; without it, CCR is explicitly blocked. Set `OPENCODE_LIVE_MODEL`
+to an explicitly configured tool-capable OpenCode route; without it, OpenCode
+is explicitly blocked before dispatch. `make acceptance-agy`, `make acceptance-codex`,
 `make acceptance-claude`, `make acceptance-pi`, and `make acceptance-opencode`
 select individual profiles. A live
 gate returns `0` for a pass, `1` for a real behavior or evidence failure, and
@@ -237,10 +268,37 @@ The tag workflow creates and verifies a draft release. Before promotion, run
 `release-native-acceptance.yml` from protected `main`, passing the exact draft
 tag as its input, on a project-owned runner labeled `delegation-native`. That
 runner must already have the provider CLIs and their native authentication; the
-workflow uses the current protected-main acceptance harness, downloads and
-verifies the requested draft archive, then runs the released `delegate`,
-`delegate-run`, `pueue`, and `pueued` binaries. Its live gate requires at least
-one authenticated provider pass and fails on behavior or evidence failures.
+workflow uses the current protected-main acceptance harness and the shared
+`scripts/verify_release_archive.py` verifier. The verifier checks the requested
+draft archive's checksum and attestation, exercises the released CLI through
+PATH and its isolated default state path, and records the absolute binary paths,
+digests, build identity, native platform, commands, and exit codes. The live
+provider gate then uses that same extracted binary directory; its final receipt
+links the archive receipt digest, the aggregate case matrix, and every compact
+case-receipt digest. The matrix covers all 14 provider, permission, and scenario
+cases; each case has an explicit output directory under the aggregate root. Each
+compact receipt binds the final status and gate, provider, permission and mode,
+scenario, task and session identity fields, binary identities, lifecycle proof,
+and the source receipt digest. Successful and
+authentication/prerequisite-blocked cases retain only their sanitized case
+receipts after identity-pinned cleanup; the compact receipt is fsynced before
+raw deletion and records the creation-time directory and parent identities.
+Failed or unresolved cases retain raw evidence. Resolved aggregate roots are
+pruned to the configured small retention count, with comparable before/after
+root, file, and byte totals recorded in the aggregate receipt.
+The verifier checks the attestation against `refs/tags/<tag>` and the tag's
+resolved release commit, while receipts record the release revision separately
+from the harness revision.
+
+The workflow stages the aggregate receipt, all 14 compact case receipts, the
+archive and final native receipts, and a digest manifest in the non-hidden
+`native-acceptance-evidence` directory before `upload-artifact`. The upload uses
+`if-no-files-found: error`; a missing case receipt or manifest is therefore a
+release evidence failure.
+Archive smoke remains unauthenticated and emits one sanitized receipt for each
+native Linux/macOS archive. The live gate requires at least one authenticated
+provider pass and fails on behavior or evidence failures; blocked cases remain
+scoped to that case's authentication or prerequisite result.
 Promotion checks the successful run's tag input and current protected-main
 commit, so a source checkout or a locally built CLI cannot satisfy the release
 gate.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -38,6 +39,34 @@ func TestDispatchFailureResponseHidesSupervisorDetails(t *testing.T) {
 		decoded.Failure.Stage != "start-supervisor" ||
 		decoded.Failure.NextAction != "stop_and_report" {
 		t.Fatalf("dispatch failure recovery contract changed: %+v", decoded)
+	}
+}
+
+func TestInspectionFailureRetainsSanitizedJournalDiagnostic(t *testing.T) {
+	taskID := strings.Repeat("a", 32)
+	privateDetail := "/private/user/state/inspections/" + taskID
+	err := withDispatchStage("inspect-provider", withInspectionFailureContext(
+		errors.Join(pueue.ErrStatusOperational, errors.New(privateDetail)),
+		taskID, time.Now().Add(time.Minute),
+	))
+	failure := dispatchFailure(err, "not_created")
+	if failure.Inspection == nil ||
+		failure.Inspection.Class != "supervisor_observation_failed" ||
+		failure.Inspection.DeadlineState != "open" ||
+		failure.Inspection.JournalTaskID != taskID {
+		t.Fatalf("inspection diagnostic lost bounded context: %+v", failure)
+	}
+	response := newResponse("dispatch")
+	response.TaskID = taskID
+	response.TaskRecord = "not_created"
+	response.Failure = &failure
+	response.Error = dispatchFailureMessage(failure.Code)
+	var output bytes.Buffer
+	if writeErr := writeJSON(&output, response); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if strings.Contains(output.String(), privateDetail) || strings.Contains(output.String(), "/private/") {
+		t.Fatalf("inspection diagnostic exposed a private path: %s", output.String())
 	}
 }
 
@@ -98,6 +127,7 @@ func TestContinuationFailureStagesMapToActionableCodes(t *testing.T) {
 		{stage: "resolve-continuation-provider", code: "provider_unavailable"},
 		{stage: "check-continuation-capability", code: "unsupported_continuation"},
 		{stage: "validate-continuation", code: "continuation_unavailable"},
+		{stage: "resolve-continuation-supervisor", code: "continuation_unavailable"},
 		{stage: "restore-continuation-environment", code: "continuation_unavailable"},
 	}
 	for _, test := range tests {
@@ -165,6 +195,11 @@ func TestDispatchFailureNextActionTracksTaskRecord(t *testing.T) {
 	if conflict.Code != "task_request_conflict" || conflict.NextAction != "check_status" {
 		t.Fatalf("existing task conflict did not require status first: %+v", conflict)
 	}
+
+	createdMigration := dispatchFailure(withDispatchStage("inspect-provider", inspection.ErrGroupMigrationRequired), "created")
+	if createdMigration.NextAction != "check_status" || createdMigration.RecoveryCommand != "" {
+		t.Fatalf("created task exposed a pre-dispatch migration command: %+v", createdMigration)
+	}
 }
 
 func TestDispatchFailureCodeCoversPreparationStages(t *testing.T) {
@@ -179,9 +214,11 @@ func TestDispatchFailureCodeCoversPreparationStages(t *testing.T) {
 		}
 	}
 
-	supervisor := dispatchFailure(withDispatchStage("prepare-supervisor-options", pueue.ErrConfiguration), "not_created")
-	if supervisor.Code != "supervisor_setup_failed" || supervisor.NextAction != "stop_and_report" {
-		t.Fatalf("supervisor option failure was not classified: %+v", supervisor)
+	for _, stage := range []string{"prepare-supervisor-executables", "prepare-supervisor-options", "start-supervisor"} {
+		supervisor := dispatchFailure(withDispatchStage(stage, pueue.ErrConfiguration), "not_created")
+		if supervisor.Code != "supervisor_setup_failed" || supervisor.NextAction != "stop_and_report" {
+			t.Fatalf("%s failure was not classified as supervisor setup: %+v", stage, supervisor)
+		}
 	}
 
 	predecessor := dispatchFailure(withDispatchStage("resolve-predecessor", errors.New("predecessor could not be resolved")), "not_created")
@@ -197,15 +234,50 @@ func TestInspectionSupervisorMigrationFailuresAreActionable(t *testing.T) {
 		code string
 	}{
 		{name: "active work", err: inspection.ErrGroupMigrationBusy, code: "supervisor_migration_blocked"},
+		{name: "external supervisor", err: inspection.ErrGroupMigrationUnsupported, code: "supervisor_migration_unsupported"},
 		{name: "unreadable binding", err: inspection.ErrGroupMigrationRequired, code: "supervisor_upgrade_required"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			failure := dispatchFailure(withDispatchStage("inspect-provider", test.err), "not_created")
-			if failure.Code != test.code || failure.NextAction != "stop_and_report" {
+			wantAction := "stop_and_report"
+			if test.code == "supervisor_upgrade_required" {
+				wantAction = "run_supervisor_migrate"
+			}
+			if test.code == "supervisor_migration_blocked" {
+				wantAction = "wait_for_legacy_work"
+			}
+			if failure.Code != test.code || failure.NextAction != wantAction {
 				t.Fatalf("migration failure was not classified safely: %+v", failure)
+			}
+			if test.code == "supervisor_upgrade_required" && failure.RecoveryCommand == "" {
+				t.Fatal("upgrade failure omitted managed recovery command")
 			}
 			if message := dispatchFailureMessage(failure.Code); message == "Delegate could not complete dispatch." {
 				t.Fatalf("migration failure code has no actionable message: %q", failure.Code)
+			}
+		})
+	}
+}
+
+func TestPrivateSupervisorMigrationFailuresAreActionable(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "active work", err: pueue.ErrPrivateSupervisorMigrationBusy, code: "supervisor_migration_blocked"},
+		{name: "upgrade required", err: pueue.ErrPrivateSupervisorMigrationRequired, code: "supervisor_upgrade_required"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			failure := dispatchFailure(withDispatchStage("inspect-provider", test.err), "not_created")
+			if failure.Code != test.code {
+				t.Fatalf("private migration failure code=%q, want %q: %+v", failure.Code, test.code, failure)
+			}
+			if test.code == "supervisor_migration_blocked" && failure.NextAction != "wait_for_legacy_work" {
+				t.Fatalf("active private work did not require waiting: %+v", failure)
+			}
+			if test.code == "supervisor_upgrade_required" && (failure.NextAction != "run_supervisor_migrate" || failure.RecoveryCommand == "") {
+				t.Fatalf("private upgrade omitted managed recovery: %+v", failure)
 			}
 		})
 	}
@@ -220,6 +292,20 @@ func TestExistingSubmissionFailureKeepsUncertainSubmissionCode(t *testing.T) {
 	if failure.Code != "task_submission_uncertain" ||
 		failure.Stage != "submit-task" || failure.NextAction != "check_status" {
 		t.Fatalf("submission failure was not classified consistently: %+v", failure)
+	}
+}
+
+func TestEnqueueFailureKeepsDurableTaskAndDirectsStatusRecovery(t *testing.T) {
+	response := newResponse("dispatch")
+	response.Admission = task.AdmissionAdmitted.String()
+	result := markDispatchSubmissionFailure(commandResult{
+		response: response,
+		err:      errors.Join(pueue.ErrEnqueueUncertain, errors.New("enqueue outcome unavailable")),
+	})
+	failure := dispatchFailure(result.err, "created")
+	if failure.Code != "task_launch_uncertain" ||
+		failure.Stage != "enqueue-task" || failure.NextAction != "check_status" {
+		t.Fatalf("staged launch failure was not classified for exact recovery: %+v", failure)
 	}
 }
 

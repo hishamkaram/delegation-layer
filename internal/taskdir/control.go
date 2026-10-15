@@ -43,6 +43,8 @@ type ControlTransaction struct {
 	done bool
 }
 
+const controlOperationTimeout = 5 * time.Second
+
 // OpenInspection opens the one inspection operation associated with a task ID.
 // It never creates an ordinary task or grants submission/start authority.
 func (s *Store) OpenInspection(taskID string, create bool) (*ControlDir, error) {
@@ -85,15 +87,28 @@ func (s *Store) OpenInspectionGroupGenerationContext(ctx context.Context, genera
 	return s.openControlDirContext(ctx, filepath.Join(s.Root, "inspection-group-"+generation), create)
 }
 
+// OpenRunnerRepair opens root-scoped receipts for completed managed-runner
+// repair transitions. These receipts are evidence only; they grant neither
+// task submission nor worker-start authority.
+func (s *Store) OpenRunnerRepair(create bool) (*ControlDir, error) {
+	return s.OpenRunnerRepairContext(context.Background(), create)
+}
+
+// OpenRunnerRepairContext preserves the caller deadline while opening the
+// root-scoped managed-runner repair receipt directory.
+func (s *Store) OpenRunnerRepairContext(ctx context.Context, create bool) (*ControlDir, error) {
+	return s.openControlDirContext(ctx, filepath.Join(s.Root, "runner-repair"), create)
+}
+
 func (s *Store) openControlDir(path string, create bool) (*ControlDir, error) {
 	return s.openControlDirContext(context.Background(), path, create)
 }
 
 func (s *Store) openControlDirContext(ctx context.Context, path string, create bool) (result *ControlDir, err error) {
-	if err = ctx.Err(); err != nil {
+	ctx, cancel, err := persistenceContext(ctx)
+	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err = s.maintLock.LockSH(ctx); err != nil {
 		return nil, err
@@ -109,7 +124,7 @@ func (s *Store) openControlDirContext(ctx context.Context, path string, create b
 		return nil, err
 	}
 	if create {
-		if err = s.mkdir(path, s.faultInjector); err != nil {
+		if err = s.mkdirContext(ctx, path, s.faultInjector); err != nil {
 			return nil, err
 		}
 	}
@@ -132,6 +147,11 @@ func (s *Store) openControlDirContext(ctx context.Context, path string, create b
 // Use the scoped transaction argument for all record operations in fn so Close
 // can reject unrelated calls without interrupting this transaction.
 func (d *ControlDir) WithLock(ctx context.Context, fn func(*ControlTransaction) error) (err error) {
+	ctx, cancel, err := persistenceContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
 	if err = d.begin(); err != nil {
 		return err
 	}
@@ -183,19 +203,26 @@ func (d *ControlDir) put(ctx context.Context, name string, record any) (created 
 	}
 	created, cleanupErr, commitErr := d.store.stageReaderContext(ctx, d.dir, name, bytes.NewReader(data), d.store.faultInjector)
 	if errors.Is(commitErr, os.ErrExist) && !created {
-		existing, readErr := d.store.readBytes(filepath.Join(d.dir, name), int64(len(data)))
-		if readErr != nil {
-			return false, errors.Join(cleanupErr, task.ErrEvidenceFault, readErr)
-		}
-		if !bytes.Equal(existing, data) {
-			return false, errors.Join(cleanupErr, task.ErrEvidenceFault)
-		}
-		// The original writer may have linked this winner before a failed
-		// directory barrier. Reestablish that barrier before accepting it;
-		// this still never grants a fresh guard to the caller.
-		return false, errors.Join(cleanupErr, d.store.barrierDirectoryEntry(d.dir, filepath.Dir(d.dir), d.store.faultInjector))
+		return false, errors.Join(cleanupErr, d.verifyCanonicalRecord(name, data))
 	}
 	return created, errors.Join(cleanupErr, commitErr)
+}
+
+func (d *ControlDir) verifyCanonicalRecord(name string, data []byte) error {
+	existing, err := d.store.readBytes(filepath.Join(d.dir, name), int64(len(data)))
+	if err != nil {
+		return errors.Join(task.ErrEvidenceFault, err)
+	}
+	if !bytes.Equal(existing, data) {
+		return task.ErrEvidenceFault
+	}
+	// The original writer may have linked this winner before a failed
+	// directory barrier. Reestablish that barrier before accepting it;
+	// this still never grants a fresh guard to the caller.
+	if err := d.store.barrierDirectoryEntry(d.dir, filepath.Dir(d.dir), d.store.faultInjector); err != nil {
+		return errors.Join(task.ErrEvidenceFault, err)
+	}
+	return nil
 }
 
 // Read strictly decodes a bounded record through the pinned root descriptor.
@@ -263,6 +290,23 @@ func (tx *ControlTransaction) Read(name string, record any) error {
 	return tx.d.read(name, record)
 }
 
+// Verify checks exact canonical bytes and durability of an existing record
+// under the enclosing WithLock leases. It never creates a record or stage.
+func (tx *ControlTransaction) Verify(name string, record any) error {
+	if err := tx.enter(); err != nil {
+		return err
+	}
+	defer tx.leave()
+	if err := validateControlName(name); err != nil {
+		return err
+	}
+	data, err := marshalControlRecord(record)
+	if err != nil {
+		return err
+	}
+	return tx.d.verifyCanonicalRecord(name, data)
+}
+
 func validateControlName(name string) error {
 	if !strings.HasSuffix(name, ".json") || len(name) > 64 {
 		return fmt.Errorf("%w: invalid control record name", task.ErrEvidenceFault)
@@ -272,7 +316,7 @@ func validateControlName(name string) error {
 		return fmt.Errorf("%w: invalid control record name", task.ErrEvidenceFault)
 	}
 	for _, char := range stem {
-		if char != '-' && (char < 'a' || char > 'z') {
+		if char != '-' && (char < '0' || char > '9') && (char < 'a' || char > 'z') {
 			return fmt.Errorf("%w: invalid control record name", task.ErrEvidenceFault)
 		}
 	}
@@ -289,6 +333,26 @@ func validInspectionGroupGeneration(generation string) bool {
 		}
 	}
 	return true
+}
+
+// persistenceContext makes taskdir the sole owner of local persistence timing.
+// A finite caller deadline remains authoritative. Calls without one receive a
+// bounded fallback so direct background use cannot wait forever. Cancellation
+// bounds lock acquisition and pre-publication checks; once durable staging has
+// started, its barriers and owned cleanup remain joined.
+func persistenceContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	if ctx == nil {
+		return nil, nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if _, ok := ctx.Deadline(); ok {
+		bounded, cancel := context.WithCancel(ctx)
+		return bounded, cancel, nil
+	}
+	bounded, cancel := context.WithTimeout(ctx, controlOperationTimeout)
+	return bounded, cancel, nil
 }
 
 func (d *ControlDir) begin() error {

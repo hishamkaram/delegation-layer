@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,12 +32,9 @@ func dispatch(a Arguments, deps Dependencies) (result commandResult) {
 	}
 	defer func() { mergeCommandClose(&result, store.Close) }()
 	response.RootID = store.RootID
-	id := a.TaskID
-	if id == "" {
-		id, err = task.NewTaskID()
-		if err != nil {
-			return failed(response, withDispatchStage("generate-task-id", err), 1)
-		}
+	id, err := dispatchTaskID(a)
+	if err != nil {
+		return failed(response, withDispatchStage("generate-task-id", err), 1)
 	}
 	response.TaskID = id
 	if a.Auto {
@@ -55,12 +53,13 @@ func dispatch(a Arguments, deps Dependencies) (result commandResult) {
 		}
 	}
 	prior := (*task.PriorSession)(nil)
+	var predecessorMeta *task.MetaRecord
 	base, err := buildRequest(store.RootID, id, a.Provider, cwd, a.Config, brief, nil)
 	if err != nil {
 		return failed(response, withDispatchStage("validate-request", err), classifyCode(err, 2))
 	}
 	if a.ResumeTask != "" {
-		prior, err = resolvePredecessor(store, base, a.ResumeTask, deps.SupervisorOptions, deps.InitialSupervisorExecutable, deps.RunnerExecutable)
+		deps, prior, predecessorMeta, err = prepareDispatchContinuation(store, deps, base, a.ResumeTask)
 		if err != nil {
 			return failed(response, withDispatchStage("resolve-predecessor", err), classifyCode(err, 1))
 		}
@@ -79,7 +78,44 @@ func dispatch(a Arguments, deps Dependencies) (result commandResult) {
 		return failed(response, withDispatchStage("open-task-record", openErr), classifyCode(openErr, 1))
 	}
 	response.TaskRecord = dispatchTaskRecordLookup(a.TaskID, false, nil)
+	restoreEnvironment, restoreErr := dispatchContinuationEnvironment(root, predecessorMeta, req.RequestedConfig.Interactive)
+	if restoreErr != nil {
+		return failed(response, withDispatchStage("apply-continuation-environment", restoreErr), 1)
+	}
+	defer restoreRunnerEnvironment(&result, restoreEnvironment)
 	return dispatchNew(a, deps, store, req, brief, response)
+}
+
+func dispatchTaskID(a Arguments) (string, error) {
+	if a.TaskID != "" {
+		return a.TaskID, nil
+	}
+	if a.generatedTaskID != "" {
+		return a.generatedTaskID, nil
+	}
+	return task.NewTaskID()
+}
+
+func dispatchContinuationEnvironment(root string, meta *task.MetaRecord, interactive bool) (func() error, error) {
+	if meta == nil || !interactive {
+		return nil, nil
+	}
+	return applyContinuationEnvironment(root, meta)
+}
+
+func prepareDispatchContinuation(store *taskdir.Store, deps Dependencies, request task.TaskRecord, predecessorID string) (Dependencies, *task.PriorSession, *task.MetaRecord, error) {
+	continuationDeps, predecessorMeta, err := continuationDependenciesForTask(store, deps, predecessorID)
+	if err != nil {
+		return deps, nil, nil, err
+	}
+	if err = validateContinuationEnvironment(predecessorMeta); err != nil {
+		return deps, nil, nil, err
+	}
+	prior, err := resolvePredecessor(store, continuationDeps, request, predecessorID)
+	if err != nil {
+		return deps, nil, nil, err
+	}
+	return continuationDeps, prior, predecessorMeta, nil
 }
 
 func initialDispatchTaskRecord(taskID string) string {
@@ -170,13 +206,35 @@ func continueTask(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, withDispatchStage("resolve-continuation-runner", err), 1)
 	}
+	deps = continuationDependencies(deps, *predecessorMeta)
+	prior, err := loadContinuationPrior(root, predecessor.TaskID, deps)
+	if err != nil {
+		return failed(response, withDispatchStage("load-continuation-session", err), 2)
+	}
+	successorID, idErr := task.NewTaskID()
+	if idErr != nil {
+		return failed(response, withDispatchStage("generate-task-id", idErr), 1)
+	}
+	successor, successorErr := buildRequest(predecessor.RootID, successorID, continuationArgs.Provider, continuationArgs.Cwd, continuationArgs.Config, continuationArgs.BriefBytes, prior)
+	if successorErr != nil {
+		return failed(response, withDispatchStage("validate-continuation", successorErr), 2)
+	}
+	if _, admissionErr := validateContinuationAdmission(deps, root, *predecessor, *predecessorMeta, prior, successor); admissionErr != nil {
+		return failed(response, withDispatchStage("validate-continuation", admissionErr), 2)
+	}
+	continuationArgs.generatedTaskID = successorID
 	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
+	controlContext, cancelControl := supervisorControlContext(supervisorOptions)
+	defer cancelControl()
+	deps.SupervisorOptions = supervisorOptions
+	if recoveryErr := recoverContinuationSupervisor(controlContext, root, &continuationArgs, deps); recoveryErr != nil {
+		return failed(response, withDispatchStage("resolve-continuation-supervisor", recoveryErr), 1)
+	}
 	restoreEnvironment, restoreErr := applyContinuationEnvironment(root, predecessorMeta)
 	if restoreErr != nil {
 		return failed(response, withDispatchStage("restore-continuation-environment", restoreErr), 1)
 	}
 	defer restoreRunnerEnvironment(&result, restoreEnvironment)
-	deps.SupervisorOptions = supervisorOptions
 	result = dispatch(continuationArgs, deps)
 	var supervisor *task.SupervisorRef
 	if continuationArgs.savedSupervisor != nil {
@@ -187,6 +245,27 @@ func continueTask(a Arguments, deps Dependencies) (result commandResult) {
 	}
 	result = decorateContinuationResult(result, root, predecessor.TaskID, registration.Description.Continuation, continuationArgs.Runner, supervisor)
 	return result
+}
+
+// recoverContinuationSupervisor reopens the predecessor's recorded private
+// supervisor only after static continuation admission has succeeded. It keeps
+// all stateful recovery in one continuation-specific boundary.
+func recoverContinuationSupervisor(ctx context.Context, root string, arguments *Arguments, deps Dependencies) error {
+	if arguments == nil || arguments.savedSupervisor == nil {
+		return nil
+	}
+	rebound, err := rebindContinuationSupervisor(ctx, root, *arguments.savedSupervisor, deps)
+	if err != nil {
+		return err
+	}
+	if pueue.IsPrivateConfig(root, rebound.ConfigPath) {
+		rebound, err = prepareContinuationSuccessor(ctx, root, rebound, deps)
+		if err != nil {
+			return err
+		}
+	}
+	*arguments.savedSupervisor = rebound
+	return nil
 }
 
 func loadContinuationInput(root string, a Arguments, deps Dependencies) (req *task.TaskRecord, meta *task.MetaRecord, brief []byte, resultErr error) {
@@ -256,6 +335,269 @@ func buildContinuationArguments(a Arguments, root string, predecessor *task.Task
 	return continuationArgs, nil
 }
 
+// continuationDependencies keeps the recorded provider preparation contract
+// attached to every candidate compiled for this successor. The production
+// catalog owns the historical interpretation; injected profile hooks retain
+// their test and acceptance behavior.
+func continuationDependencies(deps Dependencies, predecessorMeta task.MetaRecord) Dependencies {
+	normalized := deps.normalized()
+	if !normalized.useCatalogExisting {
+		return normalized
+	}
+	normalized.PrepareCandidate = func(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		if request.RequestedConfig.Interactive && request.PriorSession != nil {
+			return normalized.Catalog.Candidate(request)
+		}
+		return normalized.Catalog.ExistingCandidate(request, predecessorMeta)
+	}
+	return normalized
+}
+
+func continuationDependenciesForTask(store *taskdir.Store, deps Dependencies, id string) (result Dependencies, predecessorMeta *task.MetaRecord, resultErr error) {
+	result = deps
+	td, err := store.OpenTask(id)
+	if err != nil {
+		return deps, nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
+	_, meta, err := td.PreparedRecords()
+	if err != nil {
+		return deps, nil, err
+	}
+	if meta == nil {
+		return deps, nil, errors.New("continuation unavailable: predecessor metadata is not recorded")
+	}
+	return continuationDependencies(deps, *meta), meta, nil
+}
+
+// validateContinuationRequest is the single compatibility gate for every
+// continuation path. The catalog owns shared and provider-specific policy;
+// callers combine it with validateStaticAdmission before they can change
+// supervisor state.
+func validateContinuationRequest(catalog commonprovider.Catalog, predecessor task.TaskRecord, predecessorMeta task.MetaRecord, successor task.TaskRecord) error {
+	return catalog.ValidateContinuation(predecessor, predecessorMeta, successor)
+}
+
+// validateContinuationAdmission constructs the exact successor identity and
+// applies the shared static admission gate before any continuation recovery.
+// The saved launch environment is used only while compiling the provider
+// candidate; supervisor control keeps the caller's own environment.
+func validateContinuationAdmission(deps Dependencies, root string, predecessor task.TaskRecord, predecessorMeta task.MetaRecord, prior *task.PriorSession, successor task.TaskRecord) (task.TaskRecord, error) {
+	if prior == nil {
+		return task.TaskRecord{}, errors.New("predecessor session is unavailable")
+	}
+	priorCopy := *prior
+	successor.PriorSession = &priorCopy
+	normalized := deps.normalized()
+	if err := validateContinuationRequest(normalized.Catalog, predecessor, predecessorMeta, successor); err != nil {
+		return task.TaskRecord{}, err
+	}
+	if err := validateStaticContinuationAdmission(normalized, root, predecessorMeta, successor); err != nil {
+		return task.TaskRecord{}, err
+	}
+	return successor, nil
+}
+
+func validateStaticContinuationAdmission(deps Dependencies, root string, predecessorMeta task.MetaRecord, successor task.TaskRecord) (resultErr error) {
+	restore, err := applySavedEnvironment(predecessorMeta.Environment, predecessorMeta.EnvironmentRecorded)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, restore()) }()
+	return validateStaticAdmission(deps, root, successor)
+}
+
+func loadContinuationPrior(root, id string, deps Dependencies) (prior *task.PriorSession, resultErr error) {
+	store, err := openStore(root, deps.storeDependencies(), false)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
+	td, err := store.OpenTask(id)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
+	predecessor, _, err := td.PreparedRecords()
+	if err != nil {
+		return nil, err
+	}
+	return continuationPrior(td, predecessor)
+}
+
+func continuationPrior(td *taskdir.TaskDir, predecessor *task.TaskRecord) (*task.PriorSession, error) {
+	if predecessor == nil {
+		return nil, task.ErrInvariantFault
+	}
+	identity, err := td.ReadProviderIdentity()
+	if err != nil {
+		return nil, fmt.Errorf("predecessor session is unavailable: %w", err)
+	}
+	return &task.PriorSession{Provider: identity.Provider, ConversationID: identity.ConversationID, PredecessorTaskID: predecessor.TaskID}, nil
+}
+
+func rebindContinuationSupervisor(ctx context.Context, root string, saved task.SupervisorRef, deps Dependencies) (task.SupervisorRef, error) {
+	if ctx == nil {
+		return task.SupervisorRef{}, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return task.SupervisorRef{}, err
+	}
+	// The task's supervisor reference is durable evidence. Keep it unchanged;
+	// newSupervisorClient reopens the private endpoint through the current
+	// state-root pair and adopts a compatible daemon without rewriting task or
+	// inspection history. Explicit supervisor repair owns real migrations.
+	if !pueue.IsPrivateConfig(root, saved.ConfigPath) {
+		return saved, nil
+	}
+	if err := task.ValidateFreshSupervisorRef(saved); err != nil {
+		return task.SupervisorRef{}, err
+	}
+	return rebindPrivateContinuationSupervisor(ctx, root, saved, deps)
+}
+
+func rebindPrivateContinuationSupervisor(ctx context.Context, root string, saved task.SupervisorRef, deps Dependencies) (task.SupervisorRef, error) {
+	store, err := openStoreContext(ctx, root, deps.storeDependencies(), false)
+	if errors.Is(err, os.ErrNotExist) {
+		return saved, nil
+	}
+	if err != nil {
+		return task.SupervisorRef{}, err
+	}
+	resolution, resolutionErr := resolvePrivateSupervisorGeneration(ctx, store, saved)
+	closeErr := store.Close()
+	if resolutionErr != nil {
+		return task.SupervisorRef{}, errors.Join(resolutionErr, closeErr)
+	}
+	if closeErr != nil {
+		return task.SupervisorRef{}, closeErr
+	}
+	if resolution.PrivateAuthority || resolution.GroupMigrated {
+		return resolution.Active, nil
+	}
+	if resolution.GroupPresent {
+		return saved, nil
+	}
+	current, currentErr := resolveCurrentContinuationSupervisor(ctx, root, deps)
+	if currentErr != nil {
+		return task.SupervisorRef{}, currentErr
+	}
+	return reconcilePrivateContinuationBinding(root, saved, current)
+}
+
+// reconcilePrivateContinuationBinding is the single no-journal continuation
+// decision. The resolved endpoint and config path must remain the same as the
+// predecessor; digest drift is accepted only when the state root has no
+// conflicting persisted logical binding, allowing an installation upgrade to
+// refresh stale task provenance without opening a second queue.
+func reconcilePrivateContinuationBinding(root string, saved, current task.SupervisorRef) (task.SupervisorRef, error) {
+	if saved.ConfigPath != current.ConfigPath || saved.Endpoint != current.Endpoint {
+		return task.SupervisorRef{}, fmt.Errorf("%w: continuation predecessor uses a changed private supervisor endpoint", pueue.ErrPrivateSupervisorMigrationRequired)
+	}
+	drift, err := pueue.PrivateSupervisorLogicalDrift(root, current)
+	if err != nil {
+		return task.SupervisorRef{}, err
+	}
+	if drift {
+		return task.SupervisorRef{}, fmt.Errorf("%w: continuation predecessor uses a changed private supervisor binding", pueue.ErrPrivateSupervisorMigrationRequired)
+	}
+	return current, nil
+}
+
+func resolveCurrentContinuationSupervisor(ctx context.Context, root string, deps Dependencies) (task.SupervisorRef, error) {
+	clientExecutable, daemonExecutable, err := resolvePrivateSupervisorExecutables(root, deps)
+	if err != nil {
+		return task.SupervisorRef{}, err
+	}
+	client, err := pueue.PreparePrivate(ctx, clientExecutable, daemonExecutable, root, deps.SupervisorOptions)
+	if err != nil {
+		return task.SupervisorRef{}, err
+	}
+	binding := client.Binding()
+	if err = client.CloseAfterPending(nil); err != nil {
+		return task.SupervisorRef{}, err
+	}
+	return binding, nil
+}
+
+func prepareContinuationSuccessor(ctx context.Context, root string, successor task.SupervisorRef, deps Dependencies) (task.SupervisorRef, error) {
+	if !pueue.IsPrivateConfig(root, successor.ConfigPath) {
+		return successor, nil
+	}
+	ready := successor
+	err := pueue.WithBootstrapLockContext(ctx, root, func(lockedContext context.Context) error {
+		current, err := revalidateContinuationSuccessor(lockedContext, root, successor, deps.storeDependencies())
+		if err != nil {
+			return err
+		}
+		successor = current
+		ready = current
+		legacyBinding, present, err := pueue.ReadPrivateRecoveryBinding(root)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return nil
+		}
+		// The alias is the immediate predecessor for the current successor. The
+		// continuation's saved task may point to an older generation after a
+		// second migration, so it must not be used to validate this cleanup.
+		if task.SameSupervisorIdentity(legacyBinding, successor) {
+			return nil
+		}
+		clientExecutable, daemonExecutable, err := resolvePrivateSupervisorExecutables(root, deps)
+		if err != nil {
+			return err
+		}
+		currentClient, err := pueue.PreparePrivateWithLock(lockedContext, clientExecutable, daemonExecutable, root, deps.SupervisorOptions)
+		if err != nil {
+			return err
+		}
+		if !task.SameSupervisorIdentity(currentClient.Binding(), successor) {
+			return errors.Join(pueue.ErrBinding, currentClient.Close())
+		}
+		startErr := currentClient.StartPrivate(lockedContext, root)
+		closeErr := currentClient.CloseAfterPending(startErr)
+		if startErr != nil {
+			return errors.Join(startErr, closeErr)
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		ready = currentClient.Binding()
+		return pueue.RetirePrivateRecoveryBindingContext(lockedContext, root, ready)
+	})
+	return ready, err
+}
+
+func revalidateContinuationSuccessor(ctx context.Context, root string, candidate task.SupervisorRef, deps storeDependencies) (task.SupervisorRef, error) {
+	store, err := openStoreContext(ctx, root, deps, false)
+	if errors.Is(err, os.ErrNotExist) {
+		return candidate, nil
+	}
+	if err != nil {
+		return task.SupervisorRef{}, err
+	}
+	resolution, resolutionErr := resolvePrivateSupervisorGenerationWithLock(ctx, store, candidate)
+	if resolutionErr == nil && resolution.PrivateAuthority {
+		resolutionErr = completePendingGroupMigrationWithLock(ctx, store, resolution)
+	}
+	closeErr := store.Close()
+	if resolutionErr != nil {
+		return task.SupervisorRef{}, errors.Join(resolutionErr, closeErr)
+	}
+	if closeErr != nil {
+		return task.SupervisorRef{}, closeErr
+	}
+	if resolution.PrivateAuthority || resolution.GroupMigrated {
+		return resolution.Active, nil
+	}
+	if resolution.GroupPresent && !task.SameSupervisorIdentity(resolution.Active, candidate) {
+		return task.SupervisorRef{}, task.ErrIdentityMismatch
+	}
+	return candidate, nil
+}
+
 func continuationConfig(requested, overrides task.TaskConfig) task.TaskConfig {
 	requested.Interactive = requested.Interactive || overrides.Interactive
 	if overrides.Budget != "" {
@@ -301,8 +643,8 @@ func continuationRunner(root, savedRunner, ownership string) (string, error) {
 }
 
 func validateContinuationMetadata(root string, a Arguments, meta *task.MetaRecord) error {
-	if meta == nil || (!meta.EnvironmentRecorded && len(meta.Environment) == 0) {
-		return errors.New("continuation unavailable: predecessor launch environment is not recorded")
+	if err := validateContinuationEnvironment(meta); err != nil {
+		return err
 	}
 	if meta.RunnerExecutable == "" && a.Runner == "" {
 		return errors.New("continuation unavailable: predecessor runner executable is not recorded")
@@ -316,6 +658,13 @@ func validateContinuationMetadata(root string, a Arguments, meta *task.MetaRecor
 	private := pueue.IsPrivateConfig(root, meta.SupervisorConfig.ConfigPath)
 	if a.PueueConfig != "" && (private || a.PueueConfig != meta.SupervisorConfig.ConfigPath) {
 		return fmt.Errorf("%w: continuation must use the predecessor supervisor binding", task.ErrRequestConflict)
+	}
+	return nil
+}
+
+func validateContinuationEnvironment(meta *task.MetaRecord) error {
+	if meta == nil || (!meta.EnvironmentRecorded && len(meta.Environment) == 0) {
+		return errors.New("continuation unavailable: predecessor launch environment is not recorded")
 	}
 	return nil
 }
@@ -377,7 +726,7 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 	}
 	submit, submitErr := td.ReadSubmission()
 	if submitErr == nil {
-		if err = repairPrivateQueueForTask(context.Background(), store, oldMeta.SupervisorConfig, oldMeta, deps.SupervisorOptions, deps.InitialSupervisorExecutable, deps.RunnerExecutable); err != nil {
+		if err = repairPrivateQueueForTask(context.Background(), store, oldMeta.SupervisorConfig, oldMeta, deps); err != nil {
 			return failed(response, err, classifyCode(err, 1))
 		}
 		return reconcileExisting(store.Root, td, oldReq, oldMeta, submit, deps.SupervisorOptions, deps.InitialSupervisorExecutable, response)
@@ -388,7 +737,7 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 	if a.Runner != "" && a.Runner != oldMeta.RunnerExecutable {
 		return failed(response, task.ErrIdentityMismatch, 2)
 	}
-	if err = repairPrivateQueueForTask(context.Background(), store, oldMeta.SupervisorConfig, oldMeta, deps.SupervisorOptions, deps.InitialSupervisorExecutable, deps.RunnerExecutable); err != nil {
+	if err = repairPrivateQueueForTask(context.Background(), store, oldMeta.SupervisorConfig, oldMeta, deps); err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
 	return retryExistingTask(a, deps, store, td, oldReq, oldMeta, inspection.StartExists, response)
@@ -416,7 +765,7 @@ func retryExistingTask(a Arguments, deps Dependencies, store *taskdir.Store, td 
 		supervisorOptionsForProfile(supervisorOptions, profile), store.Root, allowManagedRunnerUpgrade, response))
 }
 
-func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, brief []byte, response Response) commandResult {
+func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.TaskRecord, brief []byte, response Response) (result commandResult) {
 	prepared, err := prepareAdmission(a, deps, store, req)
 	if err != nil {
 		err = withDispatchStage("prepare-admission", annotateMissingDispatchStage("preparing inspection admission", err))
@@ -424,8 +773,9 @@ func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.
 	}
 	response.Capability = &prepared.Capability
 	profile, supervisor := prepared.Profile, prepared.Supervisor
+	defer func() { closeSupervisorMaintenance(supervisor, result.err) }()
 	runner := prepared.RunnerExecutable
-	if err = profile.Validate(req); err != nil {
+	if err = profile.ValidateAdmission(req); err != nil {
 		return failed(response, withDispatchStage("validate-profile", err), classifyCode(err, 2))
 	}
 	runnerOwnership := prepared.RunnerOwnership
@@ -437,9 +787,6 @@ func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.
 			return failed(response, withDispatchStage("read-brief", err), classifyCode(err, 1))
 		}
 	}
-	if !prepared.InspectionDeadline.IsZero() && !time.Now().Before(prepared.InspectionDeadline) {
-		return failed(response, withDispatchStage("admission-deadline", inspection.ErrAdmissionExpired), 1)
-	}
 	td, err := store.CreateTask(req.TaskID, &req, brief, &meta)
 	if err != nil {
 		response.TaskRecord = "unknown"
@@ -447,15 +794,9 @@ func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.
 		return failed(response, withDispatchStage("create-task-record", err), classifyCode(err, 1))
 	}
 	response.TaskRecord = "created"
-	if pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
-		if err = supervisor.ConfigureUnlimitedOrdinaryTasks(context.Background()); err != nil {
-			err = errors.Join(err, td.Close())
-			return failed(response, withDispatchStage("start-supervisor", err), classifyCode(err, 1))
-		}
-	}
 	submitArgs := a
 	submitArgs.Runner = runner
-	result := submitPreparedWithProfile(submitArgs, deps, td, &req, &meta, supervisor, profile, response)
+	result = submitPreparedWithProfile(submitArgs, deps, td, &req, &meta, supervisor, profile, response)
 	if result.err != nil {
 		result.err = annotateMissingDispatchStage("submitting ordinary task", result.err)
 	}
@@ -468,6 +809,8 @@ func markDispatchSubmissionFailure(result commandResult) commandResult {
 		switch {
 		case errors.Is(result.err, pueue.ErrSubmissionUncertain):
 			stage = "submit-task"
+		case errors.Is(result.err, pueue.ErrEnqueueUncertain):
+			stage = "enqueue-task"
 		case result.response.Admission == task.AdmissionAdmitted.String():
 			stage = "record-submission-evidence"
 		}
@@ -523,6 +866,7 @@ func submitPreparedWithOptionsMode(a Arguments, deps Dependencies, td *taskdir.T
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
+	defer func() { closeSupervisorMaintenance(client, result.err) }()
 	runner, err := resolveTaskRunner(a.Runner, deps, meta)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 2))
@@ -550,7 +894,7 @@ func submitPreparedWithOptionsMode(a Arguments, deps Dependencies, td *taskdir.T
 
 func submitPreparedWithProfile(a Arguments, deps Dependencies, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, client *pueue.Client, profile PreparedProfile, response Response) (result commandResult) {
 	defer func() { mergeCommandClose(&result, td.Close) }()
-	if err := profile.Validate(*req); err != nil {
+	if err := profile.ValidateAdmission(*req); err != nil {
 		return failed(response, err, classifyCode(err, 2))
 	}
 	runner, err := resolveTaskRunner(a.Runner, deps, meta)
@@ -691,19 +1035,31 @@ func validateManagedRetryRunner(td *taskdir.TaskDir, meta *task.MetaRecord, runn
 }
 
 func submitWithClient(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, client *pueue.Client, runner string, permit *taskdir.SubmissionPermit, response Response) commandResult {
-	observation, err := client.Submit(context.Background(), permit, pueue.Launch{RunnerExecutable: runner, RootPath: filepath.Clean(filepath.Dir(filepath.Dir(td.Dir)))})
+	root := filepath.Clean(filepath.Dir(filepath.Dir(td.Dir)))
+	ownership, err := runnerOwnershipForTask(root, td, meta)
+	if err != nil {
+		return failed(response, err, classifyCode(err, 1))
+	}
+	commit := func(observation pueue.Observation) error {
+		receipt, receiptErr := observation.Receipt()
+		if receiptErr != nil {
+			return receiptErr
+		}
+		return td.RecordSupervisorReceipt(*receipt)
+	}
+	observation, err := client.SubmitStagedWithGate(context.Background(), permit, pueue.Launch{
+		RunnerExecutable: runner,
+		RootPath:         root,
+		Supervised:       ownership == task.RunnerOwnershipManaged,
+	}, privateSubmissionGate(root), commit)
 	response.Supervisor = supervisorResponse(observation)
 	response.Liveness = mapPueueState(observation.State)
 	response.Pending = pendingResponse(observation)
 	if observation.Matched {
+		// A matched Stashed row proves supervisor acceptance. The staged commit
+		// publishes its exact receipt before enqueue, so a commit or enqueue
+		// failure leaves recoverable work that status can safely resume.
 		response.Admission = task.AdmissionAdmitted.String()
-		if receipt, receiptErr := observation.Receipt(); receiptErr != nil {
-			err = errors.Join(err, receiptErr)
-		} else {
-			if recordErr := td.RecordSupervisorReceipt(*receipt); recordErr != nil {
-				err = errors.Join(err, recordErr)
-			}
-		}
 	} else {
 		response.Admission = task.AdmissionUnknown.String()
 	}
@@ -718,12 +1074,13 @@ func submitWithClient(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.Meta
 	return commandResult{response: response, code: 0}
 }
 
-func reconcileExisting(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, submit *task.SubmitRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string, response Response) commandResult {
+func reconcileExisting(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, submit *task.SubmitRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string, response Response) (result commandResult) {
 	supervisorOptions = supervisorOptionsForMeta(supervisorOptions, *meta)
 	client, err := newSupervisorClient(context.Background(), root, submit.Supervisor, supervisorOptions, true, initialSupervisorExecutable)
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
+	defer func() { closeSupervisorMaintenance(client, result.err) }()
 	_, _, spec, metaHash, hashErr := requestHashes(td)
 	if hashErr != nil {
 		return failed(response, hashErr, 1)
@@ -733,16 +1090,21 @@ func reconcileExisting(root string, td *taskdir.TaskDir, req *task.TaskRecord, m
 		return failed(response, receiptErr, 1)
 	}
 	observation, reconcileErr := client.Reconcile(context.Background(), taskIdentity(req, meta, spec, metaHash, receipt))
+	if observation.Matched && observation.State == pueue.StateStashed {
+		var recoverErr error
+		observation, recoverErr = recoverStagedOrdinarySubmission(context.Background(), root, td, client, observation)
+		reconcileErr = errors.Join(reconcileErr, recoverErr)
+	}
 	response.Supervisor = supervisorResponse(observation)
 	response.Liveness = mapPueueState(observation.State)
 	response.Pending = pendingResponse(observation)
 	if observation.Matched {
-		response.Admission = task.AdmissionAdmitted.String()
-		if positive, receiptErr := observation.Receipt(); receiptErr != nil {
-			reconcileErr = errors.Join(reconcileErr, receiptErr)
+		receiptErr := requireDurableSupervisorReceipt(td, observation)
+		reconcileErr = errors.Join(reconcileErr, receiptErr)
+		if receiptErr == nil {
+			response.Admission = task.AdmissionAdmitted.String()
 		} else {
-			recordErr := td.RecordSupervisorReceipt(*positive)
-			reconcileErr = errors.Join(reconcileErr, recordErr)
+			response.Admission = task.AdmissionUnknown.String()
 		}
 	} else {
 		response.Admission = task.AdmissionUnknown.String()
@@ -757,7 +1119,7 @@ func reconcileStatus(root string, td *taskdir.TaskDir, req *task.TaskRecord, met
 	return reconcileStatusContext(context.Background(), root, td, req, meta, spec, metaHash, supervisorOptions, initialSupervisorExecutable, response)
 }
 
-func reconcileStatusContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string, supervisorOptions pueue.Options, initialSupervisorExecutable string, response *Response) (pueue.Observation, error) {
+func reconcileStatusContext(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string, supervisorOptions pueue.Options, initialSupervisorExecutable string, response *Response) (observation pueue.Observation, resultErr error) {
 	if ctx == nil {
 		return pueue.Observation{}, context.Canceled
 	}
@@ -770,25 +1132,114 @@ func reconcileStatusContext(ctx context.Context, root string, td *taskdir.TaskDi
 	if err != nil {
 		return pueue.Observation{}, err
 	}
+	defer func() { closeSupervisorMaintenance(client, resultErr) }()
+	return reconcileStatusWithClient(ctx, root, td, req, meta, spec, metaHash, client, response)
+}
+
+func reconcileStatusWithClient(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, spec, metaHash string, client *pueue.Client, response *Response) (observation pueue.Observation, resultErr error) {
+	if ctx == nil {
+		return pueue.Observation{}, context.Canceled
+	}
+	if client == nil {
+		return pueue.Observation{}, task.ErrInvalidPermit
+	}
 	receipt, receiptErr := td.ReadSupervisorReceipt()
 	if receiptErr != nil && !errors.Is(receiptErr, os.ErrNotExist) {
 		return pueue.Observation{}, receiptErr
 	}
-	observation, reconcileErr := client.Reconcile(ctx, taskIdentity(req, meta, spec, metaHash, receipt))
+	statusClient := client
+	if pueue.IsPrivateConfig(root, client.Binding().ConfigPath) {
+		statusClient, receiptErr = client.WithObservationTimeout(pueue.PrivateStatusObservationTimeout)
+		if receiptErr != nil {
+			return pueue.Observation{}, receiptErr
+		}
+	}
+	observation, reconcileErr := statusClient.ReconcileStatus(ctx, taskIdentity(req, meta, spec, metaHash, receipt))
+	if observation.Matched && observation.State == pueue.StateStashed {
+		var recoverErr error
+		observation, recoverErr = recoverStagedOrdinarySubmission(ctx, root, td, statusClient, observation)
+		reconcileErr = errors.Join(reconcileErr, recoverErr)
+	}
 	response.Supervisor = supervisorResponse(observation)
-	response.Liveness = mapPueueState(observation.State)
 	response.Pending = pendingResponse(observation)
 	if observation.Matched {
-		response.Admission = task.AdmissionAdmitted.String()
-		if positive, positiveErr := observation.Receipt(); positiveErr != nil {
-			reconcileErr = errors.Join(reconcileErr, positiveErr)
+		receiptErr := requireDurableSupervisorReceipt(td, observation)
+		reconcileErr = errors.Join(reconcileErr, receiptErr)
+		if receiptErr == nil {
+			response.Admission = task.AdmissionAdmitted.String()
 		} else {
-			reconcileErr = errors.Join(reconcileErr, td.RecordSupervisorReceiptContext(ctx, *positive))
+			response.Admission = task.AdmissionUnknown.String()
 		}
 	} else {
 		response.Admission = task.AdmissionUnknown.String()
 	}
+	if observation.State == pueue.StateEnded {
+		if inspection, inspectErr := td.Inspect(); inspectErr == nil && inspection.Outcome != nil {
+			cleanupCompletedTask(ctx, root, td, client)
+		}
+	}
 	return observation, reconcileErr
+}
+
+func recoverStagedOrdinarySubmission(ctx context.Context, root string, td *taskdir.TaskDir, client *pueue.Client, observation pueue.Observation) (pueue.Observation, error) {
+	if pueue.IsPrivateConfig(root, client.Binding().ConfigPath) {
+		controlContext, cancel := context.WithTimeout(ctx, pueue.PrivateStatusObservationTimeout)
+		repairErr := ensurePrivateAdmissionSchedulingContext(controlContext, root, client)
+		cancel()
+		if repairErr != nil {
+			return observation, repairErr
+		}
+	}
+	commit := func(current pueue.Observation) error {
+		receipt, err := current.Receipt()
+		if err != nil {
+			return err
+		}
+		return td.RecordSupervisorReceiptContext(ctx, *receipt)
+	}
+	recovered, err := client.RecoverStagedWithGate(ctx, observation.Identity, observation.NumericTaskID, privateSubmissionGate(root), commit)
+	if err == nil || !errors.Is(err, pueue.ErrUnknown) {
+		return recovered, err
+	}
+	receipt, receiptErr := td.ReadSupervisorReceipt()
+	if receiptErr != nil || receipt.NumericTaskID != observation.NumericTaskID {
+		return recovered, errors.Join(err, receiptErr)
+	}
+	current, observeErr := client.ReconcileStatus(ctx, observation.Identity)
+	if observeErr != nil || !current.Matched || current.NumericTaskID != observation.NumericTaskID {
+		return current, errors.Join(err, observeErr)
+	}
+	switch current.State {
+	case pueue.StateQueued, pueue.StateRunning, pueue.StateEnded:
+		return current, requireDurableSupervisorReceipt(td, current)
+	case pueue.StateUnknown, pueue.StateStashed:
+		return current, err
+	}
+	return current, err
+}
+
+// requireDurableSupervisorReceipt validates queue state against the receipt
+// created by the exact staged submission. A queue observation can confirm that
+// authority, but it can never create it retroactively.
+func requireDurableSupervisorReceipt(td *taskdir.TaskDir, observation pueue.Observation) error {
+	if td == nil || !observation.Matched {
+		return task.ErrEvidenceFault
+	}
+	observed, err := observation.Receipt()
+	if err != nil {
+		return err
+	}
+	recorded, err := td.ReadSupervisorReceipt()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errors.Join(task.ErrEvidenceFault, err)
+		}
+		return err
+	}
+	if *recorded != *observed {
+		return task.ErrIdentityMismatch
+	}
+	return nil
 }
 
 func updateStatusStops(td *taskdir.TaskDir, response *Response, observation pueue.Observation) error {
@@ -799,14 +1250,36 @@ func updateStatusStopsContext(ctx context.Context, td *taskdir.TaskDir, response
 	if ctx == nil {
 		return context.Canceled
 	}
+	queueEnded := observation.State == pueue.StateEnded && observation.Matched
+	if queueEnded {
+		response.Liveness = task.LivenessRunning.String()
+	} else {
+		response.Liveness = mapPueueState(observation.State)
+	}
 	records, err := td.ReadStopRecords()
 	if err != nil {
 		return err
 	}
-	if observation.State != pueue.StateEnded || !observation.Matched {
+	if !queueEnded {
 		response.Stops = stopResponses(records)
 		return nil
 	}
+	if err = recoverTaskLifetime(ctx, td); errors.Is(err, errLifetimeRecoveryPending) {
+		markLifetimeFinalizationPending(response)
+		response.Stops = stopResponses(records)
+		return nil
+	} else if err != nil {
+		return err
+	}
+	ready, err := td.StopTerminationReadyContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !ready {
+		response.Stops = stopResponses(records)
+		return nil
+	}
+	response.Liveness = task.LivenessEnded.String()
 	var recordErr error
 	for _, record := range records {
 		if record.Request == nil || record.Request.NumericTaskID == nil || *record.Request.NumericTaskID != observation.NumericTaskID {
@@ -849,6 +1322,7 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 		if reqErr != nil {
 			return failed(response, reqErr, 1)
 		}
+		cleanupCompletedTaskFromSaved(root, td, meta, deps.storeDependencies())
 		if records, recordsErr := readTimeoutRecords(td); recordsErr == nil {
 			// The outcome is authoritative. Timeout metadata only decorates a
 			// terminal response, so malformed or stale optional records must not
@@ -869,23 +1343,34 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	if err = repairPrivateQueueForTask(context.Background(), store, submission.Supervisor, meta, deps.SupervisorOptions, deps.InitialSupervisorExecutable, deps.RunnerExecutable); err != nil {
-		return failed(response, err, 1)
+	privateSupervisor, err := preparePrivateTaskSupervisor(context.Background(), store, submission.Supervisor, meta, deps)
+	if err != nil {
+		return statusObservationResult(response, err)
 	}
-	observation, reconcileErr := reconcileStatus(root, td, req, meta, spec, metaHash, deps.SupervisorOptions, deps.InitialSupervisorExecutable, &response)
+	if privateSupervisor != nil {
+		defer func() { closeSupervisorMaintenance(privateSupervisor, result.err) }()
+	}
+	var observation pueue.Observation
+	var reconcileErr error
+	if privateSupervisor != nil {
+		observation, reconcileErr = reconcileStatusWithClient(context.Background(), root, td, req, meta, spec, metaHash, privateSupervisor, &response)
+	} else {
+		observation, reconcileErr = reconcileStatus(root, td, req, meta, spec, metaHash, deps.SupervisorOptions, deps.InitialSupervisorExecutable, &response)
+	}
 	reconcileErr = errors.Join(reconcileErr, updateStatusStops(td, &response, observation))
 	if records, recordsErr := readTimeoutRecords(td); recordsErr == nil {
 		reconcileErr = errors.Join(reconcileErr, applyTimeoutContinuationWithRecords(&response, root, td, req, meta, records, deps.normalized().Catalog))
 	} else {
 		reconcileErr = errors.Join(reconcileErr, recordsErr)
 	}
-	if reconcileErr != nil {
-		if isPureSupervisorUncertaintyError(reconcileErr) {
-			return commandResult{response: response, code: 0, err: reconcileErr}
-		}
-		return failed(response, reconcileErr, 1)
+	return statusObservationResult(response, reconcileErr)
+}
+
+func statusObservationResult(response Response, err error) commandResult {
+	if err != nil && !isPureSupervisorUncertaintyError(err) {
+		return failed(response, err, 1)
 	}
-	return commandResult{response: response, code: 0}
+	return commandResult{response: response, code: 0, err: err}
 }
 
 func recheck(a Arguments, deps storeDependencies) (result commandResult) {
@@ -1060,6 +1545,81 @@ func applyTimeoutContinuationBestEffortWithRecords(response *Response, root stri
 func collectAttempt(td *taskdir.TaskDir, predicate task.PredicateRef) (*task.OutcomeRecord, error) {
 	outcome, cleanupErr, collectErr := td.Collect(predicate)
 	return outcome, errors.Join(cleanupErr, collectErr)
+}
+
+// cleanupCompletedTask is best effort maintenance. The task store's terminal
+// outcome is authoritative, so a supervisor cleanup failure must never turn a
+// committed or rejected task back into an application failure.
+func cleanupCompletedTask(ctx context.Context, root string, td *taskdir.TaskDir, client *pueue.Client) {
+	if client == nil || !pueue.IsPrivateConfig(root, client.Binding().ConfigPath) {
+		return
+	}
+	receipt, err := td.ReadSupervisorReceipt()
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		log.Printf("delegation-layer: cannot read completed supervisor receipt for cleanup: %v", err)
+		return
+	}
+	if !task.SameSupervisorIdentity(receipt.SupervisorRef(), client.Binding()) {
+		migrated, migrationErr := pueue.PrivateSupervisorMigrationComplete(root, client.Binding())
+		if migrationErr != nil {
+			log.Printf("delegation-layer: cannot verify private supervisor migration for completed task cleanup: %v", migrationErr)
+			return
+		}
+		if !migrated {
+			log.Printf("delegation-layer: completed supervisor receipt no longer matches the current private supervisor")
+			return
+		}
+	}
+	numericTaskID := receipt.NumericTaskID
+	identity := pueue.Identity{
+		RootID:        receipt.RootID,
+		TaskID:        receipt.TaskID,
+		SpecSHA256:    receipt.SpecSHA256,
+		MetaSHA256:    receipt.MetaSHA256,
+		NumericTaskID: &numericTaskID,
+	}
+	if err = client.RemoveCompletedTask(ctx, identity); err != nil && !errors.Is(err, pueue.ErrCleanupDeferred) {
+		log.Printf("delegation-layer: completed supervisor task %d retained for retry: %v", receipt.NumericTaskID, err)
+	}
+}
+
+func cleanupCompletedTaskFromSaved(root string, td *taskdir.TaskDir, meta *task.MetaRecord, deps storeDependencies) {
+	if td == nil || meta == nil {
+		return
+	}
+	submit, err := td.ReadSubmission()
+	if err != nil || !pueue.IsPrivateConfig(root, submit.Supervisor.ConfigPath) || submit.Supervisor.ConfigPath != pueue.PrivateConfigPath(root) {
+		// A retained recovery alias belongs to an explicit migration and is
+		// cleaned by that transition, never by ordinary task collection.
+		return
+	}
+	if _, err = os.Stat(submit.Supervisor.ConfigPath); err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pueue.PrivateControlTimeout(deps.supervisorOptions))
+	defer cancel()
+	clientExecutable, daemonExecutable, resolveErr := resolvePrivateSupervisorExecutables(root, Dependencies{InitialSupervisorExecutable: deps.initialSupervisorExecutable})
+	if resolveErr != nil {
+		log.Printf("delegation-layer: cannot resolve private supervisor for completed task cleanup: %v", resolveErr)
+		return
+	}
+	client, ready, err := pueue.ProbePrivate(ctx, clientExecutable, daemonExecutable, root, supervisorOptionsForMeta(deps.supervisorOptions, *meta))
+	if err != nil {
+		log.Printf("delegation-layer: cannot bind private supervisor for completed task cleanup: %v", err)
+		return
+	}
+	defer func() {
+		if closeErr := client.Close(); closeErr != nil {
+			log.Printf("delegation-layer: private supervisor cleanup close failed: %v", closeErr)
+		}
+	}()
+	if !ready {
+		return
+	}
+	cleanupCompletedTask(ctx, root, td, client)
 }
 
 func reconcileCollectionTimeout(ctx context.Context, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, deps storeDependencies, response *Response) error {
@@ -1279,12 +1839,17 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 1)
 	}
+	return collectPreparedTask(a, deps, root, td, req, meta, response)
+}
+
+func collectPreparedTask(a Arguments, deps storeDependencies, root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, response Response) commandResult {
 	timeoutAnnotated := false
 	deadline := time.Now().Add(a.Watch)
 	nextSupervisorReconcile := time.Time{}
 	for {
 		outcome, collectErr := collectWithInteraction(td, meta.Predicate, &response)
 		if outcome != nil {
+			cleanupCompletedTaskFromSaved(root, td, meta, deps)
 			result := collectionResult(response, outcome, collectErr)
 			result = decorateCollectedTerminal(result, root, td, req, meta, deps.providerCatalog())
 			result = releaseCollectedContinuation(result, td, req, outcome)
@@ -1297,6 +1862,7 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 		descriptors, descriptorErr := td.LogDescriptors()
 		response.Raw = descriptors
 		if terminal, handled := collectionInspectionResult(response, inspection, collectErr, inspectErr, descriptorErr); handled {
+			cleanupCompletedTaskFromSaved(root, td, meta, deps)
 			terminal = decorateCollectedTerminal(terminal, root, td, req, meta, deps.providerCatalog())
 			terminal = releaseCollectedContinuation(terminal, td, req, terminal.response.Outcome)
 			return decorateRejectedRecovery(terminal, td, deps.registry())
@@ -1308,6 +1874,9 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 		}
 		if terminalInspectionWithoutError(inspection, inspectErr) {
 			return commandResult{response: response, code: 0}
+		}
+		if lifetimeFinalizationPending(response) {
+			return commandResult{response: response, code: 3}
 		}
 		if interactionWaiting(response.Interaction) {
 			response.Pending = &PendingResponse{Kind: "interaction"}
@@ -1324,7 +1893,7 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	}
 }
 
-func stopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervisorOptions pueue.Options, initialSupervisorExecutable string) (StopResponse, error) {
+func stopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervisorOptions pueue.Options, initialSupervisorExecutable string) (response StopResponse, resultErr error) {
 	_, meta, err := td.PreparedRecords()
 	if err != nil {
 		return StopResponse{}, err
@@ -1338,19 +1907,94 @@ func stopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 	if err != nil {
 		return StopResponse{}, errors.Join(err, permit.Release())
 	}
-	client, err := newSupervisorClient(context.Background(), root, request.Supervisor, supervisorOptions, true, initialSupervisorExecutable)
+	owner, err := td.TryAcquireLifetimeOwner()
+	if errors.Is(err, task.ErrLockBusy) {
+		consumeErr := permit.Consume()
+		releaseErr := permit.Release()
+		return StopResponse{
+			RequestID:     requestID,
+			Cause:         cause,
+			Requested:     true,
+			Attempted:     consumeErr == nil,
+			Action:        "terminate",
+			NumericTaskID: copyTaskID(request.NumericTaskID),
+			InFlight:      consumeErr == nil,
+			ObservedState: string(pueue.StateUnknown),
+			Message:       "durable cancellation routed to the task lifetime owner",
+		}, errors.Join(consumeErr, releaseErr)
+	}
 	if err != nil {
 		return StopResponse{}, errors.Join(err, permit.Release())
 	}
-	stopResult, stopErr := client.Stop(context.Background(), permit)
+	ownerHeld := true
+	defer func() {
+		if ownerHeld {
+			// LifetimeOwnerLease release is deliberately retryable. A failed
+			// unlock keeps the lease authoritative, so the deferred attempt must
+			// run instead of abandoning the native-lifetime fence.
+			resultErr = errors.Join(resultErr, owner.Release())
+		}
+	}()
+	client, err := newSupervisorControlClient(context.Background(), root, request.Supervisor, supervisorOptions, initialSupervisorExecutable)
+	if err != nil {
+		return StopResponse{}, errors.Join(err, permit.Release())
+	}
+	defer func() { closeSupervisorMaintenance(client, resultErr) }()
+	stopResult, stopErr := client.Stop(pueue.WithControlLease(context.Background(), owner), permit)
 	stopErr = errors.Join(stopErr, permit.Release())
 	if stopResult.Acknowledged != nil && stopResult.NumericTaskID != nil {
 		stopErr = errors.Join(stopErr, td.RecordStopReply(requestID, task.StopReplyFacts{NumericTaskID: *stopResult.NumericTaskID, Action: stopResult.Action, Acknowledged: *stopResult.Acknowledged, Message: stopResult.Message}))
 	}
-	if stopResult.ObservedState == pueue.StateEnded && stopResult.NumericTaskID != nil {
-		stopErr = errors.Join(stopErr, td.RecordStopObservation(requestID, task.StopObservationFacts{NumericTaskID: *stopResult.NumericTaskID, State: "ended", Terminated: true}))
+	var pendingStop <-chan struct{}
+	if stopResult.Pending != nil {
+		pendingStop = stopResult.Pending.Done()
 	}
-	return stopResponseFromResult(requestID, cause, stopResult), stopErr
+	if releaseErr := releaseLifetimeOwnerAfterPending(pendingStop, owner); releaseErr != nil {
+		stopErr = errors.Join(stopErr, releaseErr)
+	} else {
+		ownerHeld = false
+	}
+	terminated, terminationErr := recordStoppedTaskTermination(context.Background(), td, requestID, stopResult)
+	stopErr = errors.Join(stopErr, terminationErr)
+	response = stopResponseFromResult(requestID, cause, stopResult)
+	response.Terminated = terminated
+	return response, stopErr
+}
+
+func releaseLifetimeOwnerAfterPending(pending <-chan struct{}, owner lifetimeGuardianOwner) error {
+	if owner == nil {
+		return task.ErrEvidenceFault
+	}
+	if pending != nil {
+		// The pending supervisor mutation can still stop the managed guardian.
+		// Releasing its lifetime lease first would let a new guardian launch
+		// while that older mutation remains capable of ending the queue row.
+		<-pending
+	}
+	return owner.Release()
+}
+
+func recordStoppedTaskTermination(ctx context.Context, td *taskdir.TaskDir, requestID string, result pueue.StopResult) (bool, error) {
+	if ctx == nil {
+		return false, context.Canceled
+	}
+	if td == nil {
+		return false, task.ErrEvidenceFault
+	}
+	if !result.Matched || result.ObservedState != pueue.StateEnded || result.NumericTaskID == nil {
+		return false, nil
+	}
+	if err := recoverTaskLifetime(ctx, td); errors.Is(err, errLifetimeRecoveryPending) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	ready, err := td.StopTerminationReadyContext(ctx)
+	if err != nil || !ready {
+		return false, err
+	}
+	err = td.RecordStopObservationContext(ctx, requestID, task.StopObservationFacts{NumericTaskID: *result.NumericTaskID, State: "ended", Terminated: true})
+	return err == nil, err
 }
 
 func cancel(a Arguments, deps Dependencies) (result commandResult) {
@@ -1389,8 +2033,8 @@ func cancel(a Arguments, deps Dependencies) (result commandResult) {
 	if !task.SameSupervisorIdentity(submission.Supervisor, meta.SupervisorConfig) {
 		return failed(response, task.ErrIdentityMismatch, 1)
 	}
-	// Cancellation uses the saved supervisor binding directly. Optional runner
-	// migration must not delay or prevent the stop request.
+	// Persist the stop request first. The active lifetime owner handles native
+	// termination; only an idle task lets this command stop the saved queue row.
 	requestID, err := task.NewRandomID()
 	if err != nil {
 		return failed(response, err, 1)
@@ -1457,8 +2101,7 @@ func logs(a Arguments, deps storeDependencies) (result commandResult) {
 }
 
 func stopResponseFromResult(id, cause string, result pueue.StopResult) StopResponse {
-	terminated := result.ObservedState == pueue.StateEnded && result.NumericTaskID != nil
-	return StopResponse{RequestID: id, Cause: cause, Requested: result.Requested, Matched: result.Matched, Attempted: result.Attempted, Action: result.Action, NumericTaskID: copyTaskID(result.NumericTaskID), Acknowledged: result.Acknowledged, InFlight: result.InFlight, ObservedState: string(result.ObservedState), Terminated: terminated, Message: result.Message}
+	return StopResponse{RequestID: id, Cause: cause, Requested: result.Requested, Matched: result.Matched, Attempted: result.Attempted, Action: result.Action, NumericTaskID: copyTaskID(result.NumericTaskID), Acknowledged: result.Acknowledged, InFlight: result.InFlight, ObservedState: string(result.ObservedState), Message: result.Message}
 }
 
 func stopResponses(records []taskdir.StopRecord) []StopResponse {
@@ -1511,7 +2154,31 @@ func isPureErrorSet(err error, leaf func(error) bool) bool {
 	return leaf(err)
 }
 
-func resolvePredecessor(store *taskdir.Store, request task.TaskRecord, id string, supervisorOptions pueue.Options, initialSupervisorExecutable, runnerExecutable string) (prior *task.PriorSession, resultErr error) {
+func preparePredecessorResolution(store *taskdir.Store, td *taskdir.TaskDir, predecessorReq *task.TaskRecord, predecessorMeta *task.MetaRecord, deps Dependencies) (timedOut, submitted bool, resultErr error) {
+	inspection, err := td.Inspect()
+	if err != nil {
+		return false, false, err
+	}
+	if isTerminal(inspection) {
+		return false, true, nil
+	}
+	timedOut, err = releaseTimedOutPredecessor(td, predecessorReq)
+	if err != nil || timedOut {
+		return timedOut, false, err
+	}
+	if _, submitErr := td.ReadSubmission(); submitErr == nil {
+		if repairErr := repairPrivateQueueForTask(context.Background(), store, predecessorMeta.SupervisorConfig, predecessorMeta, deps); repairErr != nil {
+			return false, false, repairErr
+		}
+		return false, true, nil
+	} else if !errors.Is(submitErr, os.ErrNotExist) {
+		return false, false, submitErr
+	}
+	return false, false, nil
+}
+
+func resolvePredecessor(store *taskdir.Store, deps Dependencies, request task.TaskRecord, id string) (prior *task.PriorSession, resultErr error) {
+	deps = deps.normalized()
 	if err := task.ValidateTaskID(id); err != nil {
 		return nil, err
 	}
@@ -1524,54 +2191,27 @@ func resolvePredecessor(store *taskdir.Store, request task.TaskRecord, id string
 	if err != nil {
 		return nil, err
 	}
-	if predecessorReq == nil {
-		return nil, task.ErrInvariantFault
-	}
-	if err = validatePredecessorCompatibility(request, *predecessorReq); err != nil {
-		return nil, err
-	}
-	inspection, err := td.Inspect()
+	prior, err = continuationPrior(td, predecessorReq)
 	if err != nil {
 		return nil, err
 	}
-	timedOut := false
-	if !isTerminal(inspection) {
-		var timeoutErr error
-		timedOut, timeoutErr = releaseTimedOutPredecessor(td, predecessorReq)
-		if timeoutErr != nil {
-			return nil, timeoutErr
-		}
-		if !timedOut {
-			if err = repairPrivateQueueForTask(context.Background(), store, predecessorMeta.SupervisorConfig, predecessorMeta, supervisorOptions, initialSupervisorExecutable, runnerExecutable); err != nil {
-				return nil, err
-			}
-		}
+	if _, admissionErr := validateContinuationAdmission(deps, store.Root, *predecessorReq, *predecessorMeta, prior, request); admissionErr != nil {
+		return nil, admissionErr
 	}
-	if !timedOut {
-		if err = predecessorTerminated(store.Root, td, predecessorReq, supervisorOptions, initialSupervisorExecutable); err != nil {
-			return nil, err
-		}
-	}
-	identity, err := td.ReadProviderIdentity()
+	timedOut, submitted, err := preparePredecessorResolution(store, td, predecessorReq, predecessorMeta, deps)
 	if err != nil {
-		return nil, fmt.Errorf("predecessor session is unavailable: %w", err)
+		return nil, err
 	}
-	prior = &task.PriorSession{Provider: identity.Provider, ConversationID: identity.ConversationID, PredecessorTaskID: id}
+	if timedOut {
+		return prior, nil
+	}
+	if !submitted {
+		return nil, task.ErrRequestConflict
+	}
+	if err = predecessorTerminated(store.Root, td, predecessorReq, deps.SupervisorOptions, deps.InitialSupervisorExecutable); err != nil {
+		return nil, err
+	}
 	return prior, nil
-}
-
-func validatePredecessorCompatibility(request, predecessor task.TaskRecord) error {
-	if predecessor.Provider != request.Provider || predecessor.Mode != request.Mode {
-		return task.ErrIdentityMismatch
-	}
-	if request.Provider == config.ProviderPiJSON && predecessor.CanonicalCwd != request.CanonicalCwd {
-		// Pi's exact-session resume searches globally and prompts to fork when
-		// the stored session belongs to another workspace. The direct JSON
-		// adapter cannot answer that prompt while preserving the requested
-		// session identity, so reject the continuation before admission.
-		return task.ErrIdentityMismatch
-	}
-	return nil
 }
 
 var errPredecessorOutcomeUnavailable = errors.New("predecessor has no authoritative terminal outcome")

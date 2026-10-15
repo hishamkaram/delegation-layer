@@ -68,6 +68,8 @@ the focused repository skill that matches the work:
 
 - [delegation architect](skills/delegation-architect/SKILL.md) for ownership and
   interface design;
+- [supervisor architect](skills/supervisor-architect/SKILL.md) for supervisor
+  lifecycle, migration, cleanup ownership, and duplicate-policy prevention;
 - [Go implementer](skills/go-implementer/SKILL.md) for bounded runtime changes;
 - [Go reviewer](skills/go-reviewer/SKILL.md) for evidence-backed review;
 - [Go test writer](skills/go-test-writer/SKILL.md) for behavior and fault tests;
@@ -83,3 +85,19 @@ Skills are repository instructions and are read explicitly by the working CLI;
 they require no global installation or configuration. Run `make verify-skills`
 after changing a skill or its local links. Root retains ownership of
 integration, review, commits, PRs, CI, and merges.
+
+Supervisor lifecycle changes must use the supervisor architect skill and the
+shared contract's [durable transition matrix and composed-test
+rules](agents/_data/maintainability-contract.md#durable-transition-matrix-and-composed-tests),
+[recovery rules](agents/_data/maintainability-contract.md#recovery-and-verification),
+the [native backend proof](agents/_data/maintainability-contract.md#native-portability-proof),
+and the [live acceptance proof](agents/_data/maintainability-contract.md#live-acceptance-proof).
+Every handoff follows the contract's [source, binary, receipt, and unresolved
+evidence requirements](agents/_data/maintainability-contract.md#handoff-evidence);
+root retains integration and release decisions.
+
+For changes involving process identity, signals, sessions/groups, waiting,
+supervisor endpoints, descriptors, or cleanup, apply the maintainability
+contract's native portability proof. Cross-compilation and upstream
+cross-platform support are not native runtime evidence. Root may claim Linux or
+macOS behavior only after the affected path passes on that operating system.

@@ -12,6 +12,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/app"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/testutil/fakeprovider"
@@ -46,6 +47,7 @@ func NewMain(executable string) *Main {
 	configPath := filepath.Join(filepath.Dir(canonical), fixtureConfigName)
 	m := &Main{executable: canonical, configPath: configPath}
 	m.deps = app.Dependencies{
+		Catalog:                     buildAcceptanceCatalog(m.prepareProfile),
 		PrepareProfile:              m.prepareProfile,
 		PredicateRegistry:           func() predicate.Registry { return acceptanceRegistry },
 		InitialSupervisorExecutable: invalidSupervisorPath,
@@ -217,6 +219,30 @@ func buildAcceptanceRegistry() predicate.Registry {
 		panic(err)
 	}
 	return registry
+}
+
+func buildAcceptanceCatalog(prepare app.PrepareProfile) commonprovider.Catalog {
+	catalog, err := commonprovider.NewCatalog(commonprovider.Registration{
+		Description: commonprovider.Description{
+			ID:               fakeprovider.Provider,
+			SupportedModes:   []string{fakeprovider.Mode},
+			SupportedOptions: []string{commonprovider.OptionContinuation},
+			Continuation:     commonprovider.ContinuationNative,
+			ReadOnly: commonprovider.ReadOnlyCapability{
+				Supported:   true,
+				Mechanism:   commonprovider.ReadOnlyNativePlan,
+				Containment: commonprovider.ReadOnlyProviderOwned,
+			},
+			Runtime:      commonprovider.RuntimeCapability{RequiredFlags: []string{"--fixture"}},
+			Discoverable: true,
+		},
+		Prepare:      commonprovider.ReadyCandidate(prepare),
+		Interpreters: []predicate.Interpreter{fakeprovider.Predicate()},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return catalog
 }
 
 var _ app.PrepareProfile = (*Main)(nil).prepareProfile

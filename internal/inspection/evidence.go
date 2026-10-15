@@ -153,8 +153,21 @@ func validateReceiptRecord(record ReceiptRecord, digest string) error {
 // journal primitive. A failed completion write leaves an ineligible payload.
 // The worker invokes this only after joining native and network work.
 func (o *Operation) Complete(reason ResultReason, facts json.RawMessage, now time.Time) error {
+	return o.CompleteContext(context.Background(), reason, facts, now)
+}
+
+// CompleteContext persists the result and completion under the caller's
+// authoritative lifetime. Replaying the same completion safely repairs a
+// result whose completion record was not published by an earlier attempt.
+func (o *Operation) CompleteContext(ctx context.Context, reason ResultReason, facts json.RawMessage, now time.Time) error {
 	if o == nil || o.control == nil || now.IsZero() {
 		return task.ErrEvidenceFault
+	}
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	result, err := newResultRecord(reason, facts, o.digest, o.factsLimit())
 	if err != nil {
@@ -163,7 +176,24 @@ func (o *Operation) Complete(reason ResultReason, facts json.RawMessage, now tim
 	if reason == ResultEligible && o.Expired(now) {
 		return ErrAdmissionExpired
 	}
-	return withControlTransaction(o.control, func(tx *taskdir.ControlTransaction) error {
+	resultPublished, err := o.completePreparedContext(ctx, reason, result, now)
+	if err == nil || !resultPublished {
+		return err
+	}
+	// Once result.json is durable, this operation owns resolving its paired
+	// completion record. A caller deadline that expires between the two files
+	// must not strand an otherwise valid result forever. The replay remains
+	// create-once and rechecks start/stop authority; taskdir supplies the one
+	// bounded persistence fallback for this recovery attempt.
+	_, repairErr := o.completePreparedContext(context.WithoutCancel(ctx), reason, result, now)
+	if repairErr == nil {
+		return nil
+	}
+	return errors.Join(err, repairErr)
+}
+
+func (o *Operation) completePreparedContext(ctx context.Context, reason ResultReason, result ResultRecord, now time.Time) (resultPublished bool, resultErr error) {
+	resultErr = withControlTransactionContext(ctx, o.control, func(tx *taskdir.ControlTransaction) error {
 		if stopErr := rejectStoppedEligibility(tx, reason); stopErr != nil {
 			return stopErr
 		}
@@ -187,9 +217,11 @@ func (o *Operation) Complete(reason ResultReason, facts json.RawMessage, now tim
 		if _, putErr := tx.Put(resultRecordName, result); putErr != nil {
 			return putErr
 		}
+		resultPublished = true
 		_, putErr := tx.Put(completionRecordName, completion)
 		return putErr
 	})
+	return resultPublished, resultErr
 }
 
 func rejectStoppedEligibility(tx *taskdir.ControlTransaction, reason ResultReason) error {

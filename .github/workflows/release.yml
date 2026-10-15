@@ -26,7 +26,7 @@ jobs:
   release:
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -37,7 +37,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.1'
+          go-version: '1.27.2'
           cache: false
 
       - name: Set up Node.js
@@ -113,53 +113,35 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ github.ref_name }}
     steps:
-      - name: Download and verify draft archive
+      - name: Checkout the release verification harness
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify and exercise the exact release archive
         shell: bash
+        env:
+          RECEIPT: ${{ runner.temp }}/delegation-layer-archive-receipt.json
         run: |
-          release_dir="${RUNNER_TEMP}/release"
-          mkdir -p "${release_dir}"
-          gh release download "${TAG}" \
+          python3 scripts/verify_release_archive.py verify \
+            --mode archive-smoke \
+            --assets-dir "${RUNNER_TEMP}/delegation-layer-release" \
+            --extract-dir "${RUNNER_TEMP}/delegation-layer-release/extracted" \
+            --receipt "${RECEIPT}" \
+            --tag "${TAG}" \
             --repo "${GH_REPO}" \
-            --pattern 'delegation-layer_*.tar.gz' \
-            --pattern checksums.txt \
-            --dir "${release_dir}"
-          cd "${release_dir}"
-          case "$(uname -s)" in
-            Linux) os=Linux ;;
-            Darwin) os=Darwin ;;
-            *) echo "Unsupported operating system: $(uname -s)" >&2; exit 1 ;;
-          esac
-          case "$(uname -m)" in
-            x86_64|amd64) arch=amd64 ;;
-            arm64|aarch64) arch=arm64 ;;
-            *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-          archive="delegation-layer_${TAG#v}_${os}_${arch}.tar.gz"
-          test -f "${archive}"
-          checksum_line="$(grep -F "  ${archive}" checksums.txt)"
-          if command -v sha256sum >/dev/null 2>&1; then
-            printf '%s\n' "${checksum_line}" | sha256sum -c -
-          else
-            printf '%s\n' "${checksum_line}" | shasum -a 256 -c -
-          fi
-          gh attestation verify "${archive}" \
-            --repo "${GH_REPO}" \
-            --signer-workflow "${GH_REPO}/.github/workflows/release.yml"
-          mkdir extracted
-          tar -xzf "${archive}" -C extracted
-          cd extracted
-          test "$(./delegate version | awk '{print $2}')" = "${TAG#v}"
-          test -x ./pueue
-          test -x ./pueued
-          test -n "$(./pueue --version)"
-          test -n "$(./pueued --version)"
-          ./delegate providers --json >/dev/null
-          ./delegate capabilities --provider pi:json --json >/dev/null
-          test -x ./delegate-run
-          if ./delegate-run --root "${RUNNER_TEMP}/missing-state" invalid-task --json >/dev/null 2>&1; then
-            echo 'delegate-run unexpectedly accepted an invalid task invocation.' >&2
-            exit 1
-          fi
+            --source-revision "${GITHUB_SHA}"
+
+      - name: Retain the sanitized Linux/macOS archive receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-archive-receipt-${{ matrix.os }}
+          path: ${{ runner.temp }}/delegation-layer-archive-receipt.json
+          if-no-files-found: error
+          retention-days: 30
 
   promote:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}

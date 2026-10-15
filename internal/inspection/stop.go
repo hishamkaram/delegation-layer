@@ -50,6 +50,7 @@ type StopPermit struct {
 	state         *oneShot
 	rootID        string
 	taskID        string
+	queueGroup    string
 	numericTaskID int64
 	supervisor    task.SupervisorRef
 }
@@ -78,6 +79,14 @@ func (p *StopPermit) InspectionStopTaskID() string {
 		return ""
 	}
 	return p.taskID
+}
+
+// InspectionQueueGroup returns the queue group saved in the operation.
+func (p *StopPermit) InspectionQueueGroup() string {
+	if p == nil {
+		return ""
+	}
+	return p.queueGroup
 }
 
 // InspectionStopNumericTaskID returns a defensive copy of the saved numeric
@@ -135,6 +144,7 @@ func (o *Operation) ClaimStop(deadline time.Time) (*StopPermit, StopRequestRecor
 		state:         newOneShot(),
 		rootID:        o.request.RootID,
 		taskID:        o.request.TaskID,
+		queueGroup:    o.request.Group,
 		numericTaskID: record.NumericTaskID,
 		supervisor:    o.request.Binding.Supervisor,
 	}, record, nil
@@ -183,7 +193,7 @@ func (o *Operation) RecordStopReplyContext(ctx context.Context, id int64, action
 	if err != nil {
 		return err
 	}
-	if request.NumericTaskID != id || (action != "remove" && action != "kill") {
+	if request.NumericTaskID != id || (action != "remove" && action != "kill" && action != "terminate") {
 		return task.ErrEvidenceFault
 	}
 	_, err = o.control.PutContext(ctx, stopReplyRecordName, StopReplyRecord{

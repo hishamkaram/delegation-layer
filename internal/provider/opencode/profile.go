@@ -16,7 +16,7 @@ import (
 // The provider owns configuration, extensions, authentication, and permission
 // resolution; the core still owns the supervised runtime capability probe.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, true, nil)
+	return prepareCandidate(request, true, nil, true)
 }
 
 // PrepareExistingCandidate selects the preparation contract recorded by an
@@ -24,10 +24,10 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 // tasks retain the isolated policy inspection and launch flags they recorded.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
 	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
-	return prepareCandidate(request, native, &meta)
+	return prepareCandidate(request, native, &meta, meta.RuntimePreflightSHA256 != "" && native)
 }
 
-func prepareCandidate(request task.TaskRecord, native bool, meta *task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+func prepareCandidate(request task.TaskRecord, native bool, meta *task.MetaRecord, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
 	arguments, err := runArgumentsForProfile(request, native)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -49,17 +49,31 @@ func prepareCandidate(request task.TaskRecord, native bool, meta *task.MetaRecor
 		return commonprovider.ProfileCandidate{}, err
 	}
 	if !native {
-		if err := validateLegacyPreparation(request, environment, cli.SHA256); err != nil {
+		err = validateLegacyPreparation(request, environment, cli.SHA256)
+		if err != nil {
+			return commonprovider.ProfileCandidate{}, err
+		}
+	}
+	var capability string
+	if native && allowStaticAdmit {
+		capability, err = commonprovider.RuntimeCapabilityDigest(definition)
+		if err != nil {
 			return commonprovider.ProfileCandidate{}, err
 		}
 	}
 	predicateReference := candidatePredicateReference(request.Mode, native, meta)
-	return commonprovider.ProfileCandidate{
+	candidate := commonprovider.ProfileCandidate{
 		Directory:     request.CanonicalCwd,
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
 		Finalize:      candidateFinalizer(request, arguments, launchEnvironment, cli, environment, native, predicateReference),
-	}, nil
+	}
+	if capability != "" {
+		candidate.Admit = func() (commonprovider.PreparedProfile, error) {
+			return buildNativePreparedProfile(request, arguments, launchEnvironment, cli, environment, predicateReference, "", cli.SHA256, capability)
+		}
+	}
+	return candidate, nil
 }
 
 func candidateEnvironment(native bool, meta *task.MetaRecord) (profileEnvironment, error) {
@@ -115,7 +129,7 @@ func validateLegacyPreparation(request task.TaskRecord, environment profileEnvir
 
 func candidatePredicateReference(mode string, native bool, meta *task.MetaRecord) task.PredicateRef {
 	if native {
-		if meta != nil && (meta.Predicate.Equal(historicalReferenceForMode(mode)) || meta.Predicate.Equal(historicalCurrentReferenceForMode(mode))) {
+		if meta != nil && (meta.Predicate.Equal(historicalReferenceForMode(mode)) || meta.Predicate.Equal(historicalCurrentReferenceForMode(mode)) || meta.Predicate.Equal(historicalCurrentV4ReferenceForMode(mode))) {
 			return meta.Predicate
 		}
 		return ReferenceForMode(mode)
@@ -149,11 +163,15 @@ func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []s
 	if runtime.Executable != cli.Path || runtime.SHA256 != cli.SHA256 {
 		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: runtime executable changed during inspection", ErrUnsupportedProfile)
 	}
+	return buildNativePreparedProfile(request, arguments, launchEnvironment, cli, environment, predicateReference, runtime.Version, runtime.SHA256, "")
+}
+
+func buildNativePreparedProfile(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, predicateReference task.PredicateRef, observedVersion, runtimeSHA256, preflightSHA256 string) (commonprovider.PreparedProfile, error) {
 	approval, err := nativeApproval(request.Mode)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
-	effective, err := commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, runtime.SHA256, approval)
+	effective, err := commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, runtimeSHA256, approval)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
@@ -162,14 +180,15 @@ func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []s
 			Executable: cli.Path, ExecutableSHA256: cli.SHA256, Arguments: cloneArguments(arguments), Directory: request.CanonicalCwd,
 			Environment: slices.Clone(launchEnvironment), Predicate: predicateReference,
 		},
-		ObservedVersion: runtime.Version,
-		Effective:       task.CloneEffectiveConfig(effective),
-		WritableRoots:   slices.Clone(environment.WritableRoots),
+		ObservedVersion:        observedVersion,
+		RuntimePreflightSHA256: preflightSHA256,
+		Effective:              task.CloneEffectiveConfig(effective),
+		WritableRoots:          slices.Clone(environment.WritableRoots),
 		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 			return NewIdentityObserver(request.TaskID, expected, record)
 		},
 	}
-	if validateErr := prepared.Validate(request); validateErr != nil {
+	if validateErr := prepared.ValidateAdmission(request); validateErr != nil {
 		return commonprovider.PreparedProfile{}, validateErr
 	}
 	return prepared, nil

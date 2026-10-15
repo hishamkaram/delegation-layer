@@ -30,8 +30,11 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
    consumer. Keep preparation and interpretation provider-owned while shared
    execution and publication stay in the core.
 2. Trace data and resource lifetimes through admission, launch, evidence
-   sealing, collection, and publication. Identify where ownership transfers and
-   which failures leave durable evidence.
+   sealing, collection, and publication. Record every affected state change in
+   the [canonical durable transition
+   matrix](../../agents/_data/maintainability-contract.md#durable-transition-matrix-and-composed-tests),
+   including ownership transfer, commit point, recovery, consumer verdict, and
+   named composed test.
 3. Compare the proposed abstraction with existing task, execution, predicate,
    usage, lifecycle, catalog, and harness types. Reuse a type when it already
    expresses the contract; add a new one only with a concrete consumer.
@@ -40,17 +43,22 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
    the clearest ownership and lowest supported maintenance cost, then record
    why the alternatives were rejected.
 5. Check duplicate registration, historical interpretation, unsupported
-   options, identity/session compatibility, and the no-launch collection rule.
-6. Write a bounded design or implementation handoff naming consumers,
-   invariants, tests, acceptance evidence, and deferred work. Record a reason
-   for each new dependency or abstraction.
+   options, identity/session compatibility, the no-launch collection rule, and
+   the invariants' [create-once ambiguity
+   classifications](../../agents/_data/delegation-invariants.md#ambiguous-create-once-writes).
+6. Write the bounded [evidence
+   handoff](../../agents/_data/maintainability-contract.md#handoff-evidence) for
+   the affected matrix rows. Record a reason for each new dependency or
+   abstraction.
 
 ## Deliverables
 
 - a boundary map with ownership and lifetime responsibilities;
-- narrow interface and catalog decisions tied to real consumers;
+- canonical transition rows and narrow interface/catalog decisions tied to real
+  consumers;
 - compatibility and failure-path notes; and
-- a file-bounded handoff with validation evidence.
+- a contract-complete handoff with source, binary, receipt, and unresolved
+  evidence.
 
 ## Exit criteria
 
@@ -60,5 +68,7 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
   explicit preservation or migration decision.
 - The design has a meaningful test and acceptance path, with no arbitrary
   coverage or file-size gate added.
-- Root can review the handoff without needing an unrecorded architectural
-  assumption.
+- Every affected row has a composed test through its production stores and real
+  consumers, or an explicit unresolved evidence item.
+- Root can reproduce and review the handoff without an unrecorded source,
+  binary, or architectural assumption.

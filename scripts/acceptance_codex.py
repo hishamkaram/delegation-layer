@@ -18,6 +18,7 @@ import secrets
 import shlex
 import shutil
 import sys
+import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
@@ -44,9 +45,11 @@ from acceptance_provider_common import (
     write_bytes,
 )
 from acceptance_supervisor_common import (
+    DirectoryOwner,
     Processes,
     config_for,
     digest,
+    finalize_acceptance_artifacts,
     read_json,
     sha,
     write_json,
@@ -736,6 +739,22 @@ def provider_record_snapshot(directory: Path) -> dict[str, dict[str, object]]:
 
 class CodexAcceptance:
     def __init__(self, args: argparse.Namespace):
+        self._constructor_ownership = DirectoryOwner()
+        self._pueue_ownership = DirectoryOwner()
+        try:
+            self._initialize(args)
+        except BaseException as error:
+            try:
+                self._constructor_ownership.rollback()
+                self._pueue_ownership.rollback()
+            except BaseException as rollback_error:
+                raise AcceptanceFailure("Codex constructor cleanup failed: "
+                                         + str(rollback_error)) from error
+            raise
+        self.owned_directories = self._constructor_ownership.transfer()
+        self.pueue_owned_directories = ()
+
+    def _initialize(self, args: argparse.Namespace) -> None:
         self.args = args
         self.environment = os.environ.copy()
         self.tools = Path(args.tools).resolve(strict=True)
@@ -762,14 +781,29 @@ class CodexAcceptance:
         os.chmod(self.output, 0o700)
 
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(6)
-        self.state_parent = ensure_private_directory(DEFAULT_STATE_PARENT / ("codex-" + stamp),
-                                                      "acceptance state parent", create=True)
-        self.state = ensure_private_directory(self.state_parent / "state", "acceptance state", create=True)
-        self.workspace = ensure_private_directory(DEFAULT_WORKSPACE_PARENT / ("codex-" + stamp),
-                                                   "acceptance workspace", create=True)
-        self.sibling = ensure_private_directory(DEFAULT_WORKSPACE_PARENT / ("codex-" + stamp + "-sibling"),
-                                                 "acceptance sibling", create=True)
-        self.briefs = ensure_private_directory(self.state_parent / "briefs", "acceptance briefs", create=True)
+        if not DEFAULT_STATE_PARENT.exists() and not DEFAULT_STATE_PARENT.is_symlink():
+            state_root = self._constructor_ownership.create(
+                "acceptance state root", DEFAULT_STATE_PARENT,
+                DEFAULT_STATE_PARENT.parent, parents=True).directory
+        else:
+            state_root = ensure_private_directory(DEFAULT_STATE_PARENT, "acceptance state root")
+        if not DEFAULT_WORKSPACE_PARENT.exists() and not DEFAULT_WORKSPACE_PARENT.is_symlink():
+            workspace_root = self._constructor_ownership.create(
+                "acceptance workspace root", DEFAULT_WORKSPACE_PARENT,
+                DEFAULT_WORKSPACE_PARENT.parent, parents=True).directory
+        else:
+            workspace_root = ensure_private_directory(DEFAULT_WORKSPACE_PARENT,
+                                                       "acceptance workspace root")
+        self.state_parent = self._constructor_ownership.create(
+            "acceptance state parent", state_root / ("codex-" + stamp), state_root).directory
+        self.state = self._constructor_ownership.create(
+            "acceptance state", self.state_parent / "state", self.state_parent).directory
+        self.workspace = self._constructor_ownership.create(
+            "acceptance workspace", workspace_root / ("codex-" + stamp), workspace_root).directory
+        self.sibling = self._constructor_ownership.create(
+            "acceptance sibling", workspace_root / ("codex-" + stamp + "-sibling"), workspace_root).directory
+        self.briefs = self._constructor_ownership.create(
+            "acceptance briefs", self.state_parent / "briefs", self.state_parent).directory
         self.probe = self.state_parent / "probe.sh"
         reject_runtime_roots(self.probe, "acceptance probe", self.environment)
         for path, label in ((self.state, "acceptance state"), (self.workspace, "acceptance workspace"),
@@ -806,7 +840,8 @@ class CodexAcceptance:
         self.sibling_before: dict[str, dict[str, object]] | None = None
 
         git = resolve_executable(shutil.which("git"), Path("/usr/bin/git"), "git")
-        self.processes = Processes(self.output / "processes", self.environment)
+        self.processes = Processes(self.output / "processes", self.environment,
+                                   owner=self._constructor_ownership)
         self.ops = NativeTaskOps(self.processes, self.delegate, self.runner, self.pueue,
                                  self.state_parent, self.state, self.output,
                                  watch_seconds=WATCH_SECONDS)
@@ -859,17 +894,28 @@ class CodexAcceptance:
 
     def setup(self) -> None:
         self.require_probe_unchanged("before setup")
-        PUEUE_PARENT.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if sys.platform != "darwin":
+        if PUEUE_PARENT.exists() or PUEUE_PARENT.is_symlink():
             ensure_private_directory(PUEUE_PARENT, "private supervisor parent")
-        pueue_base = PUEUE_PARENT / ("delegation-layer-codex-" + secrets.token_hex(8))
-        self.pueue_base = ensure_private_directory(pueue_base, "private pueue base", create=True)
-        ensure_private_directory(self.pueue_base / "state", "private pueue state", create=True)
-        ensure_private_directory(self.pueue_base / "run", "private pueue runtime", create=True)
-        aliases = self.pueue_base / "aliases.yml"
-        write_bytes(aliases, b"{}\n")
-        self.pueue_config = self.pueue_base / "pueue.yml"
-        write_json(self.pueue_config, config_for(self.pueue_base))
+        else:
+            ensure_private_directory(PUEUE_PARENT, "private supervisor parent", create=True)
+        try:
+            pueue_base = Path(tempfile.mkdtemp(
+                prefix="delegation-layer-codex-", dir=str(PUEUE_PARENT)))
+            pueue_token = self._pueue_ownership.adopt_created(
+                "private pueue", pueue_base, PUEUE_PARENT)
+            self.pueue_base = pueue_token.directory
+            self._pueue_ownership.create(
+                "private pueue state", self.pueue_base / "state", self.pueue_base)
+            self._pueue_ownership.create(
+                "private pueue runtime", self.pueue_base / "run", self.pueue_base)
+            aliases = self.pueue_base / "aliases.yml"
+            write_bytes(aliases, b"{}\n")
+            self.pueue_config = self.pueue_base / "pueue.yml"
+            write_json(self.pueue_config, config_for(self.pueue_base))
+            self.pueue_owned_directories = self._pueue_ownership.transfer()
+        except BaseException:
+            self._pueue_ownership.rollback()
+            raise
         pueue_version = self.direct("pueue-version", [self.pueue, "--version"], timeout=15)
         pueued_version = self.direct("pueued-version", [self.pueued, "-c", self.pueue_config, "--version"], timeout=15)
         self.pueue_version = observed_pueue_version(
@@ -1261,6 +1307,14 @@ class CodexAcceptance:
         self.closed = self.ops.closed
         return result
 
+    def finalize(self, success: bool) -> bool:
+        """Remove this completed run's private state and raw process captures."""
+        directories = list(self.owned_directories)
+        directories.extend(self.pueue_owned_directories)
+        return finalize_acceptance_artifacts(
+            self.output, self.closed, tuple(directories), success,
+            raw_process_captures_token=self.processes.capture_root)
+
     def run(self) -> None:
         try:
             self.setup()
@@ -1268,7 +1322,7 @@ class CodexAcceptance:
             self.run_resume(fresh)
             self.replay()
             self.shutdown()
-            write_json(self.output / "success.json", {
+            success_receipt = {
                 "status": ACCEPTANCE_STATUS,
                 "provider": PROVIDER,
                 "native_ai_turns": len(self.tasks),
@@ -1281,23 +1335,72 @@ class CodexAcceptance:
                 "replay_launches": 0,
                 "natural_daemon_shutdown": self.closed,
                 "signals_sent": 0,
-            })
+            }
+            if not self.finalize(True):
+                raise AcceptanceFailure("completed acceptance artifacts could not be cleaned")
+            write_json(self.output / "success.json", success_receipt, replace=True)
             print("PASS Codex acceptance", flush=True)
         except BaseException as error:
-            naturally_shutdown = self.safe_failure_shutdown()
-            write_json(self.output / "failure.json", {
-                "status": "BLOCKED" if isinstance(error, BlockedFailure) else "failed",
-                "error": str(error),
-                "traceback": traceback.format_exc(),
-                "natural_daemon_shutdown": naturally_shutdown or self.closed,
-                "signals_sent": 0,
-                "unknown_termination_preserved": True,
-                "state": str(self.state),
-                "workspace": str(self.workspace),
-                "tasks": dict(self.tasks),
-                "dispatch_attempts": sorted(self.dispatch_attempts),
-                "daemon_pid": None if self.daemon is None else self.daemon.pid,
-            })
+            receipt_removal_error: BaseException | None = None
+            try:
+                (self.output / "success.json").unlink(missing_ok=True)
+            except BaseException as removal_error:
+                receipt_removal_error = removal_error
+            try:
+                traceback_text = traceback.format_exc()
+                write_json(self.output / "failure.json", {
+                    "status": "BLOCKED" if isinstance(error, BlockedFailure) else "failed",
+                    "error": str(error),
+                    "traceback": traceback_text,
+                    "signals_sent": 0,
+                    "unknown_termination_preserved": True,
+                    "state": str(self.state),
+                    "workspace": str(self.workspace),
+                    "tasks": dict(self.tasks),
+                    "dispatch_attempts": sorted(self.dispatch_attempts),
+                    "daemon_pid": None if self.daemon is None else self.daemon.pid,
+                })
+            except BaseException as diagnostic_error:
+                print("WARNING Codex acceptance diagnostics were not written: "
+                      + str(diagnostic_error), file=sys.stderr, flush=True)
+
+            cleanup_errors: list[BaseException] = []
+            naturally_shutdown = False
+            artifact_finalized = False
+            if receipt_removal_error is not None:
+                cleanup_errors.append(receipt_removal_error)
+            try:
+                if not self.safe_failure_shutdown():
+                    cleanup_errors.append(
+                        AcceptanceFailure("private supervisor failure shutdown was not proven"))
+                else:
+                    naturally_shutdown = True
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+            finally:
+                try:
+                    if not self.finalize(False):
+                        cleanup_errors.append(
+                            AcceptanceFailure("acceptance artifact finalization was not completed"))
+                    else:
+                        artifact_finalized = True
+                except BaseException as finalize_error:
+                    cleanup_errors.append(finalize_error)
+            try:
+                write_json(self.output / "failure-cleanup.json", {
+                    "status": "completed" if not cleanup_errors else "failed",
+                    "natural_daemon_shutdown": naturally_shutdown,
+                    "artifact_finalization_completed": artifact_finalized,
+                    "passed_receipt_absent": not (self.output / "success.json").exists(),
+                    "signals_sent": 0,
+                }, replace=True)
+            except BaseException as evidence_error:
+                print("WARNING Codex cleanup evidence was not written: "
+                      + str(evidence_error), file=sys.stderr, flush=True)
+
+            if cleanup_errors:
+                raise AcceptanceFailure("Codex acceptance cleanup failed: "
+                                         + str(cleanup_errors[0])) from error
             raise
 
 

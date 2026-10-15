@@ -2,9 +2,9 @@
 """Validate the repository's deliberately small skill format.
 
 This checker is intentionally narrower than YAML or Markdown.  It validates
-the two-line metadata contract, required repository skills, local links,
-explicit scaffold markers, and command-shaped ``make`` references.  It does
-not attempt to render Markdown or infer the quality of a skill's prose.
+the two-line metadata contract, required repository skills and authority links,
+local links, explicit scaffold markers, and command-shaped ``make`` references.
+It does not attempt to render Markdown or infer the quality of a skill's prose.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from typing import Iterable, Iterator, Sequence
 
 REQUIRED_SKILLS: tuple[str, ...] = (
     "delegation-architect",
+    "supervisor-architect",
     "go-implementer",
     "go-reviewer",
     "go-test-writer",
@@ -28,6 +29,35 @@ REQUIRED_SKILLS: tuple[str, ...] = (
     "docs-updater",
     "add-an-adapter",
 )
+
+# These are repository-owned authority documents, so their links are stable
+# requirements. The verifier checks destinations, not whether prose mentions a
+# particular policy.
+REQUIRED_AUTHORITY_LINKS: dict[str, tuple[str, ...]] = {
+    "add-an-adapter": (
+        "agents/_data/maintainability-contract.md",
+        "agents/_data/adapter-contract.md",
+        "agents/_data/delegation-invariants.md",
+        "agents/_data/code-quality-floor.md",
+    ),
+    "go-reviewer": (
+        "agents/_data/maintainability-contract.md",
+        "agents/_data/delegation-invariants.md",
+        "agents/_data/adapter-contract.md",
+        "agents/_data/code-quality-floor.md",
+    ),
+    "live-e2e": (
+        "agents/_data/maintainability-contract.md",
+        "agents/_data/adapter-contract.md",
+        "agents/_data/delegation-invariants.md",
+        "docs/security.md",
+    ),
+    "supervisor-architect": (
+        "agents/_data/maintainability-contract.md",
+        "agents/_data/delegation-invariants.md",
+        "docs/architecture.md",
+    ),
+}
 
 NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 FRONTMATTER_FIELD_RE = re.compile(r"^(name|description):[ \t]+(.*)$")
@@ -336,6 +366,40 @@ def _validate_links(document: SkillDocument, root: Path) -> Iterator[str]:
             yield f"{document.path}:{actual_line}: local link {target!r} does not exist"
 
 
+def _local_link_paths(document: SkillDocument) -> set[Path]:
+    """Return resolved local destinations from supported inline links."""
+
+    paths: set[Path] = set()
+    for _, raw_target, parse_error in _markdown_links(document.body):
+        if parse_error is not None or raw_target is None:
+            continue
+        target, target_error = _link_target(raw_target)
+        if target_error is not None or target is None:
+            continue
+        if (target.startswith("//") or target.startswith("/") or
+                re.match(r"^[A-Za-z]:[\\/]", target) or
+                target.startswith("#") or
+                re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target)):
+            continue
+        local_target = target.split("#", 1)[0]
+        if local_target:
+            paths.add((document.path.parent / local_target).resolve(strict=False))
+    return paths
+
+
+def _validate_required_authority_links(
+        document: SkillDocument, root: Path) -> Iterator[str]:
+    required = REQUIRED_AUTHORITY_LINKS.get(document.name, ())
+    linked_paths = _local_link_paths(document)
+    for relative_target in required:
+        target = (root / relative_target).resolve(strict=False)
+        if target not in linked_paths:
+            yield (
+                f"{document.path}: required authoritative link to "
+                f"{relative_target!r} is missing"
+            )
+
+
 def _make_targets(makefile: Path) -> tuple[set[str], str | None]:
     try:
         lines = makefile.read_text(encoding="utf-8").splitlines()
@@ -493,6 +557,7 @@ def verify(root: Path, required_skills: Sequence[str] = REQUIRED_SKILLS) -> list
             errors.append(f"{root / 'Makefile'}: cannot read Makefile: {make_error}")
     for document in documents:
         errors.extend(_validate_links(document, root))
+        errors.extend(_validate_required_authority_links(document, root))
         errors.extend(_validate_body(document, make_targets))
     return sorted(set(errors))
 

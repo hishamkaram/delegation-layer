@@ -99,44 +99,22 @@ jobs:
           name: release-assets-${{ inputs.tag }}
           path: ${{ runner.temp }}/delegation-layer-release
 
-      - name: Verify the exact release artifact
+      - name: Verify the exact release archive and packaged default path
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ inputs.tag }}
+          RECEIPT: ${{ runner.temp }}/delegation-layer-archive-receipt.json
         shell: bash
         run: |
-          release_dir="${RUNNER_TEMP}/delegation-layer-release"
-          cd "${release_dir}"
-          case "$(uname -s)" in
-            Linux) os=Linux ;;
-            Darwin) os=Darwin ;;
-            *) echo "Unsupported operating system: $(uname -s)" >&2; exit 1 ;;
-          esac
-          case "$(uname -m)" in
-            x86_64|amd64) arch=amd64 ;;
-            arm64|aarch64) arch=arm64 ;;
-            *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
-          esac
-          archive="delegation-layer_${TAG#v}_${os}_${arch}.tar.gz"
-          test -f "${archive}"
-          checksum_line="$(grep -F "  ${archive}" checksums.txt)"
-          if command -v sha256sum >/dev/null 2>&1; then
-            printf '%s\n' "${checksum_line}" | sha256sum -c -
-          else
-            printf '%s\n' "${checksum_line}" | shasum -a 256 -c -
-          fi
-          gh attestation verify "${archive}" \
+          python3 scripts/verify_release_archive.py verify \
+            --mode native-acceptance \
+            --assets-dir "${RUNNER_TEMP}/delegation-layer-release" \
+            --extract-dir "${RUNNER_TEMP}/delegation-layer-release/extracted" \
+            --receipt "${RECEIPT}" \
+            --tag "${TAG}" \
             --repo "${GH_REPO}" \
-            --signer-workflow "${GH_REPO}/.github/workflows/release.yml"
-          artifact_dir="${release_dir}/extracted"
-          mkdir -p "${artifact_dir}"
-          tar -xzf "${archive}" -C "${artifact_dir}"
-          test -x "${artifact_dir}/delegate"
-          test -x "${artifact_dir}/delegate-run"
-          test -x "${artifact_dir}/pueue"
-          test -x "${artifact_dir}/pueued"
-          printf '%s\n' "${artifact_dir}" > "${RUNNER_TEMP}/delegation-layer-artifact-dir"
+            --source-revision "${GITHUB_SHA}"
 
       - name: Configure OpenCode tool-capable acceptance model
         shell: bash
@@ -151,9 +129,81 @@ jobs:
           printf 'OPENCODE_LIVE_MODEL=%s\n' "${model}" >>"${GITHUB_ENV}"
 
       - name: Prove the released CLI with authenticated native providers
+        id: native_live
         env:
           DELEGATE_ACCEPTANCE_BIN_DIR: ${{ runner.temp }}/delegation-layer-release/extracted
+          DELEGATE_ACCEPTANCE_OUTPUT_ROOT: ${{ github.workspace }}/.native-acceptance/native-aggregate-${{ github.run_id }}
+          DELEGATE_ACCEPTANCE_TAG: ${{ inputs.tag }}
+          DELEGATE_ACCEPTANCE_SOURCE_REVISION: ${{ github.sha }}
+          DELEGATE_ACCEPTANCE_RESOLVED_RETENTION: '3'
           DELEGATION_REQUIRE_LIVE_ACCEPTANCE: '1'
+          EXIT_CODE_FILE: ${{ runner.temp }}/delegation-layer-native-acceptance.exit
         run: |
           export PATH="${DELEGATE_ACCEPTANCE_BIN_DIR}:${PATH}"
-          ./scripts/acceptance_native_all.sh
+          set -eu
+          if ./scripts/acceptance_native_all.sh; then
+            exit_code=0
+          else
+            exit_code=$?
+          fi
+          printf '%s\n' "${exit_code}" > "${EXIT_CODE_FILE}"
+          exit "${exit_code}"
+
+      - name: Finalize the native package identity receipt
+        if: always()
+        env:
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+          SOURCE_REVISION: ${{ github.sha }}
+          ACCEPTANCE_OUTCOME: ${{ steps.native_live.outcome }}
+          ARCHIVE_RECEIPT: ${{ runner.temp }}/delegation-layer-archive-receipt.json
+          NATIVE_RECEIPT: ${{ runner.temp }}/delegation-layer-native-acceptance-receipt.json
+          AGGREGATE_RECEIPT: ${{ github.workspace }}/.native-acceptance/native-aggregate-${{ github.run_id }}/aggregate-receipt.json
+          EXIT_CODE_FILE: ${{ runner.temp }}/delegation-layer-native-acceptance.exit
+        shell: bash
+        run: |
+          python3 scripts/verify_release_archive.py finalize-native \
+            --archive-receipt "${ARCHIVE_RECEIPT}" \
+            --aggregate-receipt "${AGGREGATE_RECEIPT}" \
+            --assets-dir "${RUNNER_TEMP}/delegation-layer-release" \
+            --extract-dir "${RUNNER_TEMP}/delegation-layer-release/extracted" \
+            --receipt "${NATIVE_RECEIPT}" \
+            --exit-code-file "${EXIT_CODE_FILE}" \
+            --acceptance-outcome "${ACCEPTANCE_OUTCOME:-skipped}" \
+            --tag "${TAG}" \
+            --repo "${REPO}" \
+            --source-revision "${SOURCE_REVISION}"
+
+      - name: Stage exact sanitized native evidence
+        if: always()
+        env:
+          TAG: ${{ inputs.tag }}
+          SOURCE_REVISION: ${{ github.sha }}
+          STAGED_EVIDENCE: ${{ runner.temp }}/native-acceptance-evidence
+          ARCHIVE_RECEIPT: ${{ runner.temp }}/delegation-layer-archive-receipt.json
+          NATIVE_RECEIPT: ${{ runner.temp }}/delegation-layer-native-acceptance-receipt.json
+          AGGREGATE_RECEIPT: ${{ github.workspace }}/.native-acceptance/native-aggregate-${{ github.run_id }}/aggregate-receipt.json
+        shell: bash
+        run: |
+          if python3 scripts/native_acceptance_evidence.py stage \
+            --aggregate-receipt "${AGGREGATE_RECEIPT}" \
+            --output "${STAGED_EVIDENCE}" \
+            --archive-receipt "${ARCHIVE_RECEIPT}" \
+            --native-receipt "${NATIVE_RECEIPT}" \
+            --tag "${TAG}" \
+            --source-revision "${SOURCE_REVISION}"; then
+            :
+          else
+            stage_status=$?
+            echo "sanitized native evidence staging failed exit=${stage_status}" >&2
+            exit "${stage_status}"
+          fi
+
+      - name: Retain the sanitized native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-native-acceptance-receipt-${{ inputs.tag }}
+          path: ${{ runner.temp }}/native-acceptance-evidence
+          if-no-files-found: error
+          retention-days: 30

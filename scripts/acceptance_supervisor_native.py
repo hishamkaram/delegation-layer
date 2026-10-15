@@ -16,8 +16,8 @@ import traceback
 import uuid
 
 from acceptance_supervisor_common import (
-    Processes, config_for, digest, inherited_environment, read_json,
-    require, sha, wait_until, write_json,
+    DirectoryOwner, Processes, config_for, digest, inherited_environment,
+    read_json, require, rollback_owned_directories, sha, wait_until, write_json,
 )
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps
 from acceptance_supervisor_yaml import YAMLChecks
@@ -37,6 +37,14 @@ EXPECTED_EXECUTION_EVENTS = (
     "stdout-eof", "stderr-eof", "stdout-raw-closed", "stderr-raw-closed",
     "completion-observed", "timer-disarmed", "sealed", "published",
 )
+
+
+def supervisor_operation(argv):
+    if argv[3:] == ["add", "--help"]:
+        return "add-probe"
+    if argv[3:] == ["enqueue", "--help"]:
+        return "enqueue-probe"
+    return argv[3]
 
 
 def validate_execution_event_sequence(names):
@@ -90,9 +98,33 @@ class NativeSuite:
         self.pueue, self.pueued = Path(pueue).resolve(strict=True), Path(pueued).resolve(strict=True)
         self.output = Path(output).resolve()
         self.output.mkdir(mode=0o700, parents=True)
+        ownership = DirectoryOwner()
         self.base = Path(tempfile.mkdtemp(prefix="dl-", dir="/tmp")).resolve(strict=True)
-        self.base.chmod(0o700)
-        self.processes = Processes(self.output / "processes")
+        try:
+            base_token = ownership.adopt_created(
+                "native supervisor", self.base, self.base.parent)
+            self.base = base_token.directory
+            self.state = self.base / "state"
+            self.run_directory = self.base / "run"
+            self.events = self.base / "events"
+            self.provider_records = self.base / "provider-records"
+            self.work = self.base / "work space ' ; literal"
+            self.bindir = self.base / "cli space ' ; literal"
+            for label, path in (
+                ("native supervisor state", self.state),
+                ("native supervisor runtime", self.run_directory),
+                ("native supervisor events", self.events),
+                ("native provider records", self.provider_records),
+                ("native provider workspace", self.work),
+                ("native supervisor binaries", self.bindir),
+            ):
+                ownership.create(label, path, self.base)
+            self.processes = Processes(
+                self.output / "processes", owner=ownership)
+        except BaseException:
+            ownership.rollback()
+            raise
+        self.owned_directories = ownership.transfer()
         self.daemon = None
         self.native_job = None
         self.shutdown_gate = False
@@ -103,19 +135,13 @@ class NativeSuite:
         self.case_ids = []
 
     def setup(self):
-        for name in ("state", "run", "events", "provider-records"):
-            (self.base / name).mkdir(mode=0o700)
         (self.base / "aliases.yml").write_text("{}\n")
         (self.base / "aliases.yml").chmod(0o600)
         self.config = config_for(self.base)
         self.config_path = self.base / "p.yml"
         write_json(self.config_path, self.config)
         self.config_hash = digest(self.config_path)
-        self.work = self.base / "work space ' ; literal"
-        self.work.mkdir(mode=0o700)
         self.root = self.base / "task state ' ; literal"
-        self.bindir = self.base / "cli space ' ; literal"
-        self.bindir.mkdir(mode=0o700)
         self.delegate = self.copy_binary("delegate", "delegate")
         self.runner = self.copy_binary("delegate-run", "delegate-run")
         self.provider = self.copy_binary("provider", "provider ' ; literal")
@@ -363,8 +389,9 @@ class NativeSuite:
         self.validate_events()
         self.native_terminal_proven = True
         # Historical reads use only saved task evidence after all work is done.
-        for path in (self.profile, self.provider_config, self.provider, self.work):
+        for path in (self.profile, self.provider_config, self.provider):
             path.rename(path.with_name(path.name + ".offline"))
+        self.take_provider_workspace_offline()
         saved = self.cli("collect-without-runtime-files", "collect").json()
         require(saved["outcome"] == read_json(self.task_dir / "outcome.json"), "runtime files required for historical winner")
         require(self.daemon.poll() is None, "daemon exited before authorized shutdown")
@@ -377,6 +404,7 @@ class NativeSuite:
         shutil.copytree(self.root, self.output / "task-state")
         shutil.copytree(self.base / "events", self.output / "events")
         shutil.copytree(self.base / "provider-records", self.output / "provider-records")
+        rollback_owned_directories(self.owned_directories)
         write_json(self.output / "success.json", {
             "cases": self.case_ids, "task_id": self.task_id, "root_id": self.root_id,
             "A": 1, "S": 1, "E": 1, "K": 0, "M": 0,
@@ -384,7 +412,16 @@ class NativeSuite:
             "daemon_natural_exit": self.daemon.result["exit_code"],
             "limitations": "native client YAML parity; no real signal enforcement, escaped-child containment, or hardware power-loss claim",
         })
-        shutil.rmtree(self.base)
+
+    def take_provider_workspace_offline(self):
+        matches = [entry for entry in self.owned_directories
+                   if entry.directory == self.work]
+        require(len(matches) == 1,
+                "native provider workspace has no unique ownership token")
+        workspace = matches[0]
+        rollback_owned_directories((workspace,))
+        self.owned_directories = tuple(
+            entry for entry in self.owned_directories if entry is not workspace)
 
     def validate_events(self):
         # The acceptance-only constructor supplies these immutable records;
@@ -403,8 +440,23 @@ class NativeSuite:
                 wrappers.append((directory, entry))
 
         execution_wrappers = []
+        control_owner_ids = set()
         for directory, entry in wrappers:
             events, completion = self.validate_wrapper_receipts(directory, entry)
+            argv = entry["argv"]
+            if (len(argv) == 5 and argv[0] == str(self.runner) and
+                    argv[1] == "--supervisor-control-owner"):
+                require(not events, "control owner emitted provider execution events")
+                require(argv[2] == "3" and argv[3].isdigit() and
+                        0 <= int(argv[3]) <= 16 and
+                        COMMAND_ID_RE.fullmatch(argv[4]),
+                        "control owner argv is malformed")
+                require(completion["exit_code"] == 0 and completion["failed"] is False,
+                        "control owner did not complete naturally")
+                require(argv[4] not in control_owner_ids,
+                        "duplicate control owner command ID: " + argv[4])
+                control_owner_ids.add(argv[4])
+                continue
             if events:
                 require(entry["argv"][0] == str(self.runner), "provider execution came from another wrapper")
                 execution_wrappers.append((directory, entry, completion, events))
@@ -422,9 +474,16 @@ class NativeSuite:
             command_id, argv = self.validate_supervisor_receipts(directory, entry)
             require(command_id not in command_ids, "duplicate supervisor command ID: " + command_id)
             command_ids.add(command_id)
-            verbs.append(argv[3])
+            verbs.append(supervisor_operation(argv))
         require(verbs, "missing positive supervisor command recorder")
-        require(verbs.count("add") == 1 and "kill" not in verbs and "remove" not in verbs, "native mutation counts violated")
+        require(control_owner_ids == command_ids,
+                "control owners do not match the exact supervisor commands")
+        require(
+            verbs.count("add") == 1 and verbs.count("enqueue") == 1 and
+            verbs.count("add-probe") == 1 and verbs.count("enqueue-probe") == 1 and
+            "parallel" not in verbs and "kill" not in verbs and "remove" not in verbs,
+            "native mutation counts violated",
+        )
 
         names = [event["name"] for event in runner_events]
         validate_execution_event_sequence(names)
@@ -481,20 +540,33 @@ class NativeSuite:
         self.validate_command_event(command, "entry", command_id, pid=0, exit_code=-1)
         argv = command["argv"]
         require(len(argv) >= 4 and argv[:3] == [str(self.pueue), "-c", str(self.config_path)], "native client used an unbound endpoint")
-        require(argv[3] in ("--version", "status", "parallel", "add"), "unexpected native supervisor operation")
+        require(argv[3] in ("--version", "status", "parallel", "add", "enqueue"), "unexpected native supervisor operation")
         prefix = [str(self.pueue), "-c", str(self.config_path)]
         if argv[3] == "--version":
             require(argv == [*prefix, "--version"], "native --version argv changed")
         elif argv[3] == "status":
-            require(argv == [*prefix, "status", "--json"], "native status argv changed")
+            status_argv = [*prefix, "status", "--json"]
+            task_filter = "label=delegate:" + self.root_id + ":" + self.task_id
+            require(argv in (status_argv, [*status_argv, task_filter]),
+                    "native status argv changed")
         elif argv[3] == "parallel":
             require(argv == [*prefix, "parallel", "0"], "native parallel argv changed")
-        else:
-            require(argv == [
-                *prefix, "add", "--escape", "--label",
+        elif argv[3] == "add":
+            add_argv = [
+                *prefix, "add", "--escape", "--stashed", "--label",
                 "delegate:" + self.root_id + ":" + self.task_id,
                 "--print-task-id", "--", str(self.runner), "--root", str(self.root), self.task_id,
-            ], "native add argv changed")
+            ]
+            require(argv in ([*prefix, "add", "--help"], add_argv),
+                    "native add argv changed")
+        else:
+            supervisor_ref = read_json(self.task_dir / "supervisor.ref.json")
+            numeric_task_id = supervisor_ref.get("numeric_task_id")
+            require(type(numeric_task_id) is int and numeric_task_id >= 0,
+                    "native enqueue lacks a saved numeric task ID")
+            require(argv in ([*prefix, "enqueue", "--help"],
+                             [*prefix, "enqueue", str(numeric_task_id)]),
+                    "native enqueue argv changed")
 
         event_paths = self.event_paths(directory)
         require(len(event_paths) == 1 and event_paths[0].name == "event-000001.json", "supervisor started event pairing is incomplete")
@@ -536,14 +608,25 @@ class NativeSuite:
         require([number for number, _ in paths] == list(range(1, len(paths) + 1)), "event file sequence is not contiguous")
         return [path for _, path in paths]
 
+    def supervisor_numeric_task_id(self):
+        supervisor_ref = read_json(self.task_dir / "supervisor.ref.json")
+        require(isinstance(supervisor_ref, dict), "supervisor reference is not an object")
+        numeric_task_id = supervisor_ref.get("numeric_task_id")
+        require(isinstance(numeric_task_id, int) and not isinstance(numeric_task_id, bool) and numeric_task_id >= 0,
+                "supervisor reference has no numeric task identity")
+        return numeric_task_id
+
     def failure_terminal_proof(self):
         """Require durable task/capture evidence before failure shutdown.
 
         NativeTaskOps proves that every owned caller has naturally Waited and
         that the exact queue row is terminal. This additional gate proves the
-        dispatched provider task has its sealed raw streams and paired native
-        completion receipts before the daemon shutdown request is allowed.
-        Unknown dispatch or incomplete evidence keeps ownership retained.
+        dispatched provider task has its sealed raw streams and paired provider
+        completion receipts before the daemon shutdown request is allowed. The
+        broader event oracle is deliberately excluded: an assertion about its
+        shape must not prevent safe cleanup after terminal process evidence is
+        already complete. Unknown dispatch or incomplete evidence keeps
+        ownership retained.
         """
         if not self.dispatch_attempted:
             return True
@@ -555,11 +638,7 @@ class NativeSuite:
                 return False
             if not self.task_dir.is_dir() or not (self.task_dir / "provider.exit").is_file():
                 return False
-            supervisor_ref = read_json(self.task_dir / "supervisor.ref.json")
-            require(isinstance(supervisor_ref, dict), "supervisor reference is not an object")
-            numeric_task_id = supervisor_ref.get("numeric_task_id")
-            require(isinstance(numeric_task_id, int) and not isinstance(numeric_task_id, bool) and numeric_task_id >= 0,
-                    "supervisor reference has no numeric task identity")
+            numeric_task_id = self.supervisor_numeric_task_id()
             require(native_job.get("id") == numeric_task_id and
                     native_job.get("label") == "delegate:" + self.root_id + ":" + self.task_id,
                     "fresh supervisor row identity mismatch")
@@ -568,12 +647,6 @@ class NativeSuite:
                     isinstance(status.get("Done"), dict) and
                     status["Done"].get("result") == "Success",
                     "fresh supervisor row is not Done.Success")
-            # A failure in finish() can occur before it records this proof.
-            # Re-run the complete event/receipt oracle then; once it passed,
-            # preserve that proof across the later offline replay checks.
-            if not getattr(self, "native_terminal_proven", False):
-                self.validate_events()
-                self.native_terminal_proven = True
             self.validate_terminal()
         except (AcceptanceFailure, AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError, RecursionError):
             return False
@@ -597,6 +670,7 @@ class NativeSuite:
             owner.root_id = self.root_id
             owner.tasks = {"native": self.task_id}
             owner.labels = {"native": "delegate:" + self.root_id + ":" + self.task_id}
+            owner.numbers = {"native": self.supervisor_numeric_task_id()}
             owner.dispatch_attempts = {self.task_id}
         elif self.dispatch_attempted:
             # A dispatch response that did not establish an exact admission
@@ -660,23 +734,39 @@ class NativeSuite:
             self.finish()
         except BaseException as error:
             cleanup = False
+            failure_cleanup_error = None
             try:
                 cleanup = self.retained_failure_cleanup()
-            except BaseException:
+            except BaseException as retained_error:
                 # The common retainer handles operational faults during its
                 # observation loop. If constructing the gated owner itself
                 # fails, keep the same handles under a no-authority owner
                 # instead of exiting while a caller or daemon is active.
-                cleanup = self.retain_unknown_failure_ownership()
+                failure_cleanup_error = (
+                    "retained_failure_cleanup: "
+                    f"{type(retained_error).__name__}: {retained_error}"
+                )
+                try:
+                    cleanup = self.retain_unknown_failure_ownership()
+                except BaseException as unknown_error:
+                    cleanup = False
+                    failure_cleanup_error += (
+                        "; retain_unknown_failure_ownership: "
+                        f"{type(unknown_error).__name__}: {unknown_error}"
+                    )
             active = self.processes.drain(timeout=0, exclude=(() if self.daemon is None else (self.daemon,)))
             if self.daemon is not None:
                 self.daemon.poll()
+            elif not active:
+                rollback_owned_directories(self.owned_directories)
+                cleanup = True
             write_json(self.output / "failure.json", {
                 "error": str(error), "traceback": traceback.format_exc(), "private_base": str(self.base),
                 "daemon_pid": None if self.daemon is None else self.daemon.pid,
                 "daemon_result": None if self.daemon is None else self.daemon.result,
                 "unresolved_owned_clients": active, "shutdown_gate": self.shutdown_gate,
                 "natural_failure_cleanup": cleanup,
+                "failure_cleanup_error": failure_cleanup_error,
                 "unknown_termination_preserved": True, "signals_sent": 0,
             })
             raise

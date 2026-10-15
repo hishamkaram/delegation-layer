@@ -20,6 +20,98 @@ from acceptance_supervisor_common import digest, write_json
 
 
 class InspectionDriverTests(unittest.TestCase):
+    def test_constructor_rolls_back_disposable_roots_after_partial_setup(self):
+        with tempfile.TemporaryDirectory(prefix="inspection-constructor-") as temporary:
+            root = Path(temporary)
+            tools = root / "tools"
+            tools.mkdir()
+            for name in ("delegate", "delegate-run", "provider", "inspection-helper"):
+                (tools / name).write_bytes(name.encode())
+            pueue = root / "pueue"
+            pueued = root / "pueued"
+            pueue.write_bytes(b"pueue")
+            pueued.write_bytes(b"pueued")
+            output = root / "evidence"
+            args = SimpleNamespace(tools=str(tools), pueue=str(pueue),
+                                   pueued=str(pueued), output=str(output))
+
+            with patch("acceptance_provider_common.reject_tmp"), \
+                    patch.object(inspection_acceptance.shutil, "copyfile",
+                                 side_effect=OSError("injected copy failure")):
+                with self.assertRaisesRegex(OSError, "copy failure"):
+                    InspectionAcceptance(args)
+
+            self.assertTrue(output.is_dir())
+            self.assertEqual(list(output.iterdir()), [])
+
+    def test_finalize_before_setup_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            driver = InspectionAcceptance.__new__(InspectionAcceptance)
+            driver.output = Path(temporary) / "not-created"
+            driver.ops = SimpleNamespace(closed=False)
+
+            self.assertFalse(driver.finalize(False))
+            self.assertFalse(driver.output.exists())
+
+    def test_runner_terminal_accepts_explicit_budget_stop_only_when_expected(self):
+        root = "a" * 32
+        task = "b" * 32
+        row = {
+            "label": f"delegate:{root}:{task}",
+            "status": {"Done": {"result": "Killed"}},
+        }
+
+        def client(_name, _argv, timeout):
+            self.assertGreater(timeout, 0)
+            return SimpleNamespace(json=lambda: {"tasks": {"7": row}})
+
+        self.assertEqual(
+            provider_common.wait_runner_terminal(client, root, task, "Killed",
+                                                 timeout=1, monotonic_fn=lambda: 0),
+            row,
+        )
+        with self.assertRaisesRegex(
+                AcceptanceFailure, "supervisor result 'Killed', expected 'Success'"):
+            provider_common.wait_runner_done(client, root, task,
+                                             timeout=1, monotonic_fn=lambda: 0)
+
+    def test_runner_terminal_normalizes_failed_result(self):
+        root = "a" * 32
+        task = "b" * 32
+        row = {
+            "label": f"delegate:{root}:{task}",
+            "status": {"Done": {"result": {"Failed": 1}}},
+        }
+
+        def client(_name, _argv, timeout):
+            self.assertGreater(timeout, 0)
+            return SimpleNamespace(json=lambda: {"tasks": {"7": row}})
+
+        self.assertEqual(
+            provider_common.wait_runner_terminal(client, root, task, "Failed",
+                                                 timeout=1, monotonic_fn=lambda: 0),
+            row,
+        )
+
+    def test_runner_terminal_accepts_one_of_controlled_results(self):
+        root = "a" * 32
+        task = "b" * 32
+        row = {
+            "label": f"delegate:{root}:{task}",
+            "status": {"Done": {"result": "Success"}},
+        }
+
+        def client(_name, _argv, timeout):
+            self.assertGreater(timeout, 0)
+            return SimpleNamespace(json=lambda: {"tasks": {"7": row}})
+
+        self.assertEqual(
+            provider_common.wait_runner_terminal(
+                client, root, task, frozenset({"Success", "Failed"}),
+                timeout=1, monotonic_fn=lambda: 0),
+            row,
+        )
+
     def test_concurrent_admission_is_retained_before_receipt_write(self):
         ops = NativeTaskOps(Mock(), Path("/delegate"), Path("/runner"), Path("/pueue"),
                             Path("/base"), Path("/state"), Path("/evidence"))
@@ -52,6 +144,55 @@ class InspectionDriverTests(unittest.TestCase):
                 driver.run()
         driver.cleanup_blocker_after_failure.assert_called_once_with()
         driver.ops.retain_failure_ownership.assert_called_once_with()
+
+    def test_behavioral_success_is_not_published_when_finalization_fails(self):
+        for failure in (False, OSError("injected finalization failure")):
+            with self.subTest(failure=repr(failure)), \
+                    tempfile.TemporaryDirectory(prefix="inspection-finalize-unit-") as temporary:
+                root = Path(temporary)
+                output = root / "evidence"
+                output.mkdir()
+                driver = InspectionAcceptance.__new__(InspectionAcceptance)
+                driver.output = output
+                driver.workspace = root / "workspace"
+                driver.state = root / "state"
+                driver.events = root / "events"
+                driver.cases = root / "cases"
+                driver.pueue_base = root / "pueue"
+                driver.sentinel = b"fixture-sentinel"
+                driver.config = root / "pueue.json"
+                driver.case_records = {"behavior": "passed"}
+                driver.ops = Mock(closed=True)
+                driver.ops.safe_failure_shutdown.return_value = True
+                driver.ops.retain_failure_ownership.return_value = True
+                driver.setup = Mock()
+                driver.success = Mock()
+                driver.failed_inspection = Mock()
+                driver.queued_expiry = Mock()
+                driver.cleanup_blocker_after_failure = Mock(return_value=True)
+                calls = []
+
+                def finalize(success):
+                    calls.append(success)
+                    if success and isinstance(failure, BaseException):
+                        raise failure
+                    return not success or failure is not False
+
+                driver.finalize = finalize
+                argv = ["--tools", str(root), "--pueue", "/pueue", "--pueued", "/pueued",
+                        "--output", str(output)]
+                with patch.object(inspection_acceptance, "InspectionAcceptance", return_value=driver), \
+                        patch.object(inspection_acceptance, "no_secret_bytes"), \
+                        patch.object(sys, "argv", ["acceptance_inspection.py", *argv]):
+                    code = inspection_acceptance.main()
+
+                self.assertEqual(code, 1)
+                self.assertEqual(calls, [True, False])
+                self.assertFalse((output / "success.json").exists())
+                self.assertTrue((output / "failure.json").is_file())
+                cleanup = json.loads((output / "failure-cleanup.json").read_text())
+                self.assertTrue(cleanup["passed_receipt_absent"])
+                self.assertTrue(cleanup["artifact_finalization_completed"])
 
     @staticmethod
     def _write_expiry_journal(root: Path, started: bool = True) -> tuple[Path, str, dict[str, object]]:
@@ -144,13 +285,14 @@ class InspectionDriverTests(unittest.TestCase):
             no_secret_bytes([], b"")
 
     def test_blocker_identity_state_and_argv_are_exact(self):
+        blocker = " ".join(inspection_acceptance.BLOCKER_ARGV)
         running = {"id": 7, "group": "g", "label": "l", "status": {"Running": {}},
-                   "command": "/bin/sleep 25", "original_command": "/bin/sleep 25"}
+                   "command": blocker, "original_command": blocker}
         validate_blocker_row(running, 7, "g", "l", "Running")
         with self.assertRaises(AcceptanceFailure):
             validate_blocker_row({**running, "id": 8}, 7, "g", "l", "Running")
         with self.assertRaises(AcceptanceFailure):
-            validate_blocker_row({**running, "command": "/bin/sleep 24"}, 7, "g", "l", "Running")
+            validate_blocker_row({**running, "command": "/bin/sleep 1"}, 7, "g", "l", "Running")
         done = {**running, "status": {"Done": {"result": "Success"}}}
         validate_blocker_row(done, 7, "g", "l", "Done")
 

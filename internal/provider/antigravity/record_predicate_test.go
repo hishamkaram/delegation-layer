@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
+	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -19,6 +20,65 @@ func (e recordEvidence) Read(stream predicate.Stream, consume func(io.Reader) er
 		return consume(strings.NewReader(e.stdout))
 	}
 	return consume(strings.NewReader(e.stderr))
+}
+
+func TestRecordReferencesBumpWithoutChangingHistoricalRevision(t *testing.T) {
+	current := NewRecordPrintInterpreter(ModeWorkspaceWrite).Reference()
+	historical := newHistoricalRecordPrintInterpreter(ModeWorkspaceWrite).Reference()
+	wantCurrent := task.PredicateRef{Adapter: Provider, Mode: ModeWorkspaceWrite, Version: "print-record-v2", SHA256: "54713d2c06eef693c09d8f08419f6dd2fd4f4802742e71d113df0dfbf1f9c43f"}
+	wantHistorical := task.PredicateRef{Adapter: Provider, Mode: ModeWorkspaceWrite, Version: "print-record-v1", SHA256: "5497017cbe63b0a4181b1b764523f30b9e0ae0230d79c15852c945e9fbfef4b7"}
+	if current != wantCurrent || historical != wantHistorical || current.Equal(historical) {
+		t.Fatalf("record references changed unexpectedly: current=%+v historical=%+v", current, historical)
+	}
+}
+
+func TestRecordAuthenticationFailureUsesStableReasonAndBooleanOnly(t *testing.T) {
+	stdout := `{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out"}`
+	document, err := providerjson.Document(strings.NewReader(stdout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, _, _, err := recordEnvelope(document)
+	if err != nil || !env.authenticationUnavailable || env.errorText != "" {
+		t.Fatalf("record auth classification=%+v err=%v", env, err)
+	}
+
+	interpreter := NewRecordPrintInterpreter(ModeWorkspaceWrite)
+	result, err := interpreter.Evaluate(predicate.Input{Seal: validSeal(interpreter.Reference())}, recordEvidence{stdout: stdout, stderr: authenticationErrorText}, io.Discard)
+	if err != nil || result.Verdict != task.VerdictRejected || result.Refusal != refusalAuthenticationUnavailable || len(result.Diagnostics) != 1 || result.Diagnostics[0].Code != refusalAuthenticationUnavailable {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if strings.Contains(fmt.Sprint(result), authenticationErrorText) {
+		t.Fatalf("raw authentication error was published: %+v", result)
+	}
+	if err = task.ValidateInterpretation(result); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecordAuthenticationClassificationRequiresExactEnvelope(t *testing.T) {
+	cases := []struct {
+		name   string
+		stdout string
+		stderr string
+		want   string
+	}{
+		{name: "similar error text", stdout: `{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed"}`, want: "provider-failed: status=ERROR"},
+		{name: "success status", stdout: `{"conversation_id":"","status":"SUCCESS","response":"","error":"authentication failed or timed out"}`, want: refusalIdentityMismatch},
+		{name: "nonempty response", stdout: `{"conversation_id":"","status":"ERROR","response":"answer","error":"authentication failed or timed out"}`, want: "provider-failed: status=ERROR"},
+		{name: "whitespace response", stdout: `{"conversation_id":"","status":"ERROR","response":" ","error":"authentication failed or timed out"}`, want: "provider-failed: status=ERROR"},
+		{name: "nonempty conversation", stdout: `{"conversation_id":"` + testConversation + `","status":"ERROR","response":"","error":"authentication failed or timed out"}`, want: "provider-failed: status=ERROR"},
+		{name: "stderr only", stdout: `{"conversation_id":"","status":"ERROR","response":""}`, stderr: authenticationErrorText, want: "provider-failed: status=ERROR"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			interpreter := NewRecordPrintInterpreter(ModeWorkspaceWrite)
+			result, err := interpreter.Evaluate(predicate.Input{Seal: validSeal(interpreter.Reference())}, recordEvidence{stdout: tc.stdout, stderr: tc.stderr}, io.Discard)
+			if err != nil || result.Verdict != task.VerdictRejected || result.Refusal != tc.want || result.Refusal == refusalAuthenticationUnavailable {
+				t.Fatalf("result=%+v err=%v want=%q", result, err, tc.want)
+			}
+		})
+	}
 }
 
 func TestRecordEnvelopeExtensionsAndAccounting(t *testing.T) {
@@ -87,18 +147,38 @@ func (w *boundedRecordWriter) Write(p []byte) (int, error) {
 }
 
 func TestRecordRecoveryPreservesSourcePredicate(t *testing.T) {
-	interpreter := recordPrintInterpreter{mode: ModeWorkspaceWrite}
-	source := NewCurrentPrintInterpreter().Reference()
-	input := predicate.Input{Seal: validSeal(source)}
 	stdout := `{"response":"recovered","conversation_id":"` + testConversation + `","extension":{"id":1,"id":2},"status":"SUCCESS"}`
-	var answer bytes.Buffer
-	result, err := interpreter.Recover(input, recordEvidence{stdout: stdout}, &answer)
-	if err != nil || result.Verdict != task.VerdictCommitted || answer.String() != "recovered" || !input.Seal.Predicate.Equal(source) {
-		t.Fatalf("result=%+v error=%v source=%+v", result, err, input.Seal.Predicate)
+	value := NewRecordPrintInterpreter(ModeWorkspaceWrite)
+	interpreter, ok := value.(recordPrintInterpreter)
+	if !ok {
+		t.Fatalf("current record interpreter has type %T", value)
 	}
-	input.Seal.Predicate = interpreter.Reference()
-	if _, err = interpreter.Recover(input, recordEvidence{stdout: stdout}, io.Discard); err == nil {
+	for _, source := range []task.PredicateRef{
+		NewCurrentPrintInterpreter().Reference(),
+		newHistoricalCurrentPrintInterpreterForMode(ModeWorkspaceWrite).Reference(),
+		NewPrintInterpreter().Reference(),
+	} {
+		t.Run(source.Version, func(t *testing.T) {
+			input := predicate.Input{Seal: validSeal(source)}
+			var answer bytes.Buffer
+			result, err := interpreter.Recover(input, recordEvidence{stdout: stdout}, &answer)
+			if err != nil || result.Verdict != task.VerdictCommitted || answer.String() != "recovered" || !input.Seal.Predicate.Equal(source) {
+				t.Fatalf("result=%+v error=%v source=%+v", result, err, input.Seal.Predicate)
+			}
+		})
+	}
+	input := predicate.Input{Seal: validSeal(interpreter.Reference())}
+	if _, err := interpreter.Recover(input, recordEvidence{stdout: stdout}, io.Discard); err == nil {
 		t.Fatal("same revision recovery must be unsupported")
+	}
+}
+
+func TestHistoricalRecordReplayPreservesProviderFailureSemantics(t *testing.T) {
+	interpreter := newHistoricalRecordPrintInterpreter(ModeWorkspaceWrite)
+	stdout := `{"conversation_id":"","status":"ERROR","response":"","error":"authentication failed or timed out"}`
+	result, err := interpreter.Evaluate(predicate.Input{Seal: validSeal(interpreter.Reference())}, recordEvidence{stdout: stdout}, io.Discard)
+	if err != nil || result.Verdict != task.VerdictRejected || result.Refusal != "provider-failed: status=ERROR" {
+		t.Fatalf("historical result=%+v err=%v", result, err)
 	}
 }
 

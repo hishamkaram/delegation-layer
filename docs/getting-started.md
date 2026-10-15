@@ -95,7 +95,8 @@ bunx --bun delegation-layer install-cli
 The release installer verifies checksums and installs `delegate`,
 `delegate-run`, `pueue`, and `pueued` into `$HOME/.local/bin` unless
 `DELEGATION_LAYER_INSTALL_DIR` is set. The CLI starts its private supervisor
-automatically and recovers it when a control command finds it stopped.
+automatically, recovers it when a control command finds it stopped, and adopts
+a reachable compatible supervisor after an installation upgrade.
 
 ```sh
 delegate --help
@@ -123,6 +124,20 @@ workspace is the directory the provider may inspect or edit; the state root
 contains task records and sealed evidence. An explicit `--pueue-config` or
 `DELEGATE_PUEUE_CONFIG` remains available when an existing compatible
 supervisor must be used.
+
+If the state root reports a real logical supervisor migration, inspect it and
+run the explicit repair command:
+
+```sh
+delegate --root "$HOME/delegation-state" supervisor status --json
+delegate --root "$HOME/delegation-state" supervisor migrate --json
+```
+
+Normal dispatch adopts a reachable compatible endpoint automatically. The
+repair command is only for a logical/configuration migration; it preserves the
+old inspection journal, refuses to stop queued or running inspection work, and
+resumes safely from its migration journal after a crash. Do not start or
+configure Pueue yourself.
 
 ## 4. Dispatch one task
 
@@ -173,7 +188,9 @@ delegate capabilities --provider codex:exec --json
 
 Capability discovery is side-effect-free and reports the catalog projection. It
 does not prove that the executable, supervisor, or authentication is available
-on the current host. Dispatch performs those runtime checks before admission.
+on the current host. Dispatch checks static readiness and prepares supervision.
+Each managed runtime-only task then checks the current provider before its turn
+starts. Collect the task's terminal outcome to prove completion.
 The response also reports supported permission modes, request options,
 continuation, and the provider-owned read-only mechanism. Model and effort
 choices remain in the separate `models` discovery response.

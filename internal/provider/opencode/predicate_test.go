@@ -156,6 +156,7 @@ func TestCurrentInterpreterRecoversHistoricalWireWithoutChangingSeal(t *testing.
 	for _, historical := range []predicate.Interpreter{
 		newHistoricalCurrentInterpreter(ModeReadOnly),
 		newHistoricalCurrentV3Interpreter(ModeReadOnly),
+		newHistoricalCurrentV4Interpreter(ModeReadOnly),
 	} {
 		t.Run(historical.Reference().Version, func(t *testing.T) {
 			seal := validSeal(stdout, ModeReadOnly)
@@ -191,13 +192,55 @@ func TestCurrentInterpreterAllowsLaterStepsAfterIntermediateStop(t *testing.T) {
 	}
 
 	strictSeal := validSeal(stdout, ModeReadOnly)
-	strictSeal.Predicate = historicalCurrentReferenceForMode(ModeReadOnly)
+	strictSeal.Predicate = historicalCurrentV4ReferenceForMode(ModeReadOnly)
 	answer.Reset()
-	interp, err = newHistoricalCurrentV3Interpreter(ModeReadOnly).Evaluate(
+	interp, err = newHistoricalCurrentV4Interpreter(ModeReadOnly).Evaluate(
 		predicate.Input{Seal: strictSeal}, &testEvidence{stdout: stdout}, &answer,
 	)
-	if err != nil || interp.Verdict != task.VerdictRejected || answer.Len() != 0 || interp.Refusal != refusalMalformed {
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "final answer" {
 		t.Fatalf("historical interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestCurrentInterpreterAllowsEmptyRepeatedStepStart(t *testing.T) {
+	stdout := jsonl(
+		stepStart(testSession),
+		stepStart(testSession),
+		textEvent(testSession, "final answer"),
+		stepFinish(testSession, "stop", `{}`, "0"),
+	)
+	var answer bytes.Buffer
+	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
+	)
+	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "final answer" {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+	strict := validSeal(stdout, ModeReadOnly)
+	strict.Predicate = historicalCurrentV4ReferenceForMode(ModeReadOnly)
+	answer.Reset()
+	interp, err = newHistoricalCurrentV4Interpreter(ModeReadOnly).Evaluate(
+		predicate.Input{Seal: strict}, &testEvidence{stdout: stdout}, &answer,
+	)
+	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalMalformed || answer.Len() != 0 {
+		t.Fatalf("historical interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+	}
+}
+
+func TestCurrentInterpreterRejectsRepeatedStepStartAfterContent(t *testing.T) {
+	stdout := jsonl(
+		stepStart(testSession),
+		textEvent(testSession, "partial"),
+		stepStart(testSession),
+		textEvent(testSession, "final"),
+		stepFinish(testSession, "stop", `{}`, "0"),
+	)
+	var answer bytes.Buffer
+	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
+	)
+	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalMalformed || answer.Len() != 0 {
+		t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 	}
 }
 

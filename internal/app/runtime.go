@@ -59,6 +59,7 @@ Commands:
   logs          Return validated output descriptors
   preflight     Check one provider without creating a task
   continue      Continue one terminal task through its exact session
+  supervisor    Inspect or migrate Delegate's private supervisor
   help          Show this help message
   version       Print version information
 
@@ -66,6 +67,10 @@ Global flags:
   --root ABS              State root (default: user config directory)
   --pueue-config ABS      Initial supervisor configuration
   --runner ABS            Runner executable for dispatch
+
+Supervisor recovery:
+  supervisor status --json
+  supervisor migrate --json
 
 Interactive tasks:
   dispatch ... --interactive
@@ -140,7 +145,44 @@ func (d Dependencies) normalized() Dependencies {
 	if d.PublisherVersion == "" {
 		d.PublisherVersion = defaultPublisher
 	}
+	if d.SupervisorOptions.ControlOwnerExecutable == "" {
+		d.SupervisorOptions.ControlOwnerExecutable = discoverControlOwnerExecutable()
+	}
+	if d.SupervisorOptions.PrivateMaintenanceLauncher == nil && d.SupervisorOptions.ControlOwnerExecutable != "" {
+		d.SupervisorOptions.PrivateMaintenanceLauncher = launchPrivateQueueMaintenanceOwner
+	}
+	if d.SupervisorOptions.SuccessfulCleanupAuthorizer == nil {
+		d.SupervisorOptions.SuccessfulCleanupAuthorizer = authorizePrivateSuccessfulCleanup
+	}
+	if d.SupervisorOptions.PrivateMigrationAuthorizer == nil {
+		d.SupervisorOptions.PrivateMigrationAuthorizer = authorizePrivateMigrationQueue
+	}
 	return d
+}
+
+func discoverControlOwnerExecutable() string {
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	self = canonicalExecutablePath(self)
+	candidate := self
+	base := filepath.Base(self)
+	if base != stateRunnerName && !strings.HasPrefix(base, stateRunnerName+"-") {
+		candidate = managedRunnerFromExecutable(self)
+	}
+	if !filepath.IsAbs(candidate) || filepath.Clean(candidate) != candidate {
+		return ""
+	}
+	resolved, err := filepath.EvalSymlinks(candidate)
+	if err != nil || resolved != candidate {
+		return ""
+	}
+	info, err := os.Stat(candidate)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return ""
+	}
+	return candidate
 }
 
 // Response is the bounded public control response. Payload and sealed raw
@@ -148,43 +190,55 @@ func (d Dependencies) normalized() Dependencies {
 // rooted paths and availability. Answer bytes are streamed by a future typed
 // result API rather than copied into an unbounded control object.
 type Response struct {
-	Interaction    *task.InteractionState    `json:"interaction,omitempty"`
-	Delivery       *task.InteractionDelivery `json:"delivery,omitempty"`
-	Events         []task.InteractionEvent   `json:"events,omitempty"`
-	Cursor         *uint64                   `json:"cursor,omitempty"`
-	SchemaVersion  int                       `json:"schema_version"`
-	Command        string                    `json:"command"`
-	RootID         string                    `json:"root_id,omitempty"`
-	TaskID         string                    `json:"task_id,omitempty"`
-	TaskRecord     string                    `json:"task_record,omitempty"`
-	ParentTaskID   string                    `json:"parent_task_id,omitempty"`
-	Status         string                    `json:"status,omitempty"`
-	Admission      string                    `json:"admission"`
-	Liveness       string                    `json:"liveness"`
-	Publication    string                    `json:"publication"`
-	Outcome        *task.OutcomeRecord       `json:"outcome,omitempty"`
-	Payload        *task.PayloadDescriptor   `json:"payload,omitempty"`
-	Raw            []taskdir.LogDescriptor   `json:"raw,omitempty"`
-	EvidenceSHA256 string                    `json:"evidence_sha256,omitempty"`
-	Supervisor     *SupervisorResponse       `json:"supervisor,omitempty"`
-	Stops          []StopResponse            `json:"stops,omitempty"`
-	Stop           *StopResponse             `json:"stop,omitempty"`
-	Pending        *PendingResponse          `json:"pending,omitempty"`
-	Capability     *CapabilityReport         `json:"capability,omitempty"`
-	Continuation   *ContinuationResponse     `json:"continuation,omitempty"`
-	Failure        *DispatchFailureResponse  `json:"failure,omitempty"`
-	Diagnostics    []task.OutputDiagnostic   `json:"diagnostics,omitempty"`
-	Recheck        *RecheckResponse          `json:"recheck,omitempty"`
-	Error          string                    `json:"error,omitempty"`
-	ErrorTruncated bool                      `json:"error_truncated,omitempty"`
+	Interaction       *task.InteractionState     `json:"interaction,omitempty"`
+	Delivery          *task.InteractionDelivery  `json:"delivery,omitempty"`
+	Events            []task.InteractionEvent    `json:"events,omitempty"`
+	Cursor            *uint64                    `json:"cursor,omitempty"`
+	SchemaVersion     int                        `json:"schema_version"`
+	Command           string                     `json:"command"`
+	RootID            string                     `json:"root_id,omitempty"`
+	TaskID            string                     `json:"task_id,omitempty"`
+	TaskRecord        string                     `json:"task_record,omitempty"`
+	ParentTaskID      string                     `json:"parent_task_id,omitempty"`
+	Status            string                     `json:"status,omitempty"`
+	Admission         string                     `json:"admission"`
+	Liveness          string                     `json:"liveness"`
+	Publication       string                     `json:"publication"`
+	Outcome           *task.OutcomeRecord        `json:"outcome,omitempty"`
+	Payload           *task.PayloadDescriptor    `json:"payload,omitempty"`
+	Raw               []taskdir.LogDescriptor    `json:"raw,omitempty"`
+	EvidenceSHA256    string                     `json:"evidence_sha256,omitempty"`
+	Supervisor        *SupervisorResponse        `json:"supervisor,omitempty"`
+	SupervisorControl *SupervisorControlResponse `json:"supervisor_control,omitempty"`
+	Stops             []StopResponse             `json:"stops,omitempty"`
+	Stop              *StopResponse              `json:"stop,omitempty"`
+	Pending           *PendingResponse           `json:"pending,omitempty"`
+	Capability        *CapabilityReport          `json:"capability,omitempty"`
+	Continuation      *ContinuationResponse      `json:"continuation,omitempty"`
+	Failure           *DispatchFailureResponse   `json:"failure,omitempty"`
+	Diagnostics       []task.OutputDiagnostic    `json:"diagnostics,omitempty"`
+	Recheck           *RecheckResponse           `json:"recheck,omitempty"`
+	Error             string                     `json:"error,omitempty"`
+	ErrorTruncated    bool                       `json:"error_truncated,omitempty"`
 }
 
 // DispatchFailureResponse gives an agent a stable recovery decision without
 // exposing supervisor paths or raw process diagnostics.
 type DispatchFailureResponse struct {
-	Code       string `json:"code"`
-	Stage      string `json:"stage"`
-	NextAction string `json:"next_action"`
+	Code            string                     `json:"code"`
+	Stage           string                     `json:"stage"`
+	NextAction      string                     `json:"next_action"`
+	RecoveryCommand string                     `json:"recovery_command,omitempty"`
+	Inspection      *InspectionFailureResponse `json:"inspection,omitempty"`
+}
+
+// InspectionFailureResponse retains bounded, path-free evidence about an
+// admission inspection failure. The task ID addresses its durable journal
+// under the caller's existing state root without exposing that root.
+type InspectionFailureResponse struct {
+	Class         string `json:"class"`
+	DeadlineState string `json:"deadline_state"`
+	JournalTaskID string `json:"journal_task_id,omitempty"`
 }
 
 // ContinuationResponse is emitted when a task can be continued or when a
@@ -220,6 +274,17 @@ type SupervisorResponse struct {
 	NumericTaskID *int64 `json:"numeric_task_id,omitempty"`
 }
 
+// SupervisorControlResponse describes Delegate-owned supervisor recovery
+// without exposing executable paths, socket paths, or process diagnostics.
+type SupervisorControlResponse struct {
+	Action             string `json:"action"`
+	State              string `json:"state"`
+	LegacyReachability string `json:"legacy_reachability"`
+	ActiveWork         string `json:"active_work"`
+	MigrationPhase     string `json:"migration_phase,omitempty"`
+	NextAction         string `json:"next_action"`
+}
+
 type StopResponse struct {
 	RequestID        string `json:"request_id,omitempty"`
 	Cause            string `json:"cause,omitempty"`
@@ -238,6 +303,20 @@ type StopResponse struct {
 
 type PendingResponse struct {
 	Kind string `json:"kind"`
+}
+
+const pendingLifetimeFinalization = "lifetime-finalization"
+
+func markLifetimeFinalizationPending(response *Response) {
+	if response == nil {
+		return
+	}
+	response.Liveness = task.LivenessRunning.String()
+	response.Pending = &PendingResponse{Kind: pendingLifetimeFinalization}
+}
+
+func lifetimeFinalizationPending(response Response) bool {
+	return response.Pending != nil && response.Pending.Kind == pendingLifetimeFinalization
 }
 
 type commandResult struct {
@@ -334,6 +413,8 @@ func runCommand(a Arguments, deps Dependencies) commandResult {
 		return interactionCommand(a, deps.storeDependencies())
 	case "logs":
 		return logs(a, deps.storeDependencies())
+	case "supervisor":
+		return supervisorCommand(a, deps)
 	default:
 		return commandResult{response: newResponse(a.Command), code: 2, err: fmt.Errorf("unknown command %q", a.Command)}
 	}
@@ -352,52 +433,90 @@ func writeCLIError(w io.Writer, err error, code int) int {
 
 func writeHumanResponse(w io.Writer, response Response) error {
 	var output strings.Builder
-	fmt.Fprintf(&output, "command=%s root_id=%s task_id=%s admission=%s liveness=%s publication=%s", response.Command, response.RootID, response.TaskID, response.Admission, response.Liveness, response.Publication)
-	if response.Status != "" {
-		fmt.Fprintf(&output, " status=%s", response.Status)
-	}
-	output.WriteByte('\n')
-	if response.Continuation != nil {
-		fmt.Fprintf(&output, "continuation resumable=%t mode=%s", response.Continuation.Resumable, response.Continuation.Mode)
-		if response.Continuation.PredecessorID != "" {
-			fmt.Fprintf(&output, " predecessor_task_id=%s", response.Continuation.PredecessorID)
-		}
-		if response.Continuation.ContinueCommand != "" {
-			fmt.Fprintf(&output, " command=%s", response.Continuation.ContinueCommand)
-		}
-		output.WriteByte('\n')
-	}
-	if response.Payload != nil {
-		fmt.Fprintf(&output, "payload=%s length=%d sha256=%s\n", response.Payload.Basename, response.Payload.Length, response.Payload.SHA256)
-	}
+	writeHumanSummary(&output, response)
+	writeHumanSupervisor(&output, response.SupervisorControl)
+	writeHumanContinuation(&output, response.Continuation)
+	writeHumanPayload(&output, response.Payload)
 	writeHumanOutputDiagnostics(&output, response.Diagnostics)
-	if response.Recheck != nil {
-		fmt.Fprintf(&output, "recheck status=%s assessment_id=%s report=%s", response.Recheck.Status, response.Recheck.AssessmentID, response.Recheck.ReportPath)
-		if response.Recheck.AnswerPath != "" {
-			fmt.Fprintf(&output, " answer=%s", response.Recheck.AnswerPath)
-		}
-		output.WriteByte('\n')
-	}
-	for _, descriptor := range response.Raw {
-		fmt.Fprintf(&output, "raw path=%s available=%t sealed=%t", descriptor.Path, descriptor.Available, descriptor.Sealed)
-		if descriptor.Size != nil {
-			fmt.Fprintf(&output, " size=%d", *descriptor.Size)
-		}
-		if descriptor.SHA256 != "" {
-			fmt.Fprintf(&output, " sha256=%s", descriptor.SHA256)
-		}
-		output.WriteByte('\n')
-	}
-	if response.Stop != nil {
-		writeHumanStop(&output, "stop", *response.Stop)
-	}
-	for _, stop := range response.Stops {
-		writeHumanStop(&output, "stop", stop)
-	}
+	writeHumanRecheck(&output, response.Recheck)
+	writeHumanRaw(&output, response.Raw)
+	writeHumanStops(&output, response.Stop, response.Stops)
 	if err := writeHumanInteraction(&output, response); err != nil {
 		return err
 	}
 	return writeAll(w, []byte(output.String()))
+}
+
+func writeHumanSummary(output *strings.Builder, response Response) {
+	fmt.Fprintf(output, "command=%s root_id=%s task_id=%s admission=%s liveness=%s publication=%s", response.Command, response.RootID, response.TaskID, response.Admission, response.Liveness, response.Publication)
+	if response.Status != "" {
+		fmt.Fprintf(output, " status=%s", response.Status)
+	}
+	output.WriteByte('\n')
+}
+
+func writeHumanSupervisor(output *strings.Builder, control *SupervisorControlResponse) {
+	if control == nil {
+		return
+	}
+	fmt.Fprintf(output, "supervisor action=%s state=%s legacy_reachability=%s active_work=%s next_action=%s", control.Action, control.State, control.LegacyReachability, control.ActiveWork, control.NextAction)
+	if control.MigrationPhase != "" {
+		fmt.Fprintf(output, " migration_phase=%s", control.MigrationPhase)
+	}
+	output.WriteByte('\n')
+}
+
+func writeHumanContinuation(output *strings.Builder, continuation *ContinuationResponse) {
+	if continuation == nil {
+		return
+	}
+	fmt.Fprintf(output, "continuation resumable=%t mode=%s", continuation.Resumable, continuation.Mode)
+	if continuation.PredecessorID != "" {
+		fmt.Fprintf(output, " predecessor_task_id=%s", continuation.PredecessorID)
+	}
+	if continuation.ContinueCommand != "" {
+		fmt.Fprintf(output, " command=%s", continuation.ContinueCommand)
+	}
+	output.WriteByte('\n')
+}
+
+func writeHumanPayload(output *strings.Builder, payload *task.PayloadDescriptor) {
+	if payload != nil {
+		fmt.Fprintf(output, "payload=%s length=%d sha256=%s\n", payload.Basename, payload.Length, payload.SHA256)
+	}
+}
+
+func writeHumanRecheck(output *strings.Builder, recheck *RecheckResponse) {
+	if recheck == nil {
+		return
+	}
+	fmt.Fprintf(output, "recheck status=%s assessment_id=%s report=%s", recheck.Status, recheck.AssessmentID, recheck.ReportPath)
+	if recheck.AnswerPath != "" {
+		fmt.Fprintf(output, " answer=%s", recheck.AnswerPath)
+	}
+	output.WriteByte('\n')
+}
+
+func writeHumanRaw(output *strings.Builder, raw []taskdir.LogDescriptor) {
+	for _, descriptor := range raw {
+		fmt.Fprintf(output, "raw path=%s available=%t sealed=%t", descriptor.Path, descriptor.Available, descriptor.Sealed)
+		if descriptor.Size != nil {
+			fmt.Fprintf(output, " size=%d", *descriptor.Size)
+		}
+		if descriptor.SHA256 != "" {
+			fmt.Fprintf(output, " sha256=%s", descriptor.SHA256)
+		}
+		output.WriteByte('\n')
+	}
+}
+
+func writeHumanStops(output *strings.Builder, stop *StopResponse, stops []StopResponse) {
+	if stop != nil {
+		writeHumanStop(output, "stop", *stop)
+	}
+	for _, item := range stops {
+		writeHumanStop(output, "stop", item)
+	}
 }
 
 func writeHumanOutputDiagnostics(output *strings.Builder, diagnostics []task.OutputDiagnostic) {
@@ -560,6 +679,13 @@ func openStore(root string, deps storeDependencies, create bool) (*taskdir.Store
 	return taskdir.OpenStoreWithPredicates(root, registry)
 }
 
+func openStoreContext(ctx context.Context, root string, deps storeDependencies, create bool) (*taskdir.Store, error) {
+	if create {
+		return taskdir.InitStoreWithPredicatesContext(ctx, root, deps.registry())
+	}
+	return taskdir.OpenStoreWithPredicatesContext(ctx, root, deps.registry())
+}
+
 func readBrief(path string) (data []byte, resultErr error) {
 	if _, err := config.ValidateBriefFile(path); err != nil {
 		return nil, err
@@ -691,6 +817,10 @@ func resolveBundledExecutable(deps Dependencies, name string) (string, error) {
 }
 
 func resolveBundledExecutables(deps Dependencies) (client, daemon string, resultErr error) {
+	return resolveBundledExecutablesWithPath(deps, true)
+}
+
+func resolveBundledExecutablesWithPath(deps Dependencies, allowPath bool) (client, daemon string, resultErr error) {
 	directory, err := bundledSupervisorDirectory(deps)
 	if err != nil {
 		return "", "", err
@@ -709,6 +839,9 @@ func resolveBundledExecutables(deps Dependencies) (client, daemon string, result
 	client, daemon, found, libexecErr := resolveBundledLibexecPair(directory)
 	if found {
 		return client, daemon, libexecErr
+	}
+	if !allowPath {
+		return "", "", clientErr
 	}
 
 	pathClient, pathErr := exec.LookPath("pueue")
@@ -730,6 +863,26 @@ func resolvePrivateSupervisorExecutables(root string, deps Dependencies) (client
 	stateClient, stateDaemon, found, stateErr := resolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
 	if stateErr != nil {
 		return "", "", stateErr
+	}
+	if found {
+		return stateClient, stateDaemon, nil
+	}
+	return resolveBundledExecutables(deps)
+}
+
+// resolveCurrentPrivateSupervisorExecutables selects the pair shipped by the
+// active installation for successor inventory and explicit migration work. It
+// does not select the ordinary active generation: pueue's completed published
+// binding remains authoritative until canonical migration publishes a
+// replacement, while a fresh root may bootstrap the staged pair.
+func resolveCurrentPrivateSupervisorExecutables(root string, deps Dependencies) (client, daemon string, resultErr error) {
+	client, daemon, bundledErr := resolveBundledExecutablesWithPath(deps, false)
+	if bundledErr == nil {
+		return client, daemon, nil
+	}
+	stateClient, stateDaemon, found, stateErr := resolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
+	if stateErr != nil {
+		return "", "", errors.Join(bundledErr, stateErr)
 	}
 	if found {
 		return stateClient, stateDaemon, nil
@@ -852,24 +1005,55 @@ func bindInitial(a Arguments, deps Dependencies) (*pueue.Client, error) {
 
 func newSupervisorClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, recoverPrivate bool, initialSupervisorExecutable string) (*pueue.Client, error) {
 	if recoverPrivate && pueue.IsPrivateConfig(root, saved.ConfigPath) {
-		hasDaemonPath := saved.DaemonExecutable != ""
-		hasDaemonDigest := saved.DaemonSHA256 != ""
-		if hasDaemonPath != hasDaemonDigest {
-			return nil, pueue.ErrBinding
-		}
-		clientExecutable, daemonExecutable := saved.ClientExecutable, saved.DaemonExecutable
-		if !hasDaemonPath || !privateSupervisorExecutablesAvailable(clientExecutable, daemonExecutable) {
-			var err error
-			clientExecutable, daemonExecutable, err = resolvePrivateSupervisorExecutables(root, Dependencies{InitialSupervisorExecutable: initialSupervisorExecutable})
-			if err != nil {
-				return nil, fmt.Errorf("%w: saved private supervisor executables are unavailable and the active or state-root pair could not be resolved: %w", pueue.ErrBinding, err)
-			}
-		} else if err := validateSavedStateSupervisorPair(root, saved); err != nil {
-			return nil, fmt.Errorf("%w: saved private state-root supervisor pair failed integrity validation: %w", pueue.ErrBinding, err)
+		clientExecutable, daemonExecutable, resolveErr := resolveRecoveryPrivateSupervisorExecutables(root, saved, initialSupervisorExecutable)
+		if resolveErr != nil {
+			return nil, resolveErr
 		}
 		return pueue.RecoverPrivate(ctx, root, saved, clientExecutable, daemonExecutable, options)
 	}
 	return pueue.NewClient(saved, options)
+}
+
+// newSupervisorControlClient proves the task's exact saved endpoint ready before
+// a mutating queue command. If that endpoint is unavailable, completed private
+// migration evidence may recover the current successor before the one control
+// command is sent. An uncertain probe and a failed control are never retried.
+func newSupervisorControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, initialSupervisorExecutable string) (*pueue.Client, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	direct, directErr := pueue.BindSaved(ctx, saved, options)
+	if directErr == nil {
+		directErr = direct.Ready(ctx)
+		if directErr == nil {
+			return direct, nil
+		}
+	}
+	if direct != nil {
+		directErr = errors.Join(directErr, direct.CloseAfterPending(directErr))
+	}
+	if errors.Is(directErr, pueue.ErrInFlight) || ctx.Err() != nil || !pueue.IsPrivateConfig(root, saved.ConfigPath) {
+		return nil, directErr
+	}
+	recovered, recoveryErr := newSupervisorClient(ctx, root, saved, options, true, initialSupervisorExecutable)
+	if recoveryErr != nil {
+		return nil, errors.Join(directErr, recoveryErr)
+	}
+	return recovered, nil
+}
+
+func resolveRecoveryPrivateSupervisorExecutables(root string, saved task.SupervisorRef, initialSupervisorExecutable string) (client, daemon string, resultErr error) {
+	if privateSupervisorExecutablesAvailable(saved.ClientExecutable, saved.DaemonExecutable) {
+		if err := validateSavedStateSupervisorPair(root, saved); err != nil {
+			return "", "", fmt.Errorf("%w: saved private supervisor pair failed integrity validation: %w", pueue.ErrBinding, err)
+		}
+		return saved.ClientExecutable, saved.DaemonExecutable, nil
+	}
+	client, daemon, resolveErr := resolvePrivateSupervisorExecutables(root, Dependencies{InitialSupervisorExecutable: initialSupervisorExecutable})
+	if resolveErr == nil {
+		return client, daemon, nil
+	}
+	return "", "", fmt.Errorf("%w: resolve private supervisor executables: %w", pueue.ErrBinding, resolveErr)
 }
 
 func privateSupervisorExecutablesAvailable(clientExecutable, daemonExecutable string) bool {
@@ -886,6 +1070,14 @@ func privateSupervisorExecutablesAvailable(clientExecutable, daemonExecutable st
 }
 
 func bindInitialWithOptions(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options) (*pueue.Client, error) {
+	return bindInitialWithStart(a, deps, root, supervisorOptions, true)
+}
+
+func bindInitialForAdmission(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options, deferPrivateStart bool) (*pueue.Client, error) {
+	return bindInitialWithStart(a, deps, root, supervisorOptions, !deferPrivateStart)
+}
+
+func bindInitialWithStart(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options, startPrivate bool) (*pueue.Client, error) {
 	if a.savedSupervisor != nil {
 		return newSupervisorClient(context.Background(), root, *a.savedSupervisor, supervisorOptions, true, deps.InitialSupervisorExecutable)
 	}
@@ -900,11 +1092,14 @@ func bindInitialWithOptions(a Arguments, deps Dependencies, root string, supervi
 		if root == "" {
 			return nil, fmt.Errorf("%w: state root is required for the private supervisor", pueue.ErrConfiguration)
 		}
-		clientExecutable, daemonExecutable, resolveErr := resolvePrivateSupervisorExecutables(root, deps)
-		if resolveErr != nil {
-			return nil, resolveErr
+		if !startPrivate {
+			clientExecutable, daemonExecutable, resolveErr := resolvePrivateSupervisorExecutables(root, deps)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			return pueue.PreparePrivate(context.Background(), clientExecutable, daemonExecutable, root, supervisorOptions)
 		}
-		return pueue.BindPrivate(context.Background(), clientExecutable, daemonExecutable, root, supervisorOptions)
+		return bindPrivateSupervisorWithOptions(root, deps, supervisorOptions)
 	}
 	executable, err := resolveInitialExecutable(deps)
 	if err != nil {
@@ -913,9 +1108,24 @@ func bindInitialWithOptions(a Arguments, deps Dependencies, root string, supervi
 	return pueue.Bind(context.Background(), executable, configPath, supervisorOptions)
 }
 
+func bindPrivateSupervisorWithOptions(root string, deps Dependencies, supervisorOptions pueue.Options) (*pueue.Client, error) {
+	return bindPrivateSupervisorWithContext(context.Background(), root, deps, supervisorOptions)
+}
+
+func bindPrivateSupervisorWithContext(ctx context.Context, root string, deps Dependencies, supervisorOptions pueue.Options) (*pueue.Client, error) {
+	if root == "" {
+		return nil, fmt.Errorf("%w: state root is required for the private supervisor", pueue.ErrConfiguration)
+	}
+	clientExecutable, daemonExecutable, err := resolvePrivateSupervisorExecutables(root, deps)
+	if err != nil {
+		return nil, err
+	}
+	return pueue.BindPrivate(ctx, clientExecutable, daemonExecutable, root, supervisorOptions)
+}
+
 func newMeta(req task.TaskRecord, profile PreparedProfile, supervisor task.SupervisorRef, runner, ownership, publisher string) task.MetaRecord {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, RunnerExecutable: runner, RunnerOwnership: ownership, PublisherBuild: publisher, PublisherVersion: publisher, Environment: cloneEnvironment(profile.Plan.Environment), EnvironmentRecorded: profile.Plan.Environment != nil, Predicate: profile.Plan.Predicate, InputFiles: profile.Plan.InputFiles, OutputArtifacts: profile.Plan.OutputArtifacts, OutputWriterContract: profile.Plan.OutputWriterContract, SupervisorConfig: supervisor, CreatedAt: now}
+	return task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: req.RootID, TaskID: req.TaskID, RequestedConfig: req.RequestedConfig, EffectiveConfig: profile.Effective, Containment: profile.Effective.Containment, Approval: profile.Effective.Approval, ProviderExecutable: profile.Plan.Executable, ProviderVersion: profile.ObservedVersion, RuntimePreflightSHA256: profile.RuntimePreflightSHA256, RunnerExecutable: runner, RunnerOwnership: ownership, PublisherBuild: publisher, PublisherVersion: publisher, Environment: cloneEnvironment(profile.Plan.Environment), EnvironmentRecorded: profile.Plan.Environment != nil, Predicate: profile.Plan.Predicate, InputFiles: profile.Plan.InputFiles, OutputArtifacts: profile.Plan.OutputArtifacts, OutputWriterContract: profile.Plan.OutputWriterContract, SupervisorConfig: supervisor, CreatedAt: now}
 }
 
 func cloneEnvironment(values []string) []string {
@@ -998,7 +1208,7 @@ func mapPueueState(state pueue.State) string {
 	switch state {
 	case pueue.StateUnknown:
 		return task.LivenessUndetermined.String()
-	case pueue.StateQueued:
+	case pueue.StateQueued, pueue.StateStashed:
 		return task.LivenessRunning.String()
 	case pueue.StateRunning:
 		return task.LivenessRunning.String()

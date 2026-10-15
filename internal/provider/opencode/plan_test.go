@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -103,13 +104,18 @@ func TestDescriptionAdvertisesDirectRuntimeCapabilities(t *testing.T) {
 	if len(description.Runtime.RequiredFlags) == 0 || len(description.Runtime.HelpArgs) != 1 || description.Runtime.HelpArgs[0] != "run" {
 		t.Fatalf("runtime=%+v", description.Runtime)
 	}
-	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 8 {
+	assertOpenCodeRegistration(t, Registration())
+}
+
+func assertOpenCodeRegistration(t *testing.T, registration commonprovider.Registration) {
+	t.Helper()
+	if registration.Prepare == nil || len(registration.Interpreters) != 10 {
 		t.Fatalf("registration=%+v", registration)
 	}
-	if !registration.Interpreters[2].Reference().Equal(historicalCurrentReferenceForMode(ModeReadOnly)) || !registration.Interpreters[3].Reference().Equal(historicalCurrentReferenceForMode(ModeWorkspaceWrite)) ||
-		!registration.Interpreters[4].Reference().Equal(historicalReferenceForMode(ModeReadOnly)) || !registration.Interpreters[5].Reference().Equal(historicalReferenceForMode(ModeWorkspaceWrite)) ||
-		!registration.Interpreters[6].Reference().Equal(LegacyReferenceForMode(ModeReadOnly)) || !registration.Interpreters[7].Reference().Equal(LegacyReferenceForMode(ModeWorkspaceWrite)) {
+	if !registration.Interpreters[2].Reference().Equal(historicalCurrentV4ReferenceForMode(ModeReadOnly)) || !registration.Interpreters[3].Reference().Equal(historicalCurrentV4ReferenceForMode(ModeWorkspaceWrite)) ||
+		!registration.Interpreters[4].Reference().Equal(historicalCurrentReferenceForMode(ModeReadOnly)) || !registration.Interpreters[5].Reference().Equal(historicalCurrentReferenceForMode(ModeWorkspaceWrite)) ||
+		!registration.Interpreters[6].Reference().Equal(historicalReferenceForMode(ModeReadOnly)) || !registration.Interpreters[7].Reference().Equal(historicalReferenceForMode(ModeWorkspaceWrite)) ||
+		!registration.Interpreters[8].Reference().Equal(LegacyReferenceForMode(ModeReadOnly)) || !registration.Interpreters[9].Reference().Equal(LegacyReferenceForMode(ModeWorkspaceWrite)) {
 		t.Fatalf("legacy interpreter references are not registered: %+v", registration.Interpreters)
 	}
 }

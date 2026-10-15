@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -40,6 +41,26 @@ func TestSupervisedScopeBorrowsOneDeadlineAndExpiresOnReturn(t *testing.T) {
 	if saved.Context().Err() == nil || saved.Authorize() == nil {
 		t.Fatal("retained callback scope still authorizes work")
 	}
+}
+
+func TestSupervisedCompletionClosesLifetimeBeforeReturning(t *testing.T) {
+	clock := newAdvancingClock()
+	events := &eventLog{}
+	workErr, stopErr := RunSupervised(clock.Now().Add(time.Minute), SupervisedOptions{
+		Clock:    clock,
+		Lifetime: recordingLifetime{events: events},
+		Stopper: budgetPreparerFunc(func(time.Time) (BudgetRequest, error) {
+			t.Error("completed inspection requested a stop")
+			return nil, errors.New("unexpected stop")
+		}),
+	}, func(PreflightScope) error {
+		events.add("inspection-work")
+		return nil
+	})
+	if workErr != nil || stopErr != nil {
+		t.Fatalf("work=%v stop=%v", workErr, stopErr)
+	}
+	assertOrder(t, events.snapshot(), "inspection-work", "lifetime-close")
 }
 
 func TestSupervisedQueuedExpiryDoesNotEnterWork(t *testing.T) {
@@ -164,4 +185,62 @@ func TestSupervisedExpiryCancelsObservationButWaitsForOwnedWork(t *testing.T) {
 	if err := <-finished; !errors.Is(err, errBudgetExpiredBeforeStart) {
 		t.Fatalf("expired work became eligible: %v", err)
 	}
+}
+
+type supervisedCloseLifetime struct {
+	events *eventLog
+	closed chan struct{}
+}
+
+func (*supervisedCloseLifetime) StartCommand(_ *exec.Cmd, start func() error) error { return start() }
+func (*supervisedCloseLifetime) FinishCommand(context.Context, *exec.Cmd) error     { return nil }
+func (*supervisedCloseLifetime) Terminate(context.Context) error                    { return nil }
+func (l *supervisedCloseLifetime) CloseTask(context.Context) error {
+	l.events.add("lifetime-close")
+	close(l.closed)
+	return nil
+}
+
+func TestSupervisedExpiryAwaitsStopBeforeClosingLifetime(t *testing.T) {
+	clock := newAdvancingClock()
+	events := &eventLog{}
+	workEntered := make(chan struct{})
+	stopEntered := make(chan struct{})
+	stopRelease := make(chan struct{})
+	lifetime := &supervisedCloseLifetime{events: events, closed: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		workErr, stopErr := RunSupervised(clock.Now().Add(time.Minute), SupervisedOptions{
+			Clock:    clock,
+			Lifetime: lifetime,
+			Stopper: budgetPreparerFunc(func(time.Time) (BudgetRequest, error) {
+				return func(context.Context) error {
+					events.add("stop-start")
+					close(stopEntered)
+					<-stopRelease
+					events.add("stop-finished")
+					return nil
+				}, nil
+			}),
+		}, func(scope PreflightScope) error {
+			close(workEntered)
+			<-scope.Context().Done()
+			return nil
+		})
+		done <- errors.Join(workErr, stopErr)
+	}()
+	<-workEntered
+	clock.advance(time.Minute)
+	clock.timer.ch <- clock.Now()
+	<-stopEntered
+	select {
+	case <-lifetime.closed:
+		t.Fatal("lifetime closed before the prepared stop request completed")
+	default:
+	}
+	close(stopRelease)
+	if err := <-done; !errors.Is(err, errBudgetExpiredBeforeStart) {
+		t.Fatalf("expiry result = %v, want budget expiry", err)
+	}
+	assertOrder(t, events.snapshot(), "stop-finished", "lifetime-close")
 }

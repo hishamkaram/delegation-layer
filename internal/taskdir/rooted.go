@@ -1,6 +1,7 @@
 package taskdir
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -117,6 +118,16 @@ func (s *Store) readRecord(path string, dst any) error {
 	return task.DecodeStrict(b, dst)
 }
 
+func (s *Store) readRecordContext(ctx context.Context, path string, dst any) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errors.Join(s.readRecord(path, dst), ctx.Err())
+}
+
 func (s *Store) readBytes(path string, limit int64) ([]byte, error) {
 	f, err := s.openFile(path, unix.O_RDONLY)
 	if err != nil {
@@ -124,6 +135,17 @@ func (s *Store) readBytes(path string, limit int64) ([]byte, error) {
 	}
 	b, readErr := task.ReadBounded(f, limit)
 	return b, errors.Join(readErr, f.Close())
+}
+
+func (s *Store) readBytesContext(ctx context.Context, path string, limit int64) ([]byte, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	b, err := s.readBytes(path, limit)
+	return b, errors.Join(err, ctx.Err())
 }
 
 func (s *Store) barrierDir(path string) error {
@@ -160,6 +182,16 @@ func (s *Store) link(from, to string) error {
 // Retry flushes every directory in the state-root chain, including preexisting
 // entries: their existence cannot establish that an earlier parent sync succeeded.
 func (s *Store) mkdir(path string, inj FaultInjector) error {
+	return s.mkdirContext(context.Background(), path, inj)
+}
+
+func (s *Store) mkdirContext(ctx context.Context, path string, inj FaultInjector) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	rel, err := s.relative(path)
 	if err != nil {
 		return err
@@ -169,6 +201,9 @@ func (s *Store) mkdir(path string, inj FaultInjector) error {
 		return s.barrierDir(current)
 	}
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
 		parent, e := s.openDir(current)
 		if e != nil {
 			return e
@@ -180,6 +215,9 @@ func (s *Store) mkdir(path string, inj FaultInjector) error {
 		}
 		next := filepath.Join(current, part)
 		if e = s.barrierDirectoryEntry(next, current, inj); e != nil {
+			return e
+		}
+		if e = ctx.Err(); e != nil {
 			return e
 		}
 		current = next

@@ -119,7 +119,7 @@ func ValidateStopReplyRecord(r *StopReplyRecord) error {
 	if err := ValidateStopRequestID(r.RequestID); err != nil {
 		return err
 	}
-	if r.Action != "kill" && r.Action != "remove" {
+	if r.Action != "kill" && r.Action != "remove" && r.Action != "terminate" {
 		return fmt.Errorf("invalid stop action: %w", ErrInvalidEnum)
 	}
 	return validateTimestamp(r.RepliedAt)

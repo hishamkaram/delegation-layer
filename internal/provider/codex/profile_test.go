@@ -23,6 +23,79 @@ func TestProfileReconstructionRetainsNativeAndLegacyBindings(t *testing.T) {
 	})
 }
 
+func TestCurrentNativeProfileAdmitsWithoutRuntimeFacts(t *testing.T) {
+	request, now := profileReconstructionFixture(t)
+	candidate := mustPrepareCandidate(t, request)
+	if candidate.Admit == nil {
+		t.Fatal("current native candidate does not expose static admission")
+	}
+	static, err := candidate.Admit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if static.ObservedVersion != "" || static.Plan.ProviderRuntime != (task.ProviderRuntimeIdentity{}) {
+		t.Fatalf("static admission claimed runtime facts: version=%q runtime=%+v", static.ObservedVersion, static.Plan.ProviderRuntime)
+	}
+	err = task.ValidateSHA256(static.RuntimePreflightSHA256)
+	if err != nil {
+		t.Fatalf("static capability digest=%q: %v", static.RuntimePreflightSHA256, err)
+	}
+	capability, err := commonprovider.RuntimeCapabilityDigest(*candidate.Inspection)
+	if err != nil || static.RuntimePreflightSHA256 != capability {
+		t.Fatalf("static capability digest=%q want=%q err=%v", static.RuntimePreflightSHA256, capability, err)
+	}
+	if static.Plan.RuntimePreflightSHA256 != "" {
+		t.Fatalf("provider static admission populated plan marker=%q", static.Plan.RuntimePreflightSHA256)
+	}
+	if _, err = candidate.Finalize(nil, now); err == nil {
+		t.Fatal("finalizer accepted missing runtime facts")
+	}
+
+	finalized := finalizeProfile(t, candidate, now)
+	if finalized.RuntimePreflightSHA256 != "" || finalized.ObservedVersion == "" {
+		t.Fatalf("finalized profile retained pending runtime state: %+v", finalized)
+	}
+	if !slices.Equal(static.Plan.Arguments, finalized.Plan.Arguments) ||
+		!slices.Equal(static.Plan.Environment, finalized.Plan.Environment) ||
+		!task.CompareEffectiveConfigs(static.Effective, finalized.Effective) {
+		t.Fatalf("static and finalized launch contracts differ: static=%+v finalized=%+v", static, finalized)
+	}
+}
+
+func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
+	request, _ := profileReconstructionFixture(t)
+	candidate := mustPrepareCandidate(t, request)
+	admitted, err := candidate.Admit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := PrepareExistingCandidate(request, task.MetaRecord{
+		EffectiveConfig:        admitted.Effective,
+		RuntimePreflightSHA256: admitted.RuntimePreflightSHA256,
+		Environment:            slices.Clone(admitted.Plan.Environment),
+		EnvironmentRecorded:    true,
+		Predicate:              admitted.Plan.Predicate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Admit == nil {
+		t.Fatal("pending current native profile lost static admission")
+	}
+	rebuilt, err := pending.Admit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt.ObservedVersion != "" || rebuilt.RuntimePreflightSHA256 != admitted.RuntimePreflightSHA256 {
+		t.Fatalf("pending reconstruction claimed unexpected runtime state: rebuilt=%+v admitted=%+v", rebuilt, admitted)
+	}
+	if !slices.Equal(rebuilt.Plan.Arguments, admitted.Plan.Arguments) ||
+		!slices.Equal(rebuilt.Plan.Environment, admitted.Plan.Environment) ||
+		!task.CompareEffectiveConfigs(rebuilt.Effective, admitted.Effective) {
+		t.Fatalf("pending reconstruction changed static launch contract: rebuilt=%+v admitted=%+v", rebuilt, admitted)
+	}
+}
+
 func testNativeProfileReconstruction(t *testing.T) {
 	t.Helper()
 	request, now := profileReconstructionFixture(t)

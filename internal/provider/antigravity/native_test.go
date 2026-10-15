@@ -39,6 +39,9 @@ func TestNativePreparationLeavesProviderConfigurationAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !profile.Plan.Predicate.Equal(NewRecordPrintInterpreter(ModeWorkspaceWrite).Reference()) {
+		t.Fatalf("fresh workspace profile selected predicate=%+v", profile.Plan.Predicate)
+	}
 	if profile.Effective.Policy.ProfileRevision != commonprovider.NativeProfileRevision || len(profile.Effective.Policy.Sources) != 0 {
 		t.Fatal("native configuration was inventoried")
 	}
@@ -151,6 +154,19 @@ func assertReadOnlyReconstruction(t *testing.T, request task.TaskRecord, profile
 	if !profile.Plan.Predicate.Equal(replay.Plan.Predicate) {
 		t.Fatal("read-only predicate changed during reconstruction")
 	}
+	for _, historicalPredicate := range []task.PredicateRef{
+		newHistoricalCurrentPrintInterpreterForMode(ModeReadOnly).Reference(),
+		newHistoricalRecordPrintInterpreter(ModeReadOnly).Reference(),
+	} {
+		reconstructed, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: historicalPredicate, EffectiveConfig: profile.Effective, Environment: profile.Plan.Environment})
+		if err != nil {
+			t.Fatal(err)
+		}
+		replay, err := reconstructed.Finalize(facts, time.Now())
+		if err != nil || !replay.Plan.Predicate.Equal(historicalPredicate) {
+			t.Fatalf("historical read-only predicate changed: got=%+v want=%+v err=%v", replay.Plan.Predicate, historicalPredicate, err)
+		}
+	}
 }
 
 func assertUnattendedNativeApproval(t *testing.T, profile commonprovider.PreparedProfile, requiredFlags []string) {
@@ -172,6 +188,11 @@ func assertNativeReconstruction(t *testing.T, request task.TaskRecord, profile c
 	if err != nil || !task.CompareEffectiveConfigs(profile.Effective, replay.Effective) || !slices.Equal(profile.Plan.Arguments, replay.Plan.Arguments) {
 		t.Fatal("native profile reconstruction changed")
 	}
+	assertHistoricalPredicateReconstruction(t, request, profile, facts, []task.PredicateRef{
+		NewPrintInterpreter().Reference(),
+		newHistoricalCurrentPrintInterpreterForMode(ModeWorkspaceWrite).Reference(),
+		newHistoricalRecordPrintInterpreter(ModeWorkspaceWrite).Reference(),
+	})
 	historical, err := commonprovider.NativeEffectiveConfig(request, profile.WritableRoots, profile.Effective.Policy.RuntimeSHA256, "accept-edits")
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +213,20 @@ func assertNativeReconstruction(t *testing.T, request task.TaskRecord, profile c
 	}
 	if _, err = PrepareExistingCandidate(request, task.MetaRecord{}); err == nil {
 		t.Fatal("historical configuration restrictions silently relaxed")
+	}
+}
+
+func assertHistoricalPredicateReconstruction(t *testing.T, request task.TaskRecord, profile commonprovider.PreparedProfile, facts []byte, predicates []task.PredicateRef) {
+	t.Helper()
+	for _, predicate := range predicates {
+		candidate, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: predicate, EffectiveConfig: profile.Effective, Environment: profile.Plan.Environment})
+		if err != nil {
+			t.Fatal(err)
+		}
+		replay, err := candidate.Finalize(facts, time.Now())
+		if err != nil || !replay.Plan.Predicate.Equal(predicate) {
+			t.Fatalf("historical workspace predicate changed: got=%+v want=%+v err=%v", replay.Plan.Predicate, predicate, err)
+		}
 	}
 }
 

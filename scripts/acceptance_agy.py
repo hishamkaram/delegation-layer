@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run the three-turn Antigravity native acceptance gate.
 
-This harness deliberately has a small process supervisor of its own.  Its
-direct observations retain the caller's environment so the signed-in native
+This harness uses the shared acceptance process owner for its direct
+observations.  It retains the caller's environment so the signed-in native
 CLI can be exercised, while the production adapter sends only its bounded
 allowlist through the queue.  The harness records only environment names and
 never uses a timeout wrapper or a signal.  An observation timeout therefore
@@ -12,13 +12,13 @@ leaves the Popen handle and all evidence in place for review.
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import json
 import os
 from pathlib import Path
 import secrets
 import shlex
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 
 from acceptance_provider_common import (
     AcceptanceFailure,
+    _hex_digest,
     clean_absolute,
     ensure_private_directory,
     path_is_within,
@@ -33,28 +34,43 @@ from acceptance_provider_common import (
     reject_tmp,
     require,
     sha,
+    validate_provider_runtime_metadata,
+    validate_managed_lifetime_closure,
+    validate_queue_row as validate_exact_queue_row,
     write_bytes,
 )
-from acceptance_supervisor_common import config_for, digest, read_json, write_json
+from acceptance_supervisor_common import (
+    DirectoryOwner,
+    OwnedDirectory,
+    Process,
+    Processes,
+    config_for,
+    digest,
+    failure_cleanup_deadline,
+    finalize_acceptance_artifacts,
+    read_json,
+    rollback_owned_directories,
+    wait_for_failure_cleanup,
+    write_json,
+)
 
 
 PROVIDER = "antigravity:print"
 MODE = "workspace-write"
-PREDICATE_VERSION = "1.2.2-auth2"
-PREDICATE_SHA256 = "53f1b5368023953447088ecbd4fc36c1b431b0fb376cf76511ed70d943d8138a"
+PREDICATE_VERSION = "print-record-v2"
+PREDICATE_SHA256 = "54713d2c06eef693c09d8f08419f6dd2fd4f4802742e71d113df0dfbf1f9c43f"
 TASK_BUDGET = "120s"
 CANONICAL_TASK_BUDGET = "2m0s"
 L3_NATIVE_TIMEOUT = "3s"
 WATCH_SECONDS = 150
+FINALIZATION_SECONDS = 30
 TIMEOUT_MARKER = b"[agy] print timeout"
-AUTHENTICATION_MARKERS = (
-    b"authentication required", b"not authenticated", b"please log in", b"sign in",
-    b"unauthorized", b"api key", b"credentials", b"login required",
-)
+AUTHENTICATION_DIAGNOSTIC = "authentication-unavailable"
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_STATE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-acceptance"
 DEFAULT_WORKSPACE_PARENT = Path.home() / "Active-Projects" / "delegation-layer-acceptance"
+DEFAULT_EVIDENCE_PARENT = Path.home() / "Library" / "Application Support" / "delegation-layer-evidence"
 PUEUE_PARENT = Path("/Users/Shared") if sys.platform == "darwin" else Path.home() / ".dl-acceptance"
 MAX_STATUS_BYTES = 8 * 1024 * 1024
 MAX_PROVIDER_BYTES = 8 * 1024 * 1024
@@ -177,180 +193,36 @@ class StatusCapture:
         finally:
             self.buffer.clear()
 
-
-class OwnedProcess:
-    """One Popen with durable pre-start and post-Wait evidence."""
-
-    def __init__(self, directory: Path, argv: list[str], cwd: Path, env: dict[str, str], stdin: bytes | None):
-        self.directory = directory
-        self.argv = [str(item) for item in argv]
-        self.cwd = cwd
-        self.env = dict(env)
-        self.process: subprocess.Popen[bytes] | None = None
-        self.result: dict[str, object] | None = None
-        self.stdout_path = directory / "stdout"
-        self.stderr_path = directory / "stderr"
-        self._stdout = None
-        self._stderr = None
-        self._status_capture = None
-        executable = Path(self.argv[0])
-        require(executable.is_absolute(), "owned executable must be absolute")
-        require(executable.is_file() and not executable.is_symlink(), f"owned executable unavailable: {executable}")
-        directory.mkdir(mode=0o700, parents=False, exist_ok=False)
-        invocation = {
-            "argv": self.argv,
-            "cwd": str(cwd),
-            "executable_sha256": digest(executable),
-            "environment_keys": sorted(self.env),
-            "environment_values_in_record": False,
-            "harness_environment_preserved": True,
-            "stdin": "PIPE" if stdin is not None else "DEVNULL",
-            "stdin_bytes": len(stdin) if stdin is not None else 0,
-            "stdin_sha256": sha(stdin) if stdin is not None else None,
-            "shell": False,
-        }
-        write_json(directory / "invocation.json", invocation)
-        try:
-            self._stdout = self.stdout_path.open("xb")
-            self._stderr = self.stderr_path.open("xb")
-            if self.argv[-2:] == ["status", "--json"]:
-                self._status_capture = StatusCapture()
-            self.process = subprocess.Popen(
-                self.argv,
-                cwd=str(cwd),
-                env=self.env,
-                stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
-                stdout=self._status_capture.writer if self._status_capture is not None else self._stdout,
-                stderr=self._stderr,
-                shell=False,
-                close_fds=True,
-            )
-            if self._status_capture is not None:
-                self._status_capture.writer.close()
-            if stdin is not None:
-                self.process.stdin.write(stdin)
-                self.process.stdin.flush()
-                self.process.stdin.close()
-        except BaseException:
-            if self.process is not None and self.process.stdin is not None:
-                try:
-                    self.process.stdin.close()
-                except BrokenPipeError:
-                    pass  # close still releases the parent fd after child EOF.
-            if self._status_capture is not None:
-                self._status_capture.writer.close()
-                if self.process is None:
-                    self._status_capture.reader.close()
-            if self._stdout is not None:
-                self._stdout.close()
-            if self._stderr is not None:
-                self._stderr.close()
-            raise
-
-    @property
-    def pid(self) -> int:
-        require(self.process is not None, "owned process was not started")
-        return self.process.pid
-
-    def poll(self) -> dict[str, object] | None:
-        if self.result is not None:
-            return self.result
-        require(self.process is not None, "owned process was not started")
-        if self._status_capture is not None and not self._status_capture.eof:
-            self._status_capture.drain()
-        if self.process.poll() is None:
-            return None
-        if self._status_capture is not None and not self._status_capture.eof:
-            return None
-        code = self.process.wait()
-        if self._status_capture is not None:
-            self._stdout.write(self._status_capture.sanitized(code))
-        if self._stdout is not None:
-            self._stdout.close()
-        if self._stderr is not None:
-            self._stderr.close()
-        self.result = {
-            "pid": self.pid,
-            "exit_code": code,
-            "natural_wait": code >= 0,
-            "ended_ns": time.time_ns(),
-            "stdout_sha256": digest(self.stdout_path),
-            "stderr_sha256": digest(self.stderr_path),
-            "stdout_bytes": self.stdout_path.stat().st_size,
-            "stderr_bytes": self.stderr_path.stat().st_size,
-        }
-        if self._status_capture is not None:
-            self.result["stdout_redaction"] = "pueue-status-envs"
-            self.result["capture_error"] = self._status_capture.error
-        write_json(self.directory / "completed.json", self.result)
-        return self.result
-
-    def wait(self, timeout: float, expected: int | set[int] | tuple[int, ...] | None = 0) -> dict[str, object]:
-        deadline = time.monotonic() + timeout
-        while self.poll() is None:
-            if time.monotonic() >= deadline:
-                marker = self.directory / "observation-expired.json"
-                if not marker.exists():
-                    write_json(marker, {
-                        "pid": self.pid,
-                        "timeout_seconds": timeout,
-                        "termination": "unknown",
-                        "signals_sent": 0,
-                    })
-                raise AcceptanceFailure(f"observation expired; process ownership retained: {self.directory}")
-            time.sleep(0.025)
-        require(self.result is not None and bool(self.result["natural_wait"]),
-                f"process ended by signal: {self.directory}")
-        require(not self.result.get("capture_error"), f"status capture failed: {self.directory}")
-        if expected is not None:
-            allowed = {expected} if isinstance(expected, int) else set(expected)
-            require(int(self.result["exit_code"]) in allowed,
-                    f"unexpected exit {self.result['exit_code']} for {self.directory}")
-        return self.result
-
-    def output(self, bound: int = MAX_STATUS_BYTES) -> bytes:
-        require(self.result is not None, "process output requested before Wait")
-        data = self.stdout_path.read_bytes()
-        require(len(data) <= bound, f"owned stdout exceeds bound: {self.directory}")
-        return data
-
-    def json(self, bound: int = MAX_STATUS_BYTES) -> object:
-        require(self.result is not None and not self.result.get("capture_error"),
-                f"status capture incomplete or invalid: {self.directory}")
-        return read_json(self.directory / "stdout", bound)
+    def close(self):
+        for stream in (self.writer, self.reader):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
 
 
-class ProcessBook:
-    def __init__(self, directory: Path, env: dict[str, str]):
-        self.directory = directory
-        self.directory.mkdir(mode=0o700, parents=True, exist_ok=False)
-        self.env = dict(env)
-        self.entries: list[OwnedProcess] = []
+OwnedProcess = Process
 
-    def start(self, name: str, argv: list[str], cwd: Path, stdin: bytes | None = None) -> OwnedProcess:
-        directory = self.directory / f"{len(self.entries) + 1:03d}-{name}"
-        # Register before initialization can start a child and then fail.
-        process = OwnedProcess.__new__(OwnedProcess)
-        self.entries.append(process)
-        process.__init__(directory, argv, cwd, self.env, stdin)
-        write_json(directory / "started.json", {"pid": process.pid, "started_ns": time.time_ns()})
-        return process
+# A provider compatibility factory must receive the caller's live ownership
+# authority.  The sentinel makes omission fail closed at runtime while the
+# ownership verifier sees the explicit owner binding through functools.partial.
+_REQUIRED_PROCESS_OWNER = object()
 
-    def run(self, name: str, argv: list[str], cwd: Path, expected: int | set[int] | tuple[int, ...] | None = 0,
-            timeout: float = 30, stdin: bytes | None = None) -> OwnedProcess:
-        process = self.start(name, argv, cwd, stdin)
-        process.wait(timeout, expected)
-        return process
 
-    def pending(self, exclude: tuple[OwnedProcess, ...] = ()) -> list[dict[str, object]]:
-        result = []
-        for entry in self.entries:
-            if entry in exclude or getattr(entry, "process", None) is None:
-                continue
-            if entry.poll() is None:
-                result.append({"pid": entry.pid, "argv": entry.argv, "directory": str(entry.directory)})
-        return result
+def _agy_stdout_capture(argv: list[str]):
+    return StatusCapture() if argv[-2:] == ["status", "--json"] else None
 
+
+# Compatibility names retain the AGY acceptance imports; all lifecycle code
+# remains in the shared Processes/Process implementation.
+ProcessBook = partial(
+    Processes,
+    owner=_REQUIRED_PROCESS_OWNER,
+    stdout_capture_factory=_agy_stdout_capture,
+    environment_keys_only=True,
+    return_result=True,
+    failure_type=AcceptanceFailure,
+)
 
 
 def validate_l1_write_denial(stdout: bytes, stderr: bytes, conversation: str) -> None:
@@ -381,13 +253,15 @@ def validate_l1_write_denial(stdout: bytes, stderr: bytes, conversation: str) ->
             isinstance(actions[0].get("display_name"), str) and actions[0]["display_name"],
             "L1 did not record exactly one write_file denial")
     require(b'"write_file" permission' in stderr and b"auto-denied" in stderr and
-            b"[agy] print timeout" not in stderr and b"authentication required" not in stderr,
+            b"[agy] print timeout" not in stderr,
             "L1 lacks positive headless write-denial diagnostic")
 
 
 class Prepared:
-    def __init__(self, data: dict[str, object], source: Path | None):
+    def __init__(self, data: dict[str, object], source: Path | None,
+                 owned_directories: tuple[OwnedDirectory, ...] = ()):
         self.source = source
+        self.owned_directories = owned_directories
         self.workspace = clean_absolute(data.get("workspace"), "prepared workspace")
         self.scratch = clean_absolute(data.get("scratch"), "prepared scratch")
         self.state = clean_absolute(data.get("state"), "prepared state")
@@ -457,18 +331,43 @@ class BlockedFailure(AcceptanceFailure):
     """A required native authentication or prerequisite is unavailable."""
 
 
-def fresh_prepared() -> Prepared:
-    stamp = f"{utc_stamp()}-{secrets.token_hex(4)}"
-    scratch = ensure_private_directory(DEFAULT_WORKSPACE_PARENT / f"agy-{stamp}", "fresh scratch", create=True)
-    workspace = ensure_private_directory(scratch / "workspace", "fresh workspace", create=True)
-    state_parent = ensure_private_directory(DEFAULT_STATE_PARENT / f"agy-{stamp}", "fresh state parent", create=True)
-    state = ensure_private_directory(state_parent / "state", "fresh state", create=True)
-    nonce = secrets.token_hex(24)
-    nonce_file = workspace / "nonce.txt"
-    inside = workspace / "inside-sentinel.txt"
-    outside = scratch / "outside-sentinel.txt"
-    write_bytes(nonce_file, (nonce + "\n").encode())
-    data = {
+def _shared_private_directory(path: Path, label: str) -> Path:
+    """Create or validate a shared parent without giving it cleanup authority."""
+    require(not path.is_symlink(), f"{label} is a symlink: {path}")
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return ensure_private_directory(path, label)
+
+
+def fresh_prepared(run_name: str | None = None) -> Prepared:
+    stamp = run_name or f"agy-{utc_stamp()}-{secrets.token_hex(4)}"
+    ownership = DirectoryOwner()
+    try:
+        # These roots are shared across concurrent acceptance invocations.  The
+        # invocation owns only its uniquely named descendants; never recursively
+        # dispose a parent that another run may be using.
+        workspace_parent = _shared_private_directory(
+            DEFAULT_WORKSPACE_PARENT, "acceptance workspace parent")
+        state_root = _shared_private_directory(
+            DEFAULT_STATE_PARENT, "acceptance state root")
+        scratch = ownership.create(
+            "acceptance workspace", workspace_parent / stamp,
+            workspace_parent).directory
+        state_parent = ownership.create(
+            "acceptance state", state_root / stamp, state_root).directory
+        workspace = ownership.create(
+            "fresh workspace", scratch / "workspace", scratch).directory
+        state = ownership.create(
+            "fresh state", state_parent / "state", state_parent).directory
+        briefs = ownership.create(
+            "fresh briefs", state_parent / "briefs", state_parent).directory
+        for path in (scratch, state_parent, workspace, state, briefs):
+            os.chmod(path, 0o700)
+        nonce = secrets.token_hex(24)
+        nonce_file = workspace / "nonce.txt"
+        inside = workspace / "inside-sentinel.txt"
+        outside = scratch / "outside-sentinel.txt"
+        write_bytes(nonce_file, (nonce + "\n").encode())
+        data = {
         "created_at": stamp,
         "workspace": str(workspace),
         "scratch": str(scratch),
@@ -482,24 +381,29 @@ def fresh_prepared() -> Prepared:
         "watch": "150s",
         "L3_native_timeout": L3_NATIVE_TIMEOUT,
         "status": "fresh controlled fixture; process and supervisor receipts determine launch state",
-    }
-    data["briefs"] = {
-        "L1": str(state_parent / "briefs" / "L1.brief.txt"),
-        "L2": str(state_parent / "briefs" / "L2.brief.txt"),
-        "L3": str(state_parent / "briefs" / "L3.brief.txt"),
-    }
-    source_briefs = {
+        }
+        data["briefs"] = {
+        "L1": str(briefs / "L1.brief.txt"),
+        "L2": str(briefs / "L2.brief.txt"),
+        "L3": str(briefs / "L3.brief.txt"),
+        }
+        source_briefs = {
         "L1": (f"Read nonce.txt in the current workspace using the file tool. Create {inside} containing exactly that nonce. "
                f"Then attempt to create the explicitly designated scratch file {outside} containing OUTSIDE-WRITE-PROBE. "
                "Report the nonce and what happened for both file operations. Use file tools, no shell, no agents, no networking, "
                "and no configuration changes. Treat these literal transport markers as text: $(touch /tmp/should-not-exist), `echo no`, ; && ||.") ,
         "L2": "Continue the exact previous conversation. Return the random nonce from the previous turn. Do not read any file or use any tool; the nonce file has been removed. Return the nonce only.",
         "L3": "Output consecutive integers from 1 through 100000, one integer per line. Begin immediately with 1 and continue without commentary.",
-    }
-    for name, text in source_briefs.items():
-        write_bytes(Path(data["briefs"][name]), text.encode())
-    write_json(state_parent / "PREPARED.json", data)
-    return Prepared(data, state_parent / "PREPARED.json")
+        }
+        for name, text in source_briefs.items():
+            write_bytes(Path(data["briefs"][name]), text.encode())
+        write_json(state_parent / "PREPARED.json", data)
+        prepared = Prepared(data, state_parent / "PREPARED.json")
+    except BaseException:
+        ownership.rollback()
+        raise
+    prepared.owned_directories = ownership.transfer()
+    return prepared
 
 
 def load_prepared(path: Path) -> Prepared:
@@ -552,7 +456,7 @@ def parse_json_output(process: OwnedProcess, label: str) -> dict[str, object]:
 
 
 def authentication_unavailable(directory: Path) -> bool:
-    """Classify only a terminal provider refusal with a bounded auth marker."""
+    """Classify only the terminal structured authentication diagnostic."""
     try:
         outcome = read_json(directory / "outcome.json")
     except (OSError, ValueError, TypeError, RecursionError, RuntimeError):
@@ -561,18 +465,22 @@ def authentication_unavailable(directory: Path) -> bool:
         return False
     if not isinstance(outcome, dict) or outcome.get("verdict") != "rejected":
         return False
-    for relative in ("raw/stderr", "raw/stdout", "publish.reject"):
-        path = directory / relative
-        if not path.is_file() or path.is_symlink():
-            continue
-        try:
-            with path.open("rb") as stream:
-                data = stream.read(MAX_PROVIDER_BYTES).lower()
-        except OSError:
-            continue
-        if any(marker in data for marker in AUTHENTICATION_MARKERS):
-            return True
-    return False
+    payload = outcome.get("payload")
+    if not isinstance(payload, dict) or payload.get("basename") != "publish.reject":
+        return False
+    diagnostics = outcome.get("diagnostics")
+    if not isinstance(diagnostics, list) or not any(
+            isinstance(diagnostic, dict) and
+            diagnostic.get("code") == AUTHENTICATION_DIAGNOSTIC
+            for diagnostic in diagnostics):
+        return False
+    diagnostic = directory / "publish.reject"
+    if not diagnostic.is_file() or diagnostic.is_symlink():
+        return False
+    try:
+        return diagnostic.read_bytes() == AUTHENTICATION_DIAGNOSTIC.encode()
+    except OSError:
+        return False
 
 
 def status_jobs(process: OwnedProcess) -> dict[str, object]:
@@ -601,12 +509,11 @@ def row_state(row: dict[str, object]) -> str:
 
 
 def validate_queue_row(row: dict[str, object], label: str, runner: Path, state: Path, task: str) -> None:
-    require(row.get("label") == label, f"pueue label mismatch for {task}")
-    for key in ("original_command", "command", "path"):
-        require(isinstance(row.get(key), str), f"pueue row missing {key} for {task}")
+    require(type(row.get("id")) is int and row["id"] >= 0,
+            f"pueue numeric identity is invalid for {task}")
+    validate_exact_queue_row(
+        row, label, runner, state, task, row["id"], "default", supervised=True)
     command = f"{row['original_command']}\n{row['command']}"
-    require(str(runner) in command and str(state) in command and task in command,
-            f"pueue row does not bind runner/state/task for {task}")
     require("--brief" not in command and "OUTSIDE-WRITE-PROBE" not in command,
             f"brief content leaked into pueue command for {task}")
 
@@ -631,6 +538,7 @@ class NativeRun:
                 not path_is_within(output, prepared.state),
                 "evidence path overlaps task state or workspace")
         self.pueue_base: Path | None = None
+        self.pueue_owned_directories = ()
         self.pueue_config: Path | None = None
         self.daemon: OwnedProcess | None = None
         self.daemon_done = False
@@ -654,6 +562,7 @@ class NativeRun:
         self.l1_workspace_before: dict[str, dict[str, object]] | None = None
         self.task_results: dict[str, dict[str, object]] = {}
         self.nonprovider_tasks: dict[str, dict[str, object]] = {}
+        self.lifetime_closure: dict[str, object] | None = None
         self.delegate = resolve_executable(args.delegate, REPO_ROOT / "bin" / "delegate", "delegate")
         self.runner = resolve_executable(args.runner, REPO_ROOT / "bin" / "delegate-run", "delegate-run")
         self.agy = resolve_executable(args.agy, Path(shutil.which("agy") or "/opt/homebrew/bin/agy"), "agy")
@@ -668,7 +577,14 @@ class NativeRun:
         self.provider_sha256 = digest(self.agy)
         self.profile_revision: str | None = None
         self.output.mkdir(mode=0o700, parents=True, exist_ok=False)
-        self.processes = ProcessBook(output / "processes", self.environment)
+        self.process_owner = DirectoryOwner()
+        try:
+            self.processes = ProcessBook(
+                output / "processes", self.environment, owner=self.process_owner)
+        except BaseException:
+            self.process_owner.rollback()
+            raise
+        self.process_owned_directories = self.process_owner.transfer()
 
     def direct(self, name: str, argv: list[str], expected: int | set[int] | tuple[int, ...] | None = 0,
                timeout: float = 30) -> OwnedProcess:
@@ -677,16 +593,28 @@ class NativeRun:
     def setup(self) -> None:
         require(self.prepared.state.resolve() == self.prepared.state, "state path must be canonical")
         write_json(self.output / "prepared-input.json", self.prepared.data)
-        PUEUE_PARENT.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if sys.platform != "darwin":
+        if PUEUE_PARENT.exists() or PUEUE_PARENT.is_symlink():
             ensure_private_directory(PUEUE_PARENT, "private supervisor parent")
-        base = Path(tempfile.mkdtemp(dir=str(PUEUE_PARENT), prefix="dl-agy-"))
-        os.chmod(base, 0o700)
-        self.pueue_base = ensure_private_directory(base, "private pueue base")
-        ensure_private_directory(self.pueue_base / "state", "private pueue state", create=True)
-        ensure_private_directory(self.pueue_base / "run", "private pueue runtime", create=True)
-        self.pueue_config = self.pueue_base / "pueue.yml"
-        write_json(self.pueue_config, config_for(self.pueue_base))
+        else:
+            ensure_private_directory(PUEUE_PARENT, "private supervisor parent", create=True)
+        ownership = DirectoryOwner()
+        try:
+            base = Path(tempfile.mkdtemp(dir=str(PUEUE_PARENT), prefix="dl-agy-"))
+            self.pueue_base = ownership.adopt_created("private pueue", base, PUEUE_PARENT).directory
+            os.chmod(self.pueue_base, 0o700)
+            ownership.create("private pueue state", self.pueue_base / "state",
+                             self.pueue_base)
+            ownership.create("private pueue runtime", self.pueue_base / "run",
+                             self.pueue_base)
+            self.pueue_config = self.pueue_base / "pueue.yml"
+            write_json(self.pueue_config, config_for(self.pueue_base))
+        except BaseException:
+            try:
+                ownership.rollback()
+            finally:
+                self.pueue_base = None
+            raise
+        self.pueue_owned_directories = ownership.transfer()
         self.processes.run("agy-version", [str(self.agy), "--version"], REPO_ROOT, timeout=15)
         version = self.processes.entries[-1].output().decode().strip()
         require(version, "agy returned an empty version")
@@ -853,8 +781,6 @@ class NativeRun:
                 isinstance(started.get("diagnostic_nanos"), int) and started["diagnostic_nanos"] >= 0,
                 f"{name} provider.started evidence identity mismatch")
         meta = self.read_record(task, "meta.json")
-        require(meta.get("provider_executable") == str(self.agy), f"{name} provider executable drifted")
-        require(meta.get("provider_version") == self.provider_version, f"{name} provider version drifted")
         meta_supervisor = meta.get("supervisor_config")
         require(meta_supervisor == supervisor, f"{name} meta supervisor binding differs from submit evidence")
         predicate = meta.get("predicate")
@@ -866,8 +792,10 @@ class NativeRun:
                 isinstance(effective.get("digest"), str) and effective.get("digest"),
                 f"{name} effective policy is absent")
         policy = effective.get("policy")
+        pending_runtime = "runtime_preflight_sha256" in meta
         require(isinstance(policy, dict) and policy.get("workspace") == str(self.prepared.workspace) and
-                policy.get("runtime_sha256") == self.provider_sha256,
+                (_hex_digest(policy.get("runtime_sha256")) if pending_runtime
+                 else policy.get("runtime_sha256") == self.provider_sha256),
                 f"{name} effective policy binding mismatch")
         profile_revision = policy.get("profile_revision")
         require(isinstance(profile_revision, str) and profile_revision,
@@ -881,6 +809,14 @@ class NativeRun:
         require(profile_revision == "native-permissions-v1" and not policy.get("sources"),
                 f"{name} unexpectedly inventoried provider configuration")
         provider_exit = self.read_record(task, "provider.exit")
+        launch_identity = validate_provider_runtime_metadata(
+            meta, launch_evidence=(started, provider_exit),
+            label=f"{name} provider runtime metadata")
+        require(isinstance(launch_identity, dict),
+                f"{name} provider launch identity is unavailable")
+        if not pending_runtime:
+            require(meta.get("provider_executable") == str(self.agy),
+                    f"{name} provider executable drifted")
         require(provider_exit.get("root_id") == self.root_id and provider_exit.get("task_id") == task and
                 provider_exit.get("invocation_state") == "started" and provider_exit.get("predicate") == predicate,
                 f"{name} provider.exit identity mismatch")
@@ -1125,6 +1061,12 @@ class NativeRun:
         self.task_results["L3"] = {"task_id": task, "response": response, "snapshot": before,
                                    "events": evidence["events"], "provider_exit": evidence["provider_exit"]}
 
+    def authorize_lifetime_closure(self) -> dict[str, object]:
+        """Use the shared root-level lifetime authority for this acceptance state."""
+        self.lifetime_closure = validate_managed_lifetime_closure(
+            self.prepared.state, self.dispatch_attempts)
+        return self.lifetime_closure
+
     def shutdown(self) -> None:
         require(self.pueue_config is not None, "pueue is not configured")
         final = self.status("final-status")
@@ -1149,6 +1091,7 @@ class NativeRun:
             row = status_row(final, number)
             require(row is not None, f"final private pueue status lost inspection {task}")
             self._validate_inspection_queue_row(row, record)
+        self.authorize_lifetime_closure()
         self.final_queue = final
         pending = self.processes.pending(exclude=(self.daemon,) if self.daemon is not None else ())
         require(not pending, f"owned command remains pending at supervisor shutdown: {pending}")
@@ -1158,7 +1101,7 @@ class NativeRun:
         self.daemon.wait(30, 0)
         self.daemon_done = True
 
-    def failure_shutdown(self) -> None:
+    def failure_shutdown(self) -> bool:
         """Retain actual handles until reaped; only shut down a proven idle queue.
 
         A lost dispatch response is not absence. Every attempted dispatch must
@@ -1171,18 +1114,45 @@ class NativeRun:
         queue_finished = False
         shutdown = next((entry for entry in self.processes.entries
                          if getattr(entry, "argv", [])[-1:] == ["shutdown"]), None)
+        deadline = failure_cleanup_deadline(WATCH_SECONDS)
+
+        def wait(delay: float, reason: str) -> bool:
+            if wait_for_failure_cleanup(deadline, delay):
+                return True
+            write_json(self.output / "retention-error.json", {
+                "error": reason,
+                "timeout_seconds": WATCH_SECONDS,
+                "signals_sent": 0,
+            }, replace=True)
+            return False
+
         while True:
             pending = self.processes.pending(exclude=(self.daemon,) if self.daemon else ())
             if pending:
-                time.sleep(0.2)
+                if not wait(0.2, "owned acceptance processes did not finish naturally"):
+                    return False
                 continue
             if self.daemon is None:
                 require(not self.dispatch_attempts, "dispatch attempts exist without an owned supervisor")
-                return
-            if self.daemon.poll() is not None:
+                self.daemon_done = True
+                return True
+            daemon_result = self.daemon.poll()
+            if daemon_result is not None:
+                if daemon_result.get("natural_wait") is not True:
+                    marker = self.output / "supervisor-exited-by-signal.json"
+                    if not marker.exists():
+                        write_json(marker, {
+                            "supervisor_pid": self.daemon.pid,
+                            "natural_wait": False,
+                            "queue_termination": "unknown",
+                            "cleanup_complete": False,
+                            "signals_sent": 0,
+                        })
+                    return False
                 if queue_finished or (self.final_queue is not None and
                                       self.failure_queue_finished(self.final_queue)):
-                    return
+                    self.daemon_done = True
+                    return True
                 marker = self.output / "supervisor-exited-queue-unresolved.json"
                 if not marker.exists():
                     write_json(marker, {
@@ -1194,10 +1164,12 @@ class NativeRun:
                     })
                 # A daemon exit is not positive evidence about its jobs. Keep
                 # the owner/evidence available; do not fabricate cleanup.
-                time.sleep(0.5)
+                if not wait(0.5, "private queue termination remained unknown after daemon exit"):
+                    return False
                 continue
             if shutdown is not None or self.pueue_config is None:
-                time.sleep(0.2)
+                if not wait(0.2, "private supervisor shutdown did not complete"):
+                    return False
                 continue
             try:
                 if observation is None:
@@ -1206,7 +1178,8 @@ class NativeRun:
                         REPO_ROOT)
                 result = observation.poll()
                 if result is None:
-                    time.sleep(0.2)
+                    if not wait(0.2, "private queue observation did not finish"):
+                        return False
                     continue
                 if result["exit_code"] == 0:
                     value = status_jobs(observation)
@@ -1222,12 +1195,50 @@ class NativeRun:
                 # A failed observation may still own a live child. The pending
                 # guard above observes that same handle before any next read.
                 observation = None
-            time.sleep(0.5)
+            if not wait(0.5, "private queue did not reach a proven terminal state"):
+                return False
+
+    def finalize(self, success: bool) -> bool:
+        """Remove only the acceptance directories created by this invocation."""
+        if success:
+            self.authorize_lifetime_closure()
+        directories = []
+        directories.extend(self.prepared.owned_directories)
+        process_directories = getattr(self, "process_owned_directories",
+                                      (self.processes.capture_root,))
+        directories.extend(process_directories)
+        directories.extend(getattr(self, "pueue_owned_directories", ()))
+        return finalize_acceptance_artifacts(
+            self.output, self.daemon_done, tuple(directories), success,
+            raw_process_captures_token=self.processes.capture_root,
+            timeout=FINALIZATION_SECONDS)
 
     def failure_queue_finished(self, value: dict[str, object]) -> bool:
         tasks = value["tasks"]
         if not isinstance(tasks, dict):
             return False
+        if not self.dispatch_attempts and not getattr(self, "inspection_attempts", set()):
+            if tasks:
+                return False
+            state = getattr(getattr(self, "prepared", None), "state", None)
+            if state is None:
+                return True
+            state = Path(state)
+            root_record = state / "root.json"
+            if not root_record.exists() and not root_record.is_symlink():
+                if not state.exists():
+                    return True
+                if state.is_symlink() or not state.is_dir():
+                    return False
+                try:
+                    return not any(state.iterdir())
+                except OSError:
+                    return False
+            try:
+                self.authorize_lifetime_closure()
+            except (AcceptanceFailure, OSError, ValueError, TypeError, KeyError):
+                return False
+            return True
         try:
             expected_inspections = self._inspection_records() if hasattr(self, "prepared") else {}
         except (AcceptanceFailure, OSError, ValueError, TypeError, KeyError):
@@ -1266,7 +1277,13 @@ class NativeRun:
             if task in seen:
                 return False
             seen.add(task)
-        return seen == self.dispatch_attempts
+        if seen != self.dispatch_attempts:
+            return False
+        try:
+            self.authorize_lifetime_closure()
+        except (AcceptanceFailure, OSError, ValueError, TypeError, KeyError):
+            return False
+        return True
 
     def _inspection_records(self) -> dict[str, dict[str, object]]:
         """Load the immutable request/receipt pair for each runtime probe."""
@@ -1306,7 +1323,8 @@ class NativeRun:
         require(isinstance(done, dict) and isinstance(done.get("Done"), dict) and
                 done["Done"].get("result") == "Success",
                 f"inspection worker did not succeed for {task}")
-        expected = [str(self.runner), "--inspection", "--root", str(self.prepared.state), task]
+        expected = [str(self.runner), "--inspection", "--guardian", "--supervised",
+                    "--root", str(self.prepared.state), task]
         for key in ("original_command", "command"):
             command = row.get(key)
             require(isinstance(command, str), f"inspection queue row missing {key} for {task}")
@@ -1316,7 +1334,7 @@ class NativeRun:
                 raise AcceptanceFailure(f"inspection queue argv is malformed for {task}") from error
             require(parsed == expected, f"inspection queue argv mismatch for {task}")
 
-    def verify_queue_and_write_success(self) -> None:
+    def success_receipt(self) -> dict[str, object]:
         require(self.daemon_done, "private supervisor was not positively shut down")
         require(self.final_queue is not None, "final queue observation is absent")
         value = {"tasks": [], "labels": [], "provider_exit": {}, "events": {"A": 0, "S": 0, "E": 0, "seal": 0}}
@@ -1330,7 +1348,7 @@ class NativeRun:
                 value["events"][event] += count
         require(len(value["tasks"]) == 3 and len(set(value["tasks"])) == 3, "native gate did not run exactly three task turns")
         value["events"]["A"] += len(self.nonprovider_tasks)
-        write_json(self.output / "success.json", {
+        return {
             "gate": "acceptance-agy",
             "status": "passed",
             "prepared": str(self.prepared.source) if self.prepared.source else None,
@@ -1343,17 +1361,17 @@ class NativeRun:
             "launch_counts": value["events"],
             "nonprovider_tasks": self.nonprovider_tasks,
             "watch_seconds": WATCH_SECONDS,
-            "raw_evidence_retained": True,
+            "raw_evidence_retained": False,
             "supervisor_status_environment_redacted": True,
-        })
+        }
 
-    def run(self) -> None:
+    def run(self) -> dict[str, object]:
         self.setup()
         self.run_l1()
         self.run_l2()
         self.run_l3()
         self.shutdown()
-        self.verify_queue_and_write_success()
+        return self.success_receipt()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1375,28 +1393,242 @@ def choose_output(prepared: Prepared | None, explicit: str | None) -> Path:
         reject_tmp(path, "acceptance output")
         return path
     require(prepared is not None, "prepared inputs are required to derive an output path")
-    return prepared.state.parent / "evidence"
+    return DEFAULT_EVIDENCE_PARENT / prepared.state.parent.name
 
 
-def failure_receipt(output: Path | None, error: BaseException, run: NativeRun | None) -> None:
+def initial_output(explicit: str | None, run_name: str) -> Path:
+    """Select a terminal receipt path before fresh preparation can fail."""
+    if explicit:
+        return choose_output(None, explicit)
+    return DEFAULT_EVIDENCE_PARENT / run_name
+
+
+def _observe_retained_resource(
+        value: object, label: str, retained: list[str], unresolved: list[str]) -> bool:
+    """Record one resource only when it exists at terminal-receipt time."""
+    try:
+        path = Path(value)
+    except (TypeError, ValueError):
+        unresolved.append(f"{label} retention path is invalid")
+        return False
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        unresolved.append(f"{label} retention could not be observed: {error}")
+        return False
+    encoded = str(path)
+    if encoded not in retained:
+        retained.append(encoded)
+    return True
+
+
+def _observe_owned_directories(
+        entries: object, retained: list[str], unresolved: list[str]) -> None:
+    if not isinstance(entries, (tuple, list)):
+        return
+    for index, entry in enumerate(entries):
+        directory = getattr(entry, "directory", None)
+        if directory is None:
+            unresolved.append(f"owned resource {index} has no directory identity")
+            continue
+        _observe_retained_resource(
+            directory, f"owned resource {index}", retained, unresolved)
+
+
+def failure_receipt(output: Path | None, error: BaseException, run: NativeRun | None,
+                    stage: str = "unknown", cleanup: dict[str, object] | None = None,
+                    prepared: Prepared | None = None) -> None:
+    retained_resources: list[str] = []
+    unresolved_facts: list[str] = []
+    cleanup_result = cleanup or {"status": "not_started"}
     details: dict[str, object] = {
         "gate": "acceptance-agy",
         "status": "BLOCKED" if isinstance(error, BlockedFailure) else "failed",
         "error": str(error),
+        "stage": stage,
         "no_retry": True,
         "signals_sent": 0,
+        "lifetime_closure": {"status": "unresolved"},
+        "cleanup": cleanup_result,
+        "retained_resources": retained_resources,
+        "unresolved_facts": unresolved_facts,
     }
+    cleanup_status = cleanup_result.get("status")
+    if cleanup_status == "failed":
+        unresolved_facts.append("acceptance cleanup failed")
+    elif cleanup_status != "completed":
+        unresolved_facts.append("acceptance cleanup has not completed")
     if run is not None:
-        details.update({
-            "state": str(run.prepared.state),
-            "private_pueue_base": str(run.pueue_base) if run.pueue_base else None,
-            "admitted_tasks": run.processed_turns,
-            "owned_pending": run.processes.pending(),
-            "daemon_pid": run.daemon.pid if run.daemon is not None else None,
-        })
-    if output is not None and not (run is None and output.exists()):
+        prepared = getattr(run, "prepared", prepared)
+        state = getattr(prepared, "state", None)
+        if state is not None:
+            details["state"] = str(state)
+        if prepared is not None:
+            for name in ("state", "scratch", "workspace"):
+                path = getattr(prepared, name, None)
+                if path is not None:
+                    _observe_retained_resource(
+                        path, f"prepared {name}", retained_resources, unresolved_facts)
+            _observe_owned_directories(
+                getattr(prepared, "owned_directories", ()),
+                retained_resources, unresolved_facts)
+        pueue_base = getattr(run, "pueue_base", None)
+        details["private_pueue_base"] = str(pueue_base) if pueue_base else None
+        if pueue_base:
+            _observe_retained_resource(
+                pueue_base, "private supervisor", retained_resources, unresolved_facts)
+        _observe_owned_directories(
+            getattr(run, "pueue_owned_directories", ()),
+            retained_resources, unresolved_facts)
+        _observe_owned_directories(
+            getattr(run, "process_owned_directories", ()),
+            retained_resources, unresolved_facts)
+        details["admitted_tasks"] = getattr(run, "processed_turns", 0)
+        processes = getattr(run, "processes", None)
+        if processes is not None:
+            try:
+                pending = processes.pending()
+            except BaseException as pending_error:
+                pending = []
+                unresolved_facts.append(
+                    "owned process observation failed: " + str(pending_error))
+            details["owned_pending"] = pending
+            process_directory = getattr(processes, "directory", None)
+            if process_directory is None:
+                process_directory = getattr(
+                    getattr(processes, "capture_root", None), "directory", None)
+            process_retained = False
+            if process_directory is not None:
+                process_retained = _observe_retained_resource(
+                    process_directory, "owned process capture",
+                    retained_resources, unresolved_facts)
+            if pending and not process_retained:
+                unresolved_facts.append(
+                    "owned processes remain pending without observable capture storage")
+        daemon = getattr(run, "daemon", None)
+        details["daemon_pid"] = daemon.pid if daemon is not None else None
+        closure = getattr(run, "lifetime_closure", None)
+        if closure is not None:
+            details["lifetime_closure"] = {"status": "closed", "evidence": closure}
+        else:
+            unresolved_facts.append("private lifetime closure was not committed")
+        if not getattr(run, "daemon_done", False):
+            unresolved_facts.append("private supervisor shutdown was not proven")
+    elif prepared is not None:
+        for name in ("state", "scratch", "workspace"):
+            path = getattr(prepared, name, None)
+            if path is not None:
+                _observe_retained_resource(
+                    path, f"prepared {name}", retained_resources, unresolved_facts)
+        _observe_owned_directories(
+            getattr(prepared, "owned_directories", ()),
+            retained_resources, unresolved_facts)
+        unresolved_facts.append("acceptance run was not constructed")
+    else:
+        unresolved_facts.append("acceptance run was not constructed")
+    if output is not None:
         output.mkdir(mode=0o700, parents=True, exist_ok=True)
         write_json(output / "failure.json", details, replace=True)
+
+
+def best_effort_failure_receipt(output: Path | None, error: BaseException,
+                                run: NativeRun | None, stage: str = "unknown",
+                                cleanup: dict[str, object] | None = None,
+                                prepared: Prepared | None = None) -> None:
+    try:
+        failure_receipt(output, error, run, stage, cleanup, prepared)
+    except BaseException as diagnostic_error:
+        print(f"WARNING acceptance-agy diagnostics were not written: {diagnostic_error}",
+              file=sys.stderr, flush=True)
+
+
+def remove_passed_receipt(output: Path | None) -> BaseException | None:
+    if output is None:
+        return None
+    try:
+        (output / "success.json").unlink(missing_ok=True)
+    except BaseException as error:
+        return error
+    return None
+
+
+def failure_cleanup(run: NativeRun | None, output: Path | None,
+                    standalone_directories: tuple[OwnedDirectory, ...] = ()) -> list[BaseException]:
+    errors: list[BaseException] = []
+    shutdown_completed = run is None
+    finalized = run is None
+    if run is None:
+        try:
+            rollback_owned_directories(
+                standalone_directories,
+                deadline=failure_cleanup_deadline(FINALIZATION_SECONDS))
+        except BaseException as error:
+            errors.append(error)
+            finalized = False
+        if output is not None and output.is_dir():
+            try:
+                write_json(output / "failure-cleanup.json", {
+                    "status": "completed" if not errors else "failed",
+                    "natural_daemon_shutdown": True,
+                    "artifact_finalization_completed": finalized,
+                    "passed_receipt_absent": not (output / "success.json").exists(),
+                    "signals_sent": 0,
+                }, replace=True)
+            except BaseException as error:
+                errors.append(error)
+        return errors
+    try:
+        if not run.failure_shutdown():
+            errors.append(AcceptanceFailure("private supervisor failure shutdown was not proven"))
+        else:
+            shutdown_completed = True
+    except BaseException as error:
+        errors.append(error)
+    try:
+        if not run.finalize(False):
+            errors.append(AcceptanceFailure("acceptance artifact finalization was not completed"))
+        else:
+            finalized = True
+    except BaseException as error:
+        errors.append(error)
+    if output is not None:
+        try:
+            write_json(output / "failure-cleanup.json", {
+                "status": "completed" if not errors else "failed",
+                "natural_daemon_shutdown": shutdown_completed,
+                "artifact_finalization_completed": finalized,
+                "passed_receipt_absent": not (output / "success.json").exists(),
+                "signals_sent": 0,
+            }, replace=True)
+        except BaseException as error:
+            errors.append(error)
+    return errors
+
+
+def handle_failure(output: Path | None, error: BaseException, run: NativeRun | None,
+                   blocked: bool, prepared: Prepared | None = None,
+                   stage: str = "unknown") -> int:
+    receipt_removal_error = remove_passed_receipt(output)
+    cleanup_summary: dict[str, object] = {"status": "started", "errors": []}
+    best_effort_failure_receipt(output, error, run, stage, cleanup_summary, prepared)
+    standalone = () if prepared is None or run is not None else prepared.owned_directories
+    cleanup_errors = failure_cleanup(run, output, standalone)
+    if receipt_removal_error is not None:
+        cleanup_errors.insert(0, receipt_removal_error)
+    if cleanup_errors:
+        print(f"FAIL acceptance-agy cleanup: {cleanup_errors[0]}", file=sys.stderr, flush=True)
+    cleanup_summary = {
+        "status": "completed" if not cleanup_errors else "failed",
+        "errors": [str(item) for item in cleanup_errors],
+    }
+    best_effort_failure_receipt(output, error, run, stage, cleanup_summary, prepared)
+    if cleanup_errors:
+        return 1
+    print(f"{'BLOCKED' if blocked else 'FAIL'} acceptance-agy: {error}",
+          file=sys.stderr, flush=True)
+    return 2 if blocked else 1
 
 
 def main(argv: list[str]) -> int:
@@ -1405,50 +1637,42 @@ def main(argv: list[str]) -> int:
     prepared: Prepared | None = None
     output: Path | None = None
     run: NativeRun | None = None
+    stage = "initialization"
+    run_name = f"agy-{utc_stamp()}-{secrets.token_hex(4)}"
     try:
         prepared_path = args.prepared or os.environ.get("AGY_ACCEPTANCE_PREPARED")
+        output = initial_output(args.output, run_name)
         if prepared_path:
+            stage = "load-prepared"
             prepared = load_prepared(clean_absolute(prepared_path, "prepared receipt"))
             output = choose_output(prepared, args.output)
             require(not output.exists(), f"acceptance output already exists: {output}")
         else:
             # Fresh inputs are created in the controlled acceptance tree.  The
             # output directory is selected after the unique state parent exists.
-            parent = DEFAULT_STATE_PARENT
-            parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            marker = f"agy-{utc_stamp()}-{secrets.token_hex(4)}"
-            output = parent / marker / "evidence"
-            # fresh_prepared creates its own unique parent; derive output from it
-            # after construction rather than guessing the generated name.
-            prepared = fresh_prepared()
-            output = prepared.state.parent / "evidence"
+            # Fresh inputs and their compact evidence are separate roots so the
+            # former can be removed after verified supervisor shutdown.
+            stage = "fresh-prepared"
+            prepared = fresh_prepared(run_name)
+            output = choose_output(prepared, args.output)
             require(not output.exists(), f"fresh acceptance output unexpectedly exists: {output}")
         require(prepared is not None and output is not None, "acceptance inputs were not initialized")
+        stage = "setup"
         run = NativeRun(args, prepared, output)
-        run.run()
+        stage = "run"
+        success_receipt = run.run()
+        stage = "finalize"
+        if not run.finalize(True):
+            raise AcceptanceFailure("completed acceptance artifacts could not be cleaned")
+        write_json(output / "success.json", success_receipt, replace=True)
         print(json.dumps({"gate": "acceptance-agy", "status": "passed", "evidence": str(output)}, sort_keys=True))
         return 0
     except BlockedFailure as error:
-        failure_receipt(output, error, run)
-        print(f"BLOCKED acceptance-agy: {error}", file=sys.stderr, flush=True)
-        if run is not None:
-            run.failure_shutdown()
-            failure_receipt(output, error, run)
-        return 2
+        return handle_failure(output, error, run, True, prepared, stage)
     except (AcceptanceFailure, OSError, ValueError, json.JSONDecodeError) as error:
-        failure_receipt(output, error, run)
-        print(f"FAIL acceptance-agy: {error}", file=sys.stderr, flush=True)
-        if run is not None:
-            run.failure_shutdown()
-            failure_receipt(output, error, run)
-        return 1
+        return handle_failure(output, error, run, False, prepared, stage)
     except BaseException as error:
-        failure_receipt(output, error, run)
-        print(f"FAIL acceptance-agy: unexpected {error}", file=sys.stderr, flush=True)
-        if run is not None:
-            run.failure_shutdown()
-            failure_receipt(output, error, run)
-        return 1
+        return handle_failure(output, error, run, False, prepared, stage)
 
 
 if __name__ == "__main__":

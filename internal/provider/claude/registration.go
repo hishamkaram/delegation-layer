@@ -40,6 +40,10 @@ func Registration() commonprovider.Registration {
 			interactionInterpreter{mode: WorkspaceWriteMode},
 			interactionInterpreter{mode: Mode, historical: true},
 			interactionInterpreter{mode: WorkspaceWriteMode, historical: true},
+			newPreviousNativeProbeInterpreter(Mode),
+			newPreviousNativeProbeInterpreter(WorkspaceWriteMode),
+			newPreviousInteractionInterpreter(Mode),
+			newPreviousInteractionInterpreter(WorkspaceWriteMode),
 		},
 	}
 }

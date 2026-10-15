@@ -9,7 +9,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	"github.com/hishamkaram/delegation-layer/internal/predicate"
+	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -41,7 +44,7 @@ func TestRunProviderReleasesContinuationOnCommittedAndRejected(t *testing.T) {
 			}
 			rewriteAppProviderExecutable(t, td, tc.executable)
 			profile := appTestExecutionProfile(req, tc.executable, tc.arguments)
-			result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+			result := runProvider(newResponse("dispatch"), td, req, profile, nil, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 				return profile, nil
 			}})
 			if result.code != 0 || result.err != nil {
@@ -162,7 +165,7 @@ func TestPredecessorTerminatedReleasesTerminalContinuation(t *testing.T) {
 	}
 }
 
-func TestResolvePredecessorReleasesTerminalContinuationBeforeMissingIdentityError(t *testing.T) {
+func TestResolvePredecessorPreservesTerminalContinuationBeforeMissingIdentityError(t *testing.T) {
 	store, td, req := newAppTestTaskWithPrior(t, true, testPriorSession())
 	defer closeAppTestTask(t, store, td)
 	successor, _ := newAppTaskInStore(t, store, strings.Repeat("9", 32), false, testPriorSession())
@@ -177,12 +180,15 @@ func TestResolvePredecessorReleasesTerminalContinuationBeforeMissingIdentityErro
 	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatal(err)
 	}
-	request := task.TaskRecord{Provider: req.Provider, Mode: req.Mode, CanonicalCwd: req.CanonicalCwd}
-	if _, err := resolvePredecessor(store, request, req.TaskID, pueue.Options{}, "", ""); !errors.Is(err, os.ErrNotExist) {
+	request, err := buildRequest(store.RootID, strings.Repeat("8", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolvePredecessor(store, fixtureContinuationDependencies(t, nil, ""), request, req.TaskID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing predecessor identity error = %v, want not-exist", err)
 	}
-	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
-		t.Fatalf("predecessor session was not released before identity failure: %v", err)
+	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); !errors.Is(err, task.ErrSessionBusy) {
+		t.Fatalf("missing predecessor identity released the continuation session: %v", err)
 	}
 }
 
@@ -194,8 +200,11 @@ func TestResolvePredecessorReleasesBudgetHandoffBeforePrivateRecovery(t *testing
 	priorSession, td, req := newPrivateBudgetStoppedPredecessor(t, store)
 	defer closeAppTestTask(t, store, td)
 
-	request := task.TaskRecord{Provider: req.Provider, Mode: req.Mode, CanonicalCwd: req.CanonicalCwd}
-	resolved, err := resolvePredecessor(store, request, req.TaskID, pueue.Options{}, filepath.Join(t.TempDir(), "missing-pueue"), "")
+	request, err := buildRequest(store.RootID, strings.Repeat("7", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolvePredecessor(store, fixtureContinuationDependencies(t, nil, filepath.Join(t.TempDir(), "missing-pueue")), request, req.TaskID)
 	if err != nil {
 		t.Fatalf("durable budget-stop handoff attempted private supervisor recovery: %v", err)
 	}
@@ -212,6 +221,97 @@ func TestResolvePredecessorReleasesBudgetHandoffBeforePrivateRecovery(t *testing
 	if err = successor.ClaimSession(req.Provider, resolved.ConversationID); err != nil {
 		t.Fatalf("successor could not claim budget-stopped session: %v", err)
 	}
+}
+
+func TestResolvePredecessorValidatesProviderBeforeReleasingSession(t *testing.T) {
+	store, td, req := newAppTestTaskWithPrior(t, false, testPriorSession())
+	defer closeAppTestTask(t, store, td)
+	successor, _ := newAppTaskInStore(t, store, strings.Repeat("6", 32), false, testPriorSession())
+	defer func() {
+		if closeErr := successor.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	sealContinuationPredecessorForValidation(t, td, req)
+	if claimErr := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); claimErr != nil {
+		t.Fatal(claimErr)
+	}
+	want := errors.New("provider continuation rejected")
+	validate := func(predecessor task.TaskRecord, predecessorMeta task.MetaRecord, candidate task.TaskRecord) error {
+		if predecessor.TaskID != req.TaskID || predecessorMeta.TaskID != req.TaskID || candidate.Provider != req.Provider {
+			t.Fatalf("validator received predecessor=%+v meta=%+v candidate=%+v", predecessor, predecessorMeta, candidate)
+		}
+		return want
+	}
+	request, err := buildRequest(store.RootID, strings.Repeat("5", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = resolvePredecessor(store, fixtureContinuationDependencies(t, validate, ""), request, req.TaskID); !errors.Is(err, want) {
+		t.Fatalf("provider continuation failure = %v, want %v", err, want)
+	}
+	if err = successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); !errors.Is(err, task.ErrSessionBusy) {
+		t.Fatalf("provider rejection released predecessor session: %v", err)
+	}
+}
+
+func sealContinuationPredecessorForValidation(t *testing.T, td *taskdir.TaskDir, req *task.TaskRecord) {
+	t.Helper()
+	start, err := td.PrepareStart(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = start.Consume(); err != nil {
+		t.Fatal(err)
+	}
+	if err = td.RecordProviderIdentity(task.SessionIdentity{Provider: req.Provider, ConversationID: req.PriorSession.ConversationID}); err != nil {
+		t.Fatal(err)
+	}
+	if err = td.RecordStarted(0); err != nil {
+		t.Fatal(err)
+	}
+	if err = td.WriteRawFiles("answer\n", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = td.Seal(task.InvocationStarted, 0, "", task.FixturePredicateRef()); err != nil {
+		t.Fatal(err)
+	}
+	if err = start.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef()); cleanupErr != nil || collectErr != nil {
+		t.Fatalf("preparing terminal predecessor cleanup=%v collect=%v", cleanupErr, collectErr)
+	}
+}
+
+func fixtureContinuationDependencies(t *testing.T, validate func(task.TaskRecord, task.MetaRecord, task.TaskRecord) error, initialSupervisorExecutable string) Dependencies {
+	t.Helper()
+	ref := task.PredicateRef{Adapter: "fixture:test", Mode: config.ModeReadOnly, Version: "1", SHA256: task.ComputeSHA256([]byte("fixture:test"))}
+	registration := commonprovider.Registration{
+		Description: commonprovider.Description{
+			ID:               "fixture:test",
+			SupportedModes:   []string{config.ModeReadOnly},
+			SupportedOptions: []string{commonprovider.OptionContinuation},
+			Continuation:     commonprovider.ContinuationNative,
+			ReadOnly:         commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
+			Runtime:          commonprovider.RuntimeCapability{RequiredFlags: []string{"--fixture"}},
+			Discoverable:     true,
+		},
+		Prepare: commonprovider.ReadyCandidate(func(request task.TaskRecord) (commonprovider.PreparedProfile, error) {
+			return commonprovider.PreparedProfile{
+				Plan:            execution.Plan{Executable: "/usr/bin/true", Directory: request.CanonicalCwd, Predicate: ref},
+				ObservedVersion: "fixture-v1",
+				Effective:       task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: task.ComputeSHA256([]byte("fixture-config"))},
+			}, nil
+		}),
+		ValidateContinuation: validate,
+		Interpreters:         []predicate.Interpreter{autoTestInterpreter{reference: ref}},
+	}
+	catalog, err := commonprovider.NewCatalog(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Dependencies{Catalog: catalog, InitialSupervisorExecutable: initialSupervisorExecutable}
 }
 
 func newPrivateBudgetStoppedPredecessor(t *testing.T, store *taskdir.Store) (*task.PriorSession, *taskdir.TaskDir, *task.TaskRecord) {
@@ -338,7 +438,7 @@ func TestRunProviderUnknownOutcomeRetainsContinuation(t *testing.T) {
 	profile.Identity = func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 		return nil, errInjectedIdentity
 	}
-	result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), td, req, profile, nil, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, errInjectedIdentity) || result.response.Outcome != nil {
@@ -446,7 +546,7 @@ func TestContinuationReleaseFailurePreservesWinnerAndRetries(t *testing.T) {
 	releaseErr := errors.New("release durability failed")
 	store.SetFaultInjector(&releaseOnlyFailureInjector{err: releaseErr})
 	profile := appTestExecutionProfile(req, "/usr/bin/printf", []string{"answer\n"})
-	result := runProvider(newResponse("dispatch"), td, req, profile, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	result := runProvider(newResponse("dispatch"), td, req, profile, nil, nil, Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		return profile, nil
 	}})
 	if result.code != 1 || !errors.Is(result.err, releaseErr) {

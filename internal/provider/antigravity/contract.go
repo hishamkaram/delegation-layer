@@ -15,6 +15,8 @@ const (
 	StatusSuccess = "SUCCESS"
 	StatusError   = "ERROR"
 	TimeoutMarker = "[agy] print timeout"
+
+	authenticationErrorText = "authentication failed or timed out"
 )
 
 // printV122Contract is immutable interpretation policy for the agy
@@ -42,3 +44,9 @@ func knownStatus(status string) bool {
 // currentPrintContract references the complete legacy rules and changes only
 // refusal precedence. Legacy sealed evidence keeps its original interpreter.
 const currentPrintContract = `{"version":"1.2.2-auth2","base_sha256":"9aca4a6a639c18b8c4515445d8f004f2788c0f627264695cbb66357b5285d366","change":"after structural and known-status validation, ERROR is provider-failed before conversation identity validation; no session is published; SUCCESS identity requirements unchanged"}` + "\n"
+
+// currentAuthPrintContract is the next immutable current-envelope revision.
+// Only the exact structured authentication envelope receives the stable
+// authentication-unavailable refusal; all other ERROR envelopes retain the
+// provider-failed outcome and SUCCESS identity rules remain unchanged.
+const currentAuthPrintContract = `{"version":"1.2.2-auth3","base_sha256":"53f1b5368023953447088ecbd4fc36c1b431b0fb376cf76511ed70d943d8138a","change":"after structural and known-status validation, status=ERROR with empty conversation_id, empty response, and error=authentication failed or timed out becomes authentication-unavailable; other ERROR envelopes remain provider-failed; stderr never classifies authentication; no session is published; SUCCESS identity requirements unchanged"}` + "\n"

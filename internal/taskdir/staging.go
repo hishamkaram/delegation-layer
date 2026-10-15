@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
@@ -81,31 +80,57 @@ func barrierDirAndParent(dir string, injector FaultInjector) error {
 }
 
 func createDirectoriesWithAncestorBarrier(targetDir string, injector FaultInjector) error {
+	return createDirectoriesWithAncestorBarrierContext(context.Background(), targetDir, injector)
+}
+
+func createDirectoriesWithAncestorBarrierContext(ctx context.Context, targetDir string, injector FaultInjector) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	cleanTarget := filepath.Clean(targetDir)
 	info, err := os.Lstat(cleanTarget)
 	if err == nil {
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symlink", cleanTarget)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("%s is not a directory", cleanTarget)
-		}
-		return barrierDirAndParent(cleanTarget, injector)
+		return validateExistingDirectory(cleanTarget, info, injector)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	toCreate, fErr := findDirectoriesToCreate(cleanTarget)
 	if fErr != nil {
 		return fErr
 	}
+	return createMissingDirectoriesContext(ctx, toCreate, injector)
+}
 
+func validateExistingDirectory(path string, info os.FileInfo, injector FaultInjector) error {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink", path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", path)
+	}
+	return barrierDirAndParent(path, injector)
+}
+
+func createMissingDirectoriesContext(ctx context.Context, toCreate []string, injector FaultInjector) error {
 	// The first existing ancestor may have been created by an earlier failed
 	// attempt. Repair its own parent entry before relying on new descendants.
 	if len(toCreate) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := barrierDirAndParent(filepath.Dir(toCreate[0]), injector); err != nil {
 			return err
 		}
 	}
 	for _, dir := range toCreate {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("creating directory %s: %w", dir, err)
 		}
@@ -172,16 +197,16 @@ func (s *Store) stageReader(dirPath, filename string, reader io.Reader, injector
 }
 
 func (s *Store) stageReaderContext(ctx context.Context, dirPath, filename string, reader io.Reader, injector FaultInjector) (committed bool, cleanupErr, resultErr error) {
-	if err := ctx.Err(); err != nil {
+	ctx, cancel, err := persistenceContext(ctx)
+	if err != nil {
 		return false, nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := s.maintLock.LockSH(ctx); err != nil {
+	if err = s.maintLock.LockSH(ctx); err != nil {
 		return false, nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, s.maintLock.Unlock()) }()
-	if err := ctx.Err(); err != nil {
+	if err = ctx.Err(); err != nil {
 		return false, nil, err
 	}
 	if filename == "." || filename == ".." || filepath.Base(filename) != filename {

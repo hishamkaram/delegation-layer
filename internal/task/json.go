@@ -118,6 +118,10 @@ func checkObject(dec *json.Decoder) error {
 	return nil
 }
 
+// FoldJSONKey returns the key identity used by control JSON duplicate checks.
+// Streaming consumers use the same equivalence without retaining whole documents.
+func FoldJSONKey(key string) string { return foldJSONKey(key) }
+
 // foldJSONKey uses the same Unicode simple-fold equivalence as encoding/json.
 func foldJSONKey(key string) string {
 	runes := []rune(key)

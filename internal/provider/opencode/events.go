@@ -30,7 +30,9 @@ type eventState struct {
 	stepActive           bool
 	terminal             bool
 	allowPostTerminal    bool
+	allowEmptyStepStart  bool
 	currentStepTerminal  bool
+	currentStepHadEvent  bool
 	providerFail         bool
 	semanticErr          error
 	answer               []byte

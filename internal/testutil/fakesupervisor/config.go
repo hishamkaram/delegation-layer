@@ -122,6 +122,7 @@ func validateConfig(cfg Config, path string) error {
 		"status":   cfg.Status,
 		"parallel": cfg.Parallel,
 		"add":      cfg.Add,
+		"enqueue":  cfg.Enqueue,
 		"kill":     cfg.Kill,
 		"remove":   cfg.Remove,
 	} {

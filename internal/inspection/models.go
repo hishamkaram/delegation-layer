@@ -109,7 +109,7 @@ func runModelCommand(scope execution.PreflightScope, definition provider.Inspect
 	if input != nil {
 		cmd.Stdin = input
 	}
-	startErr := scope.Start(func() error { return hooks.startCommand(cmd) })
+	startErr := scope.StartCommand(cmd, func() error { return hooks.startCommand(cmd) })
 	closeErr := errors.Join(stdout.writer.Close(), stderr.writer.Close())
 	if input != nil {
 		closeErr = errors.Join(closeErr, input.Close())
@@ -120,6 +120,7 @@ func runModelCommand(scope execution.PreflightScope, definition provider.Inspect
 	var waitErr error
 	if startErr == nil {
 		waitErr = hooks.waitCommand(cmd)
+		waitErr = errors.Join(waitErr, scope.FinishCommand(cmd))
 	}
 	stdoutErr, stderrErr := <-stdout.done, <-stderr.done
 	closeErr = errors.Join(closeErr, verified.Close())
@@ -266,12 +267,15 @@ func inspectionDeadlineMatches(binding Binding, duration time.Duration) bool {
 	if duration == inspectionTimeout(binding) {
 		return true
 	}
-	return binding.DefinitionRevision == provider.ModelsRevision && duration == legacyModelDiscoveryTimeout
+	if binding.DefinitionRevision == provider.ModelsRevision {
+		return duration == legacyModelDiscoveryTimeout
+	}
+	return duration == legacyAdmissionTimeout
 }
 
 // TimeoutForRevision is the finite inspection budget selected by a persisted
-// definition revision. Admission probes keep the shorter historical budget;
-// model discovery gets its explicitly documented cold-start allowance.
+// definition revision. Fresh admission probes get the current queue-inclusive
+// allowance; persisted requests retain their recorded historical deadline.
 func TimeoutForRevision(revision string) time.Duration {
 	return inspectionTimeout(Binding{DefinitionRevision: revision})
 }

@@ -5,11 +5,20 @@ the same as a successful provider result.
 
 1. Save `task_id` immediately after dispatch or continue.
 2. For a dispatch or continue error, inspect `task_record` first. When it is
-   `created`, observe the returned ID with `status`. When it is `not_created`,
-   do not poll; correct the request only if `failure.next_action` is
-   `correct_request`, otherwise report and stop. When it is `unknown`, stop and
-   report without polling or retrying. Status and collect can report
-   `admission: "unknown"` alongside valid terminal evidence for an existing task.
+   `created`, observe the returned ID with `status`. Before applying the generic
+   `not_created` stop rule, handle the sole migration exception: when
+   `failure.code` is `supervisor_upgrade_required` and `failure.next_action` is
+   `run_supervisor_migrate`, run `supervisor migrate` once with the same root.
+   Only after it reports `supervisor_control.state: "migrated"` and
+   `supervisor_control.next_action: "retry_dispatch"`, retry the exact original
+   admission argv once. The retry is command-neutral: `dispatch` remains
+   `dispatch`, and `continue` remains `continue`; never create a fresh dispatch
+   or call a provider directly to replace a failed continuation. For every
+   other `not_created` response, do not poll; correct the request only if
+   `failure.next_action` is `correct_request`, otherwise report and stop. When
+   `task_record` is `unknown`, stop and report without polling or retrying.
+   Status and collect can report `admission: "unknown"` alongside valid terminal
+   evidence for an existing task.
 3. If `status` is `timed_out`, follow the continuation procedure before treating
    pending publication as a reason to wait. `continuation.resumable: true`
    permits a linked successor even when no outcome has been published.
@@ -19,13 +28,22 @@ the same as a successful provider result.
    follow [offline recovery](#offline-recovery) once. Otherwise report the
    terminal rejection with its diagnostic and evidence. Do not redispatch.
 6. If `pending.kind` is `interaction`, handle the returned questions using
-   [interaction guidance](interaction.md) before waiting again. Otherwise, if
-   `liveness` is queued or running or publication is pending, observe the same
-   task with a finite watch interval.
+   [interaction guidance](interaction.md) before waiting again. If
+   `pending.kind` is `lifetime-finalization`, the resident guardian still owns
+   cleanup; observe the same task with a finite watch interval and do not run
+   supervisor or process commands, redispatch, or call the provider directly.
+   Otherwise, if `liveness` is queued or running or publication is pending,
+   observe the same task with a finite watch interval.
 7. If authentication is `blocked`, preserve that neutral state and tell the
    caller what prerequisite is unavailable without inventing a login command.
 8. Never relaunch an uncertain task by guessing. Observe only a task whose
    record is known to exist; the `task_record` decision above takes precedence.
+
+For an `inspect-provider` failure, preserve the optional
+`failure.inspection.class`, `deadline_state`, and `journal_task_id` fields in
+the report. They are bounded diagnostics, not a new recovery instruction.
+Follow `failure.next_action`; do not infer provider authentication or settings
+from an inspection-worker or supervisor-observation failure.
 
 For `delegate models`, validate the complete JSON envelope before using any
 fact. Treat `available` and `partial` with exit `0` as observations, preserve
@@ -42,6 +60,10 @@ collection watch, and `4` is a validated rejected outcome.
 
 Catalog facts (`verification: "catalog"`) are not runtime proof. Preflight
 checks static readiness; runtime verification requires the supervised probe.
+For managed runtime-only dispatches, admission accepts the static contract and
+the task's runner performs that probe before provider execution. Always collect
+the created task's outcome; `admission: "admitted"` alone does not prove that
+the provider started or completed the work.
 Versions and help are observations, not semantic-version allowlists.
 Authentication is a separate live gate (`not_run`, `passed`, or `blocked`).
 Report a blocked prerequisite without inventing a login command or retrying.

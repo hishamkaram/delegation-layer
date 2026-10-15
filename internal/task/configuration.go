@@ -394,13 +394,29 @@ func validateMetaRuntime(r *MetaRecord) error {
 	if r.RunnerOwnership != "" && r.RunnerOwnership != RunnerOwnershipManaged && r.RunnerOwnership != RunnerOwnershipCustom {
 		return errors.New("invalid runner ownership")
 	}
-	if !nonblank(r.ProviderVersion) || !nonblank(r.PublisherBuild) || !nonblank(r.PublisherVersion) {
+	if err := validateMetaRuntimeObservation(r); err != nil {
+		return err
+	}
+	if !nonblank(r.PublisherBuild) || !nonblank(r.PublisherVersion) {
 		return errors.New("missing provider version or publisher build/version")
 	}
 	if err := ValidateSupervisorRef(r.SupervisorConfig); err != nil {
 		return err
 	}
 	return validateTimestamp(r.CreatedAt)
+}
+
+func validateMetaRuntimeObservation(r *MetaRecord) error {
+	if r.RuntimePreflightSHA256 != "" {
+		if err := ValidateSHA256(r.RuntimePreflightSHA256); err != nil || r.ProviderVersion != "" || !r.EnvironmentRecorded {
+			return errors.New("invalid pending runtime preflight")
+		}
+		return nil
+	}
+	if !nonblank(r.ProviderVersion) {
+		return errors.New("missing provider version")
+	}
+	return nil
 }
 
 func validateSessionFields(provider, timestamp string) error {

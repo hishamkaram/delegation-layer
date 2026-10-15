@@ -68,6 +68,15 @@ The three status dimensions are independent:
 - `liveness`: `undetermined`, `running`, or `ended`; and
 - `publication`: `unknown`, `pending`, `committed`, or `rejected`.
 
+For lifetime-managed tasks, `liveness: "ended"` is publishable only after the
+application lifetime state machine records termination with independently
+proven empty scope and a durable worker completion disposition: the exact
+managed-worker `Wait`, or `not-started` when no child was launched. A Pueue row
+end or worker exit alone is insufficient. While the live guardian still owns
+that finalization, responses use `liveness: "running"` and
+`pending.kind: "lifetime-finalization"`; clients keep observing the same task
+and do not repair the supervisor or redispatch it.
+
 A committed collection exits `0`; a validated rejected provider outcome exits
 `4`. `collect` returns `3` when publication is still pending after its bounded
 observation interval. `status` remains observational and returns `0` even when
@@ -95,6 +104,12 @@ revalidated. Recovery does not change task lifecycle or continuation rights.
 warnings can accompany a committed or recovered answer without setting `error`.
 Original diagnostics remain in `outcome`; a recheck reports its own diagnostics
 separately. Never substitute raw stdout for an accepted answer.
+
+An `inspect-provider` failure can include `failure.inspection` with a bounded
+`class`, `deadline_state` (`open`, `expired`, or `unknown`), and optional
+`journal_task_id`. These fields identify the failed admission phase without
+exposing state paths or provider output. They are diagnostic evidence only;
+`failure.next_action` remains the recovery decision.
 
 ## Discovery API
 
@@ -178,6 +193,13 @@ The result status maps to process exit codes as follows: `available` and
 `partial` use `0`; `blocked` and `unavailable` use `2`; `failed` uses `1`.
 JSON remains parseable for each status.
 
+When Delegate cannot safely use or transition the state root's supervisor,
+discovery returns `status: "blocked"` with one of the stable supervisor reason
+codes: `supervisor_migration_blocked`,
+`supervisor_migration_unsupported`, or `supervisor_upgrade_required`. It does
+not misreport that condition as a provider or model failure, and it returns no
+model facts.
+
 ## Capability contract
 
 `delegate capabilities --provider PROFILE --json` returns the selected
@@ -190,7 +212,8 @@ The response includes supported permission modes, request options, continuation,
 and the read-only mechanism. `containment: "provider-owned"` means the adapter
 selects the provider's native read-only behavior but does not create an
 independent boundary around provider configuration, extensions, MCP servers, or
-plugins. Model and effort choices remain in the separate runtime `models`
+plugins. This is separate from process-lifetime containment, which is
+guardian-owned and independently proven. Model and effort choices remain in the separate runtime `models`
 response, and authentication remains unknown until a runtime or live
 acceptance boundary observes it.
 
@@ -263,8 +286,9 @@ continuation creates a new task and preserves the exact provider session.
 ## Collection contract
 
 `collect` and `logs` are observational. They may read existing durable records,
-wait for one bounded `--watch` interval, and reconcile the saved supervisor
-binding to record termination for an already-requested budget stop. They may
+wait for one bounded `--watch` interval, reconcile the saved Pueue binding, and
+enter lifetime recovery only for an already-requested stop. A queue-row
+end alone cannot publish terminal facts. They may
 retry validated reservation cleanup, but they never launch, retry, or resume
 provider work. A client can
 therefore poll safely until publication is terminal and then replay the same

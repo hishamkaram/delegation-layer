@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -88,6 +89,46 @@ func configWithFileEditMode(data []byte) ([]byte, error) {
 	client.Content = append(client.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "edit_mode"},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "files"},
+	)
+	return marshalFileEditConfig(&document)
+}
+
+func configWithSocketPath(data []byte, socketPath string) ([]byte, error) {
+	if !filepath.IsAbs(socketPath) || filepath.Clean(socketPath) != socketPath || strings.ContainsRune(socketPath, 0) {
+		return nil, fmt.Errorf("%w: migration socket path must be absolute", ErrConfiguration)
+	}
+	if _, err := ParseConfig(data); err != nil {
+		return nil, err
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, fmt.Errorf("%w: decode migration config: %w", ErrConfiguration, err)
+	}
+	document = *cloneYAMLNodeWithoutAnchors(&document)
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("%w: migration config document is incomplete", ErrConfiguration)
+	}
+	root := document.Content[0]
+	var shared *yaml.Node
+	for index := 0; index < len(root.Content); index += 2 {
+		if root.Content[index].Value == "shared" {
+			shared = root.Content[index+1]
+			break
+		}
+	}
+	if shared == nil {
+		shared = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "shared"}, shared)
+	}
+	for index := 0; index < len(shared.Content); index += 2 {
+		if shared.Content[index].Value == "unix_socket_path" {
+			shared.Content[index+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: socketPath}
+			return marshalFileEditConfig(&document)
+		}
+	}
+	shared.Content = append(shared.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "unix_socket_path"},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: socketPath},
 	)
 	return marshalFileEditConfig(&document)
 }

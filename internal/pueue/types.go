@@ -3,6 +3,7 @@
 package pueue
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -15,6 +16,9 @@ const (
 	// the validated command/schema contract.
 	FixtureVersion            = "4.0.4"
 	DefaultObservationTimeout = 5 * time.Second
+	// PrivateStatusObservationTimeout bounds a private status observation,
+	// including generation leases and any already-running control command.
+	PrivateStatusObservationTimeout = 30 * time.Second
 	// RunnerCommandUpgradeTimeout bounds one complete queued-runner repair.
 	RunnerCommandUpgradeTimeout = 30 * time.Second
 	MaxControlBytes             = 1 << 20
@@ -25,8 +29,16 @@ var (
 	ErrBinding             = errors.New("pueue binding changed or unsupported")
 	ErrUnknown             = errors.New("pueue observation is unknown")
 	ErrSubmissionUncertain = errors.New("pueue task submission outcome is unknown")
+	ErrEnqueueUncertain    = errors.New("pueue staged task enqueue outcome is unknown")
+	ErrStagedCapability    = errors.New("pueue staged launch capability is unavailable")
 	ErrInFlight            = errors.New("pueue command remains in flight")
 	ErrControlLimit        = errors.New("pueue control output limit exceeded")
+	// ErrCleanupDeferred means the exact task row is still running while its
+	// Delegate outcome is already terminal. A later maintenance pass owns
+	// removal after Pueue reports the row as ended.
+	ErrCleanupDeferred        = errors.New("pueue completed task cleanup deferred")
+	ErrCleanupAuthorization   = errors.New("successful supervisor cleanup authorization is unavailable")
+	ErrMigrationAuthorization = errors.New("private supervisor migration authorization is unavailable")
 )
 
 // Options controls caller observation and an optional explicit process context.
@@ -37,10 +49,42 @@ type Options struct {
 	ObservationTimeout time.Duration
 	Resolution         *ResolutionContext
 	Environment        []string
-	resolutionPinned   bool
+	// ControlOwnerExecutable is the delegate-run executable that owns a
+	// supervisor control process after the invoking CLI stops observing it.
+	// Empty keeps the in-process owner used by focused package tests and
+	// explicitly embedded clients.
+	ControlOwnerExecutable string
+	// PrivateMaintenanceLauncher starts one delegate-run process to own already
+	// persisted private queue maintenance after the invoking CLI exits. Empty
+	// keeps the in-process owner used by focused package tests and embedders.
+	PrivateMaintenanceLauncher func(context.Context, string, string) error
+	resolutionPinned           bool
+	// SuccessfulCleanupAuthorizer is the application-owned policy gate for
+	// exact private-supervisor cleanup. Pueue does not inspect Delegate task or
+	// inspection schemas.
+	SuccessfulCleanupAuthorizer func(context.Context, string, task.SupervisorRef, []Job) (PrivateQueueCleanupPlan, error)
+	// PrivateMigrationAuthorizer is the application-owned policy gate for
+	// stopping a private supervisor. Pueue supplies an immutable queue snapshot;
+	// it does not inspect Delegate task or inspection schemas.
+	PrivateMigrationAuthorizer func(context.Context, string, task.SupervisorRef, []Job) error
 	// Observer is an optional finite, concurrency-safe acceptance recorder.
 	// It receives copied values and must not block process ownership.
 	Observer func(CommandEvent)
+	// processObserver is a deterministic test seam for read-only process
+	// incarnation inspection. Production always uses the native observer.
+	processObserver func(int) (privateProcessObservation, error)
+	// taskObservationEntryObserver is a deterministic test seam for proving
+	// that independent callers overlap one private task-status snapshot.
+	taskObservationEntryObserver func()
+}
+
+// PrivateQueueCleanupPlan separates removal authority from a bounded retry
+// hint. RemoveIDs are exact terminal rows authorized by application evidence.
+// Settling is true only when that evidence is already terminal while its queue
+// row has not yet advanced; it never authorizes a removal by itself.
+type PrivateQueueCleanupPlan struct {
+	RemoveIDs []int64
+	Settling  bool
 }
 
 // CommandEvent reports entry, successful Start, or actual completion. Entry
@@ -68,6 +112,7 @@ func (i Identity) Label() string { return "delegate:" + i.RootID + ":" + i.TaskI
 type Launch struct {
 	RunnerExecutable string
 	RootPath         string
+	Supervised       bool
 }
 
 type State string
@@ -75,6 +120,7 @@ type State string
 const (
 	StateUnknown State = "unknown"
 	StateQueued  State = "queued"
+	StateStashed State = "stashed"
 	StateRunning State = "running"
 	StateEnded   State = "ended"
 )
@@ -84,6 +130,7 @@ const (
 type Observation struct {
 	Matched       bool
 	State         State
+	Group         string
 	Identity      Identity
 	Binding       task.SupervisorRef
 	NumericTaskID int64
@@ -107,6 +154,7 @@ type StopResult struct {
 
 // CommandResult is accessible only after natural Start/Wait ownership completes.
 type CommandResult struct {
+	snapshot *QueueSnapshot
 	Stdout   []byte
 	Stderr   []byte
 	ExitCode int
@@ -120,6 +168,12 @@ type Pending struct {
 	done   chan struct{}
 	result CommandResult
 	args   []string
+	status *pendingStatusIdentity
+}
+
+type pendingStatusIdentity struct {
+	binding task.SupervisorRef
+	version string
 }
 
 func (p *Pending) Done() <-chan struct{} { return p.done }
@@ -135,6 +189,10 @@ func (p *Pending) Result() (CommandResult, bool) {
 		r := p.result
 		r.Stdout = append([]byte(nil), r.Stdout...)
 		r.Stderr = append([]byte(nil), r.Stderr...)
+		if r.snapshot != nil {
+			snapshot := cloneQueueSnapshot(*r.snapshot)
+			r.snapshot = &snapshot
+		}
 		return r, true
 	default:
 		return CommandResult{}, false
