@@ -2340,8 +2340,8 @@ def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
             release_gate.release()
 
 
-def read_external_inspection_handoff_journal(state, private_config):
-    """Read the immutable external-to-private inspection edge from a fixture root."""
+def read_external_inspection_handoff_journal(state, private_config, *, supervisor_status):
+    """Retain edge evidence after the CLI validates the current journal head."""
     root = Path(state)
     journal = root / "inspection-group"
     request_path = journal / "request.json"
@@ -2354,15 +2354,16 @@ def read_external_inspection_handoff_journal(state, private_config):
             "inspection handoff completion marker is missing")
     migration = json.loads(migration_path.read_text(encoding="utf-8"))
     require(isinstance(migration, dict), "inspection handoff completion marker is invalid")
-    generations = []
-    for generation in sorted(root.glob("inspection-group-*")):
-        if generation.is_symlink() or not generation.is_dir():
-            raise RuntimeError("inspection journal generation is unsafe: " + str(generation))
-        generation_request = generation / "request.json"
-        if generation_request.is_file() and not generation_request.is_symlink():
-            record = json.loads(generation_request.read_text(encoding="utf-8"))
-            require(isinstance(record, dict), "inspection journal generation is invalid")
-            generations.append(record)
+    require(isinstance(supervisor_status, dict), "canonical supervisor status is missing")
+    control = supervisor_status.get("supervisor_control")
+    require(supervisor_status.get("command") == "supervisor"
+            and supervisor_status.get("root_id") == legacy.get("root_id")
+            and isinstance(control, dict)
+            and control.get("action") == "status"
+            and (control.get("state"), control.get("migration_phase"))
+            in (("migrated", "complete"), ("ready", "adopted"))
+            and control.get("next_action") == "none",
+            "CLI did not validate the completed private inspection handoff")
     successor = migration.get("successor")
     require(isinstance(successor, dict), "inspection handoff omitted its successor")
     legacy_supervisor = legacy.get("supervisor")
@@ -2373,16 +2374,11 @@ def read_external_inspection_handoff_journal(state, private_config):
             "external inspection journal was already private")
     require(successor_supervisor.get("config_path") == str(private_config),
             "inspection handoff successor is not the private state-root supervisor")
-    require(any(
-        isinstance(record.get("supervisor"), dict)
-        and record["supervisor"].get("config_path") == str(private_config)
-        for record in generations
-    ), "private inspection generation record is missing")
     return {
         "legacy": legacy,
         "migration": migration,
         "successor": successor,
-        "generations": generations,
+        "canonical_status": control,
     }
 
 
@@ -2788,11 +2784,18 @@ def run_external_inspection_handoff_acceptance(
                 "external daemon PID changed during private handoff")
         require(file_fingerprint(external_config) == evidence["supervisors"]["external"]["config_fingerprint"],
                 "external supervisor config changed during private handoff")
-        journal = read_external_inspection_handoff_journal(state, private_config)
+        supervisor_status = run_json(
+            delegate, env, [*private_prefix, "supervisor", "status", "--json"],
+            timeout=120, receipt=receipts / "supervisor-status-after-handoff.json",
+            phase="private-supervisor-observation", capture_root=capture_root,
+        )
+        journal = read_external_inspection_handoff_journal(
+            state, private_config, supervisor_status=supervisor_status,
+        )
         evidence["journal"].update({
             "handoff": journal["migration"],
             "private_successor": journal["successor"],
-            "generation_count": len(journal["generations"]),
+            "canonical_status": journal["canonical_status"],
         })
         evidence["external_immutability"] = {
             "task_row_unchanged": True,

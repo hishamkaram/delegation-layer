@@ -68,9 +68,10 @@ delegate --root "$HOME/delegation-state" supervisor migrate --json
 `supervisor status` is read-only. It reports whether the state root has an
 older inspection binding, whether that exact legacy endpoint is reachable, and
 whether any queued or running work prevents migration. It does not start or
-stop a supervisor. After a completed migration it reports `state: "migrated"`
-and `next_action: "none"`; the retained legacy journal is historical evidence,
-not pending work. An inspection journal still bound to an external Pueue
+stop a supervisor. A completed migration reports `state: "migrated"` with
+`migration_phase: "complete"`; compatible live adoption reports `state: "ready"`
+with `migration_phase: "adopted"`. Both report `next_action: "none"`. The retained
+legacy journal is historical evidence, not pending work. An inspection journal still bound to an external Pueue
 configuration reports `state: "external"` and
 `next_action: "run_supervisor_migrate"`. The repair changes Delegate's
 inspection routing; it does not operate on that external supervisor.

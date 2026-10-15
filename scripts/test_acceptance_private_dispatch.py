@@ -83,6 +83,62 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             source.chmod(0o700)
             self.sources[name] = source
 
+    def handoff_journal(self):
+        journal = self.root / "inspection-group"
+        journal.mkdir()
+        private_config = self.root / ".supervisor" / "pueue.yml"
+        root_id = "a" * 32
+        legacy = {"root_id": root_id, "supervisor": {"config_path": "/external/pueue.yml"}}
+        successor = {"root_id": root_id, "supervisor": {"config_path": str(private_config)}}
+        (journal / "request.json").write_text(json.dumps(legacy))
+        (journal / "migration-complete.json").write_text(json.dumps({"successor": successor}))
+        status = {
+            "command": "supervisor", "root_id": root_id,
+            "supervisor_control": {
+                "action": "status", "state": "migrated",
+                "migration_phase": "complete", "next_action": "none",
+            },
+        }
+        return private_config, status
+
+    def test_handoff_journal_uses_canonical_status_without_materialized_generation(self):
+        private_config, status = self.handoff_journal()
+        self.assertEqual(list(self.root.glob("inspection-group-*")), [])
+        for state, phase in (("migrated", "complete"), ("ready", "adopted")):
+            with self.subTest(state=state, phase=phase):
+                observed = {
+                    **status,
+                    "supervisor_control": {
+                        **status["supervisor_control"], "state": state, "migration_phase": phase,
+                    },
+                }
+                evidence = private_cli.read_external_inspection_handoff_journal(
+                    self.root, private_config, supervisor_status=observed,
+                )
+                self.assertEqual(evidence["successor"]["supervisor"]["config_path"], str(private_config))
+                self.assertEqual(evidence["canonical_status"], observed["supervisor_control"])
+
+    def test_handoff_journal_rejects_incomplete_or_unrelated_canonical_status(self):
+        private_config, status = self.handoff_journal()
+        invalid_statuses = [None, {}, {**status, "root_id": "b" * 32}]
+        for field, value in (
+                ("action", "migrate"), ("state", "external"),
+                ("migration_phase", "pending"), ("next_action", "run_supervisor_migrate")):
+            invalid_statuses.append({
+                **status, "supervisor_control": {**status["supervisor_control"], field: value},
+            })
+        for invalid in invalid_statuses:
+            with self.subTest(status=invalid):
+                with self.assertRaisesRegex(RuntimeError, "canonical supervisor status|CLI did not validate"):
+                    private_cli.read_external_inspection_handoff_journal(
+                        self.root, private_config, supervisor_status=invalid,
+                    )
+        (self.root / "inspection-group" / "migration-complete.json").unlink()
+        with self.assertRaisesRegex(RuntimeError, "completion marker is missing"):
+            private_cli.read_external_inspection_handoff_journal(
+                self.root, private_config, supervisor_status=status,
+            )
+
     def arguments(self, total, workers, output=None, scenario="capacity"):
         output = output or (self.root / "receipt.json")
         args = ["acceptance_private_cli.py"]
