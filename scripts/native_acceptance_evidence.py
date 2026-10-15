@@ -571,6 +571,80 @@ def _safe_proof_text(value: object, *, allow_empty: bool = False) -> str | None:
     return value
 
 
+_REQUESTED_OPTION_KEYS = ("requested_model", "requested_effort")
+_REQUESTED_OPTION_STATES = frozenset({"recorded", "missing", "invalid"})
+
+
+def _invalid_requested_options() -> dict[str, object]:
+    return {
+        "requested_options_state": "invalid",
+        "requested_model": None,
+        "requested_effort": None,
+    }
+
+
+def _normalize_requested_options(value: dict[str, object] | None) -> dict[str, object]:
+    """Normalize requested options while preserving explicit provider defaults."""
+    if value is None or any(key not in value for key in _REQUESTED_OPTION_KEYS):
+        return {
+            "requested_options_state": "missing",
+            "requested_model": None,
+            "requested_effort": None,
+        }
+    values: dict[str, str | None] = {}
+    for key in _REQUESTED_OPTION_KEYS:
+        option = value[key]
+        if option is None:
+            values[key] = None
+            continue
+        safe = _safe_proof_text(option)
+        if safe is None:
+            return _invalid_requested_options()
+        values[key] = safe
+    return {
+        "requested_options_state": "recorded",
+        "requested_model": values["requested_model"],
+        "requested_effort": values["requested_effort"],
+    }
+
+
+def _source_requested_options(
+        source: dict[str, object],
+        binding: dict[str, object] | None,
+        *,
+        require_binding: bool,
+        binding_error: str | None = None) -> dict[str, object]:
+    """Return source options only after a successful case matches its binding."""
+    source_options = _normalize_requested_options(source)
+    if source_options["requested_options_state"] != "recorded" or not require_binding:
+        return source_options
+    if binding_error is not None:
+        return _invalid_requested_options()
+    binding_options = _normalize_requested_options(binding)
+    if binding_options["requested_options_state"] != "recorded":
+        return binding_options
+    if any(source_options[key] != binding_options[key] for key in _REQUESTED_OPTION_KEYS):
+        return _invalid_requested_options()
+    return source_options
+
+
+def _validate_requested_options(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != {
+            "requested_options_state", "requested_model", "requested_effort"}:
+        raise EvidenceError("aggregate_case_requested_options_invalid")
+    state = value["requested_options_state"]
+    if not isinstance(state, str) or state not in _REQUESTED_OPTION_STATES:
+        raise EvidenceError("aggregate_case_requested_options_invalid")
+    if state == "recorded":
+        normalized = _normalize_requested_options({
+            key: value[key] for key in _REQUESTED_OPTION_KEYS
+        })
+        if normalized != value:
+            raise EvidenceError("aggregate_case_requested_options_invalid")
+    elif any(value[key] is not None for key in _REQUESTED_OPTION_KEYS):
+        raise EvidenceError("aggregate_case_requested_options_invalid")
+
+
 def _task_identifier_values(value: object, *, limit: int = 64) -> list[str]:
     result: list[str] = []
     if isinstance(value, dict):
@@ -728,6 +802,11 @@ def _source_proof(
     source_provider = _safe_proof_text(source.get("provider"))
     source_mode = _safe_proof_text(source.get("mode")) or row.definition.permission
     source_scenario = _safe_proof_text(source.get("scenario")) or row.definition.scenario
+    binding, binding_marker = _read_optional_object(case_directory / "binding.json")
+    binding_error = binding_marker if binding is None else None
+    requested_options = _source_requested_options(
+        source, binding, require_binding=row.status == "PASS", binding_error=binding_error,
+    )
     task_sessions = _task_session_bindings(source)
     task_ids = sorted({binding["task_id"] for binding in task_sessions})
     diagnostic_task_ids: list[str] = []
@@ -766,7 +845,8 @@ def _source_proof(
           and source_mode == row.definition.permission and source_scenario == row.definition.scenario
           and observed_aliases == expected_aliases and session_continuity
           and binary.get("state") == "complete"
-          and lifecycle["state"] == "complete"):
+          and lifecycle["state"] == "complete"
+          and requested_options["requested_options_state"] == "recorded"):
         proof_state = "complete"
     else:
         proof_state = "unresolved"
@@ -780,6 +860,7 @@ def _source_proof(
         "permission": row.definition.permission,
         "mode": source_mode,
         "scenario": source_scenario,
+        **requested_options,
         "task_ids": task_ids,
         "task_session_bindings": task_sessions,
         "diagnostic_task_ids": diagnostic_task_ids,
@@ -1652,6 +1733,13 @@ def _build_aggregate_locked(
                     or proof.get("mode") != row.definition.permission
                     or proof.get("scenario") != row.definition.scenario):
                 evidence_error = evidence_error or "source_proof_identity_mismatch"
+            requested_options_state = proof.get("requested_options_state")
+            if requested_options_state != "recorded":
+                evidence_error = evidence_error or (
+                    "source_requested_options_missing"
+                    if requested_options_state == "missing"
+                    else "source_requested_options_invalid"
+                )
             if row.status == "PASS" and proof.get("state") != "complete":
                 evidence_error = evidence_error or "source_proof_incomplete"
         except EvidenceError as error:
@@ -1665,6 +1753,8 @@ def _build_aggregate_locked(
                     "source_status": None, "gate": "acceptance-native",
                     "provider": row.definition.provider, "permission": row.definition.permission,
                     "mode": row.definition.permission, "scenario": row.definition.scenario,
+                    "requested_options_state": "missing", "requested_model": None,
+                    "requested_effort": None,
                     "task_ids": [], "task_session_bindings": [], "diagnostic_task_ids": [],
                     "session_ids": {
                         "state": "not-recorded", "values": [], "by_alias": {},
@@ -1823,11 +1913,16 @@ def _validate_case_receipt(root: Path, case: dict[str, object]) -> None:
     proof = value.get("source_proof")
     required_proof = {
         "state", "source_receipt_sha256", "final_status", "gate", "provider", "permission", "mode", "scenario",
+        "requested_options_state", "requested_model", "requested_effort",
         "task_ids", "task_session_bindings", "diagnostic_task_ids", "session_ids",
         "binary_identities", "lifecycle_proof",
     }
     if not isinstance(proof, dict) or not required_proof.issubset(proof):
         raise EvidenceError("aggregate_case_proof_missing")
+    _validate_requested_options({
+        key: proof[key]
+        for key in ("requested_options_state", "requested_model", "requested_effort")
+    })
     if (proof.get("final_status") != case["status"]
             or proof.get("provider") != case["provider"]
             or proof.get("permission") != case["permission"]
@@ -1937,6 +2032,9 @@ def _validate_case_receipt(root: Path, case: dict[str, object]) -> None:
             or HEX_DIGEST.fullmatch(str(proof.get("source_receipt_sha256", ""))) is None
             or binaries.get("state") != "complete" or lifecycle.get("state") != "complete"):
         raise EvidenceError("aggregate_case_proof_incomplete")
+    if (case["status"] == "PASS" and case["evidence_status"] == "RESOLVED"
+            and proof.get("requested_options_state") != "recorded"):
+        raise EvidenceError("aggregate_case_requested_options_incomplete")
     if (case["status"] == "PASS" and case["evidence_status"] == "RESOLVED"
             and len(bindings) > 1
             and len({binding["session_id"] for binding in bindings}) != 1):

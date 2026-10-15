@@ -9,6 +9,11 @@ on:
         description: 'Draft release tag to test, for example v1.2.3'
         required: true
         type: string
+      opencode_model:
+        description: 'Explicit OpenCode acceptance model in provider/model format'
+        required: true
+        default: 'opencode/big-pickle'
+        type: string
 
 permissions:
   contents: read
@@ -117,20 +122,19 @@ jobs:
             --source-revision "${GITHUB_SHA}"
 
       - name: Configure OpenCode tool-capable acceptance model
+        env:
+          OPENCODE_LIVE_MODEL: ${{ inputs.opencode_model }}
         shell: bash
         run: |
-          # Use OpenCode's own tool-capable model so acceptance does not depend
-          # on an account-specific OpenRouter endpoint policy.
-          model='opencode/big-pickle'
           config="${RUNNER_TEMP}/opencode-acceptance.json"
-          printf '%s\n' "{\"model\":\"${model}\"}" >"${config}"
+          python3 -c 'import json, os, sys; json.dump({"model": os.environ["OPENCODE_LIVE_MODEL"]}, sys.stdout)' >"${config}"
           chmod 0600 "${config}"
           printf 'OPENCODE_CONFIG=%s\n' "${config}" >>"${GITHUB_ENV}"
-          printf 'OPENCODE_LIVE_MODEL=%s\n' "${model}" >>"${GITHUB_ENV}"
 
       - name: Prove the released CLI with authenticated native providers
         id: native_live
         env:
+          OPENCODE_LIVE_MODEL: ${{ inputs.opencode_model }}
           DELEGATE_ACCEPTANCE_BIN_DIR: ${{ runner.temp }}/delegation-layer-release/extracted
           DELEGATE_ACCEPTANCE_OUTPUT_ROOT: ${{ github.workspace }}/.native-acceptance/native-aggregate-${{ github.run_id }}
           DELEGATE_ACCEPTANCE_TAG: ${{ inputs.tag }}

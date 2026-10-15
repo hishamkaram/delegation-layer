@@ -1226,6 +1226,30 @@ def wait_for_failure_cleanup(deadline, delay):
     return True
 
 
+def _validate_retained_owned_directories(
+        entries: tuple[OwnedDirectory, ...],
+        retained_entries: tuple[OwnedDirectory, ...],
+) -> set[int]:
+    require(type(retained_entries) is tuple,
+            "retained owned directories must be an identity-token tuple")
+    retained_ids = set()
+    for entry in retained_entries:
+        require(isinstance(entry, OwnedDirectory),
+                "retained owned directory identity token is invalid")
+        require(id(entry) not in retained_ids,
+                "retained owned directory identity token is duplicated")
+        require(any(candidate is entry for candidate in entries),
+                "retained owned directory token is not in the ownership sequence")
+        entry.assert_live()
+        retained_ids.add(id(entry))
+    for entry in retained_entries:
+        for ancestor in entries:
+            if _is_ancestor_entry(ancestor, entry):
+                require(id(ancestor) in retained_ids,
+                        "retained child requires every owned ancestor to be retained")
+    return retained_ids
+
+
 def finalize_acceptance_artifacts(
         output: Path,
         supervisor_closed: bool,
@@ -1233,7 +1257,9 @@ def finalize_acceptance_artifacts(
         success: bool,
         remove_failed_process_captures: bool = False,
         raw_process_captures_token: OwnedDirectory | None = None,
-        timeout: float = 30) -> bool:
+        timeout: float = 30,
+        *,
+        retained_owned_directories: tuple[OwnedDirectory, ...] = ()) -> bool:
     """Clean one completed acceptance run without crossing an ownership boundary.
 
     ``owned_directories`` is the invocation's explicit creation-order sequence
@@ -1243,7 +1269,10 @@ def finalize_acceptance_artifacts(
     token is removed. The compact evidence directory remains; a successful run
     drops only its large raw process captures. Failed runs may opt in to the
     same removal after a caller has persisted an independent, bounded
-    diagnostic snapshot.
+    diagnostic snapshot. On a genuine failed run, selected identity tokens may
+    be retained while all other owned entries follow the normal cleanup path.
+    Every retained child must include all of its owned ancestors, and the
+    cleanup receipt records the selected creation identities without contents.
     """
     output = Path(output)
     require(type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0,
@@ -1256,12 +1285,19 @@ def finalize_acceptance_artifacts(
     require(not remove_failed_process_captures or not success,
             "failed process capture cleanup is only valid for failed runs")
     try:
+        retained_entries = retained_owned_directories
+        require(not success or not retained_entries,
+                "retained owned directories are only valid for failed runs")
         output_mode = output.lstat().st_mode
         require(stat.S_ISDIR(output_mode) and not stat.S_ISLNK(output_mode),
                 "acceptance evidence directory is unsafe: " + str(output))
         entries = tuple(owned_directories)
         require(all(isinstance(entry, OwnedDirectory) for entry in entries),
                 "acceptance cleanup requires identity tokens")
+        retained_entry_ids = _validate_retained_owned_directories(entries, retained_entries)
+        entry_identities = {
+            id(entry): directory_identity_record(entry) for entry in entries
+        }
         if raw_process_captures_token is not None:
             require(any(entry is raw_process_captures_token for entry in entries),
                     "raw process capture token is not in the ownership sequence")
@@ -1290,30 +1326,39 @@ def finalize_acceptance_artifacts(
         "supervisor_shutdown_observed": bool(supervisor_closed),
         "completion": "passed" if success else "failed",
         "removed": [],
+        "retained": [],
+        "retained_owned_directories": [],
         "raw_process_captures": "retained",
     }
     if not supervisor_closed:
         receipt["status"] = "retained"
         receipt["reason"] = "private supervisor shutdown was not positively observed"
+        receipt["retained"] = [entry.label for entry in entries]
+        receipt["retained_owned_directories"] = [entry_identities[id(entry)]
+                                                  for entry in entries]
         write_json(output / "cleanup.json", receipt, replace=(output / "cleanup.json").exists())
         return False
 
     deadline = failure_cleanup_deadline(timeout)
     failures = []
     failed_entries = []
-    retained = []
     raw_removed = False
     raw_authorized = success or remove_failed_process_captures
     ordered_entries = tuple(reversed(entries))
+
+    def record_retained(entry):
+        receipt["retained"].append(entry.label)
+        receipt["retained_owned_directories"].append(entry_identities[id(entry)])
+
     for index, entry in enumerate(ordered_entries):
         try:
             _check_cleanup_deadline(deadline)
         except RuntimeError as error:
             failures.append({"label": entry.label, "error": str(error)})
             for retained_entry in ordered_entries[index:]:
+                record_retained(retained_entry)
                 try:
                     retained_entry.consume()
-                    retained.append(retained_entry.label)
                 except RuntimeError as consume_error:
                     failures.append({"label": retained_entry.label,
                                      "error": str(consume_error)})
@@ -1326,14 +1371,21 @@ def finalize_acceptance_artifacts(
                     "label": entry.label,
                     "error": "ancestor retained after descendant cleanup failure: " + str(error),
                 })
-            retained.append(entry.label)
+            record_retained(entry)
+            continue
+        if id(entry) in retained_entry_ids:
+            try:
+                release_owned_directory(entry, deadline=deadline)
+            except (OSError, RuntimeError) as error:
+                failures.append({"label": entry.label, "error": str(error)})
+            record_retained(entry)
             continue
         if entry is raw_process_captures_token and not raw_authorized:
             try:
                 release_owned_directory(entry, deadline=deadline)
-                retained.append(entry.label)
             except (OSError, RuntimeError) as error:
                 failures.append({"label": entry.label, "error": str(error)})
+            record_retained(entry)
             continue
         try:
             remove_owned_directory(entry, deadline=deadline)
@@ -1345,8 +1397,6 @@ def finalize_acceptance_artifacts(
             failed_entries.append(entry)
     if raw_process_captures_token is not None and raw_removed:
         receipt["raw_process_captures"] = "removed"
-    if retained:
-        receipt["retained"] = retained
     if failures:
         receipt["status"] = "partial"
         receipt["failures"] = failures
