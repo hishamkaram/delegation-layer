@@ -21,7 +21,6 @@ import secrets
 import shlex
 import shutil
 import stat
-import subprocess
 import sys
 import time
 import traceback
@@ -30,7 +29,10 @@ from acceptance_provider_common import (
     AcceptanceFailure,
     INSPECTION_GROUP_PREFIX,
     NativeTaskOps,
+    _canonical_timestamp,
+    _exact_keys,
     _hex_digest,
+    _provider_runtime_identity,
     _task_identity,
     clean_absolute,
     done_result,
@@ -41,7 +43,6 @@ from acceptance_provider_common import (
     require,
     snapshot,
     status_jobs,
-    validate_queue_row,
     validate_provider_runtime_metadata,
     verify_collected_outcome,
     write_bytes,
@@ -838,6 +839,50 @@ def dispatch_binding(response: dict[str, object], task_id: str, label: str) -> t
     return root_id, numeric_id
 
 
+def _validate_bound_provider_record(
+        evidence: object, name: str, root_id: str, task_id: str,
+        meta_digest: str, spec_digest: object) -> dict[str, object]:
+    """Validate the durable envelope shared by interrupted provider records."""
+    label = f"task {task_id} {name}"
+    require(isinstance(evidence, dict), f"{label} is not an object")
+    if name == "provider.start":
+        _exact_keys(evidence, {
+            "schema_version", "root_id", "task_id", "spec_sha256",
+            "meta_sha256", "budget_nanos", "created_at",
+        }, label=label)
+    elif name == "provider.started.json":
+        _exact_keys(evidence, {
+            "schema_version", "root_id", "task_id", "spec_sha256",
+            "meta_sha256", "started_at", "diagnostic_nanos",
+            "provider_executable", "provider_version", "provider_sha256",
+        }, label=label)
+    else:
+        raise AcceptanceFailure(f"{label} has no supported envelope")
+    require(type(evidence.get("schema_version")) is int and
+            evidence.get("schema_version") == 1 and
+            _task_identity(evidence.get("root_id")) and
+            evidence.get("root_id") == root_id and
+            _task_identity(evidence.get("task_id")) and
+            evidence.get("task_id") == task_id and
+            _hex_digest(evidence.get("spec_sha256")) and
+            evidence.get("spec_sha256") == spec_digest and
+            _hex_digest(evidence.get("meta_sha256")) and
+            evidence.get("meta_sha256") == meta_digest,
+            f"{label} binding is invalid")
+    if name == "provider.start":
+        require(type(evidence.get("budget_nanos")) is int and
+                0 < evidence.get("budget_nanos") < 2 ** 63,
+                f"{label} budget_nanos is invalid")
+        _canonical_timestamp(evidence.get("created_at"), f"{label} created_at")
+    else:
+        require(type(evidence.get("diagnostic_nanos")) is int and
+                0 <= evidence.get("diagnostic_nanos") < 2 ** 63,
+                f"{label} diagnostic_nanos is invalid")
+        _canonical_timestamp(evidence.get("started_at"), f"{label} started_at")
+        _provider_runtime_identity(evidence, "started", label)
+    return evidence
+
+
 class ModelDiscoveryCleanupOps(NativeTaskOps):
     """Use the model discovery state root for failure cleanup."""
 
@@ -863,9 +908,11 @@ class NativeAcceptanceTaskOps(NativeTaskOps):
                          managed_runner=owner.scenario == "timeout-resume")
         self.owner = owner
 
-    def _validate_queue_membership(self, status: dict[str, object], allow_failure: bool) -> None:
+    def _validate_queue_membership(
+            self, status: dict[str, object], allow_failure: bool
+            ) -> dict[str, dict[str, object]]:
         filtered = self.owner._without_model_discovery_queue(status)
-        super()._validate_queue_membership(filtered, allow_failure)
+        return super()._validate_queue_membership(filtered, allow_failure)
 
     def failure_queue_finished(self, status: dict[str, object]) -> bool:
         if self.owner.root_id is None and not self.tasks and not self.dispatch_attempts:
@@ -1439,9 +1486,11 @@ class NativeAcceptance:
         binding = self.output / "binding.json"
         require(not binding.exists() and not binding.is_symlink(),
                 "runtime binding was already persisted")
+        recorded_identity = self.provider_runtime_identities.get(task_id)
         require(_task_identity(task_id) and
                 set(provider_identity) == {"executable", "version", "sha256"} and
-                provider_identity.get("executable") == str(self.provider_executable) and
+                isinstance(recorded_identity, dict) and
+                recorded_identity == provider_identity and
                 provider_identity.get("version") == self.provider_version and
                 _hex_digest(provider_identity.get("sha256")),
                 "first admitted provider identity is unavailable")
@@ -1472,14 +1521,15 @@ class NativeAcceptance:
 
     def _record_provider_runtime_identity(
             self, task_id: str, meta: dict[str, object],
-            launch_evidence: tuple[dict[str, object], dict[str, object]] | None = None
+            launch_evidence: tuple[dict[str, object], dict[str, object]] | None = None,
+            started_evidence: dict[str, object] | None = None
             ) -> dict[str, str]:
         """Record one task's static or terminal provider runtime identity."""
         require(_task_identity(task_id), f"task {task_id} has an invalid identity")
         identity = validate_provider_runtime_metadata(
-            meta, launch_evidence=launch_evidence,
+            meta, launch_evidence=launch_evidence, started_evidence=started_evidence,
             label=f"task {task_id} provider runtime metadata")
-        if launch_evidence is None:
+        if launch_evidence is None and started_evidence is None:
             require("runtime_preflight_sha256" not in meta,
                     f"task {task_id} pending provider runtime has no launch evidence")
             executable = meta.get("provider_executable")
@@ -2248,99 +2298,71 @@ class NativeAcceptance:
                 type(default.get("parallel_tasks")) is int and
                 default.get("parallel_tasks") == 1)
 
-    def _inspection_queue_records(self) -> dict[str, dict[str, object]]:
-        """Return complete inspection journals owned by every admitted task."""
+    def _expected_inspection_attempts(self) -> set[str]:
+        """Project durable inspection expectations into the canonical owner."""
         require(self.root_id is not None, "root identity is unavailable")
-        task_ids = set(self.tasks.values())
-        validator = NativeTaskOps(
-            self.processes, self.delegate, self.runner, self.pueue,
-            self.state.parent, self.state, self.output)
-        validator.bind_supervisor(self.config, self.daemon)
-        validator.root_id = self.root_id
-        validator.dispatch_attempts = set(task_ids)
-        validator.inspection_attempts = set(task_ids)
-        records = validator.validate_inspection_journals(
-            allow_failure=False, expected_binding_required=False)
-        require(set(records) == task_ids,
-                "inspection journal coverage is incomplete for admitted tasks")
-        for task_id, record in records.items():
-            meta = read_json(self.state / "tasks" / task_id / "meta.json")
-            identity = self._record_provider_runtime_identity(task_id, meta)
-            request = record.get("request")
-            require(isinstance(request, dict), f"inspection request is absent for {task_id}")
-            binding = request.get("binding")
+        expected: set[str] = set()
+        runtime_only: set[str] = set()
+        for task_id in self.tasks.values():
+            require(_task_identity(task_id),
+                    f"ordinary task has an invalid inspection identity: {task_id}")
+            metadata = read_json(self.state / "tasks" / task_id / "meta.json")
+            require(metadata.get("root_id") == self.root_id and
+                    metadata.get("task_id") == task_id,
+                    f"task {task_id} metadata identity changed")
+            if "runtime_preflight_sha256" in metadata:
+                runtime_only.add(task_id)
+            else:
+                expected.add(task_id)
+
+        self.ops.inspection_attempts = expected
+        parent = self.state / "inspections"
+        try:
+            parent.lstat()
+        except FileNotFoundError:
+            return expected
+        require(parent.is_dir() and not parent.is_symlink(),
+                "inspection journal parent is not a regular directory")
+        for path in parent.iterdir():
+            require(_task_identity(path.name), "inspection journal has an invalid task identity")
+            require(path.is_dir() and not path.is_symlink(),
+                    "inspection journal task entry is not a regular directory")
+            require(path.name not in runtime_only,
+                    f"runtime-only task has an unexpected inspection journal: {path.name}")
+        return expected
+
+    @staticmethod
+    def _validate_terminal_default_group(status: dict[str, object]) -> None:
+        groups = status.get("groups")
+        require(isinstance(groups, dict), "private queue groups object is absent")
+        default = groups.get("default")
+        require(isinstance(default, dict) and default.get("status") == "Running" and
+                type(default.get("parallel_tasks")) is int and
+                default.get("parallel_tasks") == 1,
+                "default supervisor group is not running at parallelism one")
+
+    def _validate_inspection_runtime_bindings(
+            self, journals: dict[str, dict[str, object]]) -> None:
+        """Correlate validated inspection bindings with admitted runtimes."""
+        for task_id, journal in journals.items():
+            identity = self.provider_runtime_identities.get(task_id)
+            require(isinstance(identity, dict),
+                    f"inspection task has no admitted provider runtime identity: {task_id}")
+            request = journal.get("request")
+            binding = request.get("binding") if isinstance(request, dict) else None
             require(isinstance(binding, dict) and
-                    binding.get("helper_executable") == identity["executable"] and
-                    binding.get("helper_sha256") == identity["sha256"],
+                    binding.get("helper_executable") == identity.get("executable") and
+                    binding.get("helper_sha256") == identity.get("sha256"),
                     f"inspection helper binding does not match admitted runtime for {task_id}")
-        return records
 
     def _terminal_private_queue(self, status: dict[str, object]) -> bool:
-        rows = status.get("tasks")
-        groups = status.get("groups")
-        require(isinstance(rows, dict) and isinstance(groups, dict),
-                "private queue status is malformed")
         require(self.root_id is not None, "root identity is unavailable")
-        inspection_records = self._inspection_queue_records()
-        inspection_group = INSPECTION_GROUP_PREFIX + self.root_id
-        expected_groups = {"default"} | ({inspection_group} if inspection_records else set())
-        require(set(groups) == expected_groups, "private queue contains an unknown supervisor group")
-        for name in expected_groups:
-            group = groups[name]
-            # The native provider harness uses an explicit external config.
-            # Private bundled-supervisor parallelism is asserted by the private
-            # CLI acceptance below.
-            require(isinstance(group, dict) and group.get("status") == "Running" and
-                    type(group.get("parallel_tasks")) is int and
-                    group.get("parallel_tasks") == 1,
-                    f"private queue group is not running at parallelism one: {name}")
-
-        expected: dict[str, tuple[str, str]] = {}
-        ordinary_names: dict[str, str] = {}
-        for name, task_id in self.tasks.items():
-            require(task_id in self.numeric_ids, f"ordinary task has no numeric supervisor identity: {task_id}")
-            label = f"delegate:{self.root_id}:{task_id}"
-            require(label not in expected, "ordinary task labels are not unique")
-            require(task_id not in ordinary_names, "ordinary task identities are not unique")
-            expected[label] = ("ordinary", task_id)
-            ordinary_names[task_id] = name
-        for task_id, record in inspection_records.items():
-            label = record["label"]
-            require(isinstance(label, str) and label not in expected,
-                    "inspection task labels are not unique")
-            expected[label] = ("inspection", task_id)
-        require(len(rows) == len(expected), "private queue membership is not exact")
-
-        seen: set[str] = set()
-        for row in rows.values():
-            require(isinstance(row, dict), "private queue contains a malformed row")
-            label = row.get("label")
-            require(isinstance(label, str) and label in expected and label not in seen,
-                    "private queue labels are not exact")
-            seen.add(label)
-            kind, task_id = expected[label]
-            if kind == "ordinary":
-                self.ops.validate_ordinary_queue_row(
-                    row, label, task_id, self.numeric_ids[task_id], "default")
-                expected_result = self.ops.expected_results.get(ordinary_names[task_id], "Success")
-            else:
-                record = inspection_records[task_id]
-                require(row.get("group") == record["group"] and
-                        row.get("id") == record["numeric_task_id"],
-                        f"inspection queue identity is invalid for {task_id}")
-                expected_command = [str(self.runner), "--inspection", "--guardian", "--supervised",
-                                    "--root", str(self.state), task_id]
-                commands = []
-                for key in ("original_command", "command"):
-                    value = row.get(key)
-                    require(isinstance(value, str), f"inspection queue row missing {key}")
-                    commands.append(shlex.split(value))
-                require(commands == [expected_command, expected_command],
-                        f"inspection queue argv is invalid for {task_id}")
-                expected_result = "Success"
-            require(done_result(row) == expected_result,
-                    f"private queue task result changed for {task_id}")
-        return seen == set(expected)
+        self.ops.root_id = self.root_id
+        self._expected_inspection_attempts()
+        self._validate_terminal_default_group(status)
+        journals = self.ops._validate_queue_membership(status, allow_failure=False)
+        self._validate_inspection_runtime_bindings(journals)
+        return True
 
     def collect(self, name: str, task_id: str) -> dict[str, object]:
         self.ops.root_id = self.root_id
@@ -2418,10 +2440,36 @@ class NativeAcceptance:
                 "timed-out source published answer evidence")
         return response
 
+    def _read_bound_provider_evidence(
+            self, task_id: str, directory: Path, name: str,
+            meta_digest: str, spec_digest: object) -> dict[str, object]:
+        evidence = read_json(directory / name)
+        return _validate_bound_provider_record(
+            evidence, name, self.root_id, task_id, meta_digest, spec_digest)
+
+    def _read_bound_provider_started_evidence(
+            self, task_id: str, directory: Path,
+            meta_digest: str, spec_digest: object) -> dict[str, object]:
+        self._read_bound_provider_evidence(
+            task_id, directory, "provider.start", meta_digest, spec_digest)
+        return self._read_bound_provider_evidence(
+            task_id, directory, "provider.started.json", meta_digest, spec_digest)
+
+    def _validate_provider_metadata_binding(
+            self, task_id: str, directory: Path,
+            meta: dict[str, object], spec_digest: object) -> None:
+        require(meta.get("root_id") == self.root_id and meta.get("task_id") == task_id and
+                isinstance(spec_digest, str) and _hex_digest(spec_digest) and
+                spec_digest == digest(directory / "task.json"),
+                f"task {task_id} metadata binding is invalid")
+
     def _request_binding(self, task_id: str, require_launch_evidence: bool = False,
+                         require_started_evidence: bool = False,
                          budget: str = CANONICAL_TASK_BUDGET,
                          budget_nanos: int = TASK_BUDGET_NANOS) -> tuple[
             Path, dict[str, object], dict[str, object], str, str, Path]:
+        require(not (require_launch_evidence and require_started_evidence),
+                "provider launch evidence modes are mutually exclusive")
         directory = self.state / "tasks" / task_id
         require(directory.is_dir() and not directory.is_symlink(),
                 f"task {task_id} directory is absent")
@@ -2445,13 +2493,20 @@ class NativeAcceptance:
         meta = read_json(directory / "meta.json")
         meta_digest = digest(directory / "meta.json")
         spec_digest = meta.get("spec_sha256")
+        self._validate_provider_metadata_binding(task_id, directory, meta, spec_digest)
         launch_evidence = None
+        started_evidence = None
         if require_launch_evidence:
             launch_evidence = (
-                read_json(directory / "provider.started.json"),
+                self._read_bound_provider_evidence(
+                    task_id, directory, "provider.started.json", meta_digest, spec_digest),
                 read_json(directory / "provider.exit"),
             )
-        identity = self._record_provider_runtime_identity(task_id, meta, launch_evidence)
+        elif require_started_evidence:
+            started_evidence = self._read_bound_provider_started_evidence(
+                task_id, directory, meta_digest, spec_digest)
+        identity = self._record_provider_runtime_identity(
+            task_id, meta, launch_evidence, started_evidence)
         if self.provider_version is None:
             self.provider_version = identity["version"]
             self.write_binding(task_id, identity)
@@ -2459,7 +2514,8 @@ class NativeAcceptance:
 
     def timeout_source_binding(self, task_id: str) -> Path:
         directory, record, _meta, _meta_digest, _spec_digest, _brief = self._request_binding(
-            task_id, budget=CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
+            task_id, require_started_evidence=True,
+            budget=CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
             budget_nanos=TIMEOUT_RESUME_SOURCE_BUDGET_NANOS)
         requested = record.get("requested_config")
         args = getattr(self, "args", None)
@@ -2575,11 +2631,8 @@ class NativeAcceptance:
         require(isinstance(identity, dict),
                 f"task {task_id} admitted provider runtime identity is unavailable")
         pending_runtime = "runtime_preflight_sha256" in meta
-        require(meta.get("root_id") == self.root_id and meta.get("task_id") == task_id and
-                meta.get("containment") == self.mode and
-                isinstance(spec_digest, str) and len(spec_digest) == 64 and
-                all(character in "0123456789abcdef" for character in spec_digest),
-                f"task {task_id} metadata binding is invalid")
+        require(meta.get("containment") == self.mode,
+                f"task {task_id} metadata containment changed")
         effective = meta.get("effective_config")
         policy = effective.get("policy") if isinstance(effective, dict) else None
         require(isinstance(effective, dict) and effective.get("containment") == self.mode and
@@ -2610,11 +2663,8 @@ class NativeAcceptance:
                 supervisor.get("observed_version") == self.pueue_version,
                 f"task {task_id} supervisor submission binding is invalid")
         for name in ("provider.start", "provider.started.json"):
-            evidence = read_json(directory / name)
-            require(evidence.get("root_id") == self.root_id and evidence.get("task_id") == task_id and
-                    evidence.get("spec_sha256") == spec_digest and
-                    evidence.get("meta_sha256") == meta_digest,
-                    f"task {task_id} {name} binding is invalid")
+            self._read_bound_provider_evidence(
+                task_id, directory, name, meta_digest, spec_digest)
         provider_exit = read_json(directory / "provider.exit")
         require(provider_exit.get("root_id") == self.root_id and
                 provider_exit.get("task_id") == task_id and

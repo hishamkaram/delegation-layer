@@ -618,7 +618,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         owner = supervisor_common.DirectoryOwner()
         workspace_token = owner.create("timeout workspace", workspace, root)
         briefs_token = owner.create("timeout briefs", briefs, root)
-        lease_token = owner.create("timeout liveness leases", lease_directory, root)
+        owner.create("timeout liveness leases", lease_directory, root)
         raw_token = owner.create("raw process captures", output / "processes", output)
         operation = object.__new__(gate.NativeAcceptance)
         operation.output = output
@@ -1329,7 +1329,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             with self.assertRaisesRegex(gate.AcceptanceFailure, "symlink"):
                 gate.workspace_snapshot(workspace)
 
-    def _queue_oracle(self, root: Path, with_inspection: bool = True):
+    def _queue_oracle(self, root: Path, with_inspection: bool = True,
+                      runtime_only: bool = False):
         state = root / "state"
         state.mkdir()
         runner = root / "delegate-run"
@@ -1355,11 +1356,17 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.pueue, state.parent, state, operation.output)
         operation.ops.expected_results = {"fresh": "Success"}
         operation.provider_executable = runner
-        operation.provider_runtime_identities = {}
+        operation.provider_runtime_identities = {
+            task: {
+                "executable": str(runner),
+                "version": "fixture-v1",
+                "sha256": gate.digest(runner),
+            }
+        }
         operation.daemon = None
         task_directory = state / "tasks" / task
         task_directory.mkdir(parents=True)
-        gate.write_json(task_directory / "meta.json", {
+        metadata = {
             "root_id": operation.root_id,
             "task_id": task,
             "provider_executable": str(runner),
@@ -1367,7 +1374,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             "effective_config": {
                 "policy": {"runtime_sha256": gate.digest(runner)},
             },
-        })
+        }
+        if runtime_only:
+            metadata.update({
+                "provider_version": "",
+                "runtime_preflight_sha256": "a" * 64,
+                "environment_recorded": True,
+            })
+        gate.write_json(task_directory / "meta.json", metadata)
 
         ordinary_command = shlex.join([str(runner), "--root", str(state), task])
         rows = {
@@ -1387,16 +1401,29 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             rows["8"] = {
                 "id": 8, "label": inspection_label, "group": inspection_group,
                 "original_command": inspection_command, "command": inspection_command,
-                "path": str(state),
+                "path": str(root),
                 "status": {"Done": {"result": "Success"}},
             }
             groups[inspection_group] = {"status": "Running", "parallel_tasks": 1}
-            operation._inspection_queue_records = lambda: {
-                task: {"group": inspection_group, "label": inspection_label,
-                       "numeric_task_id": 8}
+        operation.ops.bind_supervisor(operation.config)
+        operation.ops.root_id = operation.root_id
+        operation.ops.tasks = {"fresh": task}
+        operation.ops.labels = {"fresh": f"delegate:{operation.root_id}:{task}"}
+        operation.ops.numbers = {"fresh": 7}
+        operation.ops.expected_results = {"fresh": "Success"}
+        operation.ops.dispatch_attempts = {task}
+        if with_inspection:
+            inspection_record = {
+                "task_id": task, "group": inspection_group, "label": inspection_label,
+                "numeric_task_id": 8,
+                "inspection_exit_authority": {"mode": "queue"},
+                "request": {"binding": {
+                    "helper_executable": str(runner),
+                    "helper_sha256": gate.digest(runner),
+                }},
+                "result": {"reason": "eligible"},
             }
-        else:
-            operation._inspection_queue_records = lambda: {}
+            operation.ops._inspection_journals = lambda *_args: {task: inspection_record}
         return operation, {"tasks": rows, "groups": groups}
 
     @staticmethod
@@ -1430,9 +1457,42 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation, status = self._queue_oracle(Path(directory))
             task = next(iter(operation.tasks.values()))
             operation.tasks = {"timeout-source": task}
+            operation.ops.tasks = {"timeout-source": task}
+            operation.ops.labels = {"timeout-source": f"delegate:{operation.root_id}:{task}"}
+            operation.ops.numbers = {"timeout-source": 7}
             operation.ops.expected_results = {"timeout-source": "Failed"}
             status["tasks"]["7"]["status"] = {"Done": {"result": {"Failed": 1}}}
             self.assertTrue(operation.terminal_private_queue(status))
+
+    def test_runtime_only_queue_uses_canonical_owner_without_inspection(self):
+        with tempfile.TemporaryDirectory(prefix="native-runtime-only-queue-") as directory:
+            operation, status = self._queue_oracle(
+                Path(directory), with_inspection=False, runtime_only=True)
+
+            self.assertTrue(operation.terminal_private_queue(status))
+
+    def test_runtime_only_queue_rejects_an_inspection_journal(self):
+        with tempfile.TemporaryDirectory(prefix="native-runtime-only-queue-") as directory:
+            operation, status = self._queue_oracle(
+                Path(directory), with_inspection=False, runtime_only=True)
+            (operation.state / "inspections" / operation.tasks["fresh"]).mkdir(parents=True)
+
+            self.assertFalse(operation.terminal_private_queue(status))
+
+    def test_terminal_queue_requires_running_default_group_at_parallel_one(self):
+        with tempfile.TemporaryDirectory(prefix="native-queue-group-") as directory:
+            for group in (
+                    {"status": "Paused", "parallel_tasks": 1},
+                    {"status": "Running", "parallel_tasks": 2}):
+                with self.subTest(group=group):
+                    fixture_root = Path(directory) / str(group["parallel_tasks"])
+                    fixture_root.mkdir()
+                    operation, status = self._queue_oracle(
+                        fixture_root,
+                        with_inspection=False, runtime_only=True)
+                    status["groups"]["default"] = group
+
+                    self.assertFalse(operation.terminal_private_queue(status))
 
     def test_terminal_queue_rejects_unknown_inspection_rows(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
@@ -1646,39 +1706,28 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_terminal_queue_rejects_malformed_inspection_record(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
             operation, status = self._queue_oracle(Path(directory))
-            operation._inspection_queue_records = lambda: {
-                "a" * 32: {"group": "delegation-inspection-" + "b" * 32,
-                           "label": "delegation-inspection-" + "b" * 32 + "-" + "a" * 32}
+            operation.ops._inspection_journals = lambda *_args: {
+                "a" * 32: {"task_id": "a" * 32,
+                           "group": "delegation-inspection-" + "b" * 32,
+                           "label": "malformed-inspection-label",
+                           "numeric_task_id": 8,
+                           "inspection_exit_authority": {"mode": "queue"},
+                           "result": {"reason": "eligible"}}
             }
             self.assertFalse(operation.terminal_private_queue(status))
 
-    def test_inspection_queue_uses_complete_validator_and_exact_coverage(self):
+    def test_terminal_projection_sets_exact_inspection_coverage(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
-            operation, status = self._queue_oracle(Path(directory))
-            del operation._inspection_queue_records
-            task = next(iter(operation.tasks.values()))
-            group = gate.INSPECTION_GROUP_PREFIX + operation.root_id
-            binding = {
-                "helper_executable": str(operation.provider_executable),
-                "helper_sha256": gate.digest(operation.provider_executable),
-            }
-            with patch.object(gate, "NativeTaskOps") as validator_type:
-                validator = validator_type.return_value
-                validator.validate_inspection_journals.return_value = {
-                    task: {"group": group, "label": group + "-" + task,
-                           "numeric_task_id": 8, "request": {"binding": binding}}
-                }
-                self.assertTrue(operation.terminal_private_queue(status))
-                validator.validate_inspection_journals.assert_called_once_with(
-                    allow_failure=False, expected_binding_required=False)
-
-    def test_inspection_queue_binds_each_turn_to_its_admitted_runtime(self):
-        with tempfile.TemporaryDirectory(prefix="native-queue-runtime-drift-") as directory:
             operation, _ = self._queue_oracle(Path(directory))
-            del operation._inspection_queue_records
+            task = next(iter(operation.tasks.values()))
+            self.assertEqual(operation._expected_inspection_attempts(), {task})
+            self.assertEqual(operation.ops.inspection_attempts, {task})
+
+    def test_inspection_expectations_exclude_pending_runtime_tasks(self):
+        with tempfile.TemporaryDirectory(prefix="native-queue-runtime-drift-") as directory:
+            operation, _ = self._queue_oracle(Path(directory), with_inspection=False)
             first = operation.tasks["fresh"]
             second = "c" * 32
-            second_sha256 = "b" * 64
             operation.tasks["resume"] = second
             second_directory = operation.state / "tasks" / second
             second_directory.mkdir(parents=True)
@@ -1686,35 +1735,12 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 "root_id": operation.root_id,
                 "task_id": second,
                 "provider_executable": str(operation.provider_executable),
-                "provider_version": "fixture-v2",
-                "effective_config": {"policy": {"runtime_sha256": second_sha256}},
+                "provider_version": "",
+                "runtime_preflight_sha256": "b" * 64,
+                "environment_recorded": True,
             })
-            records = {
-                first: {"request": {"binding": {
-                    "helper_executable": str(operation.provider_executable),
-                    "helper_sha256": gate.digest(operation.provider_executable),
-                }}},
-                second: {"request": {"binding": {
-                    "helper_executable": str(operation.provider_executable),
-                    "helper_sha256": second_sha256,
-                }}},
-            }
-            with patch.object(gate, "NativeTaskOps") as validator_type:
-                validator_type.return_value.validate_inspection_journals.return_value = records
-                self.assertEqual(set(operation._inspection_queue_records()), {first, second})
-            self.assertEqual(
-                operation.provider_runtime_identities[second],
-                {"executable": str(operation.provider_executable),
-                 "version": "fixture-v2", "sha256": second_sha256},
-            )
-
-            records[second]["request"]["binding"]["helper_sha256"] = gate.digest(
-                operation.provider_executable)
-            with patch.object(gate, "NativeTaskOps") as validator_type, \
-                    self.assertRaisesRegex(gate.AcceptanceFailure,
-                                            "does not match admitted runtime"):
-                validator_type.return_value.validate_inspection_journals.return_value = records
-                operation._inspection_queue_records()
+            self.assertEqual(operation._expected_inspection_attempts(), {first})
+            self.assertEqual(operation.ops.inspection_attempts, {first})
 
     def test_runtime_identity_rejects_a_different_provider_executable(self):
         with tempfile.TemporaryDirectory(prefix="native-runtime-executable-") as directory:
@@ -1773,6 +1799,207 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             with self.assertRaisesRegex(gate.AcceptanceFailure, "runtime identities differ"):
                 operation._record_provider_runtime_identity(
                     "c" * 32, meta, (started, changed_exit))
+
+    def test_pending_runtime_identity_uses_started_evidence_without_exit(self):
+        with tempfile.TemporaryDirectory(prefix="native-runtime-started-") as directory:
+            root = Path(directory)
+            selected = root / "provider"
+            selected.write_text("selected\n")
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.provider_executable = selected.resolve()
+            operation.provider_runtime_identities = {}
+            task_id = "a" * 32
+            meta = {
+                "provider_executable": str(selected.resolve()),
+                "provider_version": "",
+                "runtime_preflight_sha256": "a" * 64,
+                "environment_recorded": True,
+            }
+            started = {
+                "provider_executable": str(selected.resolve()),
+                "provider_version": "fixture-v2",
+                "provider_sha256": "b" * 64,
+            }
+
+            self.assertEqual(
+                operation._record_provider_runtime_identity(
+                    task_id, meta, started_evidence=started),
+                {"executable": str(selected.resolve()),
+                 "version": "fixture-v2", "sha256": "b" * 64},
+            )
+
+    @staticmethod
+    def _timeout_source_binding_operation(root: Path) -> tuple[object, str, Path]:
+        root_id = "b" * 32
+        task_id = "a" * 32
+        state = root / "state"
+        task = state / "tasks" / task_id
+        workspace = root / "workspace"
+        output = root / "output"
+        task.mkdir(parents=True)
+        workspace.mkdir()
+        output.mkdir()
+        provider = root / "provider"
+        provider.write_text("provider\n")
+        provider.chmod(0o700)
+        delegate = root / "delegate"
+        runner = root / "delegate-run"
+        pueue = root / "pueue"
+        pueued = root / "pueued"
+        for executable in (delegate, runner, pueue, pueued):
+            executable.write_text(executable.name + "\n")
+            executable.chmod(0o700)
+        config = root / "pueue.yml"
+        config.write_text("config\n")
+        brief = b"timeout source\n"
+        (task / "brief.md").write_bytes(brief)
+        gate.write_json(task / "task.json", {
+            "root_id": root_id, "task_id": task_id, "provider": "codex:exec",
+            "mode": "workspace-write", "canonical_cwd": str(workspace),
+            "requested_config": {
+                "permission": "workspace-write", "budget": "3m0s",
+            },
+            "budget_nanos": gate.TIMEOUT_RESUME_SOURCE_BUDGET_NANOS,
+            "brief_length": len(brief),
+            "brief_sha256": hashlib.sha256(brief).hexdigest(),
+        })
+        spec_digest = gate.digest(task / "task.json")
+        gate.write_json(task / "meta.json", {
+            "root_id": root_id, "task_id": task_id, "spec_sha256": spec_digest,
+            "containment": "workspace-write",
+            "provider_executable": str(provider.resolve()), "provider_version": "",
+            "runtime_preflight_sha256": "e" * 64, "environment_recorded": True,
+            "effective_config": {"policy": {"runtime_sha256": "f" * 64}},
+        })
+        meta_digest = gate.digest(task / "meta.json")
+        start = {
+            "schema_version": 1, "root_id": root_id, "task_id": task_id,
+            "meta_sha256": meta_digest, "spec_sha256": spec_digest,
+            "budget_nanos": gate.TIMEOUT_RESUME_SOURCE_BUDGET_NANOS,
+            "created_at": "2026-10-15T08:21:52Z",
+        }
+        started = {
+            "schema_version": 1, "root_id": root_id, "task_id": task_id,
+            "meta_sha256": meta_digest, "spec_sha256": spec_digest,
+            "started_at": "2026-10-15T08:21:52Z", "diagnostic_nanos": 1,
+            "provider_executable": str(provider.resolve()),
+            "provider_version": "fixture-v2", "provider_sha256": "1" * 64,
+        }
+        gate.write_json(task / "provider.start", start)
+        gate.write_json(task / "provider.started.json", started)
+        gate.write_json(task / "provider.ref.json", {
+            "root_id": root_id, "task_id": task_id, "provider": "codex:exec",
+            "conversation_id": "fixture-session",
+        })
+
+        operation = object.__new__(gate.NativeAcceptance)
+        operation.root_id = root_id
+        operation.state = state
+        operation.workspace = workspace
+        operation.output = output
+        operation.provider = "codex:exec"
+        operation.mode = "workspace-write"
+        operation.scenario = "timeout-resume"
+        operation.args = SimpleNamespace(model=None, effort=None)
+        operation.provider_executable = provider.resolve()
+        operation.provider_version = "fixture-v2"
+        operation.provider_runtime_identities = {}
+        operation.delegate = delegate
+        operation.runner = runner
+        operation.pueue = pueue
+        operation.pueued = pueued
+        operation.config = config
+        operation.pueue_version = "pueue 4.0.4"
+        operation.pueued_version = "pueued 4.0.4"
+        return operation, task_id, task
+
+    def test_timeout_source_binding_accepts_started_record_without_exit(self):
+        with tempfile.TemporaryDirectory(prefix="native-timeout-source-binding-") as directory:
+            operation, task_id, task = self._timeout_source_binding_operation(Path(directory))
+
+            self.assertEqual(operation.timeout_source_binding(task_id), task)
+            self.assertEqual(operation.provider_runtime_identities[task_id], {
+                "executable": str(operation.provider_executable),
+                "version": "fixture-v2", "sha256": "1" * 64,
+            })
+            self.assertFalse((task / "provider.exit").exists())
+
+    def test_timeout_source_binding_writes_refreshed_runtime_identity(self):
+        with tempfile.TemporaryDirectory(prefix="native-timeout-binding-receipt-") as directory:
+            operation, task_id, task = self._timeout_source_binding_operation(Path(directory))
+            original = Path(directory) / "provider-original"
+            original.write_text("original\n")
+            operation.provider_executable = original.resolve()
+            operation.provider_version = None
+
+            operation.timeout_source_binding(task_id)
+
+            binding = gate.read_json(operation.output / "binding.json")
+            self.assertEqual(binding["provider_executable"],
+                             str((Path(directory) / "provider").resolve()))
+            self.assertEqual(binding["provider_version"], "fixture-v2")
+            self.assertFalse((task / "provider.exit").exists())
+            self.assertFalse((task / "outcome.json").exists())
+
+    def test_timeout_source_binding_rejects_tampered_started_record_binding(self):
+        for field, value in (
+                ("root_id", "c" * 32), ("task_id", "c" * 32),
+                ("meta_sha256", "c" * 64), ("spec_sha256", "c" * 64)):
+            with self.subTest(field=field), tempfile.TemporaryDirectory(
+                    prefix="native-timeout-source-binding-tamper-") as directory:
+                operation, task_id, task = self._timeout_source_binding_operation(Path(directory))
+                started = gate.read_json(task / "provider.started.json")
+                started[field] = value
+                gate.write_json(task / "provider.started.json", started, replace=True)
+                with self.assertRaisesRegex(gate.AcceptanceFailure, "provider.started.json binding"):
+                    operation.timeout_source_binding(task_id)
+
+    def test_timeout_source_binding_rejects_malformed_provider_record_envelopes(self):
+        cases = (
+            ("provider.start", "schema_version", 2),
+            ("provider.start", "schema_version", True),
+            ("provider.start", "schema_version", 1.0),
+            ("provider.start", "budget_nanos", 0),
+            ("provider.start", "budget_nanos", 2 ** 63),
+            ("provider.start", "created_at", None),
+            ("provider.started.json", "schema_version", 2),
+            ("provider.started.json", "schema_version", True),
+            ("provider.started.json", "schema_version", 1.0),
+            ("provider.started.json", "diagnostic_nanos", -1),
+            ("provider.started.json", "diagnostic_nanos", 2 ** 63),
+            ("provider.started.json", "started_at", None),
+        )
+        for name, field, value in cases:
+            with self.subTest(name=name, field=field), tempfile.TemporaryDirectory(
+                    prefix="native-timeout-source-envelope-") as directory:
+                operation, task_id, task = self._timeout_source_binding_operation(Path(directory))
+                record = gate.read_json(task / name)
+                if value is None:
+                    del record[field]
+                else:
+                    record[field] = value
+                gate.write_json(task / name, record, replace=True)
+
+                with self.assertRaisesRegex(gate.AcceptanceFailure, name):
+                    operation.timeout_source_binding(task_id)
+
+    def test_completed_binding_still_requires_a_matching_exit_record(self):
+        with tempfile.TemporaryDirectory(prefix="native-completed-binding-") as directory:
+            operation, task_id, task = self._timeout_source_binding_operation(Path(directory))
+            with self.assertRaises(FileNotFoundError):
+                operation._request_binding(
+                    task_id, require_launch_evidence=True,
+                    budget=gate.CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
+                    budget_nanos=gate.TIMEOUT_RESUME_SOURCE_BUDGET_NANOS)
+
+            started = gate.read_json(task / "provider.started.json")
+            exited = dict(started, provider_version="fixture-v3")
+            gate.write_json(task / "provider.exit", exited)
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "runtime identities differ"):
+                operation._request_binding(
+                    task_id, require_launch_evidence=True,
+                    budget=gate.CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
+                    budget_nanos=gate.TIMEOUT_RESUME_SOURCE_BUDGET_NANOS)
 
     def test_model_discovery_binds_helper_to_selected_provider_executable(self):
         with tempfile.TemporaryDirectory(prefix="native-model-executable-") as directory:
@@ -1848,10 +2075,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_inspection_queue_rejects_missing_admitted_task_journal(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
             operation, status = self._queue_oracle(Path(directory))
-            del operation._inspection_queue_records
-            with patch.object(gate, "NativeTaskOps") as validator_type:
-                validator_type.return_value.validate_inspection_journals.return_value = {}
-                self.assertFalse(operation.terminal_private_queue(status))
+            del operation.ops._inspection_journals
+            self.assertFalse(operation.terminal_private_queue(status))
 
     def test_empty_queue_is_terminal_before_any_task_is_admitted(self):
         with tempfile.TemporaryDirectory(prefix="native-queue-unit-") as directory:
@@ -2256,7 +2481,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation = object.__new__(gate.NativeAcceptance)
             operation.daemon = None
             processes = gate.Processes(root / "processes", {"PATH": "/usr/bin"})
-            with patch.object(gate.subprocess, "Popen", FakePopen), \
+            with patch.object(supervisor_common.subprocess, "Popen", FakePopen), \
                     patch.object(supervisor_common, "write_json", side_effect=fail_started):
                 with self.assertRaisesRegex(OSError, "started receipt"):
                     processes.start("pueued", ["/bin/sh"], cwd,
@@ -2288,7 +2513,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.daemon = None
             operation.closed = False
             operation.processes = gate.Processes(root / "processes", {"PATH": "/usr/bin"})
-            with patch.object(gate.subprocess, "Popen", FakePopen):
+            with patch.object(supervisor_common.subprocess, "Popen", FakePopen):
                 process = operation.processes.start("pueued", ["/bin/sh"], cwd)
 
             self.assertFalse(operation.safe_shutdown())
@@ -2448,15 +2673,15 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.models_state = operation.base / "models-state"
         operation.output.mkdir()
         owner = supervisor_common.DirectoryOwner()
-        base_parent_token = owner.create("acceptance base parent", operation.base_parent, root)
-        base_token = owner.create("acceptance base", operation.base, operation.base_parent)
-        state_token = owner.create("acceptance state", operation.state, operation.base)
-        workspace_token = owner.create("acceptance workspace", operation.workspace, operation.base)
+        owner.create("acceptance base parent", operation.base_parent, root)
+        owner.create("acceptance base", operation.base, operation.base_parent)
+        owner.create("acceptance state", operation.state, operation.base)
+        owner.create("acceptance workspace", operation.workspace, operation.base)
         owner.create("acceptance briefs", operation.briefs, operation.base)
-        pueue_token = owner.create("private pueue", operation.pueue_base, operation.base)
+        owner.create("private pueue", operation.pueue_base, operation.base)
         owner.create("private pueue state", operation.pueue_base / "state", operation.pueue_base)
         owner.create("private pueue runtime", operation.pueue_base / "run", operation.pueue_base)
-        models_token = owner.create("model discovery state", operation.models_state, operation.base)
+        owner.create("model discovery state", operation.models_state, operation.base)
         raw_token = owner.create("raw process captures", operation.output / "processes", operation.output)
         operation.owned_directories = owner.transfer()
         operation.processes = SimpleNamespace(capture_root=raw_token)

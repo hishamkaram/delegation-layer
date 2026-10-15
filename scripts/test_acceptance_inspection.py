@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import acceptance_inspection as inspection_acceptance
+import acceptance_native as native_acceptance
 import acceptance_provider_common as provider_common
 import acceptance_supervisor_common as supervisor_common
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps, _inspection_group
@@ -1199,6 +1200,109 @@ class InspectionHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "runtime identities differ"):
             provider_common.validate_provider_runtime_metadata(
                 meta, launch_evidence=(started, exited))
+
+    def test_provider_runtime_metadata_accepts_started_only_interrupted_identity(self):
+        meta = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": "",
+            "runtime_preflight_sha256": "a" * 64,
+            "environment_recorded": True,
+        }
+        started = {
+            "provider_executable": "/fixture/provider-v2",
+            "provider_version": "fixture-v2",
+            "provider_sha256": "b" * 64,
+        }
+
+        self.assertEqual(
+            provider_common.validate_provider_runtime_metadata(
+                meta, started_evidence=started),
+            {"executable": "/fixture/provider-v2",
+             "version": "fixture-v2", "sha256": "b" * 64},
+        )
+        with self.assertRaisesRegex(AcceptanceFailure, "mutually exclusive"):
+            provider_common.validate_provider_runtime_metadata(
+                meta, launch_evidence=(started, started), started_evidence=started)
+
+    def test_provider_runtime_evidence_matches_go_identity_contract_for_both_modes(self):
+        meta = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": "",
+            "runtime_preflight_sha256": "a" * 64,
+            "environment_recorded": True,
+        }
+        valid = {
+            "provider_executable": "/fixture/provider",
+            "provider_version": " fixture-v2 ",
+            "provider_sha256": "b" * 64,
+        }
+        for mode in ("started", "sealed"):
+            with self.subTest(mode=mode):
+                kwargs = ({"started_evidence": valid} if mode == "started" else
+                          {"launch_evidence": (valid, dict(valid))})
+                self.assertEqual(
+                    provider_common.validate_provider_runtime_metadata(meta, **kwargs),
+                    {"executable": "/fixture/provider", "version": " fixture-v2 ",
+                     "sha256": "b" * 64},
+                )
+                for name, value in (
+                        ("raw path", "/fixture//provider"),
+                        ("control", "fixture\nv2"),
+                        ("invalid utf8", "fixture\ud800v2"),
+                        ("oversized", "v" * (provider_common.MAX_PROVIDER_RUNTIME_EVIDENCE_VERSION_BYTES + 1))):
+                    with self.subTest(case=name):
+                        changed = dict(valid)
+                        if name == "raw path":
+                            changed["provider_executable"] = value
+                        else:
+                            changed["provider_version"] = value
+                        changed_kwargs = ({"started_evidence": changed} if mode == "started" else
+                                          {"launch_evidence": (changed, dict(changed))})
+                        with self.assertRaises(AcceptanceFailure):
+                            provider_common.validate_provider_runtime_metadata(
+                                meta, **changed_kwargs)
+
+    def test_provider_runtime_metadata_rejects_noncanonical_executable_path(self):
+        for executable in ("/fixture//provider", "//fixture/provider"):
+            with self.subTest(executable=executable), self.assertRaisesRegex(
+                    AcceptanceFailure, "executable is invalid"):
+                provider_common.validate_provider_runtime_metadata({
+                    "provider_executable": executable,
+                    "provider_version": "fixture-v1",
+                })
+
+    def test_native_terminal_queue_correlates_helper_with_admitted_runtime(self):
+        self.inspection_records()
+        ordinary = self.durable_ordinary_admission()
+        meta_path = ordinary / "meta.json"
+        meta = read_json(meta_path)
+        meta["effective_config"]["policy"] = {"runtime_sha256": "e" * 64}
+        write_json(meta_path, meta, replace=True)
+        self.rebind_ordinary_metadata(ordinary)
+
+        operation = object.__new__(native_acceptance.NativeAcceptance)
+        operation.config = self.config
+        operation.daemon = None
+        operation.root_id = ROOT
+        operation.state = self.state
+        operation.tasks = {"fresh": TASK}
+        operation.numeric_ids = {TASK: 7}
+        operation.provider_executable = Path(meta["provider_executable"])
+        operation.provider_version = "fixture-v1"
+        operation.provider_runtime_identities = {}
+        operation.ops = self.ops
+
+        operation._record_provider_runtime_identity(TASK, meta)
+        status = self.status(self.inspection_row())
+        self.assertFalse(operation.terminal_private_queue(status))
+
+        meta["provider_executable"] = str(self.base / "helper")
+        write_json(meta_path, meta, replace=True)
+        self.rebind_ordinary_metadata(ordinary)
+        operation.provider_executable = Path(meta["provider_executable"])
+        operation.provider_runtime_identities = {}
+        operation._record_provider_runtime_identity(TASK, meta)
+        self.assertTrue(operation.terminal_private_queue(status))
 
     def test_root_lifetime_closure_rejects_complete_task_with_incomplete_inspection(self):
         self.inspection_records(managed_exit_proof=True)

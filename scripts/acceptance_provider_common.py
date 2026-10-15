@@ -35,6 +35,7 @@ from acceptance_supervisor_common import (
 
 MAX_CONTROL_BYTES = 1 << 20
 MAX_PROVIDER_BYTES = 8 << 20
+MAX_PROVIDER_RUNTIME_EVIDENCE_VERSION_BYTES = 64 * 1024
 INSPECTION_GROUP_PREFIX = "delegation-inspection-"
 INSPECTION_FAILURE_RESULTS = {"Killed", "Errored", "DependencyFailed", "Failed", "FailedToSpawn"}
 ADMISSION_INSPECTION_TIMEOUT_SECONDS = (60, 20)
@@ -757,15 +758,45 @@ def _hex_digest(value: object) -> bool:
             all(character in "0123456789abcdef" for character in value))
 
 
+def _raw_clean_absolute_path(value: object) -> bool:
+    """Match the Unix filepath.Clean identity used by the Go records."""
+    return (isinstance(value, str) and Path(value).is_absolute() and
+            not value.startswith("//") and value == os.path.normpath(value))
+
+
+def _provider_runtime_identity(evidence: object, phase: str,
+                               label: str) -> dict[str, str]:
+    require(isinstance(evidence, dict), f"{label} {phase} evidence is not an object")
+    executable = evidence.get("provider_executable")
+    version = evidence.get("provider_version")
+    sha256 = evidence.get("provider_sha256")
+    require(_raw_clean_absolute_path(executable),
+            f"{label} {phase} executable is invalid")
+    require(isinstance(version, str) and bool(version.strip()),
+            f"{label} {phase} version is invalid")
+    try:
+        version_bytes = version.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise AcceptanceFailure(f"{label} {phase} version is not valid UTF-8") from error
+    require(len(version_bytes) <= MAX_PROVIDER_RUNTIME_EVIDENCE_VERSION_BYTES,
+            f"{label} {phase} version exceeds the terminal evidence bound")
+    require(not any(unicodedata.category(character) == "Cc" for character in version),
+            f"{label} {phase} version contains control characters")
+    require(_hex_digest(sha256), f"{label} {phase} digest is invalid")
+    return {"executable": executable, "version": version, "sha256": sha256}
+
+
 def validate_provider_runtime_metadata(
         meta: dict[str, object], *, observed_version: str | None = None,
         launch_evidence: tuple[dict[str, object], dict[str, object]] | None = None,
+        started_evidence: dict[str, object] | None = None,
         label: str = "provider runtime metadata") -> dict[str, str] | None:
     """Validate pending or historical runtime metadata and terminal identity."""
     require(isinstance(meta, dict), f"{label} is not an object")
+    require(not (launch_evidence is not None and started_evidence is not None),
+            f"{label} launch evidence modes are mutually exclusive")
     executable = meta.get("provider_executable")
-    require(isinstance(executable, str) and Path(executable).is_absolute() and
-            Path(executable) == Path(os.path.normpath(executable)),
+    require(_raw_clean_absolute_path(executable),
             f"{label} executable is invalid")
     pending = "runtime_preflight_sha256" in meta
     version = meta.get("provider_version")
@@ -784,31 +815,20 @@ def validate_provider_runtime_metadata(
     if "environment_recorded" in meta:
         require(type(meta["environment_recorded"]) is bool,
                 f"{label} environment marker is invalid")
+    if started_evidence is not None:
+        identity = _provider_runtime_identity(started_evidence, "started", label)
+        if not pending:
+            require(executable == identity["executable"] and version == identity["version"],
+                    f"{label} metadata does not match started identity")
+        return identity
     if launch_evidence is None:
         return None
     started, exited = launch_evidence
-    identities: list[dict[str, str]] = []
-    for phase, evidence in (("started", started), ("exit", exited)):
-        require(isinstance(evidence, dict), f"{label} {phase} evidence is not an object")
-        evidence_executable = evidence.get("provider_executable")
-        evidence_version = evidence.get("provider_version")
-        evidence_sha256 = evidence.get("provider_sha256")
-        require(isinstance(evidence_executable, str) and
-                Path(evidence_executable).is_absolute() and
-                Path(evidence_executable) == Path(os.path.normpath(evidence_executable)),
-                f"{label} {phase} executable is invalid")
-        require(isinstance(evidence_version, str) and bool(evidence_version.strip()),
-                f"{label} {phase} version is invalid")
-        require(_hex_digest(evidence_sha256),
-                f"{label} {phase} digest is invalid")
-        identities.append({
-            "executable": evidence_executable,
-            "version": evidence_version,
-            "sha256": evidence_sha256,
-        })
-    require(identities[0] == identities[1],
+    started_identity = _provider_runtime_identity(started, "started", label)
+    exit_identity = _provider_runtime_identity(exited, "exit", label)
+    require(started_identity == exit_identity,
             f"{label} started and exit runtime identities differ")
-    identity = identities[0]
+    identity = started_identity
     if not pending:
         require(executable == identity["executable"] and version == identity["version"],
                 f"{label} metadata does not match launch identity")
@@ -2332,7 +2352,9 @@ class NativeTaskOps:
         return {"task_id": task, "label": expected_label, "numeric_task_id": numeric,
                 "expected_result": "Success", "managed_lifetime": managed_lifetime}
 
-    def _validate_queue_membership(self, status: dict[str, object], allow_failure: bool) -> None:
+    def _validate_queue_membership(
+            self, status: dict[str, object], allow_failure: bool
+            ) -> dict[str, dict[str, object]]:
         tasks = status.get("tasks")
         require(isinstance(tasks, dict), "private queue tasks object is absent")
         require(self.dispatch_attempts, "no supervisor dispatch attempt was recorded")
@@ -2420,6 +2442,7 @@ class NativeTaskOps:
             if row is not None:
                 self._validate_inspection_queue_row(
                     row, journal, allow_failure, terminal_required=False)
+        return journals
 
     def _inspection_snapshot(self) -> dict[str, dict[str, object]]:
         parent = self.state / "inspections"
