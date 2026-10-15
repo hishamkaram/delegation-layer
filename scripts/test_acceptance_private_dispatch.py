@@ -27,6 +27,19 @@ def _release_live_directory_tokens(entries):
             common.release_owned_directory(entry)
 
 
+class PrivateCaptureRootMixin:
+    def setUp(self):
+        super().setUp()
+        temporary = tempfile.TemporaryDirectory(prefix="delegate-capture-root-test-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.capture_owner = private_cli.DirectoryOwner()
+        self.capture_root = self.capture_owner.create(
+            "private control capture root", root / "capture-root", root,
+        )
+        self.addCleanup(self.capture_owner.rollback)
+
+
 class PrivateDispatchArgumentsTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-dispatch-args-")
@@ -361,7 +374,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
         return json.loads(output.read_text()), observed_upgrade, error
 
 
-class PrivateDefaultStopScenarioTests(unittest.TestCase):
+class PrivateDefaultStopScenarioTests(PrivateCaptureRootMixin, unittest.TestCase):
     def test_orchestration_requires_live_leases_and_canonical_closure(self):
         with tempfile.TemporaryDirectory(prefix="delegate-default-stop-") as directory:
             root = Path(directory)
@@ -460,7 +473,8 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
                     "liveness": "ended" if ended else "running", "stops": [stop],
                 }
 
-            def live_lease(_client, _config, _env, _state, response, _waiters, _nonce):
+            def live_lease(_client, _config, _env, _state, response, _waiters, _nonce,
+                          **_options):
                 return ({
                     "task_id": response["task_id"], "root_id": response["root_id"],
                     "pid": 100 + len(dispatches), "scope_kind": "process-group",
@@ -500,7 +514,7 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
                 evidence = private_cli.run_default_stop_acceptance(
                     provider, provider, state, workspace, brief, gate_path, waiters,
                     root / "pueue.yml", {}, responses, provider, "e" * 32,
-                    receipt, attempted,
+                    receipt, attempted, capture_root=self.capture_root,
                 )
 
             self.assertEqual([command[2] for command in calls], [
@@ -553,7 +567,7 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
             self.assertEqual(shutdown, [True])
 
 
-class EndedTaskObservationTests(unittest.TestCase):
+class EndedTaskObservationTests(PrivateCaptureRootMixin, unittest.TestCase):
     def response(self):
         return {"task_id": "a" * 32, "root_id": "r" * 32}
 
@@ -568,7 +582,7 @@ class EndedTaskObservationTests(unittest.TestCase):
                 patch.object(private_cli.time, "sleep") as sleep:
             status, evidence = private_cli.await_created_task_ended(
                 Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
-                Path("/fixture/status.json"), timeout=5,
+                Path("/fixture/status.json"), timeout=5, capture_root=self.capture_root,
             )
 
         self.assertEqual(status["liveness"], "ended")
@@ -606,7 +620,7 @@ class EndedTaskObservationTests(unittest.TestCase):
             with self.assertRaisesRegex(TimeoutError, "queue status remained non-ended"):
                 private_cli.await_created_task_ended(
                     Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
-                    Path("/fixture/status.json"), timeout=5,
+                    Path("/fixture/status.json"), timeout=5, capture_root=self.capture_root,
                 )
 
         read.assert_called_once()
@@ -622,7 +636,7 @@ class EndedTaskObservationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "different task"):
                 private_cli.await_created_task_ended(
                     Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
-                    Path("/fixture/status.json"), timeout=5,
+                    Path("/fixture/status.json"), timeout=5, capture_root=self.capture_root,
                 )
         run.assert_called_once()
         sleep.assert_not_called()
@@ -653,7 +667,7 @@ class EndedTaskObservationTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, message):
                     private_cli.await_created_task_ended(
                         Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
-                        Path("/fixture/status.json"), timeout=5,
+                        Path("/fixture/status.json"), timeout=5, capture_root=self.capture_root,
                     )
                 read.assert_called_once()
                 sleep.assert_not_called()
@@ -664,13 +678,13 @@ class EndedTaskObservationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "exit=2"):
                 private_cli.await_created_task_ended(
                     Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
-                    Path("/fixture/status.json"), timeout=5,
+                    Path("/fixture/status.json"), timeout=5, capture_root=self.capture_root,
                 )
         read.assert_called_once()
         sleep.assert_not_called()
 
 
-class TaskStatusReceiptTests(unittest.TestCase):
+class TaskStatusReceiptTests(PrivateCaptureRootMixin, unittest.TestCase):
     def test_status_response_is_retained_before_identity_validation(self):
         for returned_id in ("a" * 32, "b" * 32):
             with self.subTest(returned_id=returned_id), \
@@ -686,12 +700,14 @@ class TaskStatusReceiptTests(unittest.TestCase):
                     if returned_id == "a" * 32:
                         observed = private_cli.read_created_task_status(
                             Path("/fixture/delegate"), Path(directory), {}, "a" * 32, receipt,
+                            capture_root=self.capture_root,
                         )
                         self.assertEqual(observed, response)
                     else:
                         with self.assertRaisesRegex(RuntimeError, "different task"):
                             private_cli.read_created_task_status(
                                 Path("/fixture/delegate"), Path(directory), {}, "a" * 32, receipt,
+                                capture_root=self.capture_root,
                             )
                 recorded = json.loads(receipt.read_text())
                 self.assertEqual(recorded["response"], response)
@@ -706,18 +722,19 @@ class TaskStatusReceiptTests(unittest.TestCase):
             with patch.object(private_cli, "run_captured_command", return_value=completed):
                 private_cli.run_json(
                     Path("/fixture/delegate"), {}, ["providers", "--json"], receipt=receipt,
+                    capture_root=self.capture_root,
                 )
             self.assertNotIn("response", json.loads(receipt.read_text()))
 
 
-class PrivateControlCaptureTests(unittest.TestCase):
+class PrivateControlCaptureTests(PrivateCaptureRootMixin, unittest.TestCase):
     def test_pueue_snapshot_uses_shared_file_backed_capture(self):
         completed = subprocess.CompletedProcess([], 0, b'{"tasks": {}}\n', b"")
         metrics = {}
         with patch.object(private_cli, "run_captured_command", return_value=completed) as capture:
             snapshot = private_cli.pueue_snapshot(
                 Path("/fixture/pueue"), Path("/fixture/pueue.yml"), {"PATH": "/bin"},
-                metrics=metrics, phase="supervisor-observation",
+                metrics=metrics, phase="supervisor-observation", capture_root=self.capture_root,
             )
 
         self.assertEqual(snapshot, {"tasks": {}})
@@ -726,6 +743,7 @@ class PrivateControlCaptureTests(unittest.TestCase):
             ["/fixture/pueue", "--config", "/fixture/pueue.yml", "status", "--json"],
             {"PATH": "/bin", "DELEGATE_ACCEPTANCE_PHASE": "supervisor-observation"},
             10,
+            capture_root=self.capture_root,
         )
 
     def test_pueue_command_uses_shared_file_backed_capture(self):
@@ -734,6 +752,7 @@ class PrivateControlCaptureTests(unittest.TestCase):
             output = private_cli.pueue_command(
                 Path("/fixture/pueue"), Path("/fixture/pueue.yml"), {"PATH": "/bin"},
                 ["shutdown"], timeout=7, phase="supervisor-shutdown",
+                capture_root=self.capture_root,
             )
 
         self.assertEqual(output, "ok\n")
@@ -741,6 +760,7 @@ class PrivateControlCaptureTests(unittest.TestCase):
             ["/fixture/pueue", "--config", "/fixture/pueue.yml", "shutdown"],
             {"PATH": "/bin", "DELEGATE_ACCEPTANCE_PHASE": "supervisor-shutdown"},
             7,
+            capture_root=self.capture_root,
         )
 
     def test_private_daemon_pid_fallback_uses_shared_file_backed_capture(self):
@@ -748,12 +768,15 @@ class PrivateControlCaptureTests(unittest.TestCase):
         with patch.object(private_cli.os, "getpgid", side_effect=ProcessLookupError), \
                 patch.object(private_cli, "shutdown_remaining", return_value=3.0), \
                 patch.object(private_cli, "run_captured_command", return_value=completed) as capture:
-            self.assertTrue(private_cli.private_daemon_process_gone(123, 9.0))
+            self.assertTrue(private_cli.private_daemon_process_gone(
+                123, 9.0, capture_root=self.capture_root,
+            ))
 
         capture.assert_called_once_with(
             ["/bin/ps", "-p", "123", "-o", "pid="],
             {"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
             3.0,
+            capture_root=self.capture_root,
         )
 
     def test_file_capture_survives_soft_256_pressure_and_parallel_short_commands(self):
@@ -781,9 +804,14 @@ if old_hard != resource.RLIM_INFINITY and old_hard < 256:
     raise RuntimeError("fixture hard descriptor limit is below 256")
 resource.setrlimit(resource.RLIMIT_NOFILE, (256, old_hard))
 pins = []
+capture_owner = None
 try:
     with tempfile.TemporaryDirectory(prefix="delegate-low-fd-") as temporary:
         root = Path(temporary)
+        capture_owner = private_cli.DirectoryOwner()
+        capture_root = capture_owner.create(
+            "private control capture root", root / "capture-root", root,
+        )
         waiter_directory = root / "provider-waiters"
         waiter_directory.mkdir()
         pin_paths = []
@@ -838,9 +866,11 @@ try:
         metrics = {}
         snapshot = private_cli.pueue_snapshot(
             Path(command[0]), config, command_env, metrics=metrics, phase="fd-probe",
+            capture_root=capture_root,
         )
         control_output = private_cli.pueue_command(
             Path(command[0]), config, command_env, ["shutdown"], timeout=5, phase="fd-probe",
+            capture_root=capture_root,
         )
 
         marker_directory = root / "parallel-markers"
@@ -865,7 +895,7 @@ try:
             result = private_cli.run_captured_command(
                 [str(sys.executable), "-c", parallel_child,
                  str(marker_directory), str(release_path)],
-                command_env, child_watchdog_seconds,
+                command_env, child_watchdog_seconds, capture_root=capture_root,
             )
             return (result.returncode,
                     result.stdout.decode("utf-8").strip(),
@@ -956,7 +986,16 @@ try:
             "parallel_exit_codes": exit_codes,
             "parallel_outputs": outputs,
         }))
+        capture_owner.rollback()
+        capture_owner = None
 finally:
+    if capture_owner is not None:
+        try:
+            capture_owner.release()
+        except RuntimeError:
+            # TemporaryDirectory has already removed the parent on an
+            # exceptional probe path; release still consumes the pinned FDs.
+            pass
     for descriptor in reversed(pins):
         try:
             os.close(descriptor)
@@ -991,7 +1030,7 @@ finally:
         self.assertEqual(evidence["parallel_outputs"], ["delegate-short-capture"] * 16)
 
 
-class CreatedAdmissionTests(unittest.TestCase):
+class CreatedAdmissionTests(PrivateCaptureRootMixin, unittest.TestCase):
     def response(self):
         return {"task_id": "a" * 32, "task_record": "created", "admission": "unknown",
                 "failure": {"code": "task_submission_uncertain", "next_action": "check_status"}}
@@ -999,7 +1038,7 @@ class CreatedAdmissionTests(unittest.TestCase):
     def observe(self, response):
         return private_cli.observe_created_admission(
             Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
-            Path("/fixture/dispatch-000.json"),
+            Path("/fixture/dispatch-000.json"), capture_root=self.capture_root,
         )
 
     def test_admitted_submission_uses_dispatch_evidence_without_status(self):
@@ -1127,7 +1166,8 @@ class CreatedAdmissionTests(unittest.TestCase):
             receipt = Path(directory) / "dispatch-000.json"
             with self.assertRaisesRegex(RuntimeError, "exit=1"):
                 private_cli.observe_created_admission(Path("/fixture/delegate"), Path("/fixture/state"), {},
-                                                     self.response(), receipt)
+                                                     self.response(), receipt,
+                                                     capture_root=self.capture_root)
             saved = json.loads((receipt.parent / "observation-dispatch-000-000.json").read_text())
             self.assertEqual(saved["exit_code"], 1)
             raw_stdout = json.dumps(observed).encode()
@@ -2024,6 +2064,11 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         self.owner_proof_count = self.total
         self.failed_dispatch_index = None
         self.attempted_task_ids = []
+        self.capture_owner = private_cli.DirectoryOwner()
+        self.capture_root = self.capture_owner.create(
+            "private control capture root", self.root / "capture-root", self.root,
+        )
+        self.addCleanup(self.capture_owner.rollback)
 
     def release_old_layout(self):
         _release_live_directory_tokens(self.old_layout_owned)
@@ -2219,6 +2264,7 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
                 lease_nonce="e" * 32,
                 client_call_log=self.client_call_log,
                 attempted_task_ids=self.attempted_task_ids,
+                capture_root=self.capture_root,
             )
 
     def lease_specifications(self, state, responses, waiter_directory, nonce):
@@ -2350,7 +2396,7 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
         return {"task_id": task_id, "root_id": "b" * 32,
                 "task_record": "created", "admission": "admitted"}
 
-    def snapshot(self, _client, _config, _env, metrics, phase=None):
+    def snapshot(self, _client, _config, _env, metrics, phase=None, **_options):
         self.assertEqual(len(self.dispatched), self.total)
         self.assertFalse(self.gate.exists())
         self.assertTrue(self.old_layout.exists())

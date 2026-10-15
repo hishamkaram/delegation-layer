@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import errno
 import fcntl
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,7 @@ from acceptance_supervisor_common import (
     remove_owned_directory,
     require,
     rollback_owned_directories,
+    wait_until,
 )
 
 
@@ -605,54 +607,115 @@ def phase_environment(environment, phase):
     return value
 
 
-def run_captured_command(command, env, timeout):
-    # Pipe capture retains two descriptors per live child. macOS commonly
-    # gives this driver 256 descriptors, below a 200-caller burst. Close file
-    # handles immediately after Start; only the short spawn and result
-    # read/cleanup phases serialize. Waiting never holds this lock.
-    temporary = tempfile.TemporaryDirectory(prefix="delegate-cli-capture-")
+def _assert_capture_root(capture_root):
+    require(isinstance(capture_root, OwnedDirectory),
+            "private control capture root identity token is required")
+    capture_root.assert_live()
+
+
+def _capture_path(capture_root, name):
+    return capture_root.directory / name
+
+
+def _capture_opener(capture_root, name, read_only):
+    def open_at(_path, flags):
+        _assert_capture_root(capture_root)
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        if read_only:
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            return os.open(name, flags, dir_fd=capture_root.directory_fd)
+        return os.open(name, flags, 0o600, dir_fd=capture_root.directory_fd)
+
+    return open_at
+
+
+def _open_capture_writer(capture_root, name):
+    _assert_capture_root(capture_root)
+    return io.open(name, "xb", opener=_capture_opener(capture_root, name, False))
+
+
+def _read_capture(capture_root, name):
+    _assert_capture_root(capture_root)
+    with io.open(name, "rb", opener=_capture_opener(capture_root, name, True)) as stream:
+        return stream.read()
+
+
+def _wait_private_control_process(process, timeout, description):
+    wait_until(
+        lambda: process.poll() is not None,
+        timeout=timeout,
+        description=description,
+        timeout_error=subprocess.TimeoutExpired(process.args, timeout),
+    )
+    require(process.returncode is not None,
+            "private control process returned without an exit status")
+    return process.returncode
+
+
+def _reap_private_control_process(process, primary_error, stdout_path, stderr_path):
     try:
-        stdout = Path(temporary.name) / "stdout"
-        stderr = Path(temporary.name) / "stderr"
-        with CAPTURE_START_LOCK:
-            with stdout.open("wb") as output, stderr.open("wb") as errors:
-                process = subprocess.Popen(command, env=env, stdout=output, stderr=errors)
-        try:
-            code = process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            # Acceptance owns this direct control-CLI child. This is the narrow
-            # fixture cleanup exception in delegation-invariants.md; it never
-            # signals a managed worker, provider, daemon, or native task scope.
+        if process.poll() is None:
+            # This process is the directly spawned private control CLI. It is
+            # never a managed worker, provider, daemon, or native task scope.
             process.kill()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired as cleanup_error:
-                raise RuntimeError(
-                    "captured command could not be reaped after timeout: %s" % cleanup_error
-                ) from cleanup_error
-            with CAPTURE_START_LOCK:
-                captured_stdout = stdout.read_bytes()
-                captured_stderr = stderr.read_bytes()
-                temporary.cleanup()
-                temporary = None
-            raise subprocess.TimeoutExpired(
-                command, timeout, output=captured_stdout, stderr=captured_stderr,
-            ) from None
+        _wait_private_control_process(
+            process, 5, "private control command cleanup",
+        )
+    except BaseException as cleanup_error:
+        raise RuntimeError(
+            "private control command cleanup failed after %s: %s; retained capture files: %s, %s"
+            % (primary_error, cleanup_error, stdout_path, stderr_path)
+        ) from primary_error
+
+
+def _retain_capture_failure(error, stdout_path, stderr_path):
+    error.retained_capture_paths = (str(stdout_path), str(stderr_path))
+
+
+def run_captured_command(command, env, timeout, *, capture_root):
+    """Run one private control CLI with capture owned by the acceptance root."""
+    _assert_capture_root(capture_root)
+    capture_id = uuid.uuid4().hex
+    stdout_name = "capture-" + capture_id + ".stdout"
+    stderr_name = "capture-" + capture_id + ".stderr"
+    stdout_path = _capture_path(capture_root, stdout_name)
+    stderr_path = _capture_path(capture_root, stderr_name)
+    process = None
+    try:
         with CAPTURE_START_LOCK:
-            captured_stdout = stdout.read_bytes()
-            captured_stderr = stderr.read_bytes()
-            temporary.cleanup()
-            temporary = None
+            _assert_capture_root(capture_root)
+            with _open_capture_writer(capture_root, stdout_name) as output, \
+                    _open_capture_writer(capture_root, stderr_name) as errors:
+                process = subprocess.Popen(command, env=env, stdout=output, stderr=errors)
+        code = _wait_private_control_process(
+            process, timeout, "private control command",
+        )
+        with CAPTURE_START_LOCK:
+            captured_stdout = _read_capture(capture_root, stdout_name)
+            captured_stderr = _read_capture(capture_root, stderr_name)
         return subprocess.CompletedProcess(command, code, captured_stdout, captured_stderr)
-    finally:
-        if temporary is not None:
-            with CAPTURE_START_LOCK:
-                temporary.cleanup()
+    except subprocess.TimeoutExpired as primary_error:
+        if process is not None:
+            _reap_private_control_process(process, primary_error, stdout_path, stderr_path)
+        with CAPTURE_START_LOCK:
+            try:
+                captured_stdout = _read_capture(capture_root, stdout_name)
+                captured_stderr = _read_capture(capture_root, stderr_name)
+            except BaseException as read_error:
+                _retain_capture_failure(primary_error, stdout_path, stderr_path)
+                raise primary_error from read_error
+        raise subprocess.TimeoutExpired(
+            command, timeout, output=captured_stdout, stderr=captured_stderr,
+        ) from None
+    except BaseException as primary_error:
+        if process is not None:
+            _reap_private_control_process(process, primary_error, stdout_path, stderr_path)
+        raise
 
 
-def run_captured_text_command(command, env, timeout):
+def run_captured_text_command(command, env, timeout, *, capture_root):
     """Run one control command through the shared file-backed capture owner."""
-    captured = run_captured_command(command, env, timeout)
+    captured = run_captured_command(command, env, timeout, capture_root=capture_root)
     return subprocess.CompletedProcess(
         captured.args,
         captured.returncode,
@@ -700,7 +763,7 @@ def record_invocation_error(receipt, args, error, captured):
         return
     stdout = captured.stdout if captured is not None else getattr(error, "output", None) or b""
     stderr = captured.stderr if captured is not None else getattr(error, "stderr", None) or b""
-    receipt.write_text(json.dumps({
+    evidence = {
         "arguments": args, "invocation_error": str(error),
         "failure_class": "invocation_error",
         "exit_code": captured.returncode if captured is not None else None,
@@ -708,15 +771,27 @@ def record_invocation_error(receipt, args, error, captured):
         "stdout_tail": output_tail(stdout),
         "stderr_bytes": len(stderr), "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
         "stderr_tail": output_tail(stderr),
-    }, indent=2) + "\n")
+    }
+    retained_paths = getattr(error, "retained_capture_paths", ())
+    if retained_paths:
+        evidence["capture_failure"] = {
+            "retained_paths": list(retained_paths),
+            "cause": (None if error.__cause__ is None else {
+                "type": type(error.__cause__).__name__,
+                "message": str(error.__cause__),
+            }),
+        }
+    receipt.write_text(json.dumps(evidence, indent=2) + "\n")
 
 
 def run_json(delegate, env, args, expected=(0,), timeout=45, receipt=None, phase=None,
-             capture_response=False):
+             *, capture_root, capture_response=False):
     captured = None
     try:
         command_env = phase_environment(env, phase) if phase is not None else env
-        captured = run_captured_command([str(delegate), *args], command_env, timeout)
+        captured = run_captured_command(
+            [str(delegate), *args], command_env, timeout, capture_root=capture_root,
+        )
         result = subprocess.CompletedProcess(
             captured.args, captured.returncode,
             captured.stdout.decode("utf-8"), captured.stderr.decode("utf-8"),
@@ -762,7 +837,7 @@ def install_fixture(source, destination):
 
 
 def observe_created_admission(delegate, state, env, response, receipt, timeout=60,
-                              phase="admission-observation"):
+                              phase="admission-observation", *, capture_root):
     """Confirm one created task after uncertain or failed dispatch; never retry it."""
     failure = response.get("failure", {})
     uncertain = (failure.get("code") == "task_submission_uncertain"
@@ -786,7 +861,7 @@ def observe_created_admission(delegate, state, env, response, receipt, timeout=6
         observed = run_json(delegate, env, ["--root", str(state), "status", task_id, "--json"],
                             timeout=min(45, remaining),
                             receipt=receipt.with_name("observation-" + receipt.stem + "-%03d.json" % attempt),
-                            phase=phase)
+                            phase=phase, capture_root=capture_root)
         if observed.get("task_id") != task_id:
             raise RuntimeError("admission observation returned a different task")
         # status uses exit zero for a valid uncertain observation, including
@@ -801,11 +876,12 @@ def observe_created_admission(delegate, state, env, response, receipt, timeout=6
 
 
 def read_created_task_status(delegate, state, env, task_id, receipt,
-                             phase="task-observation", timeout=45):
+                             phase="task-observation", timeout=45, *, capture_root):
     """Read one created task without changing or resubmitting its request."""
     observed = run_json(
         delegate, env, ["--root", str(state), "status", task_id, "--json"],
-        timeout=timeout, receipt=receipt, phase=phase, capture_response=True,
+        timeout=timeout, receipt=receipt, phase=phase, capture_root=capture_root,
+        capture_response=True,
     )
     if observed.get("task_id") != task_id:
         raise RuntimeError("task observation returned a different task")
@@ -813,7 +889,7 @@ def read_created_task_status(delegate, state, env, task_id, receipt,
 
 
 def await_created_task_ended(delegate, state, env, response, receipt,
-                             timeout=30, phase="task-observation"):
+                             timeout=30, phase="task-observation", *, capture_root):
     """Poll one created task until the queue reports ended, without resubmitting it."""
     task_id = response.get("task_id")
     root_id = response.get("root_id")
@@ -831,7 +907,7 @@ def await_created_task_ended(delegate, state, env, response, receipt,
         )
         status = read_created_task_status(
             delegate, state, env, task_id, poll_receipt,
-            phase=phase, timeout=min(45, remaining),
+            phase=phase, timeout=min(45, remaining), capture_root=capture_root,
         )
         poll_receipts.append(poll_receipt.name)
         if status.get("root_id") != root_id:
@@ -924,7 +1000,7 @@ def isolated_default_state_path(home):
 def verify_packaged_default_path(owner, base, sources, provider_bin, brief,
                                  primary_client, primary_config, primary_env,
                                  response_directory, supervisor_cleanups,
-                                 run_receipt=None, managed_state_roots=None):
+                                 run_receipt=None, managed_state_roots=None, *, capture_root):
     """Prove an adjacent release bundle bootstraps through only public defaults."""
     if run_receipt is not None:
         run_receipt.phase("packaged_default_setup")
@@ -961,7 +1037,7 @@ def verify_packaged_default_path(owner, base, sources, provider_bin, brief,
     dispatched = run_json(
         package / "delegate", env, commands["dispatch"],
         receipt=Path(response_directory) / "packaged-dispatch.json",
-        phase="packaged-default-dispatch",
+        phase="packaged-default-dispatch", capture_root=capture_root,
     )
     if (dispatched.get("task_id") != task_id
             or dispatched.get("task_record") != "created"
@@ -975,11 +1051,11 @@ def verify_packaged_default_path(owner, base, sources, provider_bin, brief,
         raise RuntimeError("packaged default root did not own a distinct private daemon")
     primary_metrics = {}
     pueue_snapshot(primary_client, primary_config, primary_env, primary_metrics,
-                   phase="packaged-coexistence-observation")
+                   phase="packaged-coexistence-observation", capture_root=capture_root)
     packaged_metrics = {}
     packaged_snapshot = pueue_snapshot(
         pair / "pueue", config, env, packaged_metrics,
-        phase="packaged-coexistence-observation",
+        phase="packaged-coexistence-observation", capture_root=capture_root,
     )
     if run_receipt is not None:
         packaged_rows = packaged_snapshot.get("tasks", {})
@@ -995,7 +1071,7 @@ def verify_packaged_default_path(owner, base, sources, provider_bin, brief,
     observed = run_json(
         package / "delegate", env, commands["status"],
         receipt=Path(response_directory) / "packaged-status.json",
-        phase="packaged-default-observation",
+        phase="packaged-default-observation", capture_root=capture_root,
     )
     if observed.get("task_id") != task_id:
         raise RuntimeError("packaged default status observed a different task")
@@ -1003,7 +1079,7 @@ def verify_packaged_default_path(owner, base, sources, provider_bin, brief,
         package / "delegate", env, commands["collect"],
         timeout=COLLECT_TIMEOUT_SECONDS,
         receipt=Path(response_directory) / "packaged-collect.json",
-        phase="packaged-default-collection",
+        phase="packaged-default-collection", capture_root=capture_root,
     )
     if collected.get("outcome", {}).get("verdict") != "committed":
         raise RuntimeError("packaged default collect did not publish success")
@@ -1016,10 +1092,12 @@ def verify_packaged_default_path(owner, base, sources, provider_bin, brief,
         run_receipt.increment("collected_task_count")
         run_receipt.phase("packaged_default_shutdown")
     shutdown_private_supervisor(
-        pair / "pueue", config, env, state=default_state, task_ids=(task_id,))
+        pair / "pueue", config, env, state=default_state, task_ids=(task_id,),
+        capture_root=capture_root,
+    )
     supervisor_cleanups.remove(cleanup)
     pueue_snapshot(primary_client, primary_config, primary_env, primary_metrics,
-                   phase="packaged-coexistence-observation")
+                   phase="packaged-coexistence-observation", capture_root=capture_root)
     if run_receipt is not None:
         run_receipt.stage("packaged-default-path-proved")
     return {
@@ -1132,11 +1210,12 @@ def install_pi_fixture(install_dir, gate_file, waiter_directory, lease_nonce):
     pi.chmod(0o700)
 
 
-def pueue_snapshot(client, config, env, metrics=None, phase=None):
+def pueue_snapshot(client, config, env, metrics=None, phase=None, *, capture_root):
     command_env = phase_environment(env, phase) if phase is not None else env
     result = run_captured_text_command(
         [str(client), "--config", str(config), "status", "--json"],
         command_env, 10,
+        capture_root=capture_root,
     )
     if result.returncode != 0:
         raise RuntimeError("isolated pueue status failed: " + result.stderr[-1000:])
@@ -1145,10 +1224,11 @@ def pueue_snapshot(client, config, env, metrics=None, phase=None):
     return json.loads(result.stdout)
 
 
-def wait_for_pueue_state(client, config, env, label, expected, phase="supervisor-observation"):
+def wait_for_pueue_state(client, config, env, label, expected,
+                         phase="supervisor-observation", *, capture_root):
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        snapshot = pueue_snapshot(client, config, env, phase=phase)
+        snapshot = pueue_snapshot(client, config, env, phase=phase, capture_root=capture_root)
         for row in snapshot.get("tasks", {}).values():
             if row.get("label") == label:
                 status = row.get("status", {})
@@ -1162,7 +1242,7 @@ def wait_for_pueue_state(client, config, env, label, expected, phase="supervisor
 
 
 def wait_for_queued_label_prefix(client, config, env, group, prefix, excluded_labels, process,
-                                phase="inspection-observation"):
+                                phase="inspection-observation", *, capture_root):
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -1170,7 +1250,7 @@ def wait_for_queued_label_prefix(client, config, env, group, prefix, excluded_la
                 "models command exited before its inspection worker queued: exit=%d"
                 % process.returncode
             )
-        snapshot = pueue_snapshot(client, config, env, phase=phase)
+        snapshot = pueue_snapshot(client, config, env, phase=phase, capture_root=capture_root)
         for row in snapshot.get("tasks", {}).values():
             label = row.get("label") or ""
             if label not in excluded_labels and label.startswith(prefix) and row.get("group") == group:
@@ -1183,11 +1263,12 @@ def wait_for_queued_label_prefix(client, config, env, group, prefix, excluded_la
     raise RuntimeError("timed out waiting for queued inspection worker")
 
 
-def pueue_command(client, config, env, args, timeout=15, phase=None):
+def pueue_command(client, config, env, args, timeout=15, phase=None, *, capture_root):
     command_env = phase_environment(env, phase) if phase is not None else env
     result = run_captured_text_command(
         [str(client), "--config", str(config), *args],
         command_env, timeout,
+        capture_root=capture_root,
     )
     if result.returncode != 0:
         raise RuntimeError("isolated pueue command failed: %r: %s" % (args, result.stderr[-1000:]))
@@ -1201,7 +1282,7 @@ def shutdown_remaining(deadline):
     return remaining
 
 
-def private_daemon_process_gone(pid, deadline):
+def private_daemon_process_gone(pid, deadline, *, capture_root):
     # No signal is sent. A zombie or a reused live PID remains unavailable as
     # exit proof; timeout is safer than treating either as a stopped daemon.
     try:
@@ -1213,6 +1294,7 @@ def private_daemon_process_gone(pid, deadline):
             ["/bin/ps", "-p", str(pid), "-o", "pid="],
             {"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
             shutdown_remaining(deadline),
+            capture_root=capture_root,
         )
         if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
             return True
@@ -1317,18 +1399,18 @@ def await_managed_lifetime_closure(state, task_ids=(), timeout=30):
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
-def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=()):
+def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=(), capture_root):
     """Authorize lifetime closure, then observe PID and endpoint disappearance."""
     authorize_managed_lifetime_closure(state, task_ids)
     deadline = time.monotonic() + timeout
     pid, endpoint, socket_identity = private_shutdown_evidence(config)
-    if private_daemon_process_gone(pid, deadline):
+    if private_daemon_process_gone(pid, deadline, capture_root=capture_root):
         raise RuntimeError("private supervisor PID disappeared before shutdown")
     pueue_command(client, config, env, ["shutdown"], timeout=shutdown_remaining(deadline),
-                  phase="supervisor-shutdown")
+                  phase="supervisor-shutdown", capture_root=capture_root)
     disappeared = False
     while True:
-        gone = private_daemon_process_gone(pid, deadline)
+        gone = private_daemon_process_gone(pid, deadline, capture_root=capture_root)
         if disappeared and not gone:
             raise RuntimeError("private supervisor PID identity changed during shutdown")
         disappeared = gone
@@ -1560,7 +1642,7 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
                                         client, config, parallel_tasks, dispatch_workers,
                                         response_directory, evidence=None, *, lease_nonce,
                                         client_call_log, attempted_task_ids,
-                                        run_receipt=None):
+                                        capture_root, run_receipt=None):
     """Remove disposable package files while a state-owned task is running."""
     waiting_brief = brief.with_name("waiting-brief.md")
     waiting_brief.write_text("DELEGATE_PRIVATE_UPGRADE_WAIT\n")
@@ -1588,7 +1670,8 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
                 "--root", str(state), "dispatch", "--provider", "pi:json",
                 "--brief", str(waiting_brief), "--cwd", str(workspace),
                 "--permission", "read-only", "--budget", CAPACITY_TASK_BUDGET, "--json",
-            ], expected=(0, 1), timeout=600, receipt=receipt, phase="managed-runner")
+            ], expected=(0, 1), timeout=600, receipt=receipt, phase="managed-runner",
+                        capture_root=capture_root)
             if response.get("task_record") == "created":
                 task_id = response.get("task_id")
                 if not isinstance(task_id, str) or not task_id:
@@ -1619,7 +1702,7 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
         index, response = index_response
         observe_created_admission(
             delegate, state, env, response, receipts / ("dispatch-%03d.json" % index),
-            phase="managed-runner-observation",
+            phase="managed-runner-observation", capture_root=capture_root,
         )
         with dispatch_lock:
             admitted_task_count += 1
@@ -1674,7 +1757,7 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
         while True:
             snapshot_metrics = {}
             snapshot = pueue_snapshot(client, config, env, snapshot_metrics,
-                                      phase="capacity-observation")
+                                      phase="capacity-observation", capture_root=capture_root)
             rows_by_label = task_rows_by_label(snapshot, expected_labels)
             observed_running = sum(
                 1 for row in rows_by_label.values() if pueue_state(row) == "Running"
@@ -1714,6 +1797,7 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
                 confirmation_metrics = {}
                 confirmation = pueue_snapshot(
                     client, config, env, confirmation_metrics, phase="capacity-observation",
+                    capture_root=capture_root,
                 )
                 confirmed_rows = task_rows_by_label(confirmation, expected_labels)
                 confirmed_running = sum(
@@ -1739,7 +1823,7 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
                 final_confirmation_metrics = {}
                 final_confirmation = pueue_snapshot(
                     client, config, env, final_confirmation_metrics,
-                    phase="capacity-observation",
+                    phase="capacity-observation", capture_root=capture_root,
                 )
                 final_rows = task_rows_by_label(final_confirmation, expected_labels)
                 final_running = sum(
@@ -1818,7 +1902,7 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
             observed = read_created_task_status(
                 delegate, state, env, task_id,
                 receipts / ("status-after-upgrade-" + task_id + ".json"),
-                phase="managed-runner-observation")
+                phase="managed-runner-observation", capture_root=capture_root)
             supervisor = observed.get("supervisor", {})
             if (observed.get("admission") != "admitted" or observed.get("error")
                     or observed.get("status") == "timed_out"
@@ -1865,7 +1949,7 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
         collected = run_json(delegate, env, [
             "--root", str(state), "collect", task_id, "--watch", COLLECT_WATCH, "--json",
         ], timeout=COLLECT_TIMEOUT_SECONDS, receipt=receipts / ("collect-" + task_id + ".json"),
-                           phase="managed-runner-collection")
+                           phase="managed-runner-collection", capture_root=capture_root)
         if collected.get("outcome", {}).get("verdict") != "committed":
             raise RuntimeError("removing old package files disrupted the state-owned task")
         if run_receipt is not None:
@@ -1876,14 +1960,16 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
     with ThreadPoolExecutor(max_workers=min(parallel_tasks, 16)) as pool:
         list(pool.map(collect, task_ids))
     shutdown_private_supervisor(
-        client, config, env, state=state, task_ids=tuple(task_ids))
+        client, config, env, state=state, task_ids=tuple(task_ids),
+        capture_root=capture_root)
     # A subsequent dispatch must bootstrap from durable state without the old
     # package. This is a new requested turn, never a retry of uncertain work.
     response = run_json(delegate, env, [
         "--root", str(state), "dispatch", "--provider", "pi:json",
         "--brief", str(brief), "--cwd", str(workspace),
         "--permission", "read-only", "--budget", TASK_BUDGET, "--json",
-    ], receipt=receipts / "dispatch-restarted.json", phase="restart-dispatch")
+    ], receipt=receipts / "dispatch-restarted.json", phase="restart-dispatch",
+                    capture_root=capture_root)
     if response.get("task_record") != "created" or response.get("admission") != "admitted":
         raise RuntimeError("restart probe was not durably admitted")
     restarted_id = response["task_id"]
@@ -1891,11 +1977,12 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
         if restarted_id not in attempted_task_ids:
             attempted_task_ids.append(restarted_id)
     run_json(delegate, env, ["--root", str(state), "status", restarted_id, "--json"],
-             receipt=receipts / "status-restarted.json", phase="restart-observation")
+             receipt=receipts / "status-restarted.json", phase="restart-observation",
+             capture_root=capture_root)
     collected = run_json(delegate, env, [
         "--root", str(state), "collect", restarted_id, "--watch", COLLECT_WATCH, "--json",
     ], timeout=COLLECT_TIMEOUT_SECONDS, receipt=receipts / "collect-restarted.json",
-                           phase="restart-collection")
+                           phase="restart-collection", capture_root=capture_root)
     if collected.get("outcome", {}).get("verdict") != "committed":
         raise RuntimeError("private supervisor restart did not complete its task")
     if run_receipt is not None:
@@ -1930,13 +2017,14 @@ def remove_private_acceptance_root(root_token: OwnedDirectory,
 
 
 def default_stop_live_lease(client, config, env, state, response, waiter_directory,
-                            lease_nonce):
+                            lease_nonce, *, capture_root):
     """Prove one fixture provider is live before exercising its stop path."""
     task_id = response["task_id"]
     root_id = response["root_id"]
     label = "delegate:" + root_id + ":" + task_id
     wait_for_pueue_state(
         client, config, env, label, "Running", phase="default-stop-observation",
+        capture_root=capture_root,
     )
     deadline = time.monotonic() + 30
     while True:
@@ -2064,7 +2152,7 @@ def require_empty_fixture_waiters(waiter_directory):
 def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
                                 waiter_directory, config, env, response_directory,
                                 provider_fixture, lease_nonce, run_receipt,
-                                attempted_task_ids):
+                                attempted_task_ids, *, capture_root):
     """Exercise default user-stop and sub-second budget termination on live fixtures."""
     waiting_brief = brief.with_name("default-stop-waiting-brief.md")
     waiting_brief.write_text("DELEGATE_PRIVATE_UPGRADE_WAIT\n")
@@ -2103,6 +2191,7 @@ def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
                 "--json",
             ], expected=(0, 1), timeout=45,
             receipt=receipts / receipt_name, phase="default-stop-dispatch",
+            capture_root=capture_root,
         )
         if response.get("task_id") != task_id or response.get("task_record") != "created":
             raise RuntimeError("default-stop dispatch did not create the requested task")
@@ -2110,7 +2199,7 @@ def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
             raise RuntimeError("default-stop dispatch did not admit the requested task")
         observed = observe_created_admission(
             delegate, state, env, response, receipts / receipt_name,
-            phase="default-stop-admission-observation",
+            phase="default-stop-admission-observation", capture_root=capture_root,
         )
         if observed.get("task_id") != task_id or observed.get("admission") != "admitted":
             raise RuntimeError("default-stop admission observation did not confirm the same task")
@@ -2125,7 +2214,7 @@ def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
         closure_evidence = default_stop_closure_evidence(task_closure, task_id, cause)
         status, queue_observation = await_created_task_ended(
             delegate, state, env, response, receipts / status_receipt,
-            phase="default-stop-observation",
+            phase="default-stop-observation", capture_root=capture_root,
         )
         return status, closure_evidence, queue_observation
 
@@ -2138,6 +2227,7 @@ def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
         )
         user_specification, user_cohort, user_lease = default_stop_live_lease(
             client, config, env, state, user_dispatch, waiter_directory, lease_nonce,
+            capture_root=capture_root,
         )
         run_receipt.update_counts(running_task_count=1, live_lease_count=1)
         with user_cohort:
@@ -2145,7 +2235,7 @@ def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
             cancel = run_json(
                 delegate, env, ["--root", str(state), "cancel", user_task_id, "--json"],
                 receipt=receipts / "cancel-default-stop-user.json",
-                phase="default-stop-user-request",
+                phase="default-stop-user-request", capture_root=capture_root,
             )
             cancel_finished = time.time_ns()
             if cancel.get("task_id") != user_task_id or cancel.get("root_id") != user_dispatch.get("root_id"):
@@ -2194,6 +2284,7 @@ def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
         )
         budget_specification, budget_cohort, budget_lease = default_stop_live_lease(
             client, config, env, state, budget_dispatch, waiter_directory, lease_nonce,
+            capture_root=capture_root,
         )
         run_receipt.update_counts(running_task_count=1, live_lease_count=1)
         with budget_cohort:
@@ -2226,6 +2317,7 @@ def run_default_stop_acceptance(delegate, client, state, workspace, brief, gate,
         release_gate = None
         shutdown_private_supervisor(
             client, config, env, state=state, task_ids=tuple(attempted_task_ids),
+            capture_root=capture_root,
         )
         if run_receipt is not None:
             run_receipt.update_counts(
@@ -2393,6 +2485,7 @@ def main():
                 old_install / "delegate", old_libexec / "pueue", state, workspace,
                 brief, gate, waiter_directory, private_config, env, response_directory,
                 provider_bin / "pi", lease_nonce, run_receipt, attempted_task_ids,
+                capture_root=base_token,
             )
             wrapper_calls = (
                 wrapper_call_records(base / "old-client-starts-calls", "client", "old")
@@ -2430,7 +2523,8 @@ def main():
             "--brief", str(brief), "--cwd", str(workspace),
             "--id", task_id, "--permission", "read-only", "--budget", TASK_BUDGET,
             "--json",
-        ], receipt=response_directory / "dispatch-initial.json", phase="ordinary-dispatch")
+        ], receipt=response_directory / "dispatch-initial.json", phase="ordinary-dispatch",
+                           capture_root=base_token)
         if dispatch.get("task_id") != task_id or (
             "task_record" in dispatch and dispatch.get("task_record") != "created"
         ):
@@ -2443,14 +2537,15 @@ def main():
 
         first_status = run_json(old_install / "delegate", env, [
             "--root", str(state), "status", task_id, "--json",
-        ], receipt=response_directory / "status-initial.json", phase="ordinary-observation")
+        ], receipt=response_directory / "status-initial.json", phase="ordinary-observation",
+                           capture_root=base_token)
         if first_status.get("task_id") != task_id:
             raise RuntimeError("status did not observe the dispatched task")
 
         collected = run_json(old_install / "delegate", env, [
             "--root", str(state), "collect", task_id, "--watch", COLLECT_WATCH, "--json",
         ], timeout=COLLECT_TIMEOUT_SECONDS, receipt=response_directory / "collect-initial.json",
-                           phase="ordinary-collection")
+                           phase="ordinary-collection", capture_root=base_token)
         if collected.get("outcome", {}).get("verdict") != "committed":
             raise RuntimeError("delegate did not publish the successful fixture result")
         run_receipt.stage("initial-private-task-completed")
@@ -2505,6 +2600,7 @@ def main():
             supervisor_cleanups,
             run_receipt,
             managed_state_roots,
+            capture_root=base_token,
         )
 
         inspection_group = "delegation-inspection-" + dispatch["root_id"]
@@ -2519,7 +2615,7 @@ def main():
         else:
             initial_models = run_json(old_install / "delegate", env, models_args,
                                       receipt=response_directory / "models-initial.json",
-                                      phase="inspection-worker")
+                                      phase="inspection-worker", capture_root=base_token)
             if initial_models.get("status") != "available" or [
                 model.get("id") for model in initial_models.get("models", [])
             ] != ["openai/gpt-4.1"]:
@@ -2528,7 +2624,7 @@ def main():
             release_gate = LockedReleaseGate.acquire(gate)
             default_group = pueue_snapshot(
                 old_libexec / "pueue", private_config, env,
-                phase="supervisor-observation").get("groups", {}).get("default", {})
+                phase="supervisor-observation", capture_root=base_token).get("groups", {}).get("default", {})
             if default_group.get("parallel_tasks") != 0:
                 raise RuntimeError("private ordinary supervisor did not enable unlimited parallelism")
             acceptance_evidence = {}
@@ -2540,6 +2636,7 @@ def main():
                 lease_nonce=lease_nonce,
                 client_call_log=base / "old-client-starts-calls",
                 attempted_task_ids=attempted_task_ids,
+                capture_root=base_token,
                 run_receipt=run_receipt,
             )
             # The upgrade probe has already removed every old-layout token;
@@ -2547,7 +2644,7 @@ def main():
             old_layout_owned = ()
             shutdown_private_supervisor(
                 initial_pair_directory / "pueue", private_config, env,
-                state=state, task_ids=tuple(attempted_task_ids))
+                state=state, task_ids=tuple(attempted_task_ids), capture_root=base_token)
             wrapper_calls = (
                 wrapper_call_records(base / "old-client-starts-calls", "client", "old")
                 + wrapper_call_records(base / "old-daemon-starts-calls", "daemon", "old")
@@ -2594,8 +2691,9 @@ def main():
         # parallelism, pausing is not undone by the next dispatch.
         old_pueue = old_libexec / "pueue"
         pueue_command(old_pueue, private_config, env, ["pause", "--group", "default"],
-                      phase="supervisor-control")
-        paused_snapshot = pueue_snapshot(old_pueue, private_config, env, phase="supervisor-observation")
+                      phase="supervisor-control", capture_root=base_token)
+        paused_snapshot = pueue_snapshot(old_pueue, private_config, env,
+                                         phase="supervisor-observation", capture_root=base_token)
         if paused_snapshot.get("groups", {}).get("default", {}).get("status") != "Paused":
             raise RuntimeError("private default group did not pause for the migration fixture")
 
@@ -2606,12 +2704,14 @@ def main():
             "--brief", str(brief), "--cwd", str(workspace),
             "--id", queued_task_id, "--permission", "read-only", "--budget", TASK_BUDGET,
             "--json",
-        ], receipt=response_directory / "dispatch-queued.json", phase="ordinary-dispatch")
+        ], receipt=response_directory / "dispatch-queued.json", phase="ordinary-dispatch",
+                           capture_root=base_token)
         if queued_dispatch.get("task_id") != queued_task_id or queued_dispatch.get("admission") != "admitted":
             raise RuntimeError("legacy CLI did not admit the task that should remain queued")
         queued_label = "delegate:" + dispatch["root_id"] + ":" + queued_task_id
         queued_row = task_row_by_label(
-            pueue_snapshot(old_pueue, private_config, env, phase="supervisor-observation"), queued_label)
+            pueue_snapshot(old_pueue, private_config, env, phase="supervisor-observation",
+                           capture_root=base_token), queued_label)
         if queued_row is None or pueue_state(queued_row) != "Queued":
             raise RuntimeError("legacy task did not remain queued in the paused default group")
         old_queued_command = queued_row.get("original_command", "")
@@ -2626,7 +2726,7 @@ def main():
             row.get("label")
             for row in pueue_snapshot(
                 old_libexec / "pueue", private_config, env,
-                phase="inspection-observation").get("tasks", {}).values()
+                phase="inspection-observation", capture_root=base_token).get("tasks", {}).values()
             if row.get("group") == inspection_group and (row.get("label") or "").startswith(inspection_prefix)
         }
 
@@ -2641,10 +2741,10 @@ def main():
         pueue_command(old_libexec / "pueue", private_config, env, [
             "add", "--escape", "--group", inspection_group, "--label",
             "inspection-upgrade-blocker", "--print-task-id", "--", str(inspection_blocker),
-        ], phase="inspection-worker")
+        ], phase="inspection-worker", capture_root=base_token)
         wait_for_pueue_state(
             old_libexec / "pueue", private_config, env, "inspection-upgrade-blocker", "Running",
-            phase="inspection-observation",
+            phase="inspection-observation", capture_root=base_token,
         )
         inspection_process = subprocess.Popen(
             [str(old_install / "delegate"), *models_args],
@@ -2654,7 +2754,7 @@ def main():
         inspection_row = wait_for_queued_label_prefix(
             old_libexec / "pueue", private_config, env, inspection_group,
             inspection_prefix, previous_inspection_labels, inspection_process,
-            phase="inspection-observation",
+            phase="inspection-observation", capture_root=base_token,
         )
         inspection_label = inspection_row["label"]
         inspection_task_id = inspection_label[len(inspection_prefix):]
@@ -2672,12 +2772,12 @@ def main():
         repaired_status = run_json(upgraded_install / "delegate", env, [
             "--root", str(state), "status", queued_task_id, "--json",
         ], receipt=response_directory / "status-queued-after-upgrade.json",
-                           phase="managed-runner-observation")
+                           phase="managed-runner-observation", capture_root=base_token)
         if repaired_status.get("task_id") != queued_task_id:
             raise RuntimeError("upgraded status did not observe the queued legacy task")
         migrated_row = task_row_by_label(
             pueue_snapshot(upgraded_libexec / "pueue", private_config, env,
-                           phase="supervisor-observation"), queued_label)
+                           phase="supervisor-observation", capture_root=base_token), queued_label)
         if migrated_row is None or pueue_state(migrated_row) != "Queued":
             raise RuntimeError("upgraded CLI lost the legacy queued task during status recovery")
         migrated_command = migrated_row.get("original_command", "")
@@ -2701,7 +2801,7 @@ def main():
 
         migrated_inspection = task_row_by_label(
             pueue_snapshot(upgraded_libexec / "pueue", private_config, env,
-                           phase="inspection-observation"), inspection_label,
+                           phase="inspection-observation", capture_root=base_token), inspection_label,
         )
         if migrated_inspection is None or pueue_state(migrated_inspection) != "Queued":
             raise RuntimeError("upgraded status lost the queued inspection worker")
@@ -2739,7 +2839,7 @@ def main():
         upgraded_pueue = upgraded_libexec / "pueue"
         migrated_row = task_row_by_label(
             pueue_snapshot(upgraded_pueue, private_config, env,
-                           phase="supervisor-observation"), queued_label)
+                           phase="supervisor-observation", capture_root=base_token), queued_label)
         if migrated_row is None or pueue_state(migrated_row) != "Queued":
             raise RuntimeError("upgraded CLI lost the legacy queued task")
         migrated_command = migrated_row.get("original_command", "")
@@ -2749,17 +2849,18 @@ def main():
             raise RuntimeError("migrated queue command still references the removed install")
 
         pueue_command(upgraded_pueue, private_config, env, ["start", "--group", "default"],
-                      phase="supervisor-control")
+                      phase="supervisor-control", capture_root=base_token)
         gate.touch(mode=0o600)
         queued_collected = run_json(upgraded_install / "delegate", env, [
             "--root", str(state), "collect", queued_task_id, "--watch", COLLECT_WATCH, "--json",
         ], timeout=COLLECT_TIMEOUT_SECONDS, receipt=response_directory / "collect-queued.json",
-                           phase="managed-runner-collection")
+                           phase="managed-runner-collection", capture_root=base_token)
         if queued_collected.get("outcome", {}).get("verdict") != "committed":
             raise RuntimeError("upgraded CLI did not run and collect the migrated legacy queued task")
         upgraded_status = run_json(upgraded_install / "delegate", env, [
             "--root", str(state), "status", task_id, "--json",
-        ], receipt=response_directory / "status-upgraded.json", phase="ordinary-observation")
+        ], receipt=response_directory / "status-upgraded.json", phase="ordinary-observation",
+                           capture_root=base_token)
         if upgraded_status.get("task_id") != task_id:
             raise RuntimeError("upgraded CLI could not recover the earlier task supervisor binding")
         if inspection_process is None:
@@ -2794,7 +2895,7 @@ def main():
             raise RuntimeError("old package paths remained after simulated package cleanup")
         state_root_models = run_json(upgraded_install / "delegate", env, models_args,
                                      receipt=response_directory / "models-upgraded.json",
-                                     phase="inspection-worker")
+                                     phase="inspection-worker", capture_root=base_token)
         if state_root_models.get("status") != "available" or [
             model.get("id") for model in state_root_models.get("models", [])
         ] != ["openai/gpt-4.1"]:
@@ -2808,11 +2909,12 @@ def main():
             "--brief", str(brief), "--cwd", str(workspace),
             "--id", upgraded_task_id, "--permission", "read-only", "--budget", TASK_BUDGET,
             "--json",
-        ], receipt=response_directory / "dispatch-upgraded.json", phase="ordinary-dispatch")
+        ], receipt=response_directory / "dispatch-upgraded.json", phase="ordinary-dispatch",
+                           capture_root=base_token)
         if upgraded_dispatch.get("task_id") != upgraded_task_id or upgraded_dispatch.get("admission") != "admitted":
             raise RuntimeError("upgraded CLI did not dispatch through the existing private supervisor")
         upgraded_snapshot = pueue_snapshot(upgraded_libexec / "pueue", private_config, env,
-                                            phase="supervisor-observation")
+                                            phase="supervisor-observation", capture_root=base_token)
         default_group = upgraded_snapshot.get("groups", {}).get("default", {})
         if default_group.get("parallel_tasks") != 0:
             raise RuntimeError("private ordinary supervisor did not enable unlimited parallelism")
@@ -2822,7 +2924,7 @@ def main():
         upgraded_collected = run_json(upgraded_install / "delegate", env, [
             "--root", str(state), "collect", upgraded_task_id, "--watch", COLLECT_WATCH, "--json",
         ], timeout=COLLECT_TIMEOUT_SECONDS, receipt=response_directory / "collect-upgraded.json",
-                           phase="ordinary-collection")
+                           phase="ordinary-collection", capture_root=base_token)
         if upgraded_collected.get("outcome", {}).get("verdict") != "committed":
             raise RuntimeError("upgraded CLI did not collect the successful second task")
         if upgraded_daemon_marker.exists():
@@ -2838,7 +2940,7 @@ def main():
         # old daemon is actually unavailable.
         shutdown_private_supervisor(
             upgraded_libexec / "pueue", private_config, env,
-            state=state, task_ids=tuple(attempted_task_ids))
+            state=state, task_ids=tuple(attempted_task_ids), capture_root=base_token)
         restarted_task_id = uuid.uuid4().hex
         attempted_task_ids.append(restarted_task_id)
         restarted_dispatch = run_json(upgraded_install / "delegate", env, [
@@ -2846,13 +2948,14 @@ def main():
             "--brief", str(brief), "--cwd", str(workspace),
             "--id", restarted_task_id, "--permission", "read-only", "--budget", TASK_BUDGET,
             "--json",
-        ], receipt=response_directory / "dispatch-restarted.json", phase="restart-dispatch")
+        ], receipt=response_directory / "dispatch-restarted.json", phase="restart-dispatch",
+                           capture_root=base_token)
         if restarted_dispatch.get("task_id") != restarted_task_id or restarted_dispatch.get("admission") != "admitted":
             raise RuntimeError("upgraded CLI did not restart the private supervisor after it stopped")
         restarted_collected = run_json(upgraded_install / "delegate", env, [
             "--root", str(state), "collect", restarted_task_id, "--watch", COLLECT_WATCH, "--json",
         ], timeout=COLLECT_TIMEOUT_SECONDS, receipt=response_directory / "collect-restarted.json",
-                           phase="restart-collection")
+                           phase="restart-collection", capture_root=base_token)
         if restarted_collected.get("outcome", {}).get("verdict") != "committed":
             raise RuntimeError("upgraded CLI did not collect the task after restarting its supervisor")
         if not upgraded_daemon_marker.is_file() or upgraded_daemon_marker.read_text().splitlines() != ["started"]:
@@ -2863,7 +2966,7 @@ def main():
 
         shutdown_private_supervisor(
             upgraded_libexec / "pueue", private_config, env,
-            state=state, task_ids=tuple(attempted_task_ids))
+            state=state, task_ids=tuple(attempted_task_ids), capture_root=base_token)
         wrapper_calls = (
             wrapper_call_records(base / "old-client-starts-calls", "client", "old")
             + wrapper_call_records(base / "old-daemon-starts-calls", "daemon", "old")
@@ -2940,6 +3043,7 @@ def main():
                         pending["client"], pending["config"], pending["env"],
                         state=pending["state"],
                         task_ids=tuple(pending.get("task_ids", ())),
+                        capture_root=base_token,
                     )
                     supervisor_cleanups.remove(pending)
                 except BaseException as cleanup_error:
@@ -2958,7 +3062,7 @@ def main():
                 try:
                     shutdown_private_supervisor(
                         client, private_config, env, state=state,
-                        task_ids=tuple(attempted_task_ids))
+                        task_ids=tuple(attempted_task_ids), capture_root=base_token)
                 except BaseException as cleanup_error:
                     cleanup_errors.append(RuntimeError(
                         "primary private supervisor shutdown remained unverified: "

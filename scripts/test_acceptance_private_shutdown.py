@@ -124,6 +124,18 @@ class ManagedLifetimeFixture:
 
 
 class PrivateShutdownTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="delegate-shutdown-capture-")
+        self.addCleanup(temporary.cleanup)
+        self.capture_root_parent = Path(temporary.name)
+        self.capture_owner = private_cli.DirectoryOwner()
+        self.capture_root = self.capture_owner.create(
+            "private control capture root",
+            self.capture_root_parent / "capture-root",
+            self.capture_root_parent,
+        )
+        self.addCleanup(self.capture_owner.rollback)
+
     def test_shutdown_evidence_accepts_owned_compact_native_socket(self):
         with tempfile.TemporaryDirectory(prefix="dls-", dir="/tmp") as directory:
             parent = Path(directory).resolve()
@@ -192,7 +204,8 @@ class PrivateShutdownTests(unittest.TestCase):
                 patch.object(private_cli, "authorize_managed_lifetime_closure"), \
                 patch.object(private_cli.time, "sleep"):
             private_cli.shutdown_private_supervisor(
-                "client", "config", {}, timeout=5, state=Path("/fixture/state"))
+                "client", "config", {}, timeout=5, state=Path("/fixture/state"),
+                capture_root=self.capture_root)
         self.assertEqual(gone.call_count, 4)
         self.assertEqual(closed.call_count, 3)
         command.assert_called_once()
@@ -207,7 +220,8 @@ class PrivateShutdownTests(unittest.TestCase):
                 patch.object(private_cli.time, "monotonic", side_effect=[0, 0, 2]):
             with self.assertRaises(TimeoutError):
                 private_cli.shutdown_private_supervisor(
-                    "client", "config", {}, timeout=1, state=Path("/fixture/state"))
+                    "client", "config", {}, timeout=1, state=Path("/fixture/state"),
+                    capture_root=self.capture_root)
         command.assert_called_once()
 
     def test_observed_pid_reuse_cannot_prove_shutdown(self):
@@ -219,13 +233,16 @@ class PrivateShutdownTests(unittest.TestCase):
                 patch.object(private_cli.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "PID identity changed"):
                 private_cli.shutdown_private_supervisor(
-                    "client", "config", {}, state=Path("/fixture/state"))
+                    "client", "config", {}, state=Path("/fixture/state"),
+                    capture_root=self.capture_root)
 
     def test_real_child_is_not_gone_until_reaped(self):
         child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read(1)"], stdin=subprocess.PIPE)
         deadline = private_cli.time.monotonic() + 10
         try:
-            self.assertFalse(private_cli.private_daemon_process_gone(child.pid, deadline))
+            self.assertFalse(private_cli.private_daemon_process_gone(
+                child.pid, deadline, capture_root=self.capture_root,
+            ))
             child.stdin.close()
             while True:
                 status = subprocess.run(["/bin/ps", "-p", str(child.pid), "-o", "stat="],
@@ -234,24 +251,34 @@ class PrivateShutdownTests(unittest.TestCase):
                 if status.returncode == 0 and status.stdout.strip().startswith("Z"):
                     break
                 private_cli.time.sleep(0.01)
-            self.assertFalse(private_cli.private_daemon_process_gone(child.pid, deadline))
+            self.assertFalse(private_cli.private_daemon_process_gone(
+                child.pid, deadline, capture_root=self.capture_root,
+            ))
         finally:
             if not child.stdin.closed:
                 child.stdin.close()
             child.wait(timeout=10)
-        self.assertTrue(private_cli.private_daemon_process_gone(child.pid, deadline))
+        self.assertTrue(private_cli.private_daemon_process_gone(
+            child.pid, deadline, capture_root=self.capture_root,
+        ))
 
     def test_unobservable_process_is_not_exit_proof(self):
         with patch.object(private_cli.os, "getpgid", side_effect=PermissionError("unobservable")):
             with self.assertRaises(PermissionError):
-                private_cli.private_daemon_process_gone(123, private_cli.time.monotonic() + 5)
+                private_cli.private_daemon_process_gone(
+                    123, private_cli.time.monotonic() + 5,
+                    capture_root=self.capture_root,
+                )
 
     def test_failed_presence_probe_is_not_exit_proof(self):
         failed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"ps: malloc failed")
         with patch.object(private_cli.os, "getpgid", side_effect=ProcessLookupError()), \
                 patch.object(private_cli, "run_captured_command", return_value=failed):
             with self.assertRaisesRegex(RuntimeError, "PID presence is uncertain"):
-                private_cli.private_daemon_process_gone(123, private_cli.time.monotonic() + 5)
+                private_cli.private_daemon_process_gone(
+                    123, private_cli.time.monotonic() + 5,
+                    capture_root=self.capture_root,
+                )
 
     def test_transient_socket_timeout_does_not_prove_closure(self):
         with tempfile.TemporaryDirectory(prefix="dls-", dir="/tmp") as directory:
@@ -269,7 +296,8 @@ class PrivateShutdownTests(unittest.TestCase):
                         patch.object(private_cli.time, "sleep"):
                     connection.return_value.__enter__.return_value.connect.side_effect = [TimeoutError(), ConnectionRefusedError(private_cli.errno.ECONNREFUSED, "closed")]
                     private_cli.shutdown_private_supervisor(
-                        "client", "config", {}, state=Path("/fixture/state"))
+                        "client", "config", {}, state=Path("/fixture/state"),
+                        capture_root=self.capture_root)
                 command.assert_called_once()
 
     def test_real_endpoint_must_stop_listening(self):
@@ -296,6 +324,11 @@ class PrivateLifetimeAuthorizationTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.case_number = 0
+        self.capture_owner = private_cli.DirectoryOwner()
+        self.capture_root = self.capture_owner.create(
+            "private control capture root", self.root / "capture-root", self.root,
+        )
+        self.addCleanup(self.capture_owner.rollback)
 
     def fixture(self):
         self.case_number += 1
@@ -308,7 +341,8 @@ class PrivateLifetimeAuthorizationTests(unittest.TestCase):
                 patch.object(private_cli, "private_shutdown_evidence") as evidence:
             with self.assertRaises(provider_common.AcceptanceFailure):
                 private_cli.shutdown_private_supervisor(
-                    "client", "config", {}, state=state)
+                    "client", "config", {}, state=state,
+                    capture_root=self.capture_root)
         command.assert_not_called()
         evidence.assert_not_called()
 

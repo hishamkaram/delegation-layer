@@ -1,6 +1,7 @@
 """Byte-preserving receipts for finite private-CLI capture fixtures."""
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import acceptance_private_cli as private_cli
+from acceptance_supervisor_common import DirectoryOwner
 
 
 class PrivateCaptureTests(unittest.TestCase):
@@ -19,6 +21,11 @@ class PrivateCaptureTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-capture-test-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        self.capture_owner = DirectoryOwner()
+        self.capture_root = self.capture_owner.create(
+            "private capture root", self.root / "capture-root", self.root,
+        )
+        self.addCleanup(self.capture_owner.rollback)
         self.receipt = self.root / "invocation.json"
         self.environment = os.environ.copy()
 
@@ -51,13 +58,19 @@ class PrivateCaptureTests(unittest.TestCase):
         stdout = b'{"value":"\xff"}\n\x00'
         stderr = b"diagnostic\x80\r\n"
         command = [sys.executable, *self.child_args(stdout, stderr, code=7)]
-        result = private_cli.run_captured_command(command, self.environment, timeout=3)
+        result = private_cli.run_captured_command(
+            command, self.environment, timeout=3, capture_root=self.capture_root,
+        )
         self.assertEqual(result.args, command)
         self.assertEqual(result.returncode, 7)
         self.assertIsInstance(result.stdout, bytes)
         self.assertIsInstance(result.stderr, bytes)
         self.assertEqual(result.stdout, stdout)
         self.assertEqual(result.stderr, stderr)
+        self.assertEqual(
+            len(tuple(self.capture_root.directory.iterdir())), 2,
+            "capture streams remain owned until the acceptance root is cleaned up",
+        )
 
     def test_invalid_utf8_in_either_stream_saves_both_raw_streams(self):
         valid_stdout = '{"message":"café"}\n'.encode("utf-8")
@@ -72,7 +85,7 @@ class PrivateCaptureTests(unittest.TestCase):
                 with self.assertRaises(UnicodeDecodeError) as raised:
                     private_cli.run_json(
                         sys.executable, self.environment, args, timeout=3,
-                        receipt=self.receipt,
+                        receipt=self.receipt, capture_root=self.capture_root,
                     )
                 self.assertEqual(
                     raised.exception.object, stderr if name == "stderr" else stdout,
@@ -112,7 +125,7 @@ class PrivateCaptureTests(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired) as raised:
                 private_cli.run_json(
                     sys.executable, self.environment, args, timeout=timeout,
-                    receipt=self.receipt,
+                    receipt=self.receipt, capture_root=self.capture_root,
                 )
         error = raised.exception
         self.assertEqual(error.cmd, [sys.executable, *args])
@@ -137,6 +150,7 @@ class PrivateCaptureTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError) as raised:
             private_cli.run_json(
                 missing, self.environment, args, timeout=3, receipt=self.receipt,
+                capture_root=self.capture_root,
             )
         self.assertEqual(raised.exception.filename, str(missing))
         self.assert_error_receipt(args, raised.exception, b"", b"", None)
@@ -151,14 +165,14 @@ class PrivateCaptureTests(unittest.TestCase):
                 if code in expected:
                     result = private_cli.run_json(
                         sys.executable, self.environment, args, expected=expected,
-                        timeout=3, receipt=self.receipt,
+                        timeout=3, receipt=self.receipt, capture_root=self.capture_root,
                     )
                     self.assertEqual(result, document)
                 else:
                     with self.assertRaisesRegex(RuntimeError, "exit=7"):
                         private_cli.run_json(
                             sys.executable, self.environment, args, expected=expected,
-                            timeout=3, receipt=self.receipt,
+                            timeout=3, receipt=self.receipt, capture_root=self.capture_root,
                         )
                 expected_receipt = {
                     "arguments": args, "exit_code": code,
@@ -174,6 +188,173 @@ class PrivateCaptureTests(unittest.TestCase):
                         "stderr_tail": private_cli.output_tail(stderr),
                     })
                 self.assertEqual(self.read_receipt(), expected_receipt)
+
+    def test_post_start_error_reaps_direct_control_child_and_retains_capture(self):
+        class FailingPollProcess:
+            args = ["private-control"]
+
+            def __init__(self):
+                self.poll_calls = 0
+                self.killed = False
+                self.returncode = None
+
+            def poll(self):
+                self.poll_calls += 1
+                if self.poll_calls == 1:
+                    raise OSError("wait failed")
+                return self.returncode
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+
+        process = FailingPollProcess()
+        with patch.object(private_cli.subprocess, "Popen", return_value=process):
+            with self.assertRaisesRegex(OSError, "wait failed"):
+                private_cli.run_captured_command(
+                    ["private-control"], self.environment, timeout=3,
+                    capture_root=self.capture_root,
+                )
+        self.assertTrue(process.killed)
+        self.assertIsNotNone(process.returncode)
+        self.assertEqual(len(tuple(self.capture_root.directory.iterdir())), 2)
+
+    def test_writer_close_error_after_spawn_reaps_direct_control_child(self):
+        class CloseFailingWriter:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc_value, _traceback):
+                raise OSError("capture writer close failed")
+
+        class ReapableProcess:
+            args = ["private-control"]
+
+            def __init__(self):
+                self.killed = False
+                self.returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+
+        process = ReapableProcess()
+        with patch.object(
+                private_cli, "_open_capture_writer",
+                side_effect=[CloseFailingWriter(), CloseFailingWriter()],
+        ), patch.object(private_cli.subprocess, "Popen", return_value=process):
+            with self.assertRaisesRegex(OSError, "capture writer close failed"):
+                private_cli.run_captured_command(
+                    ["private-control"], self.environment, timeout=3,
+                    capture_root=self.capture_root,
+                )
+        self.assertTrue(process.killed)
+        self.assertEqual(process.returncode, -9)
+
+    @staticmethod
+    def open_fd_count():
+        for path in (Path("/dev/fd"), Path("/proc/self/fd")):
+            if path.is_dir():
+                return len(tuple(path.iterdir()))
+        raise unittest.SkipTest("the platform does not expose an fd directory")
+
+    def test_capture_writer_constructor_failure_does_not_leak_descriptor(self):
+        before = self.open_fd_count()
+        with patch.object(io, "open", side_effect=OSError("capture constructor failed")):
+            with self.assertRaisesRegex(OSError, "capture constructor failed"):
+                private_cli._open_capture_writer(self.capture_root, "constructor-failure.stdout")
+        self.assertEqual(self.open_fd_count(), before)
+
+    def test_timeout_primary_survives_capture_read_failure_with_receipt_cause(self):
+        class TimedOutProcess:
+            def __init__(self, args):
+                self.args = args
+                self.killed = False
+                self.returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+
+        args = ["status", "--json"]
+        process = TimedOutProcess([sys.executable, *args])
+        with patch.object(private_cli.subprocess, "Popen", return_value=process), \
+                patch.object(
+                    private_cli, "_read_capture",
+                    side_effect=OSError("capture read failed"),
+                ):
+            with self.assertRaises(subprocess.TimeoutExpired) as raised:
+                private_cli.run_json(
+                    sys.executable, self.environment, args, timeout=0,
+                    receipt=self.receipt, capture_root=self.capture_root,
+                )
+
+        error = raised.exception
+        self.assertTrue(process.killed)
+        self.assertEqual(process.returncode, -9)
+        self.assertIsInstance(error.__cause__, OSError)
+        self.assertEqual(str(error.__cause__), "capture read failed")
+        evidence = self.read_receipt()
+        self.assertEqual(evidence["invocation_error"], str(error))
+        self.assertEqual(evidence["stdout_bytes"], 0)
+        self.assertEqual(evidence["stderr_bytes"], 0)
+        capture_failure = evidence["capture_failure"]
+        self.assertEqual(capture_failure["cause"], {
+            "type": "OSError", "message": "capture read failed",
+        })
+        self.assertEqual(
+            set(capture_failure["retained_paths"]),
+            {str(path) for path in self.capture_root.directory.iterdir()},
+        )
+
+    def test_unreaped_cleanup_reports_primary_error_and_retained_capture(self):
+        class UnreapedProcess:
+            args = ["private-control"]
+            returncode = None
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                pass
+
+        process = UnreapedProcess()
+        with patch.object(private_cli.subprocess, "Popen", return_value=process):
+            with self.assertRaisesRegex(
+                    RuntimeError, "cleanup failed.*retained capture files",
+            ) as raised:
+                private_cli.run_captured_command(
+                    ["private-control"], self.environment, timeout=0,
+                    capture_root=self.capture_root,
+                )
+        self.assertIsInstance(raised.exception.__cause__, subprocess.TimeoutExpired)
+        message = str(raised.exception)
+        for path in self.capture_root.directory.iterdir():
+            self.assertIn(str(path), message)
+        self.assertEqual(len(tuple(self.capture_root.directory.iterdir())), 2)
+
+    def test_replaced_capture_root_is_rejected_before_control_spawn(self):
+        original = self.capture_root.directory
+        moved = self.root / "moved-capture-root"
+        original.rename(moved)
+        original.mkdir(mode=0o700)
+        try:
+            with patch.object(private_cli.subprocess, "Popen") as spawn:
+                with self.assertRaisesRegex(RuntimeError, "owned directory was replaced"):
+                    private_cli.run_captured_command(
+                        ["private-control"], self.environment, timeout=3,
+                        capture_root=self.capture_root,
+                    )
+            spawn.assert_not_called()
+        finally:
+            original.rmdir()
+            moved.rename(original)
 
 
 if __name__ == "__main__":

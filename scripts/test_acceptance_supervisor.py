@@ -3,6 +3,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -12,6 +13,85 @@ from unittest.mock import patch
 import acceptance_supervisor_common as supervisor_common
 import acceptance_supervisor_hermetic as hermetic
 from acceptance_supervisor_hermetic import Case, HermeticSuite
+
+
+class OwnedDirectoryReadTests(unittest.TestCase):
+    def test_live_read_rejects_replaced_parent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary) / "parent"
+            parent.mkdir()
+            owner = supervisor_common.DirectoryOwner()
+            try:
+                token = owner.create("capture root", parent / "capture", parent)
+                token.assert_live()
+                original = Path(temporary) / "original-parent"
+                parent.rename(original)
+                try:
+                    parent.mkdir()
+                    with self.assertRaisesRegex(RuntimeError, "parent was replaced"):
+                        token.assert_live()
+                finally:
+                    if parent.exists():
+                        parent.rename(Path(temporary) / "replacement-parent")
+                    original.rename(parent)
+            finally:
+                owner.release()
+
+    def test_live_read_rejects_replaced_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            owner = supervisor_common.DirectoryOwner()
+            try:
+                token = owner.create("capture root", parent / "capture", parent)
+                token.assert_live()
+                original = parent / "original-capture"
+                token.directory.rename(original)
+                try:
+                    token.directory.mkdir()
+                    with self.assertRaisesRegex(RuntimeError, "directory was replaced"):
+                        token.assert_live()
+                finally:
+                    if token.directory.exists():
+                        token.directory.rename(parent / "replacement-capture")
+                    original.rename(token.directory)
+            finally:
+                owner.release()
+
+
+class WaitUntilTests(unittest.TestCase):
+    def test_default_timeout_preserves_failure_contract(self):
+        with self.assertRaisesRegex(RuntimeError, "observation expired: fixture"):
+            supervisor_common.wait_until(lambda: False, timeout=0, description="fixture")
+
+    def test_custom_timeout_raises_the_supplied_exception(self):
+        expired = subprocess.TimeoutExpired(["fixture"], 0)
+        with self.assertRaises(subprocess.TimeoutExpired) as raised:
+            supervisor_common.wait_until(lambda: False, timeout=0, timeout_error=expired)
+        self.assertIs(raised.exception, expired)
+
+    def test_custom_timeout_preserves_predicate_failure(self):
+        failure = OSError("injected observation failure")
+
+        def predicate():
+            raise failure
+
+        with self.assertRaises(OSError) as raised:
+            supervisor_common.wait_until(
+                predicate, timeout=0,
+                timeout_error=subprocess.TimeoutExpired(["fixture"], 0),
+            )
+        self.assertIs(raised.exception, failure)
+
+    def test_custom_timeout_preserves_retry_and_success_value(self):
+        result = {"ready": True}
+        values = iter((False, result))
+        with patch.object(supervisor_common.time, "monotonic", return_value=0), \
+                patch.object(supervisor_common.time, "sleep"):
+            observed = supervisor_common.wait_until(
+                lambda: next(values), timeout=1,
+                timeout_error=subprocess.TimeoutExpired(["fixture"], 1),
+            )
+        self.assertIs(observed, result)
 
 
 class SupervisorDiagnosticsTests(unittest.TestCase):

@@ -213,6 +213,15 @@ class OwnedDirectory:
                 "owned directory authority has no pinned directory: " + str(self.directory))
         return self._directory_fd
 
+    def assert_live(self) -> None:
+        """Require the original directory to retain its owned pathname."""
+        _validate_entry_parent(self)
+        name = _directory_name(self.directory, self.parent)
+        visible = os.stat(name, dir_fd=self.parent_fd, follow_symlinks=False)
+        require(stat.S_ISDIR(visible.st_mode)
+                and (visible.st_dev, visible.st_ino) == self.identity,
+                "owned directory was replaced: " + str(self.directory))
+
     def consume(self) -> None:
         require(not self._consumed,
                 "owned directory authority was already consumed: " + str(self.directory))
@@ -1702,11 +1711,14 @@ class Processes:
         return True
 
 
-def wait_until(predicate, timeout=15, description="condition"):
+def wait_until(predicate, timeout=15, description="condition", *, timeout_error=None):
     deadline = time.monotonic() + timeout
     while True:
         value = predicate()
         if value:
             return value
-        require(time.monotonic() < deadline, "observation expired: " + description)
+        within_deadline = time.monotonic() < deadline
+        if not within_deadline and timeout_error is not None:
+            raise timeout_error
+        require(within_deadline, "observation expired: " + description)
         time.sleep(0.05)
