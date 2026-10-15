@@ -3,6 +3,13 @@
   "diagram_type": "sequence",
   "meta": {
     "title": "Delegation Layer \u2014 One Task Lifecycle",
+    "viewBox": [
+      1680,
+      1080
+    ],
+    "legend": {
+      "mode": "hidden"
+    },
     "column_fit": "spread",
     "quality_profile": "showcase",
     "views": [
@@ -16,7 +23,7 @@
           "store",
           "pueue"
         ],
-        "note": "The request is validated, capability-checked, persisted, and queued before the caller receives the task id."
+        "note": "Managed runtime-only tasks persist a static contract before receipt and enqueue. Other paths retain strict admission inspections."
       },
       {
         "id": "publish",
@@ -25,11 +32,12 @@
           "pueue",
           "guardian",
           "runner",
+          "inspect",
           "provider",
           "predicate",
           "store"
         ],
-        "note": "Delegate stages, receipts, then enqueues the row. The guardian owns lifetime; delegate-run owns execution, capture, and publication."
+        "note": "Inside the guardian scope, fresh capability preflight and strict plan validation must succeed before provider Start."
       },
       {
         "id": "observe",
@@ -45,73 +53,212 @@
       }
     ],
     "output": "diagrams/lead-interface.html",
-    "viewBox": [
-      1680,
-      1080
-    ]
+    "repository": {
+      "url": "git@github.com:hishamkaram/delegation-layer.git",
+      "revision": "94779b5a60aa2c95ed5f98bda85ef1308b83b8e6",
+      "link_mode": "local-only"
+    }
   },
   "participants": [
     {
       "id": "caller",
       "type": "external",
-      "label": "Caller"
+      "label": "Caller",
+      "sources": [
+        {
+          "path": "cmd/delegate/main.go",
+          "line": 15,
+          "end_line": 20
+        }
+      ]
     },
     {
       "id": "delegate",
       "type": "backend",
-      "label": "delegate"
+      "label": "delegate",
+      "sources": [
+        {
+          "path": "cmd/delegate/main.go",
+          "line": 15,
+          "end_line": 20
+        },
+        {
+          "path": "internal/app/runtime.go",
+          "line": 339,
+          "end_line": 419
+        },
+        {
+          "path": "internal/app/runtime.go",
+          "line": 552,
+          "end_line": 585
+        }
+      ]
     },
     {
       "id": "store",
       "type": "database",
-      "label": "Task store"
+      "label": "Task store",
+      "sources": [
+        {
+          "path": "internal/taskdir/taskdir.go",
+          "line": 206,
+          "end_line": 238
+        },
+        {
+          "path": "internal/taskdir/supervisor_records.go",
+          "line": 96,
+          "end_line": 111
+        },
+        {
+          "path": "internal/taskdir/publication.go",
+          "line": 193,
+          "end_line": 219
+        }
+      ]
     },
     {
       "id": "inspect",
       "type": "security",
-      "label": "Runtime probe"
+      "label": "Inspection",
+      "sources": [
+        {
+          "path": "internal/app/inspection_profile.go",
+          "line": 455,
+          "end_line": 491
+        },
+        {
+          "path": "internal/inspection/inspect.go",
+          "line": 14,
+          "end_line": 53
+        },
+        {
+          "path": "internal/inspection/runtime_probe.go",
+          "line": 39,
+          "end_line": 104
+        }
+      ]
     },
     {
       "id": "pueue",
       "type": "messagebus",
-      "label": "pueued"
+      "label": "pueued",
+      "sources": [
+        {
+          "path": "internal/app/runtime.go",
+          "line": 823,
+          "end_line": 859
+        },
+        {
+          "path": "internal/pueue/private.go",
+          "line": 965,
+          "end_line": 996
+        },
+        {
+          "path": "internal/pueue/staged.go",
+          "line": 207,
+          "end_line": 240
+        }
+      ]
     },
     {
       "id": "guardian",
       "type": "security",
-      "label": "Lifetime guardian"
+      "label": "Lifetime guardian",
+      "sources": [
+        {
+          "path": "internal/app/lifetime_guardian.go",
+          "line": 294,
+          "end_line": 340
+        },
+        {
+          "path": "internal/app/lifetime_guardian.go",
+          "line": 646,
+          "end_line": 695
+        },
+        {
+          "path": "internal/app/lifetime_guardian.go",
+          "line": 1227,
+          "end_line": 1273
+        }
+      ]
     },
     {
       "id": "runner",
       "type": "backend",
-      "label": "delegate-run"
+      "label": "delegate-run",
+      "sources": [
+        {
+          "path": "cmd/delegate-run/main.go",
+          "line": 13,
+          "end_line": 18
+        },
+        {
+          "path": "internal/app/runner.go",
+          "line": 505,
+          "end_line": 534
+        },
+        {
+          "path": "internal/execution/run.go",
+          "line": 76,
+          "end_line": 163
+        }
+      ]
     },
     {
       "id": "provider",
       "type": "external",
-      "label": "Provider CLI"
+      "label": "Provider CLI",
+      "sources": [
+        {
+          "path": "internal/app/catalog.go",
+          "line": 20,
+          "end_line": 44
+        },
+        {
+          "path": "internal/execution/run.go",
+          "line": 314,
+          "end_line": 324
+        },
+        {
+          "path": "internal/execution/run.go",
+          "line": 421,
+          "end_line": 437
+        }
+      ]
     },
     {
       "id": "predicate",
       "type": "security",
-      "label": "Predicate"
+      "label": "Predicate",
+      "sources": [
+        {
+          "path": "internal/predicate/contract.go",
+          "line": 31,
+          "end_line": 48
+        },
+        {
+          "path": "internal/taskdir/predicate_publication.go",
+          "line": 133,
+          "end_line": 184
+        }
+      ]
     }
   ],
   "segments": [
     {
-      "from": 150,
-      "to": 330,
-      "label": "Admission and durable enqueue"
+      "from": 140,
+      "to": 376,
+      "label": "Static admission and durable enqueue"
     },
     {
-      "from": 330,
-      "to": 735,
-      "label": "Guardian-owned run and publication"
+      "from": 376,
+      "to": 797,
+      "label": "Guardian-owned preflight, run and publication"
     },
     {
-      "from": 735,
-      "to": 980,
-      "label": "Observation, stop request, and continuation"
+      "from": 797,
+      "to": 1014,
+      "label": "Observation, stop request and continuation"
     }
   ],
   "messages": [
@@ -119,48 +266,64 @@
       "id": "dispatch",
       "from": "caller",
       "to": "delegate",
-      "y": 170,
-      "label": "preflight / dispatch --auto --brief FILE",
-      "variant": "emphasis"
+      "y": 160,
+      "label": "dispatch --provider / --auto \u00b7 brief",
+      "variant": "emphasis",
+      "note": "Validate the request and prepare its static provider candidate before binding the private supervisor."
     },
     {
-      "id": "probe",
+      "id": "bind-supervisor",
+      "from": "delegate",
+      "to": "pueue",
+      "label": "bind or prepare private supervisor",
+      "y": 188
+    },
+    {
+      "id": "strict-admission",
       "from": "delegate",
       "to": "inspect",
-      "y": 198,
-      "label": "run bounded version/help capability probe"
-    },
-    {
-      "id": "probe-facts",
-      "from": "inspect",
-      "to": "delegate",
-      "y": 226,
-      "label": "observed version, flags, executable identity",
-      "note": "Version is descriptive evidence; required behavior flags and executable identity establish compatibility.",
-      "variant": "return"
+      "label": "otherwise: strict admission inspection",
+      "variant": "dashed",
+      "note": "Mixed/native policy projections, CCR preparation selection, custom runners and historical tasks keep their strict admission inspection. The inspection returns non-secret facts for strict finalization before task persistence.",
+      "y": 216
     },
     {
       "id": "persist",
       "from": "delegate",
       "to": "store",
-      "y": 254,
-      "label": "persist brief, request, metadata",
+      "y": 244,
+      "label": "admit contract; persist immutable task",
       "variant": "emphasis",
-      "note": "The immutable request and metadata are durable before supervisor admission."
+      "note": "Managed runtime-only profiles use ProfileCandidate.Admit without version/help workers. Immutable metadata stores Meta.RuntimePreflightSHA256 and empty ProviderVersion. Other paths finalize their strict inspection facts before persistence."
+    },
+    {
+      "id": "stage",
+      "from": "delegate",
+      "to": "pueue",
+      "label": "add exact stashed row",
+      "y": 272
+    },
+    {
+      "id": "receipt",
+      "from": "delegate",
+      "to": "store",
+      "label": "persist exact numeric supervisor receipt",
+      "variant": "emphasis",
+      "y": 300
     },
     {
       "id": "enqueue",
       "from": "delegate",
       "to": "pueue",
-      "y": 282,
-      "label": "stage row \u00b7 persist exact receipt \u00b7 enqueue exact ID",
+      "y": 328,
+      "label": "enqueue that exact numeric row",
       "note": "A managed row cannot launch before Delegate durably owns its exact supervisor identity."
     },
     {
       "id": "accepted",
       "from": "delegate",
       "to": "caller",
-      "y": 310,
+      "y": 356,
       "label": "task id + admission/status fields",
       "variant": "return"
     },
@@ -168,7 +331,7 @@
       "id": "schedule",
       "from": "pueue",
       "to": "guardian",
-      "y": 350,
+      "y": 384,
       "label": "schedule guardian row",
       "variant": "emphasis"
     },
@@ -176,67 +339,83 @@
       "id": "scope-intent",
       "from": "guardian",
       "to": "store",
-      "y": 378,
-      "label": "persist scope intent + registration"
+      "y": 412,
+      "label": "persist scope intent + registration",
+      "note": "Persist scope intent, create the native scope, then persist registration before starting the managed worker."
     },
     {
       "id": "spawn",
       "from": "guardian",
       "to": "runner",
-      "y": 406,
+      "y": 440,
       "label": "start exact managed child",
       "variant": "emphasis"
-    },
-    {
-      "id": "reconstruct",
-      "from": "runner",
-      "to": "store",
-      "y": 434,
-      "label": "read receipt and recheck recorded profile"
-    },
-    {
-      "id": "hello",
-      "from": "runner",
-      "to": "guardian",
-      "y": 462,
-      "label": "hello + provider launch request"
-    },
-    {
-      "id": "launch-record",
-      "from": "guardian",
-      "to": "store",
-      "y": 490,
-      "label": "persist worker and launch identity"
     },
     {
       "id": "launch-ack",
       "from": "guardian",
       "to": "runner",
-      "y": 518,
-      "label": "authorize recorded launch",
-      "variant": "return"
+      "y": 468,
+      "label": "acknowledge identity-bound worker",
+      "variant": "return",
+      "note": "The guardian records the observed native child identity before acknowledging hello; the worker waits for that acknowledgement."
+    },
+    {
+      "id": "reconstruct",
+      "from": "runner",
+      "to": "store",
+      "y": 496,
+      "label": "read receipt and recheck recorded profile"
+    },
+    {
+      "id": "fresh-probe",
+      "from": "runner",
+      "to": "inspect",
+      "label": "check capability digest; fresh version/help",
+      "variant": "security",
+      "note": "freshPreflightProfile checks the exact required digest and probes this task\u2019s current runtime.",
+      "y": 524
     },
     {
       "id": "invoke",
       "from": "runner",
       "to": "provider",
-      "y": 546,
-      "label": "invoke one bounded provider turn",
-      "variant": "emphasis"
+      "y": 552,
+      "label": "Start only after strict validation",
+      "variant": "emphasis",
+      "note": "finalizeCandidate strictly validates; freshPreflightProfile matches the admitted contract before Start. Runtime verification must be complete."
     },
     {
       "id": "capture",
       "from": "provider",
       "to": "runner",
-      "y": 574,
+      "y": 580,
       "label": "stdout, stderr, identity, exit",
       "variant": "return"
+    },
+    {
+      "id": "close-lifetime",
+      "from": "runner",
+      "to": "guardian",
+      "y": 608,
+      "label": "close lifetime",
+      "variant": "security",
+      "note": "Before sealing evidence, the runner closes the task lifetime and waits for the guardian acknowledgement."
+    },
+    {
+      "id": "empty-scope",
+      "from": "guardian",
+      "to": "store",
+      "y": 636,
+      "label": "persist termination + empty scope",
+      "variant": "emphasis",
+      "note": "The guardian persists independently proven empty-scope termination before acknowledging the runner close."
     },
     {
       "id": "seal",
       "from": "runner",
       "to": "store",
-      "y": 602,
+      "y": 664,
       "label": "provider.exit seals raw evidence",
       "variant": "emphasis"
     },
@@ -244,62 +423,55 @@
       "id": "interpret",
       "from": "runner",
       "to": "predicate",
-      "y": 630,
+      "y": 692,
       "label": "validate sealed behavior"
     },
     {
-      "id": "outcome",
+      "id": "verdict",
       "from": "predicate",
-      "to": "store",
-      "y": 658,
-      "label": "commit outcome.json: committed or rejected",
-      "variant": "emphasis",
-      "note": "outcome.json is the terminal authority; result.txt and publish.reject are payload evidence."
+      "to": "runner",
+      "label": "return interpreted verdict",
+      "variant": "return",
+      "y": 720
     },
     {
-      "id": "worker-close",
+      "id": "outcome",
       "from": "runner",
-      "to": "guardian",
-      "y": 686,
-      "label": "persist exact child Wait after capture",
-      "variant": "return"
+      "to": "store",
+      "y": 748,
+      "label": "publish outcome.json: committed or rejected",
+      "variant": "emphasis",
+      "note": "outcome.json is the terminal authority; result.txt and publish.reject are payload evidence."
     },
     {
       "id": "lifetime-proof",
       "from": "guardian",
       "to": "store",
-      "y": 714,
-      "label": "durable child Wait \u00b7 empty scope \u00b7 termination",
+      "y": 776,
+      "label": "persist exact managed-worker Wait",
       "variant": "emphasis",
-      "note": "Pueue row completion alone is not native termination or provider-result authority."
+      "note": "Empty-scope termination was persisted before sealing. After the managed worker exits, the guardian records its exact child Wait before disposing the scope and releasing ownership."
     },
     {
       "id": "observe",
       "from": "caller",
       "to": "delegate",
-      "y": 739,
+      "y": 801,
       "label": "status / logs / collect"
     },
     {
       "id": "read",
       "from": "delegate",
       "to": "store",
-      "y": 767,
-      "label": "read durable state; never relaunch"
-    },
-    {
-      "id": "observed",
-      "from": "store",
-      "to": "delegate",
-      "y": 795,
-      "label": "state, descriptors, outcome, continuation",
-      "variant": "return"
+      "y": 829,
+      "label": "observe and reconcile this task",
+      "note": "Status can recover the exact previously stashed row. Collection can publish an existing seal. Neither creates another provider turn or replays a consumed launch."
     },
     {
       "id": "returned",
       "from": "delegate",
       "to": "caller",
-      "y": 823,
+      "y": 857,
       "label": "bounded control response",
       "variant": "return"
     },
@@ -307,7 +479,7 @@
       "id": "cancel",
       "from": "caller",
       "to": "delegate",
-      "y": 851,
+      "y": 885,
       "label": "cancel TASK_ID",
       "variant": "dashed"
     },
@@ -315,7 +487,7 @@
       "id": "cancel-request",
       "from": "delegate",
       "to": "store",
-      "y": 879,
+      "y": 913,
       "label": "persist immutable user stop request",
       "variant": "emphasis",
       "note": "The durable request is the single cancellation intent; a queue row is never native lifetime authority."
@@ -324,7 +496,7 @@
       "id": "guardian-cancel",
       "from": "guardian",
       "to": "store",
-      "y": 907,
+      "y": 941,
       "label": "active owner: terminate scope + record empty proof",
       "variant": "dashed"
     },
@@ -332,7 +504,7 @@
       "id": "stop",
       "from": "delegate",
       "to": "pueue",
-      "y": 935,
+      "y": 969,
       "label": "otherwise: stop row while holding lifetime lease",
       "variant": "dashed",
       "note": "Direct row mutation is allowed only when cancellation owns the lease, so no guardian can launch or own a provider concurrently."
@@ -341,7 +513,7 @@
       "id": "continue",
       "from": "caller",
       "to": "delegate",
-      "y": 963,
+      "y": 997,
       "label": "continue --task TASK_ID [--brief FILE]",
       "variant": "emphasis"
     }
@@ -349,62 +521,68 @@
   "activations": [
     {
       "participant": "delegate",
-      "from": 174,
-      "to": 330,
+      "from": 164,
+      "to": 376,
       "type": "backend"
     },
     {
       "participant": "inspect",
-      "from": 196,
-      "to": 238,
+      "from": 212,
+      "to": 234,
       "type": "security"
     },
     {
       "participant": "store",
-      "from": 246,
-      "to": 730,
+      "from": 236,
+      "to": 792,
       "type": "database"
     },
     {
       "participant": "pueue",
-      "from": 275,
-      "to": 365,
+      "from": 184,
+      "to": 394,
       "type": "messagebus"
     },
     {
       "participant": "guardian",
-      "from": 343,
-      "to": 730,
+      "from": 377,
+      "to": 792,
       "type": "security"
     },
     {
       "participant": "runner",
-      "from": 399,
-      "to": 700,
+      "from": 433,
+      "to": 770,
       "type": "backend"
     },
     {
+      "participant": "inspect",
+      "from": 520,
+      "to": 544,
+      "type": "security"
+    },
+    {
       "participant": "provider",
-      "from": 539,
-      "to": 582,
+      "from": 548,
+      "to": 588,
       "type": "external"
     },
     {
       "participant": "predicate",
-      "from": 623,
-      "to": 668,
+      "from": 685,
+      "to": 728,
       "type": "security"
     },
     {
       "participant": "delegate",
-      "from": 755,
-      "to": 920,
+      "from": 797,
+      "to": 1005,
       "type": "backend"
     },
     {
       "participant": "pueue",
-      "from": 905,
-      "to": 920,
+      "from": 964,
+      "to": 979,
       "type": "messagebus"
     }
   ],
@@ -413,10 +591,20 @@
       "dot": "cyan",
       "title": "Admission",
       "items": [
-        "The request is persisted before supervisor submission",
-        "A stashed row is receipted durably before its exact ID is enqueued",
-        "Runtime capability evidence is checked before launch",
-        "The caller receives a task id and separate admission/liveness fields"
+        "Managed runtime-only admission uses a static contract; no version/help worker or shared capability cache",
+        "Meta.RuntimePreflightSHA256 binds the required capability; ProviderVersion remains empty on the static path",
+        "Mixed/native projections, CCR selection, custom runners and historical tasks retain strict admission inspection",
+        "An immutable task and exact stashed-row receipt are durable before enqueue"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Fresh launch authority",
+      "items": [
+        "The managed runner probes the current runtime within its guardian scope and finite task budget",
+        "Strict finalization and matching preserve the admitted permission, workspace, environment, predicate and artifacts",
+        "Provider Start requires successful fresh preflight; observations from another task cannot authorize execution",
+        "The guardian records each observed provider launch before acknowledging it"
       ]
     },
     {
@@ -433,9 +621,18 @@
       "dot": "violet",
       "title": "Observation",
       "items": [
-        "Collection reads committed evidence without launching work",
+        "Observation can reconcile the exact stashed submission and publish an existing seal; it never creates another provider turn",
         "Cancellation persists one request; the lifetime lease selects its sole stopping owner",
         "Continuation creates a new task with an exact predecessor"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Committed source snapshot",
+      "items": [
+        "Source revision: 94779b5a60aa",
+        "Node source links identify committed code",
+        "Admission and runtime preflight retain separate owners"
       ]
     }
   ]
