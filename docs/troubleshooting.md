@@ -107,10 +107,40 @@ records under their shared lease and probes the private Unix endpoint directly.
 It leaves that daemon and its queued work running. A different verified client
 may inspect a compatible live endpoint without changing its generation. If the
 endpoint is unavailable, Delegate restarts the saved private executable pair
-when available. If that active pair is unavailable, Delegate returns the
-migration-required failure; the explicit `supervisor migrate` transaction then
+when available. Missing installation paths can also recover automatically from
+the exact retained state-root pair when the endpoint and old process are
+proven absent and neither identity has a migration-history reference. Historical
+migration edges remain immutable and use the explicit migration protocol.
+Recovery retains the recorded resolver context. A live endpoint
+whose published executables disappeared requires explicit migration; Delegate
+does not relabel that running process. If the exact pair cannot be recovered,
+Delegate returns the migration-required failure; `supervisor migrate` then
 transfers authority to the staged pair. Launch provenance is updated only after
 the authorized generation becomes ready.
+
+An upgraded root may report `pueue binding changed or unsupported` or
+`supervisor_upgrade_required` because older releases published installation
+paths while daemon provenance named the byte-identical retained pair. Current
+Delegate repairs that proven metadata split automatically and preserves task
+history. Do not delete the root or edit its records. If recovery remains
+blocked, run the existing managed command once with that same root:
+
+```sh
+delegate --root "$HOME/delegation-state" supervisor migrate --json
+```
+
+`failure.reason_code` and `supervisor_control.reason_code` distinguish
+`identity_conflict`, `transition_pending`, `published_pair_unavailable_live`,
+`predecessor_pair_unavailable`, `active_work`, `observation_failed`, and
+`state_unreadable`. These optional fields retain the existing schema version,
+failure codes, and next actions. Wait for active work to finish before retrying
+migration; report conflicting or unreadable state without manual surgery.
+
+Once shutdown starts, migration retains its recorded target. If an older
+transaction named an external installation that was removed after shutdown,
+recovery stays blocked instead of inventing a replacement identity. New
+transactions stage their target executables under the state root. Finish a
+pending transition with the current release before using an older CLI build.
 
 Before first publication, Delegate checks the generated socket path against the
 host limit. If the ordinary state-rooted name is too long, it uses a compact

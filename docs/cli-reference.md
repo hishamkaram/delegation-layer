@@ -461,7 +461,13 @@ serving its endpoint. If that endpoint is unavailable, they restart the saved
 private executable pair when it is still available. A different verified
 client may inspect a compatible live endpoint, but ordinary recovery cannot
 start or publish that client's daemon over a stopped active generation. If the
-active pair is unavailable, run the explicit `supervisor migrate` transaction
+active installation paths are missing but the same verified pair remains under
+the state root, a stopped supervisor restarts from those exact bytes without
+operator setup when neither identity has a migration-history reference.
+A durable bootstrap intent makes interruption recoverable.
+A proven binding/daemon path split with identical hashes is repaired without
+rewriting daemon provenance. Conflicts, unresolved transitions, and references
+in migration history retain the explicit `supervisor migrate` transaction
 described above. Dispatch uses the same adoption-first path; a changed daemon
 path or hash is provenance drift while the compatible endpoint remains live,
 and never grants authority to start a replacement. A real logical binding

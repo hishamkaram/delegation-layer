@@ -72,6 +72,9 @@ func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 		NextAction:      dispatchFailureNextAction(code, taskRecord),
 		RecoveryCommand: dispatchFailureRecoveryCommand(code, taskRecord),
 	}
+	if code == "supervisor_upgrade_required" || code == "supervisor_migration_blocked" || code == "supervisor_setup_failed" {
+		failure.ReasonCode = supervisorFailureReason(err)
+	}
 	if stage == "inspect-provider" {
 		failure.Inspection = inspectionFailureResponse(err)
 	}

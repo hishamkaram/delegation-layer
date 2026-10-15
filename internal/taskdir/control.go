@@ -234,6 +234,28 @@ func (d *ControlDir) Read(name string, record any) error {
 	return d.read(name, record)
 }
 
+// RecordNamesContext lists names through the pinned root. The record-family
+// owner decides which names are records and validates them with Read.
+func (d *ControlDir) RecordNamesContext(ctx context.Context) (names []string, resultErr error) {
+	if err := d.begin(); err != nil {
+		return nil, err
+	}
+	defer d.end()
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	directory, err := d.store.openDir(d.dir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, directory.Close()) }()
+	names, err = directory.Readdirnames(-1)
+	return names, errors.Join(err, ctx.Err())
+}
+
 func (d *ControlDir) read(name string, record any) error {
 	if err := validateControlName(name); err != nil {
 		return err

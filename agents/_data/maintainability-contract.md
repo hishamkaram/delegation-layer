@@ -101,6 +101,29 @@ durable commit, restart recovery, create-once classification, or a consumer
 verdict. Fault injection may wrap a production store, but the test must retain
 its real serialization, create-once behavior, reader, and consumer.
 
+## Upgrade recovery verification
+
+For supervisor upgrades, distinguish active identity, daemon launch provenance,
+and staged executable inventory. Bind the exact protected paths returned by
+installation; never reread mutable inventory to select a generation. Legacy
+adoption must verify the recorded predecessor, not a prepared successor.
+Same-byte relocation needs explicit durable intent before launch and must
+resume that target after interruption. Missing target bytes retain that intent
+and block replacement; they never authorize choosing staged inventory. Resolve
+all validated primary and alternate inspection proposals against the private
+migration owner's recorded target, and reject ambiguous matches. Keep saved
+recovery lock waits bounded even when a caller supplies a background context.
+An immutable inspection head can predate same-logical private upgrades. Use the
+canonical successor resolver for that lineage; do not require a single direct
+private edge from the head's historical executable paths. Record publication
+and target-generation comparisons remain strict.
+A metadata-only repair must preserve
+daemon provenance and task history and reject unresolved transitions or
+history references. Verify old-package removal and launch-before-publication
+interruption through production stores and consumers, then run the packaged
+upgrade scenario natively on Linux and macOS. Compilation and hand-seeded
+publication records alone do not prove interruption recovery.
+
 ## Recovery and verification
 
 Apply the canonical matrix to normal execution and journal resumption together.

@@ -122,8 +122,13 @@ client/daemon pair under the state root. Recovery reuses the saved executable
 pair when it is available. A different verified client may inspect a compatible
 active endpoint without changing its generation, but it cannot start or publish
 its own daemon over a stopped active generation. When the saved active pair is
-unavailable, the explicit journaled supervisor migration transfers authority to
-the staged pair before that pair may start. A legacy
+unavailable at its old installation paths, ordinary recovery may restart the
+exact retained bytes under their protected state-root paths after proving the
+endpoint and recorded process absent. The bootstrap journal retains both exact
+bindings until readiness-gated publication completes. A different binary pair
+requires explicit journaled supervisor migration. Automatic path relocation
+also requires that neither identity is referenced in migration history;
+history-connected generations use the explicit migration protocol. A legacy
 binding without daemon identity is recovered only through a resolved pair and
 the normal private config and endpoint checks. Launch provenance is atomically
 recorded after readiness. New private daemon launches inherit the spawning Go
@@ -134,15 +139,20 @@ limit value or system-wide setting and does not restart an existing daemon. The
 daemon also starts in its own Unix session, so a signal to the invoking CLI's
 process group cannot terminate the private supervisor.
 
-The completed supervisor identity is the sole active-generation record. The
+The completed supervisor identity is the sole active-generation record. Daemon
+identity records launch provenance. A proven same-byte path split may replace
+only the erroneous supervisor binding under the bootstrap lock, leaving daemon
+provenance and task history byte-for-byte unchanged. Pending transitions and
+migration-history references prevent this metadata-only relabeling. The
 state-root executable-pair record is verified successor inventory until fresh
 bootstrap or explicit migration publishes it as active. The ordinary-scheduling
 receipt proves default-group policy and the staged add/enqueue command surface
 for the exact active generation; it never selects executables. This lets an
 install upgrade stage a compatible pair while
 ordinary admission keeps using the published daemon and its queued work. A
-launch-path or digest change is provenance drift only and does not rewrite the
-active identity while that daemon is alive. Ordinary controls share a lease on the supervisor generation, allowing
+launch-path or digest change alone does not rewrite a live generation. The
+metadata-only reconciliation above repairs an inconsistent binding to its
+existing launch witness. Ordinary controls share a lease on the supervisor generation, allowing
 independent tasks to proceed concurrently. Startup and migration take the
 exclusive form of that same lock. An unfinished control command retains its
 lease until its process is reaped. Healthy probes reuse a published client
@@ -157,6 +167,17 @@ Changed bindings use normal version discovery. The staged command surface is
 probed only while repairing that exact-generation receipt; warm submissions
 and staged recovery consume the recorded capability without repeating help
 commands.
+
+| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
+| --- | --- | --- | --- | --- | --- | --- |
+| `UPG-01` Verified staged pair | Application / bootstrap lock | Bind exact returned immutable paths | Pair inventory publication | Revalidate exact pair, independent of inventory pointer | Inventory never selects active generation | `TestMigrationPreparesInstalledPair` |
+| `UPG-02` Inspection predecessor and matching daemon provenance | Inspection adoption / bootstrap lock | Create missing predecessor binding | Create-once binding | Preserve conflicting provenance | Prepared successor cannot become predecessor | `TestInspectionPreservesVerifiedPredecessor` |
+| `UPG-03` Same hashes, retained daemon witness, no pending edge or history reference | Application eligibility + Pueue publication / bootstrap lock | Replace erroneous binding paths only | Atomic binding replacement and directory barrier | Reread ambiguous writes | Daemon and task records unchanged | `TestPublishedPairReconcilesPathSplit`, `TestAdmissionReconcilesPublishedPair` |
+| `UPG-04` Coherent binding, missing install paths, exact retained pair, stopped endpoint and process | Pueue bootstrap / bootstrap lock | Persist exact restart intent, then start that pair | Readiness-gated identity transaction | Resume recorded target; publish an already-ready restart without relaunch | Same-byte generation available for admission and saved-task recovery | `TestPublishedPairRestartsExactRetainedPair`, `TestPublishedPairRestartRecoversLaunchBeforePublication` |
+| `UPG-05` Conflicting bytes, history reference, or unfinished transition | Existing transition owner / bootstrap lock | Preserve state and classify blocker | No replacement | Retain explicit migration path | No automatic generation substitution | `TestSupervisorUpgradePreservesConflictingState` |
+| `UPG-06` Old installation removed, explicit successor prepared, inspection predecessor retained | Explicit migration / bootstrap lock | Observe predecessor, refuse active work, gracefully drain, start successor | Existing migration journal and ready identity publication | Resume journal and resolve actual active generation | Report migrated only for committed active binding | `TestSupervisorMigrateReplacesRemovedPackagePair` |
+| `UPG-07` Immutable inspection head predates same-logical private upgrades | Canonical generation resolver / bootstrap lock | Select actual private predecessor or prove completed connected target | Exact prepared inspection edge completion | Re-resolve lineage; a direct private edge from the historical head is not required | Preserve the head while using the authoritative active generation | `TestInspectionMigrationUsesActivePredecessorAfterPathRelocation` |
+
 Pueue's terminal callback triggers maintenance after a row reaches `Done`;
 dispatch records the admission verdict and does not wait for cleanup.
 Every current ordinary and inspection submission installs a callback ticket

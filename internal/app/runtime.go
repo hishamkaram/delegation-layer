@@ -226,6 +226,7 @@ type Response struct {
 // exposing supervisor paths or raw process diagnostics.
 type DispatchFailureResponse struct {
 	Code            string                     `json:"code"`
+	ReasonCode      string                     `json:"reason_code,omitempty"`
 	Stage           string                     `json:"stage"`
 	NextAction      string                     `json:"next_action"`
 	RecoveryCommand string                     `json:"recovery_command,omitempty"`
@@ -283,6 +284,7 @@ type SupervisorControlResponse struct {
 	ActiveWork         string `json:"active_work"`
 	MigrationPhase     string `json:"migration_phase,omitempty"`
 	NextAction         string `json:"next_action"`
+	ReasonCode         string `json:"reason_code,omitempty"`
 }
 
 type StopResponse struct {
@@ -377,7 +379,7 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 			return 1
 		}
 		if result.err != nil {
-			return writeCLIError(stderr, result.err, result.code)
+			return writeCLIError(stderr, commandPresentationError(parsed.Command, result), result.code)
 		}
 	}
 	return result.code
@@ -389,6 +391,9 @@ func writeJSONResponse(stdout io.Writer, command string, response *Response, res
 		failure := dispatchFailure(resultErr, response.TaskRecord)
 		response.Failure = &failure
 		response.Error = dispatchFailureMessage(failure.Code)
+		if failure.ReasonCode != "" {
+			response.Error = publicSupervisorError(response.Error, resultErr).Error()
+		}
 	}
 	return writeJSON(stdout, *response)
 }
@@ -1005,13 +1010,33 @@ func bindInitial(a Arguments, deps Dependencies) (*pueue.Client, error) {
 
 func newSupervisorClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, recoverPrivate bool, initialSupervisorExecutable string) (*pueue.Client, error) {
 	if recoverPrivate && pueue.IsPrivateConfig(root, saved.ConfigPath) {
-		clientExecutable, daemonExecutable, resolveErr := resolveRecoveryPrivateSupervisorExecutables(root, saved, initialSupervisorExecutable)
-		if resolveErr != nil {
-			return nil, resolveErr
+		if ctx == nil {
+			return nil, context.Canceled
 		}
-		return pueue.RecoverPrivate(ctx, root, saved, clientExecutable, daemonExecutable, options)
+		client, err := recoverSavedPrivateSupervisor(ctx, root, saved, options, initialSupervisorExecutable)
+		if err == nil || errors.Is(err, pueue.ErrInFlight) || ctx.Err() != nil {
+			return client, err
+		}
+		if !errors.Is(err, pueue.ErrBinding) && !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) && !errors.Is(err, os.ErrNotExist) {
+			return client, err
+		}
+		if client != nil {
+			err = errors.Join(err, client.CloseAfterPending(err))
+		}
+		if reconcileErr := reconcileSavedSupervisor(ctx, root, options); reconcileErr != nil {
+			return nil, errors.Join(err, reconcileErr)
+		}
+		return recoverSavedPrivateSupervisor(ctx, root, saved, options, initialSupervisorExecutable)
 	}
 	return pueue.NewClient(saved, options)
+}
+
+func recoverSavedPrivateSupervisor(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, initialSupervisorExecutable string) (*pueue.Client, error) {
+	clientExecutable, daemonExecutable, err := resolveRecoveryPrivateSupervisorExecutables(root, saved, initialSupervisorExecutable)
+	if err != nil {
+		return nil, err
+	}
+	return pueue.RecoverPrivate(ctx, root, saved, clientExecutable, daemonExecutable, options)
 }
 
 // newSupervisorControlClient proves the task's exact saved endpoint ready before

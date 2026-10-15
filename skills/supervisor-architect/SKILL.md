@@ -5,6 +5,9 @@ description: Design or review supervisor lifecycle changes with one policy owner
 
 # Supervisor architect
 
+Apply the shared [upgrade recovery verification](../../agents/_data/maintainability-contract.md#upgrade-recovery-verification)
+when installation paths, identity publication, or retained pairs change.
+
 ## Trigger
 
 Use this skill for changes to private supervisor binding, continuation,

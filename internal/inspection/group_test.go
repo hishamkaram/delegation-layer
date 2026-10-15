@@ -650,6 +650,17 @@ func TestPrepareGroupMigrationKeepsSuccessivePendingSuccessorsReversible(t *test
 	if _, statErr := os.Stat(filepath.Join(store.Root, "inspection-group", pendingMigrationRecordName(groupRequestDigest(second)))); statErr != nil {
 		t.Fatalf("successive pending marker was not retained: %v", statErr)
 	}
+	proposals, readErr := PreparedGroupMigrationSuccessors(t.Context(), store)
+	if readErr != nil || len(proposals) != 2 {
+		t.Fatalf("primary and alternate proposals were not both observed: %+v %v", proposals, readErr)
+	}
+	want := map[task.SupervisorRef]bool{first.Supervisor: true, second.Supervisor: true}
+	for _, proposal := range proposals {
+		delete(want, proposal)
+	}
+	if len(want) != 0 {
+		t.Fatalf("proposal reader missed prepared successors: %+v", want)
+	}
 	if completeErr := CompleteGroupMigration(context.Background(), store, legacyRequest, second); completeErr != nil {
 		t.Fatal(completeErr)
 	}
