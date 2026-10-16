@@ -79,7 +79,8 @@ func (o *lifetimeGuardianTestOwner) setReleaseErrors(errs []error) {
 }
 
 type lifetimeGuardianTestRecords struct {
-	timeline *lifetimeGuardianTestTimeline
+	existingCompletion *task.LifetimeWorkerWaitRecord
+	timeline           *lifetimeGuardianTestTimeline
 
 	mu                        sync.Mutex
 	intents                   []taskdir.LifetimeIntentFacts
@@ -2997,4 +2998,37 @@ func TestLifetimeGuardianReaderUsesTaskDeadlineAndCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("reader did not stop when its context was canceled")
 	}
+}
+
+func (r *lifetimeGuardianTestRecords) ReadLifetimeWorkerWaitContext(ctx context.Context) (*task.LifetimeWorkerWaitRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.existingCompletion == nil {
+		return nil, os.ErrNotExist
+	}
+	record := *r.existingCompletion
+	return &record, nil
+}
+
+func (r *lifetimeGuardianTestRecords) ReadLifetimeUnlaunchedContext(ctx context.Context) (*task.LifetimeUnlaunchedRecord, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, os.ErrNotExist
+}
+
+func (r *lifetimeGuardianTestRecords) TaskLaunchRefusedContext(ctx context.Context) (bool, error) {
+	if ctx == nil {
+		return false, context.Canceled
+	}
+	return false, ctx.Err()
 }

@@ -421,6 +421,9 @@ func (td *TaskDir) PrepareSubmission(supervisor task.SupervisorRef) (_ *Submissi
 	if exists {
 		return nil, task.ErrAlreadySubmitted
 	}
+	if err = td.requireTaskLaunchPermissionContext(context.Background()); err != nil {
+		return nil, err
+	}
 	if err = td.validateExecutionDirectories(req); err != nil {
 		return nil, err
 	}
@@ -479,6 +482,9 @@ func (td *TaskDir) PrepareStart(budget int64) (_ *StartPermit, resultErr error) 
 		if exists {
 			return nil, task.ErrAlreadyStarted
 		}
+	}
+	if err = td.requireTaskLaunchPermissionContext(context.Background()); err != nil {
+		return nil, err
 	}
 	if err = td.validateExecutionDirectories(req); err != nil {
 		return nil, err

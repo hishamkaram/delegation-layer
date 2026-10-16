@@ -133,6 +133,14 @@ func completedInspectionEvidence(ctx context.Context, operation *inspection.Oper
 // saved without that immutable contract and without a lifetime journal keeps
 // its historical queue-observation path.
 func successfulInspectionLifetimeEvidence(ctx context.Context, operation *inspection.Operation) (bool, error) {
+	historical, err := historicalInspectionLifetime(ctx, operation)
+	if err != nil {
+		return false, err
+	}
+	return completedInspectionEvidence(ctx, operation, !historical)
+}
+
+func historicalInspectionLifetime(ctx context.Context, operation *inspection.Operation) (bool, error) {
 	if ctx == nil {
 		return false, context.Canceled
 	}
@@ -147,8 +155,7 @@ func successfulInspectionLifetimeEvidence(ctx context.Context, operation *inspec
 	if err != nil {
 		return false, err
 	}
-	historical := operation.Request().Binding.WorkerExitProof == "" && intent == nil && registration == nil
-	return completedInspectionEvidence(ctx, operation, !historical)
+	return operation.Request().Binding.WorkerExitProof == "" && intent == nil && registration == nil, nil
 }
 
 func validateTimelyCompletedInspectionEvidence(deadline time.Time, result inspection.ResultRecord, completion inspection.CompletionRecord, termination *task.LifetimeTerminationRecord) error {

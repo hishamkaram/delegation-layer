@@ -235,7 +235,7 @@ func storedInspectionFactsContext(ctx context.Context, deps Dependencies, root s
 		return nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
-	operation, err := inspection.LoadOperationContext(ctx, store, req.TaskID)
+	operation, err := loadAdmissionInspectionOperationContext(ctx, store, req)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +289,7 @@ func validateInspectionRunnerExecutable(root string, req task.TaskRecord, meta t
 	if store == nil {
 		return task.ErrEvidenceFault
 	}
-	operation, err := inspection.LoadOperation(store, req.TaskID)
+	operation, err := loadAdmissionInspectionOperationContext(context.Background(), store, req)
 	if err != nil {
 		return err
 	}

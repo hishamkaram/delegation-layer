@@ -49,6 +49,7 @@ type lifetimeGuardianOwner interface {
 // lifetimeGuardianRecords contains only the durable lifetime record operations
 // needed by the state machine. The application owns their ordering policy.
 type lifetimeGuardianRecords interface {
+	ReadLifetimeWorkerWaitContext(context.Context) (*task.LifetimeWorkerWaitRecord, error)
 	ReadLifetimeTerminationContext(context.Context) (*task.LifetimeTerminationRecord, error)
 	ReadLifetimeIntentContext(context.Context) (*task.LifetimeIntentRecord, error)
 	ReadLifetimeRegistrationContext(context.Context) (*task.LifetimeRegistrationRecord, error)
@@ -58,6 +59,17 @@ type lifetimeGuardianRecords interface {
 	RecordLifetimeWorkerWaitContext(context.Context, taskdir.LifetimeWorkerWaitFacts) (*task.LifetimeWorkerWaitRecord, error)
 	RecordLifetimeLaunchContext(context.Context, taskdir.LifetimeLaunchFacts) (*task.LifetimeLaunchRecord, error)
 	RecordLifetimeTerminationContext(context.Context, string) (*task.LifetimeTerminationRecord, error)
+}
+
+// lifetimeUnlaunchedReader is optional so existing task and inspection test
+// records retain their narrow lifetime contract. Workspace guardians must
+// provide it because their launch fence is an additional terminal refusal.
+type lifetimeTaskLaunchRefusalReader interface {
+	TaskLaunchRefusedContext(context.Context) (bool, error)
+}
+
+type lifetimeUnlaunchedReader interface {
+	ReadLifetimeUnlaunchedContext(context.Context) (*task.LifetimeUnlaunchedRecord, error)
 }
 
 // lifetimeGuardianScope is deliberately narrower than lifetime.Scope's
@@ -232,14 +244,14 @@ func validateLifetimeGuardianIdentity(options lifetimeGuardianOptions) error {
 	if task.ValidateRootID(options.rootID) != nil || task.ValidateTaskID(options.taskID) != nil {
 		return fmt.Errorf("%w: root and task IDs are required", errLifetimeGuardianInvalid)
 	}
-	if options.ownerKind != task.LifetimeOwnerTask && options.ownerKind != task.LifetimeOwnerInspection {
+	if options.ownerKind != task.LifetimeOwnerTask && options.ownerKind != task.LifetimeOwnerInspection && options.ownerKind != task.LifetimeOwnerWorkspace {
 		return fmt.Errorf("%w: lifetime owner kind is invalid", errLifetimeGuardianInvalid)
 	}
 	return nil
 }
 
 func validateLifetimeGuardianProofs(options lifetimeGuardianOptions) error {
-	if options.ownerKind == task.LifetimeOwnerInspection && options.userStop != nil {
+	if options.ownerKind != task.LifetimeOwnerTask && options.userStop != nil {
 		return fmt.Errorf("%w: user stop polling requires a task owner", errLifetimeGuardianInvalid)
 	}
 	return nil
@@ -266,16 +278,7 @@ func validateLifetimeGuardianTiming(options lifetimeGuardianOptions) error {
 }
 
 func taskUserStopRequested(td *taskdir.TaskDir) (bool, error) {
-	records, err := td.ReadStopRecords()
-	if err != nil {
-		return false, err
-	}
-	for _, record := range records {
-		if record.Request != nil && record.Request.Cause == "user" && record.Observation == nil {
-			return true, nil
-		}
-	}
-	return false, nil
+	return td.UserStopRequested()
 }
 
 // Run acquires the task lifetime owner, registers the strongest available
@@ -519,6 +522,29 @@ func (g *lifetimeGuardian) refuseTerminalReplay(ctx context.Context) error {
 	if ctx == nil {
 		return context.Canceled
 	}
+	if g.options.ownerKind == task.LifetimeOwnerTask {
+		reader, ok := g.options.records.(lifetimeTaskLaunchRefusalReader)
+		if !ok {
+			return fmt.Errorf("%w: task lifetime records do not expose launch refusal", errLifetimeGuardianInvalid)
+		}
+		refused, err := reader.TaskLaunchRefusedContext(ctx)
+		if err != nil {
+			return err
+		}
+		if refused {
+			return task.ErrTerminalTask
+		}
+	}
+	completion, completionErr := g.options.records.ReadLifetimeWorkerWaitContext(ctx)
+	if completionErr == nil && task.LifetimeWorkerWaitProvesAbsence(completion) {
+		return task.ErrTerminalTask
+	}
+	if completionErr != nil && !task.RecordAbsent(completionErr) {
+		return fmt.Errorf("read recovered lifetime completion before launch: %w", completionErr)
+	}
+	if err := g.refuseAuxiliaryUnlaunchedReplay(ctx); err != nil {
+		return err
+	}
 	record, err := g.options.records.ReadLifetimeTerminationContext(ctx)
 	if task.RecordAbsent(err) {
 		return nil
@@ -530,6 +556,27 @@ func (g *lifetimeGuardian) refuseTerminalReplay(ctx context.Context) error {
 		return fmt.Errorf("%w: termination reader returned invalid record", task.ErrEvidenceFault)
 	}
 	return task.ErrTerminalTask
+}
+
+func (g *lifetimeGuardian) refuseAuxiliaryUnlaunchedReplay(ctx context.Context) error {
+	if g.options.ownerKind != task.LifetimeOwnerWorkspace && g.options.ownerKind != task.LifetimeOwnerInspection {
+		return nil
+	}
+	reader, ok := g.options.records.(lifetimeUnlaunchedReader)
+	if !ok {
+		return fmt.Errorf("%w: auxiliary lifetime records do not expose the unlaunched reader", errLifetimeGuardianInvalid)
+	}
+	unlaunched, err := reader.ReadLifetimeUnlaunchedContext(ctx)
+	if task.RecordAbsent(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read lifetime unlaunched fence before launch: %w", err)
+	}
+	if unlaunched == nil {
+		return fmt.Errorf("%w: unlaunched reader returned nil record", task.ErrEvidenceFault)
+	}
+	return task.ErrLifetimeUnlaunched
 }
 
 func (g *lifetimeGuardian) acquireRunOwner(ctx context.Context) (lifetimeGuardianOwner, error) {

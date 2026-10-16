@@ -155,6 +155,19 @@ and live task evidence separately: real review, authorized write, and comparison
 or follow-up tasks need Delegate task IDs and collected outcomes. Skill-only
 routing cannot guarantee precedence over every model or competing plugin.
 
+## Managed workspace boundary
+
+Managed Git workspaces are optional and must leave ordinary non-Git delegation
+unchanged. Use the canonical [W1–W7 workspace transition
+rows](../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+and the [workspace reference](../skills/agent-integration/references/workspaces.md)
+instead of copying lifecycle rules into adapters, scripts, or skills. The
+application coordinator owns workspace use; Git subprocesses run through the
+existing supervised execution boundary. Auxiliary operation deadlines do not
+renew provider tasks, and exact native closure plus the managed-worker
+disposition precede capture and cleanup. Owned native proof controls cleanup;
+the Lead owns landing changes.
+
 ## Adapter boundary
 
 An adapter is responsible for:

@@ -19,6 +19,21 @@ directories with create-once files and bounded names. The provider receives the
 workspace selected by the request and the adapter's effective policy, not an
 arbitrary path supplied as raw arguments.
 
+Managed Git workspaces are optional cooperative checkout separation, not a
+security sandbox or read-only guarantee. They resolve a committed base and
+exclude dirty/untracked source changes from the managed checkout, but shared
+Git refs, configuration, and other global resources remain shared. Ignored
+runtime files, submodule interiors, empty directories, extended attributes, and
+LFS payloads are not promised as Git-content backup. A clean Git status is not
+proof that no write occurred outside the promised content scope. See the
+[managed workspace reference](../skills/agent-integration/references/workspaces.md)
+for capture and retention boundaries.
+
+Delegate serializes its own native worktree metadata commands using the
+canonical common-directory inode. This advisory lease does not exclude an
+external Git process or another same-user process that replaces repository
+paths. It does not repair incomplete metadata left by interrupted Git commands.
+
 ## Credentials and environment
 
 Provider authentication is native. The child process can use the provider's

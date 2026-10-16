@@ -29,7 +29,7 @@ const (
 	LockLevelRun         LockLevel = 4
 )
 
-// LockFile represents a stable advisory flock file on a dedicated inode.
+// LockFile represents a stable advisory flock lease on a file or directory inode.
 // It manages reference-counted shared leases and exclusive locks to prevent
 // one completed operation on a shared Store from releasing flock protection for another.
 type LockFile struct {
@@ -109,6 +109,17 @@ func (s *Store) openRootedLock(path string, level LockLevel, create bool) (*Lock
 	return lock, err
 }
 
+// OpenDirectoryLock opens an existing shared-resource inode. Unlike a private
+// state lock, it neither changes directory permissions nor creates or syncs
+// anything. Acquisition and descriptor ownership use the same lock machinery.
+func OpenDirectoryLock(path string, level LockLevel) (*LockFile, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open lock directory %s: %w", path, err)
+	}
+	return newLockFileHandle(os.NewFile(uintptr(fd), path), path, level)
+}
+
 // openLockInode creates a stable lock inode exactly once, or opens the existing
 // winner. Concurrent nonexclusive O_CREAT opens can return ENOENT on Darwin.
 // Only EEXIST from exclusive creation permits opening an existing inode; an
@@ -129,21 +140,9 @@ func finishLockOpen(f *os.File, path string, level LockLevel, parentBarrier func
 		closeFileQuietly(f)
 		return nil, err
 	}
-	fd := int(f.Fd())
-	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+	lock, err := newLockFileHandle(f, path, level)
 	if err != nil {
-		closeFileQuietly(f)
-		return nil, fmt.Errorf("checking FD_CLOEXEC on %s: %w", path, err)
-	}
-	if flags&unix.FD_CLOEXEC == 0 {
-		closeFileQuietly(f)
-		return nil, fmt.Errorf("lock fd missing FD_CLOEXEC: %s", path)
-	}
-
-	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err != nil {
-		closeFileQuietly(f)
-		return nil, fmt.Errorf("stat lock fd %s: %w", path, err)
+		return nil, err
 	}
 
 	if hooks, ok := injector.(LockFaultInjector); ok {
@@ -166,7 +165,25 @@ func finishLockOpen(f *os.File, path string, level LockLevel, parentBarrier func
 		closeFileQuietly(f)
 		return nil, fmt.Errorf("syncing lock parent directory %s: %w", filepath.Dir(path), err)
 	}
+	return lock, nil
+}
 
+func newLockFileHandle(f *os.File, path string, level LockLevel) (*LockFile, error) {
+	fd := int(f.Fd())
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+	if err != nil {
+		closeFileQuietly(f)
+		return nil, fmt.Errorf("checking FD_CLOEXEC on %s: %w", path, err)
+	}
+	if flags&unix.FD_CLOEXEC == 0 {
+		closeFileQuietly(f)
+		return nil, fmt.Errorf("lock fd missing FD_CLOEXEC: %s", path)
+	}
+	var stat unix.Stat_t
+	if err = unix.Fstat(fd, &stat); err != nil {
+		closeFileQuietly(f)
+		return nil, fmt.Errorf("stat lock fd %s: %w", path, err)
+	}
 	return &LockFile{
 		path:  path,
 		level: level,
@@ -175,6 +192,33 @@ func finishLockOpen(f *os.File, path string, level LockLevel, parentBarrier func
 		inode: uint64(stat.Ino),
 		dev:   uint64(stat.Dev),
 	}, nil
+}
+
+// TakeExclusiveFile transfers the held kernel lease to descriptor ownership.
+// Close on the returned file releases only its reference; inherited children
+// retain theirs. The consumed LockFile can no longer issue LOCK_UN.
+func (l *LockFile) TakeExclusiveFile() (*os.File, error) {
+	if l == nil {
+		return nil, os.ErrInvalid
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return nil, os.ErrClosed
+	}
+	if !l.isEx || l.shCount != 0 {
+		return nil, ErrLockNotHeld
+	}
+	var visible unix.Stat_t
+	if err := unix.Lstat(l.path, &visible); err != nil {
+		return nil, fmt.Errorf("verify transferred lock path %s: %w", l.path, err)
+	}
+	if uint64(visible.Dev) != l.dev || uint64(visible.Ino) != l.inode {
+		return nil, task.ErrEvidenceFault
+	}
+	file := l.file
+	l.file, l.fd, l.isEx, l.shCount, l.closed = nil, -1, false, 0, true
+	return file, nil
 }
 
 // Inode returns the recorded filesystem inode for the lock file.

@@ -1595,6 +1595,18 @@ def capacity_lease_specifications(state, responses, waiter_directory, lease_nonc
     return specifications
 
 
+def lease_candidate_specifications(specifications):
+    """Wait for fixture entry publication; acquisition still proves liveness."""
+    candidates = []
+    for specification in specifications:
+        try:
+            Path(specification["path"]).lstat()
+        except FileNotFoundError:
+            continue
+        candidates.append(specification)
+    return candidates
+
+
 def prove_lifetime_owner_cohort(specifications, lease_cohort):
     """Prove every gated task retains its exclusive lifetime-owner lease."""
     started_unix_ns = time.time_ns()
@@ -1780,9 +1792,7 @@ def verify_current_installation_upgrade(delegate, state, workspace, brief, relea
             specifications = capacity_lease_specifications(
                 state, responses, waiter_directory, lease_nonce,
             )
-            lease_candidates = sum(
-                1 for specification in specifications if specification["path"].exists()
-            )
+            lease_candidates = len(lease_candidate_specifications(specifications))
             capacity_proof["observed_running_task_count"] = observed_running
             capacity_proof["peak_observed_running_task_count"] = max(
                 capacity_proof["peak_observed_running_task_count"], observed_running,
@@ -2043,10 +2053,10 @@ def default_stop_live_lease(client, config, env, state, response, waiter_directo
     )
     deadline = time.monotonic() + 30
     while True:
-        specifications = capacity_lease_specifications(
+        specifications = lease_candidate_specifications(capacity_lease_specifications(
             state, [response], waiter_directory, lease_nonce,
-        )
-        if len(specifications) == 1 and specifications[0]["path"].exists():
+        ))
+        if len(specifications) == 1:
             lease_started = time.time_ns()
             cohort = LiveFIFOLeaseCohort.acquire(specifications, lease_nonce)
             cohort.assert_live()

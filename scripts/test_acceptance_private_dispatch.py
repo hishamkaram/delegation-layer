@@ -1773,6 +1773,24 @@ class PrivateQueueEvidenceTests(unittest.TestCase):
 
 
 class PrivateGuardianEvidenceTests(unittest.TestCase):
+    def test_lease_candidates_require_entry_publication_without_claiming_safety(self):
+        missing = {"path": self.waiters / "not-published.fifo"}
+        present = {"path": self.waiters / "published.fifo"}
+        unsafe = {"path": self.waiters / "regular-file"}
+        os.mkfifo(present["path"], 0o600)
+        unsafe["path"].touch()
+        self.assertEqual(
+            private_cli.lease_candidate_specifications([missing, present, unsafe]),
+            [present, unsafe],
+        )
+        with self.assertRaisesRegex(RuntimeError, "lease is unsafe"):
+            private_cli.LiveFIFOLease.acquire("a" * 32, 102, unsafe["path"], "c" * 32)
+
+    def test_lease_candidate_read_errors_remain_explicit(self):
+        with patch.object(Path, "lstat", side_effect=PermissionError("entry unreadable")):
+            with self.assertRaisesRegex(PermissionError, "entry unreadable"):
+                private_cli.lease_candidate_specifications([{"path": self.waiters / "fifo"}])
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="delegate-guardian-proof-")
         self.addCleanup(temporary.cleanup)

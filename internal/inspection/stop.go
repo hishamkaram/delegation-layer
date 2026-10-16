@@ -143,7 +143,7 @@ func (o *Operation) ClaimStop(deadline time.Time) (*StopPermit, StopRequestRecor
 	return &StopPermit{
 		state:         newOneShot(),
 		rootID:        o.request.RootID,
-		taskID:        o.request.TaskID,
+		taskID:        o.request.IdentityID(),
 		queueGroup:    o.request.Group,
 		numericTaskID: record.NumericTaskID,
 		supervisor:    o.request.Binding.Supervisor,

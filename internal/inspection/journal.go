@@ -62,7 +62,7 @@ func LoadOperationContext(ctx context.Context, store *taskdir.Store, taskID stri
 			return ctxErr
 		}
 		validatedDeadline, validationErr := validateRequestRecord(request, store.RootID)
-		if validationErr != nil || request.TaskID != taskID {
+		if validationErr != nil || request.IdentityID() != taskID {
 			return task.ErrEvidenceFault
 		}
 		if groupErr := validateOperationGroup(store, request); groupErr != nil {
@@ -91,7 +91,16 @@ func OpenOperation(store *taskdir.Store, request task.TaskRecord, binding Bindin
 // OpenOperationContext opens or creates an inspection journal while preserving
 // the caller's finite setup lifetime.
 func OpenOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time) (*Operation, error) {
-	return openOperationContext(ctx, store, request, binding, now, groupForRoot(request.RootID))
+	return openOperationContext(ctx, store, request, binding, now, groupForRoot(request.RootID), "")
+}
+
+// OpenOperationWithIdentityContext gives an admission attempt its own journal
+// without changing the normalized logical task or an earlier attempt.
+func OpenOperationWithIdentityContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding Binding, operationID string, now time.Time) (*Operation, error) {
+	if err := task.ValidateTaskID(operationID); err != nil {
+		return nil, err
+	}
+	return openOperationContext(ctx, store, request, binding, now, groupForRoot(request.RootID), operationID)
 }
 
 // OpenConcurrentOperation opens a runtime capability inspection in the private
@@ -104,10 +113,17 @@ func OpenConcurrentOperation(store *taskdir.Store, request task.TaskRecord, bind
 // OpenConcurrentOperationContext opens or creates a concurrent inspection
 // journal while preserving the caller's finite setup lifetime.
 func OpenConcurrentOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time) (*Operation, error) {
-	return openOperationContext(ctx, store, request, binding, now, "default")
+	return openOperationContext(ctx, store, request, binding, now, "default", "")
 }
 
-func openOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time, group string) (operation *Operation, resultErr error) {
+func OpenConcurrentOperationWithIdentityContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding Binding, operationID string, now time.Time) (*Operation, error) {
+	if err := task.ValidateTaskID(operationID); err != nil {
+		return nil, err
+	}
+	return openOperationContext(ctx, store, request, binding, now, "default", operationID)
+}
+
+func openOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding Binding, now time.Time, group, operationID string) (operation *Operation, resultErr error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -128,10 +144,12 @@ func openOperationContext(ctx context.Context, store *taskdir.Store, request tas
 		return nil, err
 	}
 	expected.Group = group
+	expected.OperationID = operationID
+	expected.Label = labelForIdentity(request.RootID, expected.IdentityID())
 	if err = validateOperationGroup(store, expected); err != nil {
 		return nil, err
 	}
-	control, err := store.OpenInspectionContext(ctx, request.TaskID, true)
+	control, err := store.OpenInspectionContext(ctx, expected.IdentityID(), true)
 	if err != nil {
 		return nil, err
 	}
@@ -271,6 +289,7 @@ func sameImmutableRequest(left, right RequestRecord) bool {
 	return left.SchemaVersion == right.SchemaVersion &&
 		left.RootID == right.RootID &&
 		left.TaskID == right.TaskID &&
+		left.OperationID == right.OperationID &&
 		left.TaskSHA256 == right.TaskSHA256 &&
 		reflect.DeepEqual(left.Task, right.Task) &&
 		reflect.DeepEqual(left.Binding, right.Binding) &&
@@ -368,7 +387,7 @@ func (o *Operation) ClaimSubmissionContext(ctx context.Context, now time.Time) (
 	return &SubmissionPermit{
 		state:      newOneShot(),
 		rootID:     o.request.RootID,
-		taskID:     o.request.TaskID,
+		taskID:     o.request.IdentityID(),
 		queueGroup: o.request.Group,
 		supervisor: o.request.Binding.Supervisor,
 	}, nil
@@ -448,7 +467,7 @@ func (o *Operation) claimGuardContext(ctx context.Context, name string, now time
 	}
 	defer cancel()
 	var created bool
-	err := withControlTransactionContext(claimCtx, o.control, func(tx *taskdir.ControlTransaction) error {
+	err := o.withLifetimeLaunchPermissionContext(claimCtx, func(tx *taskdir.ControlTransaction) error {
 		exists, readErr := readExistingClaim(tx, name, o.digest, createdFloor, o.deadline)
 		if readErr != nil {
 			return readErr

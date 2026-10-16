@@ -40,6 +40,19 @@ but it does not authorize a fresh dispatch. Apply the remaining `task_record`
 error rules in [result handling](result-handling.md) before retrying or
 observing.
 
+When the predecessor is bound to a managed workspace, `continue --task` carries
+the recorded workspace, working directory, provider session, and environment
+to the new task ID. It does not mutate the predecessor's immutable request or
+reservation. A changed provider request is a new turn and must pass the normal
+workspace-use reservation. Read [managed workspace guidance](workspaces.md)
+before attaching another provider, review, or verification operation.
+
+If `continue` returns `workspace_busy` with `task_record: "not_created"` and
+`next_action: "watch_workspace"`, observe that workspace with the same root.
+Then retry the exact `continue --task PREDECESSOR_ID` after it becomes retained.
+Keep the original predecessor, brief, and budget; do not replace continuation
+with a fresh dispatch. A created successor is only observed.
+
 `mode` describes the provider contract:
 
 - `native` uses the provider’s exact persisted conversation/session ID;
@@ -53,6 +66,14 @@ terminal outcome or a durable Pueue-ended observation backed by a guardian
 lifetime-termination record with independently proven empty scope for the
 session handoff; without one of those proofs it refuses continuation. Inspect
 the predecessor again rather than bypassing that boundary.
+
+For a managed workspace timeout, capture is a new finite auxiliary operation
+after canonical closure. The normal path proves the provider scope empty and
+records the managed worker's exact `Wait`; recovery can instead use a validated
+absence disposition or previous-boot termination without inventing a native
+`Wait`. Capture never renews the expired provider deadline or reuses its scope. Closure with an
+unavailable capture can still preserve continuation evidence; it does not
+change the provider outcome.
 
 
 ## Follow up after normal completion

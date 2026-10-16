@@ -65,6 +65,7 @@ type RequestRecord struct {
 	SchemaVersion int             `json:"schema_version"`
 	RootID        string          `json:"root_id"`
 	TaskID        string          `json:"task_id"`
+	OperationID   string          `json:"operation_id,omitempty"`
 	Task          task.TaskRecord `json:"task"`
 	TaskSHA256    string          `json:"task_sha256"`
 	Binding       Binding         `json:"binding"`
@@ -74,10 +75,20 @@ type RequestRecord struct {
 	Deadline      string          `json:"deadline"`
 }
 
+// IdentityID names this journal, queue worker and lifetime. TaskID and the
+// embedded task remain the logical request; ordinary inspections retain their
+// existing identity and byte encoding when OperationID is absent.
+func (record RequestRecord) IdentityID() string {
+	if record.OperationID != "" {
+		return record.OperationID
+	}
+	return record.TaskID
+}
+
 // SupervisorIdentity carries the saved queue group while retaining the
 // root/task-derived label used by historical inspection requests.
 func (record RequestRecord) SupervisorIdentity() pueue.InspectionIdentity {
-	return pueue.InspectionIdentity{RootID: record.RootID, TaskID: record.TaskID, QueueGroup: record.Group}
+	return pueue.InspectionIdentity{RootID: record.RootID, TaskID: record.IdentityID(), QueueGroup: record.Group}
 }
 
 // SubmissionRecord is the create-once intent for one supervisor admission.
@@ -194,7 +205,7 @@ func validateRequestIdentity(record RequestRecord, expectedRoot string) error {
 	if err := task.ValidateRootID(record.RootID); err != nil {
 		return err
 	}
-	if err := task.ValidateTaskID(record.TaskID); err != nil {
+	if err := task.ValidateTaskID(record.IdentityID()); err != nil {
 		return err
 	}
 	if expectedRoot != "" && record.RootID != expectedRoot {
@@ -219,7 +230,7 @@ func validateRequestIdentity(record RequestRecord, expectedRoot string) error {
 	if bindingErr := ValidateBinding(record.Binding); bindingErr != nil {
 		return bindingErr
 	}
-	if record.Label != labelForIdentity(record.RootID, record.TaskID) {
+	if record.Label != labelForIdentity(record.RootID, record.IdentityID()) {
 		return task.ErrIdentityMismatch
 	}
 	return validateRequestGroup(record)
@@ -285,6 +296,7 @@ func labelForIdentity(rootID, taskID string) string { return groupForRoot(rootID
 
 func cloneTaskRecord(record task.TaskRecord) task.TaskRecord {
 	copy := record
+	copy.Workspace = record.Workspace.Clone()
 	if record.PriorSession != nil {
 		prior := *record.PriorSession
 		copy.PriorSession = &prior

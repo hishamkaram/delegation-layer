@@ -101,6 +101,98 @@ successful return is not a durable fact unless an authoritative contract makes
 it one. A commit point is the first fact from which all named consumers can
 reach the row's verdict after restart.
 
+### Managed workspace transitions
+
+The application workspace coordinator owns workspace state and exclusive usage.
+Task outcomes remain provider-turn authority; workspace capture receipts are
+independent immutable Git-content evidence. All workspace subprocesses use the
+existing guardian policy through the control-lifetime journal.
+
+| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
+|---|---|---|---|---|---|---|
+| W1: request/task/workspace identity and committed-base intent | Workspace coordinator / workspace operation lock | Authorize one finite provision operation | Canonical intent and operation request | Reconcile the same mapping; preserve ambiguous submission | preparing, ready-unattached, or preparation failed | TestWorkspaceProvisionPurposeRecoveryKeepsCreateOnceMapping |
+| W2: source identity, owned container, pinned base, provision intent | Workspace coordinator / usage reservation; guardian / lifetime owner | Create and register exact detached checkout | Validated checkout and Git backlink registration | Retain partial or changed paths; never adopt another worktree | ready or retained failure | TestWorkspaceRegistrationRecoveryClassifiesRecordStates |
+| W3: usage reservation and capture obligation for typed subject | Workspace coordinator / usage reservation | Admit one task or verification operation | Task submission or durable aborted/not-launched disposition | Uncertain submission retains reservation; session resumability is separate | busy, active, or aborted | TestWorkspaceReservationClosureBeforeTaskCreationDoesNotAwaitOutcome |
+| W4: independently closed provider/verification lifetime and worker completion | Workspace coordinator / usage reservation | Start separate finite capture operation | Capture operation request and exact queue receipt | Reconcile authorized obligation; never restart provider or reopen expired scope | capture-pending | TestWorkspaceGuardianRequiresExactWorkerWaitBeforeAcceptance; native `_run_timeout` gate in `scripts/acceptance_workspaces.py` |
+| W5: immutable candidate, owned tree/base refs, artifact descriptors, capture lifetime closure | Workspace coordinator / usage reservation | Seal core capture receipt | Canonical capture receipt | Resume a committed receipt unchanged; operational read errors retain the obligation | captured or unavailable; original outcome unchanged | TestWorkspaceCaptureReceiptRecoveryClassifiesRecordStates, TestWorkspaceCaptureFinalizesRecoveredClosureWithoutNativeWait, TestWorkspaceCaptureReadFailureKeepsObligationRetryable, TestWorkspacePreviousBootCaptureUsesValidatedResultAcrossRecoveryGap |
+| W6: exclusive usage, successful final capture or explicit discard | Workspace coordinator / usage reservation | Close use and remove exact owned checkout through Git | Release and verified cleanup result | Preserve identity mismatch; resume recorded cleanup | released, cleanup-pending, or removed | TestWorkspaceReleaseRecoveryClassifiesCleanupReceiptStates |
+| W7: completed cleanup and exact forget inventory | Workspace coordinator / usage reservation | Remove matching owned refs and optional workspace artifacts | Forget intent before deletion; forgotten result after completion | Readers recognize covered intentional removal; mismatches remain retained | forgetting, forgotten, or partial failure | TestWorkspaceForgetRecoveryClassifiesTombstoneStates |
+
+Workspace operations use new operation identities after terminal lifetimes;
+recovery never renews an old deadline. Release retains snapshots and the base
+pin. Forgetting never deletes or rewrites provider evidence. Git-content
+snapshots do not promise ignored runtime data or independent filesystem
+containment. Tests must exercise these rows through production stores and the
+real action/verdict consumers before the feature is complete.
+
+`taskdir.LoadLifetimeEvidenceContext` owns lifetime evidence assembly for task,
+inspection, and workspace stores; `task.ResolveLifetimeClosure` owns closure
+policy. Records are create-once. The lifetime transition owner publishes their
+dependencies first, fences launches before termination, and refuses new startup
+after recovered absence. Readers follow reverse dependency order: completion,
+termination, launches, worker, registration, intent. This yields a consistent
+dependency set that may conservatively miss new closure evidence, not an atomic
+filesystem snapshot. Preserve the owner lease for transitions. The three-store
+interleavings are covered by
+`TestLifetimeEvidenceConcurrentPublicationKeepsDependencies`.
+
+Capture uses the validated closure kind rather than requiring hashes for records
+that a recovery variant does not contain. A valid result has the same acceptance
+policy before and after previous-boot absence publication. Once a receipt is
+committed, reservation recovery uses that receipt without reconstructing its
+proof subset. Mixed terminal and operational errors cannot close a capture
+obligation. A missing result is classified only after the entire read transaction
+succeeds; `TestWorkspaceMissingResultDoesNotHideTransactionFailure` covers the
+unlock-failure boundary.
+
+Workspace helper diagnostics are bounded artifacts. Close and sync files and
+their directory entry before publishing result descriptors. A failed diagnostic
+write must still retain a known helper failure without advertising absent bytes.
+It must not convert a failed operation into pending or success.
+
+W2 and W6 share one Git topology owner: the canonical common-directory inode.
+Acquire its exclusive leaf lease separately for each native worktree add,
+list, unlock, and remove command. Reuse the existing lock engine and the
+supervised command runner. Transfer the held descriptor rather than issuing
+an unlock when the helper closes its reference; the inherited native command
+retains its lease until its last reference closes. Never pass private state
+locks to children, nest topology acquisition, hold it for a provider turn, or
+add a second process/deadline owner. Independent repositories stay independent.
+This is cooperative exclusion among Delegate operations, not exclusion of
+external Git commands or repair of crash-stranded native metadata.
+`TestWorktreeMetadataCommandsExcludeOtherOwners` covers the command boundary;
+`TestNativeGitRetainsTransferredLeaseThroughLaunchWrapper` covers native Git,
+production launch-wrapper inheritance, parent-reference closure, and final
+release. Run the latter and the managed-workspace capacity gate on both
+supported native operating systems before claiming portability.
+
+The workspace coordinator uses the existing admission coordinator for the
+published supervisor binding; executable inventory is not another binding
+authority. One scheduling transaction covers request publication, authorization,
+submission, numeric receipt and enqueue. Its context is independent of the
+short observer and bounded by both the original helper deadline and one fixed
+private-control cutoff. Expired replay can repair resource references and seal
+no-launch evidence under bounded control, but cannot invoke authorization
+callbacks or submit; it reads the published binding without bootstrapping.
+Verification joins the operation index only after its reservation is accepted.
+Recovery uses the same reservation-to-index-and-obligation writer, validates
+the owning resource and redrives that exact helper. A validated guardian intent
+makes scheduling replay a local no-op, with no supervisor bind or queue scan.
+The use owner carries one fixed control cutoff through reconciliation,
+completed-evidence acceptance, receipt publication, and reservation closure.
+Nested scheduling retains that cutoff and its parent's cancellation or earlier
+helper deadline; it never detaches again or renews the window. Only the outer
+coordinator boundary detaches a short observer. Completed evidence can finalize
+after helper expiry without granting another launch. This boundary is exercised
+by `TestWorkspaceClosedVerificationCaptureSurvivesObserverCancellationDuringReplay`
+and the `TestWorkspaceControlTransactionNestedCalls` cases.
+W1, W3, W4 and W7 are
+covered by `TestWorkspaceSchedulingSurvivesObserverCancellationAfterAdd`,
+`TestWorkspaceSchedulingReplayRetainsOriginalDeadlineAndControlCutoff`,
+`TestWorkspaceExplicitForgetRecoversExpiredUncreatedFirstHelper`,
+`TestWorkspaceVerificationRecoversObligationAfterReservationCrash`, and
+`TestWorkspaceVerificationRecoveryRejectsAnotherResourceOrReservation`.
+
 Every affected row requires a composed lifecycle test through each affected
 production record store and each real consumer that turns the records into an
 action or verdict. When the same record family has task and inspection stores,
@@ -263,8 +355,14 @@ exclusive acquisition of its owner lock proves no writer remains. Supervisor
 control contexts compose every nested generation, intent, gate, and identity
 lease; adding an inner lease must never replace an outer one. A one-shot
 control owner inherits duplicates of the complete set until its exact child
-`Wait`, including after observer timeout or caller exit. Application
-authorization runs outside queue identity, then one
+`Wait`, including after observer timeout or caller exit. The initial snapshot,
+candidate selection and application evidence preparation share the queue
+identity mutation lease. Preparation may retain independently observed legacy
+inspection exits or enter existing nonblocking lifetime recovery; it must not
+bind a supervisor, nest a generation lease, submit work or wake a workspace.
+Migration uses its already-held exclusive bootstrap owner for the same phase.
+Application authorization only reads that durable evidence and runs outside
+queue identity, then one
 exclusive queue-identity mutation takes a fresh same-scope snapshot, verifies
 that every authorized row still has the same terminal identity, removes those
 exact numeric IDs, and clears their callback state only after successful
@@ -276,6 +374,14 @@ authorized `remove`. If durable terminal evidence exists while a row still
 reports running, maintenance releases queue identity during settlement and
 reacquires it for a fresh snapshot. The supervisor adapter never infers
 terminal state or removal authority itself.
+
+`TestPrivateInspectionPreparationWorksUnderExistingGenerationOwner` covers
+shared maintenance and exclusive migration through the production store and
+admission reader. `TestPrivateInspectionPreparationDoesNotWaitForLiveLifetimeOwner`
+retains a live guardian. `TestPrivateInspectionAuthorizationCannotPublishItsOwnExitProof`
+keeps the authorizer pure. `TestPrivateCleanupProtectsPreparationAndReleasesIdentityBeforeAuthorization`
+proves queue identity protection, authorization outside that lease, and the two
+snapshot protocol.
 
 The stable terminal-callback path is a versioned protocol endpoint. A compatible
 helper implementation may be atomically refreshed at that path so existing
@@ -388,7 +494,8 @@ runtime evidence.
 macOS temporary directories can be exposed through logical `/var` or `/tmp`
 aliases whose physical paths live under `/private`. A test that exercises a
 strict no-symlink path boundary must canonicalize its test-owned temporary root
-before constructing evidence paths, and must separately prove that a deliberate
+and executable path, including a path returned by `os.Executable`, before
+constructing evidence. It must separately prove that a deliberate
 symlinked parent is rejected. Do not weaken the production path check to accept
 the platform alias.
 
@@ -446,6 +553,15 @@ root across an executable-path or byte-identity change. Capacity claims require
 the requested tasks to be concurrently running on that OS while every counted
 task holds its live lifetime-owner lease and native scope. Cross-compilation,
 race tests, and hermetic fixtures remain additional gates, not substitutes.
+
+Native fixtures must acknowledge the tested ownership handoff before observing
+its consequence. For inherited-lease proof, await successful parent-reference
+closure and child readiness before probing contention. Deadline proof requires
+the actual stop request, successful native termination, and the corresponding
+joined process result; an arbitrary error or gate abort is not timeout evidence.
+Use existing budget, command, and native-scope owners for fixture cleanup and
+retain errors. Keep a primitive fixture's serialization distinct from claims
+about production guardian recovery or progress through a stalled native Start.
 
 The research basis is the official [Go `os/exec` contract](https://pkg.go.dev/os/exec),
 which assigns one `Wait` and documents process-only default cancellation;

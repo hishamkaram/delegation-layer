@@ -32,7 +32,7 @@ func openTaskLifetimeChild(parsed runnerArguments, td *taskdir.TaskDir) (*opened
 }
 
 func openInspectionLifetimeChild(parsed runnerArguments, operation *inspection.Operation) (*openedLifetimeChild, error) {
-	if !parsed.LifetimeChild || parsed.LifetimeFD < 3 || operation == nil || parsed.TaskID != operation.Request().TaskID {
+	if !parsed.LifetimeChild || parsed.LifetimeFD < 3 || operation == nil || parsed.TaskID != operation.Request().IdentityID() {
 		return nil, task.ErrEvidenceFault
 	}
 	return openLifetimeChild(parsed, operation)

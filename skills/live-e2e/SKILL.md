@@ -34,6 +34,14 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
   transition row IDs, selected native backend/assurance, and whether packaged or
   default-path behavior is being claimed.
 
+For managed workspace acceptance, use the canonical [W1–W7 transition
+rows](../../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+and [workspace reference](../agent-integration/references/workspaces.md).
+The coordinator owns one workspace use; auxiliary deadlines never renew a
+provider scope; exact native closure precedes capture and cleanup; and owned
+native proof controls cleanup. Do not add a provider-specific Git subprocess
+owner.
+
 ## Workflow
 
 1. Verify prerequisites and record sanitized platform, executable, profile,

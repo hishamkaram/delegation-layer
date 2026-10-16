@@ -60,6 +60,7 @@ Commands:
   preflight     Check one provider without creating a task
   continue      Continue one terminal task through its exact session
   supervisor    Inspect or migrate Delegate's private supervisor
+  workspace     Inspect, verify, release, or forget a managed Git workspace
   help          Show this help message
   version       Print version information
 
@@ -71,6 +72,17 @@ Global flags:
 Supervisor recovery:
   supervisor status --json
   supervisor migrate --json
+
+Managed Git workspaces (optional):
+  dispatch ... --cwd ABS --isolation git-worktree [--base REV]
+  dispatch ... --workspace ID
+  workspace list [--after ID] [--limit 50] --json
+  workspace status ID [--operation OP] [--watch DURATION] --json
+  workspace exec ID --budget DURATION -- COMMAND ARGS
+  workspace release ID [--discard] [--budget DURATION] --json
+  workspace forget ID [--budget DURATION] --json
+  --workspace-budget DURATION sets the finite helper budget (default: 5m).
+  Source edits are excluded; landing changes belongs to the Lead.
 
 Interactive tasks:
   dispatch ... --interactive
@@ -154,6 +166,9 @@ func (d Dependencies) normalized() Dependencies {
 	if d.SupervisorOptions.SuccessfulCleanupAuthorizer == nil {
 		d.SupervisorOptions.SuccessfulCleanupAuthorizer = authorizePrivateSuccessfulCleanup
 	}
+	if d.SupervisorOptions.PrivateTerminalEvidencePreparer == nil {
+		d.SupervisorOptions.PrivateTerminalEvidencePreparer = preparePrivateTerminalEvidence
+	}
 	if d.SupervisorOptions.PrivateMigrationAuthorizer == nil {
 		d.SupervisorOptions.PrivateMigrationAuthorizer = authorizePrivateMigrationQueue
 	}
@@ -220,6 +235,10 @@ type Response struct {
 	Recheck           *RecheckResponse           `json:"recheck,omitempty"`
 	Error             string                     `json:"error,omitempty"`
 	ErrorTruncated    bool                       `json:"error_truncated,omitempty"`
+	Workspace         *WorkspaceResponse         `json:"workspace,omitempty"`
+	Workspaces        []WorkspaceResponse        `json:"workspaces,omitempty"`
+	WorkspaceCursor   string                     `json:"workspace_cursor,omitempty"`
+	WorkspaceSupport  *WorkspaceSupportReport    `json:"workspace_support,omitempty"`
 }
 
 // DispatchFailureResponse gives an agent a stable recovery decision without
@@ -328,7 +347,11 @@ type commandResult struct {
 }
 
 func newResponse(command string) Response {
-	return Response{SchemaVersion: OutputSchemaVersion, Command: command, Admission: task.AdmissionUnknown.String(), Liveness: task.LivenessUndetermined.String(), Publication: task.PublicationUnknown.String()}
+	response := Response{SchemaVersion: OutputSchemaVersion, Command: command, Admission: task.AdmissionUnknown.String(), Liveness: task.LivenessUndetermined.String(), Publication: task.PublicationUnknown.String()}
+	if command == "providers" || command == "capabilities" {
+		response.WorkspaceSupport = workspaceSupport()
+	}
+	return response
 }
 
 func (r *Response) setError(err error) {
@@ -388,8 +411,11 @@ func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
 func writeJSONResponse(stdout io.Writer, command string, response *Response, resultErr error) error {
 	response.setError(resultErr)
 	if (command == "dispatch" || command == "continue") && resultErr != nil {
-		failure := dispatchFailure(resultErr, response.TaskRecord)
-		response.Failure = &failure
+		if response.Failure == nil {
+			failure := dispatchFailure(resultErr, response.TaskRecord)
+			response.Failure = &failure
+		}
+		failure := response.Failure
 		response.Error = dispatchFailureMessage(failure.Code)
 		if failure.ReasonCode != "" {
 			response.Error = publicSupervisorError(response.Error, resultErr).Error()
@@ -420,6 +446,8 @@ func runCommand(a Arguments, deps Dependencies) commandResult {
 		return logs(a, deps.storeDependencies())
 	case "supervisor":
 		return supervisorCommand(a, deps)
+	case "workspace":
+		return workspaceCommand(a, deps)
 	default:
 		return commandResult{response: newResponse(a.Command), code: 2, err: fmt.Errorf("unknown command %q", a.Command)}
 	}
@@ -446,6 +474,7 @@ func writeHumanResponse(w io.Writer, response Response) error {
 	writeHumanRecheck(&output, response.Recheck)
 	writeHumanRaw(&output, response.Raw)
 	writeHumanStops(&output, response.Stop, response.Stops)
+	writeHumanWorkspaceResponse(&output, response)
 	if err := writeHumanInteraction(&output, response); err != nil {
 		return err
 	}
@@ -1335,6 +1364,10 @@ func mergeCommandClose(result *commandResult, closeFn func() error) {
 	if err := closeFn(); err != nil {
 		result.err = errors.Join(result.err, err)
 		result.code = 1
+		// The command error owns failure authority. A new close fault
+		// invalidates recovery selected before closing; the wire projection
+		// must classify the complete error rather than an earlier pending one.
+		result.response.Failure = nil
 		result.response.setError(result.err)
 	}
 }

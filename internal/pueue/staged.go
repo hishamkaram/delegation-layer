@@ -587,11 +587,7 @@ func (c *Client) submitInspectionStagedLocked(ctx context.Context, permit Inspec
 		unknown.Pending = pendingFrom(capabilityErr)
 		return unknown, capabilityErr
 	}
-	runnerArguments := []string{launch.RunnerExecutable, "--inspection"}
-	if launch.Supervised {
-		runnerArguments = append(runnerArguments, "--guardian", "--supervised")
-	}
-	runnerArguments = append(runnerArguments, "--root", launch.RootPath, identity.TaskID)
+	runnerArguments := inspectionWorkerArguments(launch, identity)
 	arguments := []string{"add", "--escape", "--stashed", "--group", identity.Group(), "--label", identity.Label(), "--print-task-id", "--"}
 	var id int64
 	var pending *Pending
@@ -626,11 +622,7 @@ func (c *Client) submitInspectionStagedLocked(ctx context.Context, permit Inspec
 }
 
 func stagedInspectionCommand(launch Launch, identity InspectionIdentity) string {
-	return runnerCommand(launch.RunnerExecutable, RunnerCommandReplacement{
-		RootPath:   launch.RootPath,
-		TaskID:     identity.TaskID,
-		Inspection: true,
-	}, launch.Supervised)
+	return escapedCommand(inspectionWorkerArguments(launch, identity)...)
 }
 
 func (c *Client) requireStagedLaunchCapability(ctx context.Context, authorization SubmissionAuthorization) error {

@@ -30,6 +30,13 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
 - existing fixtures, historical predicate revisions, and persistence formats;
 - injected filesystem/writer/process doubles allowed by the test boundary.
 
+For managed workspace tests, derive assertions from the canonical [W1–W7
+transition rows](../../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+and [workspace reference](../agent-integration/references/workspaces.md).
+Exercise the one coordinator owner, finite non-renewing auxiliary deadline,
+exact closure before capture/cleanup, and owned native-proof cleanup; do not
+create a duplicate Git-subprocess lifecycle harness.
+
 ## Workflow
 
 1. Turn each affected [canonical transition

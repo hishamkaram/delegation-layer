@@ -54,11 +54,11 @@ func TestRunAdmissionInspectionReplaysRecordedFactsAfterDeadline(t *testing.T) {
 	createdAt := time.Now().UTC().Add(-inspection.AdmissionTimeout - time.Second)
 	operation := newInspectionPollTestOperationAt(t, store, bound, createdAt)
 	completeInspectionPollTestOperation(t, operation)
-	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
-	rewriteInspectionPollTestTerminationTime(t, store, operation, createdAt.Add(4*time.Millisecond))
 	if err := operation.RecordReceiptContext(t.Context(), 7); err != nil {
 		t.Fatal(err)
 	}
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
+	rewriteInspectionPollTestTerminationTime(t, store, operation, createdAt.Add(4*time.Millisecond))
 	if err := operation.RecordWorkerSuccessContext(t.Context(), 7); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,17 @@ delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
   [--effort EFFORT] [--native-timeout DURATION] [--interactive] \
   [--resume-task PREDECESSOR_ID] [--review-target TARGET] [--json]
 
+delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
+  (--auto | --provider PROFILE) --brief FILE --cwd ABS \
+  --isolation git-worktree [--base REV] [--workspace-budget DURATION] \
+  [--id TASK_ID] [--permission MODE] [--budget DURATION] [--model MODEL] \
+  [--effort EFFORT] [--interactive] [--json]
+
+delegate [--root ABS] [--pueue-config ABS] [--runner ABS] dispatch \
+  (--auto | --provider PROFILE) --brief FILE --workspace ID \
+  [--workspace-budget DURATION] [--permission MODE] [--budget DURATION] \
+  [--model MODEL] [--effort EFFORT] [--interactive] [--json]
+
 delegate [--root ABS] providers [--json]
 delegate [--root ABS] capabilities --provider PROFILE [--json]
 delegate [--root ABS] models --provider PROFILE [--cwd ABS] [--json]
@@ -30,6 +41,11 @@ delegate [--root ABS] logs TASK_ID [--json]
 delegate [--root ABS] cancel TASK_ID [--json]
 delegate [--root ABS] supervisor status [--json]
 delegate [--root ABS] supervisor migrate [--json]
+delegate [--root ABS] workspace list [--after ID] [--limit 1..50] --json
+delegate [--root ABS] workspace status ID [--operation OP] [--watch DURATION] --json
+delegate [--root ABS] workspace exec ID --budget DURATION -- ARGV...
+delegate [--root ABS] workspace release ID [--discard] [--budget DURATION] --json
+delegate [--root ABS] workspace forget ID [--budget DURATION] --json
 delegate help
 delegate version
 ```
@@ -51,7 +67,11 @@ recorded path. Model discovery retains its bounded inspection group. Dispatch
 prepares unlimited scheduling before admission and may release previously
 admitted queued work even if the new request fails.
 Use separate workspaces or read-only permissions when concurrent tasks could
-write the same files.
+write the same files. For independent parallel writes, choose
+`--isolation git-worktree` unless the user explicitly chooses shared
+coordination. There is no fixed task-count cap or TTL eviction. See the
+[managed workspace reference](../skills/agent-integration/references/workspaces.md)
+for the single policy owner.
 
 ## Supervisor recovery
 
@@ -133,6 +153,9 @@ paths must remain disjoint.
 | `--provider PROFILE` | Provider profile from `delegate providers`, such as `codex:exec` or `codex:review`. |
 | `--brief FILE` | Finite task brief, no larger than 8 MiB. |
 | `--cwd ABS` | Canonical workspace directory. |
+| `--isolation git-worktree` | Create a retained managed Git worktree; requires `--cwd`. |
+| `--base REV` | Committed base revision for a managed worktree; default `HEAD`; requires `--isolation git-worktree`. |
+| `--workspace-budget DURATION` | Finite managed-workspace helper budget; default `5m`, persisted and overridable. |
 | `--id TASK_ID` | Optional 32-character lowercase hexadecimal ID. Omit to allocate one. |
 | `--permission MODE` | `read-only` (default) or authorized unattended `workspace-write`, including commands and edits. Native access can extend beyond the workspace. |
 | `--budget DURATION` | Positive Go duration; default `30m` for ordinary tasks and `1h` for `codex:review`. Queue time is excluded. |
@@ -157,6 +180,78 @@ provider launch. A continuation is a separate task that names an exact
 predecessor and reserves the provider conversation until the predecessor has a
 validated terminal outcome or a durable Pueue-ended observation backed by a
 lifetime-termination record with independently proven empty scope.
+
+## Managed Git workspaces
+
+Managed workspaces are optional. Git is required for managed worktree creation
+or attachment; ordinary dispatch remains valid in non-Git directories. The
+public dispatch forms are:
+
+```sh
+delegate --root "$HOME/delegation-state" dispatch --auto \
+  --brief /absolute/brief.txt --cwd /absolute/git/source \
+  --isolation git-worktree [--base REV] [--workspace-budget DURATION] \
+  --permission workspace-write --budget 30m --json
+
+delegate --root "$HOME/delegation-state" dispatch --auto \
+  --brief /absolute/brief.txt --workspace WORKSPACE_ID \
+  [--workspace-budget DURATION] --permission read-only --budget 30m --json
+```
+
+`--workspace ID` cannot be combined with public `--cwd`, `--base`, or
+`--isolation`. A source-relative subdirectory is preserved in the managed
+checkout. The source base is a committed revision (default `HEAD`); dirty and
+untracked source changes are excluded. The task budget is unchanged. Workspace
+helper operations use a persisted, overridable 5-minute default, while
+`codex:review` retains its 1-hour task default.
+
+The workspace commands are asynchronous where they start an operation:
+
+- `workspace list` returns paginated summaries with `--after ID` and
+  `--limit 1..50`.
+- `workspace status ID` observes the workspace; `--operation OP` selects one
+  operation and `--watch DURATION` bounds observation.
+- `workspace exec ID --budget DURATION -- ARGV...` runs literal argv through
+  the supervised helper; its initial pending response exits `3`.
+- `workspace release ID` performs explicit final capture and cleanup;
+  `--discard` accepts loss of uncaptured checkout content but not missing
+  closure or ownership proof.
+- `workspace forget ID` is only for a proven release and intentionally removes
+  exact owned evidence references; it is not automatic pruning.
+
+Exit `3` distinguishes an accepted pending action (`watch_workspace`) from a
+busy precondition that did not authorize it (`requested_action_not_authorized`
+with `retry_exec`, `retry_release`, or `retry_forget`). Only a supplied
+`operation_id` names a helper. Watch accepted actions without repeating them;
+after `exec` succeeds, wait for the workspace to become `retained` so recapture
+has finished. The [agent result decisions](../skills/agent-integration/references/result-handling.md#managed-workspace-results)
+give the exact retry and observation flow.
+
+Failed helpers may include a bounded `error.txt` artifact in their operation
+evidence. Validate its descriptor before reading; it is separate from captured
+Git content. Release and forgetting retain compact ownership and journal metadata.
+Forgetting removes its recorded artifact inventory; a failed forget attempt may
+retain a diagnostic created after that inventory was committed.
+
+A short watch does not cancel an already-authorized helper scheduling
+transaction or extend its saved deadline. Once Delegate proves a preparation
+ended without a registered checkout or provider launch, the workspace reports
+`preparation_failed` with `stop_and_report`; it does not remain `provisioning`.
+
+`continue --task ID` inherits the predecessor's managed workspace, cwd, session,
+and environment while creating a new task ID. A native review can attach a
+retained workspace with `--workspace ID`; its explicit target remains its scope.
+Codex's `uncommitted` target covers current staged, unstaged, and untracked
+changes. It excludes worker commits. For a complete base-to-capture review,
+use an ordinary read-only task with explicit sealed refs and `git diff BASE
+TREE`. See the [workspace reference](../skills/agent-integration/references/workspaces.md#recovery-and-review-scope).
+
+A known pre-task provision wait returns `task_record: "not_created"`,
+`failure.code: "workspace_provision_pending"`, and
+`failure.next_action: "watch_workspace"` with an exact recovery command.
+Observe that workspace before reuse. Unknown creation state and other failures
+follow their returned next action. Partial-provision release retains changed
+or unverifiable paths rather than guessing ownership.
 
 ## Preflight and continuation
 

@@ -63,6 +63,10 @@ type Options struct {
 	// exact private-supervisor cleanup. Pueue does not inspect Delegate task or
 	// inspection schemas.
 	SuccessfulCleanupAuthorizer func(context.Context, string, task.SupervisorRef, []Job) (PrivateQueueCleanupPlan, error)
+	// PrivateTerminalEvidencePreparer retains observations while the snapshot's
+	// queue identity is protected. Authorization remains a separate read-only
+	// application decision after that short mutation boundary is released.
+	PrivateTerminalEvidencePreparer func(context.Context, string, task.SupervisorRef, []Job) error
 	// PrivateMigrationAuthorizer is the application-owned policy gate for
 	// stopping a private supervisor. Pueue supplies an immutable queue snapshot;
 	// it does not inspect Delegate task or inspection schemas.
@@ -110,9 +114,10 @@ func (i Identity) Label() string { return "delegate:" + i.RootID + ":" + i.TaskI
 
 // Launch transports identity only. The brief never appears in supervisor argv.
 type Launch struct {
-	RunnerExecutable string
-	RootPath         string
-	Supervised       bool
+	RunnerExecutable   string
+	RootPath           string
+	Supervised         bool
+	WorkspaceOperation bool
 }
 
 type State string

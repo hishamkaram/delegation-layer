@@ -16,6 +16,16 @@ const controlLifetimeOwnerLockName = ".lifetime-owner.lock"
 // its guardian is active. Close waits for an acquisition already in progress;
 // the returned lease remains independently releasable after Close.
 func (d *ControlDir) AcquireLifetimeOwner(ctx context.Context) (_ *LifetimeOwnerLease, resultErr error) {
+	return d.acquireLifetimeOwner(ctx, false)
+}
+
+// TryAcquireLifetimeOwnerContext is the observation/recovery edge. A live
+// owner is left untouched; no deadline is spent waiting for that owner.
+func (d *ControlDir) TryAcquireLifetimeOwnerContext(ctx context.Context) (*LifetimeOwnerLease, error) {
+	return d.acquireLifetimeOwner(ctx, true)
+}
+
+func (d *ControlDir) acquireLifetimeOwner(ctx context.Context, nonblocking bool) (_ *LifetimeOwnerLease, resultErr error) {
 	if d == nil || d.store == nil || ctx == nil {
 		return nil, task.ErrInvalidPermit
 	}
@@ -27,7 +37,11 @@ func (d *ControlDir) AcquireLifetimeOwner(ctx context.Context) (_ *LifetimeOwner
 		return nil, err
 	}
 
-	if err := d.store.maintLock.LockSH(ctx); err != nil {
+	lockMaintenance := d.store.maintLock.LockSH
+	if nonblocking {
+		lockMaintenance = d.store.maintLock.LockSHNonblockingContext
+	}
+	if err := lockMaintenance(ctx); err != nil {
 		return nil, err
 	}
 	releaseMaintenance := true
@@ -44,7 +58,11 @@ func (d *ControlDir) AcquireLifetimeOwner(ctx context.Context) (_ *LifetimeOwner
 	if err != nil {
 		return nil, err
 	}
-	if err = owner.LockEX(ctx); err != nil {
+	lockOwner := owner.LockEX
+	if nonblocking {
+		lockOwner = owner.LockEXNonblockingContext
+	}
+	if err = lockOwner(ctx); err != nil {
 		return nil, errors.Join(err, owner.Close())
 	}
 	if err = ctx.Err(); err != nil {

@@ -208,8 +208,8 @@ func TestCancelWithoutSubmissionDoesNotRecoverPrivateSupervisor(t *testing.T) {
 	result := cancel(Arguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{
 		InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
 	})
-	if !errors.Is(result.err, os.ErrNotExist) {
-		t.Fatalf("cancel without submission error = %v, want missing submission", result.err)
+	if result.err != nil || result.code != 0 || result.response.Stop == nil || result.response.Stop.Action != "not-launched" || result.response.Stop.NumericTaskID != nil {
+		t.Fatalf("cancel prepared task without supervisor recovery: %+v", result)
 	}
 	if _, err = os.Lstat(filepath.Join(store.Root, ".supervisor")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cancel without submission acquired supervisor authority: %v", err)

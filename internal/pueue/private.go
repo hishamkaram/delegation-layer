@@ -2686,6 +2686,13 @@ func (c *Client) authorizePrivateMigrationQueue(ctx context.Context, stateRoot s
 	if err != nil {
 		return fmt.Errorf("%w: inspect previous private supervisor: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
+	// The caller already owns the exclusive bootstrap transition for this
+	// predecessor. Preparation must not rebind or acquire another generation.
+	if c.options.PrivateTerminalEvidencePreparer != nil {
+		if err = c.options.PrivateTerminalEvidencePreparer(ctx, stateRoot, oldSupervisor.Binding(), append([]Job(nil), snapshot.Jobs...)); err != nil {
+			return err
+		}
+	}
 	if err = c.options.PrivateMigrationAuthorizer(ctx, stateRoot, oldSupervisor.Binding(), append([]Job(nil), snapshot.Jobs...)); err != nil {
 		if errors.Is(err, ErrPrivateSupervisorMigrationBusy) {
 			if preserveErr := oldSupervisor.PersistPrivateRecoveryBinding(stateRoot); preserveErr != nil {
@@ -4368,9 +4375,9 @@ func sameTerminalQueueJob(left, right Job) bool {
 }
 
 // authorizePrivateSuccessfulTasks takes one queue snapshot and asks the
-// application-owned policy to validate its terminal rows. The callback is the
-// sole owner of Delegate record interpretation; it records independently
-// observed worker exits before any caller is allowed to remove a row.
+// application-owned policy to validate its terminal rows. Evidence preparation
+// consumes the identity-protected snapshot; authorization itself is read-only
+// and runs outside that mutation lease.
 func (c *Client) authorizePrivateSuccessfulTasks(ctx context.Context, eventOnly bool) (QueueSnapshot, PrivateQueueCleanupPlan, error) {
 	if c == nil {
 		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, ErrConfiguration
@@ -4382,12 +4389,20 @@ func (c *Client) authorizePrivateSuccessfulTasks(ctx context.Context, eventOnly 
 	if c.options.SuccessfulCleanupAuthorizer == nil {
 		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, ErrCleanupAuthorization
 	}
-	snapshot, err := c.privateCleanupSnapshot(ctx)
-	if err != nil {
-		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, err
-	}
-	candidates := cloneQueueSnapshot(snapshot).Jobs
-	candidates, err = c.privateTerminalEventJobs(ctx, stateRoot, candidates, eventOnly)
+	var snapshot QueueSnapshot
+	var candidates []Job
+	err := c.withPrivateQueueIdentityMutation(ctx, func(lockedContext context.Context) error {
+		var readErr error
+		snapshot, readErr = c.privateCleanupSnapshot(lockedContext)
+		if readErr != nil {
+			return readErr
+		}
+		candidates, readErr = c.privateTerminalEventJobs(lockedContext, stateRoot, cloneQueueSnapshot(snapshot).Jobs, eventOnly)
+		if readErr != nil || c.options.PrivateTerminalEvidencePreparer == nil {
+			return readErr
+		}
+		return c.options.PrivateTerminalEvidencePreparer(lockedContext, stateRoot, c.binding, candidates)
+	})
 	if err != nil {
 		return QueueSnapshot{}, PrivateQueueCleanupPlan{}, err
 	}

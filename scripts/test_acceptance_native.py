@@ -367,7 +367,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 "status": {"Done": {"result": "Success"}},
             }
             journal = {
-                "task_id": task, "label": label, "group": group,
+                "task_id": task, "operation_id": task, "label": label, "group": group,
                 "numeric_task_id": 7, "result": {"reason": "eligible"},
             }
             ops = provider_common.NativeTaskOps(
@@ -1426,6 +1426,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         if with_inspection:
             inspection_record = {
                 "task_id": task, "group": inspection_group, "label": inspection_label,
+                "operation_id": task, "group_parallelism": 1,
+                "historical_attempts": [], "historical_aborted": False,
                 "numeric_task_id": 8,
                 "inspection_exit_authority": {"mode": "queue"},
                 "request": {"binding": {

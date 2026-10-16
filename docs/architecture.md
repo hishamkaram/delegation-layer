@@ -97,6 +97,48 @@ change to any of those contracts is rejected before launch.
 | RT-L1: required digest in metadata, matching plan, consumed start permit | Task runner inside guardian lifetime / task start lease | Probe this task's runtime and finalize its launch plan | Successful fresh preflight followed by `provider.started.json` | Failed or missing probe seals a rejected result; no second task launch | Execution allowed only after the pending plan marker is cleared and runtime identity is observed | `TestPendingRuntimeRequiresPlanCallback`, `TestPendingRuntimeRejectsUnfinishedPreflight`, `TestPendingRuntimePreflightLaunchesOnceWithObservedIdentity`, `TestCodexMissingNonGitCapabilityRejectsBeforeLaunch` |
 | RT-R1: persisted pending metadata and recorded launch context | Application reconstruction / recorded task contract | Rebuild static inputs and compare the exact required digest | Validated reconstructed contract | Capability, environment, or policy drift fails before provider execution | Metadata remains immutable; another task's runtime proof grants no authority | `TestPendingRuntimeCandidateRejectsChangedContractBeforeProbe`, `TestPendingRuntimeBindsImmutableAdmissionMarker`, `TestPreparedProfileMatchesRequiresExactPendingMarkerAndImmutablePolicy`, `TestCodexContinuationPreservesRecordedContract` |
 
+### Managed Git workspace lifecycle
+
+Managed Git workspaces are optional and have one application-level coordinator
+as their usage owner. The canonical W1–W7 rows cover committed-base intent,
+checkout registration, usage reservation, provider closure, Git-content capture,
+release, and explicit forgetting; see the [maintainability transition
+matrix](../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+and the [agent-facing workspace reference](../skills/agent-integration/references/workspaces.md).
+Ordinary non-Git dispatch remains on the existing path.
+
+The coordinator does not delegate Git subprocess ownership to a provider
+adapter. Managed Git work runs through the existing supervised lifetime and
+execution boundary. Auxiliary helper deadlines are finite operation budgets,
+not extensions of a provider task deadline. Capture and cleanup require exact
+native closure and the managed worker's disposition first; owned native proof
+controls whether cleanup may proceed. Provider outcomes remain immutable and
+separate from Git-content capture receipts. The Lead decides whether captured
+changes are applied, committed, branched, or merged.
+
+Native worktree add, list, unlock, and remove commands take an exclusive lease
+on the shared Git common-directory inode. This prevents concurrent Delegate
+helpers from reading Git's partially published worktree metadata, including
+across state roots. The command inherits the descriptor through the existing
+launch wrapper, so a helper's exit cannot release a live Git command's lease.
+Provider turns and content capture remain concurrent. Other repositories use
+different inodes, and external Git commands do not participate in this lease.
+
+One shared reader assembles task, inspection, and workspace lifetime evidence in
+reverse dependency order. The pure closure resolver validates that set; individual
+consumers do not infer closure from a required pair of hashes. Recovered absence
+and previous-boot termination can prove closure without a native Wait. A validated
+helper result remains usable across the previous-boot recovery publication gap.
+Operational result-read errors leave capture retryable. Recovery completes a
+published capture receipt without rewriting its original evidence or disposition.
+The coordinator's fixed control window covers receipt publication and
+reservation closure even when a short watcher expires. Nested operations keep
+that window; helper launch and execution retain their original deadlines.
+
+Failed workspace helpers retain a bounded `error.txt` artifact when its bytes can
+be durably written. Public responses expose descriptors; they do not inline that
+diagnostic. File closure and directory synchronization precede result publication.
+
 Pueue owns scheduling and worker-row state. One application lifetime state
 machine owns native-lifetime transition policy for both the live guardian and
 recovery. Task or inspection storage owns its durable lifetime records. The
@@ -224,7 +266,12 @@ A queue writer publishes intent under its dedicated owner lock before waiting
 for exclusive queue identity. New readers check that intent before and while
 crossing the short gate, so a continuous submission stream cannot overtake the
 writer. An abandoned intent is cleared only after exclusive acquisition proves
-its writer is gone. Application authorization runs without queue identity;
+its writer is gone. The initial snapshot, candidate selection and application
+evidence preparation share queue identity. Preparation preserves exact legacy
+inspection exit observations before removal and uses nonblocking lifetime
+recovery; it never rebinds a supervisor or schedules workspace work. Migration
+performs that phase under its existing exclusive bootstrap owner. Application
+authorization then reads the durable evidence without queue identity;
 maintenance then takes a fresh same-scope snapshot under the exclusive identity
 mutation, verifies every authorized terminal row is unchanged, removes those
 exact IDs, and retires callback state after successful removal. Failed removal

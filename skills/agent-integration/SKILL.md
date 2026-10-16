@@ -34,7 +34,7 @@ Do not inspect, authenticate, install, or repair provider CLIs to bypass a
 Delegate blocker.
 
 A reported blocker is a valid final response to a delegation request. It does
-not turn that request into an environment-repair task. The one lifecycle
+not turn that request into an environment-repair task. The supervisor recovery
 exception is `failure.code: "supervisor_upgrade_required"` with
 `next_action: "run_supervisor_migrate"`: run Delegate's own
 `supervisor migrate` command once with the exact same state root, then retry the
@@ -47,6 +47,9 @@ not Pueue administration. Never run `pueue`, `pueued`, socket inspection,
 process searches, root deletion, or a provider CLI during recovery. Executable
 path or hash drift alone is handled by normal adoption and does not require
 this command.
+Managed admission also permits the two explicit `watch_workspace` responses
+in the task-record table below. They keep the exact admission command and
+inputs, including `continue`; they do not authorize environment repair.
 When a response says `failure.next_action: "stop_and_report"`, that attempt is
 finished. Include its failure in your final response without opening a
 clarification dialog to choose a fallback. For `task_record: not_created`,
@@ -72,7 +75,9 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
 3. Give every turn an absolute workspace, an explicit permission mode, and a
    finite budget. Keep the state root outside the workspace. Reuse a supplied
    `DELEGATE_ROOT` for all providers and tasks; do not invent per-provider or
-   per-task state roots. Task IDs separate work within that root.
+   per-task state roots. Task IDs separate work within that root. Managed Git
+   workspaces are optional; read [managed workspace guidance](references/workspaces.md)
+   before creating or attaching one.
 4. Use `--json` and save each response separately with its requested destination,
    model, effort, workspace, and returned `task_id`. Never merge concurrent
    responses into an unlabeled output stream. Read `admission`, `liveness`,
@@ -119,8 +124,10 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
 11. The model chooses ordinary-task fan-out by issuing independent `dispatch`
     commands concurrently. The private supervisor does not impose a task-count
     or CPU-based limit. Use this for independent investigation, debate, review,
-    or provider comparison. Concurrent write tasks must use separate workspaces
-    or explicit coordination to avoid file conflicts.
+    or provider comparison. For independent parallel writes, choose
+    `--isolation git-worktree` automatically unless the user explicitly chooses
+    shared coordination; the model chooses fan-out and task scope. A read-only
+    review may attach a retained workspace with `--workspace ID`.
 
 For an explicit Codex code review, use the discoverable `codex:review` profile
 with one persisted target: `--review-target uncommitted`,
@@ -131,6 +138,13 @@ provider to edit files; the review profile is for Codex's native review
 operation and keeps the reviewed Git state explicit. The brief is retained as
 task evidence; the review target supplies Codex's review scope because its
 native command does not accept a prompt with the target flag.
+For a complete managed-workspace turn, review the recorded initial base against
+its captured tree through an ordinary read-only task. Include both sealed refs
+and an explicit `git diff BASE TREE` scope. A native `uncommitted` review covers
+current staged, unstaged, and untracked changes; it excludes worker commits.
+Do not pass a tree as a native branch target. Preserve an explicitly requested
+native review target and state its narrower scope. See [workspace review
+guidance](references/workspaces.md#recovery-and-review-scope).
 
 ## Operating procedure
 
@@ -152,7 +166,7 @@ If no destination was named, use automatic selection directly. If the user
 named a harness (for example, “Codex”), resolve its exact provider ID from:
 
 ```sh
-delegate providers --json
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" providers --json
 ```
 
 Use the matching catalog ID with `--provider`; do not silently substitute
@@ -287,6 +301,7 @@ for **each attempt**, including requests issued together:
 | Usage error, no JSON response | Correct the reported syntax using Delegate help or `providers --json`, then invoke that request again. Parsing failed before admission. |
 | `task_record: not_created`, `failure.code: supervisor_upgrade_required`, and `failure.next_action: run_supervisor_migrate` | Run `delegate --root "<the exact absolute state root used by the failed command>" supervisor migrate --json` once. Retry the exact original admission argv once only after `supervisor_control.state: migrated` and `supervisor_control.next_action: retry_dispatch`; otherwise stop and report the migration response. Preserve an explicit custom root exactly. A failed `continue` must be retried as the same `continue`; never replace it with a fresh `dispatch` or a direct provider call. |
 | `task_record: not_created` and `failure.next_action: correct_request` | Correct that request and retry it. |
+| `task_record: not_created`, `failure.code: workspace_provision_pending` or `workspace_busy`, and `failure.next_action: watch_workspace` | Follow [managed workspace recovery](references/result-handling.md#managed-workspace-results) using the same root and workspace. Once ready, retry the exact admission command and inputs. A failed `continue` remains that same `continue`, never a new dispatch. |
 | `task_record: not_created` with any other next action | Report that attempt's failure and stop it. Do not diagnose provider setup or substitute an integration. |
 | `task_record: created` | Use `status` before taking any other action. Do not dispatch again. |
 | `task_record: unknown` or an ambiguous response | Stop and report; do not retry an uncertain task creation. |
@@ -352,10 +367,14 @@ recruit more agents unless that is explicitly part of the task.
   admission, publication, authentication, errors, or exit codes.
 - Read [continuation](references/continuation.md) for timeout recovery or an
   exact-session follow-up.
+- Read [managed workspaces](references/workspaces.md) for optional Git
+  worktrees, capture, review scope, release, and forgetting.
 - Use [read-only example](examples/read-only-task.md),
-  [write example](examples/workspace-write-task.md), and
-  [JSON examples](examples/json-results.md) when constructing a task or parsing
-  unfamiliar output. Do not load every reference for a routine dispatch.
+  [write example](examples/workspace-write-task.md),
+  [JSON examples](examples/json-results.md), and
+  [managed workspace example](examples/managed-workspace.md) when constructing
+  a task or parsing unfamiliar output. Do not load every reference for a
+  routine dispatch.
 
 ## Completion report
 

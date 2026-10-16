@@ -17,6 +17,7 @@ const (
 
 	LifetimeOwnerTask       = "task"
 	LifetimeOwnerInspection = "inspection"
+	LifetimeOwnerWorkspace  = "workspace"
 
 	LifetimeTerminationCompleted    = "completed"
 	LifetimeTerminationBudget       = "budget"
@@ -46,7 +47,8 @@ func RecordAbsent(err error) bool {
 }
 
 // LifetimeWorkerWaitResult is the closed classification of one managed-worker
-// completion disposition: either no child started or one exact child Wait.
+// completion disposition: a native child Wait, no child started, or a typed
+// worker-absence witness.
 type LifetimeWorkerWaitResult string
 
 // LifetimeIntentRecord reserves the immutable scope plan before native scope
@@ -96,8 +98,9 @@ type LifetimeWorkerRecord struct {
 }
 
 // LifetimeWorkerWaitRecord binds one create-once managed-worker completion
-// disposition to its registration. WorkerSHA256 is optional only when no
-// child started or an exact scope has an unqualified Wait observation.
+// disposition to its registration or prepared intent. WorkerSHA256 is
+// optional only when no child started, an exact scope has an unqualified Wait
+// observation, or a previous-boot absence witness has no worker record.
 type LifetimeWorkerWaitRecord struct {
 	SchemaVersion      int                      `json:"schema_version"`
 	RootID             string                   `json:"root_id"`
@@ -108,6 +111,9 @@ type LifetimeWorkerWaitRecord struct {
 	Result             LifetimeWorkerWaitResult `json:"result"`
 	ExitCode           *int                     `json:"exit_code,omitempty"`
 	ObservedAt         string                   `json:"observed_at"`
+	IntentSHA256       string                   `json:"intent_sha256,omitempty"`
+	AbsenceProof       LifetimeAbsenceProof     `json:"absence_proof,omitempty"`
+	ObservedBootID     string                   `json:"observed_boot_id,omitempty"`
 }
 
 // LifetimeLaunchRecord binds one authorized native start to its registered
@@ -221,13 +227,18 @@ func ValidateLifetimeWorkerWaitRecord(r *LifetimeWorkerWaitRecord) error {
 	if err := validateLifetimeIdentity(r.SchemaVersion, r.RootID, r.TaskID); err != nil {
 		return err
 	}
-	if err := ValidateSHA256(r.RegistrationSHA256); err != nil {
-		return err
+	if r.Result != LifetimeWorkerWaitAbsent {
+		if err := ValidateSHA256(r.RegistrationSHA256); err != nil {
+			return err
+		}
 	}
 	if r.WorkerSHA256 != "" {
 		if err := ValidateSHA256(r.WorkerSHA256); err != nil {
 			return err
 		}
+	}
+	if err := validateLifetimeWorkerWaitAbsenceFields(r); err != nil {
+		return err
 	}
 	if err := validateLifetimeWorkerWaitResult(r); err != nil {
 		return err
@@ -237,8 +248,10 @@ func ValidateLifetimeWorkerWaitRecord(r *LifetimeWorkerWaitRecord) error {
 
 func validateLifetimeWorkerWaitResult(r *LifetimeWorkerWaitRecord) error {
 	switch r.Result {
+	case LifetimeWorkerWaitAbsent:
+		return validateLifetimeWorkerWaitAbsenceResult(r)
 	case LifetimeWorkerWaitNotStarted:
-		if r.WorkerSHA256 != "" || r.ChildPID != 0 || r.ExitCode != nil {
+		if !LifetimeWorkerWaitProvesNotStarted(r) {
 			return ErrIdentityMismatch
 		}
 	case LifetimeWorkerWaitSuccess:
@@ -296,7 +309,7 @@ func LifetimeWorkerWaitMatchesWorker(wait *LifetimeWorkerWaitRecord, worker *Lif
 // LifetimeWorkerWaitIsQualified reports whether a wait record carries the
 // canonical worker identity needed for qualified proof.
 func LifetimeWorkerWaitIsQualified(wait *LifetimeWorkerWaitRecord) bool {
-	return wait != nil && wait.WorkerSHA256 != ""
+	return wait != nil && wait.Result != LifetimeWorkerWaitAbsent && wait.WorkerSHA256 != ""
 }
 
 // LifetimeWorkerWaitProvesNotStarted reports whether the durable disposition
@@ -351,7 +364,7 @@ func validLifetimeToken(value string) bool {
 
 func validateLifetimeOwner(ownerKind, ownerSHA256 string) error {
 	switch ownerKind {
-	case LifetimeOwnerTask, LifetimeOwnerInspection:
+	case LifetimeOwnerTask, LifetimeOwnerInspection, LifetimeOwnerWorkspace:
 	default:
 		return fmt.Errorf("invalid lifetime owner kind: %w", ErrInvalidEnum)
 	}

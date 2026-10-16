@@ -1,5 +1,13 @@
 # Parallel reviews and debates
 
+For independent parallel write work, choose `--isolation git-worktree`
+automatically unless the user explicitly chooses shared coordination. The
+model chooses fan-out and task scope; the supervisor has no fixed task-count
+cap or TTL eviction. A read-only review may attach a retained workspace with
+`--workspace ID`. The single managed-workspace policy, capture boundary, and
+release rules live in [managed workspace guidance](workspaces.md); do not
+restate them in each collaboration brief.
+
 ## Keep each request identifiable
 
 Choose the fan-out needed for the user's task. Each participant needs its own

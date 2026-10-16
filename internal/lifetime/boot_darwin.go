@@ -4,20 +4,20 @@ package lifetime
 
 import (
 	"errors"
-	"strconv"
 
 	"golang.org/x/sys/unix"
 )
 
-// BootID returns the kernel boot time used to reject stale process-scope
-// evidence after a restart.
+// BootID returns the kernel boot-session UUID. Unlike kern.boottime, this
+// identity does not change when the system wall clock is adjusted.
 func BootID() (string, error) {
-	value, err := unix.SysctlTimeval("kern.boottime")
+	value, err := unix.Sysctl("kern.bootsessionuuid")
 	if err != nil {
 		return "", err
 	}
-	if value == nil || value.Sec <= 0 || value.Usec < 0 {
-		return "", errors.New("lifetime: invalid Darwin boot identity")
+	uuid, valid := canonicalBootUUID(value)
+	if !valid {
+		return "", errors.New("lifetime: invalid Darwin boot-session UUID")
 	}
-	return "darwin:" + strconv.FormatInt(value.Sec, 10) + ":" + strconv.FormatInt(int64(value.Usec), 10), nil
+	return "darwin:boot-session:" + uuid, nil
 }

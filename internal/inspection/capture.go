@@ -1,12 +1,12 @@
 package inspection
 
 import (
-	"context"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 
+	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
@@ -19,14 +19,9 @@ type nativeHooks struct {
 	wait  func(*exec.Cmd) error
 }
 
-// nativeScope is the small lifetime boundary needed by native inspection. The
-// production implementation is execution.PreflightScope; keeping the
-// interface here prevents inspection from owning task or process lifetimes.
-type nativeScope interface {
-	Context() context.Context
-	StartCommand(*exec.Cmd, func() error) error
-	FinishCommand(*exec.Cmd) error
-}
+// nativeScope preserves the private runNative signature while making the
+// execution package the single owner of the command lifetime boundary.
+type nativeScope = execution.CommandScope
 
 // runNative is private to the supervised inspection lifetime. The scope owns
 // the final start gate and guardian registration. Cancellation refuses a new
@@ -44,44 +39,31 @@ func runNative(scope nativeScope, definition provider.InspectionDefinition, hook
 	if _, finite := ctx.Deadline(); !finite || ctx.Err() != nil {
 		return nil, errNativeInspection
 	}
-	stdout, err := newNativeStream(definition.OutputLimit, true)
-	if err != nil {
-		return nil, errNativeInspection
-	}
-	stderr, err := newNativeStream(definition.OutputLimit, false)
-	if err != nil {
-		stdout.discard()
-		return nil, errNativeInspection
-	}
 	// A nil Stdin makes the child receive finite EOF. The command is bound to
 	// the executable observed during admission before the final Start gate.
 	cmd, verified, err := newVerifiedCommand(definition.Executable, definition.ExecutableSHA256, definition.Directory, definition.Environment, definition.Arguments...)
 	if err != nil {
-		stdout.discard()
-		stderr.discard()
 		return nil, errNativeInspection
 	}
 	cmd.Dir, cmd.Env = definition.Directory, definition.Environment
-	cmd.Stdout, cmd.Stderr = stdout.writer, stderr.writer
-	go stdout.drain()
-	go stderr.drain()
-	startErr := scope.StartCommand(cmd, func() error { return hooks.startCommand(cmd) })
-	closeErr := errors.Join(stdout.writer.Close(), stderr.writer.Close())
-	if startErr == nil {
-		closeErr = errors.Join(closeErr, verified.ReleaseDescriptors())
+	stdout := boundedNativeBuffer{
+		remaining: definition.OutputLimit,
+		retain:    true,
+		bytes:     make([]byte, 0, definition.OutputLimit),
 	}
-	var waitErr error
-	if startErr == nil {
-		waitErr = hooks.waitCommand(cmd)
-		waitErr = errors.Join(waitErr, scope.FinishCommand(cmd))
-	}
-	stdoutErr, stderrErr := <-stdout.done, <-stderr.done
-	closeErr = errors.Join(closeErr, verified.Close())
-	if errors.Join(startErr, closeErr, waitErr, stdoutErr, stderrErr, ctx.Err()) != nil {
-		clear(stdout.buffer.bytes)
+	stderr := boundedNativeBuffer{remaining: definition.OutputLimit}
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	commandErr := execution.RunScopedCommand(scope, cmd, execution.CommandHooks{
+		Start:   hooks.startCommand,
+		Wait:    hooks.waitCommand,
+		Started: verified.ReleaseDescriptors,
+	})
+	verifiedErr := verified.Close()
+	if errors.Join(commandErr, verifiedErr) != nil || stdout.overflow || stderr.overflow {
+		clear(stdout.bytes)
 		return nil, errNativeInspection
 	}
-	return stdout.buffer.bytes, nil
+	return stdout.bytes, nil
 }
 
 func (h nativeHooks) startCommand(cmd *exec.Cmd) error {

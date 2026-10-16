@@ -8,6 +8,13 @@ description: Design or review supervisor lifecycle changes with one policy owner
 Apply the shared [upgrade recovery verification](../../agents/_data/maintainability-contract.md#upgrade-recovery-verification)
 when installation paths, identity publication, or retained pairs change.
 
+Managed workspace lifecycle uses the canonical [W1–W7 transition
+rows](../../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+and [workspace reference](../agent-integration/references/workspaces.md).
+Keep one coordinator owner, treat auxiliary deadlines as finite operations
+rather than renewal, and require exact native closure before capture or cleanup;
+do not add a second Git-subprocess or cleanup policy here.
+
 ## Trigger
 
 Use this skill for changes to private supervisor binding, continuation,

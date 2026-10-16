@@ -271,6 +271,59 @@ continuation and retry use the current managed runner after the old installation
 is removed. If the receipt is absent and the recorded executable is unavailable,
 delegate cannot safely infer its ownership and leaves the task unchanged.
 
+## A managed workspace is pending, busy, or retained
+
+Managed workspaces are optional. Ordinary non-Git dispatch does not require
+Git; only `--isolation git-worktree`, a retained `--workspace ID`, or a
+workspace operation does.
+
+Observe the workspace itself, not a task record that may not exist yet:
+
+```sh
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" workspace status WORKSPACE_ID \
+  --watch 30s --json
+```
+
+The current pre-task provision exception is explicit:
+`task_record: "not_created"`, `failure.code:
+"workspace_provision_pending"`, `failure.next_action: "watch_workspace"`.
+Follow its returned workspace-status command with the same root. Do not invent
+another recovery code, create a replacement task, or call a provider CLI. Other
+`not_created` responses follow the generic result-handling stop rule. Structured
+partial-provision recovery beyond this exception is not available in the
+current branch.
+
+For a workspace mutation, `requested_action_not_authorized` with `retry_exec`,
+`retry_release`, or `retry_forget` means the requested action was not accepted.
+Wait for the prior use to end, then repeat that exact mutation. Accepted
+pending actions return `watch_workspace`; observe them without repeating the
+mutation. Use `--operation` only when an actual helper ID was returned. See
+the [agent result decisions](../skills/agent-integration/references/result-handling.md#managed-workspace-results).
+
+`workspace exec` starts an asynchronous bounded helper. Observe it with
+`workspace status WORKSPACE_ID --operation OP --watch DURATION --json`, and
+wait for `state: retained` after command success so recapture finishes too. A
+verification exit or capture receipt is separate from the provider outcome.
+The watch interval does not cancel an already-authorized control transaction.
+Receipt publication and reservation closure can use the fixed private control
+window, which defaults to 85 seconds. Allow the command to finish; a later
+watch resumes durable progress if that window expires. Helper execution keeps
+its original deadline.
+The workspace remains retained through success, failure, and no-op outcomes.
+Normal `workspace release ID` performs final capture before exclusive cleanup;
+if capture or identity proof fails, retain the workspace and retry the recorded
+operation. `--discard` waives uncaptured checkout content only; it never waives
+closure or ownership proof. Use `workspace forget ID` only after a proven
+release and expect intentional forgetting to remain visible in evidence. Busy
+or unknown state receives no cleanup, and there is no TTL or global Git prune.
+
+Delegate coordinates its own concurrent worktree metadata commands internally;
+no Git lock setup is required. If a native Git command fails, inspect the
+returned bounded diagnostic artifact. An external Git command or an earlier
+interrupted command can still leave incomplete repository metadata. Delegate
+retains that failure and the workspace instead of pruning unrelated worktrees
+or guessing that a missing registration authorizes deletion.
+
 ## A task remains pending
 
 `status` reports what is known and may recover the private Pueue binding.

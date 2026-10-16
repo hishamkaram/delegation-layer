@@ -155,6 +155,9 @@ func authorizePrivateSuccessfulCleanupCandidates(ctx context.Context, store *tas
 }
 
 func inspectPrivateSettlingInspection(ctx context.Context, store *taskdir.Store, group inspection.GroupRequestRecord, taskID string, job pueue.Job) (resultErr error) {
+	if found, err := inspectPrivateWorkspaceOperation(ctx, store, group, taskID, job); found || err != nil {
+		return err
+	}
 	operation, err := inspection.LoadOperationContext(ctx, store, taskID)
 	if err != nil {
 		return err
@@ -638,11 +641,15 @@ func privateSupervisorDaemonDrift(root string, deps Dependencies) (bool, error) 
 }
 
 func supervisorControlContext(options pueue.Options) (context.Context, context.CancelFunc) {
+	return supervisorControlContextWithParent(context.Background(), options)
+}
+
+func supervisorControlContextWithParent(parent context.Context, options pueue.Options) (context.Context, context.CancelFunc) {
 	timeout := pueue.PrivateControlTimeout(options)
 	if timeout <= 0 {
 		timeout = supervisorMigrationTimeout
 	}
-	return context.WithTimeout(context.Background(), timeout)
+	return context.WithTimeout(parent, timeout)
 }
 
 func supervisorControlOptions(deps Dependencies) pueue.Options {

@@ -371,10 +371,30 @@ func TestScheduledPrivateMaintenanceWaitsForQueueIdentityLease(t *testing.T) {
 
 func TestScheduledPrivateMaintenanceAllowsQueueIdentityLeasesDuringAuthorization(t *testing.T) {
 	scenario := newPrivateTerminalTriggerScenario(t, "identity-gate", true)
+	// Snapshot preparation now intentionally owns queue identity. Block the
+	// actual authorizer, rather than mislabelling a blocked status subprocess.
+	scenario.releaseStatus(t)
+	authorizationEntered, authorizationRelease := make(chan struct{}), make(chan struct{})
+	var enteredOnce, releaseOnce sync.Once
+	releaseAuthorization := func() { releaseOnce.Do(func() { close(authorizationRelease) }) }
+	defer releaseAuthorization()
+	scenario.client.options.SuccessfulCleanupAuthorizer = func(ctx context.Context, root string, binding task.SupervisorRef, jobs []Job) (PrivateQueueCleanupPlan, error) {
+		enteredOnce.Do(func() { close(authorizationEntered) })
+		select {
+		case <-ctx.Done():
+			return PrivateQueueCleanupPlan{}, ctx.Err()
+		case <-authorizationRelease:
+			return privateTerminalTriggerCleanupAuthorizer(ctx, root, binding, jobs)
+		}
+	}
 	if !scenario.client.SchedulePrivateQueueMaintenance(t.Context()) {
 		t.Fatal("private maintenance was not scheduled")
 	}
-	waitForPrivateFixtureMarker(t, scenario.startedPath)
+	select {
+	case <-authorizationEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("private maintenance did not reach authorization")
+	}
 
 	leaseEntered := make(chan struct{})
 	leaseDone := make(chan error, 1)
@@ -393,7 +413,7 @@ func TestScheduledPrivateMaintenanceAllowsQueueIdentityLeasesDuringAuthorization
 		t.Fatal(err)
 	}
 
-	scenario.releaseStatus(t)
+	releaseAuthorization()
 	if closeErr := scenario.client.Close(); closeErr != nil {
 		t.Fatal(closeErr)
 	}

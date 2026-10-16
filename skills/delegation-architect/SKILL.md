@@ -24,6 +24,12 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 - compatibility requirements and the relevant acceptance scenarios; and
 - existing interfaces, value types, and failure behavior to preserve.
 
+For managed Git workspaces, use the contract's [W1–W7 transition
+rows](../../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+and the [workspace reference](../agent-integration/references/workspaces.md).
+The application coordinator remains the one owner; do not duplicate workspace
+lifecycle or Git-subprocess execution policy in an adapter or a second layer.
+
 ## Workflow
 
 1. Map the consumer that needs each operation and assign the interface to that

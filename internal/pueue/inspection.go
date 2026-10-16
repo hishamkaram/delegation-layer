@@ -499,11 +499,7 @@ func (c *Client) addInspectionWorker(ctx context.Context, permit InspectionSubmi
 }
 
 func (c *Client) addInspectionWorkerWithIdentityLease(ctx context.Context, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch) (id int64, terminalEventRegistered, terminalEventRegistrationKnown bool, resultErr error) {
-	runnerArguments := []string{launch.RunnerExecutable, "--inspection"}
-	if launch.Supervised {
-		runnerArguments = append(runnerArguments, "--guardian", "--supervised")
-	}
-	runnerArguments = append(runnerArguments, "--root", launch.RootPath, identity.TaskID)
+	runnerArguments := inspectionWorkerArguments(launch, identity)
 	arguments := []string{"add", "--escape", "--group", identity.Group(), "--label", identity.Label(), "--print-task-id", "--"}
 	result, err := c.command(ctx, permit.ConsumeInspectionSubmission, append(arguments, runnerArguments...)...)
 	if err != nil {
@@ -533,6 +529,20 @@ func (c *Client) addInspectionWorkerWithIdentityLease(ctx context.Context, permi
 		return id, false, terminalEventRegistrationKnown, nil
 	}
 	return id, true, terminalEventRegistrationKnown, nil
+}
+
+// inspectionWorkerArguments is shared by immediate and staged auxiliary
+// submission, so their native guardian modes cannot drift apart.
+func inspectionWorkerArguments(launch Launch, identity InspectionIdentity) []string {
+	mode := "--inspection"
+	if launch.WorkspaceOperation {
+		mode = "--workspace-operation"
+	}
+	arguments := []string{launch.RunnerExecutable, mode}
+	if launch.Supervised {
+		arguments = append(arguments, "--guardian", "--supervised")
+	}
+	return append(arguments, "--root", launch.RootPath, identity.TaskID)
 }
 
 // StopInspection routes one saved inspection target to remove or kill after a

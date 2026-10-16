@@ -31,6 +31,13 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
 - the implementation handoff, test output, and acceptance receipts; and
 - any previous finding and the claimed correction.
 
+For managed workspace changes, review the canonical [W1–W7 transition
+rows](../../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+and [workspace reference](../agent-integration/references/workspaces.md).
+Check one coordinator owner, non-renewing auxiliary deadlines, exact closure
+before capture/cleanup, and owned native-proof cleanup without duplicating
+Git-subprocess lifecycle policy in the review skill.
+
 ## Workflow
 
 1. Validate the [handoff evidence
