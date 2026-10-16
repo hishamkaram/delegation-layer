@@ -1091,12 +1091,9 @@ def _collect_task(context: WorkspaceContext, task: dict[str, object], timeout: f
 
 
 def _prove_lifetimes_closed(context: WorkspaceContext, task_ids: list[str]) -> dict[str, object]:
-    try:
-        proof = private_cli.authorize_managed_lifetime_closure(
-            context.state, tuple(task_ids),
-        )
-    except (OSError, RuntimeError) as error:
-        raise RuntimeError("managed task lifetime closure was not proven") from error
+    proof = private_cli.await_managed_lifetime_closure(
+        context.state, tuple(task_ids), timeout=WAIT_SECONDS,
+    )
     require(isinstance(proof, dict), "managed lifetime closure proof is not an object")
     return proof
 

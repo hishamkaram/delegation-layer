@@ -1409,7 +1409,8 @@ def await_managed_lifetime_closure(state, task_ids=(), timeout=30):
             last_error = error
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                "managed lifetime closure remained incomplete before supervisor shutdown"
+                "managed lifetime closure remained incomplete before supervisor shutdown: "
+                + str(last_error)
             ) from last_error
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 

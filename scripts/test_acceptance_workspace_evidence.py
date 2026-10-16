@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 import acceptance_provider_common as common
 import acceptance_workspaces as workspaces
@@ -40,6 +41,45 @@ class WorkspaceEvidenceTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_workspace_driver_waits_for_exact_capture_owner_and_wait(self) -> None:
+        operation = self.write_native_records()
+        wait_path = operation / "lifetime-worker-wait.json"
+        wait_bytes = wait_path.read_bytes()
+        wait_path.unlink()
+        request_bytes = (operation / "request.json").read_bytes()
+        context = mock.Mock(spec=workspaces.WorkspaceContext)
+        context.state = self.state
+        lock = operation / ".lifetime-owner.lock"
+        lock.touch(mode=0o600)
+        with lock.open("r+b") as held:
+            fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+
+            def finish_capture(_delay: float) -> None:
+                wait_path.write_bytes(wait_bytes)
+                wait_path.chmod(0o600)
+                fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+
+            with mock.patch.object(workspaces.private_cli.time, "sleep", side_effect=finish_capture) as wait:
+                proof = workspaces._prove_lifetimes_closed(context, [])
+        wait.assert_called_once()
+        self.assertEqual(proof["workspace"][OPERATION]["managed_lifetime"]["worker_wait"]["result"], "success")
+        self.assertEqual((operation / "request.json").read_bytes(), request_bytes)
+
+    def test_workspace_driver_does_not_accept_persistent_capture_identity_fault(self) -> None:
+        operation = self.write_native_records(owner_sha="f" * 64)
+        request_bytes = (operation / "request.json").read_bytes()
+        context = mock.Mock(spec=workspaces.WorkspaceContext)
+        context.state = self.state
+        with (
+            mock.patch.object(workspaces.private_cli.time, "monotonic",
+                              side_effect=[0, workspaces.WAIT_SECONDS]),
+            mock.patch.object(workspaces.private_cli.time, "sleep") as wait,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "closure remained incomplete.*intent binding mismatch for " + OPERATION):
+                workspaces._prove_lifetimes_closed(context, [])
+        wait.assert_not_called()
+        self.assertEqual((operation / "request.json").read_bytes(), request_bytes)
 
     @staticmethod
     def supervisor() -> dict[str, object]:

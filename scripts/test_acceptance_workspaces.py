@@ -27,6 +27,39 @@ WAIT_SHA = "5" * 64
 
 
 class ManagedWorkspaceDriverTests(unittest.TestCase):
+    def test_root_closure_waits_for_capture_after_provider_publication(self):
+        context = mock.Mock(spec=driver.WorkspaceContext)
+        context.state = Path("/state")
+        proof = {"tasks": {TASK_ID: {}}, "workspace": {OPERATION_ID: {}}}
+        pending = driver.private_cli.AcceptanceFailure(
+            "workspace operation lifetime owner is still active: " + OPERATION_ID)
+        with (
+            mock.patch.object(driver.private_cli, "authorize_managed_lifetime_closure",
+                              side_effect=[pending, proof]) as authorize,
+            mock.patch.object(driver.private_cli.time, "sleep") as wait,
+        ):
+            self.assertEqual(driver._prove_lifetimes_closed(context, [TASK_ID]), proof)
+        self.assertEqual(authorize.call_args_list, [
+            mock.call(context.state, (TASK_ID,)), mock.call(context.state, (TASK_ID,)),
+        ])
+        wait.assert_called_once()
+
+    def test_root_closure_deadline_retains_the_validation_failure(self):
+        context = mock.Mock(spec=driver.WorkspaceContext)
+        context.state = Path("/state")
+        fault = driver.private_cli.AcceptanceFailure("capture identity mismatch")
+        with (
+            mock.patch.object(driver.private_cli, "authorize_managed_lifetime_closure",
+                              side_effect=fault),
+            mock.patch.object(driver.private_cli.time, "monotonic",
+                              side_effect=[0, driver.WAIT_SECONDS]),
+            mock.patch.object(driver.private_cli.time, "sleep") as wait,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "closure remained incomplete.*capture identity mismatch") as raised:
+                driver._prove_lifetimes_closed(context, [TASK_ID])
+        self.assertIs(raised.exception.__cause__, fault)
+        wait.assert_not_called()
+
     def test_capacity_waits_for_provider_fifo_after_preflight_launch(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
