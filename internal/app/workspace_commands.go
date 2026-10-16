@@ -162,6 +162,9 @@ func watchManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *
 		}
 	}()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		err := observeManagedWorkspace(ctx, store, resource, deps, a.WorkspaceOperationID)
 		if err == nil || !errors.Is(err, workspace.ErrPending) || a.Watch == 0 {
 			return err

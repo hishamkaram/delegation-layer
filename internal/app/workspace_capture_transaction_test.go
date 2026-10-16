@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,42 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
+
+func TestWorkspaceCanceledWatchDoesNotBeginCaptureReplay(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		expired bool
+	}{{"canceled", false}, {"deadline", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture, verification, capture, deps := prepareClosedVerificationCapture(t)
+			observer, cancel := context.WithCancel(t.Context())
+			want := context.Canceled
+			if test.expired {
+				cancel()
+				observer, cancel = context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+				want = context.DeadlineExceeded
+			}
+			cancel()
+			var commands atomic.Int32
+			deps.SupervisorOptions.Observer = func(pueue.CommandEvent) { commands.Add(1) }
+			err := watchManagedWorkspace(observer, fixture.store, fixture.resource, deps, Arguments{Watch: time.Second})
+			if !errors.Is(err, want) || (test.expired && !errors.Is(err, workspace.ErrPending)) {
+				t.Fatalf("already stopped observer began replay: %v", err)
+			}
+			if _, err = fixture.resource.CaptureReceipt(t.Context(), capture.OperationID); !workspace.OperationAbsent(err) {
+				t.Fatalf("already stopped observer published a capture receipt: %v", err)
+			}
+			if _, err = fixture.resource.Reservation(t.Context()); err != nil {
+				t.Fatalf("already stopped observer changed the reservation: %v", err)
+			}
+			if commands.Load() != 0 {
+				t.Fatalf("already stopped observer contacted the supervisor %d times", commands.Load())
+			}
+			assertWorkspaceReplayRequestUnchanged(t, fixture.store, verification)
+			assertWorkspaceReplayRequestUnchanged(t, fixture.store, capture)
+		})
+	}
+}
 
 type workspaceReplayObserverCancellation struct {
 	taskdir.BaseFaultInjector
