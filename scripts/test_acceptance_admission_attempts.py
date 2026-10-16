@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import shlex
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import acceptance_provider_common as provider_common
 import test_acceptance_inspection as inspection_fixtures
@@ -25,7 +26,7 @@ REPLAY_REQUEST = "e" * 64
 class AdmissionAttemptOracleTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="admission-attempt-oracle-")
-        base = Path(self.temporary.name)
+        base = Path(self.temporary.name).resolve(strict=True)
         self.base = base
         self.state = base / "state"
         self.state_parent = base / "state-parent"
@@ -869,6 +870,25 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
         wrong_parallelism["groups"]["default"]["parallel_tasks"] = 1
         with self.assertRaises(AcceptanceFailure):
             ops._validate_queue_membership(wrong_parallelism, allow_failure=False)
+
+
+class AdmissionAttemptFixturePathTests(unittest.TestCase):
+    def test_journals_accept_a_symlinked_temporary_parent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve(strict=True)
+            actual = parent / "actual"
+            actual.mkdir()
+            alias = parent / "alias"
+            alias.symlink_to(actual, target_is_directory=True)
+            for method in (
+                    "test_full_journal_accepts_existing_ordinary_workspace_attempt",
+                    "test_managed_workspace_journal_accepts_private_default_group_and_zero_parallelism"):
+                with self.subTest(method=method), patch.object(tempfile, "tempdir", str(alias)):
+                    result = unittest.TestResult()
+                    AdmissionAttemptOracleTests(method).run(result)
+                    self.assertEqual(result.errors, [])
+                    self.assertEqual(result.failures, [])
+                    self.assertEqual(result.testsRun, 1)
 
 
 if __name__ == "__main__":
