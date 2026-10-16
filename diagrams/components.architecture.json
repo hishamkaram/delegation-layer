@@ -46,12 +46,26 @@
           "runner"
         ],
         "note": "Observation reads durable state; guardian recovery resumes the same lifetime policy and continuation creates a linked successor."
+      },
+      {
+        "id": "managed-workspaces",
+        "label": "Optional managed Git workspaces",
+        "focus": [
+          "caller",
+          "delegate",
+          "pueue",
+          "guardian",
+          "runner",
+          "store",
+          "workspace"
+        ],
+        "note": "Git isolation is optional. Finite helpers capture only after exact lifetime closure; provider outcomes remain independent."
       }
     ],
     "output": "diagrams/components.html",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "10c0c5c24286f8be75c3475d40c12d8ed073d381",
+      "revision": "cb71d7474371b9bd37b93ec34442cee339305687",
       "link_mode": "local-only"
     }
   },
@@ -83,7 +97,7 @@
       "sublabel": "dispatch \u00b7 auto \u00b7 observe \u00b7 continue",
       "pos": [
         30,
-        310
+        490
       ],
       "size": [
         190,
@@ -91,19 +105,19 @@
       ],
       "sources": [
         {
-          "path": "cmd/delegate/main.go",
-          "line": 15,
-          "end_line": 20
+          "path": "internal/app/runtime.go",
+          "line": 364,
+          "end_line": 454
         },
         {
-          "path": "internal/app/runtime.go",
-          "line": 341,
-          "end_line": 424
+          "path": "internal/app/workspace_admission.go",
+          "line": 37,
+          "end_line": 159
         },
         {
-          "path": "internal/app/runtime.go",
-          "line": 557,
-          "end_line": 590
+          "path": "internal/app/workspace_capture.go",
+          "line": 18,
+          "end_line": 143
         }
       ]
     },
@@ -114,7 +128,7 @@
       "sublabel": "static candidate \u00b7 required capability",
       "pos": [
         240,
-        80
+        260
       ],
       "size": [
         255,
@@ -146,7 +160,7 @@
       "tag": "current runtime authority at launch",
       "pos": [
         540,
-        80
+        260
       ],
       "size": [
         270,
@@ -173,12 +187,12 @@
     {
       "id": "store",
       "type": "database",
-      "label": "Task and inspection store",
-      "sublabel": "requests \u00b7 lifetime records \u00b7 sealed evidence",
-      "tag": "outcome.json is terminal authority",
+      "label": "Task, inspection and workspace records",
+      "sublabel": "requests \u00b7 lifetime facts \u00b7 independent receipts",
+      "tag": "provider outcome and Git capture have separate authority",
       "pos": [
         240,
-        560
+        740
       ],
       "size": [
         400,
@@ -186,19 +200,19 @@
       ],
       "sources": [
         {
-          "path": "internal/taskdir/taskdir.go",
-          "line": 206,
-          "end_line": 238
-        },
-        {
           "path": "internal/taskdir/publication.go",
-          "line": 140,
+          "line": 193,
           "end_line": 219
         },
         {
           "path": "internal/inspection/evidence.go",
-          "line": 195,
-          "end_line": 224
+          "line": 207,
+          "end_line": 237
+        },
+        {
+          "path": "internal/workspace/resource_capture.go",
+          "line": 55,
+          "end_line": 80
         }
       ]
     },
@@ -210,7 +224,7 @@
       "tag": "auto-start \u00b7 parallel",
       "pos": [
         245,
-        310
+        490
       ],
       "size": [
         180,
@@ -219,8 +233,8 @@
       "sources": [
         {
           "path": "internal/app/runtime.go",
-          "line": 828,
-          "end_line": 864
+          "line": 857,
+          "end_line": 894
         },
         {
           "path": "internal/pueue/private.go",
@@ -237,11 +251,11 @@
     {
       "id": "workspace",
       "type": "security",
-      "label": "Workspace and runtime",
-      "sublabel": "canonical paths kept disjoint",
+      "label": "Selected workspace",
+      "sublabel": "caller directory or Git checkout",
       "pos": [
         940,
-        560
+        740
       ],
       "size": [
         230,
@@ -264,11 +278,11 @@
       "id": "guardian",
       "type": "security",
       "label": "Lifetime guardian",
-      "sublabel": "scope owner \u00b7 exact child wait \u00b7 recovery",
+      "sublabel": "native scope \u00b7 exact Wait \u00b7 recovery",
       "tag": "owns native stopping",
       "pos": [
         470,
-        300
+        480
       ],
       "size": [
         200,
@@ -277,18 +291,18 @@
       "sources": [
         {
           "path": "internal/app/lifetime_guardian.go",
-          "line": 294,
-          "end_line": 340
+          "line": 301,
+          "end_line": 344
         },
         {
           "path": "internal/app/lifetime_guardian.go",
-          "line": 646,
-          "end_line": 695
+          "line": 823,
+          "end_line": 843
         },
         {
           "path": "internal/app/lifetime_guardian.go",
-          "line": 1227,
-          "end_line": 1273
+          "line": 1274,
+          "end_line": 1321
         }
       ]
     },
@@ -296,11 +310,11 @@
       "id": "runner",
       "type": "backend",
       "label": "delegate-run",
-      "sublabel": "probe \u00b7 Start/Wait \u00b7 capture \u00b7 seal",
-      "tag": "one provider turn",
+      "sublabel": "preflight \u00b7 Start/Wait \u00b7 seal",
+      "tag": "provider turn or finite workspace helper",
       "pos": [
         710,
-        310
+        490
       ],
       "size": [
         190,
@@ -308,19 +322,19 @@
       ],
       "sources": [
         {
-          "path": "cmd/delegate-run/main.go",
-          "line": 13,
-          "end_line": 18
-        },
-        {
           "path": "internal/app/runner.go",
-          "line": 505,
-          "end_line": 534
+          "line": 515,
+          "end_line": 561
         },
         {
-          "path": "internal/execution/run.go",
-          "line": 76,
-          "end_line": 163
+          "path": "internal/app/workspace_operation_worker.go",
+          "line": 64,
+          "end_line": 96
+        },
+        {
+          "path": "internal/app/workspace_operation_worker.go",
+          "line": 205,
+          "end_line": 221
         }
       ]
     },
@@ -332,7 +346,7 @@
       "tag": "native login and output",
       "pos": [
         940,
-        300
+        480
       ],
       "size": [
         230,
@@ -360,10 +374,10 @@
       "id": "predicate",
       "type": "security",
       "label": "Behavior predicates",
-      "sublabel": "strict interpretation of sealed evidence",
+      "sublabel": "strict sealed-evidence interpretation",
       "pos": [
         710,
-        560
+        740
       ],
       "size": [
         200,
@@ -390,7 +404,7 @@
       "tag": "BLOCKED is neutral",
       "pos": [
         30,
-        560
+        740
       ],
       "size": [
         200,
@@ -446,7 +460,7 @@
       "toSide": "top",
       "labelAt": [
         240,
-        190
+        370
       ]
     },
     {
@@ -459,16 +473,16 @@
       "via": [
         [
           125,
-          230
+          410
         ],
         [
           367.5,
-          230
+          410
         ]
       ],
       "labelAt": [
         245,
-        215
+        395
       ]
     },
     {
@@ -480,7 +494,7 @@
       "toSide": "left",
       "labelAt": [
         517,
-        60
+        240
       ]
     },
     {
@@ -494,16 +508,16 @@
       "via": [
         [
           675,
-          260
+          440
         ],
         [
           125,
-          260
+          440
         ]
       ],
       "labelAt": [
         475,
-        245
+        425
       ]
     },
     {
@@ -517,20 +531,20 @@
       "via": [
         [
           805,
-          205
+          385
         ],
         [
           865,
-          205
+          385
         ],
         [
           865,
-          123
+          303
         ]
       ],
       "labelAt": [
         965,
-        205
+        385
       ]
     },
     {
@@ -544,16 +558,16 @@
       "via": [
         [
           125,
-          500
+          680
         ],
         [
           440,
-          500
+          680
         ]
       ],
       "labelAt": [
         280,
-        480
+        660
       ]
     },
     {
@@ -565,7 +579,7 @@
       "toSide": "left",
       "labelAt": [
         228,
-        285
+        465
       ]
     },
     {
@@ -579,20 +593,20 @@
       "via": [
         [
           805,
-          500
+          680
         ],
         [
           680,
-          500
+          680
         ],
         [
           680,
-          608
+          788
         ]
       ],
       "labelAt": [
         740,
-        480
+        660
       ]
     },
     {
@@ -605,7 +619,7 @@
       "toSide": "left",
       "labelAt": [
         920,
-        420
+        600
       ]
     },
     {
@@ -617,7 +631,7 @@
       "toSide": "top",
       "labelAt": [
         1055,
-        500
+        680
       ]
     },
     {
@@ -629,7 +643,7 @@
       "toSide": "top",
       "labelAt": [
         850,
-        535
+        715
       ]
     },
     {
@@ -642,7 +656,7 @@
       "toSide": "bottom",
       "labelAt": [
         250,
-        535
+        715
       ]
     },
     {
@@ -655,20 +669,20 @@
       "toSide": "bottom",
       "labelAt": [
         960,
-        460
+        640
       ],
       "via": [
         [
           925,
-          604
+          784
         ],
         [
           925,
-          455
+          635
         ],
         [
           805,
-          455
+          635
         ]
       ]
     },
@@ -683,7 +697,7 @@
       "via": [
         [
           15,
-          353
+          533
         ],
         [
           15,
@@ -692,7 +706,7 @@
       ],
       "labelAt": [
         250,
-        245
+        425
       ]
     },
     {
@@ -705,7 +719,7 @@
       "toSide": "left",
       "labelAt": [
         458,
-        420
+        600
       ]
     },
     {
@@ -718,7 +732,7 @@
       "toSide": "left",
       "labelAt": [
         690,
-        420
+        600
       ]
     },
     {
@@ -732,16 +746,16 @@
       "via": [
         [
           805,
-          285
+          465
         ],
         [
           570,
-          285
+          465
         ]
       ],
       "labelAt": [
         695,
-        275
+        455
       ]
     },
     {
@@ -755,16 +769,16 @@
       "via": [
         [
           570,
-          470
+          650
         ],
         [
           440,
-          470
+          650
         ]
       ],
       "labelAt": [
         505,
-        450
+        630
       ]
     }
   ],
@@ -786,7 +800,9 @@
       "items": [
         "Pueue owns scheduling and worker-row state",
         "The guardian owns native scope, stopping, and durable exact child Wait",
-        "delegate-run owns provider Start/Wait, capture, and sealing"
+        "delegate-run owns provider Start/Wait, capture, and sealing",
+        "The workspace coordinator owns use \u2192 capture \u2192 reusable under its use-owner lease",
+        "Git worktree metadata commands share one common-directory lease; execution still uses the existing runner"
       ]
     },
     {
@@ -795,7 +811,9 @@
       "items": [
         "provider.exit seals raw evidence",
         "outcome.json is terminal authority",
-        "result.txt and publish.reject are payload evidence"
+        "result.txt and publish.reject are payload evidence",
+        "Workspace capture receipts have independent authority; they never rewrite provider outcomes",
+        "Git snapshots cover Git-visible content; ignored files, runtime state and submodule contents are outside that contract"
       ]
     },
     {
@@ -809,10 +827,30 @@
       ]
     },
     {
+      "dot": "amber",
+      "title": "Optional isolation and explicit retention",
+      "items": [
+        "Non-Git and ordinary caller-directory tasks remain available without managed isolation",
+        "Managed writes use detached checkouts; verification runs inside the retained checkout",
+        "Capture and cleanup require exact helper/provider lifetime closure; failed evidence retains the workspace",
+        "The lead chooses release and forget; no background TTL deletion or automatic code landing"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Workspace coordination uses existing components",
+      "items": [
+        "The delegate application owns the workspace coordinator; it is not another service or process owner",
+        "Its finite Git and verification helpers use the existing Pueue \u2192 guardian \u2192 delegate-run execution path",
+        "A completed guardian or later observer wakes the same coordinator; the use-owner lease selects its sole writer",
+        "The records node contains independent provider outcomes, helper results and workspace capture receipts"
+      ]
+    },
+    {
       "dot": "slate",
       "title": "Committed source snapshot",
       "items": [
-        "Source revision: 10c0c5c24286",
+        "Source revision: cb71d7474371",
         "Node source links identify committed code",
         "Admission and runtime preflight retain separate owners"
       ]

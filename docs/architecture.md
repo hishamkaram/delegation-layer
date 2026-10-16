@@ -36,9 +36,11 @@ flowchart TD
 ```
 
 The maintained Archify views are [system components](../diagrams/components.html)
-and [one task lifecycle](../diagrams/lead-interface.html). Their editable
+and [ordinary task lifecycle](../diagrams/lead-interface.html). Their editable
 sources are [components.architecture.json](../diagrams/components.architecture.json)
 and [lead-interface.sequence.json](../diagrams/lead-interface.sequence.json).
+The component view includes optional managed Git workspace coordination; the
+sequence keeps provider execution separate from its workspace helper operations.
 
 The plugin bootstrap is outside the task lifecycle. It only makes the
 provider-neutral control CLI available before the agent can use the skill; the
