@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
 // recoverInspectionLifetime is the sole inspection policy that turns an ended
@@ -18,6 +20,11 @@ func recoverInspectionLifetime(ctx context.Context, operation *inspection.Operat
 	if operation == nil {
 		return task.ErrEvidenceFault
 	}
+	if _, err := readAuxiliaryLifetimeProof(ctx, operation); err == nil {
+		return nil
+	} else if !errors.Is(err, workspace.ErrPending) {
+		return err
+	}
 
 	intent, err := optionalLifetimeIntent(operation.ReadLifetimeIntentContext(ctx))
 	if err != nil {
@@ -28,9 +35,18 @@ func recoverInspectionLifetime(ctx context.Context, operation *inspection.Operat
 		return err
 	}
 	if intent == nil && registration == nil {
+		if _, fenceErr := operation.ReadLifetimeUnlaunchedContext(ctx); fenceErr == nil {
+			return nil
+		} else if !task.RecordAbsent(fenceErr) {
+			return fenceErr
+		}
+		if operation.Request().Binding.WorkerExitProof == inspection.WorkerExitProofGuardianWaitV1 && operation.Expired(time.Now()) {
+			_, fenceErr := operation.SealLifetimeUnlaunchedContext(ctx)
+			return fenceErr
+		}
 		return nil
 	}
-	owner, err := operation.AcquireLifetimeOwner(ctx)
+	owner, err := operation.TryAcquireLifetimeOwner(ctx)
 	if err != nil {
 		return err
 	}
@@ -43,44 +59,18 @@ func recoverInspectionLifetime(ctx context.Context, operation *inspection.Operat
 // while its caller retains the lifetime-owner lease. It is shared by external
 // recovery and the live guardian's deterministic scope-collision path.
 func reconcileInspectionLifetimeOwned(ctx context.Context, operation *inspection.Operation) error {
-	if ctx == nil {
-		return context.Canceled
-	}
 	if operation == nil {
 		return task.ErrEvidenceFault
 	}
-	intent, err := optionalLifetimeIntent(operation.ReadLifetimeIntentContext(ctx))
-	if err != nil {
-		return err
-	}
-	registration, err := optionalLifetimeRegistration(operation.ReadLifetimeRegistrationContext(ctx))
-	if err != nil {
-		return err
-	}
-	if intent == nil && registration == nil {
-		return task.ErrEvidenceFault
-	}
-	var worker *task.LifetimeWorkerRecord
-	var workerWait *task.LifetimeWorkerWaitRecord
-	var launches []task.LifetimeLaunchRecord
-	terminated := false
-	if registration != nil {
-		worker, err = optionalLifetimeWorker(operation.ReadLifetimeWorkerContext(ctx))
-		if err != nil {
-			return err
-		}
-		workerWait, err = optionalLifetimeWorkerWait(operation.ReadLifetimeWorkerWaitContext(ctx))
-		if err != nil {
-			return err
-		}
-		launches, err = operation.ReadLifetimeLaunchesContext(ctx)
-		if err != nil {
-			return err
-		}
-		terminated, err = operation.HasTerminatedLifetimeContext(ctx, "")
-		if err != nil {
-			return err
-		}
-	}
-	return reconcileOwnedLifetime(ctx, intent, registration, worker, workerWait, launches, terminated, operation.RecordLifetimeTerminationContext)
+	return reconcileControlLifetimeOwned(ctx, operation)
+}
+
+// controlLifetimeRecovery is shared by finite auxiliary operations. The
+// operation family supplies storage; reconciliation owns all closure policy.
+type controlLifetimeRecovery interface {
+	lifetimeRecoveryRecords
+}
+
+func reconcileControlLifetimeOwned(ctx context.Context, operation controlLifetimeRecovery) error {
+	return reconcileLifetimeRecordsOwned(ctx, operation)
 }

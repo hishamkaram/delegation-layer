@@ -172,6 +172,34 @@ Collection is observational. It can recover sealed evidence from an existing
 task but never launches, retries, or resumes provider work. A rejected outcome
 is still a terminal, inspectable result and exits with code 4.
 
+## Optional managed Git workspace
+
+For independent parallel writes, use a retained Git worktree unless the user
+explicitly chooses shared coordination. Ordinary non-Git delegation does not
+change. From a Git checkout, dispatch with a committed base:
+
+```sh
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
+  --brief /absolute/brief.txt --cwd /absolute/git/source \
+  --permission workspace-write --isolation git-worktree \
+  --base HEAD --workspace-budget 5m --budget 30m --json
+```
+
+The source-relative subdirectory is preserved in the managed checkout. Dirty
+and untracked source changes are excluded. The checkout remains retained until
+the Lead explicitly releases it after reviewing the captured Git-content
+evidence; Delegate does not automatically apply, commit, branch, or merge
+worker changes.
+
+Use `workspace status ID --watch DURATION --json` to observe a workspace,
+`workspace exec ID --budget DURATION -- ARGV...` for a bounded literal-argv
+verification command, and `workspace release ID --budget DURATION --json` for
+explicit final capture and cleanup. `--workspace ID` attaches a later task to
+the retained checkout and cannot be combined with public `--cwd`, `--base`, or
+`--isolation`. `continue --task ID` inherits the predecessor's workspace and
+session while creating a new task ID. The full retention, capture, forgetting,
+and review-scope policy is in the [managed workspace reference](../skills/agent-integration/references/workspaces.md).
+
 ## 6. Discover capabilities
 
 List the compiled provider catalog:

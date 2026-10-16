@@ -181,11 +181,15 @@ func (td *TaskDir) newStopRequest(id, cause string, deadline time.Time) (*task.S
 	if !errors.Is(err, errNoOutcome) {
 		return nil, err
 	}
+	supervisor := meta.SupervisorConfig
+	label := fmt.Sprintf("delegate:%s:%s", td.store.RootID, td.TaskID)
 	submit, err := td.ReadSubmission()
-	if err != nil {
+	if err == nil {
+		supervisor, label = submit.Supervisor, submit.Label
+	} else if !task.RecordAbsent(err) {
 		return nil, err
 	}
-	r := &task.StopRequestRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: hash, Label: submit.Label, Supervisor: submit.Supervisor, RequestID: id, Cause: cause, BudgetNanos: req.BudgetNanos, RequestedAt: timestamp()}
+	r := &task.StopRequestRecord{SchemaVersion: task.SchemaVersion, RootID: td.store.RootID, TaskID: td.TaskID, SpecSHA256: spec, MetaSHA256: hash, Label: label, Supervisor: supervisor, RequestID: id, Cause: cause, BudgetNanos: req.BudgetNanos, RequestedAt: timestamp()}
 	receipt, receiptErr := td.ReadSupervisorReceipt()
 	if receiptErr == nil {
 		numeric := receipt.NumericTaskID

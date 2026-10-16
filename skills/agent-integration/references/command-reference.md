@@ -5,28 +5,30 @@ All paths passed to `--root`, `--cwd`, and `--brief` must be absolute. Add
 
 Pass the intended workspace directly. Delegate handles provider launch options;
 do not initialize Git, change trust settings, or call a provider CLI as a
-workspace workaround. Ordinary Codex tasks support non-Git directories;
-Git-targeted native review requires a suitable repository.
+workspace workaround. Ordinary tasks support non-Git directories. Git is
+required for managed worktree creation/attachment only; native review retains
+its separate explicit review-target contract. See [managed workspace guidance](workspaces.md)
+for the policy owner.
 
 | Command | Purpose | Launches provider work? |
 | --- | --- | --- |
 | `delegate --version` | Confirm the installed control CLI | No |
-| `delegate providers --json` | List compiled provider metadata | No |
-| `delegate capabilities --provider ID --json` | Read the catalog contract | No |
-| `delegate models --provider ID [--cwd ABS] --json` | Discover advisory native model and effort facts | Native inspection only; no admitted task |
-| `delegate preflight --provider ID --cwd ABS --json` | Check static provider admission | No |
-| `delegate dispatch --auto ... --json` | Select and admit one bounded turn | Yes, at most once |
-| `delegate status TASK --json` | Reconcile and observe task state | No provider launch |
-| `delegate collect TASK --watch 5s --json` | Read or wait for publication | No provider launch |
-| `delegate recheck TASK --json` | Reassess eligible rejected evidence offline | No provider launch; original outcome unchanged |
-| `delegate continue --task TASK ... --json` | Create an exact-session successor | Yes, at most once for the successor |
-| `delegate reply TASK --request ID --answers FILE --id MESSAGE_ID --json` | Answer a pending native question | No new launch |
-| `delegate steer TASK --brief FILE --id MESSAGE_ID --json` | Guide a supported active turn | No new launch |
-| `delegate events TASK --after SEQUENCE --watch 5s --json` | Read a bounded interaction event page | No |
-| `delegate logs TASK --json` | Return validated output descriptors | No |
-| `delegate cancel TASK --json` | Record one explicit stop request | Stops, does not relaunch |
+| `delegate --root ROOT providers --json` | List compiled provider metadata | No |
+| `delegate --root ROOT capabilities --provider ID --json` | Read the catalog contract | No |
+| `delegate --root ROOT models --provider ID [--cwd ABS] --json` | Discover advisory native model and effort facts | Native inspection only; no admitted task |
+| `delegate --root ROOT preflight --provider ID --cwd ABS --json` | Check static provider admission | No |
+| `delegate --root ROOT dispatch --auto ... --json` | Select and admit one bounded turn | Yes, at most once |
+| `delegate --root ROOT status TASK --json` | Reconcile and observe task state | No provider launch |
+| `delegate --root ROOT collect TASK --watch 5s --json` | Read or wait for publication | No provider launch |
+| `delegate --root ROOT recheck TASK --json` | Reassess eligible rejected evidence offline | No provider launch; original outcome unchanged |
+| `delegate --root ROOT continue --task TASK ... --json` | Create an exact-session successor | Yes, at most once for the successor |
+| `delegate --root ROOT reply TASK --request ID --answers FILE --id MESSAGE_ID --json` | Answer a pending native question | No new launch |
+| `delegate --root ROOT steer TASK --brief FILE --id MESSAGE_ID --json` | Guide a supported active turn | No new launch |
+| `delegate --root ROOT events TASK --after SEQUENCE --watch 5s --json` | Read a bounded interaction event page | No |
+| `delegate --root ROOT logs TASK --json` | Return validated output descriptors | No |
+| `delegate --root ROOT cancel TASK --json` | Record one explicit stop request | Stops, does not relaunch |
 
-`delegate supervisor migrate --json` is the single command-neutral recovery
+`delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" supervisor migrate --json` is the single command-neutral recovery
 step for a `supervisor_upgrade_required` admission response. Run it once with
 the failed command's exact root. A successful response names its next action
 `retry_dispatch`, but the original command and argv remain authoritative:
@@ -55,6 +57,35 @@ Dispatch flags:
 - `--interactive`: enable advertised native clarification and steering; see [interaction](interaction.md);
 - `--native-timeout DURATION`: optional provider-native timeout where advertised.
 
+## Managed workspace commands
+
+Managed workspaces are optional. For independent parallel writes, choose
+`--isolation git-worktree` unless the user explicitly chooses shared
+coordination. The model chooses fan-out and task scope; there is no fixed task
+count cap or TTL eviction. Use the canonical [workspace reference](workspaces.md)
+for retention, capture, release, forgetting, and review-scope rules.
+
+The public forms are:
+
+```sh
+delegate --root ROOT dispatch --isolation git-worktree --cwd ABS \
+  [--base REV] [--workspace-budget DURATION] ... --json
+delegate --root ROOT dispatch --workspace WORKSPACE_ID ... --json
+delegate --root ROOT workspace list [--after ID] [--limit 1..50] --json
+delegate --root ROOT workspace status ID [--operation OP] [--watch DURATION] --json
+delegate --root ROOT workspace exec ID --budget DURATION -- ARGV...
+delegate --root ROOT workspace release ID [--discard] [--budget DURATION] --json
+delegate --root ROOT workspace forget ID [--budget DURATION] --json
+```
+
+`--workspace` cannot be combined with public `--cwd`, `--base`, or
+`--isolation`. `workspace exec` passes literal argv after `--` and initially
+returns asynchronously; exit `3` means the operation is pending. The helper
+budget defaults to 5m, is persisted/overridable, and does not renew the task
+budget. `continue --task TASK` inherits the predecessor workspace, cwd, and
+session while creating a new task ID. A read-only review may attach a retained
+workspace with `--workspace ID`.
+
 Model discovery uses the same `--provider ID` profiles and accepts an optional
 absolute `--cwd` (default: current directory). Its JSON has `status` values
 `available`, `partial`, `blocked`, `unavailable`, or `failed`; exits are `0`,
@@ -77,7 +108,8 @@ is incomplete or does not list them. To resolve a natural-language model name
 or choose an option the caller left open, use native discovery:
 
 ```sh
-delegate models --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" models \
+  --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE --json
 ```
 
 Omit `--cwd` to use the current directory. Run discovery only when the caller
@@ -111,7 +143,8 @@ Use `preflight` when the caller asks about static readiness, rather than as a
 required step before every dispatch:
 
 ```sh
-delegate preflight --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE \
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" preflight \
+  --provider PROVIDER_ID --cwd ABSOLUTE_WORKSPACE \
   --permission REQUESTED_MODE --json
 ```
 

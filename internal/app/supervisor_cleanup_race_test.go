@@ -92,6 +92,9 @@ func assertFailedManagedInspectionWithoutCompletionAuthorized(t *testing.T, migr
 	}
 
 	binding := operation.Request().Binding.Supervisor
+	if err := preparePrivateTerminalEvidence(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
+		t.Fatal(err)
+	}
 	if migrate {
 		if err := authorizePrivateMigrationQueue(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
 			t.Fatalf("proven failed inspection blocked migration: %v", err)
@@ -147,6 +150,9 @@ func assertCleanupInspectionExitSaved(t *testing.T, reason inspection.ResultReas
 	request := operation.Request()
 	if _, _, proofErr := operation.ReadWorkerResultContext(t.Context()); !errors.Is(proofErr, os.ErrNotExist) {
 		t.Fatalf("fixture already has independent worker observation: %v", proofErr)
+	}
+	if err := preparePrivateTerminalEvidence(t.Context(), store.Root, request.Binding.Supervisor, []pueue.Job{job}); err != nil {
+		t.Fatal(err)
 	}
 	plan, cleanupErr := authorizePrivateSuccessfulCleanup(t.Context(), store.Root, request.Binding.Supervisor, []pueue.Job{job})
 	if cleanupErr != nil || len(plan.RemoveIDs) != 1 || plan.RemoveIDs[0] != job.ID || plan.Settling {
@@ -464,9 +470,10 @@ esac
 		t.Fatal(err)
 	}
 	options := pueue.Options{
-		Environment:                 append(os.Environ(), "FAKE_STATUS="+statusPath, "FAKE_REMOVALS="+removals, "FAKE_STATUS_QUERIES="+statusQueries),
-		ObservationTimeout:          5 * time.Second,
-		SuccessfulCleanupAuthorizer: authorizePrivateSuccessfulCleanup,
+		Environment:                     append(os.Environ(), "FAKE_STATUS="+statusPath, "FAKE_REMOVALS="+removals, "FAKE_STATUS_QUERIES="+statusQueries),
+		ObservationTimeout:              5 * time.Second,
+		SuccessfulCleanupAuthorizer:     authorizePrivateSuccessfulCleanup,
+		PrivateTerminalEvidencePreparer: preparePrivateTerminalEvidence,
 	}
 	client, err := pueue.Bind(t.Context(), clientPath, configPath, options)
 	if err != nil {
@@ -578,6 +585,9 @@ func assertDefaultQueueCleanupAndMigration(t *testing.T, migrate bool) {
 		t.Fatalf("fixture unexpectedly has a legacy group journal: %v", err)
 	}
 	binding := operation.Request().Binding.Supervisor
+	if err := preparePrivateTerminalEvidence(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
+		t.Fatal(err)
+	}
 	if migrate {
 		if err := authorizePrivateMigrationQueue(t.Context(), store.Root, binding, []pueue.Job{job}); err != nil {
 			t.Fatalf("default-only inspection blocked migration: %v", err)

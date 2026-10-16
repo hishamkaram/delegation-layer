@@ -110,7 +110,7 @@ func TestRecoverInspectionLifetimeBeforeWorkerAcknowledgementRefusesWithoutTermi
 
 func TestRecoverInspectionLifetimeChangedBootRecordsRecovery(t *testing.T) {
 	_, operation, _ := newCleanupInspectionTestOperation(t, inspection.ResultUnavailable, false)
-	recordInspectionLifetimeRegistration(t, operation, "different-boot", task.LifetimeAssuranceCooperative)
+	recordInspectionLifetimeRegistration(t, operation, differentNativeBootID(t), task.LifetimeAssuranceCooperative)
 
 	if err := recoverInspectionLifetime(t.Context(), operation); err != nil {
 		t.Fatalf("changed-boot inspection recovery = %v", err)
@@ -136,7 +136,7 @@ func TestRecoverInspectionLifetimeRefusesCooperativeScopeWithoutLaunchIdentity(t
 	}
 }
 
-func TestRecoverInspectionLifetimeRefusesExistingTerminationWithoutWorkerWait(t *testing.T) {
+func TestRecoverInspectionLifetimeRecoversMissingWaitFromExactWorkerAbsence(t *testing.T) {
 	_, operation, _ := newCleanupInspectionTestOperation(t, inspection.ResultUnavailable, false)
 	recordInspectionLifetimeRegistration(t, operation, inspectionRecoveryBootID(t), task.LifetimeAssuranceCooperative)
 	owner, err := operation.AcquireLifetimeOwner(t.Context())
@@ -152,8 +152,15 @@ func TestRecoverInspectionLifetimeRefusesExistingTerminationWithoutWorkerWait(t 
 		t.Fatal(releaseErr)
 	}
 
-	if err = recoverInspectionLifetime(t.Context(), operation); !errors.Is(err, task.ErrEvidenceFault) {
-		t.Fatalf("recovery with termination but no worker Wait = %v, want evidence fault", err)
+	if err = recoverInspectionLifetime(t.Context(), operation); err != nil {
+		t.Fatal(err)
+	}
+	completion, err := operation.ReadLifetimeWorkerWaitContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completion.Result != task.LifetimeWorkerWaitAbsent || completion.AbsenceProof != task.LifetimeAbsenceExactWorker || completion.ExitCode != nil || task.LifetimeWorkerWaitIsQualified(completion) {
+		t.Fatalf("absence was not a precise non-Wait completion: %+v", completion)
 	}
 	current, err := operation.ReadLifetimeTerminationContext(t.Context())
 	if err != nil {

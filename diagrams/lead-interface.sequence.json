@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "sequence",
   "meta": {
-    "title": "Delegation Layer \u2014 One Task Lifecycle",
+    "title": "Delegation Layer \u2014 Ordinary Task Lifecycle",
     "viewBox": [
       1680,
       1080
@@ -55,7 +55,7 @@
     "output": "diagrams/lead-interface.html",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "10c0c5c24286f8be75c3475d40c12d8ed073d381",
+      "revision": "cb71d7474371b9bd37b93ec34442cee339305687",
       "link_mode": "local-only"
     }
   },
@@ -84,13 +84,13 @@
         },
         {
           "path": "internal/app/runtime.go",
-          "line": 341,
-          "end_line": 424
+          "line": 364,
+          "end_line": 454
         },
         {
           "path": "internal/app/runtime.go",
-          "line": 557,
-          "end_line": 590
+          "line": 586,
+          "end_line": 620
         }
       ]
     },
@@ -145,8 +145,8 @@
       "sources": [
         {
           "path": "internal/app/runtime.go",
-          "line": 828,
-          "end_line": 864
+          "line": 857,
+          "end_line": 894
         },
         {
           "path": "internal/pueue/private.go",
@@ -167,18 +167,18 @@
       "sources": [
         {
           "path": "internal/app/lifetime_guardian.go",
-          "line": 294,
-          "end_line": 340
+          "line": 301,
+          "end_line": 344
         },
         {
           "path": "internal/app/lifetime_guardian.go",
-          "line": 646,
-          "end_line": 695
+          "line": 693,
+          "end_line": 744
         },
         {
           "path": "internal/app/lifetime_guardian.go",
-          "line": 1227,
-          "end_line": 1273
+          "line": 1274,
+          "end_line": 1321
         }
       ]
     },
@@ -194,8 +194,8 @@
         },
         {
           "path": "internal/app/runner.go",
-          "line": 505,
-          "end_line": 534
+          "line": 515,
+          "end_line": 561
         },
         {
           "path": "internal/execution/run.go",
@@ -627,10 +627,20 @@
       ]
     },
     {
+      "dot": "amber",
+      "title": "Optional managed Git workspaces",
+      "items": [
+        "This sequence shows an ordinary provider task; Git isolation is optional",
+        "Managed dispatch provisions before the provider turn; separate finite helpers capture only after exact lifetime closure",
+        "Workspace capture receipts never change outcome.json; the lead verifies the retained checkout and explicitly releases or forgets it",
+        "See the system component view for the workspace coordinator and its separate evidence ownership"
+      ]
+    },
+    {
       "dot": "slate",
       "title": "Committed source snapshot",
       "items": [
-        "Source revision: 10c0c5c24286",
+        "Source revision: cb71d7474371",
         "Node source links identify committed code",
         "Admission and runtime preflight retain separate owners"
       ]

@@ -7,9 +7,30 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-type lifetimeTerminationWriter func(context.Context, string) (*task.LifetimeTerminationRecord, error)
+type (
+	lifetimeTerminationWriter func(context.Context, string) (*task.LifetimeTerminationRecord, error)
+	lifetimeAbsenceWriter     func(context.Context, task.LifetimeAbsenceProof, string) (*task.LifetimeWorkerWaitRecord, error)
+)
+
+type lifetimeRecoveryRecords interface {
+	taskdir.LifetimeRecordReader
+	RecordLifetimeTerminationContext(context.Context, string) (*task.LifetimeTerminationRecord, error)
+	RecordLifetimeWorkerAbsenceContext(context.Context, task.LifetimeAbsenceProof, string) (*task.LifetimeWorkerWaitRecord, error)
+}
+
+func reconcileLifetimeRecordsOwned(ctx context.Context, records lifetimeRecoveryRecords) error {
+	evidence, err := taskdir.LoadLifetimeEvidenceContext(ctx, records)
+	if err != nil {
+		return err
+	}
+	if evidence.Intent == nil && evidence.Registration == nil {
+		return task.ErrEvidenceFault
+	}
+	return reconcileOwnedLifetime(ctx, evidence, records.RecordLifetimeTerminationContext, records.RecordLifetimeWorkerAbsenceContext)
+}
 
 type lifetimeFinalizationScope interface {
 	Terminate(context.Context, []lifetime.LaunchRef) error
@@ -56,69 +77,120 @@ func finalizeLifetimeScope(ctx context.Context, scope lifetimeFinalizationScope,
 // reconcileOwnedLifetime is the single native-lifetime finalization policy for
 // ordinary and inspection work. Its caller holds the durable lifetime-owner
 // lease for the complete transition.
-func reconcileOwnedLifetime(
-	ctx context.Context,
-	intent *task.LifetimeIntentRecord,
-	registration *task.LifetimeRegistrationRecord,
-	worker *task.LifetimeWorkerRecord,
-	workerWait *task.LifetimeWorkerWaitRecord,
-	launches []task.LifetimeLaunchRecord,
-	terminated bool,
-	recordTermination lifetimeTerminationWriter,
-) (resultErr error) {
+func reconcileOwnedLifetime(ctx context.Context, evidence task.LifetimeEvidence, recordTermination lifetimeTerminationWriter, recordAbsence lifetimeAbsenceWriter) error {
 	if ctx == nil {
 		return context.Canceled
 	}
-	if intent == nil && registration == nil {
+	closure, err := task.ResolveLifetimeClosure(evidence)
+	if err != nil {
+		return err
+	}
+	if closure.Closed() {
+		return nil
+	}
+	if evidence.Intent == nil && evidence.Registration == nil {
 		return nil
 	}
 	bootID, err := lifetime.BootID()
 	if err != nil {
 		return err
 	}
-	if registration == nil {
-		return reconcileUnregisteredLifetimeIntent(ctx, intent, bootID)
+	if evidence.Registration == nil {
+		if err = reconcileUnregisteredLifetimeIntent(ctx, evidence.Intent, bootID); err != nil {
+			return err
+		}
+		proof := task.LifetimeAbsenceUnregisteredDisposed
+		if lifetime.CompareBootIDs(evidence.Intent.BootID, bootID) == lifetime.BootDifferent {
+			proof = task.LifetimeAbsencePreviousBoot
+		}
+		return persistRecoveredLifetimeAbsence(ctx, &evidence, proof, bootID, recordAbsence)
 	}
-	if intent != nil && !lifetimeIntentMatchesRegistrationRecord(intent, registration) {
-		return task.ErrIdentityMismatch
+	switch lifetime.CompareBootIDs(evidence.Registration.BootID, bootID) {
+	case lifetime.BootDifferent:
+		if err = reconcilePreviousBootLifetime(ctx, evidence.Termination != nil, func(ctx context.Context, cause string) (*task.LifetimeTerminationRecord, error) {
+			record, writeErr := recordTermination(ctx, cause)
+			if writeErr == nil {
+				evidence.Termination = record
+			}
+			return record, writeErr
+		}); err != nil {
+			return err
+		}
+		return persistRecoveredLifetimeAbsence(ctx, &evidence, task.LifetimeAbsencePreviousBoot, bootID, recordAbsence)
+	case lifetime.BootUnknown:
+		return fmt.Errorf("%w: stored boot identity cannot prove native lifetime recovery", task.ErrEvidenceFault)
+	case lifetime.BootSame:
+		return reconcileCurrentBootLifetime(ctx, &evidence, bootID, recordTermination, recordAbsence)
 	}
-	if registration.BootID != bootID {
-		return reconcilePreviousBootLifetime(ctx, terminated, recordTermination)
-	}
-	return reconcileCurrentBootLifetime(ctx, intent, registration, worker, workerWait, launches, terminated, recordTermination)
+	return task.ErrEvidenceFault
 }
 
-func reconcileCurrentBootLifetime(
-	ctx context.Context,
-	intent *task.LifetimeIntentRecord,
-	registration *task.LifetimeRegistrationRecord,
-	worker *task.LifetimeWorkerRecord,
-	workerWait *task.LifetimeWorkerWaitRecord,
-	launches []task.LifetimeLaunchRecord,
-	terminated bool,
-	recordTermination lifetimeTerminationWriter,
-) (resultErr error) {
-	scope, refs, err := openRegisteredLifetime(ctx, intent, registration, launches)
-	if terminated && errors.Is(err, lifetime.ErrScopeAbsent) {
-		return requireDurableLifetimeWorkerWait(workerWait)
+func reconcileCurrentBootLifetime(ctx context.Context, evidence *task.LifetimeEvidence, bootID string, recordTermination lifetimeTerminationWriter, recordAbsence lifetimeAbsenceWriter) (resultErr error) {
+	if evidence.Termination != nil {
+		// A genuine durable empty-scope proof already exists. Do not demand
+		// ownerless cooperative scope inspection to observe the exact worker.
+		return recoverLifetimeWorkerCompletion(ctx, evidence, bootID, recordAbsence)
 	}
+	scope, refs, err := openRegisteredLifetime(ctx, evidence.Intent, evidence.Registration, evidence.Launches)
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, releaseLifetimeScopeUncanceled(ctx, scope)) }()
-
-	if !terminated {
-		if err = recoverRegisteredLifetime(ctx, scope, refs, registration.Assurance, intent != nil, worker); err != nil {
-			return err
-		}
-		if err = persistRecoveredLifetimeTermination(ctx, recordTermination, task.LifetimeTerminationRecovery); err != nil {
-			return err
-		}
+	if err = recoverRegisteredLifetime(ctx, scope, refs, evidence.Registration.Assurance, evidence.Intent != nil, evidence.Worker); err != nil {
+		return err
 	}
-	if err = requireDurableLifetimeWorkerWait(workerWait); err != nil {
+	if err = persistRecoveredLifetimeTermination(ctx, func(ctx context.Context, cause string) (*task.LifetimeTerminationRecord, error) {
+		record, writeErr := recordTermination(ctx, cause)
+		if writeErr == nil {
+			evidence.Termination = record
+		}
+		return record, writeErr
+	}, task.LifetimeTerminationRecovery); err != nil {
+		return err
+	}
+	if err = recoverLifetimeWorkerCompletion(ctx, evidence, bootID, recordAbsence); err != nil {
 		return err
 	}
 	return scope.DestroyEmpty()
+}
+
+func recoverLifetimeWorkerCompletion(ctx context.Context, evidence *task.LifetimeEvidence, bootID string, recordAbsence lifetimeAbsenceWriter) error {
+	if evidence.WorkerWait != nil {
+		return requireDurableLifetimeWorkerWait(evidence.WorkerWait)
+	}
+	if evidence.Worker == nil {
+		return fmt.Errorf("%w: scope closure cannot prove an unrecorded worker has exited", task.ErrEvidenceFault)
+	}
+	worker, err := lifetime.NewProcessRef(evidence.Worker.PID, evidence.Worker.ProcessStart)
+	if err != nil {
+		return err
+	}
+	if err = lifetime.WaitProcessAbsent(ctx, worker); err != nil {
+		return err
+	}
+	return persistRecoveredLifetimeAbsence(ctx, evidence, task.LifetimeAbsenceExactWorker, bootID, recordAbsence)
+}
+
+func persistRecoveredLifetimeAbsence(ctx context.Context, evidence *task.LifetimeEvidence, proof task.LifetimeAbsenceProof, bootID string, writer lifetimeAbsenceWriter) error {
+	if writer == nil {
+		return task.ErrEvidenceFault
+	}
+	completion, err := writer(ctx, proof, bootID)
+	if err != nil {
+		return err
+	}
+	if err = task.ValidateLifetimeCompletionBinding(completion, *evidence); err != nil {
+		return err
+	}
+	evidence.WorkerWait = completion
+	closure, err := task.ResolveLifetimeClosure(*evidence)
+	if err != nil {
+		return err
+	}
+	if !closure.Closed() {
+		return task.ErrEvidenceFault
+	}
+	return nil
 }
 
 func requireDurableLifetimeWorkerWait(workerWait *task.LifetimeWorkerWaitRecord) error {
@@ -139,8 +211,12 @@ func reconcileUnregisteredLifetimeIntent(ctx context.Context, intent *task.Lifet
 	if intent == nil {
 		return nil
 	}
-	if intent.BootID != bootID {
+	switch lifetime.CompareBootIDs(intent.BootID, bootID) {
+	case lifetime.BootDifferent:
 		return nil
+	case lifetime.BootUnknown:
+		return fmt.Errorf("%w: stored boot identity cannot prove planned-scope recovery", task.ErrEvidenceFault)
+	case lifetime.BootSame:
 	}
 	plan, err := lifetime.NewPlan(lifetime.Kind(intent.ScopeKind), lifetime.Assurance(intent.Assurance), intent.ScopePlan)
 	if err != nil {
@@ -274,17 +350,6 @@ func persistRecoveredLifetimeTermination(ctx context.Context, writer lifetimeTer
 	return nil
 }
 
-func lifetimeIntentMatchesRegistrationRecord(intent *task.LifetimeIntentRecord, registration *task.LifetimeRegistrationRecord) bool {
-	return intent.RootID == registration.RootID &&
-		intent.TaskID == registration.TaskID &&
-		intent.OwnerKind == registration.OwnerKind &&
-		intent.OwnerSHA256 == registration.OwnerSHA256 &&
-		intent.ScopeKind == registration.ScopeKind &&
-		intent.Assurance == registration.Assurance &&
-		intent.BootID == registration.BootID &&
-		intent.Deadline == registration.Deadline
-}
-
 func optionalLifetimeIntent(record *task.LifetimeIntentRecord, err error) (*task.LifetimeIntentRecord, error) {
 	if task.RecordAbsent(err) {
 		return nil, nil
@@ -293,20 +358,6 @@ func optionalLifetimeIntent(record *task.LifetimeIntentRecord, err error) (*task
 }
 
 func optionalLifetimeRegistration(record *task.LifetimeRegistrationRecord, err error) (*task.LifetimeRegistrationRecord, error) {
-	if task.RecordAbsent(err) {
-		return nil, nil
-	}
-	return record, err
-}
-
-func optionalLifetimeWorker(record *task.LifetimeWorkerRecord, err error) (*task.LifetimeWorkerRecord, error) {
-	if task.RecordAbsent(err) {
-		return nil, nil
-	}
-	return record, err
-}
-
-func optionalLifetimeWorkerWait(record *task.LifetimeWorkerWaitRecord, err error) (*task.LifetimeWorkerWaitRecord, error) {
 	if task.RecordAbsent(err) {
 		return nil, nil
 	}

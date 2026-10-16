@@ -217,6 +217,10 @@ func pathsOverlap(p1, p2 string) bool {
 	return isSubpath(p1, p2) || isSubpath(p2, p1)
 }
 
+// PathsOverlap reports lexical containment of clean canonical paths. Callers
+// must resolve filesystem aliases before using this to validate ownership.
+func PathsOverlap(first, second string) bool { return pathsOverlap(first, second) }
+
 // MaxBriefBytes is the global maximum size of brief.md (8 MiB).
 const MaxBriefBytes = 8 * 1024 * 1024
 

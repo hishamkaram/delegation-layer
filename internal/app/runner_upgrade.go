@@ -1687,6 +1687,9 @@ func prepareQueuedInspectionRunnerCommand(ctx context.Context, store *taskdir.St
 	if err := task.ValidateTaskID(taskID); err != nil {
 		return pueue.RunnerCommandReplacement{}, false, task.ErrIdentityMismatch
 	}
+	if owned, err := queuedWorkspaceOperation(ctx, store, supervisor, job, taskID); owned || err != nil {
+		return pueue.RunnerCommandReplacement{}, false, err
+	}
 	operation, err := inspection.LoadOperationContext(ctx, store, taskID)
 	if err != nil {
 		return pueue.RunnerCommandReplacement{}, false, err
@@ -1717,7 +1720,7 @@ func prepareQueuedInspectionRunnerCommand(ctx context.Context, store *taskdir.St
 }
 
 func validateQueuedInspectionIdentity(store *taskdir.Store, supervisor *pueue.Client, job pueue.Job, request inspection.RequestRecord, identity pueue.InspectionIdentity) error {
-	if request.RootID != store.RootID || request.TaskID != identity.TaskID || request.Task.RootID != store.RootID || request.Task.TaskID != identity.TaskID || request.Group != identity.Group() || request.Label != identity.Label() {
+	if request.RootID != store.RootID || request.IdentityID() != identity.TaskID || request.Task.RootID != store.RootID || request.Task.TaskID != request.TaskID || request.Group != identity.Group() || request.Label != identity.Label() {
 		return task.ErrIdentityMismatch
 	}
 	if job.Label == nil || *job.Label != identity.Label() || job.Group != identity.Group() || !task.SameSupervisorIdentity(request.Binding.Supervisor, supervisor.Binding()) {
@@ -1767,7 +1770,7 @@ func validateInspectionReplacementIdentity(store *taskdir.Store, replacement pue
 	if (pueue.InspectionIdentity{RootID: replacement.RootID, QueueGroup: replacement.InspectionGroup}).Group() != request.Group {
 		return task.ErrIdentityMismatch
 	}
-	if request.RootID != store.RootID || request.TaskID != replacement.TaskID || request.Task.RootID != store.RootID || request.Task.TaskID != replacement.TaskID || request.Group != identity.Group() || request.Label != identity.Label() || replacement.Label != identity.Label() || request.Binding.WorkerExecutable != replacement.OldRunner {
+	if request.RootID != store.RootID || request.IdentityID() != replacement.TaskID || request.Task.RootID != store.RootID || request.Task.TaskID != request.TaskID || request.Group != identity.Group() || request.Label != identity.Label() || replacement.Label != identity.Label() || request.Binding.WorkerExecutable != replacement.OldRunner {
 		return task.ErrIdentityMismatch
 	}
 	return nil

@@ -1067,6 +1067,62 @@ class InspectionHarnessTests(unittest.TestCase):
         with self.assertRaisesRegex(AcceptanceFailure, "inspection lifetime worker Wait"):
             provider_common.validate_managed_lifetime_closure(self.state)
 
+    def unlaunched_inspection(self, operation_id: str | None = None) -> Path:
+        directory = self.inspection_records(
+            result=None, include_ordinary=False, managed_exit_proof=True)
+        for entry in tuple(directory.iterdir()):
+            if entry.name != "request.json":
+                entry.unlink()
+        if operation_id is not None:
+            request = read_json(directory / "request.json")
+            request["operation_id"] = operation_id
+            request["label"] = f"{_inspection_group(ROOT)}-{operation_id}"
+            (directory / "request.json").unlink()
+            write_json(directory / "request.json", request)
+            directory = directory.rename(directory.with_name(operation_id))
+        fence = {
+            "schema_version": 1, "root_id": ROOT,
+            "task_id": operation_id or TASK, "owner_kind": "inspection",
+            "owner_sha256": digest(directory / "request.json"),
+            "deadline": "2026-09-15T00:01:00Z", "cause": "deadline-expired",
+            "observed_at": "2026-09-15T00:01:00Z",
+        }
+        (directory / "lifetime-unlaunched.json").write_bytes(
+            provider_common.canonical_go_json(fence))
+        return directory
+
+    def test_root_lifetime_closure_accepts_expired_inspection_without_native_facts(self):
+        directory = self.unlaunched_inspection()
+        closure = provider_common.validate_managed_lifetime_closure(self.state)
+        proof = closure["inspections"][TASK]
+        self.assertEqual(proof["mode"], "unlaunched")
+        self.assertEqual(proof["unlaunched_sha256"],
+                         digest(directory / "lifetime-unlaunched.json"))
+        self.assertNotIn("worker_wait", proof)
+        self.assertNotIn("termination", proof)
+
+    def test_root_lifetime_closure_uses_inspection_operation_identity(self):
+        operation = "c" * 32
+        self.unlaunched_inspection(operation)
+        closure = provider_common.validate_managed_lifetime_closure(self.state)
+        self.assertEqual(set(closure["inspections"]), {operation})
+        self.assertEqual(closure["inspections"][operation]["unlaunched"]["task_id"], operation)
+
+    def test_root_lifetime_closure_rejects_unlaunched_native_contradiction(self):
+        directory = self.unlaunched_inspection()
+        write_json(directory / "lifetime-intent.json", {})
+        with self.assertRaises(AcceptanceFailure):
+            provider_common.validate_managed_lifetime_closure(self.state)
+
+    def test_root_lifetime_closure_rejects_logical_id_as_attempt_fence(self):
+        directory = self.unlaunched_inspection("c" * 32)
+        fence = read_json(directory / "lifetime-unlaunched.json")
+        fence["task_id"] = TASK
+        (directory / "lifetime-unlaunched.json").write_bytes(
+            provider_common.canonical_go_json(fence))
+        with self.assertRaises(AcceptanceFailure):
+            provider_common.validate_managed_lifetime_closure(self.state)
+
     def test_root_lifetime_closure_ignores_unsubmitted_managed_proof_reference(self):
         directory = self.inspection_records(include_ordinary=False, managed_exit_proof=True)
         for entry in tuple(directory.iterdir()):

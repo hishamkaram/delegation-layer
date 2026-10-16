@@ -59,42 +59,7 @@ func reconcileTaskLifetimeOwned(ctx context.Context, td *taskdir.TaskDir) error 
 	if td == nil {
 		return task.ErrEvidenceFault
 	}
-	intent, err := optionalLifetimeIntent(td.ReadLifetimeIntentContext(ctx))
-	if err != nil {
-		return err
-	}
-	registration, err := optionalLifetimeRegistration(td.ReadLifetimeRegistrationContext(ctx))
-	if err != nil {
-		return err
-	}
-	if intent == nil && registration == nil {
-		return task.ErrEvidenceFault
-	}
-	var worker *task.LifetimeWorkerRecord
-	var workerWait *task.LifetimeWorkerWaitRecord
-	var launches []task.LifetimeLaunchRecord
-	terminated := false
-	if registration != nil {
-		worker, err = optionalLifetimeWorker(td.ReadLifetimeWorkerContext(ctx))
-		if err != nil {
-			return err
-		}
-		workerWait, err = optionalLifetimeWorkerWait(td.ReadLifetimeWorkerWaitContext(ctx))
-		if err != nil {
-			return err
-		}
-		launches, err = td.ReadLifetimeLaunchesContext(ctx)
-		if err != nil {
-			return err
-		}
-		terminated, err = td.HasTerminatedLifetimeContext(ctx, "")
-		if err != nil {
-			return err
-		}
-	}
-	return reconcileOwnedLifetime(ctx, intent, registration, worker, workerWait, launches, terminated, func(ctx context.Context, cause string) (*task.LifetimeTerminationRecord, error) {
-		return recordTaskLifetimeTerminationContext(ctx, td, cause)
-	})
+	return reconcileLifetimeRecordsOwned(ctx, td)
 }
 
 type lifetimeTerminationRecorder interface {

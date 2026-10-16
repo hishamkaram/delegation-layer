@@ -28,6 +28,9 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	if exit, handled := runLifetimeLaunchGateMode(os.Args[1:], os.Stderr); handled {
+		os.Exit(exit)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--queue-maintenance" {
 		if err := recordQueueMaintenanceDescriptorInheritance(os.Args[1:]); err != nil {
 			os.Exit(2)

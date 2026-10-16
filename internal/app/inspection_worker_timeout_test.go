@@ -113,6 +113,28 @@ func TestSupervisedInspectionMarkerReconcilesNonManagedBindings(t *testing.T) {
 	}
 }
 
+func TestGuardianInspectionWorkerRejectsMissingAuthenticatedChild(t *testing.T) {
+	fixture := newInspectionWorkerStartupFixtureWithExitProof(t, task.RunnerOwnershipManaged, inspection.WorkerExitProofGuardianWaitV1)
+	if err := fixture.operation.RecordReceiptContext(t.Context(), 7); err != nil {
+		t.Fatal(err)
+	}
+	var nativeStarts atomic.Int32
+	err := runInspectionWorkerOperationMode(fixture.store.Root, fixture.operation.Request().TaskID, true, Dependencies{
+		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+			nativeStarts.Add(1)
+			return commonprovider.ProfileCandidate{}, errors.New("unexpected native inspection")
+		},
+	}, fixture.store)
+	if inspectionWorkerFailureStage(err, "unknown") != "open-lifetime" || nativeStarts.Load() != 0 {
+		t.Fatalf("guardian-contract worker accepted an unauthenticated launch: error=%v native_starts=%d", err, nativeStarts.Load())
+	}
+	assertInspectionWorkerStartUnclaimed(t, fixture.store, fixture.operation.Request().TaskID)
+	log, err := os.ReadFile(fixture.logPath)
+	if err != nil || len(log) != 0 {
+		t.Fatalf("unauthenticated worker touched its supervisor: log=%q error=%v", log, err)
+	}
+}
+
 func testSupervisedInspectionMarkerReconcilesNonManagedBinding(t *testing.T, ownership string) {
 	t.Helper()
 	fixture := newInspectionWorkerStartupFixture(t, ownership)
@@ -350,6 +372,11 @@ type inspectionWorkerStartupFixture struct {
 
 func newInspectionWorkerStartupFixture(t *testing.T, runnerOwnership string) *inspectionWorkerStartupFixture {
 	t.Helper()
+	return newInspectionWorkerStartupFixtureWithExitProof(t, runnerOwnership, "")
+}
+
+func newInspectionWorkerStartupFixtureWithExitProof(t *testing.T, runnerOwnership, workerExitProof string) *inspectionWorkerStartupFixture {
+	t.Helper()
 	store := newBareInspectionStore(t)
 	bound, logPath, _ := newUncertainGroupSupervisorWithConfig(t, store.RootID, pueue.PrivateConfigPath(store.Root))
 	if closeErr := bound.Close(); closeErr != nil {
@@ -376,6 +403,7 @@ func newInspectionWorkerStartupFixture(t *testing.T, runnerOwnership string) *in
 		WorkerExecutable:   worker,
 		WorkerSHA256:       workerSHA,
 		RunnerOwnership:    runnerOwnership,
+		WorkerExitProof:    workerExitProof,
 		Supervisor:         bound.Binding(),
 	}, time.Now().UTC())
 	if err != nil {

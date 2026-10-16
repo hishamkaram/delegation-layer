@@ -600,7 +600,11 @@ func resolveAdmissionRunner(argument, ownership string, deps Dependencies) (stri
 }
 
 func preparePrivateAdmissionExecutables(a Arguments, deps Dependencies, root, runner, runnerOwnership string) (string, error) {
-	controlContext, cancel := supervisorControlContext(deps.SupervisorOptions)
+	return preparePrivateAdmissionExecutablesContext(context.Background(), a, deps, root, runner, runnerOwnership)
+}
+
+func preparePrivateAdmissionExecutablesContext(ctx context.Context, a Arguments, deps Dependencies, root, runner, runnerOwnership string) (string, error) {
+	controlContext, cancel := supervisorControlContextWithParent(ctx, deps.SupervisorOptions)
 	defer cancel()
 	terminalRunner, err := resolveRunner("", deps)
 	if err != nil {
@@ -1416,7 +1420,14 @@ func validateLegacyEndedInspectionBinding(ctx context.Context, store *taskdir.St
 
 func validateLegacyEndedInspectionLifetime(ctx context.Context, operation *inspection.Operation, taskID string, job pueue.Job) error {
 	if !job.Succeeded {
-		if err := recoverInspectionLifetime(ctx, operation); err != nil {
+		historical, err := historicalInspectionLifetime(ctx, operation)
+		if err != nil {
+			return fmt.Errorf("%w: ended Delegate inspection %s lifetime termination is unproven: %w", inspection.ErrGroupMigrationRequired, taskID, err)
+		}
+		if historical {
+			return nil
+		}
+		if _, err = readAuxiliaryLifetimeProof(ctx, operation); err != nil {
 			return fmt.Errorf("%w: ended Delegate inspection %s lifetime termination is unproven: %w", inspection.ErrGroupMigrationRequired, taskID, err)
 		}
 		return nil
@@ -1424,15 +1435,6 @@ func validateLegacyEndedInspectionLifetime(ctx context.Context, operation *inspe
 	ready, err := successfulInspectionLifetimeEvidence(ctx, operation)
 	if err != nil {
 		return fmt.Errorf("%w: ended Delegate inspection %s lifetime evidence is invalid: %w", inspection.ErrGroupMigrationRequired, taskID, err)
-	}
-	if !ready {
-		if err = recoverInspectionLifetime(ctx, operation); err != nil {
-			return fmt.Errorf("%w: ended Delegate inspection %s lifetime termination is unproven: %w", inspection.ErrGroupMigrationRequired, taskID, err)
-		}
-		ready, err = successfulInspectionLifetimeEvidence(ctx, operation)
-		if err != nil {
-			return fmt.Errorf("%w: ended Delegate inspection %s lifetime evidence is invalid after recovery: %w", inspection.ErrGroupMigrationRequired, taskID, err)
-		}
 	}
 	if !ready {
 		return fmt.Errorf("%w: ended Delegate inspection %s is awaiting lifetime termination", inspection.ErrGroupMigrationBusy, taskID)
@@ -1451,6 +1453,9 @@ func inspectLegacyEndedInspection(ctx context.Context, store *taskdir.Store, leg
 	if err := validateLegacyEndedInspectionJob(taskID, job); err != nil {
 		return err
 	}
+	if found, err := inspectPrivateWorkspaceOperation(ctx, store, legacy, taskID, job); found || err != nil {
+		return err
+	}
 	operation, err := inspection.LoadOperationContext(ctx, store, taskID)
 	if err != nil {
 		return fmt.Errorf("%w: ended Delegate inspection %s could not be reopened: %w", inspection.ErrGroupMigrationRequired, taskID, err)
@@ -1460,12 +1465,6 @@ func inspectLegacyEndedInspection(ctx context.Context, store *taskdir.Store, leg
 		return err
 	}
 	if err := validateLegacyEndedInspectionLifetime(ctx, operation, taskID, job); err != nil {
-		return err
-	}
-	// Preserve this independent exit observation before cleanup or migration
-	// removes the row. Admission can then finish from durable evidence even if
-	// its own next queue snapshot no longer contains the worker.
-	if err := recordLegacyEndedInspectionExit(ctx, operation, taskID, job); err != nil {
 		return err
 	}
 	return validateLegacyEndedInspectionEvidence(ctx, operation, taskID, job)
@@ -1627,8 +1626,8 @@ func openAdmissionInspectionOperation(store *taskdir.Store, request task.TaskRec
 }
 
 func openAdmissionInspectionOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (operation *inspection.Operation, resultErr error) {
-	operation, err := inspection.LoadOperationContext(ctx, store, request.TaskID)
-	if errors.Is(err, os.ErrNotExist) {
+	operation, err := loadAdmissionInspectionOperationContext(ctx, store, request)
+	if task.RecordAbsent(err) {
 		return createAdmissionInspectionOperationContext(ctx, store, request, binding, now)
 	}
 	if err != nil {
@@ -1657,6 +1656,10 @@ func validateAdmissionInspectionReplay(ctx context.Context, store *taskdir.Store
 	if record.RootID != store.RootID || record.TaskID != request.TaskID || record.TaskSHA256 != task.ComputeSHA256(requestBytes) {
 		return task.ErrEvidenceFault
 	}
+	identity, err := admissionInspectionIdentity(ctx, store, request)
+	if err != nil || record.IdentityID() != identity {
+		return errors.Join(task.ErrEvidenceFault, err)
+	}
 	if err = rejectCompletedRuntimeIdentityDrift(ctx, operation, record.Binding, binding); err != nil {
 		return err
 	}
@@ -1683,8 +1686,18 @@ func createAdmissionInspectionOperation(store *taskdir.Store, request task.TaskR
 }
 
 func createAdmissionInspectionOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (*inspection.Operation, error) {
+	identity, err := admissionInspectionIdentity(ctx, store, request)
+	if err != nil {
+		return nil, err
+	}
 	if concurrentAdmissionInspection(store.Root, binding) {
+		if request.Workspace != nil {
+			return inspection.OpenConcurrentOperationWithIdentityContext(ctx, store, request, binding, identity, now)
+		}
 		return inspection.OpenConcurrentOperationContext(ctx, store, request, binding, now)
+	}
+	if request.Workspace != nil {
+		return inspection.OpenOperationWithIdentityContext(ctx, store, request, binding, identity, now)
 	}
 	return inspection.OpenOperationContext(ctx, store, request, binding, now)
 }
@@ -2268,12 +2281,28 @@ func recoverStagedInspectionObservation(ctx context.Context, operation *inspecti
 		return operation.RecordReceiptContext(ctx, current.Job.ID)
 	}
 	root := filepath.Dir(filepath.Dir(observation.Binding.ConfigPath))
+	receiptMatches := func(id int64) error {
+		receipt, receiptErr := operation.ReceiptContext(ctx)
+		if receiptErr != nil {
+			return receiptErr
+		}
+		if receipt.NumericTaskID == nil || *receipt.NumericTaskID != id {
+			return task.ErrIdentityMismatch
+		}
+		return nil
+	}
+	return recoverStagedAuxiliaryObservation(ctx, supervisor, root, observation, receiptCommit, receiptMatches, commit)
+}
+
+// recoverStagedAuxiliaryObservation owns the scheduling receipt/enqueue race
+// for both inspections and workspace helpers. Each journal supplies exact
+// receipt publication and verification; this function never grants a new add.
+func recoverStagedAuxiliaryObservation(ctx context.Context, supervisor *pueue.Client, root string, observation pueue.InspectionObservation, receiptCommit pueue.InspectionSubmissionCommit, receiptMatches func(int64) error, commit pueue.InspectionObservationCommit) (pueue.InspectionObservation, error) {
 	recovered, recoverErr := supervisor.RecoverInspectionStagedWithGate(ctx, observation.Identity, observation.Job.ID, privateSubmissionGate(root), receiptCommit)
-	if recoverErr == nil || !errors.Is(recoverErr, pueue.ErrUnknown) {
+	if recoverErr == nil || inFlightInspectionError(recoverErr) != nil || !errors.Is(recoverErr, pueue.ErrUnknown) {
 		return recovered, recoverErr
 	}
-	receipt, receiptErr := operation.ReceiptContext(ctx)
-	if receiptErr != nil || receipt.NumericTaskID == nil || *receipt.NumericTaskID != observation.Job.ID {
+	if receiptErr := receiptMatches(observation.Job.ID); receiptErr != nil {
 		return recovered, errors.Join(recoverErr, receiptErr)
 	}
 	// Another observer may have enqueued the exact receipted row between

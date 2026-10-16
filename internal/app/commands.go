@@ -37,20 +37,21 @@ func dispatch(a Arguments, deps Dependencies) (result commandResult) {
 		return failed(response, withDispatchStage("generate-task-id", err), 1)
 	}
 	response.TaskID = id
-	if a.Auto {
-		persistedProvider, exists, providerErr := persistedProviderForTask(store, id)
-		response.TaskRecord = dispatchTaskRecordLookup(a.TaskID, exists, providerErr)
-		if providerErr != nil {
-			return failed(response, withDispatchStage("select-provider", providerErr), classifyCode(providerErr, 1))
-		}
-		if exists {
-			a.Provider = persistedProvider
-		} else {
-			a.Provider, err = selectAutoProvider(deps, store.Root, store.RootID, id, cwd, a.Config, brief)
-			if err != nil {
-				return failed(response, withDispatchStage("select-provider", err), classifyCode(err, 2))
-			}
-		}
+	managed, managedCwd, workspaceErr := prepareManagedDispatch(a, deps, store, id, cwd, brief)
+	if managed != nil {
+		defer func() { finishManagedAdmission(store, managed, &result) }()
+	}
+	if workspaceErr != nil {
+		return failed(response, withDispatchStage("prepare-workspace", workspaceErr), classifyCode(workspaceErr, 2))
+	}
+	cwd = managedCwd
+	if managed != nil {
+		a.workspaceBinding = managed.binding
+	}
+	var providerErrorCode int
+	a, providerErrorCode, err = resolveDispatchProvider(a, deps, store, id, cwd, brief, &response)
+	if err != nil {
+		return failed(response, withDispatchStage("select-provider", err), providerErrorCode)
 	}
 	prior := (*task.PriorSession)(nil)
 	var predecessorMeta *task.MetaRecord
@@ -58,6 +59,7 @@ func dispatch(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, withDispatchStage("validate-request", err), classifyCode(err, 2))
 	}
+	base.Workspace = a.workspaceBinding
 	if a.ResumeTask != "" {
 		deps, prior, predecessorMeta, err = prepareDispatchContinuation(store, deps, base, a.ResumeTask)
 		if err != nil {
@@ -94,6 +96,22 @@ func dispatchTaskID(a Arguments) (string, error) {
 		return a.generatedTaskID, nil
 	}
 	return task.NewTaskID()
+}
+
+func resolveDispatchProvider(a Arguments, deps Dependencies, store *taskdir.Store, id, cwd string, brief []byte, response *Response) (Arguments, int, error) {
+	if !a.Auto {
+		return a, 0, nil
+	}
+	provider, exists, err := persistedProviderForTask(store, id)
+	response.TaskRecord = dispatchTaskRecordLookup(a.TaskID, exists, err)
+	if err != nil {
+		return a, classifyCode(err, 1), err
+	}
+	if !exists {
+		provider, err = selectAutoProvider(deps, store.Root, store.RootID, id, cwd, a.Config, brief)
+	}
+	a.Provider = provider
+	return a, classifyCode(err, 2), err
 }
 
 func dispatchContinuationEnvironment(root string, meta *task.MetaRecord, interactive bool) (func() error, error) {
@@ -159,9 +177,13 @@ func dispatchInputs(a Arguments) (root, cwd string, brief []byte, err error) {
 	if err != nil {
 		return "", "", nil, err
 	}
-	_, cwd, err = validateRootAndCwd(root, a.Cwd)
-	if err != nil {
-		return "", "", nil, err
+	if a.WorkspaceID == "" {
+		_, cwd, err = validateRootAndCwd(root, a.Cwd)
+		if err != nil {
+			return "", "", nil, err
+		}
+	} else {
+		cwd = a.Cwd
 	}
 	if a.BriefBytes != nil {
 		if len(a.BriefBytes) == 0 {
@@ -192,12 +214,14 @@ func continueTask(a Arguments, deps Dependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, withDispatchStage("load-predecessor", err), 1)
 	}
-	registration, lookupErr := deps.normalized().Catalog.Lookup(predecessor.Provider)
-	if lookupErr != nil {
-		return failed(response, withDispatchStage("resolve-continuation-provider", lookupErr), 2)
+	response.RootID = predecessor.RootID
+	response.Workspace, err = prepareManagedContinuation(root, deps, *predecessor)
+	if err != nil {
+		return managedContinuationFailure(root, response, err)
 	}
-	if registration.Description.Continuation != commonprovider.ContinuationNative {
-		return failed(response, withDispatchStage("check-continuation-capability", fmt.Errorf("native continuation unsupported for %s", predecessor.Provider)), 2)
+	mode, modeErr := continuationProviderMode(deps, predecessor.Provider)
+	if modeErr != nil {
+		return failed(response, modeErr, 2)
 	}
 	if err = validateContinuationMetadata(root, a, predecessorMeta); err != nil {
 		return failed(response, withDispatchStage("validate-continuation", err), 2)
@@ -243,8 +267,19 @@ func continueTask(a Arguments, deps Dependencies) (result commandResult) {
 	} else if continuationArgs.PueueConfig != "" {
 		supervisor = &task.SupervisorRef{ConfigPath: continuationArgs.PueueConfig}
 	}
-	result = decorateContinuationResult(result, root, predecessor.TaskID, registration.Description.Continuation, continuationArgs.Runner, supervisor)
+	result = decorateContinuationResult(result, root, predecessor.TaskID, mode, continuationArgs.Runner, supervisor)
 	return result
+}
+
+func continuationProviderMode(deps Dependencies, provider string) (commonprovider.ContinuationMode, error) {
+	registration, err := deps.normalized().Catalog.Lookup(provider)
+	if err != nil {
+		return "", withDispatchStage("resolve-continuation-provider", err)
+	}
+	if registration.Description.Continuation != commonprovider.ContinuationNative {
+		return "", withDispatchStage("check-continuation-capability", fmt.Errorf("native continuation unsupported for %s", provider))
+	}
+	return registration.Description.Continuation, nil
 }
 
 // recoverContinuationSupervisor reopens the predecessor's recorded private
@@ -312,6 +347,11 @@ func buildContinuationArguments(a Arguments, root string, predecessor *task.Task
 	continuationArgs.Brief = ""
 	continuationArgs.BriefBytes = brief
 	continuationArgs.Cwd = predecessor.CanonicalCwd
+	if predecessor.Workspace != nil {
+		binding := *predecessor.Workspace
+		continuationArgs.WorkspaceID = binding.ID
+		continuationArgs.workspaceBinding = &binding
+	}
 	continuationArgs.Config = continuationConfig(predecessor.RequestedConfig, a.Config)
 	if meta != nil {
 		saved := meta.SupervisorConfig
@@ -706,11 +746,8 @@ func dispatchExisting(a Arguments, deps Dependencies, store *taskdir.Store, td *
 		return dispatchNew(a, deps, store, req, nil, response)
 	}
 
-	if !sameExistingRequest(a, &req, oldReq) {
-		return failed(response, task.ErrRequestConflict, 2)
-	}
-	if a.PueueConfig != "" && a.PueueConfig != oldMeta.SupervisorConfig.ConfigPath {
-		return failed(response, task.ErrRequestConflict, 2)
+	if err = validateExistingDispatchRequest(a, store, req, oldReq, oldMeta); err != nil {
+		return failed(response, err, classifyCode(err, 1))
 	}
 	response.RootID, response.TaskID = oldReq.RootID, oldReq.TaskID
 	inspection, inspectErr := td.Inspect()
@@ -786,6 +823,9 @@ func dispatchNew(a Arguments, deps Dependencies, store *taskdir.Store, req task.
 			err = annotateMissingDispatchStage("reading brief", err)
 			return failed(response, withDispatchStage("read-brief", err), classifyCode(err, 1))
 		}
+	}
+	if err = recordManagedTaskCapture(store, req); err != nil {
+		return failed(response, withDispatchStage("record-workspace-capture", err), 1)
 	}
 	td, err := store.CreateTask(req.TaskID, &req, brief, &meta)
 	if err != nil {
@@ -933,13 +973,10 @@ func validateSubmissionRunner(deps Dependencies, td *taskdir.TaskDir, req *task.
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
-	inspectionDir := filepath.Join(root, "inspections", req.TaskID)
-	if _, statErr := os.Lstat(inspectionDir); errors.Is(statErr, os.ErrNotExist) {
+	operation, err := loadAdmissionInspectionOperationContext(context.Background(), store, *req)
+	if task.RecordAbsent(err) {
 		return nil
-	} else if statErr != nil {
-		return statErr
 	}
-	operation, err := inspection.LoadOperation(store, req.TaskID)
 	if err != nil {
 		return err
 	}
@@ -1310,6 +1347,7 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
+	defer func() { fillManagedTaskWorkspace(store, td, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	inspection, err := td.Inspect()
 	err = errors.Join(err, fillInspectedInteraction(&response, td, inspection))
@@ -1834,6 +1872,7 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
+	defer func() { fillManagedTaskWorkspace(store, td, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	req, meta, err := td.PreparedRecords()
 	if err != nil {
@@ -1935,6 +1974,9 @@ func stopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 			resultErr = errors.Join(resultErr, owner.Release())
 		}
 	}()
+	if request.NumericTaskID == nil {
+		return stopTaskWithoutNumericTarget(td, permit, requestID, cause)
+	}
 	client, err := newSupervisorControlClient(context.Background(), root, request.Supervisor, supervisorOptions, initialSupervisorExecutable)
 	if err != nil {
 		return StopResponse{}, errors.Join(err, permit.Release())
@@ -1959,6 +2001,25 @@ func stopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 	response = stopResponseFromResult(requestID, cause, stopResult)
 	response.Terminated = terminated
 	return response, stopErr
+}
+
+// A missing numeric receipt is not authority to control any queue row or to
+// restart its supervisor. The durable user stop fences later task launch; only
+// the existing lifetime/run owners can additionally prove never-launched.
+func stopTaskWithoutNumericTarget(td *taskdir.TaskDir, permit *taskdir.StopPermit, requestID, cause string) (StopResponse, error) {
+	proven, err := td.ProveUnlaunchedTaskOwnedContext(context.Background())
+	if err != nil {
+		return StopResponse{}, errors.Join(err, permit.Release())
+	}
+	response := StopResponse{
+		RequestID: requestID, Cause: cause, Requested: true, Action: "terminate",
+		ObservedState: string(pueue.StateUnknown), Message: "durable cancellation recorded; native termination is not yet proven",
+	}
+	if proven {
+		response.Action, response.Terminated = "not-launched", true
+		response.Message = "durable cancellation prevents this unlaunched task from starting"
+	}
+	return response, errors.Join(permit.Consume(), permit.Release())
 }
 
 func releaseLifetimeOwnerAfterPending(pending <-chan struct{}, owner lifetimeGuardianOwner) error {
@@ -2027,11 +2088,12 @@ func cancel(a Arguments, deps Dependencies) (result commandResult) {
 		return failed(response, err, 1)
 	}
 	submission, err := td.ReadSubmission()
-	if err != nil {
+	if err == nil {
+		if !task.SameSupervisorIdentity(submission.Supervisor, meta.SupervisorConfig) {
+			return failed(response, task.ErrIdentityMismatch, 1)
+		}
+	} else if !task.RecordAbsent(err) {
 		return failed(response, err, classifyCode(err, 1))
-	}
-	if !task.SameSupervisorIdentity(submission.Supervisor, meta.SupervisorConfig) {
-		return failed(response, task.ErrIdentityMismatch, 1)
 	}
 	// Persist the stop request first. The active lifetime owner handles native
 	// termination; only an idle task lets this command stop the saved queue row.

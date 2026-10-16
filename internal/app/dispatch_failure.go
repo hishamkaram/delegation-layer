@@ -9,6 +9,7 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
 type dispatchStageError struct {
@@ -148,6 +149,9 @@ func dispatchSubmissionFailureCode(err error, stage, taskRecord string) string {
 }
 
 func dispatchCauseFailureCode(err error) string {
+	if code := workspaceFailureCode(err); code != "" {
+		return code
+	}
 	switch {
 	case errors.Is(err, commonprovider.ErrUnsupportedOption):
 		return "unsupported_option"
@@ -172,6 +176,19 @@ func dispatchCauseFailureCode(err error) string {
 	}
 }
 
+func workspaceFailureCode(err error) string {
+	switch {
+	case errors.Is(err, workspace.ErrReleased):
+		return "workspace_released"
+	case workspacePendingError(err):
+		return "workspace_busy"
+	case errors.Is(err, workspace.ErrIdentity), errors.Is(err, workspace.ErrIdentityMismatch):
+		return "workspace_identity_changed"
+	default:
+		return ""
+	}
+}
+
 func dispatchFailureStageCode(stage string) string {
 	switch stage {
 	case "validate-request":
@@ -188,6 +205,8 @@ func dispatchFailureStageCode(stage string) string {
 		return "delegate_installation_incomplete"
 	case "resolve-state-root":
 		return "state_root_unavailable"
+	case "prepare-workspace":
+		return "workspace_preparation_failed"
 	case "resolve-predecessor", "load-predecessor", "validate-continuation", "resolve-continuation-supervisor", "restore-continuation-environment":
 		return "continuation_unavailable"
 	case "resolve-continuation-provider":
@@ -241,6 +260,11 @@ var dispatchFailureMessages = map[string]string{
 	"state_root_unavailable":             "Delegate could not access the saved task state. Stop and report this failure.",
 	"continuation_unavailable":           "Delegate could not load or validate the predecessor for continuation. Stop and report this failure.",
 	"unsupported_continuation":           "The selected provider does not support resumable continuation. Stop and report this limitation.",
+	"workspace_busy":                     "The managed workspace is still in use or awaiting capture. Observe its workspace status.",
+	"workspace_provision_pending":        "Delegate is preparing the managed workspace. Observe its workspace status before retrying the same request.",
+	"workspace_released":                 "The managed workspace was released and cannot accept another turn.",
+	"workspace_identity_changed":         "Delegate could not verify the managed workspace identity. Its files were retained.",
+	"workspace_preparation_failed":       "Delegate could not prepare the managed workspace. Stop and report this failure; its saved evidence was retained.",
 }
 
 func dispatchFailureMessage(code string) string {

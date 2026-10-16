@@ -63,8 +63,20 @@ func (o *Operation) RecordReceiptContext(ctx context.Context, id int64) error {
 		return task.ErrEvidenceFault
 	}
 	record := ReceiptRecord{SchemaVersion: task.SchemaVersion, RequestSHA256: o.digest, NumericTaskID: &id}
-	_, err := o.control.PutContext(ctx, receiptRecordName, record)
-	return err
+	records, err := o.controlLifetime(true)
+	if err != nil {
+		return err
+	}
+	return records.WithLifetimeLaunchPermissionOrReplayContext(ctx, func(tx *taskdir.ControlTransaction) error {
+		var existing ReceiptRecord
+		if readErr := tx.Read(receiptRecordName, &existing); readErr != nil {
+			return readErr
+		}
+		return tx.Verify(receiptRecordName, record)
+	}, func(tx *taskdir.ControlTransaction) error {
+		_, putErr := tx.Put(receiptRecordName, record)
+		return putErr
+	})
 }
 
 // AuthorizeManagedWorkerUpgradeContext records that queue migration verified

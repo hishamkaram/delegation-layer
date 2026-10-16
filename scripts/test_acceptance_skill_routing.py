@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch, Mock
 
 import acceptance_skill_routing as gate
+import acceptance_provider_common as provider_common
 
 
 class RoutingTests(unittest.TestCase):
@@ -383,12 +384,15 @@ class RoutingTests(unittest.TestCase):
             skill = (root / "SKILL.md").read_text(encoding="utf-8")
             skill_flat = " ".join(skill.split())
             result_handling = (root / "references/result-handling.md").read_text(encoding="utf-8")
+            result_handling_flat = " ".join(result_handling.split())
             continuation = (root / "references/continuation.md").read_text(encoding="utf-8")
             routing_rule = json.loads((root / "references/routing-rule.json").read_text(encoding="utf-8"))
             self.assertLess(skill.index("supervisor_upgrade_required"),
                             skill.index("task_record: not_created` with any other next action"))
-            self.assertLess(result_handling.index("sole migration exception"),
-                            result_handling.index("For every\n   other `not_created` response"))
+            generic_stop = result_handling_flat.index("For every other `not_created` response")
+            self.assertLess(result_handling_flat.index("sole migration exception"), generic_stop)
+            self.assertLess(result_handling_flat.index("workspace_provision_pending"), generic_stop)
+            self.assertLess(result_handling_flat.index("workspace_busy"), generic_stop)
             self.assertIn("`continue` remains `continue`", skill_flat)
             self.assertIn("argv-equivalent `continue`", continuation)
             self.assertIn("continue remains continue", routing_rule)
@@ -606,10 +610,21 @@ class RoutingTests(unittest.TestCase):
         })
         inspection = state / "inspections" / ("b" * 32)
         inspection.mkdir(parents=True)
+
+        task_record = {
+            "schema_version": 1, "root_id": "a" * 32, "task_id": "b" * 32,
+            "provider": "fixture:test", "mode": "read-only", "canonical_cwd": "/fixture",
+            "requested_config": {}, "budget_nanos": 60_000_000_000,
+            "brief_sha256": "0" * 64, "brief_length": 1,
+        }
+        group = provider_common._inspection_group("a" * 32)
         gate.write_json(inspection / "request.json", {
             "schema_version": 1, "root_id": "a" * 32, "task_id": "b" * 32,
+            "task": task_record,
+            "task_sha256": provider_common.sha(provider_common._canonical_task_bytes(task_record)),
+            "group": group, "label": group + "-" + "b" * 32,
             "created_at": "2026-10-13T00:00:01Z",
-            "deadline": "2026-10-13T00:01:00Z",
+            "deadline": "2026-10-13T00:01:01Z",
             "binding": {
                 "definition_revision": "fixture-v1", "definition_sha256": "c" * 64,
                 "helper_executable": "/fixture/helper", "helper_sha256": "d" * 64,

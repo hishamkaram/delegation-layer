@@ -23,18 +23,19 @@ import (
 const runnerReceiptPollInterval = 10 * time.Millisecond
 
 type runnerArguments struct {
-	Root             string
-	TaskID           string
-	JSON             bool
-	Inspection       bool
-	Supervised       bool
-	Guardian         bool
-	QueueMaintenance bool
-	LifetimeChild    bool
-	LifetimeFD       int
-	TerminalEvent    bool
-	PueueID          int64
-	ExitCode         string
+	Root               string
+	TaskID             string
+	JSON               bool
+	Inspection         bool
+	WorkspaceOperation bool
+	Supervised         bool
+	Guardian           bool
+	QueueMaintenance   bool
+	LifetimeChild      bool
+	LifetimeFD         int
+	TerminalEvent      bool
+	PueueID            int64
+	ExitCode           string
 }
 
 // RunRunner executes one saved task from the supervisor's exact root/task
@@ -79,6 +80,11 @@ func runRunnerControlMode(parsed runnerArguments, stderr io.Writer, deps Depende
 	case parsed.Inspection:
 		if err := runInspectionRunnerMode(parsed, deps.normalized()); err != nil {
 			return writeCLIError(stderr, inspectionWorkerPublicError(err), 1), true
+		}
+		return 0, true
+	case parsed.WorkspaceOperation:
+		if err := runWorkspaceOperationWorker(parsed, deps.normalized()); err != nil {
+			return writeCLIError(stderr, err, 1), true
 		}
 		return 0, true
 	default:
@@ -132,6 +138,7 @@ func newRunnerFlagSet(parsed *runnerArguments) *flag.FlagSet {
 	fs.StringVar(&parsed.Root, "root", "", "absolute state root")
 	fs.BoolVar(&parsed.JSON, "json", false, "emit versioned JSON")
 	fs.BoolVar(&parsed.Inspection, "inspection", false, "run the saved internal inspection operation")
+	fs.BoolVar(&parsed.WorkspaceOperation, "workspace-operation", false, "run the saved internal workspace operation")
 	fs.BoolVar(&parsed.Supervised, "supervised", false, "consume a saved supervisor receipt")
 	fs.BoolVar(&parsed.Guardian, "guardian", false, "own the saved task process lifetime")
 	fs.BoolVar(&parsed.QueueMaintenance, "queue-maintenance", false, "own requested private queue maintenance")
@@ -173,7 +180,7 @@ func validateRunnerArguments(parsed runnerArguments, positional []string) (runne
 }
 
 func runnerTerminalEventHasUnexpectedArguments(parsed runnerArguments, positional []string) bool {
-	if parsed.Inspection || parsed.Supervised || parsed.Guardian || parsed.QueueMaintenance || parsed.LifetimeChild {
+	if parsed.Inspection || parsed.WorkspaceOperation || parsed.Supervised || parsed.Guardian || parsed.QueueMaintenance || parsed.LifetimeChild {
 		return true
 	}
 	if parsed.LifetimeFD != -1 || parsed.JSON || len(positional) != 0 {
@@ -183,13 +190,16 @@ func runnerTerminalEventHasUnexpectedArguments(parsed runnerArguments, positiona
 }
 
 func runnerQueueMaintenanceHasUnexpectedArguments(parsed runnerArguments, positional []string) bool {
-	if parsed.Inspection || parsed.Supervised || parsed.Guardian || parsed.TerminalEvent || parsed.LifetimeChild {
+	if parsed.Inspection || parsed.WorkspaceOperation || parsed.Supervised || parsed.Guardian || parsed.TerminalEvent || parsed.LifetimeChild {
 		return true
 	}
 	return parsed.LifetimeFD != -1 || parsed.JSON || parsed.PueueID >= 0 || parsed.ExitCode != "" || len(positional) != 0
 }
 
 func validateRunnerModes(parsed runnerArguments) error {
+	if parsed.WorkspaceOperation && (parsed.Inspection || !parsed.Supervised) {
+		return errors.New("delegate-run workspace operation requires its own supervised mode")
+	}
 	if parsed.Guardian && parsed.LifetimeChild {
 		return errors.New("delegate-run guardian and lifetime child modes are mutually exclusive")
 	}
@@ -606,6 +616,9 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 	}
 	if inspection.StartExists {
 		return failed(response, task.ErrAlreadyStarted, 1)
+	}
+	if req.Workspace != nil && lifetimeChild == nil {
+		return failed(response, fmt.Errorf("%w: a managed workspace requires an authenticated lifetime child", task.ErrInvalidPermit), 1)
 	}
 	_, err = prepareMatchedProfile(deps, root, *req, *meta)
 	if err != nil {

@@ -62,10 +62,10 @@ func TestInspectionAdmissionDecisionDoesNotAcquireLifetimeOwner(t *testing.T) {
 	bound, _, _ := newUncertainGroupSupervisor(t, store.RootID)
 	operation := newInspectionPollTestOperationAtWithOwnership(t, store, bound, time.Now().UTC(), task.RunnerOwnershipManaged)
 	completeInspectionPollTestOperation(t, operation)
-	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
 	if err := operation.RecordReceiptContext(t.Context(), 7); err != nil {
 		t.Fatal(err)
 	}
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
 	if err := operation.RecordWorkerSuccessContext(t.Context(), 7); err != nil {
 		t.Fatal(err)
 	}
@@ -162,10 +162,10 @@ func TestInspectionStatusCannotOverrideManagedGuardianProof(t *testing.T) {
 			bound, logPath, _ := newUncertainGroupSupervisor(t, store.RootID)
 			operation := newInspectionPollTestOperationAtWithOwnership(t, store, bound, time.Now().UTC(), task.RunnerOwnershipManaged)
 			completeInspectionPollTestOperation(t, operation)
-			completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
 			if err := operation.RecordReceiptContext(t.Context(), 7); err != nil {
 				t.Fatal(err)
 			}
+			completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
 			statusPath := filepath.Join(filepath.Dir(logPath), "status.json")
 			tc.writeStatus(t, statusPath, operation)
 			published := make(chan error, 1)
@@ -195,10 +195,10 @@ func TestInspectionGraceUsesDurableProofAfterQueueRemoval(t *testing.T) {
 	bound, logPath, _ := newUncertainGroupSupervisor(t, store.RootID)
 	operation := newInspectionPollTestOperationAtWithOwnership(t, store, bound, time.Now().UTC(), task.RunnerOwnershipManaged)
 	completeInspectionPollTestOperation(t, operation)
-	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
 	if err := operation.RecordReceiptContext(t.Context(), 7); err != nil {
 		t.Fatal(err)
 	}
+	completeInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
 	if err := operation.RecordWorkerSuccessContext(t.Context(), 7); err != nil {
 		t.Fatal(err)
 	}

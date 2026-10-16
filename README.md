@@ -30,6 +30,8 @@ already use instead of replacing them.
   capabilities are checked before provider execution.
 - **Model choice when needed** — native model and effort discovery is available
   without turning discovery into an admission allowlist.
+- **Optional retained worktrees** — independent Git writes can use a managed
+  worktree with explicit capture and Lead-controlled release.
 - **Native authentication** — provider login stays with the provider CLI; task
   state does not contain copied credentials.
 
@@ -280,6 +282,25 @@ delegate --root "$HOME/delegation-state" continue \
 The successor receives a new task ID and is observed with the same `status` and
 `collect` commands.
 
+### Optional managed Git workspaces
+
+Ordinary delegation is unchanged. For independent parallel writes, use a
+managed worktree unless the user explicitly chooses shared coordination:
+
+```sh
+delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" dispatch --auto \
+  --brief /absolute/brief.txt --cwd /absolute/git/source \
+  --permission workspace-write --isolation git-worktree \
+  --base HEAD --workspace-budget 5m --budget 30m --json
+```
+
+The committed base is authoritative; dirty and untracked source changes are
+excluded. The worktree remains retained until the Lead reviews the captured
+Git-content evidence and explicitly releases it. Use the [managed workspace
+reference](skills/agent-integration/references/workspaces.md) for attachment,
+continuation, verification, review scope, release, and forgetting. This
+feature does not automatically apply, commit, branch, or merge worker changes.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install and run a first task.
@@ -296,7 +317,9 @@ The successor receives a new task ID and is observed with the same `status` and
   failures.
 - [Agent integration skill](skills/agent-integration/SKILL.md) — the
   provider-neutral instructions installed into an agent harness.
-- [Contributing](CONTRIBUTING.md) — development and review guidance.
+- [Managed workspaces](skills/agent-integration/references/workspaces.md) —
+  optional Git checkout, capture, and retention policy.
+- [Contributing](docs/contributing.md) — development and review guidance.
 
 ## License
 

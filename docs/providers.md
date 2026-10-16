@@ -208,6 +208,12 @@ the requested native sandbox remains selected. Existing tasks retain their
 recorded launch contract when reconstructed or continued after an upgrade.
 Native Git-targeted reviews still require a suitable repository.
 
+Codex's native sandbox can deny staging or committing in a linked worktree
+because its Git metadata is outside the checkout. Managed capture still records
+file changes without a commit. The Lead can explicitly run Git operations with
+`workspace exec`; Delegate does not widen Codex's sandbox to shared repository
+metadata.
+
 If a current ordinary task exits with a positive status before emitting any
 structured events, collection reports `provider_startup_failed`. This diagnosis
 uses sealed process facts and never copies or interprets stderr as a cause.

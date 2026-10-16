@@ -228,6 +228,9 @@ func TestLegacyEndedInspectionJobUsesInspectionJournalEvidence(t *testing.T) {
 		RootID: store.RootID, Supervisor: supervisor.Binding(),
 		Name: job.Group, ParallelTasks: 1,
 	}
+	if err = prepareEndedInspectionEvidence(t.Context(), store, legacy, request.TaskID, job); err != nil {
+		t.Fatal(err)
+	}
 	if err = inspectLegacyEndedJob(context.Background(), store, legacy, job); err != nil {
 		t.Fatalf("completed inspection was not accepted from its journal: %v", err)
 	}

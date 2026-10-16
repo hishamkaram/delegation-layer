@@ -197,7 +197,9 @@ func newTerminalGenerationWriteFault(t *testing.T, root string, supervisor *pueu
 	if err := os.MkdirAll(filepath.Join(base, "terminal-events"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"queue-maintenance.lock", "queue-maintenance-state.lock"} {
+	// A real queue row has already crossed submission's identity lease. The
+	// synthetic row needs those stable locks before the unrelated write fault.
+	for _, name := range []string{"queue-maintenance.lock", "queue-maintenance-state.lock", "queue-writer-intent.lock", "queue-identity-gate.lock", "queue-identity.lock"} {
 		createTerminalGenerationLock(t, filepath.Join(base, name))
 	}
 	baseInfo, err := os.Stat(base)
@@ -1016,10 +1018,11 @@ printf '%s\n' "$$" > "$base/run/pueue.pid"
 	var statusCalls atomic.Int32
 	var unfilteredStatusCalls atomic.Int32
 	options := pueue.Options{
-		ObservationTimeout:          inspection.AdmissionTimeout,
-		SuccessfulCleanupAuthorizer: authorizePrivateSuccessfulCleanup,
-		PrivateMaintenanceLauncher:  launcher,
-		Environment:                 append(os.Environ(), extraEnvironment...),
+		ObservationTimeout:              inspection.AdmissionTimeout,
+		SuccessfulCleanupAuthorizer:     authorizePrivateSuccessfulCleanup,
+		PrivateTerminalEvidencePreparer: preparePrivateTerminalEvidence,
+		PrivateMaintenanceLauncher:      launcher,
+		Environment:                     append(os.Environ(), extraEnvironment...),
 		Observer: func(event pueue.CommandEvent) {
 			if event.Stage == "entry" && slices.Contains(event.Argv, "status") {
 				statusCalls.Add(1)

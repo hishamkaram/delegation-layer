@@ -264,17 +264,27 @@ type RootRecord struct {
 
 // TaskRecord is stored in task.json (the immutable task request).
 type TaskRecord struct {
-	SchemaVersion   int           `json:"schema_version"`
-	RootID          string        `json:"root_id"`
-	TaskID          string        `json:"task_id"`
-	Provider        string        `json:"provider"`
-	Mode            string        `json:"mode"`
-	CanonicalCwd    string        `json:"canonical_cwd"`
-	RequestedConfig TaskConfig    `json:"requested_config"`
-	BudgetNanos     int64         `json:"budget_nanos"`
-	PriorSession    *PriorSession `json:"prior_session,omitempty"`
-	BriefSHA256     string        `json:"brief_sha256"`
-	BriefLength     int64         `json:"brief_length"`
+	SchemaVersion   int               `json:"schema_version"`
+	RootID          string            `json:"root_id"`
+	TaskID          string            `json:"task_id"`
+	Provider        string            `json:"provider"`
+	Mode            string            `json:"mode"`
+	CanonicalCwd    string            `json:"canonical_cwd"`
+	RequestedConfig TaskConfig        `json:"requested_config"`
+	BudgetNanos     int64             `json:"budget_nanos"`
+	PriorSession    *PriorSession     `json:"prior_session,omitempty"`
+	BriefSHA256     string            `json:"brief_sha256"`
+	BriefLength     int64             `json:"brief_length"`
+	Workspace       *WorkspaceBinding `json:"workspace,omitempty"`
+}
+
+// WorkspaceBinding identifies the resource usage owned by this request. The
+// workspace journal owns checkout and capture state; task.json only pins use.
+type WorkspaceBinding struct {
+	ID            string `json:"id"`
+	Reservation   uint64 `json:"reservation"`
+	RequestSHA256 string `json:"request_sha256"`
+	BudgetNanos   int64  `json:"budget_nanos"`
 }
 
 // MetaRecord is stored in meta.json (the immutable prepared execution plan).
@@ -577,6 +587,9 @@ func ValidateTaskRecord(r *TaskRecord) error {
 		return err
 	}
 	if err := ValidateTaskID(r.TaskID); err != nil {
+		return err
+	}
+	if err := validateWorkspaceBinding(r.Workspace); err != nil {
 		return err
 	}
 	if err := validateTaskConfiguration(r); err != nil {

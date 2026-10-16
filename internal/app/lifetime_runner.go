@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	"golang.org/x/sys/unix"
 )
 
@@ -30,6 +32,9 @@ type lifetimeGuardianRunState struct {
 
 func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) (lifetimeGuardianRunState, error) {
 	state := lifetimeGuardianRunState{ownerKind: task.LifetimeOwnerTask}
+	if parsed.WorkspaceOperation {
+		return loadWorkspaceGuardianState(store, parsed.TaskID)
+	}
 	if parsed.Inspection {
 		operation, err := loadInspectionOperationForWorker(store, parsed.TaskID)
 		if err != nil {
@@ -154,7 +159,20 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 	if err != nil {
 		return err
 	}
-	return errors.Join(guardian.Run(context.Background()), inheritedCloseErr)
+	guardianErr := runGuardianWithWorkspaceCompletion(guardian, store, parsed, deps)
+	return errors.Join(guardianErr, inheritedCloseErr)
+}
+
+func runGuardianWithWorkspaceCompletion(guardian *lifetimeGuardian, store *taskdir.Store, parsed runnerArguments, deps Dependencies) error {
+	guardianErr := guardian.Run(context.Background())
+	if parsed.Inspection {
+		return guardianErr
+	}
+	if wakeErr := reconcileWorkspaceAfterGuardian(store, parsed, deps); wakeErr != nil && !errors.Is(wakeErr, workspace.ErrPending) {
+		// Capture remains recoverable without rewriting the provider result.
+		log.Printf("delegate: workspace capture deferred: %v", wakeErr)
+	}
+	return guardianErr
 }
 
 func newLifetimeWorkerCommand(executable, canonicalRoot string, parsed runnerArguments) (*exec.Cmd, error) {
@@ -171,6 +189,9 @@ func lifetimeWorkerArguments(parsed runnerArguments) []string {
 	arguments := make([]string, 0, 9)
 	if parsed.Inspection {
 		arguments = append(arguments, "--inspection")
+	}
+	if parsed.WorkspaceOperation {
+		arguments = append(arguments, "--workspace-operation")
 	}
 	arguments = append(
 		arguments,
@@ -231,4 +252,5 @@ func newLifetimeControlPair() (net.Conn, *os.File, error) {
 var (
 	_ lifetimeGuardianRecords = (*taskdir.TaskDir)(nil)
 	_ lifetimeGuardianRecords = (*inspection.Operation)(nil)
+	_ lifetimeGuardianRecords = (*workspace.Operation)(nil)
 )

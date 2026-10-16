@@ -13,8 +13,11 @@ the same as a successful provider result.
    `supervisor_control.next_action: "retry_dispatch"`, retry the exact original
    admission argv once. The retry is command-neutral: `dispatch` remains
    `dispatch`, and `continue` remains `continue`; never create a fresh dispatch
-   or call a provider directly to replace a failed continuation. For every
-   other `not_created` response, do not poll; correct the request only if
+   or call a provider directly to replace a failed continuation. Also handle
+   `workspace_provision_pending` or `workspace_busy` with `watch_workspace`
+   using [managed workspace recovery](#managed-workspace-results) before the
+   generic stop rule. For every other `not_created` response, do not poll;
+   correct the request only if
    `failure.next_action` is `correct_request`, otherwise report and stop. When
    `task_record` is `unknown`, stop and report without polling or retrying.
    Status and collect can report `admission: "unknown"` alongside valid terminal
@@ -67,6 +70,47 @@ the provider started or completed the work.
 Versions and help are observations, not semantic-version allowlists.
 Authentication is a separate live gate (`not_run`, `passed`, or `blocked`).
 Report a blocked prerequisite without inventing a login command or retrying.
+
+## Managed workspace results
+
+Treat `response.workspace` as a separate resource and Git-content evidence
+projection. It does not replace `outcome`, `publication`, or `continuation`.
+The provider outcome is immutable and the workspace `CaptureReceipt` is a
+separate immutable fact; a failed or unavailable capture must not be reported
+as a provider failure when native closure is already proven.
+
+Before a task record exists, a pending workspace provision returns
+`task_record: "not_created"` with
+`failure.code: "workspace_provision_pending"` and
+`failure.next_action: "watch_workspace"`. Run the returned workspace-status
+command with the same root and workspace ID. Once ready, retry the same
+admission with the returned task ID in `--id` and unchanged provider, brief,
+permission, model, effort, and source options. A proven never-launched attempt
+gets a fresh helper deadline; a created task is only observed.
+
+An occupied managed workspace can return `workspace_busy` with
+`task_record: "not_created"` and `watch_workspace` before authorizing a task.
+Observe the owning workspace, then retry the exact original admission command.
+For `continue`, keep `continue --task PREDECESSOR_ID`; never replace it with a
+dispatch. These two workspace responses are narrow exceptions to the generic
+stop rule. Do not invent another recovery code or provider retry.
+
+Read the acknowledgement before observing or repeating a workspace mutation:
+
+| Response | Required action |
+| --- | --- |
+| Exit `3`, reason `requested_action_not_authorized`, next action `retry_exec`, `retry_release`, or `retry_forget` | The requested mutation was not accepted. Observe the workspace without `--operation` until the prior use ends, then retry that exact mutation. `exec` and `release` need `state: retained`; `forget` needs `state: released`. |
+| Exit `3`, next action `watch_workspace` | The action is accepted. Observe the same workspace; add `--operation OP` only when its response supplies `operation_id`. Do not repeat the mutation or invent an operation ID. |
+| A concrete failure or `stop_and_report` | Preserve the response and report it; do not turn it into a pending watch or provider fallback. |
+
+Use `workspace status ID [--operation OP] --watch DURATION --json` for these
+observations. An accepted action may not have a helper ID yet. An `exec`
+result of `succeeded` proves the command finished; wait for `state: retained`
+before another use, because recapture must finish too. Verification evidence
+does not replace the provider outcome. Keep the checkout retained until the
+Lead has terminal task/capture evidence and explicitly releases it. Read
+[managed workspace guidance](workspaces.md) for the exact command surface and
+review/capture/forgetting boundaries.
 
 ## Offline recovery
 

@@ -124,3 +124,10 @@ observation must never be interpreted as absence.
 - **Filesystem Capability**: Filesystems are not rejected by type name. Admission probes the required file, directory, hard-link, sync/barrier, and lock operations; a root is refused only when one of those operations cannot be proven.
 - **State Root Isolation**: Task state root and workspace must never overlap in either direction. Admission also rejects overlap with declared provider runtime roots. Native provider configuration and extensions may grant wider access; these placement checks do not establish an independent sandbox.
 - **Advisory Locks**: Stable advisory locks (`.admission.lock`, `.run.lock`, `.maintenance.lock`) use `flock` on dedicated inodes without unlinking or passing file descriptors to child processes.
+- **Git Topology Lease**: Managed worktree add, list, unlock, and remove each
+  hold one exclusive lease on the canonical Git common-directory inode. This
+  leaf lease is separate from private state locks and uses their shared lock
+  acquisition machinery. Its descriptor is transferred to the native Git
+  command so helper exit cannot release the lease before Git exits. The
+  execution runner remains the sole subprocess owner. Provider turns and
+  content capture do not hold this topology lease.

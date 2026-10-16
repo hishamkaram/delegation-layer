@@ -129,7 +129,15 @@ func loadInspectionOperationForWorker(store *taskdir.Store, taskID string) (*ins
 	// deadline govern every action that follows.
 	ctx, cancel := context.WithTimeout(context.Background(), inspection.ModelDiscoveryTimeout)
 	defer cancel()
-	return inspection.LoadOperationContext(ctx, store, taskID)
+	operation, err := inspection.LoadOperationContext(ctx, store, taskID)
+	if err != nil {
+		return nil, err
+	}
+	identity, err := admissionInspectionIdentity(ctx, store, operation.Request().Task)
+	if err != nil || identity != operation.Request().IdentityID() {
+		return nil, errors.Join(task.ErrIdentityMismatch, err, operation.Close())
+	}
+	return operation, nil
 }
 
 func openInspectionLifetimeChildIfRequested(lifetimeArgs *runnerArguments, operation *inspection.Operation) (*openedLifetimeChild, error) {
@@ -141,7 +149,10 @@ func openInspectionLifetimeChildIfRequested(lifetimeArgs *runnerArguments, opera
 
 func runLoadedInspectionWorkerOperation(canonicalRoot, taskID string, supervised bool, lifetimeChild *openedLifetimeChild, deps Dependencies, store *taskdir.Store, operation *inspection.Operation) (resultErr error) {
 	record := operation.Request()
-	meta, err := loadInspectionWorkerMeta(store, taskID)
+	if record.Binding.WorkerExitProof == inspection.WorkerExitProofGuardianWaitV1 && lifetimeChild == nil {
+		return inspectionWorkerFailure("open-lifetime")
+	}
+	meta, err := loadInspectionWorkerMeta(store, record.TaskID)
 	if err != nil {
 		return inspectionWorkerFailure("load-task")
 	}

@@ -267,6 +267,21 @@ func (c *Client) WithObservationTimeout(timeout time.Duration) (*Client, error) 
 	}
 	options := c.options
 	options.ObservationTimeout = timeout
+	return c.withCommandOptions(options)
+}
+
+// WithCommandEnvironment derives one command client without changing daemon
+// startup options, supervisor identity, or ownership of pending commands.
+func (c *Client) WithCommandEnvironment(environment []string) (*Client, error) {
+	if c == nil {
+		return nil, ErrConfiguration
+	}
+	options := c.options
+	options.Environment = environment
+	return c.withCommandOptions(options)
+}
+
+func (c *Client) withCommandOptions(options Options) (*Client, error) {
 	options, err := normalizeOptions(options)
 	if err != nil {
 		return nil, err

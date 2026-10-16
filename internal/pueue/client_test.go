@@ -173,6 +173,29 @@ func TestWithObservationTimeoutDoesNotChangeBoundClient(t *testing.T) {
 	}
 }
 
+func TestWithCommandEnvironmentKeepsBindingAndPendingOwnerImmutable(t *testing.T) {
+	fake := newFakeSupervisor(t, "normal")
+	original := slices.Clone(fake.client.options.Environment)
+	environment := append(slices.Clone(original), "WORKSPACE_VERIFY_SENTINEL=original")
+	command, err := fake.client.WithCommandEnvironment(environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment[len(environment)-1] = "WORKSPACE_VERIFY_SENTINEL=changed"
+	if !slices.Equal(fake.client.options.Environment, original) || !slices.Contains(command.options.Environment, "WORKSPACE_VERIFY_SENTINEL=original") {
+		t.Fatal("derived environment aliases the caller or changes daemon/control defaults")
+	}
+	if command.Binding() != fake.client.Binding() || command.RuntimeBinding() != fake.client.RuntimeBinding() || command.workOwner != fake.client.workOwner || command.ownsWorkOwner {
+		t.Fatal("derived command client changed supervisor identity or work ownership")
+	}
+	if err = command.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fake.client.checkVersion(t.Context()); err != nil {
+		t.Fatalf("closing a derived client closed the original owner: %v", err)
+	}
+}
+
 const fakeSupervisorScript = `#!/bin/sh
 set -eu
 {

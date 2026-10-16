@@ -119,24 +119,32 @@ func (o *Operation) ReadWorkerResultContext(ctx context.Context) (*ResultRecord,
 // guardian-owned worker completion disposition and independently validated
 // empty-scope termination. Queue state is absent from this proof path.
 func (o *Operation) readManagedWorkerResultContext(ctx context.Context) (*ResultRecord, bool, error) {
-	if ctx == nil {
-		return nil, false, context.Canceled
+	if err := o.requireManagedWorkerLaunchReceiptContext(ctx); err != nil {
+		return nil, false, err
 	}
-	receipt, err := o.ReceiptContext(ctx)
+	evidence, err := taskdir.LoadLifetimeEvidenceContext(ctx, o)
 	if err != nil {
 		return nil, false, err
 	}
-	if receipt.NumericTaskID == nil {
+	closure, err := task.ResolveLifetimeClosure(evidence)
+	if err != nil {
+		return nil, false, err
+	}
+	if !closure.Closed() {
+		if evidence.WorkerWait == nil {
+			return nil, false, os.ErrNotExist
+		}
+		if evidence.Termination == nil {
+			return nil, false, lifetimeDependencyError(os.ErrNotExist)
+		}
 		return nil, false, task.ErrEvidenceFault
 	}
-	waitRecord, err := o.ReadLifetimeWorkerWaitContext(ctx)
-	if err != nil {
-		return nil, false, err
+	if closure.Kind != task.LifetimeClosureRegisteredNative {
+		// Positive absence permits lifecycle recovery, never an eligible
+		// inspection result or a fabricated worker exit status.
+		return nil, false, nil
 	}
-	termination, err := o.ReadLifetimeTerminationContext(ctx)
-	if err != nil {
-		return nil, false, lifetimeDependencyError(err)
-	}
+	waitRecord, termination := evidence.WorkerWait, evidence.Termination
 	if task.LifetimeWorkerWaitProvesNotStarted(waitRecord) {
 		return managedWorkerFailureResult(termination.Cause)
 	}
@@ -147,6 +155,27 @@ func (o *Operation) readManagedWorkerResultContext(ctx context.Context) (*Result
 		return managedWorkerFailureResult(termination.Cause)
 	}
 	return o.readStartedManagedWorkerResultContext(ctx, waitRecord, termination.Cause)
+}
+
+func (o *Operation) requireManagedWorkerLaunchReceiptContext(ctx context.Context) error {
+	if ctx == nil {
+		return context.Canceled
+	}
+	fence, err := o.ReadLifetimeUnlaunchedContext(ctx)
+	if err == nil && fence != nil {
+		return ErrAdmissionExpired
+	}
+	if err != nil && !task.RecordAbsent(err) {
+		return err
+	}
+	receipt, err := o.ReceiptContext(ctx)
+	if err != nil {
+		return err
+	}
+	if receipt.NumericTaskID == nil {
+		return task.ErrEvidenceFault
+	}
+	return nil
 }
 
 func (o *Operation) readStartedManagedWorkerResultContext(ctx context.Context, waitRecord *task.LifetimeWorkerWaitRecord, terminationCause string) (*ResultRecord, bool, error) {

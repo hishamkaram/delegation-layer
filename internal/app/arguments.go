@@ -16,26 +16,37 @@ import (
 
 // Arguments contains requested values only. Parsing grants no external authority.
 type Arguments struct {
-	MessageID        string
-	RequestID        string
-	Answers          string
-	After            uint64
-	Command          string
-	SupervisorAction string
-	Root             string
-	PueueConfig      string
-	Runner           string
-	TaskID           string
-	Auto             bool
-	Provider         string
-	Brief            string
-	BriefBytes       []byte
-	Cwd              string
-	Config           task.TaskConfig
-	ReviewTarget     string
-	ResumeTask       string
-	JSON             bool
-	Watch            time.Duration
+	MessageID            string
+	RequestID            string
+	Answers              string
+	After                uint64
+	Command              string
+	SupervisorAction     string
+	Root                 string
+	PueueConfig          string
+	Runner               string
+	TaskID               string
+	Auto                 bool
+	Provider             string
+	Brief                string
+	BriefBytes           []byte
+	Cwd                  string
+	Config               task.TaskConfig
+	ReviewTarget         string
+	ResumeTask           string
+	JSON                 bool
+	Watch                time.Duration
+	Isolation            string
+	WorkspaceID          string
+	Base                 string
+	WorkspaceBudget      string
+	WorkspaceAction      string
+	WorkspaceOperationID string
+	WorkspaceAfter       string
+	WorkspaceLimit       int
+	Discard              bool
+	ExecArguments        []string
+	workspaceBinding     *task.WorkspaceBinding
 
 	// savedSupervisor is populated only by the continuation command after the
 	// predecessor binding has been loaded and validated. It never comes from
@@ -59,6 +70,9 @@ func ParseArguments(args []string) (Arguments, error) {
 		return Arguments{}, err
 	}
 	a := Arguments{Command: command}
+	if command == "workspace" {
+		return parseWorkspaceArguments(a, rest)
+	}
 	if command == "supervisor" {
 		var action string
 		action, rest, err = parseSupervisorAction(rest)
@@ -131,7 +145,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
@@ -202,6 +216,10 @@ func registerCommandFlags(fs *flag.FlagSet, a *Arguments, watch *string) {
 	fs.StringVar(&a.Config.Effort, "effort", "", "requested effort")
 	fs.StringVar(&a.ReviewTarget, "review-target", "", "Codex review target: uncommitted, base:BRANCH, or commit:SHA")
 	fs.StringVar(&a.ResumeTask, "resume-task", "", "exact predecessor task ID")
+	fs.StringVar(&a.Isolation, "isolation", "", "optional workspace isolation: git-worktree")
+	fs.StringVar(&a.WorkspaceID, "workspace", "", "retained managed workspace ID")
+	fs.StringVar(&a.Base, "base", "", "committed Git base (default: HEAD)")
+	fs.StringVar(&a.WorkspaceBudget, "workspace-budget", "", "finite workspace helper budget (default: 5m)")
 }
 
 // orderFlags permits documented ID --json placement without silently accepting
@@ -384,14 +402,17 @@ func (a *Arguments) validateTaskCommand(positional []string, watch string) error
 }
 
 func (a *Arguments) validateDispatch(positional []string) error {
+	if err := validateWorkspaceDispatch(*a); err != nil {
+		return err
+	}
 	if len(positional) != 0 {
 		return errors.New("dispatch does not accept positional arguments or raw argv")
 	}
 	if err := a.validateDispatchProvider(); err != nil {
 		return err
 	}
-	if a.Brief == "" || !filepath.IsAbs(a.Cwd) {
-		return errors.New("dispatch requires --brief FILE and --cwd ABS")
+	if a.Brief == "" || (a.WorkspaceID == "" && !filepath.IsAbs(a.Cwd)) {
+		return errors.New("dispatch requires --brief FILE and --cwd ABS or --workspace ID")
 	}
 	if err := config.ValidateMode(a.Config.Permission); err != nil {
 		return err

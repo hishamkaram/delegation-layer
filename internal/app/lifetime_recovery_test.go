@@ -194,7 +194,7 @@ func TestRecoverLifetimeScopeCooperativeCleanupTerminatesAndPreservesErrors(t *t
 func TestRecoverTaskLifetimeLeavesActiveOwnerUntouched(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	recordRecoverableLifetime(t, td, "different-boot")
+	recordRecoverableLifetime(t, td, differentNativeBootID(t))
 	owner, err := td.AcquireLifetimeOwner(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestUpdateStatusKeepsIntentOnlyLifetimeRunningWhileOwnerBusy(t *testing.T) 
 func TestRecoverTaskLifetimeAcceptsChangedBootAsEmptyProof(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	recordRecoverableLifetime(t, td, "different-boot")
+	recordRecoverableLifetime(t, td, differentNativeBootID(t))
 
 	if err := recoverTaskLifetime(t.Context(), td); err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestRecoverTaskLifetimeBeforeWorkerAcknowledgementRefusesWithoutTerminalPro
 func TestUpdateStatusKeepsRegisteredLifetimeRunningWhileOwnerBusy(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	recordRecoverableLifetime(t, td, "different-boot")
+	recordRecoverableLifetime(t, td, differentNativeBootID(t))
 	owner, err := td.AcquireLifetimeOwner(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -384,7 +384,7 @@ func TestUpdateStatusRecoversLifetimeBeforePublishingStop(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
 	prepareAppBudgetRecords(t, td)
-	recordRecoverableLifetime(t, td, "different-boot")
+	recordRecoverableLifetime(t, td, differentNativeBootID(t))
 	deadline := time.Now().Add(time.Minute)
 	permit, err := td.PrepareStop("budget", "budget", deadline)
 	if err != nil {
@@ -465,4 +465,42 @@ func currentBootID(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return value
+}
+
+// A different spelling is not reboot evidence. Use a comparable kernel UUID
+// scheme, and verify the fixture actually represents a different boot.
+func differentNativeBootID(t *testing.T) string {
+	t.Helper()
+	current := currentBootID(t)
+	prefix := "linux:"
+	if strings.HasPrefix(current, "darwin:boot-session:") {
+		prefix = "darwin:boot-session:"
+	}
+	candidate := prefix + "00000000-0000-0000-0000-000000000001"
+	if candidate == current {
+		candidate = prefix + "00000000-0000-0000-0000-000000000002"
+	}
+	if lifetime.CompareBootIDs(candidate, current) != lifetime.BootDifferent {
+		t.Fatalf("not a comparable prior boot fixture: %q, %q", candidate, current)
+	}
+	return candidate
+}
+
+func TestRecoverTaskLifetimeRejectsUnknownBootWithoutClosing(t *testing.T) {
+	for _, boot := range []string{"different-boot", "darwin:1790770768:55074"} {
+		t.Run(boot, func(t *testing.T) {
+			store, td, _ := newAppTestTask(t, false)
+			defer closeAppTestTask(t, store, td)
+			recordRecoverableLifetime(t, td, boot)
+			if err := recoverTaskLifetime(t.Context(), td); !errors.Is(err, task.ErrEvidenceFault) {
+				t.Fatalf("unknown boot recovery = %v", err)
+			}
+			if _, err := td.ReadLifetimeTerminationContext(t.Context()); !task.RecordAbsent(err) {
+				t.Fatalf("unknown epoch wrote termination: %v", err)
+			}
+			if _, err := td.ReadLifetimeWorkerWaitContext(t.Context()); !task.RecordAbsent(err) {
+				t.Fatalf("unknown epoch wrote completion: %v", err)
+			}
+		})
+	}
 }
