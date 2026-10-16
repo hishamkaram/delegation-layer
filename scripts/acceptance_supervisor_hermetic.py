@@ -461,6 +461,13 @@ class Case:
         # exit and its child intentionally share this configured rendezvous.
         self.release(str(self.provider_release) + ".release")
 
+    def update_provider(self, **changes):
+        self.provider_settings.update(changes)
+        write_json(self.provider_config, self.provider_settings, replace=True)
+        profile = read_json(self.profile_config)
+        profile["provider_config_sha256"] = digest(self.provider_config)
+        write_json(self.profile_config, profile, replace=True)
+
     def dispatch_argv(self, brief=None, cwd=None, budget=None, task=None,
                       pueue_config=None, provider=PREDICATE, extra=(),
                       omit_budget=False):
@@ -1657,6 +1664,7 @@ class HermeticSuite:
         self.run_case("C03-transition", run_c03_transition)
         self.run_case("C04", run_c04)
         self.run_case("C05", run_c05)
+        self.run_case("C05-before-start", run_c05_before_start)
         self.run_case("C06", run_c06)
         self.run_case("C07-locked-unknown", run_c07_locked_unknown)
         self.run_case("C08-ended-unsealed", run_c08_ended_unsealed_cancel)
@@ -1672,6 +1680,8 @@ class HermeticSuite:
 
     def run_targeted(self, case_ids):
         controls = {
+            "C05": run_c05,
+            "C05-before-start": run_c05_before_start,
             "C07-locked-unknown": run_c07_locked_unknown,
             "C08-ended-unsealed": run_c08_ended_unsealed_cancel,
             "SESSION-CHAIN": run_session_chain,
@@ -2262,13 +2272,8 @@ def run_p01(case):
 
 
 def run_p02(case):
-    case.provider_settings["stdout_bytes"] = 2 * 1024 * 1024 + 17
-    case.provider_settings["stderr_bytes"] = 2 * 1024 * 1024 + 29
-    write_json(case.provider_config, case.provider_settings, replace=True)
-    # Profile digest must follow the exact provider-config bytes.
-    profile = read_json(case.profile_config)
-    profile["provider_config_sha256"] = digest(case.provider_config)
-    write_json(case.profile_config, profile, replace=True)
+    case.update_provider(stdout_bytes=2 * 1024 * 1024 + 17,
+                         stderr_bytes=2 * 1024 * 1024 + 29)
     response = complete_success_case(case)
     require_publication(response, "committed")
     raw_stdout = case.task_dir() / "raw" / "stdout"
@@ -2876,13 +2881,30 @@ def run_c04(case):
 
 
 def run_c05(case):
+    case.update_provider(
+        scenario="hold", lifetime_ms=CASE_TIMEOUT * 1000,
+        rendezvous_path=str(case.provider_release),
+    )
     case.update_fake("kill", exit_code=7)
     case.dispatch_dynamic()
     case.set_status("running")
+    hold_started = time.monotonic()
+    runner = case.start_runner(expected=(0,))
+    case.wait_path(case.provider_records / "provider.entry.json")
+    case.wait_provider_hold()
     _, cancel = case.run_command("cancel-refused", "cancel", expected=(1,))
     require_true(cancel.get("error"), "failed stop lacked operational error")
-    case.set_status("running")
-    runner = case.start_runner(expected=(0,))
+    stop = cancel.get("stop") or {}
+    require_true(stop.get("requested") is True and stop.get("acknowledged") is False and
+                 stop.get("terminated") is False,
+                 "failed cancellation fabricated acknowledgement or termination")
+    request = case.stop_record(stop["request_id"])
+    require_true(request.get("cause") == "user", "failed cancellation lost durable intent")
+    require_true(not (case.task_dir() / "outcome.json").exists(),
+                 "held provider published before explicit release")
+    case.release_provider()
+    require_true(time.monotonic() - hold_started < CASE_TIMEOUT,
+                 "provider hold could have expired before explicit release")
     response = case.finish_runner(runner, expected=(0,))
     require_publication(response, "committed")
     case.require_terminal_evidence(response)
@@ -2901,6 +2923,28 @@ def run_c05(case):
     case.require_terminal_evidence(terminal)
     case.require_provider_evidence()
     assert_counts(case, A=1, S=1, E=1, K=1, M=0)
+
+
+def run_c05_before_start(case):
+    case.update_fake("kill", exit_code=7)
+    case.dispatch_dynamic()
+    case.set_status("running")
+    _, cancel = case.run_command("cancel-before-start", "cancel", expected=(1,))
+    stop = cancel.get("stop") or {}
+    require_true(cancel.get("error") and stop.get("requested") is True and
+                 stop.get("acknowledged") is False and stop.get("terminated") is False,
+                 "failed stop changed its durable cancellation authority")
+    require_true(case.stop_record(stop["request_id"]).get("cause") == "user",
+                 "failed cancellation lost durable intent")
+    runner = case.start_runner(expected=(1,))
+    response = case.finish_runner(runner, expected=(1,))
+    require_true(response.get("error"), "cancelled task launch was not refused")
+    require_true(not (case.provider_records / "provider.entry.json").exists() and
+                 all(not (case.task_dir() / name).exists()
+                     for name in ("provider.start", "provider.exit", "outcome.json")),
+                 "cancelled task launched a provider or fabricated terminal evidence")
+    case.require_bound_records()
+    assert_counts(case, A=1, S=0, E=0, K=1, M=0)
 
 
 def run_c06(case):
@@ -3022,6 +3066,8 @@ def main():
         "--case",
         action="append",
         choices=(
+            "C05",
+            "C05-before-start",
             "C07-locked-unknown",
             "C08-ended-unsealed",
             "SESSION-CHAIN",

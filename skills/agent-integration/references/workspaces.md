@@ -7,6 +7,13 @@ or attaches to a managed workspace (`--isolation git-worktree` or
 `--workspace ID`).
 
 This reference is self-contained guidance for using managed workspaces.
+
+Provider-native permissions still apply inside an isolated checkout. A provider
+may edit files but be unable to stage or commit because linked-worktree Git
+metadata lives outside that checkout. Leave edits uncommitted for capture;
+do not bypass the provider's permissions. When a commit is needed, the Lead can
+explicitly authorize a bounded Git command through `workspace exec`.
+
 Delegate owns durable records, process lifetimes, capture, and recovery; use
 the public commands below to observe and manage them.
 

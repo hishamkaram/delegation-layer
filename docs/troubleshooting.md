@@ -54,6 +54,14 @@ copy credential files into the Delegation Layer state root. Native login caches
 and account policy can change between preparation and launch; the provider's
 reported authentication result is authoritative for that turn.
 
+On macOS, a working login in a GUI terminal or tmux session does not prove that
+an existing private supervisor started from SSH can access the same login.
+Starting a later Delegate command in tmux does not move the running supervisor
+into that context. Preserve the failed task and request separate troubleshooting
+to compare the exact executable and environment in both contexts. Any restart
+must preserve the state root and first establish that its work has closed; do
+not delete state or change credentials based on this symptom alone.
+
 For a live acceptance command, an unavailable native login is reported as
 `BLOCKED` with exit status `2` only when structured Delegate state, a supported
 native authentication-status response, or a structured HTTP 401/403 provider
