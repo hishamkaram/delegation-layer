@@ -11,6 +11,8 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 // BarrierFile flushes an open file to stable storage using this platform's
@@ -217,7 +219,7 @@ func (s *Store) stageReaderContext(ctx context.Context, dirPath, filename string
 		return false, nil, err
 	}
 	defer closeFileQuietly(dir)
-	id, err := task.NewRandomID()
+	id, err := randomid.NewRandomID()
 	if err != nil {
 		return false, nil, err
 	}

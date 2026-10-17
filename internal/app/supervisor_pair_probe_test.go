@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 )
 
 const (
@@ -29,7 +31,7 @@ func TestSupervisorPairProbeHealthyAdmissionSharesLeaseWithoutWrites(t *testing.
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	if err := installStateSupervisorPairForAdmission(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon); err != nil {
+	if err := supervisor.PrepareStateSupervisorPair(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon); err != nil {
 		t.Fatalf("healthy pair admission required exclusive ownership: %v", err)
 	}
 	assertSupervisorPairProbeUnchanged(t, fixture.base, before)
@@ -58,8 +60,8 @@ func testSupervisorPairProbeRecoveryFallback(t *testing.T, missingMember bool) {
 			t.Fatal(err)
 		}
 	}
-	t.Setenv("PATH", canonicalAppTestTempDir(t))
-	missingDelegate := filepath.Join(canonicalAppTestTempDir(t), "missing", "delegate")
+	t.Setenv("PATH", testsupport.CanonicalTempDir(t))
+	missingDelegate := filepath.Join(testsupport.CanonicalTempDir(t), "missing", "delegate")
 	if missingMember {
 		if err := os.Remove(fixture.daemon); err != nil {
 			t.Fatal(err)
@@ -71,7 +73,7 @@ func testSupervisorPairProbeRecoveryFallback(t *testing.T, missingMember bool) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	err := installStateSupervisorPairForRecovery(ctx, fixture.root, missingDelegate, binding)
+	err := supervisor.InstallStateSupervisorPairForRecovery(ctx, fixture.root, missingDelegate, binding)
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		t.Fatalf("recovery fallback waited for exclusive ownership: %v", err)
 	}
@@ -164,7 +166,7 @@ func TestSupervisorPairProbeCorruptionFailsWithoutOverwrite(t *testing.T) {
 			writeRunnerFixture(t, f.daemon, "corrupted daemon")
 		}},
 		{name: "pointer-record", tamper: func(t *testing.T, f supervisorPairProbeFixture) {
-			if err := os.WriteFile(filepath.Join(f.base, stateSupervisorPairRecordName), []byte("{}\n"), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(f.base, "pueue-pair.json"), []byte("{}\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -190,7 +192,7 @@ func TestSupervisorPairProbeCorruptionFailsWithoutOverwrite(t *testing.T) {
 			before := snapshotSupervisorPairProbe(t, fixture.base)
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
-			err := installStateSupervisorPairForAdmission(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon)
+			err := supervisor.PrepareStateSupervisorPair(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon)
 			if !errors.Is(err, pueue.ErrConfiguration) {
 				t.Fatalf("corrupted private pair was repaired or deferred instead of rejected: %v", err)
 			}
@@ -243,14 +245,12 @@ type supervisorPairProbeFixture struct {
 
 func newSupervisorPairProbeFixture(t *testing.T) supervisorPairProbeFixture {
 	t.Helper()
-	fixture := supervisorPairProbeFixture{root: canonicalAppTestTempDir(t)}
+	fixture := supervisorPairProbeFixture{root: testsupport.CanonicalTempDir(t)}
 	fixture.base = filepath.Join(fixture.root, ".supervisor")
 	fixture.sourceClient, fixture.sourceDaemon = writeSavedSupervisorPair(t)
 	ctx, cancel := context.WithTimeout(t.Context(), supervisorPairProbeFixtureSetupTimeout)
 	defer cancel()
-	err := pueue.WithBootstrapLock(ctx, fixture.root, func() error {
-		return installStateSupervisorPair(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon)
-	})
+	err := supervisor.PrepareStateSupervisorPair(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon)
 	if err != nil {
 		t.Fatalf("install initial pair before the lock fault: %v", err)
 	}
@@ -262,7 +262,7 @@ func installSupervisorPairProbeFixture(t *testing.T, fixture supervisorPairProbe
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), supervisorPairProbeFixtureSetupTimeout)
 	defer cancel()
-	if err := installStateSupervisorPairForAdmission(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon); err != nil {
+	if err := supervisor.PrepareStateSupervisorPair(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon); err != nil {
 		t.Fatalf("prepare supervisor pair: %v", err)
 	}
 }
@@ -271,7 +271,7 @@ func assertSupervisorPairProbeWaits(t *testing.T, fixture supervisorPairProbeFix
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
-	err := installStateSupervisorPairForAdmission(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon)
+	err := supervisor.PrepareStateSupervisorPair(ctx, fixture.root, fixture.sourceClient, fixture.sourceDaemon)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("pair mutation did not wait for exclusive ownership: %v", err)
 	}
@@ -334,7 +334,7 @@ func freezeSupervisorPairProbeTimes(t *testing.T, fixture supervisorPairProbeFix
 	// A fixed old mtime makes even transient create/unlink staging observable
 	// without sleeping for the filesystem's timestamp resolution.
 	old := time.Unix(946684800, 0).UTC()
-	for _, path := range []string{fixture.base, filepath.Dir(fixture.client), filepath.Join(fixture.base, stateSupervisorPairRecordName)} {
+	for _, path := range []string{fixture.base, filepath.Dir(fixture.client), filepath.Join(fixture.base, "pueue-pair.json")} {
 		if err := os.Chtimes(path, old, old); err != nil {
 			t.Fatal(err)
 		}

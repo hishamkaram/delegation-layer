@@ -37,6 +37,7 @@ create_valid_stubs() {
 #!/usr/bin/env bash
 if [[ "$*" == "version" ]]; then echo "go version go1.27.2 darwin/arm64"; exit 0; fi
 if [[ "$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
+if [[ "$*" == "run ./cmd/maintainability --go-sources" ]]; then printf '%s\0' "$PWD/cmd/dummy.go"; exit 0; fi
 exit 0
 EOF
     chmod +x "${DISPOSABLE_REPO}/bin/go"
@@ -648,7 +649,7 @@ fi
 # --- 10. Formatter Error Propagation under Make 3.81 (F-01) ---
 # 10a. Positive control: valid formatting
 set +e
-output="$(make -C "${DISPOSABLE_REPO}" -o tool-versions fmt-check 2>&1)"
+output="$(PATH="${DISPOSABLE_REPO}/bin:${PATH}" make -C "${DISPOSABLE_REPO}" -o tool-versions fmt-check 2>&1)"
 status=$?
 set -e
 if [[ "${status}" -eq 0 ]]; then
@@ -672,7 +673,7 @@ EOF
 chmod +x "${DISPOSABLE_REPO}/bin/gofumpt"
 
 set +e
-output="$(make -C "${DISPOSABLE_REPO}" -o tool-versions fmt-check 2>&1)"
+output="$(PATH="${DISPOSABLE_REPO}/bin:${PATH}" make -C "${DISPOSABLE_REPO}" -o tool-versions fmt-check 2>&1)"
 status=$?
 set -e
 if [[ "${status}" -ne 0 ]]; then
@@ -695,7 +696,7 @@ EOF
 chmod +x "${DISPOSABLE_REPO}/bin/gofumpt"
 
 set +e
-output="$(make -C "${DISPOSABLE_REPO}" -o tool-versions fmt-check 2>&1)"
+output="$(PATH="${DISPOSABLE_REPO}/bin:${PATH}" make -C "${DISPOSABLE_REPO}" -o tool-versions fmt-check 2>&1)"
 status=$?
 set -e
 if [[ "${status}" -ne 0 && "${output}" == *"not formatted with gofumpt"* ]]; then
@@ -717,7 +718,7 @@ cp "${DISPOSABLE_REPO}/bin/"* "${SPACED_REPO}/bin/"
 
 # 11a. fmt-check in spaced path
 set +e
-output="$(make -C "${SPACED_REPO}" -o tool-versions fmt-check 2>&1)"
+output="$(PATH="${SPACED_REPO}/bin:${PATH}" make -C "${SPACED_REPO}" -o tool-versions fmt-check 2>&1)"
 status=$?
 set -e
 if [[ "${status}" -eq 0 ]]; then
@@ -729,7 +730,7 @@ fi
 
 # 11b. fmt in spaced path
 set +e
-output="$(make -C "${SPACED_REPO}" -o tool-versions fmt 2>&1)"
+output="$(PATH="${SPACED_REPO}/bin:${PATH}" make -C "${SPACED_REPO}" -o tool-versions fmt 2>&1)"
 status=$?
 set -e
 if [[ "${status}" -eq 0 ]]; then

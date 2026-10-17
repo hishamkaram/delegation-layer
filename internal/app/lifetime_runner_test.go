@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -51,7 +54,7 @@ func TestLifetimeWorkerCommandUsesCanonicalRootAndExplicitDirectory(t *testing.T
 	if err := os.Symlink(realRoot, alias); err != nil {
 		t.Fatal(err)
 	}
-	canonicalRoot, err := resolveRoot(alias)
+	canonicalRoot, err := tasklifecycle.ResolveRoot(alias)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,129 +183,18 @@ func TestLifetimeControlPairIsDuplex(t *testing.T) {
 }
 
 func recordManagedInspectionLifetimeExit(t *testing.T, operation *inspection.Operation, result task.LifetimeWorkerWaitResult, observedAt time.Time) {
-	recordManagedInspectionLifetimeExitWithCause(t, operation, result, observedAt, task.LifetimeTerminationCompleted)
-}
-
-func recordManagedInspectionLifetimeExitWithCause(t *testing.T, operation *inspection.Operation, result task.LifetimeWorkerWaitResult, observedAt time.Time, cause string) {
 	t.Helper()
-	deadline := operation.Deadline()
-	_, err := operation.RecordLifetimeIntent(taskdir.LifetimeIntentFacts{
-		ScopeKind: task.LifetimeScopeProcessGroup,
-		Assurance: task.LifetimeAssuranceCooperative,
-		ScopePlan: "pg:test-managed-inspection",
-		BootID:    "test-boot",
-		Deadline:  deadline,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = operation.RecordLifetimeRegistration(taskdir.LifetimeRegistrationFacts{
-		ScopeKind: task.LifetimeScopeProcessGroup,
-		Assurance: task.LifetimeAssuranceCooperative,
-		ScopeID:   "pg:test-managed-inspection",
-		BootID:    "test-boot",
-		Deadline:  deadline,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	worker, err := operation.RecordLifetimeWorker(taskdir.LifetimeWorkerFacts{
-		PID: 303, ProcessStart: "worker-start", BootID: "test-boot",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	workerBytes, err := task.MarshalCanonical(worker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exitCode := 0
-	if result != task.LifetimeWorkerWaitSuccess {
-		exitCode = 1
-	}
-	_, err = operation.RecordLifetimeWorkerWait(taskdir.LifetimeWorkerWaitFacts{
-		WorkerSHA256: task.ComputeSHA256(workerBytes),
-		ChildPID:     worker.PID,
-		Result:       result,
-		ExitCode:     &exitCode,
-		ObservedAt:   observedAt,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = operation.RecordLifetimeTermination(cause); err != nil {
-		t.Fatal(err)
-	}
+	admissionfixture.RecordManagedInspectionLifetimeExit(t, operation, result, observedAt)
 }
 
 func recordManagedInspectionNotStarted(t *testing.T, operation *inspection.Operation, cause string, observedAt time.Time) {
 	t.Helper()
-	deadline := operation.Deadline()
-	_, err := operation.RecordLifetimeIntent(taskdir.LifetimeIntentFacts{
-		ScopeKind: task.LifetimeScopeProcessGroup,
-		Assurance: task.LifetimeAssuranceCooperative,
-		ScopePlan: "pg:test-managed-inspection-not-started",
-		BootID:    "test-boot",
-		Deadline:  deadline,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = operation.RecordLifetimeRegistration(taskdir.LifetimeRegistrationFacts{
-		ScopeKind: task.LifetimeScopeProcessGroup,
-		Assurance: task.LifetimeAssuranceCooperative,
-		ScopeID:   "pg:test-managed-inspection-not-started",
-		BootID:    "test-boot",
-		Deadline:  deadline,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = operation.RecordLifetimeTermination(cause); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = operation.RecordLifetimeWorkerWait(taskdir.LifetimeWorkerWaitFacts{
-		Result: task.LifetimeWorkerWaitNotStarted, ObservedAt: observedAt,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	admissionfixture.RecordManagedInspectionNotStarted(t, operation, cause, observedAt)
 }
 
 func recordManagedExactInspectionUnqualifiedExit(t *testing.T, operation *inspection.Operation, result task.LifetimeWorkerWaitResult, cause string, observedAt time.Time) {
 	t.Helper()
-	deadline := operation.Deadline()
-	_, err := operation.RecordLifetimeIntent(taskdir.LifetimeIntentFacts{
-		ScopeKind: task.LifetimeScopeCgroupV2,
-		Assurance: task.LifetimeAssuranceExact,
-		ScopePlan: "cgroup:test-managed-inspection-unqualified",
-		BootID:    "test-boot",
-		Deadline:  deadline,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = operation.RecordLifetimeRegistration(taskdir.LifetimeRegistrationFacts{
-		ScopeKind: task.LifetimeScopeCgroupV2,
-		Assurance: task.LifetimeAssuranceExact,
-		ScopeID:   "cgroup:test-managed-inspection-unqualified",
-		BootID:    "test-boot",
-		Deadline:  deadline,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	exitCode := 1
-	if result == task.LifetimeWorkerWaitSuccess {
-		exitCode = 0
-	}
-	if _, err = operation.RecordLifetimeWorkerWait(taskdir.LifetimeWorkerWaitFacts{
-		ChildPID: 303, Result: result, ExitCode: &exitCode, ObservedAt: observedAt,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = operation.RecordLifetimeTermination(cause); err != nil {
-		t.Fatal(err)
-	}
+	admissionfixture.RecordManagedExactInspectionUnqualifiedExit(t, operation, result, cause, observedAt)
 }
 
 func TestManagedInspectionDerivesSuccessFromWaitAndTermination(t *testing.T) {
@@ -325,73 +217,6 @@ func TestManagedInspectionDerivesSuccessFromWaitAndTermination(t *testing.T) {
 	_, succeeded, err := operation.ReadWorkerResultContext(t.Context())
 	if err != nil || !succeeded {
 		t.Fatalf("worker proof = succeeded %t, err %v", succeeded, err)
-	}
-}
-
-func TestManagedInspectionPreservesExactWorkerFailureWithoutCompletion(t *testing.T) {
-	created := time.Now().UTC()
-	_, operation := newInspectionWorkerOperationWithExitProof(t, created, task.RunnerOwnershipManaged, inspection.WorkerExitProofGuardianWaitV1)
-	start, err := operation.ClaimStart(created.Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = start.Consume(); err != nil {
-		t.Fatal(err)
-	}
-	if err = operation.RecordReceipt(42); err != nil {
-		t.Fatal(err)
-	}
-	recordManagedInspectionLifetimeExit(t, operation, task.LifetimeWorkerWaitExitError, created.Add(2*time.Second))
-	result, succeeded, err := operation.ReadWorkerResultContext(t.Context())
-	if err != nil || succeeded || result != nil {
-		t.Fatalf("worker proof = result %#v, succeeded %t, err %v; want exact failure", result, succeeded, err)
-	}
-	evaluation, err := evaluateInspectionAdmission(t.Context(), operation)
-	if err != nil || evaluation.decision != inspectionAdmissionUnavailable || !evaluation.recorded {
-		t.Fatalf("admission evaluation = %#v, err %v; want durable unavailable", evaluation, err)
-	}
-}
-
-func TestManagedInspectionPreservesNotStartedFailureWithoutWorker(t *testing.T) {
-	created := time.Now().UTC()
-	_, operation := newInspectionWorkerOperationWithExitProof(t, created, task.RunnerOwnershipManaged, inspection.WorkerExitProofGuardianWaitV1)
-	start, err := operation.ClaimStart(created.Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = start.Consume(); err != nil {
-		t.Fatal(err)
-	}
-	if err = operation.RecordReceipt(42); err != nil {
-		t.Fatal(err)
-	}
-	recordManagedInspectionNotStarted(t, operation, task.LifetimeTerminationRecovery, created.Add(2*time.Second))
-	result, succeeded, err := operation.ReadWorkerResultContext(t.Context())
-	if err != nil || succeeded || result != nil {
-		t.Fatalf("not-started proof = result %#v, succeeded %t, err %v; want durable failure", result, succeeded, err)
-	}
-	evaluation, err := evaluateInspectionAdmission(t.Context(), operation)
-	if err != nil || evaluation.decision != inspectionAdmissionUnavailable || !evaluation.recorded {
-		t.Fatalf("not-started evaluation = %#v, err %v; want durable unavailable", evaluation, err)
-	}
-}
-
-func TestManagedInspectionPreservesExactUnqualifiedWorkerFailure(t *testing.T) {
-	created := time.Now().UTC()
-	_, operation := newInspectionWorkerOperationWithExitProof(t, created, task.RunnerOwnershipManaged, inspection.WorkerExitProofGuardianWaitV1)
-	if err := operation.RecordReceipt(42); err != nil {
-		t.Fatal(err)
-	}
-	recordManagedExactInspectionUnqualifiedExit(
-		t, operation, task.LifetimeWorkerWaitExitError, task.LifetimeTerminationRecovery, created.Add(time.Second),
-	)
-	result, succeeded, err := operation.ReadWorkerResultContext(t.Context())
-	if err != nil || succeeded || result != nil {
-		t.Fatalf("unqualified failed worker proof = result %#v, succeeded %t, err %v; want durable failure", result, succeeded, err)
-	}
-	evaluation, err := evaluateInspectionAdmission(t.Context(), operation)
-	if err != nil || evaluation.decision != inspectionAdmissionUnavailable || !evaluation.recorded {
-		t.Fatalf("unqualified failed worker evaluation = %#v, err %v; want durable unavailable", evaluation, err)
 	}
 }
 
@@ -429,70 +254,12 @@ func TestManagedInspectionNotStartedBudgetIsAdmissionExpiry(t *testing.T) {
 	}
 }
 
-func TestManagedInspectionBudgetTerminationIsAdmissionExpiry(t *testing.T) {
-	created := time.Now().UTC()
-	_, operation := newInspectionWorkerOperationWithExitProof(t, created, task.RunnerOwnershipCustom, inspection.WorkerExitProofGuardianWaitV1)
-	start, err := operation.ClaimStart(created.Add(time.Second))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = start.Consume(); err != nil {
-		t.Fatal(err)
-	}
-	if err = operation.Complete(inspection.ResultExpired, nil, created.Add(2*time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	if err = operation.RecordReceipt(42); err != nil {
-		t.Fatal(err)
-	}
-	recordManagedInspectionLifetimeExitWithCause(
-		t, operation, task.LifetimeWorkerWaitExitError, created.Add(3*time.Second), task.LifetimeTerminationBudget,
-	)
-	result, succeeded, err := operation.ReadWorkerResultContext(t.Context())
-	if result != nil || succeeded || !errors.Is(err, inspection.ErrAdmissionExpired) {
-		t.Fatalf("budget worker proof = result %#v, succeeded %t, err %v; want admission expiry", result, succeeded, err)
-	}
-	evaluation, err := evaluateInspectionAdmission(t.Context(), operation)
-	if evaluation.decision != inspectionAdmissionPending || evaluation.recorded || !errors.Is(err, inspection.ErrAdmissionExpired) {
-		t.Fatalf("budget admission evaluation = %#v, err %v; want admission expiry", evaluation, err)
-	}
-}
-
 func TestManagedInspectionProofRequiresReceipt(t *testing.T) {
 	created := time.Now().UTC()
 	_, operation := newInspectionWorkerOperationWithExitProof(t, created, task.RunnerOwnershipManaged, inspection.WorkerExitProofGuardianWaitV1)
 	recordManagedInspectionLifetimeExit(t, operation, task.LifetimeWorkerWaitExitError, created.Add(time.Second))
 	if _, _, err := operation.ReadWorkerResultContext(t.Context()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("managed exit without receipt error = %v, want missing receipt", err)
-	}
-}
-
-func TestAwaitInspectionUsesDurableManagedFailureBeforeQueue(t *testing.T) {
-	for _, test := range []struct {
-		name    string
-		created time.Time
-	}{
-		{name: "active admission", created: time.Now().UTC()},
-		{name: "expired admission", created: time.Now().UTC().Add(-inspection.AdmissionTimeout - time.Second)},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, operation := newInspectionWorkerOperationWithExitProof(t, test.created, task.RunnerOwnershipManaged, inspection.WorkerExitProofGuardianWaitV1)
-			start, err := operation.ClaimStart(test.created.Add(time.Second))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err = start.Consume(); err != nil {
-				t.Fatal(err)
-			}
-			if err = operation.RecordReceipt(42); err != nil {
-				t.Fatal(err)
-			}
-			recordManagedInspectionLifetimeExit(t, operation, task.LifetimeWorkerWaitExitError, test.created.Add(2*time.Second))
-			facts, err := awaitInspection(t.Context(), operation, nil)
-			if facts != nil || !errors.Is(err, errInspectionWorkerUnavailable) {
-				t.Fatalf("saved failed worker required a queue read: facts=%s err=%v", facts, err)
-			}
-		})
 	}
 }
 

@@ -102,8 +102,10 @@ owner.
    nested Delegate task records can supply guardian empty-scope evidence.
    Reuse the shared cleanup helper and test both the closed and unclosed paths.
 
-All acceptance harnesses share the process owner in
-`../../scripts/acceptance_supervisor_common.py`. A provider harness may supply a
+All acceptance harnesses share the canonical process owner in
+`../../scripts/delegate_acceptance/processes/operations.py`;
+`../../scripts/acceptance_supervisor_common.py` exports the same class objects.
+A provider harness may supply a
 narrow stdin or bounded-output hook, but it must not add its own `Popen`, wait,
 process registry, or cleanup implementation. Run the ownership verifier after
 changing an acceptance harness.

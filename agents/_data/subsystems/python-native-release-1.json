@@ -1,0 +1,607 @@
+[
+  {
+    "name": "py:delegate_acceptance.native",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.native.acceptance",
+      "py:delegate_acceptance.native.bindings",
+      "py:delegate_acceptance.native.interactions",
+      "py:delegate_acceptance.native.model_discovery",
+      "py:delegate_acceptance.native.timeouts",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.tasks.operations"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.acceptance",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:datetime",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.inspections.binding",
+      "py:delegate_acceptance.native.acceptance_collection",
+      "py:delegate_acceptance.native.acceptance_diagnostics",
+      "py:delegate_acceptance.native.acceptance_discovery",
+      "py:delegate_acceptance.native.acceptance_dispatch",
+      "py:delegate_acceptance.native.acceptance_lifecycle",
+      "py:delegate_acceptance.native.acceptance_operations",
+      "py:delegate_acceptance.native.acceptance_scenarios",
+      "py:delegate_acceptance.native.binding_policy",
+      "py:delegate_acceptance.native.bindings",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native.diagnostics",
+      "py:delegate_acceptance.native.errors",
+      "py:delegate_acceptance.native.fixtures",
+      "py:delegate_acceptance.native.interactions",
+      "py:delegate_acceptance.native.model_discovery",
+      "py:delegate_acceptance.native.provider_policy",
+      "py:delegate_acceptance.native.task_ops",
+      "py:delegate_acceptance.native.timeouts",
+      "py:delegate_acceptance.native.workspace",
+      "py:delegate_acceptance.paths.operations",
+      "py:delegate_acceptance.paths.policy",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.supervisor.config_policy",
+      "py:delegate_acceptance.tasks.operations",
+      "py:functools",
+      "py:pathlib",
+      "py:secrets",
+      "py:select",
+      "py:shutil",
+      "py:sys",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.acceptance_collection",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:collections.abc",
+      "py:copy",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.inspections.binding",
+      "py:delegate_acceptance.native.acceptance_diagnostics",
+      "py:delegate_acceptance.native.binding_policy",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native.diagnostics",
+      "py:delegate_acceptance.native.errors",
+      "py:delegate_acceptance.native.fixtures",
+      "py:delegate_acceptance.native.workspace",
+      "py:delegate_acceptance.supervisor.queue_policy",
+      "py:delegate_acceptance.tasks.publication",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.acceptance_diagnostics",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native.diagnostics",
+      "py:json",
+      "py:pathlib",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.acceptance_discovery",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native.errors",
+      "py:delegate_acceptance.native.fixtures",
+      "py:delegate_acceptance.native.provider_policy",
+      "py:delegate_acceptance.native.task_ops",
+      "py:delegate_acceptance.native.workspace",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.supervisor.binding",
+      "py:delegate_acceptance.supervisor.configuration",
+      "py:delegate_acceptance.tasks.operations",
+      "py:hashlib",
+      "py:os",
+      "py:pathlib",
+      "py:shutil",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.acceptance_dispatch",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.acceptance_diagnostics",
+      "py:delegate_acceptance.native.binding_policy",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native.diagnostics",
+      "py:delegate_acceptance.native.errors",
+      "py:delegate_acceptance.native.provider_policy",
+      "py:pathlib",
+      "py:secrets",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.acceptance_lifecycle",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.finalization",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.task_ops",
+      "py:delegate_acceptance.native.timeouts",
+      "py:delegate_acceptance.supervisor.configuration",
+      "py:delegate_acceptance.tasks.operations",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.acceptance_operations",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native.fixtures",
+      "py:delegate_acceptance.paths.operations",
+      "py:pathlib",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.acceptance_scenarios",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native.fixtures",
+      "py:delegate_acceptance.native.workspace",
+      "py:delegate_acceptance.supervisor.queue_policy",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.binding_policy",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.tasks.runtime_metadata"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.bindings",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.tasks.runtime_metadata",
+      "py:pathlib",
+      "py:types",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.constants",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "pure",
+    "imports": []
+  },
+  {
+    "name": "py:delegate_acceptance.native.diagnostics",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.constants",
+      "py:hashlib",
+      "py:json",
+      "py:pathlib",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.errors",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "pure",
+    "imports": [
+      "py:delegate_acceptance.evidence.validation"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.fixtures",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.constants",
+      "py:hashlib",
+      "py:pathlib",
+      "py:secrets",
+      "py:shlex"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.interactions",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "application",
+    "imports": [
+      "py:__future__"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.model_discovery",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.validation"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.output",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:datetime",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.paths.operations",
+      "py:delegate_acceptance.paths.policy",
+      "py:pathlib",
+      "py:secrets",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.provider_policy",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:datetime",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.constants"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.task_ops",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.tasks.operations"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.timeouts",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.diagnostics",
+      "py:delegate_acceptance.native.errors",
+      "py:delegate_acceptance.paths.operations",
+      "py:delegate_acceptance.processes.observation",
+      "py:os",
+      "py:pathlib",
+      "py:secrets",
+      "py:select",
+      "py:shlex",
+      "py:stat",
+      "py:sys",
+      "py:time",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.workspace",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.tasks.publication",
+      "py:hashlib",
+      "py:pathlib",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.aggregate",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.native_evidence.cases",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.directories",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.proof",
+      "py:delegate_acceptance.native_evidence.retention",
+      "py:delegate_acceptance.native_evidence.retention_records",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:pathlib",
+      "py:re",
+      "py:stat",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.cases",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.cli",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "tool",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:delegate_acceptance.native_evidence.aggregate",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.directories",
+      "py:delegate_acceptance.native_evidence.staging",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.directories",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.filesystem",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.bounded_files",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:stat",
+      "py:tempfile"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.proof",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:pathlib",
+      "py:re"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.retention",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.retention_records",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.retention_records",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:os",
+      "py:pathlib",
+      "py:re"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.staging",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:json",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.validation",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.retention_records",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.release_verification.assets",
+    "owner": "py:delegate_acceptance.release_verification",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.release_verification.commands",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.filesystem",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:platform",
+      "py:shutil",
+      "py:stat",
+      "py:tarfile"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.release_verification.cleanup",
+    "owner": "py:delegate_acceptance.release_verification",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.filesystem",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.release_verification.cli",
+    "owner": "py:delegate_acceptance.release_verification",
+    "layer": "tool",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:delegate_acceptance.release_verification.verification"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.release_verification.commands",
+    "owner": "py:delegate_acceptance.release_verification",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.processes.contracts",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.release_verification.contract"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.release_verification.filesystem",
+    "owner": "py:delegate_acceptance.release_verification",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.evidence.bounded_files",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:re",
+      "py:stat",
+      "py:tempfile"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.release_verification.source",
+    "owner": "py:delegate_acceptance.release_verification",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.filesystem",
+      "py:hashlib",
+      "py:json",
+      "py:maintainability.python_facts",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.release_verification.verification",
+    "owner": "py:delegate_acceptance.release_verification",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:delegate_acceptance.release_verification.assets",
+      "py:delegate_acceptance.release_verification.cleanup",
+      "py:delegate_acceptance.release_verification.commands",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.filesystem",
+      "py:delegate_acceptance.release_verification.source",
+      "py:pathlib",
+      "py:re",
+      "py:tempfile"
+    ]
+  }
+]

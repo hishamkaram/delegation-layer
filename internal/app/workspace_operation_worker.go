@@ -11,9 +11,11 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
@@ -27,11 +29,11 @@ func loadWorkspaceGuardianState(store *taskdir.Store, id string) (lifetimeGuardi
 	return lifetimeGuardianRunState{
 		ownerKind: task.LifetimeOwnerWorkspace,
 		records:   operation,
-		acquireOwner: func(ownerContext context.Context) (lifetimeGuardianOwner, error) {
+		acquireOwner: func(ownerContext context.Context) (guardian.Owner, error) {
 			return operation.AcquireLifetimeOwner(ownerContext)
 		},
 		reconcileOwned: func(ownerContext context.Context) error {
-			return reconcileControlLifetimeOwned(ownerContext, operation)
+			return guardian.ReconcileRecordsOwned(ownerContext, operation)
 		},
 		deadline:   operation.Deadline(),
 		closeOwner: operation.Close,
@@ -42,7 +44,7 @@ func runWorkspaceOperationWorker(parsed runnerArguments, deps Dependencies) (res
 	if !parsed.WorkspaceOperation || !parsed.Supervised || !parsed.LifetimeChild {
 		return task.ErrInvalidPermit
 	}
-	root, err := resolveRoot(parsed.Root)
+	root, err := tasklifecycle.ResolveRoot(parsed.Root)
 	if err != nil {
 		return err
 	}

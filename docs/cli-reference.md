@@ -488,8 +488,10 @@ owns native cleanup or durable finalization. Liveness remains `running` and
 process commands, redispatch the brief, or switch to a provider CLI.
 
 When a task has a committed outcome, that outcome is the terminal authority.
-Payload and sealed raw streams are returned as descriptors with rooted paths,
-byte sizes, and SHA-256 digests rather than copied into the control response.
+Payloads and sealed raw streams are returned as validated descriptors with
+byte sizes and SHA-256 digests rather than copied into the control response.
+The payload descriptor names its exact task-relative basename; raw stream
+descriptors include rooted paths.
 
 ## Offline evidence recheck
 

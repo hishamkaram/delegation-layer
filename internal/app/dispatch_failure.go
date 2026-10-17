@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
-	"time"
+
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -12,58 +14,11 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
-type dispatchStageError struct {
-	stage string
-	err   error
-}
-
-type inspectionFailureContextError struct {
-	err           error
-	taskID        string
-	deadlineState string
-}
-
-func (e *inspectionFailureContextError) Error() string { return e.err.Error() }
-
-func (e *inspectionFailureContextError) Unwrap() error { return e.err }
-
-func withInspectionFailureContext(err error, taskID string, deadline time.Time) error {
-	if err == nil {
-		return nil
-	}
-	state := "unknown"
-	if !deadline.IsZero() {
-		state = "open"
-		if !time.Now().Before(deadline) {
-			state = "expired"
-		}
-	}
-	if errors.Is(err, inspection.ErrAdmissionExpired) {
-		state = "expired"
-	}
-	return &inspectionFailureContextError{err: err, taskID: taskID, deadlineState: state}
-}
-
-func (e *dispatchStageError) Error() string { return e.err.Error() }
-
-func (e *dispatchStageError) Unwrap() error { return e.err }
-
-func withDispatchStage(stage string, err error) error {
-	if err == nil {
-		return nil
-	}
-	var staged *dispatchStageError
-	if errors.As(err, &staged) {
-		return err
-	}
-	return &dispatchStageError{stage: stage, err: err}
-}
-
 func dispatchFailure(err error, taskRecord string) DispatchFailureResponse {
 	stage := "dispatch"
-	var staged *dispatchStageError
+	var staged *admissioncore.StageError
 	if errors.As(err, &staged) {
-		stage = staged.stage
+		stage = staged.Stage()
 	}
 
 	code := dispatchFailureCode(err, stage, taskRecord)
@@ -86,10 +41,10 @@ func inspectionFailureResponse(err error) *InspectionFailureResponse {
 	response := &InspectionFailureResponse{
 		Class: inspectionFailureClass(err), DeadlineState: "unknown",
 	}
-	var contextual *inspectionFailureContextError
+	var contextual *admissioncore.InspectionFailureContextError
 	if errors.As(err, &contextual) {
-		response.DeadlineState = contextual.deadlineState
-		response.JournalTaskID = contextual.taskID
+		response.DeadlineState = contextual.DeadlineState()
+		response.JournalTaskID = contextual.TaskID()
 	}
 	return response
 }
@@ -98,7 +53,7 @@ func inspectionFailureClass(err error) string {
 	switch {
 	case errors.Is(err, inspection.ErrAdmissionExpired):
 		return "admission_deadline_expired"
-	case errors.Is(err, errInspectionWorkerUnavailable):
+	case errors.Is(err, admissioncore.ErrInspectionWorkerUnavailable):
 		return "inspection_worker_failed"
 	case errors.Is(err, ErrProfileUnavailable):
 		return "provider_unavailable"
@@ -180,7 +135,7 @@ func workspaceFailureCode(err error) string {
 	switch {
 	case errors.Is(err, workspace.ErrReleased):
 		return "workspace_released"
-	case workspacePendingError(err):
+	case workspaces.PendingError(err):
 		return "workspace_busy"
 	case errors.Is(err, workspace.ErrIdentity), errors.Is(err, workspace.ErrIdentityMismatch):
 		return "workspace_identity_changed"

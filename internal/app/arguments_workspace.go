@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
 func validateWorkspaceDispatch(a Arguments) error {
@@ -31,21 +31,10 @@ func validateWorkspaceDispatch(a Arguments) error {
 		if a.Isolation == "" && a.WorkspaceID == "" {
 			return errors.New("--workspace-budget requires a managed workspace")
 		}
-		_, err := parseWorkspaceBudget(a.WorkspaceBudget)
+		_, err := workspaces.ParseBudget(a.WorkspaceBudget)
 		return err
 	}
 	return nil
-}
-
-func parseWorkspaceBudget(value string) (time.Duration, error) {
-	if value == "" {
-		return workspace.DefaultBudget, nil
-	}
-	budget, err := time.ParseDuration(value)
-	if err != nil || budget <= 0 {
-		return 0, errors.New("workspace budget must be a positive finite duration")
-	}
-	return budget, nil
 }
 
 func parseWorkspaceArguments(a Arguments, rest []string) (Arguments, error) {
@@ -127,7 +116,7 @@ func validateWorkspaceArguments(a *Arguments, positional []string, watch string)
 			return err
 		}
 	}
-	if _, err := parseWorkspaceBudget(a.WorkspaceBudget); err != nil {
+	if _, err := workspaces.ParseBudget(a.WorkspaceBudget); err != nil {
 		return err
 	}
 	duration, err := time.ParseDuration(watch)

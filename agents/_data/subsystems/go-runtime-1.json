@@ -1,0 +1,561 @@
+[
+  {
+    "name": "go:cmd/delegate",
+    "owner": "go:cmd/delegate",
+    "layer": "application",
+    "imports": [
+      "go:internal/app",
+      "go:io",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:cmd/delegate#test",
+    "owner": "go:cmd/delegate",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:errors",
+      "go:fmt",
+      "go:strings",
+      "go:testing"
+    ]
+  },
+  {
+    "name": "go:cmd/delegate-run",
+    "owner": "go:cmd/delegate-run",
+    "layer": "application",
+    "imports": [
+      "go:internal/app",
+      "go:io",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:cmd/maintainability",
+    "owner": "go:cmd/maintainability",
+    "layer": "tool",
+    "imports": [
+      "go:encoding/json",
+      "go:flag",
+      "go:fmt",
+      "go:internal/maintainability",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/app",
+    "owner": "go:internal/app",
+    "layer": "application",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:encoding/json",
+      "go:errors",
+      "go:flag",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:hash",
+      "go:internal/admission",
+      "go:internal/config",
+      "go:internal/execution",
+      "go:internal/guardian",
+      "go:internal/inspection",
+      "go:internal/lifetime",
+      "go:internal/predicate",
+      "go:internal/provider",
+      "go:internal/provider/antigravity",
+      "go:internal/provider/ccr",
+      "go:internal/provider/claude",
+      "go:internal/provider/codex",
+      "go:internal/provider/opencode",
+      "go:internal/provider/pi",
+      "go:internal/pueue",
+      "go:internal/supervisor",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:internal/taskdir",
+      "go:internal/tasklifecycle",
+      "go:internal/workspace",
+      "go:internal/workspaces",
+      "go:io",
+      "go:log",
+      "go:net",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:slices",
+      "go:strconv",
+      "go:strings",
+      "go:syscall",
+      "go:time",
+      "go:unicode/utf8"
+    ]
+  },
+  {
+    "name": "go:internal/app#test",
+    "owner": "go:internal/app",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/admission",
+      "go:internal/admission/testsupport",
+      "go:internal/config",
+      "go:internal/execution",
+      "go:internal/guardian",
+      "go:internal/guardian/testsupport",
+      "go:internal/inspection",
+      "go:internal/lifetime",
+      "go:internal/predicate",
+      "go:internal/provider",
+      "go:internal/provider/antigravity",
+      "go:internal/provider/ccr",
+      "go:internal/provider/claude",
+      "go:internal/provider/codex",
+      "go:internal/provider/pi",
+      "go:internal/pueue",
+      "go:internal/supervisor",
+      "go:internal/supervisor/testsupport",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:internal/taskdir",
+      "go:internal/tasklifecycle",
+      "go:internal/tasklifecycle/testsupport",
+      "go:internal/workspace",
+      "go:internal/workspaces",
+      "go:internal/workspaces/testsupport",
+      "go:io",
+      "go:io/fs",
+      "go:maps",
+      "go:net",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:reflect",
+      "go:runtime",
+      "go:slices",
+      "go:strconv",
+      "go:strings",
+      "go:sync",
+      "go:sync/atomic",
+      "go:syscall",
+      "go:testing",
+      "go:testing/synctest",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/config",
+    "owner": "go:internal/config",
+    "layer": "runtime",
+    "imports": [
+      "go:errors",
+      "go:fmt",
+      "go:internal/config/policy",
+      "go:os",
+      "go:path/filepath",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/config#test",
+    "owner": "go:internal/config",
+    "layer": "test",
+    "imports": [
+      "go:errors",
+      "go:internal/config/policy",
+      "go:os",
+      "go:path/filepath",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/execution",
+    "owner": "go:internal/execution",
+    "layer": "runtime",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:errors",
+      "go:fmt",
+      "go:internal/execution/plan",
+      "go:internal/providerjson",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:internal/verifiedexec",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:slices",
+      "go:sync",
+      "go:syscall",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/execution#test",
+    "owner": "go:internal/execution",
+    "layer": "test",
+    "imports": [
+      "go:bufio",
+      "go:bytes",
+      "go:context",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:internal/execution/plan",
+      "go:internal/providerjson",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:internal/taskdir",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:reflect",
+      "go:slices",
+      "go:strings",
+      "go:sync",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/inspection",
+    "owner": "go:internal/inspection",
+    "layer": "runtime",
+    "imports": [
+      "go:context",
+      "go:encoding/json",
+      "go:internal/execution",
+      "go:internal/inspection/contract",
+      "go:internal/inspection/internal/journal",
+      "go:internal/inspection/internal/probe",
+      "go:internal/provider",
+      "go:internal/pueue",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/lifetime",
+    "owner": "go:internal/lifetime",
+    "layer": "runtime",
+    "imports": [
+      "go:bufio",
+      "go:bytes",
+      "go:context",
+      "go:crypto/sha256",
+      "go:encoding/base64",
+      "go:encoding/binary",
+      "go:encoding/hex",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:github.com/ebitengine/purego",
+      "go:golang.org/x/sys/unix",
+      "go:io",
+      "go:net",
+      "go:net/netip",
+      "go:os",
+      "go:os/exec",
+      "go:os/signal",
+      "go:path/filepath",
+      "go:sort",
+      "go:strconv",
+      "go:strings",
+      "go:sync",
+      "go:syscall",
+      "go:time",
+      "go:unsafe"
+    ]
+  },
+  {
+    "name": "go:internal/lifetime#test",
+    "owner": "go:internal/lifetime",
+    "layer": "test",
+    "imports": [
+      "go:bufio",
+      "go:context",
+      "go:crypto/sha256",
+      "go:encoding/binary",
+      "go:encoding/hex",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:io",
+      "go:net",
+      "go:os",
+      "go:os/exec",
+      "go:os/signal",
+      "go:path/filepath",
+      "go:runtime",
+      "go:strconv",
+      "go:strings",
+      "go:sync",
+      "go:sync/atomic",
+      "go:syscall",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/maintainability",
+    "owner": "go:internal/maintainability",
+    "layer": "tool",
+    "imports": [
+      "go:bufio",
+      "go:bytes",
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:go/ast",
+      "go:go/parser",
+      "go:go/token",
+      "go:internal/maintainability/policy",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:slices",
+      "go:strconv",
+      "go:strings"
+    ]
+  },
+  {
+    "name": "go:internal/maintainability#test",
+    "owner": "go:internal/maintainability",
+    "layer": "test",
+    "imports": [
+      "go:errors",
+      "go:internal/maintainability/policy",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:slices",
+      "go:strconv",
+      "go:strings",
+      "go:testing"
+    ]
+  },
+  {
+    "name": "go:internal/maintainability/policy",
+    "owner": "go:internal/maintainability/policy",
+    "layer": "pure",
+    "imports": [
+      "go:fmt",
+      "go:slices",
+      "go:sort",
+      "go:strings"
+    ]
+  },
+  {
+    "name": "go:internal/maintainability/policy#test",
+    "owner": "go:internal/maintainability/policy",
+    "layer": "test",
+    "imports": [
+      "go:slices",
+      "go:strings",
+      "go:testing"
+    ]
+  },
+  {
+    "name": "go:internal/predicate",
+    "owner": "go:internal/predicate",
+    "layer": "runtime",
+    "imports": [
+      "go:errors",
+      "go:fmt",
+      "go:internal/task",
+      "go:io",
+      "go:reflect"
+    ]
+  },
+  {
+    "name": "go:internal/predicate#test",
+    "owner": "go:internal/predicate",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:errors",
+      "go:internal/task",
+      "go:io",
+      "go:testing"
+    ]
+  },
+  {
+    "name": "go:internal/pueue",
+    "owner": "go:internal/pueue",
+    "layer": "runtime",
+    "imports": [
+      "go:context",
+      "go:internal/pueue/internal/control",
+      "go:internal/task",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/pueue#test",
+    "owner": "go:internal/pueue",
+    "layer": "test",
+    "imports": [
+      "go:context",
+      "go:internal/pueue",
+      "go:internal/task"
+    ]
+  },
+  {
+    "name": "go:internal/task",
+    "owner": "go:internal/task",
+    "layer": "pure",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:internal/config/policy",
+      "go:io",
+      "go:io/fs",
+      "go:math",
+      "go:path/filepath",
+      "go:reflect",
+      "go:regexp",
+      "go:slices",
+      "go:strconv",
+      "go:strings",
+      "go:time",
+      "go:unicode",
+      "go:unicode/utf8"
+    ]
+  },
+  {
+    "name": "go:internal/task#test",
+    "owner": "go:internal/task",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:internal/config",
+      "go:internal/task/randomid",
+      "go:io/fs",
+      "go:os",
+      "go:reflect",
+      "go:strings",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/taskdir",
+    "owner": "go:internal/taskdir",
+    "layer": "runtime",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:hash",
+      "go:internal/config",
+      "go:internal/predicate",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:io",
+      "go:os",
+      "go:path/filepath",
+      "go:reflect",
+      "go:slices",
+      "go:sort",
+      "go:strconv",
+      "go:strings",
+      "go:sync",
+      "go:syscall",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/taskdir#test",
+    "owner": "go:internal/taskdir",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/predicate",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:io",
+      "go:os",
+      "go:path/filepath",
+      "go:reflect",
+      "go:slices",
+      "go:strings",
+      "go:sync",
+      "go:sync/atomic",
+      "go:testing",
+      "go:testing/synctest",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/verifiedexec",
+    "owner": "go:internal/verifiedexec",
+    "layer": "runtime",
+    "imports": [
+      "go:bytes",
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/config",
+      "go:io",
+      "go:io/fs",
+      "go:net/url",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:runtime",
+      "go:strconv",
+      "go:strings"
+    ]
+  },
+  {
+    "name": "go:internal/verifiedexec#test",
+    "owner": "go:internal/verifiedexec",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:runtime",
+      "go:strings",
+      "go:testing"
+    ]
+  }
+]

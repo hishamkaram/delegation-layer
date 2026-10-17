@@ -12,6 +12,8 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 type payloadStage struct {
@@ -34,7 +36,7 @@ func (td *TaskDir) newPayloadStageAt(dir, name string) (*payloadStage, error) {
 	if name == "" || filepath.Base(name) != name || name == "." || name == ".." {
 		return nil, task.ErrEvidenceFault
 	}
-	id, err := task.NewRandomID()
+	id, err := randomid.NewRandomID()
 	if err != nil {
 		return nil, err
 	}

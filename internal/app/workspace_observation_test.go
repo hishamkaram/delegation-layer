@@ -11,10 +11,12 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
 
 func TestWorkspaceWatchDeadlineRemainsPending(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := testsupport.NewResource(t)
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 	err := watchManagedWorkspace(ctx, store, resource, Dependencies{}, Arguments{Watch: time.Second})
@@ -28,7 +30,7 @@ func TestWorkspaceWatchDeadlineRemainsPending(t *testing.T) {
 }
 
 func TestWorkspaceAbortedPreparationDoesNotRemainProvisioning(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := testsupport.NewResource(t)
 	subject := workspace.Subject{Kind: workspace.SubjectAdmission, ID: resource.Request().TaskID, SHA256: resource.Request().RequestSHA256}
 	reservation, err := resource.Reserve(t.Context(), subject)
 	if err != nil {
@@ -37,7 +39,7 @@ func TestWorkspaceAbortedPreparationDoesNotRemainProvisioning(t *testing.T) {
 	if err = resource.RecordAdmissionAborted(t.Context(), reservation); err != nil {
 		t.Fatal(err)
 	}
-	description, err := describeWorkspace(t.Context(), resource)
+	description, err := workspaces.Describe(t.Context(), resource)
 	if err != nil || description.State != "preparation_failed" || description.NextAction != "stop_and_report" || description.Path != "" {
 		t.Fatalf("closed no-launch preparation remained active: %+v, %v", description, err)
 	}
@@ -83,7 +85,7 @@ func TestManagedTaskWorkspaceFailureReportsTypedCause(t *testing.T) {
 }
 
 func TestWorkspaceResponseViewDeadlineDoesNotFailPendingOperation(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := testsupport.NewResource(t)
 	control, err := store.OpenWorkspace(t.Context(), resource.Request().WorkspaceID, false)
 	if err != nil {
 		t.Fatal(err)
@@ -126,9 +128,9 @@ func TestWorkspaceResponseDoesNotHideFaultsJoinedWithViewDeadline(t *testing.T) 
 }
 
 func TestWorkspaceControlUncertaintyKeepsObservationPending(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := testsupport.NewResource(t)
 	for _, cause := range []error{pueue.ErrInFlight, pueue.ErrSubmissionUncertain, pueue.ErrEnqueueUncertain} {
-		err := workspaceControlError(cause)
+		err := workspaces.ControlError(cause)
 		if !errors.Is(err, workspace.ErrPending) || !errors.Is(err, cause) {
 			t.Fatalf("control uncertainty lost its cause: %v", err)
 		}
@@ -137,14 +139,14 @@ func TestWorkspaceControlUncertaintyKeepsObservationPending(t *testing.T) {
 			t.Fatalf("control uncertainty became a failed or successful operation: %+v", result)
 		}
 	}
-	result := workspaceCommandResponse(t.Context(), store, resource, "", newResponse("workspace"), workspaceControlError(task.ErrEvidenceFault))
+	result := workspaceCommandResponse(t.Context(), store, resource, "", newResponse("workspace"), workspaces.ControlError(task.ErrEvidenceFault))
 	if result.code != 1 {
 		t.Fatalf("evidence fault was classified as pending: %+v", result)
 	}
 }
 
 func TestWorkspaceStatusDoesNotWaitForActiveUseOwner(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := testsupport.NewResource(t)
 	owner, err := resource.AcquireUseOwner(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +165,7 @@ func TestWorkspaceStatusDoesNotWaitForActiveUseOwner(t *testing.T) {
 func TestWorkspaceBusyMutationRequiresExactActionRetry(t *testing.T) {
 	for _, action := range []string{"exec", "release", "forget"} {
 		t.Run(action, func(t *testing.T) {
-			store, resource := newAppWorkspaceResource(t)
+			store, resource := testsupport.NewResource(t)
 			owner, err := resource.AcquireUseOwner(t.Context())
 			if err != nil {
 				t.Fatal(err)
@@ -199,7 +201,16 @@ func TestWorkspaceAcknowledgementSurvivesViewTimeout(t *testing.T) {
 	for _, authorized := range []bool{false, true} {
 		response := newResponse("workspace")
 		response.Workspace = &WorkspaceResponse{ID: "fixture-workspace", NextAction: "retry_release"}
-		ack := workspaceActionAcknowledgement{authorized: authorized}
+		ack := workspaces.ActionAcknowledgement{}
+		if authorized {
+			store, resource := testsupport.NewFinalizeFixture(t)
+			testsupport.SeedCanonicalReleaseCapture(t, resource)
+			var err error
+			ack, err = workspaces.AcknowledgeAction(t.Context(), store, resource, "release", false, "")
+			if err != nil || !ack.Authorized() {
+				t.Fatalf("durable release acknowledgement: %v", err)
+			}
+		}
 		result := finishWorkspaceActionResponse(ctx, response, "release", ack, workspace.ErrPending, context.DeadlineExceeded)
 		wantNext, wantReason := "retry_release", "requested_action_not_authorized"
 		if authorized {
@@ -212,39 +223,39 @@ func TestWorkspaceAcknowledgementSurvivesViewTimeout(t *testing.T) {
 }
 
 func TestWorkspaceReleaseAcknowledgementRequiresLinkedReservation(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := testsupport.NewResource(t)
 	subject, err := resource.RecordReleaseAction(t.Context(), workspace.ReleaseAction{
 		SchemaVersion: task.SchemaVersion, WorkspaceID: resource.Request().WorkspaceID, ID: strings.Repeat("a", 32), BudgetNanos: int64(time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authorized, readErr := workspaceReleaseAcknowledged(t.Context(), resource, false); readErr != nil || authorized {
+	if authorized, readErr := workspaces.ReleaseAcknowledged(t.Context(), resource, false); readErr != nil || authorized {
 		t.Fatalf("unlinked release action was acknowledged: authorized=%v error=%v", authorized, readErr)
 	}
 	if _, err = resource.Reserve(t.Context(), subject); err != nil {
 		t.Fatal(err)
 	}
-	result := workspaceCommandActionResponse(t.Context(), store, resource, "release", false, workspaceActionAcknowledgement{}, newResponse("workspace"), workspace.ErrPending)
+	result := workspaceCommandActionResponse(t.Context(), store, resource, "release", false, workspaces.ActionAcknowledgement{}, newResponse("workspace"), workspace.ErrPending)
 	if result.code != 3 || result.response.Workspace.NextAction != "watch_workspace" || result.response.Workspace.OperationID != "" {
 		t.Fatalf("helperless accepted release was not acknowledged: %+v", result)
 	}
 }
 
 func TestWorkspaceReleaseAcknowledgementIncludesClosedCaptureGap(t *testing.T) {
-	_, resource := newWorkspaceFinalizeFixture(t)
-	seedCanonicalReleaseCapture(t, resource)
+	_, resource := testsupport.NewFinalizeFixture(t)
+	testsupport.SeedCanonicalReleaseCapture(t, resource)
 	if _, err := resource.Release(t.Context()); !workspace.OperationAbsent(err) {
 		t.Fatalf("fixture already published release: %v", err)
 	}
-	if authorized, err := workspaceReleaseAcknowledged(t.Context(), resource, false); err != nil || !authorized {
+	if authorized, err := workspaces.ReleaseAcknowledged(t.Context(), resource, false); err != nil || !authorized {
 		t.Fatalf("successful closed capture lost release authorization: authorized=%v error=%v", authorized, err)
 	}
 }
 
 func TestWorkspaceReleaseAcknowledgementDoesNotReviveFailedCapture(t *testing.T) {
 	for _, discard := range []bool{false, true} {
-		_, resource := newAppWorkspaceResource(t)
+		_, resource := testsupport.NewResource(t)
 		subject, err := resource.RecordReleaseAction(t.Context(), workspace.ReleaseAction{
 			SchemaVersion: task.SchemaVersion, WorkspaceID: resource.Request().WorkspaceID, ID: strings.Repeat("b", 32), BudgetNanos: int64(time.Minute), Discard: discard,
 		})
@@ -265,24 +276,24 @@ func TestWorkspaceReleaseAcknowledgementDoesNotReviveFailedCapture(t *testing.T)
 		if err = resource.CloseReservation(t.Context(), reservation, "unavailable", captureID); err != nil {
 			t.Fatal(err)
 		}
-		if authorized, err := workspaceReleaseAcknowledged(t.Context(), resource, discard); err != nil || authorized != discard {
+		if authorized, err := workspaces.ReleaseAcknowledged(t.Context(), resource, discard); err != nil || authorized != discard {
 			t.Fatalf("failed capture authorization=%v discard=%v error=%v", authorized, discard, err)
 		}
 	}
 }
 
 func TestWorkspaceAcknowledgementReadFaultDoesNotClaimNotAuthorized(t *testing.T) {
-	fixture := newWorkspaceRecoveryFixture(t)
+	fixture := testsupport.NewRecoveryFixture(t)
 	prepareForgetRecovery(t, fixture, "absent")
-	fixture.corruptResourceRecord(t, "forget-intent.json")
-	result := workspaceCommandActionResponse(t.Context(), fixture.store, fixture.resource, "forget", false, workspaceActionAcknowledgement{}, newResponse("workspace"), workspace.ErrPending)
+	fixture.CorruptResourceRecord(t, "forget-intent.json")
+	result := workspaceCommandActionResponse(t.Context(), fixture.Store, fixture.Resource, "forget", false, workspaces.ActionAcknowledgement{}, newResponse("workspace"), workspace.ErrPending)
 	if result.code != 1 || result.response.Workspace.ReasonCode == "requested_action_not_authorized" || result.response.Workspace.NextAction == "retry_forget" {
 		t.Fatalf("unreadable authorization became a negative acknowledgement: %+v", result)
 	}
 }
 
 func TestWorkspaceReleaseAcknowledgementPreservesRequestedDiscard(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := testsupport.NewResource(t)
 	subject, err := resource.RecordReleaseAction(t.Context(), workspace.ReleaseAction{
 		SchemaVersion: task.SchemaVersion, WorkspaceID: resource.Request().WorkspaceID,
 		ID: strings.Repeat("a", 32), BudgetNanos: int64(time.Minute),
@@ -293,17 +304,24 @@ func TestWorkspaceReleaseAcknowledgementPreservesRequestedDiscard(t *testing.T) 
 	if _, err = resource.Reserve(t.Context(), subject); err != nil {
 		t.Fatal(err)
 	}
-	result := workspaceCommandActionResponse(t.Context(), store, resource, "release", true, workspaceActionAcknowledgement{}, newResponse("workspace"), workspace.ErrBusy)
+	result := workspaceCommandActionResponse(t.Context(), store, resource, "release", true, workspaces.ActionAcknowledgement{}, newResponse("workspace"), workspace.ErrBusy)
 	if result.code != 3 || result.response.Workspace.NextAction != "retry_release" || result.response.Workspace.ReasonCode != "requested_action_not_authorized" {
 		t.Fatalf("a prior nondiscard release acknowledged a new discard request: %+v", result)
 	}
-	if authorized, readErr := workspaceReleaseAcknowledged(t.Context(), resource, false); readErr != nil || !authorized {
+	if authorized, readErr := workspaces.ReleaseAcknowledged(t.Context(), resource, false); readErr != nil || !authorized {
 		t.Fatalf("mismatching request changed original release authority: %v %v", authorized, readErr)
 	}
 }
 
 func TestWorkspaceKnownAcknowledgementDoesNotRequireAnotherAuthorizationRead(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := testsupport.NewResource(t)
+	if _, err := workspaces.EnsureForgetIntent(t.Context(), store, resource, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	ack, err := workspaces.AcknowledgeAction(t.Context(), store, resource, "forget", false, "")
+	if err != nil || !ack.Authorized() {
+		t.Fatalf("durable forget acknowledgement: %v", err)
+	}
 	control, err := store.OpenWorkspace(t.Context(), resource.Request().WorkspaceID, false)
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +356,7 @@ func TestWorkspaceKnownAcknowledgementDoesNotRequireAnotherAuthorizationRead(t *
 	case <-time.After(5 * time.Second):
 		t.Fatal("workspace lock fixture did not enter")
 	}
-	result := workspaceCommandActionResponse(t.Context(), store, resource, "forget", false, workspaceActionAcknowledgement{authorized: true}, newResponse("workspace"), workspace.ErrPending)
+	result := workspaceCommandActionResponse(t.Context(), store, resource, "forget", false, ack, newResponse("workspace"), workspace.ErrPending)
 	if result.code != 3 || result.response.Workspace.NextAction != "watch_workspace" || result.response.Workspace.State != "undetermined" {
 		t.Fatalf("known durable authorization was lost at a later view timeout: %+v", result)
 	}

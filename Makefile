@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-maintainability verify-maintainability-strict verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
 
 tools:
 	./scripts/install-tools.sh
@@ -25,10 +25,14 @@ tool-versions:
 	./scripts/check-tool-versions.sh
 
 fmt: tool-versions
-	find . -type f -name '*.go' -not -path './bin/*' -not -path './dist/*' -exec "$(GOFUMPT_BIN)" -w {} +
+	@formatter_sources=$$(mktemp) || exit $$?; trap 'rm -f "$$formatter_sources"' EXIT; \
+	go run ./cmd/maintainability --go-sources >"$$formatter_sources" || exit $$?; \
+	if [ -s "$$formatter_sources" ]; then xargs -0 "$(GOFUMPT_BIN)" -w <"$$formatter_sources"; fi
 
 fmt-check: tool-versions
-	@files=$$(find . -type f -name '*.go' -not -path './bin/*' -not -path './dist/*' -exec "$(GOFUMPT_BIN)" -l {} +) || exit $$?; \
+	@formatter_sources=$$(mktemp) || exit $$?; trap 'rm -f "$$formatter_sources"' EXIT; \
+	go run ./cmd/maintainability --go-sources >"$$formatter_sources" || exit $$?; \
+	files=$$(if [ -s "$$formatter_sources" ]; then xargs -0 "$(GOFUMPT_BIN)" -l <"$$formatter_sources"; fi) || exit $$?; \
 	if [ -n "$$files" ]; then \
 		echo "ERROR: The following Go files are not formatted with gofumpt:" >&2; \
 		echo "$$files" >&2; \
@@ -72,6 +76,14 @@ verify-acceptance-ownership:
 	python3 scripts/verify_acceptance_ownership.py
 	python3 -m unittest discover -s scripts -p 'test_verify_acceptance_ownership.py' -v
 
+verify-maintainability: tool-versions
+	go test -race -count=1 ./internal/maintainability/...
+	go run ./cmd/maintainability
+
+verify-maintainability-strict: tool-versions
+	go test -race -count=1 ./internal/maintainability/...
+	go run ./cmd/maintainability --strict
+
 skill-package-check:
 	./scripts/check-skill-package.sh
 
@@ -83,6 +95,7 @@ test-race: tool-versions
 
 test-native-harness:
 	python3 -m unittest discover -s scripts -p 'test_acceptance_*.py' -v
+	python3 -m unittest discover -s scripts/acceptance_tests -t scripts -p 'test_*.py' -v
 
 test-evidence-tools:
 	python3 -m unittest discover -s scripts -p 'test_handoff_evidence.py' -v
@@ -210,10 +223,12 @@ vuln: tool-versions
 
 check:
 	$(MAKE) tool-versions
+	$(MAKE) verify-maintainability-strict
 	$(MAKE) verify-skills
 	$(MAKE) verify-diagram-checksums
 	$(MAKE) verify-acceptance-ownership
 	$(MAKE) plugin-package-check
+	$(MAKE) skill-package-check
 	$(MAKE) fmt-check
 	$(MAKE) config-check
 	$(MAKE) vet

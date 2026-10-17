@@ -15,12 +15,13 @@ import unittest
 from argparse import Namespace
 from unittest.mock import patch
 
-try:
-    from scripts import verify_release_archive as verifier
-    from scripts import native_acceptance_evidence as evidence
-except ModuleNotFoundError:
-    import native_acceptance_evidence as evidence
-    import verify_release_archive as verifier
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts import verify_release_archive as verifier
+from scripts import native_acceptance_evidence as evidence
+from scripts.delegate_acceptance.release_verification import filesystem as receipt_files
+from scripts.delegate_acceptance.directories import journal as cleanup_module
 
 
 TAG = "v1.2.3"
@@ -121,6 +122,62 @@ esac
     def load_receipt(self, path=None):
         return json.loads((path or self.receipt_path).read_text(encoding="utf-8"))
 
+    def write_passing_aggregate_case(self, index, case, case_directory):
+        aliases = evidence._expected_task_aliases(case.provider, case.scenario)
+        session = "session-" + case.case_id
+        tasks = {
+            alias: f"{index + 1:016x}{position + 1:016x}"
+            for position, alias in enumerate(aliases)
+        }
+        provider_executable = str((self.root / "provider-runtime").resolve())
+        provider_runtimes = {
+            task_id: {
+                "executable": provider_executable,
+                "version": f"fixture-{position + 1}",
+                "sha256": hashlib.sha256(
+                    f"{case.case_id}:{alias}".encode()
+                ).hexdigest(),
+            }
+            for position, (alias, task_id) in enumerate(tasks.items())
+        }
+        first_task_id = tasks[aliases[0]]
+        first_runtime = provider_runtimes[first_task_id]
+        (case_directory / "success.json").write_text(json.dumps({
+            "gate": "acceptance-native", "status": "passed", "provider": case.provider,
+            "mode": case.permission, "scenario": case.scenario,
+            "requested_model": None, "requested_effort": None,
+            "tasks": tasks,
+            "provider_sessions": {alias: session for alias in aliases},
+            "provider_versions": {
+                alias: provider_runtimes[task_id]["version"]
+                for alias, task_id in tasks.items()
+            },
+            "provider_runtime_identities": provider_runtimes,
+            "natural_daemon_shutdown": True,
+        }), encoding="utf-8")
+        (case_directory / "binding.json").write_text(json.dumps({
+            "provider": case.provider, "mode": case.permission,
+            "scenario": case.scenario,
+            "provider_identity_scope": "first-admitted-task",
+            "provider_task_id": first_task_id,
+            "requested_model": None, "requested_effort": None,
+            "provider_executable": first_runtime["executable"],
+            "provider_version": first_runtime["version"],
+            "provider_sha256": first_runtime["sha256"],
+            "delegate_sha256": hashlib.sha256(
+                (self.extract / "delegate").read_bytes()).hexdigest(),
+            "runner_sha256": hashlib.sha256(
+                (self.extract / "delegate-run").read_bytes()).hexdigest(),
+            "pueue_sha256": hashlib.sha256(
+                (self.extract / "pueue").read_bytes()).hexdigest(),
+            "pueued_sha256": hashlib.sha256(
+                (self.extract / "pueued").read_bytes()).hexdigest(),
+        }), encoding="utf-8")
+        (case_directory / "cleanup.json").write_text(json.dumps({
+            "status": "removed", "supervisor_shutdown_observed": True,
+            "raw_process_captures": "removed",
+        }), encoding="utf-8")
+
     def write_aggregate(self, *, source_revision=REVISION, status="PASS", require_pass=False):
         root = self.root / "native-aggregate-fixture"
         (root / evidence.CASE_ROOT_NAME).mkdir(parents=True)
@@ -129,60 +186,7 @@ esac
         for index, case in enumerate(evidence.EXPECTED_CASES):
             case_directory = evidence.prepare_case_directory(root, case.case_id)
             if status == "PASS" or (status == "FAIL" and index):
-                aliases = evidence._expected_task_aliases(case.provider, case.scenario)
-                session = "session-" + case.case_id
-                tasks = {
-                    alias: f"{index + 1:016x}{position + 1:016x}"
-                    for position, alias in enumerate(aliases)
-                }
-                provider_executable = str((self.root / "provider-runtime").resolve())
-                provider_runtimes = {
-                    task_id: {
-                        "executable": provider_executable,
-                        "version": f"fixture-{position + 1}",
-                        "sha256": hashlib.sha256(
-                            f"{case.case_id}:{alias}".encode()
-                        ).hexdigest(),
-                    }
-                    for position, (alias, task_id) in enumerate(tasks.items())
-                }
-                first_task_id = tasks[aliases[0]]
-                first_runtime = provider_runtimes[first_task_id]
-                (case_directory / "success.json").write_text(json.dumps({
-                    "gate": "acceptance-native", "status": "passed", "provider": case.provider,
-                    "mode": case.permission, "scenario": case.scenario,
-                    "requested_model": None, "requested_effort": None,
-                    "tasks": tasks,
-                    "provider_sessions": {alias: session for alias in aliases},
-                    "provider_versions": {
-                        alias: provider_runtimes[task_id]["version"]
-                        for alias, task_id in tasks.items()
-                    },
-                    "provider_runtime_identities": provider_runtimes,
-                    "natural_daemon_shutdown": True,
-                }), encoding="utf-8")
-                (case_directory / "binding.json").write_text(json.dumps({
-                    "provider": case.provider, "mode": case.permission,
-                    "scenario": case.scenario,
-                    "provider_identity_scope": "first-admitted-task",
-                    "provider_task_id": first_task_id,
-                    "requested_model": None, "requested_effort": None,
-                    "provider_executable": first_runtime["executable"],
-                    "provider_version": first_runtime["version"],
-                    "provider_sha256": first_runtime["sha256"],
-                    "delegate_sha256": hashlib.sha256(
-                        (self.extract / "delegate").read_bytes()).hexdigest(),
-                    "runner_sha256": hashlib.sha256(
-                        (self.extract / "delegate-run").read_bytes()).hexdigest(),
-                    "pueue_sha256": hashlib.sha256(
-                        (self.extract / "pueue").read_bytes()).hexdigest(),
-                    "pueued_sha256": hashlib.sha256(
-                        (self.extract / "pueued").read_bytes()).hexdigest(),
-                }), encoding="utf-8")
-                (case_directory / "cleanup.json").write_text(json.dumps({
-                    "status": "removed", "supervisor_shutdown_observed": True,
-                    "raw_process_captures": "removed",
-                }), encoding="utf-8")
+                self.write_passing_aggregate_case(index, case, case_directory)
                 matrix.append("\t".join((case.case_id, case.provider, case.permission,
                                          case.scenario, "0", "PASS", case.case_output)) + "\n")
             elif status == "BLOCKED":
@@ -536,7 +540,7 @@ esac
                 raise verifier.VerificationError("forced_terminal_write_failure", "write-receipt")
             return original_write(path, receipt)
 
-        with patch.object(verifier, "write_receipt", side_effect=interrupt_final_write):
+        with patch.object(receipt_files, "write_receipt", side_effect=interrupt_final_write):
             with self.assertRaisesRegex(verifier.VerificationError,
                                         "forced_terminal_write_failure"):
                 verifier.finalize_native(args)
@@ -580,7 +584,7 @@ esac
                 if done is not None:
                     done.set()
 
-        with patch.object(verifier, "write_receipt", side_effect=pause_first_writer):
+        with patch.object(receipt_files, "write_receipt", side_effect=pause_first_writer):
             first = threading.Thread(target=run, args=("first",), name="release-first")
             second = threading.Thread(
                 target=run, args=("second", second_started, second_done), name="release-second",
@@ -630,7 +634,6 @@ esac
             exit_code_file=str(exit_file), tag=TAG, source_revision=REVISION,
         )
 
-        cleanup_module = sys.modules[verifier.resume_directory_cleanup.__module__]
         with patch.object(cleanup_module, "_cleanup_empty",
                           side_effect=OSError("simulated cleanup interruption")):
             self.assertEqual(verifier.finalize_native(args), 1)
@@ -664,7 +667,7 @@ esac
                 raise verifier.VerificationError("forced_prepare_write_failure", "write-receipt")
             return original_write(path, receipt)
 
-        with patch.object(verifier, "write_receipt", side_effect=interrupt_prepare):
+        with patch.object(receipt_files, "write_receipt", side_effect=interrupt_prepare):
             with self.assertRaisesRegex(verifier.VerificationError, "forced_prepare_write_failure"):
                 verifier.finalize_native(args)
         self.assertTrue(self.assets.is_dir())
@@ -695,7 +698,7 @@ esac
                 shutil.rmtree(self.assets)
             return result
 
-        with patch.object(verifier, "write_receipt", side_effect=remove_after_prepare):
+        with patch.object(receipt_files, "write_receipt", side_effect=remove_after_prepare):
             self.assertEqual(verifier.finalize_native(args), 1)
         prepared = self.load_receipt(final_receipt)
         self.assertEqual(prepared["cleanup"]["status"], "incomplete")
@@ -859,6 +862,71 @@ esac
         self.assertEqual(receipt["failure"]["code"], "native_acceptance_failed")
         self.assertTrue(self.extract.exists())
         self.assertIn(str(self.assets), receipt["cleanup"]["retained_paths"])
+
+    def test_native_receipt_keeps_complete_proof_once_within_existing_bound(self):
+        self.assertEqual(self.verify(), 0)
+        aggregate = self.write_aggregate()
+        exit_file = self.root / "acceptance.exit"
+        exit_file.write_text("0\n", encoding="ascii")
+        receipt_path = self.root / "native-bounded.json"
+        self.assertEqual(verifier.finalize_native(Namespace(
+            receipt=str(receipt_path), archive_receipt=str(self.receipt_path),
+            aggregate_receipt=str(aggregate), assets_dir=str(self.assets),
+            extract_dir=str(self.extract), acceptance_outcome="success",
+            exit_code_file=str(exit_file), tag=TAG, source_revision=REVISION,
+        )), 0)
+        receipt = self.load_receipt(receipt_path)
+        self.assertEqual(receipt["source_harness"], verifier.source_fingerprint("native-acceptance"))
+        cases = receipt["native_acceptance"]["case_receipt_hashes"]
+        self.assertEqual({case["case_id"] for case in cases},
+                         {case.case_id for case in evidence.EXPECTED_CASES})
+        self.assertNotIn("case_results", receipt["acceptance"])
+        self.assertEqual(verifier.MAX_RECEIPT, 32 * 1024)
+        self.assertLessEqual(receipt_path.stat().st_size, verifier.MAX_RECEIPT)
+        with self.assertRaisesRegex(verifier.VerificationError, "receipt_too_large"):
+            receipt_files.write_receipt(self.root / "oversized.json",
+                                        {"padding": "x" * verifier.MAX_RECEIPT})
+        self.assertFalse((self.root / "oversized.json").exists())
+
+    def test_prepared_legacy_duplicate_case_proof_replays_without_rewriting_it(self):
+        # Synthetic legacy receipt: exercise the actual cleanup store and replay,
+        # without claiming provider or current-source acceptance for this fixture.
+        receipt = verifier.new_receipt("native-acceptance", TAG, REVISION)
+        receipt["claim"] = "native-acceptance-case-results"
+        cases = [{"case_id": "legacy-fixture", "receipt_sha256": "a" * 64}]
+        receipt["native_acceptance"] = {"case_receipt_hashes": cases}
+        receipt["acceptance"] = {"case_results": cases}
+        owner = verifier.DirectoryOwner()
+        token = owner.adopt_created("legacy release assets", self.assets, self.runner_temp)
+        verifier.remember_directory(receipt, token)
+        receipt_path = self.root / "legacy-native.json"
+        original_write = receipt_files.write_receipt
+
+        def interrupt_terminal(path, value):
+            if value.get("completion", {}).get("state") == "complete":
+                raise verifier.VerificationError("forced_legacy_write_failure", "write-receipt")
+            return original_write(path, value)
+
+        with patch.object(receipt_files, "write_receipt", side_effect=interrupt_terminal):
+            with self.assertRaisesRegex(verifier.VerificationError, "forced_legacy_write_failure"):
+                verifier.finish_gate(receipt_path, receipt, owner, lambda: None,
+                                     "remove", {"assets": self.assets})
+        self.assertFalse(self.assets.exists())
+        self.assertEqual(self.load_receipt(receipt_path)["completion"]["state"], "prepared")
+        args = Namespace(receipt=str(receipt_path), tag=TAG, source_revision=REVISION)
+        self.assertEqual(verifier.finalize_native(args), 0)
+        terminal = receipt_path.read_bytes()
+        restored = self.load_receipt(receipt_path)
+        self.assertEqual(restored["native_acceptance"]["case_receipt_hashes"], cases)
+        self.assertEqual(restored["acceptance"]["case_results"], cases)
+        self.assertEqual(restored["completion"]["state"], "complete")
+        tampered = json.loads(terminal)
+        tampered["acceptance"]["case_results"][0]["receipt_sha256"] = "b" * 64
+        with self.assertRaisesRegex(verifier.VerificationError,
+                                    "release_cleanup_authorization_changed"):
+            verifier._release_cleanup_transaction(tampered)
+        self.assertEqual(verifier.finalize_native(args), 0)
+        self.assertEqual(receipt_path.read_bytes(), terminal)
 
     def replace_delegate_script(self, script):
         temporary_extract = self.root / "replacement"

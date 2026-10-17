@@ -9,13 +9,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/provider/pi"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 func TestInteractiveDispatchResumeUsesSavedPiSessionRoot(t *testing.T) {
@@ -64,9 +67,9 @@ func newInteractivePiResumeFixture(t *testing.T, testCase interactivePiResumeTes
 	fixture := &interactivePiResumeFixture{
 		testCase:       testCase,
 		prepareFailure: prepareFailure,
-		root:           filepath.Join(canonicalAppTestTempDir(t), "state"),
-		workspace:      canonicalAppTestTempDir(t),
-		runner:         filepath.Join(canonicalAppTestTempDir(t), "delegate-run"),
+		root:           filepath.Join(testsupport.CanonicalTempDir(t), "state"),
+		workspace:      testsupport.CanonicalTempDir(t),
+		runner:         filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run"),
 		predecessorID:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		sessionID:      "11111111-1111-4111-8111-111111111111",
 	}
@@ -85,8 +88,8 @@ func newInteractivePiResumeFixture(t *testing.T, testCase interactivePiResumeTes
 
 func configureInteractivePiResumeEnvironment(t *testing.T, fixture *interactivePiResumeFixture) {
 	t.Helper()
-	savedHome := filepath.Join(canonicalAppTestTempDir(t), "saved-home")
-	fixture.callerHome = filepath.Join(canonicalAppTestTempDir(t), "caller-home")
+	savedHome := filepath.Join(testsupport.CanonicalTempDir(t), "saved-home")
+	fixture.callerHome = filepath.Join(testsupport.CanonicalTempDir(t), "caller-home")
 	fixture.callerSessionRoot = filepath.Join(fixture.callerHome, "pi-sessions")
 	fixture.savedSessionRoot = filepath.Join(savedHome, "pi-sessions")
 	for _, path := range []string{fixture.callerSessionRoot, fixture.savedSessionRoot} {
@@ -161,7 +164,7 @@ func prepareInteractivePiResumePredecessor(t *testing.T, fixture *interactivePiR
 		}
 	})
 	brief := []byte("continue this exact Pi session")
-	request, err := buildRequest(store.RootID, fixture.predecessorID, pi.Provider, fixture.workspace, task.TaskConfig{
+	request, err := admission.BuildRequest(store.RootID, fixture.predecessorID, pi.Provider, fixture.workspace, task.TaskConfig{
 		Permission: config.ModeReadOnly,
 		Budget:     "1m0s",
 	}, brief, nil)
@@ -173,7 +176,7 @@ func prepareInteractivePiResumePredecessor(t *testing.T, fixture *interactivePiR
 	if !fixture.testCase.missingEnvironment {
 		predecessorProfile.Plan.Environment = slices.Clone(fixture.savedEnvironment)
 	}
-	meta := newMeta(request, predecessorProfile, fixture.supervisor.Binding(), fixture.runner, task.RunnerOwnershipCustom, "interactive-resume-test")
+	meta := tasklifecycle.NewMeta(request, predecessorProfile, fixture.supervisor.Binding(), fixture.runner, task.RunnerOwnershipCustom, "interactive-resume-test")
 	predecessorDir, err = store.CreateTask(fixture.predecessorID, &request, brief, &meta)
 	if err != nil {
 		t.Fatal(err)

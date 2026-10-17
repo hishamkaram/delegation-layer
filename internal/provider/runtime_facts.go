@@ -9,13 +9,15 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/hishamkaram/delegation-layer/internal/provider/contract"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 // RuntimeInspectionRevision is the stable common revision for the supervised
 // executable capability probe. The definition digest also covers its command,
 // environment, and required flags, so this revision is not a CLI release pin.
-const RuntimeInspectionRevision = "runtime-capability-v1"
+const RuntimeInspectionRevision = contract.RuntimeInspectionRevision
 
 // RuntimeProbeDefinition is the data-only description of a provider CLI
 // capability probe. The inspection worker owns every process started from it.

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,69 +8,23 @@ import (
 	"testing"
 	"time"
 
+	lifecyclefixture "github.com/hishamkaram/delegation-layer/internal/tasklifecycle/testsupport"
+
+	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-type lifetimeTerminationRecorderProbe struct {
-	ctx   context.Context
-	calls int
-}
-
-type lifetimeTestContextKey struct{}
-
-func (p *lifetimeTerminationRecorderProbe) RecordLifetimeTerminationContext(ctx context.Context, cause string) (*task.LifetimeTerminationRecord, error) {
-	p.ctx = ctx
-	p.calls++
-	if ctx == nil {
-		return nil, context.Canceled
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return &task.LifetimeTerminationRecord{Cause: cause, ScopeEmpty: true}, nil
-}
-
-func TestRecordTaskLifetimeTerminationContextPreservesCallerAndNilGuard(t *testing.T) {
-	probe := &lifetimeTerminationRecorderProbe{}
-	var nilContext context.Context
-	if _, err := recordTaskLifetimeTerminationContext(nilContext, probe, task.LifetimeTerminationRecovery); !errors.Is(err, context.Canceled) {
-		t.Fatalf("nil context error = %v, want context canceled", err)
-	}
-	if probe.calls != 0 {
-		t.Fatalf("nil context invoked recorder %d times, want 0", probe.calls)
-	}
-
-	marker := &struct{}{}
-	ctx := context.WithValue(t.Context(), lifetimeTestContextKey{}, marker)
-	if _, err := recordTaskLifetimeTerminationContext(ctx, probe, task.LifetimeTerminationRecovery); err != nil {
-		t.Fatalf("record with caller context: %v", err)
-	}
-	if probe.ctx != ctx {
-		t.Fatal("record did not receive the exact caller context")
-	}
-	if probe.ctx.Value(lifetimeTestContextKey{}) != marker {
-		t.Fatal("record lost caller context value")
-	}
-
-	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
-	if _, err := recordTaskLifetimeTerminationContext(canceled, probe, task.LifetimeTerminationRecovery); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled context error = %v, want context canceled", err)
-	}
-	if probe.ctx != canceled {
-		t.Fatal("canceled caller context was replaced")
-	}
-}
-
 func TestRecoverTaskLifetimeRefusesCooperativeScopeWithoutLaunchIdentity(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	recordRecoverableLifetime(t, td, currentBootID(t))
+	recordRecoverableLifetime(t, td, admissionfixture.CurrentBootID(t))
 
-	if err := recoverTaskLifetime(t.Context(), td); !errors.Is(err, lifetime.ErrUnverifiableLaunch) {
+	if err := guardian.RecoverTaskLifetime(t.Context(), td); !errors.Is(err, lifetime.ErrUnverifiableLaunch) {
 		t.Fatalf("recovery error = %v, want unverifiable launch", err)
 	}
 	if _, err := td.ReadLifetimeTermination(); !errors.Is(err, os.ErrNotExist) {
@@ -82,119 +35,21 @@ func TestRecoverTaskLifetimeRefusesCooperativeScopeWithoutLaunchIdentity(t *test
 func TestRecoverTaskLifetimeDoesNotIgnorePresentRecordsWithMissingPreparedInput(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	recordRecoverableLifetime(t, td, currentBootID(t))
+	recordRecoverableLifetime(t, td, admissionfixture.CurrentBootID(t))
 	if err := os.Remove(filepath.Join(td.Dir, "brief.md")); err != nil {
 		t.Fatal(err)
 	}
 
-	err := recoverTaskLifetime(t.Context(), td)
+	err := guardian.RecoverTaskLifetime(t.Context(), td)
 	if !errors.Is(err, task.ErrIdentityMismatch) || !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("recovery error = %v, want identity mismatch and os.ErrNotExist", err)
-	}
-}
-
-func TestRecoverLifetimeScopeAcceptsConcurrentCleanupOnlyAfterEmptyRecheck(t *testing.T) {
-	scope := &lifetimeGuardianTestScope{
-		timeline:     &lifetimeGuardianTestTimeline{},
-		emptyResults: []bool{false, true},
-		terminateErr: lifetime.ErrUnverifiableLaunch,
-	}
-	if err := recoverLifetimeScope(t.Context(), scope, nil, task.LifetimeAssuranceExact); err != nil {
-		t.Fatalf("recover after concurrent cleanup: %v", err)
-	}
-	empty, terminate, _ := scope.counts()
-	if empty != 2 || terminate != 1 {
-		t.Fatalf("scope calls empty=%d terminate=%d, want 2/1", empty, terminate)
-	}
-}
-
-func TestLifetimeFinalizationRequiresDurableWorkerWait(t *testing.T) {
-	if err := requireDurableLifetimeWorkerWait(nil); !errors.Is(err, task.ErrEvidenceFault) {
-		t.Fatalf("missing worker Wait = %v, want evidence fault", err)
-	}
-	if err := requireDurableLifetimeWorkerWait(&task.LifetimeWorkerWaitRecord{}); err != nil {
-		t.Fatalf("present validated worker Wait was rejected: %v", err)
-	}
-}
-
-func TestDisposeUnregisteredCooperativeScopeUsesCommitOrder(t *testing.T) {
-	scope := &lifetimeGuardianTestScope{}
-
-	if err := disposeUnregisteredLifetimeScope(t.Context(), scope, lifetime.AssuranceCooperative); err != nil {
-		t.Fatalf("dispose unregistered cooperative scope: %v", err)
-	}
-	empty, _, _ := scope.counts()
-	destroy, _ := scope.disposalCounts()
-	if empty != 0 {
-		t.Fatalf("cooperative intent-only cleanup called EmptyContext %d times, want 0", empty)
-	}
-	if destroy != 1 {
-		t.Fatalf("cooperative intent-only cleanup destroyed %d times, want 1", destroy)
-	}
-}
-
-func TestDisposeUnregisteredExactScopeProvesBeforeDestroy(t *testing.T) {
-	scope := &lifetimeGuardianTestScope{emptyResults: []bool{true}}
-
-	if err := disposeUnregisteredLifetimeScope(t.Context(), scope, lifetime.AssuranceExact); err != nil {
-		t.Fatalf("dispose unregistered exact scope: %v", err)
-	}
-	empty, _, _ := scope.counts()
-	destroy, _ := scope.disposalCounts()
-	if empty != 1 || destroy != 1 {
-		t.Fatalf("exact intent-only cleanup calls empty=%d destroy=%d, want 1/1", empty, destroy)
-	}
-}
-
-func TestCooperativeLifetimeRecoveryPreservesJoinedCleanupErrors(t *testing.T) {
-	cleanupErr := errors.New("cleanup failed")
-	scope := &lifetimeGuardianTestScope{
-		terminateErr: errors.Join(lifetime.ErrUnverifiableLaunch, cleanupErr),
-	}
-	launchRef, err := lifetime.NewLaunchRef(1, "token", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = recoverRegisteredLifetime(t.Context(), scope, []lifetime.LaunchRef{launchRef}, task.LifetimeAssuranceCooperative, true, nil)
-	if !errors.Is(err, lifetime.ErrUnverifiableLaunch) {
-		t.Fatalf("recovery error = %v, want ErrUnverifiableLaunch", err)
-	}
-	if !errors.Is(err, cleanupErr) {
-		t.Fatalf("recovery error = %v, lost cleanup error", err)
-	}
-	empty, terminate, _ := scope.counts()
-	if terminate != 1 || empty != 0 {
-		t.Fatalf("cooperative cleanup calls empty=%d terminate=%d, want 0/1", empty, terminate)
-	}
-}
-
-func TestRecoverLifetimeScopeCooperativeCleanupTerminatesAndPreservesErrors(t *testing.T) {
-	cleanupErr := errors.New("terminate failed")
-	scope := &lifetimeGuardianTestScope{
-		terminateErr: errors.Join(lifetime.ErrUnverifiableLaunch, cleanupErr),
-	}
-	launchRef, err := lifetime.NewLaunchRef(1, "token", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = recoverLifetimeScope(t.Context(), scope, []lifetime.LaunchRef{launchRef}, task.LifetimeAssuranceCooperative)
-	if !errors.Is(err, lifetime.ErrUnverifiableLaunch) {
-		t.Fatalf("cooperative recovery error = %v, want ErrUnverifiableLaunch", err)
-	}
-	if !errors.Is(err, cleanupErr) {
-		t.Fatalf("cooperative recovery error = %v, lost terminate error", err)
-	}
-	empty, terminate, _ := scope.counts()
-	if terminate != 1 || empty != 0 {
-		t.Fatalf("cooperative cleanup calls empty=%d terminate=%d, want 0/1", empty, terminate)
 	}
 }
 
 func TestRecoverTaskLifetimeLeavesActiveOwnerUntouched(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	recordRecoverableLifetime(t, td, differentNativeBootID(t))
+	recordRecoverableLifetime(t, td, admissionfixture.DifferentNativeBootID(t))
 	owner, err := td.AcquireLifetimeOwner(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +60,7 @@ func TestRecoverTaskLifetimeLeavesActiveOwnerUntouched(t *testing.T) {
 		}
 	}()
 
-	if err = recoverTaskLifetime(t.Context(), td); !errors.Is(err, errLifetimeRecoveryPending) {
+	if err = guardian.RecoverTaskLifetime(t.Context(), td); !errors.Is(err, guardian.ErrRecoveryPending) {
 		t.Fatalf("recovery error = %v, want pending", err)
 	}
 	if _, err = td.ReadLifetimeTermination(); !errors.Is(err, os.ErrNotExist) {
@@ -220,7 +75,7 @@ func TestUpdateStatusKeepsIntentOnlyLifetimeRunningWhileOwnerBusy(t *testing.T) 
 		ScopeKind: task.LifetimeScopeProcessGroup,
 		Assurance: task.LifetimeAssuranceCooperative,
 		ScopePlan: "pg:" + strings.Repeat("d", 32),
-		BootID:    currentBootID(t),
+		BootID:    admissionfixture.CurrentBootID(t),
 		Deadline:  time.Now().Add(time.Minute),
 	})
 	if err != nil {
@@ -252,9 +107,9 @@ func TestUpdateStatusKeepsIntentOnlyLifetimeRunningWhileOwnerBusy(t *testing.T) 
 func TestRecoverTaskLifetimeAcceptsChangedBootAsEmptyProof(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	recordRecoverableLifetime(t, td, differentNativeBootID(t))
+	recordRecoverableLifetime(t, td, admissionfixture.DifferentNativeBootID(t))
 
-	if err := recoverTaskLifetime(t.Context(), td); err != nil {
+	if err := guardian.RecoverTaskLifetime(t.Context(), td); err != nil {
 		t.Fatal(err)
 	}
 	terminated, err := td.HasTerminatedLifetime(task.LifetimeTerminationPreviousBoot)
@@ -271,13 +126,13 @@ func TestRecoverTaskLifetimeCleansUnregisteredIntentWithoutTerminationEvidence(t
 		ScopeKind: task.LifetimeScopeProcessGroup,
 		Assurance: task.LifetimeAssuranceCooperative,
 		ScopePlan: "pg:" + strings.Repeat("b", 32),
-		BootID:    currentBootID(t),
+		BootID:    admissionfixture.CurrentBootID(t),
 		Deadline:  deadline,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = recoverTaskLifetime(t.Context(), td); err != nil {
+	if err = guardian.RecoverTaskLifetime(t.Context(), td); err != nil {
 		t.Fatalf("recover unregistered intent: %v", err)
 	}
 	if _, err = td.ReadLifetimeRegistration(); !errors.Is(err, os.ErrNotExist) {
@@ -292,7 +147,7 @@ func TestRecoverTaskLifetimeBeforeWorkerAcknowledgementRefusesWithoutTerminalPro
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
 	deadline := time.Now().Add(time.Minute)
-	bootID := currentBootID(t)
+	bootID := admissionfixture.CurrentBootID(t)
 	plan := "pg:" + strings.Repeat("c", 32)
 	if _, err := td.RecordLifetimeIntent(taskdir.LifetimeIntentFacts{
 		ScopeKind: task.LifetimeScopeProcessGroup,
@@ -312,7 +167,7 @@ func TestRecoverTaskLifetimeBeforeWorkerAcknowledgementRefusesWithoutTerminalPro
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recoverTaskLifetime(t.Context(), td); !errors.Is(err, lifetime.ErrUnverifiableLaunch) {
+	if err := guardian.RecoverTaskLifetime(t.Context(), td); !errors.Is(err, lifetime.ErrUnverifiableLaunch) {
 		t.Fatalf("recover pre-ack registration = %v, want ErrUnverifiableLaunch", err)
 	}
 	if _, err := td.ReadLifetimeTermination(); !errors.Is(err, os.ErrNotExist) {
@@ -323,7 +178,7 @@ func TestRecoverTaskLifetimeBeforeWorkerAcknowledgementRefusesWithoutTerminalPro
 func TestUpdateStatusKeepsRegisteredLifetimeRunningWhileOwnerBusy(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	recordRecoverableLifetime(t, td, differentNativeBootID(t))
+	recordRecoverableLifetime(t, td, admissionfixture.DifferentNativeBootID(t))
 	owner, err := td.AcquireLifetimeOwner(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -353,7 +208,7 @@ func TestUpdateStatusKeepsRegisteredLifetimeRunningWhileOwnerBusy(t *testing.T) 
 func TestUpdateStatusKeepsUnprovenRegisteredLifetimeRunning(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
-	recordRecoverableLifetime(t, td, currentBootID(t))
+	recordRecoverableLifetime(t, td, admissionfixture.CurrentBootID(t))
 
 	response := newResponse("status")
 	observation := pueue.Observation{Matched: true, State: pueue.StateEnded, NumericTaskID: 7}
@@ -384,7 +239,7 @@ func TestUpdateStatusRecoversLifetimeBeforePublishingStop(t *testing.T) {
 	store, td, _ := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
 	prepareAppBudgetRecords(t, td)
-	recordRecoverableLifetime(t, td, differentNativeBootID(t))
+	recordRecoverableLifetime(t, td, admissionfixture.DifferentNativeBootID(t))
 	deadline := time.Now().Add(time.Minute)
 	permit, err := td.PrepareStop("budget", "budget", deadline)
 	if err != nil {
@@ -418,72 +273,7 @@ func TestUpdateStatusRecoversLifetimeBeforePublishingStop(t *testing.T) {
 
 func recordRecoverableLifetime(t *testing.T, td *taskdir.TaskDir, bootID string) {
 	t.Helper()
-	owner, err := td.AcquireLifetimeOwner(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if releaseErr := owner.Release(); releaseErr != nil {
-			t.Error(releaseErr)
-		}
-	}()
-	deadline := time.Now().Add(time.Minute)
-	_, err = td.RecordLifetimeIntent(taskdir.LifetimeIntentFacts{
-		ScopeKind: task.LifetimeScopeProcessGroup,
-		Assurance: task.LifetimeAssuranceCooperative,
-		ScopePlan: "pg:" + strings.Repeat("a", 32),
-		BootID:    bootID,
-		Deadline:  deadline,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = td.RecordLifetimeRegistration(taskdir.LifetimeRegistrationFacts{
-		ScopeKind: task.LifetimeScopeProcessGroup,
-		Assurance: task.LifetimeAssuranceCooperative,
-		ScopeID:   "pg:" + strings.Repeat("a", 32),
-		BootID:    bootID,
-		Deadline:  deadline,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = td.RecordLifetimeWorker(taskdir.LifetimeWorkerFacts{
-		PID:          1 << 30,
-		ProcessStart: "test-worker-start",
-		BootID:       bootID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func currentBootID(t *testing.T) string {
-	t.Helper()
-	value, err := lifetime.BootID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return value
-}
-
-// A different spelling is not reboot evidence. Use a comparable kernel UUID
-// scheme, and verify the fixture actually represents a different boot.
-func differentNativeBootID(t *testing.T) string {
-	t.Helper()
-	current := currentBootID(t)
-	prefix := "linux:"
-	if strings.HasPrefix(current, "darwin:boot-session:") {
-		prefix = "darwin:boot-session:"
-	}
-	candidate := prefix + "00000000-0000-0000-0000-000000000001"
-	if candidate == current {
-		candidate = prefix + "00000000-0000-0000-0000-000000000002"
-	}
-	if lifetime.CompareBootIDs(candidate, current) != lifetime.BootDifferent {
-		t.Fatalf("not a comparable prior boot fixture: %q, %q", candidate, current)
-	}
-	return candidate
+	lifecyclefixture.RecordRecoverableLifetime(t, td, bootID)
 }
 
 func TestRecoverTaskLifetimeRejectsUnknownBootWithoutClosing(t *testing.T) {
@@ -492,7 +282,7 @@ func TestRecoverTaskLifetimeRejectsUnknownBootWithoutClosing(t *testing.T) {
 			store, td, _ := newAppTestTask(t, false)
 			defer closeAppTestTask(t, store, td)
 			recordRecoverableLifetime(t, td, boot)
-			if err := recoverTaskLifetime(t.Context(), td); !errors.Is(err, task.ErrEvidenceFault) {
+			if err := guardian.RecoverTaskLifetime(t.Context(), td); !errors.Is(err, task.ErrEvidenceFault) {
 				t.Fatalf("unknown boot recovery = %v", err)
 			}
 			if _, err := td.ReadLifetimeTerminationContext(t.Context()); !task.RecordAbsent(err) {

@@ -12,9 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 func TestPendingRuntimeAdmissionSurvivesExecutableRefreshAndRechecksPayload(t *testing.T) {
@@ -27,29 +31,29 @@ func testPendingRuntimeUpgrade(t *testing.T, name string) {
 	t.Helper()
 	store := newBareInspectionStore(t)
 	request := newBareInspectionRequest(t, store)
-	directory := canonicalAppTestTempDir(t)
+	directory := testsupportcore.CanonicalTempDir(t)
 	versionPath, helpPath := filepath.Join(directory, "version"), filepath.Join(directory, "help")
 	writeAppTestFile(t, versionPath, []byte("provider-v1\n"))
 	writeAppTestFile(t, helpPath, []byte("--run\n"))
 	oldPath := filepath.Join(directory, "provider-old")
 	writeRuntimeUpgradeLauncher(t, oldPath, versionPath, helpPath)
 	admitted := runtimeUpgradeCandidate(t, request, oldPath)
-	profile, err := admitCandidate(admitted, request)
-	requireAppTest(t, err)
+	profile, err := admission.AdmitCandidate(admitted, request)
+	testsupport.RequireAppTest(t, err)
 	supervisor, _, _ := newUncertainGroupSupervisor(t, store.RootID)
-	meta := newMeta(request, profile, supervisor.Binding(), "", task.RunnerOwnershipManaged, "app-test")
+	meta := tasklifecycle.NewMeta(request, profile, supervisor.Binding(), "", task.RunnerOwnershipManaged, "app-test")
 	td, err := store.CreateTask(request.TaskID, &request, []byte("inspection brief"), &meta)
-	requireAppTest(t, err)
-	t.Cleanup(func() { requireAppTest(t, td.Close()) })
+	testsupport.RequireAppTest(t, err)
+	t.Cleanup(func() { testsupport.RequireAppTest(t, td.Close()) })
 	persistedRequest, persistedMeta, err := td.PreparedRecords()
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	metadataBefore, err := os.ReadFile(filepath.Join(td.Dir, "meta.json"))
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	currentPath := oldPath
 	if name == "relinked executable" {
 		currentPath = filepath.Join(directory, "provider-new")
 		writeRuntimeUpgradeLauncher(t, currentPath, versionPath, helpPath)
-		requireAppTest(t, os.Remove(oldPath))
+		testsupport.RequireAppTest(t, os.Remove(oldPath))
 	}
 	writeAppTestFile(t, versionPath, []byte("provider-v2\n"))
 	incompatible := name == "unchanged launcher incompatible payload"
@@ -59,9 +63,9 @@ func testPendingRuntimeUpgrade(t *testing.T, name string) {
 	current := runtimeUpgradeCandidate(t, request, currentPath)
 	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) { return current, nil }}
 	rebuilt, err := prepareMatchedProfile(deps, store.Root, *persistedRequest, *persistedMeta)
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	permit, err := td.PrepareStart(0)
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	starts := 0
 	result := execution.Run(td, permit, rebuilt.Plan, execution.Options{
 		PreflightPlan: func(scope execution.PreflightScope, _ execution.Plan) (execution.Plan, error) {
@@ -69,10 +73,10 @@ func testPendingRuntimeUpgrade(t *testing.T, name string) {
 		},
 		Hooks: execution.Hooks{Start: func(command *exec.Cmd) error { starts++; return command.Start() }},
 	})
-	requireAppTest(t, errors.Join(result.Error, result.CleanupError, result.ReceiptError, result.StopError))
+	testsupport.RequireAppTest(t, errors.Join(result.Error, result.CleanupError, result.ReceiptError, result.StopError))
 	assertPendingRuntimeUpgradeOutcome(t, td.Dir, result, incompatible, starts, currentPath)
 	metadataAfter, err := os.ReadFile(filepath.Join(td.Dir, "meta.json"))
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	if !bytes.Equal(metadataBefore, metadataAfter) {
 		t.Fatal("runtime refresh mutated admission metadata")
 	}
@@ -89,9 +93,9 @@ func assertPendingRuntimeUpgradeOutcome(t *testing.T, directory string, result e
 	}
 	if !incompatible {
 		data, err := os.ReadFile(filepath.Join(directory, "provider.started.json"))
-		requireAppTest(t, err)
+		testsupport.RequireAppTest(t, err)
 		var started task.ProviderStartedRecord
-		requireAppTest(t, task.DecodeStrict(data, &started))
+		testsupport.RequireAppTest(t, task.DecodeStrict(data, &started))
 		if started.ProviderExecutable != executable || started.ProviderVersion != "provider-v2" {
 			t.Fatalf("launch did not record refreshed runtime: %+v", started)
 		}
@@ -102,17 +106,17 @@ func writeRuntimeUpgradeLauncher(t *testing.T, executable, version, help string)
 	t.Helper()
 	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 	source := fmt.Sprintf("#!/bin/sh\ncase ${1-} in\n--version) exec /bin/cat %s ;;\n--help) exec /bin/cat %s ;;\n*) exec /bin/cat ;;\nesac\n", quote(version), quote(help))
-	requireAppTest(t, os.WriteFile(executable, []byte(source), 0o700))
+	testsupport.RequireAppTest(t, os.WriteFile(executable, []byte(source), 0o700))
 }
 
 func runtimeUpgradeCandidate(t *testing.T, request task.TaskRecord, executable string) commonprovider.ProfileCandidate {
 	t.Helper()
 	cli, err := commonprovider.LocateCLIPath(executable)
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, []string{"LANG=C"}, commonprovider.RuntimeCapability{RequiredFlags: []string{"--run"}})
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	capability, err := commonprovider.RuntimeCapabilityDigest(definition)
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	build := func(version, pending string) commonprovider.PreparedProfile {
 		profile := appInspectionPreparedProfile(request, request.CanonicalCwd, nil)
 		profile.Plan.Executable, profile.Plan.ExecutableSHA256 = cli.Path, cli.SHA256
@@ -138,15 +142,15 @@ func TestPendingRuntimeAdmissionReconstructsFromTaskMetadataWithoutInspection(t 
 	store := newBareInspectionStore(t)
 	request := newBareInspectionRequest(t, store)
 	candidate := pendingRuntimeCandidate(t, request)
-	profile, err := profileForAdmission(candidate, request, true)
-	requireAppTest(t, err)
+	profile, err := admission.ProfileForAdmission(candidate, request, true)
+	testsupport.RequireAppTest(t, err)
 	supervisor, _, _ := newUncertainGroupSupervisor(t, store.RootID)
-	meta := newMeta(request, profile, supervisor.Binding(), "", task.RunnerOwnershipManaged, "app-test")
+	meta := tasklifecycle.NewMeta(request, profile, supervisor.Binding(), "", task.RunnerOwnershipManaged, "app-test")
 	td, err := store.CreateTask(request.TaskID, &request, []byte("inspection brief"), &meta)
-	requireAppTest(t, err)
-	t.Cleanup(func() { requireAppTest(t, td.Close()) })
+	testsupport.RequireAppTest(t, err)
+	t.Cleanup(func() { testsupport.RequireAppTest(t, td.Close()) })
 	persistedRequest, persistedMeta, err := td.PreparedRecords()
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	if persistedMeta.RuntimePreflightSHA256 == "" || persistedMeta.ProviderVersion != "" {
 		t.Fatalf("admission fabricated runtime verification: %+v", persistedMeta)
 	}
@@ -154,7 +158,7 @@ func TestPendingRuntimeAdmissionReconstructsFromTaskMetadataWithoutInspection(t 
 		return candidate, nil
 	}}
 	rebuilt, err := prepareMatchedProfile(deps, store.Root, *persistedRequest, *persistedMeta)
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	if rebuilt.RuntimePreflightSHA256 != persistedMeta.RuntimePreflightSHA256 || rebuilt.ObservedVersion != "" ||
 		rebuilt.Plan.RuntimePreflightSHA256 != persistedMeta.RuntimePreflightSHA256 {
 		t.Fatalf("reconstruction lost pending authority: %+v", rebuilt)
@@ -168,10 +172,10 @@ func TestPendingRuntimeCandidateRejectsChangedContractBeforeProbe(t *testing.T) 
 	store := newBareInspectionStore(t)
 	request := newBareInspectionRequest(t, store)
 	candidate := pendingRuntimeCandidate(t, request)
-	profile, err := admitCandidate(candidate, request)
-	requireAppTest(t, err)
+	profile, err := admission.AdmitCandidate(candidate, request)
+	testsupport.RequireAppTest(t, err)
 	meta := task.MetaRecord{RuntimePreflightSHA256: profile.RuntimePreflightSHA256, Environment: profile.Plan.Environment, EnvironmentRecorded: true}
-	requireAppTest(t, validatePendingRuntimeCandidate(candidate, meta))
+	testsupport.RequireAppTest(t, admission.ValidatePendingRuntimeCandidate(candidate, meta))
 	for _, test := range []struct {
 		name   string
 		mutate func(*commonprovider.InspectionDefinition)
@@ -189,7 +193,7 @@ func TestPendingRuntimeCandidateRejectsChangedContractBeforeProbe(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			changed := pendingRuntimeCandidate(t, request)
 			test.mutate(changed.Inspection)
-			if err := validatePendingRuntimeCandidate(changed, meta); !errors.Is(err, task.ErrIdentityMismatch) {
+			if err := admission.ValidatePendingRuntimeCandidate(changed, meta); !errors.Is(err, task.ErrIdentityMismatch) {
 				t.Fatalf("changed contract passed before probe: %v", err)
 			}
 		})
@@ -200,7 +204,7 @@ func pendingRuntimeCandidate(t *testing.T, request task.TaskRecord) commonprovid
 	t.Helper()
 	candidate := runtimeAdmissionCandidate(t, request, "provider", "--run")
 	capability, err := commonprovider.RuntimeCapabilityDigest(*candidate.Inspection)
-	requireAppTest(t, err)
+	testsupport.RequireAppTest(t, err)
 	profile := appInspectionPreparedProfile(request, request.CanonicalCwd, nil)
 	profile.Plan.Executable = candidate.Inspection.Executable
 	profile.Plan.ExecutableSHA256 = candidate.Inspection.ExecutableSHA256

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -16,7 +17,7 @@ import (
 
 func TestDispatchFailureResponseHidesSupervisorDetails(t *testing.T) {
 	privateDetail := "/private/user/state/.supervisor/pueue.yml"
-	err := withDispatchStage("start-supervisor", errors.Join(pueue.ErrConfiguration, errors.New(privateDetail)))
+	err := admission.WithStage("start-supervisor", errors.Join(pueue.ErrConfiguration, errors.New(privateDetail)))
 	failure := dispatchFailure(err, "not_created")
 	response := newResponse("dispatch")
 	response.TaskRecord = "not_created"
@@ -45,7 +46,7 @@ func TestDispatchFailureResponseHidesSupervisorDetails(t *testing.T) {
 func TestInspectionFailureRetainsSanitizedJournalDiagnostic(t *testing.T) {
 	taskID := strings.Repeat("a", 32)
 	privateDetail := "/private/user/state/inspections/" + taskID
-	err := withDispatchStage("inspect-provider", withInspectionFailureContext(
+	err := admission.WithStage("inspect-provider", admission.WithInspectionFailureContext(
 		errors.Join(pueue.ErrStatusOperational, errors.New(privateDetail)),
 		taskID, time.Now().Add(time.Minute),
 	))
@@ -75,7 +76,7 @@ func TestContinueResponseUsesDispatchFailureEnvelope(t *testing.T) {
 	response := newResponse("continue")
 	response.TaskID = "successor-task"
 	response.TaskRecord = "created"
-	err := withDispatchStage("submit-task", errors.Join(pueue.ErrUnknown, pueue.ErrSubmissionUncertain, errors.New(privateDetail)))
+	err := admission.WithStage("submit-task", errors.Join(pueue.ErrUnknown, pueue.ErrSubmissionUncertain, errors.New(privateDetail)))
 
 	var output bytes.Buffer
 	if writeErr := writeJSONResponse(&output, "continue", &response, err); writeErr != nil {
@@ -132,7 +133,7 @@ func TestContinuationFailureStagesMapToActionableCodes(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.stage, func(t *testing.T) {
-			failure := dispatchFailure(withDispatchStage(test.stage, errors.New("private detail")), "not_created")
+			failure := dispatchFailure(admission.WithStage(test.stage, errors.New("private detail")), "not_created")
 			if failure.Stage != test.stage || failure.Code != test.code || failure.NextAction != "stop_and_report" {
 				t.Fatalf("continuation failure stage was not classified safely: %+v", failure)
 			}
@@ -167,61 +168,61 @@ func TestDispatchTaskRecordLookupIsConservativeForExplicitIDs(t *testing.T) {
 
 func TestDispatchFailureNextActionTracksTaskRecord(t *testing.T) {
 	uncertainErr := errors.Join(pueue.ErrUnknown, pueue.ErrSubmissionUncertain, errors.New("submission uncertain"))
-	uncertain := dispatchFailure(withDispatchStage("submit-task", uncertainErr), "created")
+	uncertain := dispatchFailure(admission.WithStage("submit-task", uncertainErr), "created")
 	if uncertain.Code != "task_submission_uncertain" || uncertain.NextAction != "check_status" {
 		t.Fatalf("created task did not direct the caller to status: %+v", uncertain)
 	}
 
-	unknown := dispatchFailure(withDispatchStage("create-task-record", errors.New("record write failed")), "unknown")
+	unknown := dispatchFailure(admission.WithStage("create-task-record", errors.New("record write failed")), "unknown")
 	if unknown.NextAction != "stop_and_report" {
 		t.Fatalf("uncertain task record invited an unsafe retry: %+v", unknown)
 	}
-	unknownInvalid := dispatchFailure(withDispatchStage("validate-request", errors.New("bad request")), "unknown")
+	unknownInvalid := dispatchFailure(admission.WithStage("validate-request", errors.New("bad request")), "unknown")
 	if unknownInvalid.NextAction != "stop_and_report" {
 		t.Fatalf("unknown task identity invited request correction: %+v", unknownInvalid)
 	}
 
-	invalid := dispatchFailure(withDispatchStage("validate-request", errors.New("bad request")), "not_created")
+	invalid := dispatchFailure(admission.WithStage("validate-request", errors.New("bad request")), "not_created")
 	if invalid.Code != "invalid_request" || invalid.NextAction != "correct_request" {
 		t.Fatalf("invalid request did not direct safe correction: %+v", invalid)
 	}
 
-	unsupported := dispatchFailure(withDispatchStage("prepare-provider", commonprovider.ErrUnsupportedOption), "not_created")
+	unsupported := dispatchFailure(admission.WithStage("prepare-provider", commonprovider.ErrUnsupportedOption), "not_created")
 	if unsupported.Code != "unsupported_option" || unsupported.NextAction != "correct_request" {
 		t.Fatalf("unsupported request option did not direct safe correction: %+v", unsupported)
 	}
 
-	conflict := dispatchFailure(withDispatchStage("existing-task", task.ErrRequestConflict), "created")
+	conflict := dispatchFailure(admission.WithStage("existing-task", task.ErrRequestConflict), "created")
 	if conflict.Code != "task_request_conflict" || conflict.NextAction != "check_status" {
 		t.Fatalf("existing task conflict did not require status first: %+v", conflict)
 	}
 
-	createdMigration := dispatchFailure(withDispatchStage("inspect-provider", inspection.ErrGroupMigrationRequired), "created")
+	createdMigration := dispatchFailure(admission.WithStage("inspect-provider", inspection.ErrGroupMigrationRequired), "created")
 	if createdMigration.NextAction != "check_status" || createdMigration.RecoveryCommand != "" {
 		t.Fatalf("created task exposed a pre-dispatch migration command: %+v", createdMigration)
 	}
 }
 
 func TestDispatchFailureCodeCoversPreparationStages(t *testing.T) {
-	provider := dispatchFailure(withDispatchStage("prepare-provider", errors.New("adapter preparation failed")), "not_created")
+	provider := dispatchFailure(admission.WithStage("prepare-provider", errors.New("adapter preparation failed")), "not_created")
 	if provider.Code != "provider_preparation_failed" || provider.NextAction != "stop_and_report" {
 		t.Fatalf("provider preparation failure was not classified: %+v", provider)
 	}
 	for _, stage := range []string{"validate-profile", "record-runtime-capability"} {
-		failure := dispatchFailure(withDispatchStage(stage, errors.New("profile contract failed")), "not_created")
+		failure := dispatchFailure(admission.WithStage(stage, errors.New("profile contract failed")), "not_created")
 		if failure.Code != "provider_preparation_failed" || failure.NextAction != "stop_and_report" {
 			t.Fatalf("%s failure was not classified as provider preparation: %+v", stage, failure)
 		}
 	}
 
 	for _, stage := range []string{"prepare-supervisor-executables", "prepare-supervisor-options", "start-supervisor"} {
-		supervisor := dispatchFailure(withDispatchStage(stage, pueue.ErrConfiguration), "not_created")
+		supervisor := dispatchFailure(admission.WithStage(stage, pueue.ErrConfiguration), "not_created")
 		if supervisor.Code != "supervisor_setup_failed" || supervisor.NextAction != "stop_and_report" {
 			t.Fatalf("%s failure was not classified as supervisor setup: %+v", stage, supervisor)
 		}
 	}
 
-	predecessor := dispatchFailure(withDispatchStage("resolve-predecessor", errors.New("predecessor could not be resolved")), "not_created")
+	predecessor := dispatchFailure(admission.WithStage("resolve-predecessor", errors.New("predecessor could not be resolved")), "not_created")
 	if predecessor.Code != "continuation_unavailable" || predecessor.NextAction != "stop_and_report" {
 		t.Fatalf("predecessor resolution failure was not classified: %+v", predecessor)
 	}
@@ -238,7 +239,7 @@ func TestInspectionSupervisorMigrationFailuresAreActionable(t *testing.T) {
 		{name: "unreadable binding", err: inspection.ErrGroupMigrationRequired, code: "supervisor_upgrade_required"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			failure := dispatchFailure(withDispatchStage("inspect-provider", test.err), "not_created")
+			failure := dispatchFailure(admission.WithStage("inspect-provider", test.err), "not_created")
 			wantAction := "stop_and_report"
 			if test.code == "supervisor_upgrade_required" {
 				wantAction = "run_supervisor_migrate"
@@ -269,7 +270,7 @@ func TestPrivateSupervisorMigrationFailuresAreActionable(t *testing.T) {
 		{name: "upgrade required", err: pueue.ErrPrivateSupervisorMigrationRequired, code: "supervisor_upgrade_required"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			failure := dispatchFailure(withDispatchStage("inspect-provider", test.err), "not_created")
+			failure := dispatchFailure(admission.WithStage("inspect-provider", test.err), "not_created")
 			if failure.Code != test.code {
 				t.Fatalf("private migration failure code=%q, want %q: %+v", failure.Code, test.code, failure)
 			}

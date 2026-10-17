@@ -175,10 +175,6 @@ func (i interpreter) Recover(input predicate.Input, raw predicate.Evidence, out 
 	return i.evaluateAgainst(input, raw, out, input.Seal.Predicate)
 }
 
-func readEvidence(raw predicate.Evidence) (eventState, error) {
-	return readEvidenceWithOptions(raw, parserOptions{})
-}
-
 func readEvidenceWithOptions(raw predicate.Evidence, options parserOptions) (eventState, error) {
 	var stdout eventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {

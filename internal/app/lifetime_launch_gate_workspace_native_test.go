@@ -8,14 +8,16 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
-	"github.com/hishamkaram/delegation-layer/internal/task"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 // The fixture borrows production budget, execution, launch-gate, and native
 // scope primitives. It owns no alternative Start/Wait, timer, or signal loop.
 func (s worktreeGateTestScope) Run(command *exec.Cmd, hooks execution.CommandHooks) (resultErr error) {
-	id, err := task.NewTaskID()
+	id, err := randomid.NewTaskID()
 	if err != nil {
 		return err
 	}
@@ -63,24 +65,24 @@ func (f *worktreeGateTestLifetime) StartCommand(command *exec.Cmd, start func() 
 	if f.stopped {
 		return errors.New("native worktree fixture already stopped")
 	}
-	gate, err := newRunnerLifetimeLaunchGateFactory(f.configuration.runner)(command)
+	gate, err := guardian.NewLaunchGateFactory(f.configuration.runner)(command)
 	if err != nil {
 		return err
 	}
 	if err = f.native.Configure(command); err != nil {
-		return errors.Join(err, gate.abort())
+		return errors.Join(err, gate.Abort())
 	}
 	startErr := start()
-	if err = errors.Join(startErr, gate.started(startErr)); err != nil {
-		return errors.Join(err, gate.abort())
+	if err = errors.Join(startErr, gate.Started(startErr)); err != nil {
+		return errors.Join(err, gate.Abort())
 	}
 	if _, err = f.native.ObserveStarted(command.Process.Pid); err != nil {
-		return errors.Join(err, gate.abort())
+		return errors.Join(err, gate.Abort())
 	}
 	if f.configuration.abort {
-		return gate.abort()
+		return gate.Abort()
 	}
-	return gate.release()
+	return gate.Release()
 }
 
 func (f *worktreeGateTestLifetime) PrepareBudget(time.Time) (execution.BudgetRequest, error) {

@@ -12,7 +12,13 @@ import unittest
 from unittest import mock
 
 import acceptance_workspaces as driver
-from acceptance_supervisor_common import DirectoryOwner, Processes
+from scripts.delegate_acceptance.private_cli import supervisor as private_supervisor
+import scripts.delegate_acceptance.workspaces.scenarios.application as scenario_application
+import scripts.delegate_acceptance.workspaces.scenarios.capacity as scenario_capacity
+import scripts.delegate_acceptance.workspaces.scenarios.lifecycle as scenario_lifecycle
+import scripts.delegate_acceptance.workspaces.scenarios.operations as scenario_operations
+import scripts.delegate_acceptance.workspaces.scenarios.workspace_operations as scenario_workspace_operations
+from scripts.acceptance_supervisor_common import DirectoryOwner, Processes
 
 
 TASK_ID = "a" * 32
@@ -34,7 +40,7 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
         pending = driver.private_cli.AcceptanceFailure(
             "workspace operation lifetime owner is still active: " + OPERATION_ID)
         with (
-            mock.patch.object(driver.private_cli, "authorize_managed_lifetime_closure",
+            mock.patch.object(private_supervisor, "authorize_managed_lifetime_closure",
                               side_effect=[pending, proof]) as authorize,
             mock.patch.object(driver.private_cli.time, "sleep") as wait,
         ):
@@ -49,7 +55,7 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
         context.state = Path("/state")
         fault = driver.private_cli.AcceptanceFailure("capture identity mismatch")
         with (
-            mock.patch.object(driver.private_cli, "authorize_managed_lifetime_closure",
+            mock.patch.object(private_supervisor, "authorize_managed_lifetime_closure",
                               side_effect=fault),
             mock.patch.object(driver.private_cli.time, "monotonic",
                               side_effect=[0, driver.WAIT_SECONDS]),
@@ -87,9 +93,12 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
 
             with (
                 mock.patch.object(driver.private_cli.LockedReleaseGate, "acquire"),
-                mock.patch.object(driver, "_dispatch_capacity_one", return_value=task),
-                mock.patch.object(driver, "_adopt_workspace_container"),
-                mock.patch.object(driver.private_cli, "capacity_lease_specifications", side_effect=specifications),
+                mock.patch.object(scenario_capacity, "_dispatch_capacity_one", return_value=task),
+                mock.patch.object(scenario_capacity, "_adopt_workspace_container"),
+                mock.patch.object(
+                    scenario_capacity.private_cli_capacity_records,
+                    "capacity_lease_specifications", side_effect=specifications,
+                ),
                 mock.patch.object(driver.time, "sleep", side_effect=publish_provider),
                 mock.patch.object(driver.private_cli.LiveFIFOLeaseCohort, "acquire", side_effect=acquire) as cohort,
             ):
@@ -109,7 +118,7 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             return 0, {"workspace": {"id": WORKSPACE_ID, "state": "retained",
                                      "path": "/checkout"}}
 
-        with mock.patch.object(driver, "_control", side_effect=delayed_control):
+        with mock.patch.object(scenario_operations, "_control", side_effect=delayed_control):
             response = driver._wait_workspace(context, WORKSPACE_ID, timeout=5)
         self.assertEqual(response["workspace"]["state"], "retained")
 
@@ -129,8 +138,8 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             receipt = Path(temporary) / "receipt.json"
             finalizer = driver.ReceiptFinalizer(receipt, [], {})
             with (
-                mock.patch.object(driver, "build_source_manifest", return_value={}),
-                mock.patch.object(driver, "_run_capacity", side_effect=failed_cleanup),
+                mock.patch.object(scenario_application, "build_source_manifest", return_value={}),
+                mock.patch.object(scenario_application, "_run_capacity", side_effect=failed_cleanup),
             ):
                 with self.assertRaisesRegex(RuntimeError, "cleanup observation failed"):
                     driver._run(mock.Mock(scenario="capacity", parallel_tasks=200,
@@ -156,9 +165,9 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
 
             try:
                 with (
-                    mock.patch.object(driver, "verify_capture_receipt", side_effect=captures),
-                    mock.patch.object(driver, "_git", return_value=(0, b"")),
-                    mock.patch.object(driver, "_git_ok", side_effect=git_result),
+                    mock.patch.object(scenario_workspace_operations, "verify_capture_receipt", side_effect=captures),
+                    mock.patch.object(scenario_workspace_operations, "_git", return_value=(0, b"")),
+                    mock.patch.object(scenario_workspace_operations, "_git_ok", side_effect=git_result),
                 ):
                     for capture in captures:
                         self.assertEqual(driver._capture_roundtrip(context, capture), capture)
@@ -182,8 +191,8 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
         }
         with (
             mock.patch.object(driver.uuid, "uuid4", return_value=mock.Mock(hex=TASK_ID)),
-            mock.patch.object(driver, "_control", return_value=(0, response)),
-            mock.patch.object(driver, "_wait_workspace") as observe,
+            mock.patch.object(scenario_operations, "_control", return_value=(0, response)),
+            mock.patch.object(scenario_operations, "_wait_workspace") as observe,
         ):
             first = driver._dispatch(context, Path("/brief"), task_budget="2s", fresh=True)
             followup = driver._continue(
@@ -200,9 +209,9 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
         finalizer = mock.Mock(spec=driver.ReceiptFinalizer)
         success = {"release": {"state": "released"}, "forget": {"state": "forgotten"}}
         with (
-            mock.patch.object(driver, "build_source_manifest", return_value={}),
-            mock.patch.object(driver, "_run_success", return_value=success),
-            mock.patch.object(driver, "_run_timeout", side_effect=RuntimeError("timeout proof failed")),
+            mock.patch.object(scenario_application, "build_source_manifest", return_value={}),
+            mock.patch.object(scenario_application, "_run_success", return_value=success),
+            mock.patch.object(scenario_application, "_run_timeout", side_effect=RuntimeError("timeout proof failed")),
         ):
             with self.assertRaisesRegex(RuntimeError, "timeout proof failed"):
                 driver._run(mock.Mock(scenario="lifecycle"), finalizer, context)
@@ -280,12 +289,12 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             "root_id": "e" * 32,
         }
         with (
-            mock.patch.object(driver, "_dispatch", side_effect=[first, reused]),
-            mock.patch.object(driver, "_adopt_workspace_container"),
-            mock.patch.object(driver, "_await_task", return_value={"status": "done"}),
-            mock.patch.object(driver, "_collect_task", return_value={"status": "collected"}),
+            mock.patch.object(scenario_lifecycle, "_dispatch", side_effect=[first, reused]),
+            mock.patch.object(scenario_lifecycle, "_adopt_workspace_container"),
+            mock.patch.object(scenario_lifecycle, "_await_task", return_value={"status": "done"}),
+            mock.patch.object(scenario_lifecycle, "_collect_task", return_value={"status": "collected"}),
             mock.patch.object(
-                driver,
+                scenario_lifecycle,
                 "_wait_capture",
                 side_effect=[
                     ({"workspace": {"state": "retained"}}, {"status": "captured"}),
@@ -293,17 +302,17 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
                 ],
             ) as wait_capture,
             mock.patch.object(
-                driver, "read_json", return_value={"verdict": "committed"},
+                scenario_lifecycle, "read_json", return_value={"verdict": "committed"},
             ),
             mock.patch.object(
-                driver, "_prove_lifetimes_closed", return_value={"closed": True},
+                scenario_lifecycle, "_prove_lifetimes_closed", return_value={"closed": True},
             ),
             mock.patch.object(
-                driver,
+                scenario_lifecycle,
                 "_provider_session",
                 return_value={"provider": "pi:json", "conversation_id": driver.FIXTURE_SESSION},
             ),
-            mock.patch.object(driver, "_capture_roundtrip", return_value={
+            mock.patch.object(scenario_lifecycle, "_capture_roundtrip", return_value={
                 "snapshot_ref": "ref",
                 "operation_id": "a" * 32,
                 "subject": {"id": TASK_ID},
@@ -344,9 +353,9 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             raise AssertionError("unexpected control: " + kwargs["label"])
 
         with (
-            mock.patch.object(driver, "_control", side_effect=control) as control_mock,
+            mock.patch.object(scenario_operations, "_control", side_effect=control) as control_mock,
             mock.patch.object(
-                driver,
+                scenario_operations,
                 "_wait_workspace",
                 return_value={"root_id": predecessor["root_id"],
                               "workspace": {"id": WORKSPACE_ID, "state": "retained",
@@ -400,7 +409,7 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             },
         }
         with (
-            mock.patch.object(driver, "_control", return_value=(1, response)) as control_mock,
+            mock.patch.object(scenario_operations, "_control", return_value=(1, response)) as control_mock,
             mock.patch.object(
                 driver.uuid, "uuid4", return_value=mock.Mock(hex=successor_id),
             ),
@@ -477,9 +486,9 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             }
             binary = Path(driver.__file__)
             with (
-                mock.patch.object(driver, "_require_executable", return_value=binary),
-                mock.patch.object(driver, "_make_context", return_value=(context, {})),
-                mock.patch.object(driver, "_run", side_effect=RuntimeError("injected scenario failure")),
+                mock.patch.object(scenario_application, "_require_executable", return_value=binary),
+                mock.patch.object(scenario_application, "_make_context", return_value=(context, {})),
+                mock.patch.object(scenario_application, "_run", side_effect=RuntimeError("injected scenario failure")),
                 mock.patch.object(driver.sys.stdout, "write"),
             ):
                 result = driver.main([
@@ -622,8 +631,8 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             "id": WORKSPACE_ID, "state": "cleanup_pending", "next_action": "watch_workspace",
         }}
         with (
-            mock.patch.object(driver, "_control", side_effect=[(3, rejected), (3, accepted)]) as control,
-            mock.patch.object(driver, "_wait_workspace") as observe,
+            mock.patch.object(scenario_workspace_operations, "_control", side_effect=[(3, rejected), (3, accepted)]) as control,
+            mock.patch.object(scenario_workspace_operations, "_wait_workspace") as observe,
         ):
             self.assertEqual(driver._workspace_mutation(
                 context, arguments, action="release", workspace_id=WORKSPACE_ID,
@@ -643,8 +652,8 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
         }}
         finished = {"workspace": {"id": WORKSPACE_ID, "state": "forgotten"}}
         with (
-            mock.patch.object(driver, "_control", return_value=(3, pending)) as control,
-            mock.patch.object(driver, "_wait_workspace", return_value=finished) as observe,
+            mock.patch.object(scenario_workspace_operations, "_control", return_value=(3, pending)) as control,
+            mock.patch.object(scenario_workspace_operations, "_wait_workspace", return_value=finished) as observe,
         ):
             result = driver._forget_workspace(context, {"workspace_id": WORKSPACE_ID, "task_id": TASK_ID})
         self.assertEqual(result["forget_state"], "forgotten")
@@ -665,8 +674,8 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             "operation": {"operation_id": OPERATION_ID, "status": "succeeded", "command_exit": 0},
         }}
         with (
-            mock.patch.object(driver, "_control", return_value=(3, pending)),
-            mock.patch.object(driver, "_wait_workspace", return_value=finished) as observe,
+            mock.patch.object(scenario_workspace_operations, "_control", return_value=(3, pending)),
+            mock.patch.object(scenario_workspace_operations, "_wait_workspace", return_value=finished) as observe,
         ):
             driver._workspace_exec(context, {"workspace_id": WORKSPACE_ID, "task_id": TASK_ID})
         self.assertEqual(observe.call_args.kwargs["state"], "retained")

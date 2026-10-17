@@ -1,0 +1,566 @@
+[
+  {
+    "name": "py:delegate_acceptance.directories.finalization",
+    "owner": "py:delegate_acceptance.directories",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.processes.observation",
+      "py:math",
+      "py:os",
+      "py:pathlib",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.directories.journal",
+    "owner": "py:delegate_acceptance.directories",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.files",
+      "py:fcntl",
+      "py:hashlib",
+      "py:os",
+      "py:pathlib",
+      "py:secrets",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.directories.operations",
+    "owner": "py:delegate_acceptance.directories",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:ctypes",
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.policy",
+      "py:os",
+      "py:pathlib",
+      "py:secrets",
+      "py:stat",
+      "py:sys",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.evidence.bounded_files",
+    "owner": "py:delegate_acceptance.evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:enum",
+      "py:os",
+      "py:pathlib",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.evidence.files",
+    "owner": "py:delegate_acceptance.evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:tempfile"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.evidence.json_decoder",
+    "owner": "py:delegate_acceptance.evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.validation",
+      "py:json",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.evidence.records",
+    "owner": "py:delegate_acceptance.evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:datetime",
+      "py:delegate_acceptance.evidence.digests",
+      "py:delegate_acceptance.evidence.json_decoder",
+      "py:delegate_acceptance.evidence.limits",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.supervisor.queue_policy",
+      "py:json",
+      "py:pathlib",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.inspections.authority",
+    "owner": "py:delegate_acceptance.inspections",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:datetime",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.lifetime.evidence",
+      "py:delegate_acceptance.lifetime.unlaunched",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.inspections.journal",
+    "owner": "py:delegate_acceptance.inspections",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:datetime",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.inspections.authority",
+      "py:delegate_acceptance.inspections.binding",
+      "py:delegate_acceptance.inspections.data",
+      "py:delegate_acceptance.inspections.result_policy",
+      "py:delegate_acceptance.supervisor.binding",
+      "py:delegate_acceptance.supervisor.config_policy",
+      "py:delegate_acceptance.tasks.specification",
+      "py:delegate_acceptance.workspaces.admission_evidence",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.lifetime.closure",
+    "owner": "py:delegate_acceptance.lifetime",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.inspections.authority",
+      "py:delegate_acceptance.inspections.binding",
+      "py:delegate_acceptance.lifetime.evidence",
+      "py:delegate_acceptance.workspaces.admission_evidence",
+      "py:delegate_acceptance.workspaces.closure",
+      "py:pathlib",
+      "py:stat",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.lifetime.evidence",
+    "owner": "py:delegate_acceptance.lifetime",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:datetime",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.lifetime.absence_policy",
+      "py:delegate_acceptance.lifetime.identity",
+      "py:delegate_acceptance.lifetime.policy",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.lifetime.unlaunched",
+    "owner": "py:delegate_acceptance.lifetime",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.encoding",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.lifetime.identity",
+      "py:delegate_acceptance.lifetime.policy",
+      "py:errno",
+      "py:fcntl",
+      "py:os",
+      "py:pathlib",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.paths.operations",
+    "owner": "py:delegate_acceptance.paths",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.validation",
+      "py:os",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.processes.contracts",
+    "owner": "py:delegate_acceptance.processes",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:enum",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.processes.observation",
+    "owner": "py:delegate_acceptance.processes",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.policy",
+      "py:math",
+      "py:os",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.processes.operations",
+    "owner": "py:delegate_acceptance.processes",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.digests",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.processes.contracts",
+      "py:delegate_acceptance.processes.observation",
+      "py:fcntl",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:selectors",
+      "py:struct",
+      "py:subprocess",
+      "py:termios",
+      "py:time",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.supervisor.configuration",
+    "owner": "py:delegate_acceptance.supervisor",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.supervisor.config_policy",
+      "py:os",
+      "py:pathlib",
+      "py:pwd",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.supervisor.observation",
+    "owner": "py:delegate_acceptance.supervisor",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.supervisor.queue_policy",
+      "py:time",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.tasks.admission",
+    "owner": "py:delegate_acceptance.tasks",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.limits",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.lifetime.closure",
+      "py:delegate_acceptance.lifetime.evidence",
+      "py:delegate_acceptance.supervisor.binding",
+      "py:delegate_acceptance.tasks.metadata",
+      "py:delegate_acceptance.tasks.specification",
+      "py:delegate_acceptance.workspaces.admission_evidence",
+      "py:pathlib",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.tasks.operations",
+    "owner": "py:delegate_acceptance.tasks",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:copy",
+      "py:datetime",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.inspections.binding",
+      "py:delegate_acceptance.inspections.journal",
+      "py:delegate_acceptance.lifetime.closure",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.supervisor.configuration",
+      "py:delegate_acceptance.supervisor.membership",
+      "py:delegate_acceptance.supervisor.observation",
+      "py:delegate_acceptance.supervisor.queue_policy",
+      "py:delegate_acceptance.tasks.admission",
+      "py:delegate_acceptance.tasks.publication",
+      "py:delegate_acceptance.tasks.refusal_policy",
+      "py:delegate_acceptance.workspaces.admission_evidence",
+      "py:os",
+      "py:pathlib",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.tasks.publication",
+    "owner": "py:delegate_acceptance.tasks",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.digests",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.admission_evidence",
+    "owner": "py:delegate_acceptance.workspaces",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:copy",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.tasks.specification",
+      "py:delegate_acceptance.workspaces.admission_identity",
+      "py:delegate_acceptance.workspaces.specification",
+      "py:pathlib",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.closure",
+    "owner": "py:delegate_acceptance.workspaces",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:datetime",
+      "py:delegate_acceptance.evidence.limits",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.lifetime.evidence",
+      "py:delegate_acceptance.lifetime.identity",
+      "py:delegate_acceptance.lifetime.unlaunched",
+      "py:delegate_acceptance.workspaces.specification",
+      "py:pathlib",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.application",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.fingerprints",
+      "py:delegate_acceptance.private_cli.installation",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.workspaces.scenarios.capacity",
+      "py:delegate_acceptance.workspaces.scenarios.context",
+      "py:delegate_acceptance.workspaces.scenarios.evidence",
+      "py:delegate_acceptance.workspaces.scenarios.lifecycle",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:delegate_acceptance.workspaces.scenarios.source",
+      "py:delegate_acceptance.workspaces.scenarios.timeout",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.capacity",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:concurrent.futures",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.capacity_ownership",
+      "py:delegate_acceptance.private_cli.capacity_records",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.workspaces.scenarios.context",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:delegate_acceptance.workspaces.scenarios.operations",
+      "py:delegate_acceptance.workspaces.scenarios.policy",
+      "py:delegate_acceptance.workspaces.scenarios.workspace_operations",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.context",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.root_cleanup",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:delegate_acceptance.workspaces.scenarios.policy",
+      "py:pathlib",
+      "py:threading"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.evidence",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:hashlib",
+      "py:json",
+      "py:pathlib",
+      "py:platform",
+      "py:sys",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.lifecycle",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.workspaces.scenarios.context",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:delegate_acceptance.workspaces.scenarios.operations",
+      "py:delegate_acceptance.workspaces.scenarios.policy",
+      "py:delegate_acceptance.workspaces.scenarios.workspace_operations"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.operations",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.tasks.publication",
+      "py:delegate_acceptance.workspaces.scenarios.context",
+      "py:delegate_acceptance.workspaces.scenarios.evidence",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:delegate_acceptance.workspaces.scenarios.policy",
+      "py:os",
+      "py:pathlib",
+      "py:time",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.source",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.fixtures",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.workspaces.scenarios.context",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:shlex",
+      "py:shutil"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.timeout",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.stop",
+      "py:delegate_acceptance.private_cli.stop_policy",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.workspaces.scenarios.context",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:delegate_acceptance.workspaces.scenarios.operations",
+      "py:delegate_acceptance.workspaces.scenarios.policy",
+      "py:delegate_acceptance.workspaces.scenarios.workspace_operations",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.workspace_operations",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.stop",
+      "py:delegate_acceptance.workspaces.closure",
+      "py:delegate_acceptance.workspaces.scenarios.context",
+      "py:delegate_acceptance.workspaces.scenarios.evidence",
+      "py:delegate_acceptance.workspaces.scenarios.model",
+      "py:delegate_acceptance.workspaces.scenarios.operations",
+      "py:delegate_acceptance.workspaces.scenarios.policy",
+      "py:delegate_acceptance.workspaces.scenarios.source",
+      "py:pathlib",
+      "py:re",
+      "py:time"
+    ]
+  }
+]

@@ -14,11 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/provider/ccr"
 	"github.com/hishamkaram/delegation-layer/internal/provider/pi"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -581,7 +583,7 @@ func assertContinuationSuccessorTestGate(t *testing.T, fixture continuationSucce
 
 func newContinuationSuccessorTestState(t *testing.T) continuationSuccessorTestState {
 	t.Helper()
-	return newContinuationSuccessorTestStateAt(t, filepath.Join(canonicalAppTestTempDir(t), "state"))
+	return newContinuationSuccessorTestStateAt(t, filepath.Join(testsupportcore.CanonicalTempDir(t), "state"))
 }
 
 func newCCRContinuationSuccessorTestState(t *testing.T) continuationSuccessorTestState {
@@ -609,7 +611,7 @@ func newContinuationSuccessorTestStateAt(t *testing.T, root string) continuation
 	fixture := continuationSuccessorTestState{store: store, bindings: make(map[string]task.SupervisorRef)}
 	for _, name := range []string{"A", "B", "C"} {
 		digest := task.ComputeSHA256([]byte("generation " + name))
-		binding := continuationSupervisorRef(store.Root, digest, "unix:"+filepath.Join(base, "run", name+".sock"))
+		binding := testsupport.ContinuationSupervisorRef(store.Root, digest, "unix:"+filepath.Join(base, "run", name+".sock"))
 		binding.ConfigDigest = task.ComputeSHA256(continuationSuccessorTestConfig(t, store.Root, name))
 		// A no-head continuation must use the published records even after the
 		// predecessor installation disappears. Neither executable exists.

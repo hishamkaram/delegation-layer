@@ -12,6 +12,7 @@ from unittest.mock import patch
 import acceptance_native as gate
 import acceptance_supervisor_common as common
 import native_acceptance_evidence as evidence
+from scripts.delegate_acceptance.native import acceptance as acceptance_impl
 from test_acceptance_native import fake_native_python_script
 
 
@@ -34,7 +35,8 @@ class NonGitAcceptanceTests(unittest.TestCase):
             home = root / "home"
             runs = []
             with patch.object(gate.Path, "home", return_value=home), \
-                    patch.object(gate, "reject_tmp"), patch.object(gate, "require_discovery"):
+                    patch.object(acceptance_impl, "reject_tmp"), \
+                    patch.object(acceptance_impl, "require_discovery"):
                 for index in range(2):
                     output = root / f"evidence-{index}"
                     output.mkdir()
@@ -87,9 +89,9 @@ class NonGitAcceptanceTests(unittest.TestCase):
             output.mkdir()
             with patch.object(gate.Path, "home", return_value=home), \
                     patch.object(gate, "choose_output", return_value=output), \
-                    patch.object(gate, "resolve_executable", return_value=Path("/bin/sh")), \
-                    patch.object(gate, "require_discovery"), \
-                    patch.object(gate, "Processes") as processes:
+                    patch.object(acceptance_impl, "resolve_executable", return_value=Path("/bin/sh")), \
+                    patch.object(acceptance_impl, "require_discovery"), \
+                    patch.object(acceptance_impl, "Processes") as processes:
                 code = gate.main(["--provider", "codex:exec", "--permission", "read-only",
                                   "--scenario", "non-git", "--output", str(output)])
             self.assertEqual(code, 2)
@@ -111,7 +113,8 @@ class NonGitAcceptanceTests(unittest.TestCase):
                     "--pueue", "/bin/sh", "--pueued", "/bin/sh", "--provider-executable", "/bin/sh",
                 ])
                 with patch.object(gate.Path, "home", return_value=home), \
-                        patch.object(gate, "reject_tmp"), patch.object(gate, "require_discovery"), \
+                        patch.object(acceptance_impl, "reject_tmp"), \
+                        patch.object(acceptance_impl, "require_discovery"), \
                         isolate_git_ancestors(root):
                     operation = gate.NativeAcceptance(args)
                 try:

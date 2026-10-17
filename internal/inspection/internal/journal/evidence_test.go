@@ -1,0 +1,251 @@
+package journal
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+)
+
+var errInjectedCompletionStage = errors.New("injected completion stage failure")
+
+type completionStageFault struct {
+	taskdir.BaseFaultInjector
+	failed bool
+}
+
+func (f *completionStageFault) OnBeforeStageCreate(_, destination string) error {
+	if filepath.Base(destination) == completionRecordName && !f.failed {
+		f.failed = true
+		return errInjectedCompletionStage
+	}
+	return nil
+}
+
+func evidenceOperation(t *testing.T) *Operation {
+	return evidenceOperationWithRunnerOwnership(t, "")
+}
+
+func evidenceOperationWithRunnerOwnership(t *testing.T, ownership string) *Operation {
+	t.Helper()
+	store, request, binding := inspectionFixture(t)
+	binding.RunnerOwnership = ownership
+	op, err := OpenOperation(store, request, binding, time.Unix(100, 0))
+	mustInspection(t, err)
+	t.Cleanup(func() { mustInspection(t, op.Close()) })
+	return op
+}
+
+func TestInspectionCompletionRequiresStartAndMatchingResult(t *testing.T) {
+	op := evidenceOperation(t)
+	now := time.Unix(102, 0)
+	facts := json.RawMessage(`{"eligible":true}`)
+	if err := op.Complete(ResultEligible, facts, now); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completion without start: %v", err)
+	}
+	permit, err := op.ClaimStart(time.Unix(101, 0))
+	mustInspection(t, err)
+	mustInspection(t, permit.Consume())
+	mustInspection(t, op.Complete(ResultEligible, facts, now))
+	result, completion, err := op.ReadCompleted()
+	mustInspection(t, err)
+	if result.Reason != ResultEligible || completion.RequestSHA256 != op.Digest() {
+		t.Fatal("completion identity lost")
+	}
+	mustInspection(t, op.Complete(ResultEligible, facts, now.Add(time.Second)))
+	_, replayed, err := op.ReadCompleted()
+	mustInspection(t, err)
+	if replayed != completion {
+		t.Fatal("replay changed completion time")
+	}
+	if err = op.Complete(ResultEligible, json.RawMessage(`{"eligible":false}`), now); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatal("conflicting result accepted")
+	}
+}
+
+func TestInspectionCompletionContextRepairsTransientCompletionFailure(t *testing.T) {
+	store, request, binding := inspectionFixture(t)
+	op, err := OpenOperation(store, request, binding, time.Unix(100, 0))
+	mustInspection(t, err)
+	t.Cleanup(func() { mustInspection(t, op.Close()) })
+	permit, err := op.ClaimStart(time.Unix(101, 0))
+	mustInspection(t, err)
+	mustInspection(t, permit.Consume())
+
+	fault := &completionStageFault{}
+	store.SetFaultInjector(fault)
+	facts := json.RawMessage(`{"eligible":true}`)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute))
+	defer cancel()
+	if err = op.CompleteContext(ctx, ResultEligible, facts, time.Unix(102, 0)); err != nil {
+		t.Fatalf("completion recovery failed: %v", err)
+	}
+	if !fault.failed {
+		t.Fatal("completion stage fault did not run")
+	}
+	completedResult, completed, err := op.ReadCompletedContext(ctx)
+	mustInspection(t, err)
+	if completedResult.Reason != ResultEligible || completed.RequestSHA256 != op.Digest() {
+		t.Fatalf("repaired completion lost identity: result=%+v completion=%+v", completedResult, completed)
+	}
+}
+
+func TestCanceledCompletionContextPublishesNoResult(t *testing.T) {
+	op := evidenceOperation(t)
+	permit, err := op.ClaimStart(time.Unix(101, 0))
+	mustInspection(t, err)
+	mustInspection(t, permit.Consume())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err = op.CompleteContext(ctx, ResultEligible, json.RawMessage(`{"eligible":true}`), time.Unix(102, 0)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled completion returned %v", err)
+	}
+	var result ResultRecord
+	if err = op.control.Read(resultRecordName, &result); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled completion published result: record=%+v err=%v", result, err)
+	}
+}
+
+func TestInspectionResultWithoutCompletionIsIneligible(t *testing.T) {
+	op := evidenceOperation(t)
+	_, err := op.control.Put(resultRecordName, ResultRecord{SchemaVersion: task.SchemaVersion, RequestSHA256: op.Digest(), Reason: ResultEligible, Facts: map[string]json.RawMessage{"eligible": json.RawMessage(`true`)}})
+	mustInspection(t, err)
+	if _, _, err = op.ReadCompleted(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("payload alone qualified: %v", err)
+	}
+}
+
+func TestInspectionCompletionRejectsLateOrSecretDiagnosticFacts(t *testing.T) {
+	op := evidenceOperation(t)
+	_, err := op.ClaimStart(time.Unix(101, 0))
+	mustInspection(t, err)
+	deadline := op.Deadline()
+	for _, test := range []struct {
+		reason ResultReason
+		facts  json.RawMessage
+		now    time.Time
+	}{
+		{ResultEligible, json.RawMessage(`{}`), deadline.Add(time.Nanosecond)},
+		{ResultEligible, json.RawMessage(`null`), time.Unix(102, 0)},
+		{ResultUnavailable, json.RawMessage(`{"error":"synthetic-secret"}`), time.Unix(102, 0)},
+		{ResultReason("synthetic-secret"), nil, time.Unix(102, 0)},
+		{ResultEligible, json.RawMessage(`{}`), time.Unix(100, 0)},
+	} {
+		if err = op.Complete(test.reason, test.facts, test.now); err == nil {
+			t.Fatal("invalid completion accepted")
+		}
+	}
+	mustInspection(t, op.Complete(ResultExpired, nil, deadline.Add(time.Second)))
+	result, _, err := op.ReadCompleted()
+	mustInspection(t, err)
+	if result.Reason != ResultExpired || len(result.Facts) != 0 {
+		t.Fatal("expired result contains eligible data")
+	}
+}
+
+func TestInspectionReceiptDoesNotDefaultMissingTargetToZero(t *testing.T) {
+	for _, target := range []map[string]any{{}, {"numeric_task_id": nil}, {"numeric_task_id": -1}} {
+		op := evidenceOperation(t)
+		target["schema_version"] = task.SchemaVersion
+		target["request_sha256"] = op.Digest()
+		_, err := op.control.Put(receiptRecordName, target)
+		mustInspection(t, err)
+		if _, err = op.Receipt(); !errors.Is(err, task.ErrEvidenceFault) {
+			t.Fatalf("missing target was accepted: %v", err)
+		}
+	}
+	op := evidenceOperation(t)
+	mustInspection(t, op.RecordReceipt(0))
+	receipt, err := op.Receipt()
+	mustInspection(t, err)
+	if receipt.NumericTaskID == nil || *receipt.NumericTaskID != 0 {
+		t.Fatal("valid zero target lost")
+	}
+	if err = op.RecordReceipt(1); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatal("receipt target changed")
+	}
+}
+
+func TestManagedWorkerUpgradeAuthorizationIsCreateOnceAndBoundToRequest(t *testing.T) {
+	op := evidenceOperationWithRunnerOwnership(t, task.RunnerOwnershipManaged)
+	if authorized, err := op.ManagedWorkerUpgradeAuthorizedContext(context.Background()); err != nil || authorized {
+		t.Fatalf("initial managed-worker authorization = %v, err=%v", authorized, err)
+	}
+	if err := op.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := op.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
+		t.Fatalf("identical managed-worker authorization replay failed: %v", err)
+	}
+	if authorized, err := op.ManagedWorkerUpgradeAuthorizedContext(context.Background()); err != nil || !authorized {
+		t.Fatalf("saved managed-worker authorization = %v, err=%v", authorized, err)
+	}
+	conflicting := ManagedWorkerUpgradeRecord{SchemaVersion: task.SchemaVersion, RequestSHA256: "different-request"}
+	if _, err := op.control.Put(workerUpgradeName, conflicting); !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("conflicting managed-worker authorization replaced winner: %v", err)
+	}
+
+	other := evidenceOperationWithRunnerOwnership(t, task.RunnerOwnershipManaged)
+	if _, err := other.control.Put(workerUpgradeName, conflicting); err != nil {
+		t.Fatal(err)
+	}
+	if authorized, err := other.ManagedWorkerUpgradeAuthorizedContext(context.Background()); authorized || !errors.Is(err, task.ErrEvidenceFault) {
+		t.Fatalf("authorization for a different request accepted: %v, err=%v", authorized, err)
+	}
+}
+
+func TestManagedWorkerUpgradeAuthorizationRequiresManagedOwnership(t *testing.T) {
+	for _, ownership := range []string{"", task.RunnerOwnershipCustom} {
+		t.Run(map[string]string{"": "unknown", task.RunnerOwnershipCustom: "custom"}[ownership], func(t *testing.T) {
+			op := evidenceOperationWithRunnerOwnership(t, ownership)
+			if err := op.AuthorizeManagedWorkerUpgradeContext(context.Background()); !errors.Is(err, task.ErrEvidenceFault) {
+				t.Fatalf("upgrade authorization accepted runner ownership %q: %v", ownership, err)
+			}
+			_, err := op.control.Put(workerUpgradeName, ManagedWorkerUpgradeRecord{
+				SchemaVersion: task.SchemaVersion,
+				RequestSHA256: op.Digest(),
+			})
+			mustInspection(t, err)
+			if authorized, readErr := op.ManagedWorkerUpgradeAuthorizedContext(context.Background()); authorized || !errors.Is(readErr, task.ErrEvidenceFault) {
+				t.Fatalf("forged upgrade marker accepted runner ownership %q: authorized=%v err=%v", ownership, authorized, readErr)
+			}
+		})
+	}
+}
+
+func TestInspectionClaimRejectsTimeBeforeCreation(t *testing.T) {
+	op := evidenceOperation(t)
+	if permit, err := op.ClaimStart(time.Unix(99, 0)); permit != nil || !errors.Is(err, ErrInvalidAdmissionTime) {
+		t.Fatal("pre-creation start was authorized")
+	}
+	if permit, err := op.ClaimSubmission(time.Unix(99, 0)); permit != nil || !errors.Is(err, ErrInvalidAdmissionTime) {
+		t.Fatal("pre-creation submission was authorized")
+	}
+}
+
+func TestCanceledReceiptContextCannotPublishAuthority(t *testing.T) {
+	op := evidenceOperation(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := op.RecordReceiptContext(ctx, 42); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled receipt context returned %v", err)
+	}
+	if _, err := op.Receipt(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("canceled receipt context published authority: %v", err)
+	}
+}
+
+func TestCanceledCompletedReadHonorsCallerContext(t *testing.T) {
+	op := evidenceOperation(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := op.ReadCompletedContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled completed read returned %v", err)
+	}
+}

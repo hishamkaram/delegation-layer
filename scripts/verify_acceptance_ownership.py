@@ -9,7 +9,20 @@ import sys
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 SHARED_COMMON = (SCRIPT_DIRECTORY / "acceptance_supervisor_common.py").resolve()
 COMMON_MODULE = "acceptance_supervisor_common"
+COMMON_MODULES = frozenset({COMMON_MODULE, "scripts.acceptance_supervisor_common"})
+PACKAGE_DIRECTORY = SCRIPT_DIRECTORY / "delegate_acceptance"
+DIRECTORY_OWNER = (PACKAGE_DIRECTORY / "directories" / "operations.py").resolve()
+DIRECTORY_JOURNAL = (PACKAGE_DIRECTORY / "directories" / "journal.py").resolve()
+PROCESS_OWNER = (PACKAGE_DIRECTORY / "processes" / "operations.py").resolve()
+DIRECTORY_REMOVAL_FILES = frozenset({DIRECTORY_OWNER, DIRECTORY_JOURNAL})
+OWNER_MODULES = frozenset({
+    "scripts.delegate_acceptance.directories.operations",
+    "scripts.delegate_acceptance.processes.operations",
+    "delegate_acceptance.directories.operations",
+    "delegate_acceptance.processes.operations",
+})
 PROCESS_LIFECYCLE_TYPES = frozenset({"Process", "Processes", "OwnedProcess", "ProcessBook"})
+DIRECTORY_LIFECYCLE_TYPES = frozenset({"DirectoryOwner", "OwnedDirectory"})
 PROCESS_FACTORY_MODULE = "functools"
 PROCESS_FACTORY_NAME = "partial"
 SUBPROCESS_LIFECYCLE_APIS = frozenset({"Popen"})
@@ -19,6 +32,7 @@ SUBPROCESS_LIFECYCLE_APIS = frozenset({"Popen"})
 # exception and must use the shared process owner.
 DIRECT_FIXTURE_SUBPROCESS_FILES = frozenset({
     (SCRIPT_DIRECTORY / "acceptance_private_cli.py").resolve(),
+    (PACKAGE_DIRECTORY / "private_cli" / "capture.py").resolve(),
 })
 
 DIRECTORY_REMOVAL_REFERENCES = frozenset({
@@ -38,7 +52,8 @@ CONTROLLED_MODULES = frozenset({
     "shutil",
     "subprocess",
     PROCESS_FACTORY_MODULE,
-    COMMON_MODULE,
+    *COMMON_MODULES,
+    *OWNER_MODULES,
 })
 CONTROLLED_COMMON_REFERENCES = frozenset({
     "DirectoryOwner",
@@ -66,11 +81,9 @@ class Violation:
 
 
 def production_paths() -> tuple[Path, ...]:
-    return tuple(sorted(SCRIPT_DIRECTORY.glob("acceptance_*.py")))
-
-
-def _is_shared_common(path: Path) -> bool:
-    return path.resolve() == SHARED_COMMON
+    paths = set(SCRIPT_DIRECTORY.glob("acceptance_*.py"))
+    paths.update((SCRIPT_DIRECTORY / "delegate_acceptance").rglob("*.py"))
+    return tuple(sorted(paths))
 
 
 def _name(node: ast.AST) -> str | None:
@@ -100,28 +113,68 @@ def _add_alias(
     aliases.setdefault(name, set()).add(reference)
 
 
-def _import_aliases(tree: ast.AST) -> ControlledAliases:
+def _controlled_reference(module: str, symbol: str) -> ControlledReference:
+    return (COMMON_MODULE if module in OWNER_MODULES | COMMON_MODULES else module, symbol)
+
+
+def _owner_module_prefix(module: str) -> bool:
+    return any(owner == module or owner.startswith(module + ".")
+               for owner in OWNER_MODULES | COMMON_MODULES)
+
+
+def _absolute_import_module(node: ast.ImportFrom, path: Path | None) -> str | None:
+    if not node.level:
+        return node.module
+    if path is None:
+        return None
+    try:
+        relative = path.relative_to(SCRIPT_DIRECTORY)
+    except ValueError:
+        return None
+    package = ("scripts", *relative.parent.parts)
+    if node.level > len(package):
+        return None
+    parent = package[:len(package) - node.level + 1]
+    return ".".join((*parent, node.module)) if node.module else ".".join(parent)
+
+
+def _attribute_reference(module: str, name: str) -> ControlledReference:
+    qualified = module + "." + name
+    if _owner_module_prefix(qualified):
+        return qualified, None
+    return _controlled_reference(module, name)
+
+
+def _import_aliases(tree: ast.AST, path: Path | None = None) -> ControlledAliases:
     """Resolve one bounded set of import aliases used by the ownership gate."""
 
     aliases: ControlledAliases = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for imported in node.names:
-                if imported.name not in CONTROLLED_MODULES:
+                if imported.name not in CONTROLLED_MODULES and not _owner_module_prefix(imported.name):
                     continue
                 bound_name = imported.asname or imported.name
                 _add_alias(aliases, bound_name, (imported.name, None))
-        elif isinstance(node, ast.ImportFrom) and node.module in CONTROLLED_MODULES:
+        elif isinstance(node, ast.ImportFrom):
+            module = _absolute_import_module(node, path)
+            if module is None:
+                continue
             for imported in node.names:
-                if imported.name in CONTROLLED_COMMON_REFERENCES or (
-                        node.module in {"os", "shutil"} and
+                if module in CONTROLLED_MODULES and (imported.name in CONTROLLED_COMMON_REFERENCES or (
+                        module in {"os", "shutil"} and
                         imported.name in {"rmdir", "rmtree", "removedirs"}
-                ) or (node.module == "subprocess" and imported.name in SUBPROCESS_APIS):
+                ) or (module == "subprocess" and imported.name in SUBPROCESS_APIS)):
                     bound_name = imported.asname or imported.name
-                    _add_alias(aliases, bound_name, (node.module, imported.name))
-                elif node.module == PROCESS_FACTORY_MODULE and imported.name == PROCESS_FACTORY_NAME:
+                    _add_alias(aliases, bound_name,
+                               _controlled_reference(module, imported.name))
+                elif module == PROCESS_FACTORY_MODULE and imported.name == PROCESS_FACTORY_NAME:
                     bound_name = imported.asname or imported.name
-                    _add_alias(aliases, bound_name, (node.module, imported.name))
+                    _add_alias(aliases, bound_name, (module, imported.name))
+                else:
+                    qualified = module + "." + imported.name
+                    if _owner_module_prefix(qualified):
+                        _add_alias(aliases, imported.asname or imported.name, (qualified, None))
     return aliases
 
 
@@ -144,7 +197,7 @@ def _references(
         return frozenset()
     if isinstance(node, ast.Attribute):
         references = {
-            (module, node.attr)
+            _attribute_reference(module, node.attr)
             for module, symbol in _references(node.value, aliases)
             if symbol is None
         }
@@ -152,7 +205,7 @@ def _references(
         if dotted is not None:
             module, separator, name = dotted.rpartition(".")
             if separator and module in CONTROLLED_MODULES:
-                references.add((module, name))
+                references.add(_controlled_reference(module, name))
         return frozenset(references)
     return frozenset()
 
@@ -269,25 +322,91 @@ def _literal_recursive_rm(node: ast.Call, aliases: ControlledAliases) -> bool:
     return False
 
 
+def _call_violations(
+        path: Path,
+        tree: ast.AST,
+        aliases: ControlledAliases,
+        owner_names: set[str],
+        owner_type_names: set[str],
+) -> list[Violation]:
+    violations: list[Violation] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        process_constructor = _is_process_reference(node.func, aliases)
+        if (_is_partial_reference(node.func, aliases) and node.args and
+                _is_process_reference(node.args[0], aliases)):
+            keywords = {keyword.arg for keyword in node.keywords}
+            if ("owner" in keywords) == ("capture_root" in keywords):
+                violations.append(_violation(
+                    path, node, "process-capture-owner",
+                    "partial Processes factories require exactly one owner or capture_root binding"))
+        references = _references(node.func, aliases)
+        if (any(module == "subprocess" and symbol in SUBPROCESS_LIFECYCLE_APIS
+                for module, symbol in references) and
+                path != PROCESS_OWNER and path not in DIRECT_FIXTURE_SUBPROCESS_FILES):
+            violations.append(_violation(
+                path, node, "direct-process-owner",
+                "acceptance process lifecycle must use the shared Process/Processes owner"))
+        if _is_directory_removal(node, aliases) and path not in DIRECTORY_REMOVAL_FILES:
+            violations.append(_violation(
+                path, node, "recursive-removal",
+                "acceptance code must remove disposable directories through the shared owner"))
+        if _literal_recursive_rm(node, aliases):
+            violations.append(_violation(
+                path, node, "subprocess-removal",
+                "literal recursive rm subprocess calls are forbidden; use the shared owner"))
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == "register" and
+                _owner_receiver(node.func.value, owner_names, owner_type_names, aliases)):
+            violations.append(_violation(
+                path, node, "legacy-register",
+                "DirectoryOwner.register is forbidden; use create or adopt_created"))
+        if _is_common_reference(node.func, "remove_owned_directory", aliases) and (
+                len(node.args) != 1 or any(keyword.arg in {"directory", "parent"}
+                                           for keyword in node.keywords)):
+            violations.append(_violation(
+                path, node, "path-only-removal",
+                "remove_owned_directory requires one identity token"))
+        if process_constructor:
+            keywords = {keyword.arg for keyword in node.keywords}
+            if ("owner" in keywords) == ("capture_root" in keywords):
+                violations.append(_violation(
+                    path, node, "process-capture-owner",
+                    "Processes requires exactly one caller-owned owner or capture_root"))
+        for keyword in node.keywords:
+            if keyword.arg in {
+                "raw_process_captures", "raw_process_captures_owned",
+                "raw_process_captures_path", "raw_process_captures_directory",
+            }:
+                violations.append(_violation(
+                    path, keyword, "raw-capture-authority",
+                    "raw process capture cleanup requires raw_process_captures_token"))
+    return violations
+
+
 def find_violations(paths: tuple[Path, ...] | list[Path]) -> tuple[Violation, ...]:
     violations: list[Violation] = []
     for candidate in paths:
         path = Path(candidate).resolve()
-        if _is_shared_common(path):
-            continue
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except (OSError, SyntaxError) as error:
             violations.append(Violation(path, 0, 0, "source", str(error)))
             continue
 
-        aliases = _import_aliases(tree)
+        aliases = _import_aliases(tree, path)
         _collect_controlled_aliases(tree, aliases)
         for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name in PROCESS_LIFECYCLE_TYPES:
+            if (isinstance(node, ast.ClassDef) and node.name in PROCESS_LIFECYCLE_TYPES
+                    and path != PROCESS_OWNER):
                 violations.append(_violation(
                     path, node, "duplicate-process-owner",
-                    "process lifecycle classes must be defined in the shared supervisor common module"))
+                    "process lifecycle classes must be defined in the canonical process owner"))
+            if (isinstance(node, ast.ClassDef) and node.name in DIRECTORY_LIFECYCLE_TYPES
+                    and path != DIRECTORY_OWNER):
+                violations.append(_violation(
+                    path, node, "duplicate-directory-owner",
+                    "directory lifecycle classes must be defined in the canonical directory owner"))
         owner_type_names = {
             name for name, references in aliases.items()
             if (COMMON_MODULE, "DirectoryOwner") in references
@@ -305,57 +424,8 @@ def find_violations(paths: tuple[Path, ...] | list[Path]) -> tuple[Violation, ..
                 if name is not None:
                     owner_names.add(name)
 
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            process_constructor = _is_process_reference(node.func, aliases)
-            if (_is_partial_reference(node.func, aliases) and node.args and
-                    _is_process_reference(node.args[0], aliases)):
-                keywords = {keyword.arg for keyword in node.keywords}
-                if ("owner" in keywords) == ("capture_root" in keywords):
-                    violations.append(_violation(
-                        path, node, "process-capture-owner",
-                        "partial Processes factories require exactly one owner or capture_root binding"))
-            references = _references(node.func, aliases)
-            if (any(module == "subprocess" and symbol in SUBPROCESS_LIFECYCLE_APIS
-                    for module, symbol in references) and
-                    path not in DIRECT_FIXTURE_SUBPROCESS_FILES):
-                violations.append(_violation(
-                    path, node, "direct-process-owner",
-                    "acceptance process lifecycle must use the shared Process/Processes owner"))
-            if _is_directory_removal(node, aliases):
-                violations.append(_violation(
-                    path, node, "recursive-removal",
-                    "acceptance code must remove disposable directories through the shared owner"))
-            if _literal_recursive_rm(node, aliases):
-                violations.append(_violation(
-                    path, node, "subprocess-removal",
-                    "literal recursive rm subprocess calls are forbidden; use the shared owner"))
-            if (isinstance(node.func, ast.Attribute) and node.func.attr == "register" and
-                    _owner_receiver(node.func.value, owner_names, owner_type_names, aliases)):
-                violations.append(_violation(
-                    path, node, "legacy-register",
-                    "DirectoryOwner.register is forbidden; use create or adopt_created"))
-            if _is_common_reference(node.func, "remove_owned_directory", aliases) and (
-                    len(node.args) != 1 or any(keyword.arg in {"directory", "parent"}
-                                               for keyword in node.keywords)):
-                violations.append(_violation(
-                    path, node, "path-only-removal",
-                    "remove_owned_directory requires one identity token"))
-            if process_constructor:
-                keywords = {keyword.arg for keyword in node.keywords}
-                if ("owner" in keywords) == ("capture_root" in keywords):
-                    violations.append(_violation(
-                        path, node, "process-capture-owner",
-                        "Processes requires exactly one caller-owned owner or capture_root"))
-            for keyword in node.keywords:
-                if keyword.arg in {
-                    "raw_process_captures", "raw_process_captures_owned",
-                    "raw_process_captures_path", "raw_process_captures_directory",
-                }:
-                    violations.append(_violation(
-                        path, keyword, "raw-capture-authority",
-                        "raw process capture cleanup requires raw_process_captures_token"))
+        violations.extend(_call_violations(
+            path, tree, aliases, owner_names, owner_type_names))
 
         for node in ast.walk(tree):
             if isinstance(node, (ast.Name, ast.Attribute)):

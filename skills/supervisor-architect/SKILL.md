@@ -32,6 +32,9 @@ Load the [maintainability contract](../../agents/_data/maintainability-contract.
    matrix](../../agents/_data/maintainability-contract.md#durable-transition-matrix-and-composed-tests)
    before choosing a design. Give every row a stable ID and cover normal entry,
    interrupted entry, recovery, and each consumer verdict.
+   Trace each shared gate through indirect callers to the public command. Keep
+   existing-task observation, optional maintenance, and admission distinct;
+   prove allowed reads and refused mutations against the same durable state.
 3. Apply the contract's [boundary and ownership
    assignments](../../agents/_data/maintainability-contract.md#boundary-and-ownership).
    Record the policy owner and named lease in every row, and use one narrow
@@ -124,9 +127,15 @@ Load the [maintainability contract](../../agents/_data/maintainability-contract.
 - Does a retry observe release of every election lease retained by that command
   before attempting re-election, rather than treating pending completion as
   lock release?
-- Does normal cleanup expose only event-backed ordinary and inspection
-  candidates, retain same-label rows for ambiguity checks, and include an exact
-  application-observation fallback when the configured callback is delayed?
+- Does inbox-only cleanup start from exact event IDs and retain same-label
+  ambiguity witnesses, while full recovery presents all rows to the same
+  durable evidence authorizer when a callback or observation hint is lost?
+- Does actual task-status reading revalidate observability inside its shared
+  lease before using cached or fresh rows, while mutation owners independently
+  revalidate completion inside their existing mutation leases?
+- Can an explicitly classified pre-mutation maintenance refusal defer only
+  after fresh saved-task observation, without hiding a joined fault, pending
+  command, invalid receipt, or shutdown progress?
 - Do cleanup and migration consume the same canonical inspection terminal
   evidence as admission, including exact failed exits without local completion?
 - Do callback-disabled historical roots retain exact journal reconciliation

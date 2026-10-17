@@ -13,6 +13,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
 
 func TestWorkspaceCleanupResumesExistingStagedHelper(t *testing.T) {
@@ -23,20 +25,20 @@ func TestWorkspaceCleanupResumesExistingStagedHelper(t *testing.T) {
 
 func verifyWorkspaceCleanupSubmissionRecovery(t *testing.T, kind string) {
 	t.Helper()
-	fixture := newWorkspaceRecoveryFixture(t)
-	supervisor, _ := newTerminalEventInspectionSupervisor(t, fixture.store)
+	fixture := testsupport.NewRecoveryFixture(t)
+	supervisor, _ := newTerminalEventInspectionSupervisor(t, fixture.Store)
 	var adds, enqueues atomic.Int32
 	options := pueue.Options{Environment: os.Environ(), Observer: workspaceRecoveryCommandObserver(&adds, &enqueues)}
 	statusPath := filepath.Join(filepath.Dir(supervisor.Binding().ConfigPath), "terminal-event-status.json")
 	request := workspaceCleanupRecoveryRequest(t, fixture, kind)
 	request.Supervisor = supervisor.Binding()
-	operation := openWorkspaceSelectionOperation(t, fixture, request)
+	operation := testsupport.OpenSelectionOperation(t, fixture, request)
 	if kind == workspace.OperationForget {
-		intent, err := fixture.resource.ForgetIntent(t.Context())
+		intent, err := fixture.Resource.ForgetIntent(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = fixture.resource.AssociateOperation(t.Context(), workspaceForgetPurpose(intent), request); err != nil {
+		if _, err = fixture.Resource.AssociateOperation(t.Context(), workspaces.ForgetPurpose(intent), request); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -44,14 +46,14 @@ func verifyWorkspaceCleanupSubmissionRecovery(t *testing.T, kind string) {
 	for _, stashed := range []bool{true, false} {
 		writeWorkspaceRecoveryQueue(t, statusPath, operation, stashed)
 		err := observeWorkspaceCleanupRecovery(t, fixture, kind, Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: options})
-		if !workspacePendingError(err) {
+		if !workspaces.PendingError(err) {
 			t.Fatalf("existing helper recovery failed: %v", err)
 		}
 	}
 	if adds.Load() != 0 || enqueues.Load() != 1 {
 		t.Fatalf("recovery added %d new jobs and enqueued %d times", adds.Load(), enqueues.Load())
 	}
-	ids, err := fixture.resource.OperationIDs(t.Context())
+	ids, err := fixture.Resource.OperationIDs(t.Context())
 	if err != nil || len(ids) != 1 || ids[0] != request.OperationID || operation.Request().Deadline != request.Deadline {
 		t.Fatalf("recovery replaced the authorized helper: ids=%v error=%v", ids, err)
 	}
@@ -71,28 +73,28 @@ func workspaceRecoveryCommandObserver(adds, enqueues *atomic.Int32) func(pueue.C
 	}
 }
 
-func workspaceCleanupRecoveryRequest(t *testing.T, fixture *workspaceRecoveryFixture, kind string) workspace.OperationRequest {
+func workspaceCleanupRecoveryRequest(t *testing.T, fixture *testsupport.RecoveryFixture, kind string) workspace.OperationRequest {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)
 	var subject workspace.Subject
 	var err error
 	if kind == workspace.OperationRemove {
-		release := workspace.ReleaseRecord{SchemaVersion: task.SchemaVersion, WorkspaceID: fixture.resource.Request().WorkspaceID, OperationID: strings.Repeat("a", 32), Discard: true}
-		if err = fixture.resource.RecordRelease(t.Context(), release); err != nil {
+		release := workspace.ReleaseRecord{SchemaVersion: task.SchemaVersion, WorkspaceID: fixture.Resource.Request().WorkspaceID, OperationID: strings.Repeat("a", 32), Discard: true}
+		if err = fixture.Resource.RecordRelease(t.Context(), release); err != nil {
 			t.Fatal(err)
 		}
-		subject, err = workspaceRemovalSubject(release)
+		subject, err = workspaces.RemovalSubject(release)
 	} else {
-		intent := workspace.ForgetIntent{SchemaVersion: task.SchemaVersion, WorkspaceID: fixture.resource.Request().WorkspaceID, OperationID: strings.Repeat("a", 32), BudgetNanos: int64(time.Minute), Deadline: deadline}
-		if err = fixture.resource.RecordForgetIntent(t.Context(), intent); err != nil {
+		intent := workspace.ForgetIntent{SchemaVersion: task.SchemaVersion, WorkspaceID: fixture.Resource.Request().WorkspaceID, OperationID: strings.Repeat("a", 32), BudgetNanos: int64(time.Minute), Deadline: deadline}
+		if err = fixture.Resource.RecordForgetIntent(t.Context(), intent); err != nil {
 			t.Fatal(err)
 		}
-		subject, err = workspaceForgetSubject(intent)
+		subject, err = workspaces.ForgetSubject(intent)
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := recoveryOperationRequest(t, fixture, strings.Repeat("b", 32), kind, subject)
+	request := testsupport.RecoveryOperationRequest(t, fixture, strings.Repeat("b", 32), kind, subject)
 	request.Deadline = deadline
 	request.Discard = kind == workspace.OperationRemove
 	return request
@@ -131,12 +133,12 @@ func writeWorkspaceRecoveryQueue(t *testing.T, path string, operation *workspace
 	writeAppTestFile(t, path, []byte(status))
 }
 
-func observeWorkspaceCleanupRecovery(t *testing.T, fixture *workspaceRecoveryFixture, kind string, deps Dependencies) error {
+func observeWorkspaceCleanupRecovery(t *testing.T, fixture *testsupport.RecoveryFixture, kind string, deps Dependencies) error {
 	t.Helper()
 	if kind == workspace.OperationRemove {
-		return reconcileWorkspaceRemoval(t.Context(), fixture.store, fixture.resource, deps, false)
+		return reconcileWorkspaceRemoval(t.Context(), fixture.Store, fixture.Resource, deps, false)
 	}
-	_, handled, err := reconcileWorkspaceForgetOperation(t.Context(), fixture.store, fixture.resource, deps, false, 0)
+	_, handled, err := reconcileWorkspaceForgetOperation(t.Context(), fixture.Store, fixture.Resource, deps, false, 0)
 	if !handled {
 		return errors.New("forget recovery ignored its existing intent")
 	}

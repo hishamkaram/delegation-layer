@@ -8,33 +8,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
 func TestSeededValidateWorkspaceArtifactUsesForgetIntentForExactMissingBytes(t *testing.T) {
 	store, _, operationID, artifact := newWorkspaceArtifactFixture(t)
 	artifactPath := writeWorkspaceArtifactTestFile(t, store, operationID, artifact.Name, []byte("captured bytes"))
-	if err := validateWorkspaceArtifact(t.Context(), store, operationID, artifact); err != nil {
+	if err := workspaces.ValidateArtifact(t.Context(), store, operationID, artifact); err != nil {
 		t.Fatalf("present artifact validation failed: %v", err)
 	}
 	if err := os.Remove(artifactPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateWorkspaceArtifact(t.Context(), store, operationID, artifact); err != nil {
+	if err := workspaces.ValidateArtifact(t.Context(), store, operationID, artifact); err != nil {
 		t.Fatalf("exact intentional absence was not accepted: %v", err)
 	}
 	unlisted := artifact
 	unlisted.Name = "stderr"
-	if err := validateWorkspaceArtifact(t.Context(), store, operationID, unlisted); !errors.Is(err, os.ErrNotExist) {
+	if err := workspaces.ValidateArtifact(t.Context(), store, operationID, unlisted); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unlisted missing artifact error=%v, want not-exist evidence", err)
 	}
 }
 
 func newWorkspaceArtifactFixture(t *testing.T) (*taskdir.Store, *workspace.Resource, string, workspace.Artifact) {
 	t.Helper()
-	store, err := taskdir.InitStore(filepath.Join(canonicalAppTestTempDir(t), "workspace-artifact-state"))
+	store, err := taskdir.InitStore(filepath.Join(testsupportcore.CanonicalTempDir(t), "workspace-artifact-state"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +71,7 @@ func newWorkspaceArtifactFixture(t *testing.T) (*taskdir.Store, *workspace.Resou
 		SchemaVersion: task.SchemaVersion, RootID: store.RootID, OperationID: operationID, WorkspaceID: workspaceID,
 		Kind: workspace.OperationCapture, Subject: workspace.Subject{Kind: workspace.SubjectTask, ID: taskID, SHA256: request.RequestSHA256},
 		Deadline: time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano), WorkerExecutable: "/fixture/worker", WorkerSHA256: workerDigest,
-		Supervisor: continuationSupervisorRef(store.Root, workerDigest, "unix:/fixture/pueue.sock"),
+		Supervisor: testsupport.ContinuationSupervisorRef(store.Root, workerDigest, "unix:/fixture/pueue.sock"),
 	}
 	operation, err := workspace.OpenOperation(t.Context(), store, operationRequest)
 	if err != nil {

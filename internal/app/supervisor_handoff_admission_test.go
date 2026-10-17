@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -73,7 +76,7 @@ func TestAdmissionHandoffBootstrapsExternalOnlyRoot(t *testing.T) {
 	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
 
-	bundle := canonicalAppTestTempDir(t)
+	bundle := testsupport.CanonicalTempDir(t)
 	for _, source := range []string{template.Binding().ClientExecutable, template.Binding().DaemonExecutable} {
 		data := readSupervisorProbeTestFile(t, source)
 		data = []byte(strings.ReplaceAll(string(data), templateStore.RootID, store.RootID))
@@ -130,7 +133,7 @@ func TestAdmissionHandoffRefusesPrivateInspectionMigration(t *testing.T) {
 	if err == nil {
 		t.Fatal("private inspection migration was admitted automatically")
 	}
-	if errors.Is(err, errExternalInspectionHandoffRequired) {
+	if errors.Is(err, supervisorcore.ErrExternalInspectionHandoffRequired) {
 		t.Fatalf("private inspection migration took the external handoff path: %v", err)
 	}
 	head, migrated, readErr := inspection.ReadGroupHead(t.Context(), store)

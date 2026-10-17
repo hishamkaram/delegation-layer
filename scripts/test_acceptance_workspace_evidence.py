@@ -122,16 +122,9 @@ class WorkspaceEvidenceTests(unittest.TestCase):
         (operation / "request.json").chmod(0o600)
         return operation, common.sha(request_bytes)
 
-    def write_native_records(
-            self, *, include_termination: bool = True,
-            include_worker_wait: bool = True,
-            owner_sha: str | None = None,
-            deadline: str = DEADLINE,
-            boot_id: str = "workspace-fixture-boot",
-            ) -> Path:
-        request = self.operation_request(deadline)
-        operation, request_digest = self.operation_directory(request)
-        owner_sha = request_digest if owner_sha is None else owner_sha
+    def write_owner_records(
+            self, operation: Path, request_digest: str, owner_sha: str,
+            deadline: str, boot_id: str) -> str:
         intent = {
             "schema_version": 1,
             "root_id": ROOT,
@@ -164,8 +157,11 @@ class WorkspaceEvidenceTests(unittest.TestCase):
             "schema_version": 1,
             "request_sha256": request_digest,
         })
-        registration_digest = common.sha(
-            (operation / "lifetime-registration.json").read_bytes())
+        return common.sha((operation / "lifetime-registration.json").read_bytes())
+
+    def write_worker_and_launch_records(
+            self, operation: Path, registration_digest: str,
+            boot_id: str) -> tuple[str, dict[str, object]]:
         worker = {
             "schema_version": 1,
             "root_id": ROOT,
@@ -190,6 +186,12 @@ class WorkspaceEvidenceTests(unittest.TestCase):
             "started_at": "2026-09-15T00:00:04Z",
         }
         write_record(operation / "lifetime-launch-00000000000000000001.json", launch)
+        return worker_digest, launch
+
+    def write_terminal_records(
+            self, operation: Path, registration_digest: str, worker_digest: str,
+            launch: dict[str, object], include_termination: bool,
+            include_worker_wait: bool) -> None:
         if include_termination:
             write_record(operation / "lifetime-termination.json", {
                 "schema_version": 1,
@@ -214,6 +216,24 @@ class WorkspaceEvidenceTests(unittest.TestCase):
                 "exit_code": 0,
                 "observed_at": "2026-09-15T00:00:05Z",
             })
+
+    def write_native_records(
+            self, *, include_termination: bool = True,
+            include_worker_wait: bool = True,
+            owner_sha: str | None = None,
+            deadline: str = DEADLINE,
+            boot_id: str = "workspace-fixture-boot",
+            ) -> Path:
+        request = self.operation_request(deadline)
+        operation, request_digest = self.operation_directory(request)
+        selected_owner_sha = request_digest if owner_sha is None else owner_sha
+        registration_digest = self.write_owner_records(
+            operation, request_digest, selected_owner_sha, deadline, boot_id)
+        worker_digest, launch = self.write_worker_and_launch_records(
+            operation, registration_digest, boot_id)
+        self.write_terminal_records(
+            operation, registration_digest, worker_digest, launch,
+            include_termination, include_worker_wait)
         return operation
 
     def write_recovered_records(self, *, registered: bool, proof: str,

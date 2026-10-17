@@ -10,6 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
+	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -28,11 +33,6 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := task.FixturePredicateRef()
-	interpreter, err := predicate.Default().Resolve(ref)
-	if err != nil {
-		t.Fatal(err)
-	}
 	request := task.TaskRecord{
 		Provider:     config.ProviderFixture,
 		Mode:         config.ModeReadOnly,
@@ -41,54 +41,14 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 			Permission: config.ModeReadOnly,
 		},
 	}
-	profileCandidate := func(version string) commonprovider.ProfileCandidate {
-		profile := PreparedProfile{
-			Plan: execution.Plan{
-				Executable: "/usr/bin/true",
-				Directory:  workspace,
-				Predicate:  ref,
-			},
-			ObservedVersion: version,
-			Effective: task.EffectiveConfig{
-				Containment: config.ModeReadOnly,
-				Approval:    "never",
-				Digest:      task.ComputeSHA256([]byte(version)),
-			},
-		}
-		return commonprovider.ProfileCandidate{
-			Directory: workspace,
-			Finalize: func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
-				return profile, nil
-			},
-		}
-	}
 	var prepareCalls, existingCalls int
-	catalog, err := commonprovider.NewCatalog(commonprovider.Registration{
-		Description: commonprovider.Description{
-			ID:             config.ProviderFixture,
-			SupportedModes: []string{config.ModeReadOnly},
-			ReadOnly:       commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
-			Runtime:        commonprovider.RuntimeCapability{RequiredFlags: []string{"--fixture"}},
-			Discoverable:   true,
-		},
-		Prepare: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-			prepareCalls++
-			return profileCandidate("portable"), nil
-		},
-		PrepareExisting: func(task.TaskRecord, task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-			existingCalls++
-			return profileCandidate("legacy"), nil
-		},
-		Interpreters: []predicate.Interpreter{interpreter},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog := newHistoricalInspectionCandidateCatalog(t, workspace, &prepareCalls, &existingCalls)
 	deps := (Dependencies{
 		Catalog: catalog,
 		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 			prepareCalls++
-			return profileCandidate("portable"), nil
+			profile := historicalInspectionCandidateProfile(workspace, task.FixturePredicateRef(), "portable")
+			return profile, nil
 		},
 	}).normalized()
 	candidate, facts, err := prepareExistingCandidateContext(context.Background(), deps, root, request, task.MetaRecord{})
@@ -100,6 +60,70 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 	}
 	if candidate.Finalize == nil || facts != nil {
 		t.Fatalf("historical candidate was not reconstructed cleanly: candidate=%+v facts=%s", candidate, facts)
+	}
+}
+
+func newHistoricalInspectionCandidateCatalog(
+	t *testing.T,
+	workspace string,
+	prepareCalls, existingCalls *int,
+) commonprovider.Catalog {
+	t.Helper()
+	ref := task.FixturePredicateRef()
+	interpreter, err := predicate.Default().Resolve(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileCandidate := func(version string) commonprovider.ProfileCandidate {
+		return historicalInspectionCandidateProfile(workspace, ref, version)
+	}
+	catalog, err := commonprovider.NewCatalog(commonprovider.Registration{
+		Description: commonprovider.Description{
+			ID:             config.ProviderFixture,
+			SupportedModes: []string{config.ModeReadOnly},
+			ReadOnly:       commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
+			Runtime:        commonprovider.RuntimeCapability{RequiredFlags: []string{"--fixture"}},
+			Discoverable:   true,
+		},
+		Prepare: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+			(*prepareCalls)++
+			return profileCandidate("portable"), nil
+		},
+		PrepareExisting: func(task.TaskRecord, task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+			(*existingCalls)++
+			return profileCandidate("legacy"), nil
+		},
+		Interpreters: []predicate.Interpreter{interpreter},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+func historicalInspectionCandidateProfile(
+	workspace string,
+	ref task.PredicateRef,
+	version string,
+) commonprovider.ProfileCandidate {
+	profile := PreparedProfile{
+		Plan: execution.Plan{
+			Executable: "/usr/bin/true",
+			Directory:  workspace,
+			Predicate:  ref,
+		},
+		ObservedVersion: version,
+		Effective: task.EffectiveConfig{
+			Containment: config.ModeReadOnly,
+			Approval:    "never",
+			Digest:      task.ComputeSHA256([]byte(version)),
+		},
+	}
+	return commonprovider.ProfileCandidate{
+		Directory: workspace,
+		Finalize: func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
+			return profile, nil
+		},
 	}
 }
 
@@ -141,9 +165,9 @@ func TestMarkerlessRuntimeInspectionRejectsHistoricalCapabilityDrift(t *testing.
 		commonprovider.CLIInfo{Path: oldPath, SHA256: oldSHA}, request.CanonicalCwd, []string{"LANG=C"},
 		commonprovider.RuntimeCapability{HelpArgs: []string{"--help"}, RequiredFlags: []string{"--run"}},
 	)
-	requireAppTest(t, err)
+	admissionfixture.RequireAppTest(t, err)
 	_, oldDigest, err := oldDefinition.Snapshot()
-	requireAppTest(t, err)
+	admissionfixture.RequireAppTest(t, err)
 	supervisor, _ := newBlockingInspectionSupervisor(t, store.RootID)
 	operation, err := inspection.OpenOperation(store, request, inspection.Binding{
 		DefinitionRevision: oldDefinition.Revision,
@@ -155,52 +179,45 @@ func TestMarkerlessRuntimeInspectionRejectsHistoricalCapabilityDrift(t *testing.
 		Environment:        []string{"LANG=C"},
 		Supervisor:         supervisor.Binding(),
 	}, time.Unix(100, 0).UTC())
-	requireAppTest(t, err)
-	t.Cleanup(func() { requireAppTest(t, operation.Close()) })
+	admissionfixture.RequireAppTest(t, err)
+	t.Cleanup(func() { admissionfixture.RequireAppTest(t, operation.Close()) })
 	queuedCandidate := commonprovider.ProfileCandidate{Directory: request.CanonicalCwd, Inspection: &oldDefinition}
-	requireAppTest(t, validateInspectionCandidate(context.Background(), operation, request, queuedCandidate))
+	admissionfixture.RequireAppTest(t, admission.ValidateInspectionCandidate(context.Background(), operation, request, queuedCandidate))
 	changedDefinition, err := commonprovider.NewRuntimeInspectionDefinition(
 		commonprovider.CLIInfo{Path: oldPath, SHA256: oldSHA}, request.CanonicalCwd, []string{"LANG=C"},
 		commonprovider.RuntimeCapability{HelpArgs: []string{"--help"}, RequiredFlags: []string{"--changed"}},
 	)
-	requireAppTest(t, err)
+	admissionfixture.RequireAppTest(t, err)
 	changedCandidate := commonprovider.ProfileCandidate{Directory: request.CanonicalCwd, Inspection: &changedDefinition}
-	requireAppTest(t, validateInspectionCandidate(context.Background(), operation, request, changedCandidate))
+	admissionfixture.RequireAppTest(t, admission.ValidateInspectionCandidate(context.Background(), operation, request, changedCandidate))
 	start, err := operation.ClaimStart(time.Unix(101, 0).UTC())
-	requireAppTest(t, err)
-	requireAppTest(t, start.Consume())
-	requireAppTest(t, operation.RecordReceipt(1))
+	admissionfixture.RequireAppTest(t, err)
+	admissionfixture.RequireAppTest(t, start.Consume())
+	admissionfixture.RequireAppTest(t, operation.RecordReceipt(1))
 	changedCapability, err := commonprovider.RuntimeCapabilityDigest(changedDefinition)
-	requireAppTest(t, err)
+	admissionfixture.RequireAppTest(t, err)
 	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{
 		Executable: oldPath, Version: "provider-old", SHA256: oldSHA, CapabilitySHA256: changedCapability,
 	}, nil)
-	requireAppTest(t, err)
-	requireAppTest(t, operation.Complete(inspection.ResultEligible, facts, time.Unix(102, 0).UTC()))
-	requireAppTest(t, operation.RecordWorkerSuccess(1))
+	admissionfixture.RequireAppTest(t, err)
+	admissionfixture.RequireAppTest(t, operation.Complete(inspection.ResultEligible, facts, time.Unix(102, 0).UTC()))
+	admissionfixture.RequireAppTest(t, operation.RecordWorkerSuccess(1))
 
 	newPath := filepath.Join(t.TempDir(), "provider-new")
 	newSHA := strings.Repeat("c", 64)
 	currentDefinition, err := commonprovider.NewRuntimeInspectionDefinition(commonprovider.CLIInfo{Path: newPath, SHA256: newSHA}, request.CanonicalCwd, []string{"LANG=C"}, commonprovider.RuntimeCapability{HelpArgs: []string{"--help"}, RequiredFlags: []string{"--changed"}})
-	requireAppTest(t, err)
+	admissionfixture.RequireAppTest(t, err)
 	candidate := commonprovider.ProfileCandidate{Directory: request.CanonicalCwd, Inspection: &currentDefinition}
-	requireAppTest(t, validateInspectionCandidate(context.Background(), operation, request, candidate))
+	admissionfixture.RequireAppTest(t, admission.ValidateInspectionCandidate(context.Background(), operation, request, candidate))
 
 	changedDefinition, err = commonprovider.NewRuntimeInspectionDefinition(
 		commonprovider.CLIInfo{Path: newPath, SHA256: newSHA}, request.CanonicalCwd, []string{"LANG=C"},
 		commonprovider.RuntimeCapability{HelpArgs: []string{"--help"}, RequiredFlags: []string{"--different"}},
 	)
-	requireAppTest(t, err)
+	admissionfixture.RequireAppTest(t, err)
 	candidate.Inspection = &changedDefinition
-	if err = validateInspectionCandidate(context.Background(), operation, request, candidate); !errors.Is(err, task.ErrEvidenceFault) {
+	if err = admission.ValidateInspectionCandidate(context.Background(), operation, request, candidate); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("markerless runtime capability drift was accepted: %v", err)
-	}
-}
-
-func requireAppTest(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -241,7 +258,7 @@ func TestPrepareMatchedProfileForRunnerRejectsChangedCustomInspectionWorker(t *t
 
 func TestPrepareMatchedProfileForRunnerAcceptsStateRunnerAfterLegacyInspection(t *testing.T) {
 	fixture := newAppInspectionProofFixtureWithOwnership(t, true, "")
-	stateRunner, err := installStateRunner(fixture.store.Root, fixture.workerPath)
+	stateRunner, err := supervisorcore.InstallStateRunner(fixture.store.Root, fixture.workerPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +274,7 @@ func TestPrepareMatchedProfileForRunnerRejectsStateRunnerSuccessorForCustomInspe
 	fixture := newAppInspectionProofFixture(t, true)
 	fixture.meta.RunnerExecutable = fixture.workerPath
 	fixture.meta.RunnerOwnership = task.RunnerOwnershipCustom
-	stateRunner, err := installStateRunner(fixture.store.Root, fixture.workerPath)
+	stateRunner, err := supervisorcore.InstallStateRunner(fixture.store.Root, fixture.workerPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +288,7 @@ func TestPrepareMatchedProfileForRunnerRejectsStateRunnerSuccessorForCustomInspe
 
 func TestPrepareMatchedProfileForRunnerRechecksManagedOrdinaryRunnerDigest(t *testing.T) {
 	fixture := newAppInspectionProofFixture(t, true)
-	runner, err := installStateRunner(fixture.store.Root, fixture.workerPath)
+	runner, err := supervisorcore.InstallStateRunner(fixture.store.Root, fixture.workerPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +342,26 @@ func newAppInspectionProofFixture(t *testing.T, workerSuccess bool) *appInspecti
 
 func newAppInspectionProofFixtureWithOwnership(t *testing.T, workerSuccess bool, runnerOwnership string) *appInspectionProofFixture {
 	t.Helper()
-	store, err := taskdir.InitStore(filepath.Join(canonicalAppTestTempDir(t), "state"))
+	store, request, workspace, base := newAppInspectionProofRequest(t)
+	fixture := &appInspectionProofFixture{store: store, req: request}
+	workerPath, workerSHA, snapshot, definitionSHA := newAppInspectionProofDefinition(t, fixture, base, workspace)
+	fixture.workerPath = workerPath
+	configureAppInspectionProofOperation(t, fixture, request, workspace, base, runnerOwnership, workerSHA, snapshot, definitionSHA)
+	recordAppInspectionProofResults(t, fixture, workerSuccess)
+	t.Cleanup(func() {
+		if err := fixture.operation.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return fixture
+}
+
+func newAppInspectionProofRequest(t *testing.T) (*taskdir.Store, task.TaskRecord, string, string) {
+	t.Helper()
+	store, err := taskdir.InitStore(filepath.Join(testsupport.CanonicalTempDir(t), "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,19 +385,28 @@ func newAppInspectionProofFixtureWithOwnership(t *testing.T, workerSuccess bool,
 		BriefSHA256: task.ComputeSHA256([]byte("inspection brief")),
 		BriefLength: int64(len("inspection brief")),
 	}
-	rawBase := canonicalAppTestTempDir(t)
+	rawBase := testsupport.CanonicalTempDir(t)
 	base, err := filepath.EvalSymlinks(rawBase)
 	if err != nil {
 		closeAppInspectionStore(t, store)
 		t.Fatal(err)
 	}
+	return store, request, workspace, base
+}
+
+func newAppInspectionProofDefinition(
+	t *testing.T,
+	fixture *appInspectionProofFixture,
+	base, workspace string,
+) (string, string, commonprovider.InspectionDefinition, string) {
+	t.Helper()
 	helperPath := filepath.Join(base, "inspection-helper")
 	workerPath := filepath.Join(base, "inspection-worker")
 	writeAppInspectionExecutable(t, helperPath, []byte("helper bytes"))
 	writeAppInspectionExecutable(t, workerPath, []byte("worker bytes"))
 	workerSHA, err := commonprovider.FingerprintExecutable(workerPath)
 	if err != nil {
-		closeAppInspectionStore(t, store)
+		closeAppInspectionStore(t, fixture.store)
 		t.Fatal(err)
 	}
 	definition := commonprovider.InspectionDefinition{
@@ -373,16 +418,27 @@ func newAppInspectionProofFixtureWithOwnership(t *testing.T, workerSuccess bool,
 		Environment:      []string{"LANG=C"},
 		OutputLimit:      4096,
 	}
-	fixture := &appInspectionProofFixture{store: store, req: request, workerPath: workerPath}
 	definition.Project = func(_ []byte) (json.RawMessage, error) {
 		fixture.projectCalls++
 		return json.RawMessage(`{"eligible":true}`), nil
 	}
 	snapshot, definitionSHA, err := definition.Snapshot()
 	if err != nil {
-		closeAppInspectionStore(t, store)
+		closeAppInspectionStore(t, fixture.store)
 		t.Fatal(err)
 	}
+	return workerPath, workerSHA, snapshot, definitionSHA
+}
+
+func configureAppInspectionProofOperation(
+	t *testing.T,
+	fixture *appInspectionProofFixture,
+	request task.TaskRecord,
+	workspace, base, runnerOwnership, workerSHA string,
+	snapshot commonprovider.InspectionDefinition,
+	definitionSHA string,
+) {
+	t.Helper()
 	supervisor := task.SupervisorRef{
 		ClientExecutable:     filepath.Join(base, "pueue"),
 		ClientSHA256:         task.ComputeSHA256([]byte("pueue client")),
@@ -397,14 +453,14 @@ func newAppInspectionProofFixtureWithOwnership(t *testing.T, workerSuccess bool,
 		DefinitionSHA256:   definitionSHA,
 		HelperExecutable:   snapshot.Executable,
 		HelperSHA256:       snapshot.ExecutableSHA256,
-		WorkerExecutable:   workerPath,
+		WorkerExecutable:   fixture.workerPath,
 		WorkerSHA256:       workerSHA,
 		RunnerOwnership:    runnerOwnership,
 		Supervisor:         supervisor,
 	}
-	operation, err := inspection.OpenOperation(store, request, binding, time.Unix(100, 0).UTC())
+	operation, err := inspection.OpenOperation(fixture.store, request, binding, time.Unix(100, 0).UTC())
 	if err != nil {
-		closeAppInspectionStore(t, store)
+		closeAppInspectionStore(t, fixture.store)
 		t.Fatal(err)
 	}
 	fixture.operation = operation
@@ -434,38 +490,34 @@ func newAppInspectionProofFixtureWithOwnership(t *testing.T, workerSuccess bool,
 			return profile, nil
 		},
 	}
+}
+
+func recordAppInspectionProofResults(t *testing.T, fixture *appInspectionProofFixture, workerSuccess bool) {
+	t.Helper()
+	operation := fixture.operation
 	start, err := operation.ClaimStart(time.Unix(101, 0).UTC())
 	if err != nil {
-		closeAppInspectionFixture(t, operation, store)
+		closeAppInspectionFixture(t, operation, fixture.store)
 		t.Fatal(err)
 	}
 	if err = start.Consume(); err != nil {
-		closeAppInspectionFixture(t, operation, store)
+		closeAppInspectionFixture(t, operation, fixture.store)
 		t.Fatal(err)
 	}
 	if err = operation.Complete(inspection.ResultEligible, json.RawMessage(`{"eligible":true}`), time.Unix(102, 0).UTC()); err != nil {
-		closeAppInspectionFixture(t, operation, store)
+		closeAppInspectionFixture(t, operation, fixture.store)
 		t.Fatal(err)
 	}
 	if err = operation.RecordReceipt(7); err != nil {
-		closeAppInspectionFixture(t, operation, store)
+		closeAppInspectionFixture(t, operation, fixture.store)
 		t.Fatal(err)
 	}
 	if workerSuccess {
 		if err = operation.RecordWorkerSuccess(7); err != nil {
-			closeAppInspectionFixture(t, operation, store)
+			closeAppInspectionFixture(t, operation, fixture.store)
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() {
-		if err := operation.Close(); err != nil {
-			t.Error(err)
-		}
-		if err := store.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	return fixture
 }
 
 func closeAppInspectionStore(t *testing.T, store *taskdir.Store) {
@@ -536,14 +588,14 @@ func TestInspectionFinalizerCannotExpandDirectoryOrWritableRoots(t *testing.T) {
 			return appInspectionPreparedProfile(request, filepath.Join(filepath.Dir(request.CanonicalCwd), "other-workspace"), []string{allowed}), nil
 		},
 	}
-	if profile, err := finalizeCandidate(candidate, request, nil); profile.Plan.Executable != "" || !errors.Is(err, task.ErrIdentityMismatch) {
+	if profile, err := admission.FinalizeCandidate(candidate, request, nil); profile.Plan.Executable != "" || !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("finalizer changed cwd: profile=%+v err=%v", profile, err)
 	}
 
 	candidate.Finalize = func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
 		return appInspectionPreparedProfile(request, request.CanonicalCwd, []string{allowed, filepath.Join(filepath.Dir(request.CanonicalCwd), "expanded-cache")}), nil
 	}
-	if profile, err := finalizeCandidate(candidate, request, nil); profile.Plan.Executable != "" || !errors.Is(err, ErrProfileUnavailable) {
+	if profile, err := admission.FinalizeCandidate(candidate, request, nil); profile.Plan.Executable != "" || !errors.Is(err, ErrProfileUnavailable) {
 		t.Fatalf("finalizer expanded writable roots: profile=%+v err=%v", profile, err)
 	}
 	assertAppInspectionNoOrdinaryTasks(t, store)
@@ -737,23 +789,23 @@ func TestManagedRetryAcceptsCurrentRunnerAfterInspectionWorkerUpgrade(t *testing
 	fixture := newAppInspectionProofFixture(t, true)
 	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
 	meta := fixture.meta
-	meta.RunnerExecutable = filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
+	meta.RunnerExecutable = filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	meta.RunnerOwnership = task.RunnerOwnershipManaged
-	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
+	source := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, source, "current managed runner")
-	currentRunner, err := installStateRunner(fixture.store.Root, source)
+	currentRunner, err := supervisorcore.InstallStateRunner(fixture.store.Root, source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = validateManagedRetryRunner(td, &meta, currentRunner); err != nil {
+	if err = supervisorcore.ValidateManagedRetryRunner(td, &meta, currentRunner); err != nil {
 		t.Fatalf("managed retry rejected the verified current runner: %v", err)
 	}
 	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("strict submission accepted a runner that differs from the immutable historical binding: %v", err)
 	}
-	custom := filepath.Join(canonicalAppTestTempDir(t), "custom-runner")
+	custom := filepath.Join(testsupport.CanonicalTempDir(t), "custom-runner")
 	writeRunnerFixture(t, custom, "custom runner")
-	if err = validateManagedRetryRunner(td, &meta, custom); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err = supervisorcore.ValidateManagedRetryRunner(td, &meta, custom); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("managed retry accepted an unverified custom executable: %v", err)
 	}
 }
@@ -767,7 +819,7 @@ func TestManagedRetryRejectsChangedInspectedWorkerEvenWithProof(t *testing.T) {
 	if err := os.WriteFile(fixture.workerPath, []byte("replaced managed worker"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateInspectionSubmissionRunner(fixture.operation, fixture.store, td, &fixture.req, &meta, fixture.workerPath); !errors.Is(err, task.ErrEvidenceFault) {
+	if err := admission.ValidateInspectionSubmissionRunner(fixture.operation, fixture.store, td, &fixture.req, &meta, fixture.workerPath); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("retry accepted changed bytes at the inspected worker path: %v", err)
 	}
 }
@@ -775,9 +827,9 @@ func TestManagedRetryRejectsChangedInspectedWorkerEvenWithProof(t *testing.T) {
 func TestManagedRetryProofAcceptsVerifiedStateRootSuccessor(t *testing.T) {
 	fixture := newAppInspectionProofFixtureWithOwnership(t, true, task.RunnerOwnershipManaged)
 	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
-	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
+	source := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, source, "current managed inspection worker")
-	runner, err := installStateRunner(fixture.store.Root, source)
+	runner, err := supervisorcore.InstallStateRunner(fixture.store.Root, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,15 +843,15 @@ func TestManagedRetryProofAcceptsVerifiedStateRootSuccessor(t *testing.T) {
 
 func TestManagedRetrySubmissionRequiresInspectionUpgradeAuthority(t *testing.T) {
 	fixture := newAppInspectionProofFixtureWithOwnership(t, false, task.RunnerOwnershipManaged)
-	oldSource := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
+	oldSource := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, oldSource, "old managed runner")
-	oldRunner, err := installStateRunner(fixture.store.Root, oldSource)
+	oldRunner, err := supervisorcore.InstallStateRunner(fixture.store.Root, oldSource)
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentSource := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
+	currentSource := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, currentSource, "current managed runner")
-	currentRunner, err := installStateRunner(fixture.store.Root, currentSource)
+	currentRunner, err := supervisorcore.InstallStateRunner(fixture.store.Root, currentSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,9 +885,9 @@ func TestSubmissionAcceptsAuthorizedManagedInspectionWorkerSuccessor(t *testing.
 	fixture := newAppInspectionProofFixtureWithOwnership(t, false, task.RunnerOwnershipManaged)
 	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
 	meta := fixture.meta
-	source := filepath.Join(canonicalAppTestTempDir(t), stateRunnerName)
+	source := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, source, "current managed inspection worker")
-	currentRunner, err := installStateRunner(fixture.store.Root, source)
+	currentRunner, err := supervisorcore.InstallStateRunner(fixture.store.Root, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -867,44 +919,5 @@ func TestOrdinarySubmissionRemainsBoundWithoutInspectionJournal(t *testing.T) {
 	}
 	if err := validateSubmissionRunner(Dependencies{}, td, req, meta, "/tmp/other-runner"); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("different worker crossed recorded binding without inspection evidence: %v", err)
-	}
-}
-
-func TestInspectionFactsCompareCanonicalObjectsBeforeFinalize(t *testing.T) {
-	if !inspectionFactsMatch(json.RawMessage(`{"z":2,"a":1}`), json.RawMessage(`{"a":1,"z":2}`)) {
-		t.Fatal("equivalent canonical facts differed only by object field order")
-	}
-	if inspectionFactsMatch(json.RawMessage(`{"eligible":true}`), json.RawMessage(`{"eligible":false}`)) {
-		t.Fatal("changed inspection facts were accepted")
-	}
-	if inspectionFactsMatch(json.RawMessage(`{"eligible":true}`), json.RawMessage(`not-json`)) {
-		t.Fatal("malformed fresh facts were accepted")
-	}
-	runtime := commonprovider.RuntimeFacts{Executable: "/bin/provider", Version: "provider-1", SHA256: strings.Repeat("a", 64)}
-	stored, err := commonprovider.EncodeInspectionFacts(runtime, json.RawMessage(`{"eligible":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	changedRuntime := runtime
-	changedRuntime.Executable = "/opt/provider-new"
-	changedRuntime.Version = "provider-2"
-	changedRuntime.SHA256 = strings.Repeat("b", 64)
-	fresh, err := commonprovider.EncodeInspectionFacts(changedRuntime, json.RawMessage(`{"eligible":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !inspectionFactsMatch(stored, fresh) {
-		t.Fatal("runtime identity drift changed the native inspection contract")
-	}
-	changedNative, err := commonprovider.EncodeInspectionFacts(changedRuntime, json.RawMessage(`{"eligible":false}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inspectionFactsMatch(stored, changedNative) {
-		t.Fatal("native inspection drift was accepted with runtime identity drift")
-	}
-	nativeWithRuntimeKey := json.RawMessage(`{"runtime":{"provider":"native"},"eligible":true}`)
-	if !inspectionFactsMatchForDefinition(nativeWithRuntimeKey, nativeWithRuntimeKey, false) {
-		t.Fatal("native-only projection with a runtime key was decoded as an envelope")
 	}
 }

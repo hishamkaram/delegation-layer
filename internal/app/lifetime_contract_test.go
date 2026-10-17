@@ -8,8 +8,11 @@ import (
 	"testing"
 	"time"
 
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
+	"github.com/hishamkaram/delegation-layer/internal/guardian/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	"github.com/hishamkaram/delegation-layer/internal/lifetime"
+	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -41,56 +44,8 @@ func (f *lifetimeContractPostLinkFault) didFire() bool {
 	return f.fired
 }
 
-func newProductionRecordGuardianFixture(
-	t *testing.T,
-	rootID string,
-	taskID string,
-	ownerKind string,
-	deadline time.Time,
-	records lifetimeGuardianRecords,
-	acquireOwner func(context.Context) (lifetimeGuardianOwner, error),
-	configure func(*lifetimeGuardianOptions),
-) *lifetimeGuardianTestFixture {
-	t.Helper()
-	return newLifetimeGuardianTestFixtureWithOptions(
-		t,
-		nil,
-		lifetime.KindProcessGroup,
-		lifetime.AssuranceCooperative,
-		nil,
-		nil,
-		func(options *lifetimeGuardianOptions) {
-			options.rootID = rootID
-			options.taskID = taskID
-			options.ownerKind = ownerKind
-			options.deadline = deadline
-			options.now = time.Now
-			options.records = records
-			options.acquireOwner = acquireOwner
-			options.waitRecordRetry = func(context.Context) error { return nil }
-			options.finalizationBackoff = func(context.Context, time.Duration) error { return nil }
-			if configure != nil {
-				configure(options)
-			}
-		},
-	)
-}
-
-func callProductionRecordGuardian(t *testing.T, fixture *lifetimeGuardianTestFixture, taskID, kind string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	if err := fixture.client.callContext(ctx, lifetimeMessage{
-		Version: lifetimeProtocolVersion,
-		Type:    kind,
-		TaskID:  taskID,
-	}); err != nil {
-		t.Fatalf("%s: %v", kind, err)
-	}
-}
-
 func TestLifetimeGuardianTaskStoreAmbiguousWorkerWriteReachesStopConsumer(t *testing.T) {
-	store, err := taskdir.InitStore(filepath.Join(canonicalAppTestTempDir(t), "state"))
+	store, err := taskdir.InitStore(filepath.Join(testsupportcore.CanonicalTempDir(t), "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,23 +56,23 @@ func TestLifetimeGuardianTaskStoreAmbiguousWorkerWriteReachesStopConsumer(t *tes
 	store.SetFaultInjector(fault)
 	t.Cleanup(func() { store.SetFaultInjector(nil) })
 	deadline := time.Now().Add(time.Minute).UTC()
-	fixture := newProductionRecordGuardianFixture(
+	fixture := testsupport.NewRecordFixture(
 		t,
 		request.RootID,
 		request.TaskID,
 		task.LifetimeOwnerTask,
 		deadline,
 		td,
-		func(ctx context.Context) (lifetimeGuardianOwner, error) {
+		func(ctx context.Context) (guardian.Owner, error) {
 			return td.AcquireLifetimeOwner(ctx)
 		},
 		nil,
 	)
 
-	callProductionRecordGuardian(t, fixture, request.TaskID, lifetimeMessageHello)
-	callProductionRecordGuardian(t, fixture, request.TaskID, lifetimeMessageClose)
-	fixture.worker.release()
-	if runErr := fixture.waitRun(t); runErr != nil {
+	fixture.Hello(t)
+	fixture.CloseTask(t)
+	fixture.ReleaseWorker()
+	if runErr := fixture.WaitRun(t); runErr != nil {
 		t.Fatalf("guardian with production task store: %v", runErr)
 	}
 	if !fault.didFire() {
@@ -164,25 +119,25 @@ func TestLifetimeGuardianInspectionStoreAmbiguousWorkerWriteReachesAdmissionCons
 	store.SetFaultInjector(fault)
 	t.Cleanup(func() { store.SetFaultInjector(nil) })
 	request := operation.Request()
-	fixture := newProductionRecordGuardianFixture(
+	fixture := testsupport.NewRecordFixture(
 		t,
 		request.RootID,
 		request.TaskID,
 		task.LifetimeOwnerInspection,
 		operation.Deadline(),
 		operation,
-		func(ctx context.Context) (lifetimeGuardianOwner, error) {
+		func(ctx context.Context) (guardian.Owner, error) {
 			return operation.AcquireLifetimeOwner(ctx)
 		},
 		nil,
 	)
 	waitErr := errors.New("injected managed inspection worker failure")
-	fixture.worker.setWaitError(waitErr)
+	fixture.SetWorkerWaitError(waitErr)
 
-	callProductionRecordGuardian(t, fixture, request.TaskID, lifetimeMessageHello)
-	callProductionRecordGuardian(t, fixture, request.TaskID, lifetimeMessageClose)
-	fixture.worker.release()
-	if runErr := fixture.waitRun(t); !errors.Is(runErr, waitErr) {
+	fixture.Hello(t)
+	fixture.CloseTask(t)
+	fixture.ReleaseWorker()
+	if runErr := fixture.WaitRun(t); !errors.Is(runErr, waitErr) {
 		t.Fatalf("guardian failure = %v, want worker failure", runErr)
 	}
 	if !fault.didFire() {
@@ -192,8 +147,8 @@ func TestLifetimeGuardianInspectionStoreAmbiguousWorkerWriteReachesAdmissionCons
 	if err != nil || result != nil || succeeded {
 		t.Fatalf("inspection consumer = result %#v, succeeded %t, err %v", result, succeeded, err)
 	}
-	evaluation, err := evaluateInspectionAdmission(t.Context(), operation)
-	if err != nil || evaluation.decision != inspectionAdmissionUnavailable || !evaluation.recorded {
-		t.Fatalf("admission consumer = %#v, err %v", evaluation, err)
+	facts, recorded, terminal, err := admissioncore.RecordedInspectionFacts(t.Context(), operation)
+	if !errors.Is(err, admissioncore.ErrInspectionWorkerUnavailable) || !recorded || !terminal || facts != nil {
+		t.Fatalf("admission consumer = facts %s, recorded %t, terminal %t, err %v", facts, recorded, terminal, err)
 	}
 }

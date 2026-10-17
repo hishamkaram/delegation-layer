@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 func must(t *testing.T, err error) {
@@ -30,7 +32,7 @@ func testStore(t *testing.T) *Store {
 
 func preparedInput(t *testing.T, s *Store) (*task.TaskRecord, *task.MetaRecord, []byte) {
 	t.Helper()
-	id, err := task.NewTaskID()
+	id, err := randomid.NewTaskID()
 	must(t, err)
 	cwd, err := filepath.EvalSymlinks(t.TempDir())
 	must(t, err)

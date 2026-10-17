@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "module": "github.com/hishamkaram/delegation-layer",
+  "limits": {
+    "code": 800,
+    "tests": 1000,
+    "documentation": 1800,
+    "function": 80
+  },
+  "module_files": [
+    "agents/_data/subsystems/go-fixtures-1.json",
+    "agents/_data/subsystems/go-providers-1.json",
+    "agents/_data/subsystems/go-runtime-1.json",
+    "agents/_data/subsystems/go-subsystems-2.json",
+    "agents/_data/subsystems/javascript-1.json",
+    "agents/_data/subsystems/python-acceptance-1.json",
+    "agents/_data/subsystems/python-tests-1.json",
+    "agents/_data/subsystems/python-tools-1.json",
+    "agents/_data/subsystems/go-workspace-2.json",
+    "agents/_data/subsystems/python-foundation-runtime-1.json",
+    "agents/_data/subsystems/python-hermetic-tools-1.json",
+    "agents/_data/subsystems/python-native-release-1.json",
+    "agents/_data/subsystems/python-private-2.json",
+    "agents/_data/subsystems/python-pure-1.json",
+    "agents/_data/subsystems/python-subsystems-2.json",
+    "agents/_data/subsystems/python-tests-2.json",
+    "agents/_data/subsystems/python-tests-3.json"
+  ],
+  "migration": "agents/_data/maintainability-migration.jsonl",
+  "generated": [
+    {
+      "path": "diagrams/components.html",
+      "generator": "archify 3.0.1",
+      "source": "diagrams/components.architecture.json"
+    },
+    {
+      "path": "diagrams/lead-interface.html",
+      "generator": "archify 3.0.1",
+      "source": "diagrams/lead-interface.sequence.json"
+    },
+    {
+      "path": "scripts/_data/unicode-simple-fold.json",
+      "generator": "go generate ./internal/testutil/unicodefold (go1.27.2)",
+      "source": "internal/testutil/unicodefold/generate.go"
+    }
+  ]
+}

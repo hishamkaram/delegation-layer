@@ -10,12 +10,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func TestInteractiveContinuationUsesFreshCatalogCandidate(t *testing.T) {
-	workspace := canonicalAppTestTempDir(t)
-	root := canonicalAppTestTempDir(t)
+	workspace := testsupport.CanonicalTempDir(t)
+	root := testsupport.CanonicalTempDir(t)
 	interpreter, err := predicate.Default().Resolve(task.FixturePredicateRef())
 	if err != nil {
 		t.Fatal(err)

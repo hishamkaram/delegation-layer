@@ -14,6 +14,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -39,8 +41,8 @@ func TestModelsArguments(t *testing.T) {
 }
 
 func TestModelsUnavailableProviderHasJSON(t *testing.T) {
-	root := canonicalAppTestTempDir(t)
-	cwd := canonicalAppTestTempDir(t)
+	root := testsupport.CanonicalTempDir(t)
+	cwd := testsupport.CanonicalTempDir(t)
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"--root", root, "models", "--provider", "missing:provider", "--cwd", cwd, "--json"}, &stdout, &stderr, Dependencies{})
 	var response ModelsResponse
@@ -53,8 +55,8 @@ func TestModelsUnavailableProviderHasJSON(t *testing.T) {
 }
 
 func TestModelsInvalidDirectoriesUseInvalidRequestExitCode(t *testing.T) {
-	root := canonicalAppTestTempDir(t)
-	workspaceFile := filepath.Join(canonicalAppTestTempDir(t), "workspace-file")
+	root := testsupport.CanonicalTempDir(t)
+	workspaceFile := filepath.Join(testsupport.CanonicalTempDir(t), "workspace-file")
 	if err := os.WriteFile(workspaceFile, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +148,8 @@ func TestDiscoveryCandidateDoesNotRequireDispatchFlagsOrFinalize(t *testing.T) {
 }
 
 func TestModelDiscoveryUsesStateRootManagedExecutables(t *testing.T) {
-	root := canonicalAppTestTempDir(t)
-	bundle := canonicalAppTestTempDir(t)
+	root := testsupport.CanonicalTempDir(t)
+	bundle := testsupport.CanonicalTempDir(t)
 	delegate := filepath.Join(bundle, "delegate")
 	runner := filepath.Join(bundle, "delegate-run")
 	client := filepath.Join(bundle, "pueue")
@@ -163,10 +165,10 @@ func TestModelDiscoveryUsesStateRootManagedExecutables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !isStateRunnerPath(root, args.Runner) || queueRepairRunner != args.Runner || !currentManagedRunnerExecutable(root, args.Runner) || args.runnerOwnership != task.RunnerOwnershipManaged {
+	if !supervisor.IsStateRunnerPath(root, args.Runner) || queueRepairRunner != args.Runner || !supervisor.CurrentManagedRunnerExecutable(root, args.Runner) || args.runnerOwnership != task.RunnerOwnershipManaged {
 		t.Fatalf("model discovery executable paths or ownership are not durable and managed: runner=%q repair=%q ownership=%q", args.Runner, queueRepairRunner, args.runnerOwnership)
 	}
-	stateClient, stateDaemon, found, err := resolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
+	stateClient, stateDaemon, found, err := supervisor.ResolveStateSupervisorPair(filepath.Join(root, ".supervisor"))
 	if err != nil || !found {
 		t.Fatalf("model discovery did not persist its supervisor pair: found=%t err=%v", found, err)
 	}

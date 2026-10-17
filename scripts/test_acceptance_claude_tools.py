@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 import unittest
 
-import acceptance_claude as gate
+from scripts.delegate_acceptance.provider_drivers.claude import protocol as gate
 from acceptance_provider_common import AcceptanceFailure
-from test_acceptance_claude import NONCE, answer_event, fresh_stream, init_event, stream
+from scripts.acceptance_tests.provider_drivers.claude_fixtures import NONCE, answer_event, fresh_stream, init_event, stream
 
 
 class ToolEvidenceTests(unittest.TestCase):

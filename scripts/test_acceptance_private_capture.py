@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import acceptance_private_cli as private_cli
+from scripts.delegate_acceptance.private_cli import capture
 from acceptance_supervisor_common import DirectoryOwner
 
 
@@ -243,7 +244,7 @@ class PrivateCaptureTests(unittest.TestCase):
 
         process = ReapableProcess()
         with patch.object(
-                private_cli, "_open_capture_writer",
+                capture, "_open_capture_writer",
                 side_effect=[CloseFailingWriter(), CloseFailingWriter()],
         ), patch.object(private_cli.subprocess, "Popen", return_value=process):
             with self.assertRaisesRegex(OSError, "capture writer close failed"):
@@ -286,7 +287,7 @@ class PrivateCaptureTests(unittest.TestCase):
         process = TimedOutProcess([sys.executable, *args])
         with patch.object(private_cli.subprocess, "Popen", return_value=process), \
                 patch.object(
-                    private_cli, "_read_capture",
+                    capture, "_read_capture",
                     side_effect=OSError("capture read failed"),
                 ):
             with self.assertRaises(subprocess.TimeoutExpired) as raised:

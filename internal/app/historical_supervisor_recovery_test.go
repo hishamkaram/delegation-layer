@@ -20,8 +20,11 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 type historicalSupervisorFixture struct {
@@ -200,10 +203,10 @@ func TestCompletedPrivateMigrationRecoversPendingInspectionEdgeWithoutGeneration
 
 	admitted, err := preparePrivateAdmissionSupervisor(recovery.deps, fixture.store, fixture.options)
 	if err != nil {
-		closeSupervisorMaintenance(admitted, err)
+		supervisor.CloseMaintenance(admitted, err)
 		t.Fatalf("fresh admission did not select completed successor B: %v", err)
 	}
-	defer closeSupervisorMaintenance(admitted, nil)
+	defer supervisor.CloseMaintenance(admitted, nil)
 	if admitted.Binding() != fixture.successor {
 		t.Fatalf("fresh admission selected %+v, want successor B %+v", admitted.Binding(), fixture.successor)
 	}
@@ -247,7 +250,7 @@ func prepareHistoricalInspectionRecovery(t *testing.T, scenario *historicalInspe
 	if err = os.RemoveAll(scenario.legacyDir); err != nil {
 		t.Fatal(err)
 	}
-	if err = publishPrivateOrdinaryScheduling(fixture.root, fixture.successor, pueue.StagedLaunchCapability{AddStashed: true, EnqueueByID: true}); err != nil {
+	if err = writePrivateSchedulingFixture(fixture.root, fixture.successor, pueue.StagedLaunchCapability{AddStashed: true, EnqueueByID: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -314,7 +317,7 @@ func completeHistoricalInspectionRecovery(t *testing.T, scenario *historicalInsp
 func assertHistoricalInspectionRecoveryState(t *testing.T, scenario *historicalInspectionMigrationScenario, recovery historicalInspectionRecovery, admitted *pueue.Client) {
 	t.Helper()
 	fixture := scenario.fixture
-	if err := ensureInspectionGroup(fixture.store, admitted, inspection.AdmissionTimeout); err != nil {
+	if err := supervisor.EnsureInspectionGroup(fixture.store, admitted, inspection.AdmissionTimeout); err != nil {
 		t.Fatalf("fresh admission did not establish successor inspection group: %v", err)
 	}
 	select {
@@ -435,7 +438,7 @@ func newHistoricalSupervisorFixture(t *testing.T, stopped bool) *historicalSuper
 
 func newHistoricalSupervisorFixturePaths(t *testing.T) *historicalSupervisorFixture {
 	t.Helper()
-	base := canonicalAppTestTempDir(t)
+	base := testsupport.CanonicalTempDir(t)
 	return &historicalSupervisorFixture{
 		root:           filepath.Join(base, "state"),
 		statusPath:     filepath.Join(base, "status.json"),
@@ -517,7 +520,7 @@ func prepareHistoricalSupervisorTask(t *testing.T, fixture *historicalSupervisor
 	brief := []byte("historical supervisor recovery")
 	request := newHistoricalSupervisorTaskRecord(store.RootID, workspace, brief)
 	profile := appTestExecutionProfile(&request, fixture.provider, nil)
-	meta := newMeta(request, profile, fixture.predecessor, fixture.runner, task.RunnerOwnershipCustom, "historical-supervisor-test")
+	meta := tasklifecycle.NewMeta(request, profile, fixture.predecessor, fixture.runner, task.RunnerOwnershipCustom, "historical-supervisor-test")
 	fixture.td, err = store.CreateTask(request.TaskID, &request, brief, &meta)
 	if err != nil {
 		t.Fatal(err)

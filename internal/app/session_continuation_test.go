@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
@@ -16,6 +17,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 func TestRunProviderReleasesContinuationOnCommittedAndRejected(t *testing.T) {
@@ -180,7 +182,7 @@ func TestResolvePredecessorPreservesTerminalContinuationBeforeMissingIdentityErr
 	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatal(err)
 	}
-	request, err := buildRequest(store.RootID, strings.Repeat("8", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
+	request, err := admission.BuildRequest(store.RootID, strings.Repeat("8", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +202,7 @@ func TestResolvePredecessorReleasesBudgetHandoffBeforePrivateRecovery(t *testing
 	priorSession, td, req := newPrivateBudgetStoppedPredecessor(t, store)
 	defer closeAppTestTask(t, store, td)
 
-	request, err := buildRequest(store.RootID, strings.Repeat("7", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
+	request, err := admission.BuildRequest(store.RootID, strings.Repeat("7", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +245,7 @@ func TestResolvePredecessorValidatesProviderBeforeReleasingSession(t *testing.T)
 		}
 		return want
 	}
-	request, err := buildRequest(store.RootID, strings.Repeat("5", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
+	request, err := admission.BuildRequest(store.RootID, strings.Repeat("5", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +397,7 @@ func TestContinuationClaimRetainedWithoutTerminalEvidenceOrAfterActiveRun(t *tes
 	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatal(err)
 	}
-	if err := releaseContinuationSession(td, req, nil); err != nil {
+	if err := tasklifecycle.ReleaseContinuationSession(td, req, nil); err != nil {
 		t.Fatalf("unknown continuation outcome changed the claim: %v", err)
 	}
 	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); !errors.Is(err, task.ErrSessionBusy) {
@@ -414,7 +416,7 @@ func TestContinuationClaimRetainedWithoutTerminalEvidenceOrAfterActiveRun(t *tes
 		}
 	}()
 	outcome := &task.OutcomeRecord{EvidenceSHA256: task.ComputeSHA256([]byte("unpublished"))}
-	if err = releaseContinuationSession(td, req, outcome); !errors.Is(err, task.ErrSessionBusy) {
+	if err = tasklifecycle.ReleaseContinuationSession(td, req, outcome); !errors.Is(err, task.ErrSessionBusy) {
 		t.Fatalf("active runner was not retained: %v", err)
 	}
 	if err = successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); !errors.Is(err, task.ErrSessionBusy) {
@@ -476,7 +478,7 @@ func TestContinuationSessionSerializesOverlappingSuccessors(t *testing.T) {
 	if err = owner.ClaimSession(ownerReq.Provider, ownerReq.PriorSession.ConversationID); err != nil {
 		t.Fatal(err)
 	}
-	if err = releaseContinuationSession(owner, ownerReq, winner.Outcome); err != nil {
+	if err = tasklifecycle.ReleaseContinuationSession(owner, ownerReq, winner.Outcome); err != nil {
 		t.Fatal(err)
 	}
 	first, firstReq := newAppTaskInStore(t, store, strings.Repeat("2", 32), false, prior)

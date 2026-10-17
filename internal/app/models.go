@@ -16,9 +16,15 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
+
+	// ModelsResponse is an advisory observation, never an admission allowlist.
+	"github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
-// ModelsResponse is an advisory observation, never an admission allowlist.
 type ModelsResponse struct {
 	SchemaVersion int    `json:"schema_version"`
 	Command       string `json:"command"`
@@ -97,7 +103,7 @@ func writeModelsHuman(out io.Writer, response ModelsResponse) error {
 }
 
 func discoverModels(a Arguments, deps Dependencies) (catalog commonprovider.ModelCatalog, resultErr error) {
-	root, err := resolveRoot(a.Root)
+	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return catalog, err
 	}
@@ -107,7 +113,7 @@ func discoverModels(a Arguments, deps Dependencies) (catalog commonprovider.Mode
 			return catalog, err
 		}
 	}
-	_, cwd, err := validateRootAndCwd(root, a.Cwd)
+	_, cwd, err := config.ValidateDirectories(root, a.Cwd)
 	if err != nil {
 		return catalog, err
 	}
@@ -124,13 +130,13 @@ func discoverModels(a Arguments, deps Dependencies) (catalog commonprovider.Mode
 }
 
 func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store, cwd, mode string) (result commonprovider.ModelCatalog, resultErr error) {
-	id, err := task.NewTaskID()
+	id, err := randomid.NewTaskID()
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
 	}
 	// Inspection records reuse the normalized request identity, but no task is
 	// admitted and this marker is never sent to a provider.
-	req, err := buildRequest(store.RootID, id, a.Provider, cwd, task.TaskConfig{Permission: mode, Budget: inspection.ModelDiscoveryTimeout.String()}, []byte("model discovery"), nil)
+	req, err := admission.BuildRequest(store.RootID, id, a.Provider, cwd, task.TaskConfig{Permission: mode, Budget: inspection.ModelDiscoveryTimeout.String()}, []byte("model discovery"), nil)
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
 	}
@@ -139,7 +145,7 @@ func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store,
 		return commonprovider.ModelCatalog{}, err
 	}
 	a, supervisor, queueRepairRunner, prepareErr := prepareModelDiscoverySupervisor(a, deps, store, candidate)
-	supervisorOwner, err := acquireSupervisorClient(supervisor, prepareErr)
+	supervisorOwner, err := supervisorcore.AcquireClient(supervisor, prepareErr)
 	defer func() { resultErr = errors.Join(resultErr, supervisorOwner.CloseAfterPending(resultErr)) }()
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
@@ -147,13 +153,13 @@ func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store,
 	supervisor = supervisorOwner.Client()
 	inspectionGroupReady := false
 	if candidate.Inspection != nil {
-		if groupErr := ensureInspectionGroup(store, supervisor, inspection.ModelDiscoveryTimeout); groupErr != nil {
+		if groupErr := supervisorcore.EnsureInspectionGroup(store, supervisor, inspection.ModelDiscoveryTimeout); groupErr != nil {
 			return commonprovider.ModelCatalog{}, fmt.Errorf("prepare inspection supervisor before model discovery: %w", groupErr)
 		}
 		inspectionGroupReady = true
 	}
 	if queueRepairRunner != "" {
-		if repairErr := ensurePrivateQueuedRunnerRepair(store, supervisor, queueRepairRunner); repairErr != nil {
+		if repairErr := supervisorcore.EnsurePrivateQueuedRunnerRepair(store, supervisor, queueRepairRunner); repairErr != nil {
 			return commonprovider.ModelCatalog{}, fmt.Errorf("repair queued task runner paths before model discovery: %w", repairErr)
 		}
 	}
@@ -172,7 +178,7 @@ func prepareModelDiscoverySupervisor(a Arguments, deps Dependencies, store *task
 	if err != nil {
 		return Arguments{}, nil, "", err
 	}
-	options, err := supervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
+	options, err := admission.SupervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
 	if err != nil {
 		return Arguments{}, nil, "", err
 	}
@@ -193,7 +199,7 @@ func prepareModelDiscoverySupervisor(a Arguments, deps Dependencies, store *task
 		return Arguments{}, supervisor, "", err
 	}
 	if a.savedSupervisor != nil && pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
-		if err = ensurePrivateAdmissionScheduling(store, supervisor, options); err != nil {
+		if err = supervisorcore.EnsureAdmissionScheduling(store, supervisor, options); err != nil {
 			return Arguments{}, supervisor, "", err
 		}
 	}

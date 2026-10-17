@@ -107,14 +107,10 @@ func rejectAlternateDiscovery(environment map[string]string) error {
 	return nil
 }
 
-// runtimeStateExclusions conservatively excludes the provider runtime, system
+// runtimeStateExclusionsWithOptions conservatively excludes the provider runtime, system
 // temporary roots, and the documented build-cache classes. Some entries are
 // broader than the provider's actual grants; this is a state-placement check,
 // never an assertion that the agent is authorized to write every listed path.
-func runtimeStateExclusions(home string, environment map[string]string) ([]string, error) {
-	return runtimeStateExclusionsWithOptions(home, environment, true)
-}
-
 func runtimeStateExclusionsWithOptions(home string, environment map[string]string, includeNativeDiscoveryRoots bool) ([]string, error) {
 	roots := []string{"/tmp", "/var/tmp", "/var/folders", "/dev"}
 	for _, relative := range []string{

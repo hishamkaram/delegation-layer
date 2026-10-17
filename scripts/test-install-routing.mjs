@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { runInstaller as runInteractiveInstaller } from "./installer/application.mjs";
+import { createPickerState, transitionPicker } from "./installer/picker-state.mjs";
+import { countRoutingEvents, createRoutingPlan } from "./installer/routing-rules.mjs";
+import { pickOptions } from "./installer/terminal.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const installer = resolve(process.argv[2] ?? join(repositoryRoot, "scripts/install-agent-integration.mjs"));
@@ -19,16 +24,210 @@ const install = ["install", "--scope", "global", "--harness", "claude,codex", "-
 const configPath = join(home, ".claude", "settings.json");
 const codexPath = join(home, ".codex", "hooks.json");
 const readJSON = async (path) => JSON.parse(await readFile(path, "utf8"));
+
+class FakeInput extends EventEmitter {
+  constructor(eventSequences = []) {
+    super();
+    this.isTTY = true;
+    this.eventSequences = eventSequences;
+    this.rawModes = [];
+    this.resumeCount = 0;
+    this.pauseCount = 0;
+  }
+
+  setRawMode(enabled) { this.rawModes.push(enabled); }
+  resume() {
+    const events = this.eventSequences[this.resumeCount] ?? [];
+    this.resumeCount += 1;
+    queueMicrotask(() => events.forEach(([character, key]) => this.emit("keypress", character, key)));
+  }
+  pause() { this.pauseCount += 1; }
+}
+
+class FakeOutput {
+  constructor({ throwAtWrite } = {}) {
+    this.isTTY = true;
+    this.writes = [];
+    this.throwAtWrite = throwAtWrite;
+  }
+
+  write(value) {
+    this.writes.push(value);
+    if (this.writes.length === this.throwAtWrite) throw new Error("render failed");
+    return true;
+  }
+}
+
+function testRoutingRules() {
+  const target = join(root, "policy target ' quoted");
+  const config = {
+    unrelated: { keep: true },
+    hooks: {
+      SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: "echo user" }] }],
+    },
+  };
+  const before = JSON.stringify(config);
+  const enabled = createRoutingPlan({
+    name: "claude",
+    path: join(root, "settings.json"),
+    target,
+    before,
+    config,
+    mode: 0o640,
+    action: "enable",
+  });
+  const enabledConfig = JSON.parse(enabled.after);
+  assert.equal(enabled.status, "configured");
+  assert.equal(countRoutingEvents(enabledConfig, target), 2);
+  assert.deepEqual(enabledConfig.unrelated, config.unrelated);
+  assert.deepEqual(enabledConfig.hooks.SessionStart[0], config.hooks.SessionStart[0]);
+  assert.equal(JSON.stringify(config), before, "routing planning must not mutate its input");
+
+  const repeated = createRoutingPlan({
+    name: "claude",
+    path: enabled.path,
+    target,
+    before: enabled.after,
+    config: enabledConfig,
+    mode: enabled.mode,
+    action: "enable",
+  });
+  assert.equal(repeated.after, enabled.after, "enabling existing routes must preserve exact bytes");
+
+  const incompleteConfig = {
+    ...enabledConfig,
+    hooks: { ...enabledConfig.hooks, SubagentStart: undefined },
+  };
+  delete incompleteConfig.hooks.SubagentStart;
+  const incomplete = createRoutingPlan({
+    name: "claude",
+    path: enabled.path,
+    target,
+    before: JSON.stringify(incompleteConfig),
+    config: incompleteConfig,
+    mode: enabled.mode,
+    action: "status",
+    assetsPresent: false,
+  });
+  assert.equal(incomplete.status, "incomplete");
+
+  const disabled = createRoutingPlan({
+    name: "claude",
+    path: enabled.path,
+    target,
+    before: enabled.after,
+    config: enabledConfig,
+    mode: enabled.mode,
+    action: "disable",
+  });
+  const disabledConfig = JSON.parse(disabled.after);
+  assert.equal(disabled.status, "disabled");
+  assert.equal(countRoutingEvents(disabledConfig, target), 0);
+  assert.deepEqual(disabledConfig.hooks.SessionStart, config.hooks.SessionStart);
+}
+
+function testPickerState() {
+  let state = createPickerState({ initialValues: ["claude"], multiple: true });
+  state = transitionPicker(state, "down", ["claude", "codex"]).state;
+  state = transitionPicker(state, "toggle", ["claude", "codex"]).state;
+  assert.deepEqual(state.selectedValues, ["claude", "codex"]);
+  state = transitionPicker(state, "none", ["claude", "codex"]).state;
+  const empty = transitionPicker(state, "enter", ["claude", "codex"]);
+  assert.equal(empty.done, false);
+  assert.match(empty.state.error, /Select at least one harness/);
+  const selected = transitionPicker(empty.state, "all", ["claude", "codex"]);
+  assert.deepEqual(transitionPicker(selected.state, "enter", ["claude", "codex"]).value, ["claude", "codex"]);
+
+  const single = createPickerState({});
+  const wrapped = transitionPicker(single, "up", ["global", "project"]);
+  assert.equal(wrapped.state.index, 1);
+  assert.equal(transitionPicker(wrapped.state, "enter", ["global", "project"]).value, "project");
+}
+
+async function testTerminalCleanup() {
+  const input = new FakeInput([[
+    ["", { name: "down" }],
+    ["", { name: "enter" }],
+  ]]);
+  const output = new FakeOutput();
+  const selected = await pickOptions({
+    initialValues: ["global"],
+    options: [{ value: "global", label: "Global" }, { value: "project", label: "Project" }],
+    title: "Scope",
+    input,
+    output,
+  });
+  assert.equal(selected, "project");
+  assert.deepEqual(input.rawModes, [true, false]);
+  assert.equal(input.resumeCount, 1);
+  assert.equal(input.pauseCount, 1);
+  assert.equal(input.listenerCount("keypress"), 0);
+  assert.ok(output.writes.some((write) => write.includes("\u001b[?25l")));
+  assert.ok(output.writes.some((write) => write.includes("\u001b[?25h")));
+
+  const failedInput = new FakeInput();
+  const failedOutput = new FakeOutput({ throwAtWrite: 2 });
+  await assert.rejects(
+    pickOptions({
+      options: [{ value: "one", label: "One" }],
+      title: "Render failure",
+      input: failedInput,
+      output: failedOutput,
+    }),
+    /render failed/,
+  );
+  assert.deepEqual(failedInput.rawModes, [true, false]);
+  assert.equal(failedInput.pauseCount, 1);
+  assert.equal(failedInput.listenerCount("keypress"), 0);
+  assert.ok(failedOutput.writes.at(-1).includes("\u001b[?25h"));
+}
 try {
+  testRoutingRules();
+  testPickerState();
+  await testTerminalCleanup();
   await mkdir(join(home, ".claude"), { recursive: true });
   await mkdir(project);
+  const interactiveProject = join(root, "interactive-project");
+  const interactiveHome = join(root, "interactive-home");
+  await mkdir(join(interactiveProject, ".claude"), { recursive: true });
+  await mkdir(interactiveHome, { recursive: true });
+  const interactiveInput = new FakeInput([
+    [["", { name: "down" }], ["", { name: "enter" }]],
+    [["", { name: "enter" }]],
+    [["", { name: "enter" }]],
+  ]);
+  const interactiveOutput = new FakeOutput();
+  const interactiveErrors = new FakeOutput();
+  const interactiveExit = await runInteractiveInstaller({
+    argumentsList: ["install"],
+    packageRoot: repositoryRoot,
+    cwd: interactiveProject,
+    home: interactiveHome,
+    environment: { PATH: "", DELEGATION_LAYER_HOME: interactiveHome },
+    platform: "linux",
+    input: interactiveInput,
+    output: interactiveOutput,
+    errorOutput: interactiveErrors,
+    installCliMain: async () => {},
+  });
+  assert.equal(interactiveExit, 0, interactiveErrors.writes.join(""));
+  await readFile(join(interactiveProject, ".claude/skills/agent-integration/SKILL.md"));
+  const interactiveRouting = await readJSON(join(interactiveProject, ".claude/settings.local.json"));
+  assert.equal(interactiveRouting.hooks.SessionStart.length, 1);
+  assert.equal(interactiveRouting.hooks.SubagentStart.length, 1);
+  assert.deepEqual(interactiveInput.rawModes, [true, false, true, false, true, false]);
+  assert.equal(interactiveInput.pauseCount, 3);
+
   const existing = { unrelated: { keep: true }, hooks: { SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: "echo user-hook" }] }], Stop: [{ hooks: [{ type: "command", command: "echo stop" }] }] } };
   const original = JSON.stringify(existing);
   await writeFile(configPath, original);
+  await chmod(configPath, 0o640);
   const result = success(run(install));
   assert.match(result.stdout, /Activation not verified/);
   assert.match(result.stdout, /trust.*\/hooks/);
   const config = await readJSON(configPath);
+  assert.equal((await stat(configPath)).mode & 0o777, 0o640);
+  assert.equal((await stat(codexPath)).mode & 0o777, 0o600);
   assert.deepEqual(config.unrelated, existing.unrelated);
   assert.deepEqual(config.hooks.Stop, existing.hooks.Stop);
   assert.deepEqual(config.hooks.SessionStart[0], existing.hooks.SessionStart[0]);
@@ -84,12 +283,26 @@ try {
   assert.notEqual(run(install).status, 0);
   await rm(codexPath);
   const otherHome = join(root, "rollback");
+  const rollbackClaudeDirectory = join(otherHome, ".claude");
   await mkdir(join(otherHome, ".codex"), { recursive: true });
+  await mkdir(rollbackClaudeDirectory, { recursive: true });
+  const rollbackClaudePath = join(rollbackClaudeDirectory, "settings.json");
+  const rollbackClaudeOriginal = JSON.stringify({
+    unrelated: { preserve: true },
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "echo existing" }] }] },
+  });
+  await writeFile(rollbackClaudePath, rollbackClaudeOriginal);
+  await chmod(rollbackClaudePath, 0o640);
   await writeFile(join(otherHome, ".codex/hooks.json.delegation-layer.lock"), "occupied");
   const rollback = run(install, { DELEGATION_LAYER_HOME: otherHome });
   assert.notEqual(rollback.status, 0);
   assert.match(rollback.stderr, /rolled back/);
-  await assert.rejects(readFile(join(otherHome, ".claude/settings.json")), { code: "ENOENT" });
+  assert.equal(
+    await readFile(rollbackClaudePath, "utf8"),
+    rollbackClaudeOriginal,
+    "rollback must restore the existing user config exactly",
+  );
+  assert.equal((await stat(rollbackClaudePath)).mode & 0o777, 0o640);
   const custom = { CLAUDE_CONFIG_DIR: join(root, "custom claude"), CODEX_HOME: join(root, "custom codex") };
   success(run(install, custom));
   await readFile(join(custom.CLAUDE_CONFIG_DIR, "skills/agent-integration/SKILL.md"));

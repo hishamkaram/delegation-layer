@@ -341,10 +341,6 @@ func sealRefusal(seal task.ProviderExitRecord) string {
 	return ""
 }
 
-func identityMatches(input predicate.Input, sessionID string) bool {
-	return identityMatchesProvider(input, sessionID, Provider)
-}
-
 func identityMatchesProvider(input predicate.Input, sessionID, providerID string) bool {
 	if !validSessionID(sessionID) {
 		return false

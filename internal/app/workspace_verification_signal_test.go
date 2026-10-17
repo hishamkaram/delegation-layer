@@ -13,10 +13,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+
+	// This self-terminating command tests result interpretation. Native deadline
+	// stopping is exercised by the guardian and native acceptance tests.
+	"github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 )
 
-// This self-terminating command tests result interpretation. Native deadline
-// stopping is exercised by the guardian and native acceptance tests.
 type workspaceSignalTestStopper struct{}
 
 func (workspaceSignalTestStopper) PrepareBudget(time.Time) (execution.BudgetRequest, error) {
@@ -46,7 +49,7 @@ func TestSignaledWorkspaceVerificationRetainsDurableDiagnostics(t *testing.T) {
 		t.Fatalf("stored signal verdict=%+v error=%v", stored, err)
 	}
 	for _, artifact := range stored.Artifacts {
-		if err = validateWorkspaceArtifact(t.Context(), store, request.OperationID, artifact); err != nil {
+		if err = workspaces.ValidateArtifact(t.Context(), store, request.OperationID, artifact); err != nil {
 			t.Fatal(err)
 		}
 		content, readErr := os.ReadFile(filepath.Join(workspace.ScratchPath(store.Root, request.OperationID), artifact.Name))
@@ -75,7 +78,7 @@ func newWorkspaceSignalTestOperation(t *testing.T) (*taskdir.Store, *workspace.O
 		OperationID: strings.Repeat("f", 32), Kind: workspace.OperationVerify,
 		Subject:  workspace.Subject{Kind: workspace.SubjectAdmission, ID: strings.Repeat("e", 32), SHA256: digest},
 		Deadline: deadline.UTC().Format(time.RFC3339Nano), WorkerExecutable: "/fixture/delegate-run", WorkerSHA256: digest,
-		Supervisor: continuationSupervisorRef(store.Root, digest, "unix:/fixture/pueue.sock"),
+		Supervisor: testsupport.ContinuationSupervisorRef(store.Root, digest, "unix:/fixture/pueue.sock"),
 		Arguments:  []string{"/bin/sh", "-c", "printf signal-stdout; printf signal-stderr >&2; kill -9 $$"},
 	}
 	operation, err := workspace.OpenOperation(t.Context(), store, request)

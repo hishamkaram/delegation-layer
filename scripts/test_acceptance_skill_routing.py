@@ -22,6 +22,12 @@ class RoutingTests(unittest.TestCase):
         self.addCleanup(home.stop)
         self.case = {"name": "review", "prompt": "Ask Codex for a review.", "external": True}
 
+    def test_failed_workspace_preparation_rolls_back_owned_directories(self):
+        with patch.object(gate, "prepare_workspace", side_effect=RuntimeError("fixture setup failed")):
+            with self.assertRaisesRegex(RuntimeError, "fixture setup failed"):
+                gate.run_case(self.root, "codex", None, self.case, 1)
+        self.assertFalse((self.root / "review-1" / "workspace").exists())
+
     def receipt(self, case=None, mode="live", fixture_scenario=None):
         case = self.case if case is None else case
         run = self.root / (case["name"] + "-1")
@@ -320,6 +326,28 @@ class RoutingTests(unittest.TestCase):
                 result = Mock(returncode=code, stdout=stdout, stderr=stderr)
                 self.assertEqual(self.run_fixture(argv, result), (code, stdout, stderr))
 
+    def assert_migration_guidance_matches_contract(self):
+        roots = (
+            gate.SKILL,
+            gate.REPO / "plugins/delegation-layer/skills/agent-integration",
+        )
+        for root in roots:
+            skill = (root / "SKILL.md").read_text(encoding="utf-8")
+            skill_flat = " ".join(skill.split())
+            result_handling = (root / "references/result-handling.md").read_text(encoding="utf-8")
+            result_handling_flat = " ".join(result_handling.split())
+            continuation = (root / "references/continuation.md").read_text(encoding="utf-8")
+            routing_rule = json.loads((root / "references/routing-rule.json").read_text(encoding="utf-8"))
+            self.assertLess(skill.index("supervisor_upgrade_required"),
+                            skill.index("task_record: not_created` with any other next action"))
+            generic_stop = result_handling_flat.index("For every other `not_created` response")
+            self.assertLess(result_handling_flat.index("sole migration exception"), generic_stop)
+            self.assertLess(result_handling_flat.index("workspace_provision_pending"), generic_stop)
+            self.assertLess(result_handling_flat.index("workspace_busy"), generic_stop)
+            self.assertIn("`continue` remains `continue`", skill_flat)
+            self.assertIn("argv-equivalent `continue`", continuation)
+            self.assertIn("continue remains continue", routing_rule)
+
     def test_composed_skill_migration_retry_preserves_continue_intent(self):
         original_continue = [
             "delegate", "--root", "/state", "continue", "--task", "a" * 32,
@@ -376,26 +404,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(dispatch_calls, [])
         self.assertEqual(direct_provider_calls, [])
 
-        roots = (
-            gate.SKILL,
-            gate.REPO / "plugins/delegation-layer/skills/agent-integration",
-        )
-        for root in roots:
-            skill = (root / "SKILL.md").read_text(encoding="utf-8")
-            skill_flat = " ".join(skill.split())
-            result_handling = (root / "references/result-handling.md").read_text(encoding="utf-8")
-            result_handling_flat = " ".join(result_handling.split())
-            continuation = (root / "references/continuation.md").read_text(encoding="utf-8")
-            routing_rule = json.loads((root / "references/routing-rule.json").read_text(encoding="utf-8"))
-            self.assertLess(skill.index("supervisor_upgrade_required"),
-                            skill.index("task_record: not_created` with any other next action"))
-            generic_stop = result_handling_flat.index("For every other `not_created` response")
-            self.assertLess(result_handling_flat.index("sole migration exception"), generic_stop)
-            self.assertLess(result_handling_flat.index("workspace_provision_pending"), generic_stop)
-            self.assertLess(result_handling_flat.index("workspace_busy"), generic_stop)
-            self.assertIn("`continue` remains `continue`", skill_flat)
-            self.assertIn("argv-equivalent `continue`", continuation)
-            self.assertIn("continue remains continue", routing_rule)
+        self.assert_migration_guidance_matches_contract()
 
         evaluations = json.loads((gate.SKILL / "evals/evals.json").read_text(encoding="utf-8"))
         migration_case = next(case for case in evaluations["cases"]

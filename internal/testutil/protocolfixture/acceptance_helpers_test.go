@@ -16,6 +16,8 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 var fixtureBinPath string
@@ -52,7 +54,7 @@ type (
 func newCase(t *testing.T) *fixtureCase {
 	t.Helper()
 	base := t.TempDir()
-	id, err := task.NewTaskID()
+	id, err := randomid.NewTaskID()
 	if err != nil {
 		t.Fatal(err)
 	}

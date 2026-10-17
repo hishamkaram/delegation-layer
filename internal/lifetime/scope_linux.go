@@ -249,14 +249,6 @@ func checkCgroupControls(path string) error {
 	return errors.Join(checkCgroupControlsAt(directory), directory.Close())
 }
 
-func writeCgroupKill(path string) error {
-	directory, err := openCgroupDirectory(path)
-	if err != nil {
-		return err
-	}
-	return errors.Join(writeCgroupKillAt(directory), directory.Close())
-}
-
 func cgroupEmpty(path string) (bool, error) {
 	directory, err := openCgroupDirectory(path)
 	if err != nil {

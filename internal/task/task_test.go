@@ -5,10 +5,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 func TestTaskIDValidation(t *testing.T) {
-	validID, err := NewTaskID()
+	validID, err := randomid.NewTaskID()
 	if err != nil {
 		t.Fatalf("unexpected error generating task ID: %v", err)
 	}
@@ -33,7 +35,7 @@ func TestTaskIDValidation(t *testing.T) {
 }
 
 func TestRootIDValidation(t *testing.T) {
-	validID, err := NewRootID()
+	validID, err := randomid.NewRootID()
 	if err != nil {
 		t.Fatalf("unexpected error generating root ID: %v", err)
 	}
@@ -323,8 +325,14 @@ func TestValidateJSONStructure_Edges(t *testing.T) {
 func TestTypedValidators(t *testing.T) {
 	validHex32 := "0123456789abcdef0123456789abcdef"
 	validHex64 := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	testRootRecordValidator(t, validHex32)
+	testTaskRecordValidator(t, validHex32, validHex64)
+	testProviderExitRecordValidator(t, validHex32, validHex64)
+	testOutcomeRecordValidator(t, validHex32, validHex64)
+}
 
-	// 1. RootRecord
+func testRootRecordValidator(t *testing.T, validHex32 string) {
+	t.Helper()
 	rootRec := &RootRecord{
 		SchemaVersion: 1,
 		RootID:        validHex32,
@@ -338,8 +346,10 @@ func TestTypedValidators(t *testing.T) {
 	if err := ValidateRootRecord(&badRoot); !errors.Is(err, ErrUnsupportedSchema) {
 		t.Errorf("expected ErrUnsupportedSchema, got: %v", err)
 	}
+}
 
-	// 2. TaskRecord
+func testTaskRecordValidator(t *testing.T, validHex32, validHex64 string) {
+	t.Helper()
 	taskRec := &TaskRecord{
 		SchemaVersion:   1,
 		RootID:          validHex32,
@@ -360,8 +370,10 @@ func TestTypedValidators(t *testing.T) {
 	if err := ValidateTaskRecord(&badTask); err == nil {
 		t.Errorf("expected error for zero budget, got nil")
 	}
+}
 
-	// 3. ProviderExitRecord & RawManifest
+func testProviderExitRecordValidator(t *testing.T, validHex32, validHex64 string) {
+	t.Helper()
 	manifest := []RawManifestEntry{
 		{Path: "raw/stderr", Size: 10, SHA256: validHex64},
 		{Path: "raw/stdout", Size: 20, SHA256: validHex64},
@@ -402,8 +414,10 @@ func TestTypedValidators(t *testing.T) {
 	if err := ValidateProviderExitRecord(&badExit); !errors.Is(err, ErrEvidenceFault) {
 		t.Errorf("expected ErrEvidenceFault for unsorted manifest, got: %v", err)
 	}
+}
 
-	// 4. OutcomeRecord
+func testOutcomeRecordValidator(t *testing.T, validHex32, validHex64 string) {
+	t.Helper()
 	outcomeRec := &OutcomeRecord{
 		SchemaVersion:  1,
 		RootID:         validHex32,

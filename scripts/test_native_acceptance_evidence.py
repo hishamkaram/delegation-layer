@@ -10,12 +10,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-try:
-    import acceptance_supervisor_common as common
-    from scripts import native_acceptance_evidence as evidence
-except ModuleNotFoundError:
-    from scripts import acceptance_supervisor_common as common
-    import native_acceptance_evidence as evidence
+import sys
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts import acceptance_supervisor_common as common
+from scripts import native_acceptance_evidence as evidence
+from scripts.delegate_acceptance.directories import journal as cleanup_journal
+from scripts.delegate_acceptance.native_evidence import cases as case_operations
+from scripts.delegate_acceptance.native_evidence import retention as retention_operations
 
 
 class NativeAcceptanceEvidenceTests(unittest.TestCase):
@@ -71,6 +75,50 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             evidence.validate_prepared_case_directory(
                 case_directory, definition.provider, definition.permission, definition.scenario)
 
+    def write_pass_case(self, index, case, case_directory, requested_model, requested_effort):
+        aliases = evidence._expected_task_aliases(case.provider, case.scenario)
+        session = "session-" + case.case_id
+        tasks = {
+            alias: f"{index + 1:016x}{position + 1:016x}"
+            for position, alias in enumerate(aliases)
+        }
+        provider_runtimes = {
+            task_id: {
+                "executable": f"/fixture/provider-{position + 1}",
+                "version": f"1.{position}",
+                "sha256": ("a" if position == 0 else "b") * 64,
+            }
+            for position, task_id in enumerate(tasks.values())
+        }
+        first_task = next(iter(tasks.values()))
+        first_runtime = provider_runtimes[first_task]
+        (case_directory / "success.json").write_text(json.dumps({
+            "gate": "acceptance-native", "status": "passed", "provider": case.provider,
+            "mode": case.permission, "scenario": case.scenario,
+            "requested_model": requested_model, "requested_effort": requested_effort,
+            "tasks": tasks,
+            "provider_sessions": {alias: session for alias in aliases},
+            "provider_versions": {
+                task_id: identity["version"]
+                for task_id, identity in provider_runtimes.items()
+            },
+            "provider_runtime_identities": provider_runtimes,
+            "natural_daemon_shutdown": True,
+        }), encoding="utf-8")
+        (case_directory / "binding.json").write_text(json.dumps({
+            "provider": case.provider, "mode": case.permission,
+            "scenario": case.scenario,
+            "provider_identity_scope": "first-admitted-task",
+            "provider_task_id": first_task,
+            "requested_model": requested_model,
+            "requested_effort": requested_effort,
+            "provider_executable": first_runtime["executable"],
+            "provider_version": first_runtime["version"],
+            "provider_sha256": first_runtime["sha256"],
+            "delegate_sha256": "2" * 64, "runner_sha256": "3" * 64,
+            "pueue_sha256": "4" * 64, "pueued_sha256": "5" * 64,
+        }), encoding="utf-8")
+
     def make_matrix(
             self, root: Path, *, status: str = "BLOCKED", failed_index: int | None = None,
             with_cleanup: bool = True, requested_model: str | None = None,
@@ -93,48 +141,9 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                     "provider secret must remain in unresolved raw evidence", encoding="utf-8")
             elif status == "PASS":
                 exit_code = 0
-                aliases = evidence._expected_task_aliases(case.provider, case.scenario)
-                session = "session-" + case.case_id
-                tasks = {
-                    alias: f"{index + 1:016x}{position + 1:016x}"
-                    for position, alias in enumerate(aliases)
-                }
-                provider_runtimes = {
-                    task_id: {
-                        "executable": f"/fixture/provider-{position + 1}",
-                        "version": f"1.{position}",
-                        "sha256": ("a" if position == 0 else "b") * 64,
-                    }
-                    for position, task_id in enumerate(tasks.values())
-                }
-                first_task = next(iter(tasks.values()))
-                first_runtime = provider_runtimes[first_task]
-                (case_directory / "success.json").write_text(json.dumps({
-                    "gate": "acceptance-native", "status": "passed", "provider": case.provider,
-                    "mode": case.permission, "scenario": case.scenario,
-                    "requested_model": requested_model, "requested_effort": requested_effort,
-                    "tasks": tasks,
-                    "provider_sessions": {alias: session for alias in aliases},
-                    "provider_versions": {
-                        task_id: identity["version"]
-                        for task_id, identity in provider_runtimes.items()
-                    },
-                    "provider_runtime_identities": provider_runtimes,
-                    "natural_daemon_shutdown": True,
-                }), encoding="utf-8")
-                (case_directory / "binding.json").write_text(json.dumps({
-                    "provider": case.provider, "mode": case.permission,
-                    "scenario": case.scenario,
-                    "provider_identity_scope": "first-admitted-task",
-                    "provider_task_id": first_task,
-                    "requested_model": requested_model,
-                    "requested_effort": requested_effort,
-                    "provider_executable": first_runtime["executable"],
-                    "provider_version": first_runtime["version"],
-                    "provider_sha256": first_runtime["sha256"],
-                    "delegate_sha256": "2" * 64, "runner_sha256": "3" * 64,
-                    "pueue_sha256": "4" * 64, "pueued_sha256": "5" * 64,
-                }), encoding="utf-8")
+                self.write_pass_case(
+                    index, case, case_directory, requested_model, requested_effort,
+                )
             else:
                 (case_directory / "failure.json").write_text(json.dumps({
                     "gate": "acceptance-native", "status": "BLOCKED", "provider": case.provider,
@@ -320,7 +329,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         case_directory = root / definition.case_output
         source = case_directory / "success.json"
         original_source = source.read_bytes()
-        with patch.object(evidence, "resume_directory_cleanup",
+        with patch.object(case_operations, "resume_directory_cleanup",
                           side_effect=RuntimeError("interrupted before cleanup")):
             with self.assertRaisesRegex(evidence.EvidenceError, "case_cleanup_journal_invalid"):
                 evidence.build_aggregate(
@@ -335,7 +344,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         compact["source_proof"]["requested_model"] = "model-b"
         compact_path.write_text(json.dumps(compact), encoding="utf-8")
         row = evidence.MatrixRow(definition, 0, "PASS")
-        with patch.object(evidence, "resume_directory_cleanup") as cleanup:
+        with patch.object(case_operations, "resume_directory_cleanup") as cleanup:
             replayed = evidence._replay_prepared_case(
                 compact_path, case_directory, root / evidence.CASE_ROOT_NAME,
                 root / evidence.CASE_CLEANUP_ROOT_NAME, row,
@@ -368,7 +377,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             self.assertEqual(value["raw_deletion"]["journal_path"], str(Path(journal).resolve()))
             return original(journal, label, identity, quarantine_parent, authorization)
 
-        with patch.object(evidence, "prepare_directory_cleanup", side_effect=prepare):
+        with patch.object(case_operations, "prepare_directory_cleanup", side_effect=prepare):
             value, code = self.build(root=root, status="PASS")
         self.assertEqual(code, 0)
         self.assertEqual(observed, ["published-before-cleanup"] * len(evidence.EXPECTED_CASES))
@@ -487,7 +496,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                 raise RuntimeError("simulated interruption after raw cleanup")
             return original(path, value)
 
-        with patch.object(evidence, "_write_atomic", side_effect=publish_then_interrupt):
+        with patch.object(case_operations, "_write_atomic", side_effect=publish_then_interrupt):
             with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
                 evidence.build_aggregate(
                     root, matrix, root / evidence.AGGREGATE_RECEIPT_NAME,
@@ -515,7 +524,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                 raise RuntimeError("simulated interruption after isolation")
             return original(value)
 
-        with patch.object(common, "_cleanup_empty", side_effect=interrupt_once):
+        with patch.object(cleanup_journal, "_cleanup_empty", side_effect=interrupt_once):
             with self.assertRaisesRegex(evidence.EvidenceError, "case_cleanup_journal_invalid"):
                 evidence.build_aggregate(
                     root, matrix, root / evidence.AGGREGATE_RECEIPT_NAME,
@@ -765,7 +774,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                 raise RuntimeError("simulated retention interruption")
             return original(value)
 
-        with patch.object(common, "_cleanup_empty", side_effect=interrupt_retention), \
+        with patch.object(cleanup_journal, "_cleanup_empty", side_effect=interrupt_retention), \
                 self.assertRaisesRegex(evidence.EvidenceError, "aggregate_retention_incomplete"):
             evidence.build_aggregate(
                 current, matrix, current / evidence.AGGREGATE_RECEIPT_NAME,
@@ -803,7 +812,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                 journal, label, identity, quarantine_parent, authorization,
             )
 
-        with patch.object(evidence, "prepare_directory_cleanup", side_effect=interrupt_first_plan), \
+        with patch.object(retention_operations, "prepare_directory_cleanup", side_effect=interrupt_first_plan), \
                 self.assertRaisesRegex(evidence.EvidenceError, "aggregate_retention_incomplete"):
             evidence.build_aggregate(
                 first, first_matrix, first / evidence.AGGREGATE_RECEIPT_NAME,
@@ -910,7 +919,7 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                 journal, label, identity, quarantine_parent, authorization,
             )
 
-        with patch.object(evidence, "prepare_directory_cleanup", side_effect=swap_before_prepare):
+        with patch.object(retention_operations, "prepare_directory_cleanup", side_effect=swap_before_prepare):
             with self.assertRaisesRegex(evidence.EvidenceError, "aggregate_retention_incomplete"):
                 evidence.build_aggregate(
                     current, matrix, current / evidence.AGGREGATE_RECEIPT_NAME,

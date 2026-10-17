@@ -61,8 +61,6 @@ func ParseCLIVersion(output []byte) (string, error) {
 	return version, nil
 }
 
-func parseCLIVersion(output []byte) (string, error) { return ParseCLIVersion(output) }
-
 func containsCLIFlag(output []byte, flag string) bool {
 	if flag == "" {
 		return false

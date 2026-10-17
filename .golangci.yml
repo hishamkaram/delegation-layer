@@ -9,6 +9,7 @@ linters:
     - errcheck
     - govet
     - staticcheck
+    - unused
     - ineffassign
     - nilerr
     - errorlint
@@ -21,6 +22,12 @@ linters:
     - gocognit
     - gocyclo
   settings:
+    # The maintainability audit runs this linter separately so staged baseline
+    # findings retain exact source identity; tests receive the same limit.
+    funlen:
+      lines: 80
+      statements: -1
+      ignore-comments: false
     errcheck:
       check-type-assertions: true
       check-blank: true

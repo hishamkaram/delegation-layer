@@ -1,0 +1,117 @@
+[
+  {
+    "name": "go:internal/workspace",
+    "owner": "workspace",
+    "layer": "runtime",
+    "imports": [
+      "go:context",
+      "go:internal/taskdir",
+      "go:internal/workspace/contract",
+      "go:internal/workspace/internal/git",
+      "go:internal/workspace/internal/journal"
+    ]
+  },
+  {
+    "name": "go:internal/workspace/contract",
+    "owner": "workspace",
+    "layer": "pure",
+    "imports": [
+      "go:errors",
+      "go:fmt",
+      "go:internal/task",
+      "go:path/filepath",
+      "go:strings",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/workspace/internal/git",
+    "owner": "workspace",
+    "layer": "runtime",
+    "imports": [
+      "go:bufio",
+      "go:bytes",
+      "go:context",
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:errors",
+      "go:fmt",
+      "go:internal/config",
+      "go:internal/taskdir",
+      "go:internal/workspace/contract",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:sort",
+      "go:strconv",
+      "go:strings"
+    ]
+  },
+  {
+    "name": "go:internal/workspace/internal/journal",
+    "owner": "workspace",
+    "layer": "runtime",
+    "imports": [
+      "go:context",
+      "go:errors",
+      "go:fmt",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:internal/workspace/contract",
+      "go:os",
+      "go:path/filepath",
+      "go:slices",
+      "go:strconv",
+      "go:strings",
+      "go:sync",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/workspace/internal/git#test",
+    "owner": "workspace",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:errors",
+      "go:fmt",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:internal/workspace/contract",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:slices",
+      "go:strings",
+      "go:sync",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/workspace/internal/journal#test",
+    "owner": "workspace",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:errors",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:internal/workspace/contract",
+      "go:os",
+      "go:path/filepath",
+      "go:reflect",
+      "go:slices",
+      "go:strings",
+      "go:sync",
+      "go:testing",
+      "go:time"
+    ]
+  }
+]

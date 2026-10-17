@@ -8,39 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+	workspacefixture "github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
-
-func newAppWorkspaceResource(t *testing.T) (*taskdir.Store, *workspace.Resource) {
-	t.Helper()
-	store, err := taskdir.InitStore(filepath.Join(canonicalAppTestTempDir(t), "state"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if closeErr := store.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	resource, err := workspace.EstablishResource(t.Context(), store, workspace.ResourceRequest{
-		SchemaVersion: task.SchemaVersion, RootID: store.RootID,
-		WorkspaceID: strings.Repeat("b", 32), TaskID: strings.Repeat("c", 32),
-		RequestSHA256: task.ComputeSHA256([]byte("initial admission")),
-		SourceCwd:     filepath.Join(filepath.Dir(store.Root), "source"),
-		Container:     workspace.ContainerPath(store.Root, store.RootID), BudgetNanos: int64(time.Minute),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if closeErr := resource.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	return store, resource
-}
 
 func TestOrdinaryContinuationDoesNotOpenWorkspaceStore(t *testing.T) {
 	response, err := prepareManagedContinuation("/nonexistent/state", Dependencies{}, task.TaskRecord{})
@@ -50,7 +25,7 @@ func TestOrdinaryContinuationDoesNotOpenWorkspaceStore(t *testing.T) {
 }
 
 func TestManagedContinuationRejectsReleasedWorkspaceBeforeCwdAccess(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := workspacefixture.NewResource(t)
 	if err := resource.RecordRelease(t.Context(), workspace.ReleaseRecord{SchemaVersion: task.SchemaVersion, WorkspaceID: resource.Request().WorkspaceID, OperationID: strings.Repeat("d", 32), Discard: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +37,7 @@ func TestManagedContinuationRejectsReleasedWorkspaceBeforeCwdAccess(t *testing.T
 }
 
 func TestManagedContinuationDoesNotStealWorkspaceUseOwner(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := workspacefixture.NewResource(t)
 	owner, err := resource.AcquireUseOwner(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +54,7 @@ func TestManagedContinuationDoesNotStealWorkspaceUseOwner(t *testing.T) {
 }
 
 func TestInitialWorkspaceAttachRetainsAdmissionDigest(t *testing.T) {
-	_, resource := newAppWorkspaceResource(t)
+	_, resource := workspacefixture.NewResource(t)
 	request := resource.Request()
 	arguments := Arguments{Provider: "codex:exec", Isolation: "git-worktree", Base: request.BaseRef}
 	brief := []byte("bounded task")
@@ -110,7 +85,7 @@ func TestWorkspaceFailureCodesKeepProviderFailuresSeparate(t *testing.T) {
 	}
 	for _, candidate := range cases {
 		t.Run(candidate.code+"/"+candidate.err.Error(), func(t *testing.T) {
-			failure := dispatchFailure(withDispatchStage("prepare-workspace", candidate.err), "not_created")
+			failure := dispatchFailure(admission.WithStage("prepare-workspace", candidate.err), "not_created")
 			if failure.Code != candidate.code || failure.Stage != "prepare-workspace" {
 				t.Fatalf("incorrect failure boundary: %+v", failure)
 			}
@@ -119,7 +94,7 @@ func TestWorkspaceFailureCodesKeepProviderFailuresSeparate(t *testing.T) {
 }
 
 func TestWorkspaceReservationClosureBeforeTaskCreationDoesNotAwaitOutcome(t *testing.T) {
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := workspacefixture.NewResource(t)
 	subject := workspace.Subject{Kind: workspace.SubjectAdmission, ID: resource.Request().TaskID, SHA256: resource.Request().RequestSHA256}
 	reservation, err := resource.Reserve(t.Context(), subject)
 	if err != nil {
@@ -129,7 +104,7 @@ func TestWorkspaceReservationClosureBeforeTaskCreationDoesNotAwaitOutcome(t *tes
 		SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: subject.ID,
 		Workspace: &task.WorkspaceBinding{ID: resource.Request().WorkspaceID, Reservation: reservation.Sequence, RequestSHA256: subject.SHA256, BudgetNanos: int64(time.Minute)},
 	}
-	if err = recordManagedTaskCapture(store, request); err != nil {
+	if err = workspaces.RecordTaskCapture(store, request); err != nil {
 		t.Fatal(err)
 	}
 	if err = reconcileWorkspaceUse(t.Context(), store, resource, Dependencies{}); err != nil {
@@ -160,7 +135,7 @@ func TestWorkspaceReservationClosureBeforeTaskCreationDoesNotAwaitOutcome(t *tes
 }
 
 func TestManagedWorkspaceRejectsCustomRunnerBeforeResourceCreation(t *testing.T) {
-	store, err := taskdir.InitStore(filepath.Join(canonicalAppTestTempDir(t), "state"))
+	store, err := taskdir.InitStore(filepath.Join(testsupport.CanonicalTempDir(t), "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +145,7 @@ func TestManagedWorkspaceRejectsCustomRunnerBeforeResourceCreation(t *testing.T)
 		}
 	}()
 	arguments := Arguments{Isolation: "git-worktree", Runner: "/unused/custom-runner"}
-	managed, _, err := prepareManagedDispatch(arguments, Dependencies{}, store, strings.Repeat("a", 32), canonicalAppTestTempDir(t), []byte("bounded task"))
+	managed, _, err := prepareManagedDispatch(arguments, Dependencies{}, store, strings.Repeat("a", 32), testsupport.CanonicalTempDir(t), []byte("bounded task"))
 	if managed != nil || !errors.Is(err, task.ErrInvalidPermit) {
 		t.Fatalf("custom runner provisioned managed state: managed=%+v err=%v", managed, err)
 	}
@@ -179,7 +154,7 @@ func TestManagedWorkspaceRejectsCustomRunnerBeforeResourceCreation(t *testing.T)
 		t.Fatalf("rejected custom runner created workspace identities: ids=%v err=%v", ids, err)
 	}
 	arguments.Isolation = ""
-	cwd := canonicalAppTestTempDir(t)
+	cwd := testsupport.CanonicalTempDir(t)
 	managed, effective, err := prepareManagedDispatch(arguments, Dependencies{}, store, strings.Repeat("a", 32), cwd, []byte("ordinary task"))
 	if err != nil || managed != nil || effective != cwd {
 		t.Fatalf("ordinary custom runner behavior changed: managed=%+v cwd=%q err=%v", managed, effective, err)

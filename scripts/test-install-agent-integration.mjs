@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { main as installCliMain } from "./install-cli.mjs";
+import { parseInstallArguments, parseLegacyArguments } from "./installer/arguments.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const installerPath = resolve(process.argv[2] ?? join(repositoryRoot, "scripts", "install-agent-integration.mjs"));
@@ -52,6 +55,56 @@ async function assertInstalled(target) {
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "delegation-layer-installer-")));
 try {
+  assert.deepEqual(
+    parseInstallArguments(["--scope", "project", "--harness", "Claude,Codex", "-y", "--force", "--routing", "default"]),
+    {
+      kind: "options",
+      options: {
+        force: true,
+        harnessNames: ["claude", "codex"],
+        scope: "project",
+        yes: true,
+        routing: "default",
+      },
+    },
+  );
+  assert.deepEqual(parseLegacyArguments(["--target", join(root, "legacy flags"), "--force"]), {
+    kind: "options",
+    options: { force: true, target: join(root, "legacy flags") },
+  });
+
+  const cliCalls = [];
+  const cliOutput = [];
+  await installCliMain(["--version", "9.8.7", "--install-dir", join(root, "release install")], {
+    packageRoot: repositoryRoot,
+    environment: { PRESERVED_SETTING: "kept" },
+    platform: "linux",
+    errorOutput: { write: (value) => cliOutput.push(value) },
+    spawnProcess: (command, argumentsList, options) => {
+      cliCalls.push({ command, argumentsList, options });
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("exit", 0, null));
+      return child;
+    },
+  });
+  assert.equal(cliCalls.length, 1);
+  assert.equal(cliCalls[0].command, "sh");
+  assert.deepEqual(cliCalls[0].argumentsList, [join(repositoryRoot, "install.sh")]);
+  assert.equal(cliCalls[0].options.stdio, "inherit");
+  assert.equal(cliCalls[0].options.env.PRESERVED_SETTING, "kept");
+  assert.equal(cliCalls[0].options.env.DELEGATION_LAYER_VERSION, "9.8.7");
+  assert.equal(cliCalls[0].options.env.DELEGATION_LAYER_INSTALL_DIR, join(root, "release install"));
+  assert.deepEqual(cliOutput, []);
+
+  const helpOutput = [];
+  await installCliMain(["--help"], {
+    packageRoot: repositoryRoot,
+    errorOutput: { write: (value) => helpOutput.push(value) },
+    spawnProcess: () => assert.fail("help must not launch the release installer"),
+  });
+  assert.match(helpOutput.join(""), /delegation-layer install-cli/);
+  assert.equal(cliCalls.length, 1);
+
   const project = join(root, "project");
   const home = join(root, "home");
   const bin = join(root, "bin");

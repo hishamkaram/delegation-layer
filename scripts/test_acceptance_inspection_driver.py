@@ -35,7 +35,7 @@ class InspectionDriverTests(unittest.TestCase):
             args = SimpleNamespace(tools=str(tools), pueue=str(pueue),
                                    pueued=str(pueued), output=str(output))
 
-            with patch("acceptance_provider_common.reject_tmp"), \
+            with patch("scripts.delegate_acceptance.paths.operations.reject_tmp"), \
                     patch.object(inspection_acceptance.shutil, "copyfile",
                                  side_effect=OSError("injected copy failure")):
                 with self.assertRaisesRegex(OSError, "copy failure"):
@@ -122,7 +122,7 @@ class InspectionDriverTests(unittest.TestCase):
         with self.assertRaises(AcceptanceFailure):
             ops.record_admission("success", task, response)
         ops.dispatch_attempts.add(task)
-        with patch("acceptance_provider_common.write_json", side_effect=OSError("receipt failure")):
+        with patch("scripts.delegate_acceptance.tasks.operations.write_json", side_effect=OSError("receipt failure")):
             with self.assertRaises(OSError):
                 ops.record_admission("success", task, response)
         self.assertEqual(ops.tasks, {"success": task})

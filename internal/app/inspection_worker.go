@@ -7,6 +7,11 @@ import (
 	"os"
 	"time"
 
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
@@ -16,21 +21,16 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-// errInspectionWorkerUnavailable is the only failure returned by the worker.
-// Inspection diagnostics can include native or provider-sensitive details, so
-// neither those details nor supervisor command errors cross this boundary.
-var errInspectionWorkerUnavailable = errors.New("native inspection unavailable")
-
 type inspectionWorkerStageError struct {
 	stage string
 }
 
 func (e *inspectionWorkerStageError) Error() string {
-	return errInspectionWorkerUnavailable.Error() + ": stage=" + e.stage
+	return admissioncore.ErrInspectionWorkerUnavailable.Error() + ": stage=" + e.stage
 }
 
 func (*inspectionWorkerStageError) Unwrap() error {
-	return errInspectionWorkerUnavailable
+	return admissioncore.ErrInspectionWorkerUnavailable
 }
 
 func inspectionWorkerFailure(stage string) error {
@@ -50,7 +50,7 @@ func inspectionWorkerPublicError(err error) error {
 	if errors.As(err, &staged) && staged.stage != "" {
 		return staged
 	}
-	return errInspectionWorkerUnavailable
+	return admissioncore.ErrInspectionWorkerUnavailable
 }
 
 // runInspectionWorker executes one already-admitted inspection operation. It
@@ -74,7 +74,7 @@ func runInspectionWorkerWithLifetime(root, taskID string, supervised bool, lifet
 	if err := task.ValidateTaskID(taskID); err != nil {
 		return inspectionWorkerFailure("validate-task")
 	}
-	canonicalRoot, err := resolveRoot(root)
+	canonicalRoot, err := tasklifecycle.ResolveRoot(root)
 	if err != nil {
 		return inspectionWorkerFailure("resolve-root")
 	}
@@ -89,10 +89,6 @@ func runInspectionWorkerWithLifetime(root, taskID string, supervised bool, lifet
 		}
 	}()
 	return runInspectionWorkerOperationModeWithLifetime(canonicalRoot, taskID, supervised, lifetimeArgs, deps, store)
-}
-
-func runInspectionWorkerOperation(canonicalRoot, taskID string, deps Dependencies, store *taskdir.Store) (resultErr error) {
-	return runInspectionWorkerOperationMode(canonicalRoot, taskID, false, deps, store)
 }
 
 func runInspectionWorkerOperationMode(canonicalRoot, taskID string, supervised bool, deps Dependencies, store *taskdir.Store) (resultErr error) {
@@ -133,7 +129,7 @@ func loadInspectionOperationForWorker(store *taskdir.Store, taskID string) (*ins
 	if err != nil {
 		return nil, err
 	}
-	identity, err := admissionInspectionIdentity(ctx, store, operation.Request().Task)
+	identity, err := admissioncore.OperationID(ctx, store, operation.Request().Task)
 	if err != nil || identity != operation.Request().IdentityID() {
 		return nil, errors.Join(task.ErrIdentityMismatch, err, operation.Close())
 	}
@@ -156,7 +152,7 @@ func runLoadedInspectionWorkerOperation(canonicalRoot, taskID string, supervised
 	if err != nil {
 		return inspectionWorkerFailure("load-task")
 	}
-	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
+	supervisorOptions := supervisorcore.OptionsForCurrentEnvironment(deps.SupervisorOptions)
 	observeContext, cancel := context.WithDeadline(context.Background(), operation.Deadline())
 	defer cancel()
 	restoreEnvironment, err := prepareInspectionWorkerEnvironment(observeContext, canonicalRoot, operation, record.Binding)
@@ -165,13 +161,13 @@ func runLoadedInspectionWorkerOperation(canonicalRoot, taskID string, supervised
 	}
 	defer func() { resultErr = errors.Join(resultErr, restoreEnvironment()) }()
 
-	workerOptions := supervisorOptionsWithEnvironment(supervisorOptions, record.Binding.Environment)
+	workerOptions := supervisorcore.OptionsWithEnvironment(supervisorOptions, record.Binding.Environment)
 	supervisor, identity, err := inspectionWorkerSupervisor(observeContext, operation, supervised, record.Binding, workerOptions)
 	if err != nil {
 		return inspectionWorkerFailure("resume-supervisor")
 	}
 	var maintenanceErr error
-	defer func() { closeSupervisorMaintenance(supervisor, errors.Join(resultErr, maintenanceErr)) }()
+	defer func() { supervisorcore.CloseMaintenance(supervisor, errors.Join(resultErr, maintenanceErr)) }()
 
 	startPermit, err := operation.ClaimStartContext(observeContext, time.Now())
 	if err != nil {
@@ -250,11 +246,11 @@ func reconcileInspectionWorker(ctx context.Context, operation *inspection.Operat
 	}
 	defer func(owner *pueue.Client) {
 		if resultErr != nil {
-			closeSupervisorMaintenance(owner, resultErr)
+			supervisorcore.CloseMaintenance(owner, resultErr)
 			supervisor = nil
 		}
 	}(supervisor)
-	identity, err = inspectionIdentityContext(ctx, operation)
+	identity, err = admissioncore.InspectionIdentityContext(ctx, operation)
 	if err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
@@ -269,13 +265,13 @@ func reconcileInspectionWorker(ctx context.Context, operation *inspection.Operat
 		return nil, pueue.InspectionIdentity{}, err
 	}
 	if !observation.Matched || observation.Job.State != pueue.StateRunning {
-		return nil, pueue.InspectionIdentity{}, errInspectionWorkerUnavailable
+		return nil, pueue.InspectionIdentity{}, admissioncore.ErrInspectionWorkerUnavailable
 	}
 	if operation.Expired(time.Now()) {
-		return nil, pueue.InspectionIdentity{}, errInspectionWorkerUnavailable
+		return nil, pueue.InspectionIdentity{}, admissioncore.ErrInspectionWorkerUnavailable
 	}
 	observedID := observation.Job.ID
-	if err = requireInspectionReceipt(ctx, operation, observedID); err != nil {
+	if err = admissioncore.RequireInspectionReceipt(ctx, operation, observedID); err != nil {
 		return nil, pueue.InspectionIdentity{}, err
 	}
 	identity.NumericTaskID = &observedID
@@ -356,7 +352,7 @@ func runInspectionCallback(scope execution.PreflightScope, operation *inspection
 	if err != nil {
 		return inspectionWorkerFailure("prepare-candidate")
 	}
-	if err = validateInspectionCandidate(scope.Context(), operation, record.Task, candidate); err != nil {
+	if err = admissioncore.ValidateInspectionCandidate(scope.Context(), operation, record.Task, candidate); err != nil {
 		return inspectionWorkerFailure("validate-candidate")
 	}
 	inspected, err := inspection.Inspect(scope, *candidate.Inspection)
@@ -367,7 +363,7 @@ func runInspectionCallback(scope execution.PreflightScope, operation *inspection
 	if record.Binding.DefinitionRevision == commonprovider.ModelsRevision {
 		return nil
 	}
-	_, err = finalizeCandidate(candidate, record.Task, *facts)
+	_, err = admissioncore.FinalizeCandidate(candidate, record.Task, *facts)
 	if err != nil {
 		return inspectionWorkerFailure("finalize-candidate")
 	}
@@ -409,7 +405,7 @@ func validateInspectionWorkerExecutable(ctx context.Context, root string, operat
 	if !managedInspectionWorkerBinding(saved, binding) {
 		return task.ErrEvidenceFault
 	}
-	if !isStateRunnerPath(root, canonical) || !currentManagedRunnerExecutable(root, canonical) {
+	if !supervisorcore.IsStateRunnerPath(root, canonical) || !supervisorcore.CurrentManagedRunnerExecutable(root, canonical) {
 		return task.ErrEvidenceFault
 	}
 	authorized, err := operation.ManagedWorkerUpgradeAuthorizedContext(ctx)
@@ -427,33 +423,6 @@ func sameInspectionWorkerBinding(saved, current inspection.Binding) bool {
 		saved.WorkerSHA256 == current.WorkerSHA256 &&
 		saved.RunnerOwnership == current.RunnerOwnership &&
 		saved.WorkerExitProof == current.WorkerExitProof
-}
-
-// validateProviderRunnerExecutable accepts the inspection worker pinned when
-// the task was admitted or a verified content-addressed runner installed in
-// the state root. Its content-addressed identity proves the successor is
-// managed; explicit custom ownership in either task record keeps the original
-// runner pinned. Inspection-worker upgrades still use the stricter
-// authorization check above.
-func validateProviderRunnerExecutable(root string, binding inspection.Binding, taskOwnership, current string) error {
-	canonical, err := config.CanonicalizePath(current)
-	if err != nil {
-		return task.ErrEvidenceFault
-	}
-	digest, err := commonprovider.FingerprintExecutable(canonical)
-	if err != nil {
-		return task.ErrEvidenceFault
-	}
-	if canonical == binding.WorkerExecutable && digest == binding.WorkerSHA256 {
-		return nil
-	}
-	if binding.RunnerOwnership == task.RunnerOwnershipCustom || taskOwnership == task.RunnerOwnershipCustom {
-		return task.ErrEvidenceFault
-	}
-	if isStateRunnerPath(root, canonical) && currentManagedRunnerExecutable(root, canonical) {
-		return nil
-	}
-	return task.ErrEvidenceFault
 }
 
 func managedInspectionWorkerBinding(saved, binding inspection.Binding) bool {

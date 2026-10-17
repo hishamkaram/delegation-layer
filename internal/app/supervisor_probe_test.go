@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -35,7 +38,7 @@ func TestPreparePrivateAdmissionSupervisorRecoversPendingPublication(t *testing.
 
 	probeContext, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	probed, err := probePrivateAdmissionSupervisor(probeContext, store, successor.ClientExecutable, successor.DaemonExecutable, deps.SupervisorOptions)
+	probed, err := supervisorcore.ProbePrivateAdmissionSupervisor(probeContext, store, successor.ClientExecutable, successor.DaemonExecutable, deps.SupervisorOptions)
 	settleSupervisorProbeTestClient(t, probed, err)
 	if err != nil || probed != nil {
 		t.Fatalf("app probe did not defer the pending publication to recovery: client=%v err=%v", probed, err)
@@ -103,7 +106,7 @@ func TestPreparePrivateAdmissionSupervisorElectsOneColdPolicyTransition(t *testi
 	if err != nil {
 		t.Fatalf("observe configured private scheduling: %v", err)
 	}
-	configured, err := privateOrdinarySchedulingConfiguredGroups(store.Root, original.Binding(), snapshot.Groups)
+	configured, err := supervisorcore.OrdinarySchedulingConfiguredGroups(store.Root, original.Binding(), snapshot.Groups)
 	if err != nil || !configured {
 		t.Fatalf("ordinary scheduling receipt was not published: configured=%t err=%v", configured, err)
 	}
@@ -276,7 +279,7 @@ func TestPrepareAdmissionSupervisorConfiguresContinuationScheduling(t *testing.T
 	if err != nil {
 		t.Fatalf("observe continuation supervisor: %v", err)
 	}
-	configured, err := privateOrdinarySchedulingConfiguredGroups(store.Root, continuation.RuntimeBinding(), snapshot.Groups)
+	configured, err := supervisorcore.OrdinarySchedulingConfiguredGroups(store.Root, continuation.RuntimeBinding(), snapshot.Groups)
 	if err != nil || !configured {
 		t.Fatalf("continuation did not publish ordinary scheduling receipt: configured=%t err=%v", configured, err)
 	}
@@ -302,7 +305,7 @@ func TestEnsurePrivateQueuedRunnerRepairElectsOneQueueScan(t *testing.T) {
 	if err := os.WriteFile(statusLog, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runner := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
+	runner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, runner, "runner")
 
 	const callers = 24
@@ -314,7 +317,7 @@ func TestEnsurePrivateQueuedRunnerRepairElectsOneQueueScan(t *testing.T) {
 		go func() {
 			defer calls.Done()
 			<-start
-			errs <- ensurePrivateQueuedRunnerRepair(store, supervisor, runner)
+			errs <- supervisorcore.EnsurePrivateQueuedRunnerRepair(store, supervisor, runner)
 		}()
 	}
 	close(start)
@@ -332,7 +335,7 @@ func TestEnsurePrivateQueuedRunnerRepairElectsOneQueueScan(t *testing.T) {
 	if count := bytes.Count(status, []byte("status\n")); count != 1 {
 		t.Fatalf("queue repair status scan count = %d, want 1; log=%q", count, status)
 	}
-	if err = ensurePrivateQueuedRunnerRepair(store, supervisor, runner); err != nil {
+	if err = supervisorcore.EnsurePrivateQueuedRunnerRepair(store, supervisor, runner); err != nil {
 		t.Fatalf("warm runner repair failed: %v", err)
 	}
 	status, err = os.ReadFile(statusLog)
@@ -351,7 +354,7 @@ func TestRepairPrivateQueueForTaskElectsOneQueueScanAcrossCallers(t *testing.T) 
 	if err := os.WriteFile(statusLog, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runner := filepath.Join(canonicalAppTestTempDir(t), "delegate-run")
+	runner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, runner, "runner")
 	meta := &task.MetaRecord{SupervisorConfig: supervisor.Binding()}
 
@@ -393,7 +396,7 @@ func TestRepairPrivateQueueForTaskElectsOneQueueScanAcrossCallers(t *testing.T) 
 
 func newSupervisorProbeTestFixture(t *testing.T) (*taskdir.Store, Dependencies, *pueue.Client) {
 	t.Helper()
-	root := filepath.Join(canonicalAppTestTempDir(t), "state")
+	root := filepath.Join(testsupport.CanonicalTempDir(t), "state")
 	store, err := taskdir.InitStore(root)
 	if err != nil {
 		t.Fatal(err)
@@ -403,7 +406,7 @@ func newSupervisorProbeTestFixture(t *testing.T) (*taskdir.Store, Dependencies, 
 			t.Error(closeErr)
 		}
 	})
-	bundle := canonicalAppTestTempDir(t)
+	bundle := testsupport.CanonicalTempDir(t)
 	clientPath := filepath.Join(bundle, "pueue")
 	daemonPath := filepath.Join(bundle, "pueued")
 	writeRunnerFixture(t, clientPath, `#!/bin/sh
@@ -467,33 +470,7 @@ printf '%s\n' "$$" > "$base/run/pueue.pid"
 
 func listenSupervisorProbeTestEndpoint(t *testing.T, endpoint string) {
 	t.Helper()
-	const prefix = "unix:"
-	if !strings.HasPrefix(endpoint, prefix) {
-		t.Fatalf("private supervisor endpoint = %q, want Unix socket", endpoint)
-	}
-	listener, err := net.Listen("unix", strings.TrimPrefix(endpoint, prefix))
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			connection, acceptErr := listener.Accept()
-			if acceptErr != nil {
-				return
-			}
-			if closeErr := connection.Close(); closeErr != nil {
-				t.Error(closeErr)
-			}
-		}
-	}()
-	t.Cleanup(func() {
-		if closeErr := listener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
-			t.Error(closeErr)
-		}
-		<-done
-	})
+	admissionfixture.ListenSupervisorProbeTestEndpoint(t, endpoint)
 }
 
 func stageSupervisorProbeTestPublication(t *testing.T, saved task.SupervisorRef, options pueue.Options, publishedData []byte) (task.SupervisorRef, []byte) {
@@ -684,19 +661,5 @@ func assertSupervisorProbeTestNoAdmissionAuthority(t *testing.T, store *taskdir.
 
 func settleSupervisorProbeTestClient(t *testing.T, client *pueue.Client, err error) {
 	t.Helper()
-	var inFlight *pueue.InFlightError
-	if errors.As(err, &inFlight) && inFlight.Pending != nil {
-		timer := time.NewTimer(10 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-inFlight.Pending.Done():
-		case <-timer.C:
-			t.Fatalf("finite supervisor fixture did not complete: %v", err)
-		}
-	}
-	t.Cleanup(func() {
-		if closeErr := client.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
+	admissionfixture.SettleSupervisorProbeTestClient(t, client, err)
 }

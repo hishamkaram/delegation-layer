@@ -483,6 +483,12 @@ func assertDeferredAdmissionIsolation(t *testing.T, profile PreparedProfile) {
 	}
 }
 
+type preparedProfileMutationCase struct {
+	name            string
+	mutate          func(*PreparedProfile, *task.MetaRecord)
+	wantIdentityErr bool
+}
+
 func TestPreparedProfileMatchesRequiresExactPendingMarkerAndImmutablePolicy(t *testing.T) {
 	fixture := newDeferredAdmissionFixture(t)
 	profile := cloneCandidateProfile(fixture.pending)
@@ -491,11 +497,7 @@ func TestPreparedProfileMatchesRequiresExactPendingMarkerAndImmutablePolicy(t *t
 		t.Fatalf("valid pending profile did not match exact metadata: %v", err)
 	}
 
-	cases := []struct {
-		name            string
-		mutate          func(*PreparedProfile, *task.MetaRecord)
-		wantIdentityErr bool
-	}{
+	cases := []preparedProfileMutationCase{
 		{
 			name: "missing pending marker",
 			mutate: func(_ *PreparedProfile, meta *task.MetaRecord) {
@@ -553,20 +555,9 @@ func TestPreparedProfileMatchesRequiresExactPendingMarkerAndImmutablePolicy(t *t
 			},
 		},
 	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			current := cloneCandidateProfile(profile)
-			currentMeta := meta
-			testCase.mutate(&current, &currentMeta)
-			err := current.Matches(fixture.request, currentMeta)
-			if err == nil {
-				t.Fatal("immutable pending contract was accepted")
-			}
-			if testCase.wantIdentityErr && !errors.Is(err, task.ErrIdentityMismatch) {
-				t.Fatalf("immutable pending contract error=%v, want identity mismatch", err)
-			}
-		})
-	}
+	assertPreparedProfileMutationCases(t, fixture.request, profile, meta, cases, func(profile *PreparedProfile, meta *task.MetaRecord) error {
+		return profile.Matches(fixture.request, *meta)
+	})
 }
 
 func TestPreparedProfileMatchesWithRuntimeRefreshPreservesImmutableContract(t *testing.T) {
@@ -590,79 +581,108 @@ func TestPreparedProfileMatchesWithRuntimeRefreshPreservesImmutableContract(t *t
 		t.Fatalf("valid observed runtime refresh was rejected: %v", err)
 	}
 
-	cases := []struct {
-		name   string
-		mutate func(*PreparedProfile, *task.MetaRecord)
-	}{
+	cases := runtimeRefreshProfileMutationCases()
+	assertPreparedProfileMutationCases(t, fixture.request, refreshed, meta, cases, func(profile *PreparedProfile, meta *task.MetaRecord) error {
+		return profile.MatchesWithRuntimeRefresh(fixture.request, *meta)
+	})
+}
+
+func runtimeRefreshProfileMutationCases() []preparedProfileMutationCase {
+	return []preparedProfileMutationCase{
 		{
-			name: "environment",
+			name:            "environment",
+			wantIdentityErr: true,
 			mutate: func(profile *PreparedProfile, _ *task.MetaRecord) {
 				profile.Plan.Environment = []string{"LANG=C", "CHANGED=1"}
 			},
 		},
 		{
-			name: "containment",
+			name:            "containment",
+			wantIdentityErr: true,
 			mutate: func(profile *PreparedProfile, _ *task.MetaRecord) {
 				profile.Effective.Containment = "workspace-write"
 			},
 		},
 		{
-			name: "approval",
+			name:            "approval",
+			wantIdentityErr: true,
 			mutate: func(profile *PreparedProfile, _ *task.MetaRecord) {
 				profile.Effective.Approval = "accept-edits"
 			},
 		},
 		{
-			name: "policy workspace",
+			name:            "policy workspace",
+			wantIdentityErr: true,
 			mutate: func(profile *PreparedProfile, _ *task.MetaRecord) {
 				profile.Effective.Policy.Workspace = "/other-workspace"
 			},
 		},
 		{
-			name: "policy writable roots",
+			name:            "policy writable roots",
+			wantIdentityErr: true,
 			mutate: func(profile *PreparedProfile, _ *task.MetaRecord) {
 				profile.WritableRoots = []string{"/other-runtime"}
 				profile.Effective.Policy.WritableRoots = []string{"/other-runtime"}
 			},
 		},
 		{
-			name: "policy source",
+			name:            "policy source",
+			wantIdentityErr: true,
 			mutate: func(profile *PreparedProfile, _ *task.MetaRecord) {
 				profile.Effective.Policy.Sources[0].SHA256 = task.ComputeSHA256([]byte("changed-source"))
 			},
 		},
 		{
-			name: "predicate",
+			name:            "predicate",
+			wantIdentityErr: true,
 			mutate: func(profile *PreparedProfile, _ *task.MetaRecord) {
 				profile.Plan.Predicate.Version = "2"
 				profile.Plan.Predicate.SHA256 = task.ComputeSHA256([]byte("changed-predicate"))
 			},
 		},
 		{
-			name: "input artifact",
+			name:            "input artifact",
+			wantIdentityErr: true,
 			mutate: func(profile *PreparedProfile, _ *task.MetaRecord) {
 				profile.Plan.InputFiles[0].Content = "changed"
 			},
 		},
 		{
-			name: "output artifact",
+			name:            "output artifact",
+			wantIdentityErr: true,
 			mutate: func(profile *PreparedProfile, _ *task.MetaRecord) {
 				profile.Plan.OutputArtifacts[0].Name = "changed-output"
 			},
 		},
 		{
-			name: "writer contract",
+			name:            "writer contract",
+			wantIdentityErr: true,
 			mutate: func(_ *PreparedProfile, meta *task.MetaRecord) {
 				meta.OutputWriterContract = ""
 			},
 		},
 	}
+}
+
+func assertPreparedProfileMutationCases(
+	t *testing.T,
+	request task.TaskRecord,
+	profile PreparedProfile,
+	meta task.MetaRecord,
+	cases []preparedProfileMutationCase,
+	match func(*PreparedProfile, *task.MetaRecord) error,
+) {
+	t.Helper()
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			current := cloneCandidateProfile(refreshed)
+			current := cloneCandidateProfile(profile)
 			currentMeta := meta
 			testCase.mutate(&current, &currentMeta)
-			if err := current.MatchesWithRuntimeRefresh(fixture.request, currentMeta); !errors.Is(err, task.ErrIdentityMismatch) {
+			err := match(&current, &currentMeta)
+			if err == nil {
+				t.Fatal("immutable launch contract was accepted")
+			}
+			if testCase.wantIdentityErr && !errors.Is(err, task.ErrIdentityMismatch) {
 				t.Fatalf("immutable launch contract error=%v, want identity mismatch", err)
 			}
 		})

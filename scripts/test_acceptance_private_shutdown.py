@@ -11,6 +11,9 @@ import unittest
 from unittest.mock import patch
 
 import acceptance_private_cli as private_cli
+from scripts.delegate_acceptance.private_cli import capture as capture_impl
+from scripts.delegate_acceptance.private_cli import supervisor as supervisor_impl
+from scripts.delegate_acceptance.private_cli import root_cleanup as root_cleanup_impl
 import acceptance_provider_common as provider_common
 
 
@@ -171,7 +174,7 @@ class PrivateShutdownTests(unittest.TestCase):
     def test_waits_for_managed_lifetime_closure_after_gate_release(self):
         evidence = {"root_id": ROOT_ID, "tasks": {}, "inspections": {}}
         with patch.object(
-                private_cli, "authorize_managed_lifetime_closure",
+                supervisor_impl, "authorize_managed_lifetime_closure",
                 side_effect=[provider_common.AcceptanceFailure("pending"), evidence],
         ) as authorize, patch.object(
                 private_cli.time, "monotonic", side_effect=[0, 0, 0],
@@ -186,7 +189,7 @@ class PrivateShutdownTests(unittest.TestCase):
     def test_managed_lifetime_closure_timeout_preserves_last_failure(self):
         pending = provider_common.AcceptanceFailure("pending evidence")
         with patch.object(
-                private_cli, "authorize_managed_lifetime_closure", side_effect=pending,
+                supervisor_impl, "authorize_managed_lifetime_closure", side_effect=pending,
         ), patch.object(private_cli.time, "monotonic", side_effect=[0, 2]):
             with self.assertRaisesRegex(
                     RuntimeError, "managed lifetime closure remained incomplete",
@@ -197,11 +200,11 @@ class PrivateShutdownTests(unittest.TestCase):
         self.assertIs(raised.exception.__cause__, pending)
 
     def test_waits_for_both_process_and_endpoint_after_one_ack(self):
-        with patch.object(private_cli, "private_shutdown_evidence", return_value=(123, Path("/fixture/socket"), (1, 2))), \
-                patch.object(private_cli, "private_daemon_process_gone", side_effect=[False, False, True, True]) as gone, \
-                patch.object(private_cli, "private_shutdown_endpoint_closed", side_effect=[False, False, True]) as closed, \
-                patch.object(private_cli, "pueue_command") as command, \
-                patch.object(private_cli, "authorize_managed_lifetime_closure"), \
+        with patch.object(supervisor_impl, "private_shutdown_evidence", return_value=(123, Path("/fixture/socket"), (1, 2))), \
+                patch.object(supervisor_impl, "private_daemon_process_gone", side_effect=[False, False, True, True]) as gone, \
+                patch.object(supervisor_impl, "private_shutdown_endpoint_closed", side_effect=[False, False, True]) as closed, \
+                patch.object(supervisor_impl, "pueue_command") as command, \
+                patch.object(supervisor_impl, "authorize_managed_lifetime_closure"), \
                 patch.object(private_cli.time, "sleep"):
             private_cli.shutdown_private_supervisor(
                 "client", "config", {}, timeout=5, state=Path("/fixture/state"),
@@ -212,11 +215,11 @@ class PrivateShutdownTests(unittest.TestCase):
         self.assertEqual(command.call_args.args, ("client", "config", {}, ["shutdown"]))
 
     def test_ack_with_live_process_expires(self):
-        with patch.object(private_cli, "private_shutdown_evidence", return_value=(123, Path("/fixture/socket"), (1, 2))), \
-                patch.object(private_cli, "private_daemon_process_gone", return_value=False), \
-                patch.object(private_cli, "private_shutdown_endpoint_closed", return_value=True), \
-                patch.object(private_cli, "pueue_command") as command, \
-                patch.object(private_cli, "authorize_managed_lifetime_closure"), \
+        with patch.object(supervisor_impl, "private_shutdown_evidence", return_value=(123, Path("/fixture/socket"), (1, 2))), \
+                patch.object(supervisor_impl, "private_daemon_process_gone", return_value=False), \
+                patch.object(supervisor_impl, "private_shutdown_endpoint_closed", return_value=True), \
+                patch.object(supervisor_impl, "pueue_command") as command, \
+                patch.object(supervisor_impl, "authorize_managed_lifetime_closure"), \
                 patch.object(private_cli.time, "monotonic", side_effect=[0, 0, 2]):
             with self.assertRaises(TimeoutError):
                 private_cli.shutdown_private_supervisor(
@@ -225,11 +228,11 @@ class PrivateShutdownTests(unittest.TestCase):
         command.assert_called_once()
 
     def test_observed_pid_reuse_cannot_prove_shutdown(self):
-        with patch.object(private_cli, "private_shutdown_evidence", return_value=(123, Path("/fixture/socket"), (1, 2))), \
-                patch.object(private_cli, "private_daemon_process_gone", side_effect=[False, True, False]), \
-                patch.object(private_cli, "private_shutdown_endpoint_closed", return_value=False), \
-                patch.object(private_cli, "pueue_command"), \
-                patch.object(private_cli, "authorize_managed_lifetime_closure"), \
+        with patch.object(supervisor_impl, "private_shutdown_evidence", return_value=(123, Path("/fixture/socket"), (1, 2))), \
+                patch.object(supervisor_impl, "private_daemon_process_gone", side_effect=[False, True, False]), \
+                patch.object(supervisor_impl, "private_shutdown_endpoint_closed", return_value=False), \
+                patch.object(supervisor_impl, "pueue_command"), \
+                patch.object(supervisor_impl, "authorize_managed_lifetime_closure"), \
                 patch.object(private_cli.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "PID identity changed"):
                 private_cli.shutdown_private_supervisor(
@@ -273,7 +276,7 @@ class PrivateShutdownTests(unittest.TestCase):
     def test_failed_presence_probe_is_not_exit_proof(self):
         failed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"ps: malloc failed")
         with patch.object(private_cli.os, "getpgid", side_effect=ProcessLookupError()), \
-                patch.object(private_cli, "run_captured_command", return_value=failed):
+                patch.object(capture_impl, "run_captured_command", return_value=failed):
             with self.assertRaisesRegex(RuntimeError, "PID presence is uncertain"):
                 private_cli.private_daemon_process_gone(
                     123, private_cli.time.monotonic() + 5,
@@ -288,10 +291,10 @@ class PrivateShutdownTests(unittest.TestCase):
                 listener.listen()
                 info = endpoint.stat()
                 identity = (info.st_dev, info.st_ino)
-                with patch.object(private_cli, "private_shutdown_evidence", return_value=(123, endpoint, identity)), \
-                        patch.object(private_cli, "private_daemon_process_gone", side_effect=[False, False, True]), \
-                        patch.object(private_cli, "pueue_command") as command, \
-                        patch.object(private_cli, "authorize_managed_lifetime_closure"), \
+                with patch.object(supervisor_impl, "private_shutdown_evidence", return_value=(123, endpoint, identity)), \
+                        patch.object(supervisor_impl, "private_daemon_process_gone", side_effect=[False, False, True]), \
+                        patch.object(supervisor_impl, "pueue_command") as command, \
+                        patch.object(supervisor_impl, "authorize_managed_lifetime_closure"), \
                         patch.object(private_cli.socket, "socket") as connection, \
                         patch.object(private_cli.time, "sleep"):
                     connection.return_value.__enter__.return_value.connect.side_effect = [TimeoutError(), ConnectionRefusedError(private_cli.errno.ECONNREFUSED, "closed")]
@@ -337,8 +340,8 @@ class PrivateLifetimeAuthorizationTests(unittest.TestCase):
         return ManagedLifetimeFixture(parent)
 
     def assert_shutdown_refused(self, state):
-        with patch.object(private_cli, "pueue_command") as command, \
-                patch.object(private_cli, "private_shutdown_evidence") as evidence:
+        with patch.object(supervisor_impl, "pueue_command") as command, \
+                patch.object(supervisor_impl, "private_shutdown_evidence") as evidence:
             with self.assertRaises(provider_common.AcceptanceFailure):
                 private_cli.shutdown_private_supervisor(
                     "client", "config", {}, state=state,
@@ -384,7 +387,7 @@ class PrivateLifetimeAuthorizationTests(unittest.TestCase):
         token = owner.adopt_created("private root", owned, parent)
         entries = owner.transfer()
         try:
-            with patch.object(private_cli, "rollback_owned_directories") as rollback:
+            with patch.object(root_cleanup_impl, "rollback_owned_directories") as rollback:
                 with self.assertRaises(provider_common.AcceptanceFailure):
                     private_cli.remove_private_acceptance_root(
                         token, entries, managed_state_roots=(fixture.state,))

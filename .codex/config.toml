@@ -1,5 +1,5 @@
 # Minimal scoped Codex configuration for delegation-layer
-# Strict sandboxing: read-only, no blanket approvals, no parallelism overrides.
+# Research and review stay read-only; implementation has explicit file ownership.
 
 [agents.reviewer]
 description = "Scoped read-only code review, verification gate checks, and diff inspection."
@@ -8,3 +8,7 @@ config_file = "agents/reviewer.toml"
 [agents.researcher]
 description = "Scoped read-only codebase exploration, documentation analysis, and constraint checking."
 config_file = "agents/researcher.toml"
+
+[agents.implementer]
+description = "Bounded subsystem implementation with fixed interfaces and evidence handoff."
+config_file = "agents/implementer.toml"

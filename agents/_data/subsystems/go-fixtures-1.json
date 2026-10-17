@@ -1,0 +1,538 @@
+[
+  {
+    "name": "go:internal/testutil/claudeacceptance/cmd/delegate",
+    "owner": "go:internal/testutil/claudeacceptance/cmd/delegate",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/app",
+      "go:internal/provider/claude",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/claudeacceptance/cmd/delegate-run",
+    "owner": "go:internal/testutil/claudeacceptance/cmd/delegate-run",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/app",
+      "go:internal/provider/claude",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/codexacceptance/cmd/delegate",
+    "owner": "go:internal/testutil/codexacceptance/cmd/delegate",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/app",
+      "go:internal/provider/codex",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/codexacceptance/cmd/delegate-run",
+    "owner": "go:internal/testutil/codexacceptance/cmd/delegate-run",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/app",
+      "go:internal/provider/codex",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorcli",
+    "owner": "go:internal/testutil/contributorcli",
+    "layer": "runtime",
+    "imports": [
+      "go:errors",
+      "go:fmt",
+      "go:internal/app",
+      "go:internal/provider",
+      "go:internal/testutil/contributorprovider",
+      "go:io",
+      "go:os",
+      "go:path/filepath"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorcli#test",
+    "owner": "go:internal/testutil/contributorcli",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:encoding/json",
+      "go:errors",
+      "go:internal/app",
+      "go:os",
+      "go:path/filepath",
+      "go:testing"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorcli/cmd/delegate",
+    "owner": "go:internal/testutil/contributorcli/cmd/delegate",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/testutil/contributorcli",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorcli/cmd/delegate-run",
+    "owner": "go:internal/testutil/contributorcli/cmd/delegate-run",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/testutil/contributorcli",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorprovider",
+    "owner": "go:internal/testutil/contributorprovider",
+    "layer": "runtime",
+    "imports": [
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:internal/config",
+      "go:internal/execution",
+      "go:internal/predicate",
+      "go:internal/provider",
+      "go:internal/task",
+      "go:internal/testutil/contributorprovider/fixture",
+      "go:internal/testutil/contributorprovider/protocol",
+      "go:io",
+      "go:os",
+      "go:path/filepath",
+      "go:strings",
+      "go:sync",
+      "go:time",
+      "go:unicode/utf8"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorprovider#test",
+    "owner": "go:internal/testutil/contributorprovider",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:errors",
+      "go:fmt",
+      "go:internal/config",
+      "go:internal/predicate",
+      "go:internal/provider",
+      "go:internal/task",
+      "go:internal/testutil/contributorprovider/protocol",
+      "go:io",
+      "go:os",
+      "go:path/filepath",
+      "go:slices",
+      "go:strings",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorprovider/cmd/provider",
+    "owner": "go:internal/testutil/contributorprovider/cmd/provider",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/testutil/contributorprovider/fixture",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorprovider/fixture",
+    "owner": "go:internal/testutil/contributorprovider/fixture",
+    "layer": "runtime",
+    "imports": [
+      "go:bytes",
+      "go:errors",
+      "go:flag",
+      "go:fmt",
+      "go:internal/task",
+      "go:internal/testutil/contributorprovider/protocol",
+      "go:io",
+      "go:os",
+      "go:path/filepath",
+      "go:regexp",
+      "go:strings"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorprovider/fixture#test",
+    "owner": "go:internal/testutil/contributorprovider/fixture",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:errors",
+      "go:internal/task",
+      "go:internal/testutil/contributorprovider/protocol",
+      "go:io",
+      "go:os",
+      "go:path/filepath",
+      "go:strings",
+      "go:testing"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/contributorprovider/protocol",
+    "owner": "go:internal/testutil/contributorprovider/protocol",
+    "layer": "runtime",
+    "imports": []
+  },
+  {
+    "name": "go:internal/testutil/fakeprovider",
+    "owner": "go:internal/testutil/fakeprovider",
+    "layer": "runtime",
+    "imports": [
+      "go:bytes",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/execution",
+      "go:internal/predicate",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:strings",
+      "go:sync",
+      "go:time",
+      "go:unicode",
+      "go:unicode/utf8"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/fakeprovider#test",
+    "owner": "go:internal/testutil/fakeprovider",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/predicate",
+      "go:internal/task",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:strings",
+      "go:sync",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/fakeprovider/cmd/provider",
+    "owner": "go:internal/testutil/fakeprovider/cmd/provider",
+    "layer": "runtime",
+    "imports": [
+      "go:errors",
+      "go:fmt",
+      "go:internal/testutil/fakeprovider",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/fakesupervisor",
+    "owner": "go:internal/testutil/fakesupervisor",
+    "layer": "runtime",
+    "imports": [
+      "go:crypto/rand",
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/task",
+      "go:io",
+      "go:os",
+      "go:path/filepath",
+      "go:strconv",
+      "go:strings",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/fakesupervisor#test",
+    "owner": "go:internal/testutil/fakesupervisor",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:encoding/json",
+      "go:errors",
+      "go:internal/pueue",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:runtime",
+      "go:strings",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/fakesupervisor/cmd/pueue",
+    "owner": "go:internal/testutil/fakesupervisor/cmd/pueue",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/testutil/fakesupervisor",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/harnesscli",
+    "owner": "go:internal/testutil/harnesscli",
+    "layer": "runtime",
+    "imports": [
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/app",
+      "go:internal/config",
+      "go:internal/execution",
+      "go:internal/predicate",
+      "go:internal/provider",
+      "go:internal/pueue",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:internal/testutil/fakeprovider",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:strings",
+      "go:sync",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/harnesscli#test",
+    "owner": "go:internal/testutil/harnesscli",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/pueue",
+      "go:internal/task",
+      "go:internal/testutil/fakeprovider",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:strings",
+      "go:sync",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/harnesscli/cmd/delegate",
+    "owner": "go:internal/testutil/harnesscli/cmd/delegate",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/testutil/harnesscli",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/harnesscli/cmd/delegate-run",
+    "owner": "go:internal/testutil/harnesscli/cmd/delegate-run",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/testutil/harnesscli",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/harnessprobe",
+    "owner": "go:internal/testutil/harnessprobe",
+    "layer": "runtime",
+    "imports": [
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:golang.org/x/sys/unix",
+      "go:internal/pueue",
+      "go:internal/task",
+      "go:io",
+      "go:os",
+      "go:path/filepath"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/harnessprobe#test",
+    "owner": "go:internal/testutil/harnessprobe",
+    "layer": "test",
+    "imports": [
+      "go:golang.org/x/sys/unix",
+      "go:internal/pueue",
+      "go:os",
+      "go:path/filepath",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/inspectionfixture",
+    "owner": "go:internal/testutil/inspectionfixture",
+    "layer": "runtime",
+    "imports": [
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:encoding/json",
+      "go:errors",
+      "go:internal/app",
+      "go:internal/execution",
+      "go:internal/provider",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:internal/testutil/harnesscli",
+      "go:io",
+      "go:os",
+      "go:path/filepath",
+      "go:slices",
+      "go:strings",
+      "go:time",
+      "go:unicode/utf8"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/inspectionfixture#test",
+    "owner": "go:internal/testutil/inspectionfixture",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:encoding/json",
+      "go:errors",
+      "go:internal/execution",
+      "go:internal/provider",
+      "go:internal/task",
+      "go:io",
+      "go:os",
+      "go:path/filepath",
+      "go:reflect",
+      "go:strings",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/inspectionfixture/cmd/delegate",
+    "owner": "go:internal/testutil/inspectionfixture/cmd/delegate",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/testutil/inspectionfixture",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/inspectionfixture/cmd/delegate-run",
+    "owner": "go:internal/testutil/inspectionfixture/cmd/delegate-run",
+    "layer": "runtime",
+    "imports": [
+      "go:internal/testutil/inspectionfixture",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/inspectionfixture/cmd/inspection-helper",
+    "owner": "go:internal/testutil/inspectionfixture/cmd/inspection-helper",
+    "layer": "runtime",
+    "imports": [
+      "go:fmt",
+      "go:internal/testutil/inspectionfixture",
+      "go:os"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/protocolfixture",
+    "owner": "go:internal/testutil/protocolfixture",
+    "layer": "runtime",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:crypto/sha256",
+      "go:encoding/hex",
+      "go:encoding/json",
+      "go:errors",
+      "go:flag",
+      "go:fmt",
+      "go:internal/config",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:io",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:strconv",
+      "go:strings",
+      "go:sync/atomic",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/protocolfixture#test",
+    "owner": "go:internal/testutil/protocolfixture",
+    "layer": "test",
+    "imports": [
+      "go:bytes",
+      "go:context",
+      "go:encoding/json",
+      "go:errors",
+      "go:fmt",
+      "go:internal/config",
+      "go:internal/task",
+      "go:internal/task/randomid",
+      "go:internal/taskdir",
+      "go:io/fs",
+      "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:strconv",
+      "go:strings",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/unicodefold",
+    "owner": "go:internal/testutil/unicodefold",
+    "layer": "runtime",
+    "imports": [
+      "go:encoding/json",
+      "go:fmt",
+      "go:os",
+      "go:path/filepath",
+      "go:strconv",
+      "go:unicode"
+    ]
+  },
+  {
+    "name": "go:internal/testutil/unicodefold#test",
+    "owner": "go:internal/testutil/unicodefold",
+    "layer": "test",
+    "imports": [
+      "go:encoding/json",
+      "go:os",
+      "go:path/filepath",
+      "go:reflect",
+      "go:runtime",
+      "go:strconv",
+      "go:testing",
+      "go:unicode"
+    ]
+  }
+]

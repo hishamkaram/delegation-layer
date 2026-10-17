@@ -16,6 +16,8 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 func require(t *testing.T, err error) {
@@ -44,7 +46,7 @@ func fixtureTaskWithPlan(t *testing.T, mode string, configure func(*task.MetaRec
 	exeBytes, err := os.ReadFile(exe)
 	require(t, err)
 	exeDigest := task.ComputeSHA256(exeBytes)
-	id, err := task.NewTaskID()
+	id, err := randomid.NewTaskID()
 	require(t, err)
 	brief := []byte("  literal '$HOME' $(inert) \"Ω\"\nsecond line\n\n")
 	config := task.TaskConfig{Permission: "read-only", Budget: "1m0s"}

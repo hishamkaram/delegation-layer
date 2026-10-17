@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 func TestRecoverySurvivesUnavailableWorkspace(t *testing.T) {
@@ -298,7 +300,7 @@ func TestTaskNormalizationIsTransactional(t *testing.T) {
 func TestContinuationClaimMatchesSavedConversation(t *testing.T) {
 	s := testStore(t)
 	req, meta, brief := preparedInput(t, s)
-	predecessor, err := task.NewTaskID()
+	predecessor, err := randomid.NewTaskID()
 	must(t, err)
 	req.PriorSession = &task.PriorSession{Provider: req.Provider, ConversationID: "saved-conversation", PredecessorTaskID: predecessor}
 	td, err := s.CreateTask(req.TaskID, req, brief, meta)

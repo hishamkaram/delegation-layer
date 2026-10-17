@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
 // NormalizeRequestedConfig applies pure request defaults before immutable hashing.
@@ -22,7 +22,7 @@ func NormalizeRequestedConfig(r *TaskRecord) error {
 	if err := normalizeRequestedConfig(&normalized); err != nil {
 		return err
 	}
-	if err := config.ValidateProvider(normalized.Provider); err != nil {
+	if err := policy.ValidateProvider(normalized.Provider); err != nil {
 		return err
 	}
 	*r = normalized
@@ -33,7 +33,7 @@ func normalizeRequestedConfig(r *TaskRecord) error {
 	if r.Mode == "" {
 		r.Mode = r.RequestedConfig.Permission
 		if r.Mode == "" {
-			r.Mode = config.DefaultMode
+			r.Mode = policy.DefaultMode
 		}
 	}
 	if r.RequestedConfig.Permission == "" {
@@ -42,7 +42,7 @@ func normalizeRequestedConfig(r *TaskRecord) error {
 	if r.RequestedConfig.Budget == "" && r.BudgetNanos > 0 {
 		r.RequestedConfig.Budget = time.Duration(r.BudgetNanos).String()
 	}
-	duration, err := config.ParseBudgetForProvider(r.Provider, r.RequestedConfig.Budget)
+	duration, err := policy.ParseBudgetForProvider(r.Provider, r.RequestedConfig.Budget)
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func normalizedNativeTimeout(provider, value string, budget int64) (string, erro
 	if value == "" {
 		return "", nil
 	}
-	if err := config.ValidateProvider(provider); err != nil {
+	if err := policy.ValidateProvider(provider); err != nil {
 		return "", err
 	}
 	duration, err := time.ParseDuration(value)
@@ -87,10 +87,10 @@ func validateRequestedConfig(provider string, request TaskConfig, mode string, b
 	if mode == "" || request.Permission == "" || request.Permission != mode {
 		return errors.New("requested permission must match the explicit task mode")
 	}
-	if err := config.ValidateMode(mode); err != nil {
+	if err := policy.ValidateMode(mode); err != nil {
 		return err
 	}
-	duration, err := config.ParseBudgetForProvider(provider, request.Budget)
+	duration, err := policy.ParseBudgetForProvider(provider, request.Budget)
 	if err != nil {
 		return err
 	}
@@ -139,7 +139,7 @@ func validReviewTargetValue(value string) bool {
 }
 
 func validateTaskConfiguration(r *TaskRecord) error {
-	if err := config.ValidateProvider(r.Provider); err != nil {
+	if err := policy.ValidateProvider(r.Provider); err != nil {
 		return err
 	}
 	if err := validateRequestedConfig(r.Provider, r.RequestedConfig, r.Mode, r.BudgetNanos); err != nil {
@@ -181,13 +181,13 @@ func validateTimestamp(value string) error {
 // ValidatePredicateRef checks record shape, without requiring the implementation
 // to remain installed. Recovery performs a separate exact registry lookup.
 func ValidatePredicateRef(ref PredicateRef) error {
-	if err := config.ValidateProvider(ref.Adapter); err != nil {
+	if err := policy.ValidateProvider(ref.Adapter); err != nil {
 		return err
 	}
 	if ref.Mode == "" {
 		return errors.New("missing predicate mode")
 	}
-	if err := config.ValidateMode(ref.Mode); err != nil {
+	if err := policy.ValidateMode(ref.Mode); err != nil {
 		return err
 	}
 	if !nonblank(ref.Version) {
@@ -365,7 +365,7 @@ func validateMetaConfiguration(r *MetaRecord) error {
 	if err := ValidatePredicateRef(r.Predicate); err != nil {
 		return err
 	}
-	duration, err := config.ParseBudgetForProvider(r.Predicate.Adapter, r.RequestedConfig.Budget)
+	duration, err := policy.ParseBudgetForProvider(r.Predicate.Adapter, r.RequestedConfig.Budget)
 	if err != nil {
 		return err
 	}
@@ -420,7 +420,7 @@ func validateMetaRuntimeObservation(r *MetaRecord) error {
 }
 
 func validateSessionFields(provider, timestamp string) error {
-	if err := config.ValidateProvider(provider); err != nil {
+	if err := policy.ValidateProvider(provider); err != nil {
 		return err
 	}
 	return validateTimestamp(timestamp)
