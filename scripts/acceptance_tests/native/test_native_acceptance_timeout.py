@@ -11,6 +11,7 @@ from typing import Callable
 
 import acceptance_provider_common as provider_common
 import acceptance_supervisor_common as supervisor_common
+from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
 )
@@ -18,8 +19,7 @@ from scripts.delegate_acceptance.native.timeouts import TimeoutLeaseOwner
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):
-    @staticmethod
-    def _timeout_lease_operation(root: Path) -> object:
+    def _timeout_lease_operation(self, root: Path) -> object:
         output = root / "evidence"
         workspace = root / "workspace"
         briefs = root / "briefs"
@@ -34,6 +34,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.workspace = workspace_token.directory
         operation.briefs = briefs_token.directory
         operation.owned_directories = owner.transfer()
+        track_directory_pins(self, operation.owned_directories)
         operation.processes = SimpleNamespace(capture_root=raw_token)
         operation.timeout_state = timeout_state
         return operation
@@ -201,8 +202,11 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.base_parent = root / "private"
             operation.base_parent_token = base_owner.create(
                 "private parent", operation.base_parent, root)
-            operation.base = base_owner.create(
-                "private base", operation.base_parent / "run", operation.base_parent).directory
+            track_directory_pins(self, (operation.base_parent_token,))
+            base_token = base_owner.create(
+                "private base", operation.base_parent / "run", operation.base_parent)
+            track_directory_pins(self, (base_token,))
+            operation.base = base_token.directory
             operation.owned_directories = (
                 *base_owner.transfer(), *operation.owned_directories,
             )

@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import acceptance_supervisor_native as native
+from scripts.acceptance_tests.resources import track_directory_pins
 
 
 class NativeEventOracleTests(unittest.TestCase):
@@ -251,6 +252,7 @@ class FailureCleanupTests(unittest.TestCase):
             owner = native.DirectoryOwner()
             suite.owned_directories = (owner.adopt_created(
                 "native supervisor", suite.base, root),)
+            track_directory_pins(self, suite.owned_directories)
             suite.output = root / "output"
             suite.output.mkdir()
             suite.root = root / "task-root"

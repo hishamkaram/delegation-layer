@@ -17,6 +17,7 @@ import acceptance_provider_common as provider_common
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps
 import acceptance_supervisor_common as supervisor_common
 from acceptance_supervisor_common import digest, write_json
+from scripts.acceptance_tests.resources import DirectoryPinOwner
 
 
 class InspectionDriverTests(unittest.TestCase):
@@ -397,7 +398,9 @@ class InspectionDriverSetupTests(unittest.TestCase):
             with patch.object(inspection_acceptance, "ensure_private_directory",
                               side_effect=private_directory), \
                     patch.object(inspection_acceptance.secrets, "token_hex",
-                                 side_effect=lambda count: "a" * (count * 2)):
+                                 side_effect=lambda count: "a" * (count * 2)), \
+                    patch.object(inspection_acceptance, "DirectoryOwner",
+                                 side_effect=lambda: DirectoryPinOwner(self)):
                 driver = inspection_acceptance.InspectionAcceptance(args)
                 driver.ops.direct = direct
                 driver.processes.start = before_daemon

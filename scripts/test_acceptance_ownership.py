@@ -16,6 +16,7 @@ from scripts.delegate_acceptance.directories import journal as directory_journal
 from scripts.delegate_acceptance.directories import operations as directory_operations
 from scripts.delegate_acceptance.evidence import files as evidence_files
 from scripts.delegate_acceptance.processes import operations as process_operations
+from scripts.acceptance_tests.resources import track_directory_pins
 
 
 class DirectoryOwnershipTests(unittest.TestCase):
@@ -962,6 +963,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             output.mkdir()
             owner = common.DirectoryOwner()
             raw = owner.create("raw process captures", output / "processes", output)
+            track_directory_pins(self, (raw,))
             processes = common.Processes(raw.directory, {}, capture_root=raw)
             process = processes.start(
                 "signaled", [sys.executable, "-c", "import os,signal; os.kill(os.getpid(), signal.SIGTERM)"], root)

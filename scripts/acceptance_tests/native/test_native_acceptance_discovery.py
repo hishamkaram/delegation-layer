@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 import acceptance_provider_common as provider_common
 from scripts import acceptance_native as entry
+from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.acceptance_tests.native.support import (
     acceptance_task_ops,
     queue_oracle,
@@ -203,6 +204,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertNotIn("OPENCODE_CONFIG_DIR", fixture_environment)
 
             processes = gate.Processes(root / "processes", environment)
+            track_directory_pins(self, (processes.capture_root,))
             process = processes.run("environment-probe", [sys.executable, "-c",
                 "import json, os; print(json.dumps(dict(os.environ)))"], root)
             observed = gate.read_json(process.directory / "stdout")

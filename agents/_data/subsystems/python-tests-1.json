@@ -76,6 +76,7 @@
       "py:acceptance_native",
       "py:acceptance_provider_common",
       "py:acceptance_tests.native.support",
+      "py:acceptance_tests.resources",
       "py:delegate_acceptance.native.acceptance",
       "py:json",
       "py:os",
@@ -96,6 +97,7 @@
     "imports": [
       "py:acceptance_native",
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.resources",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.acceptance_lifecycle",
       "py:delegate_acceptance.processes.operations",
@@ -134,6 +136,7 @@
     "imports": [
       "py:acceptance_provider_common",
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.resources",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.timeouts",
       "py:os",
@@ -172,6 +175,7 @@
     "imports": [
       "py:acceptance_ccr_fixture",
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.resources",
       "py:json",
       "py:pathlib",
       "py:sys",
@@ -218,6 +222,7 @@
       "py:acceptance_inspection",
       "py:acceptance_provider_common",
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.resources",
       "py:json",
       "py:pathlib",
       "py:sys",
@@ -253,6 +258,7 @@
     "layer": "test",
     "imports": [
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.resources",
       "py:delegate_acceptance.directories.finalization",
       "py:delegate_acceptance.directories.journal",
       "py:delegate_acceptance.directories.operations",
@@ -375,6 +381,7 @@
       "py:acceptance_supervisor_common",
       "py:acceptance_supervisor_hermetic",
       "py:acceptance_tests.hermetic.fixtures",
+      "py:acceptance_tests.resources",
       "py:contextlib",
       "py:delegate_acceptance.hermetic.case",
       "py:delegate_acceptance.hermetic.observations",
@@ -399,6 +406,7 @@
     "imports": [
       "py:__future__",
       "py:acceptance_supervisor_native",
+      "py:acceptance_tests.resources",
       "py:pathlib",
       "py:tempfile",
       "py:types",
@@ -476,6 +484,7 @@
       "py:hashlib",
       "py:json",
       "py:native_acceptance_evidence",
+      "py:os",
       "py:pathlib",
       "py:shutil",
       "py:sys",

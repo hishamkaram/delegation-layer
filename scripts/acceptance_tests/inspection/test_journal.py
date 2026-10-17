@@ -15,6 +15,7 @@ from scripts import acceptance_provider_common as provider_common
 from scripts import acceptance_supervisor_common as supervisor_common
 from scripts.acceptance_provider_common import AcceptanceFailure, NativeTaskOps, _inspection_group
 from scripts.acceptance_supervisor_common import digest, read_json, write_json
+from scripts.acceptance_tests.resources import track_directory_pins
 
 
 ROOT = "a" * 32
@@ -625,6 +626,7 @@ class InspectionHarnessTests(unittest.TestCase):
             return original_write_json(path, *args, **kwargs)
 
         processes = supervisor_common.Processes(self.fixture.base / "processes", {"PATH": "/usr/bin"})
+        track_directory_pins(self, (processes.capture_root,))
         daemon = SimpleNamespace(poll=lambda: None)
         ops = NativeTaskOps(processes, self.fixture.base / "delegate", self.fixture.runner, self.fixture.pueue,
                             self.fixture.state_parent, self.fixture.state, self.fixture.output)

@@ -18,6 +18,7 @@ from scripts.delegate_acceptance.hermetic import suite as hermetic_suite
 from scripts.delegate_acceptance.hermetic import observations as hermetic_observations
 from scripts.delegate_acceptance.hermetic import scenarios_admission
 from scripts.acceptance_tests.hermetic.fixtures import retry_case
+from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.processes import operations as process_operations
 
 
@@ -144,6 +145,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
+            track_directory_pins(self, (processes.capture_root,))
             with patch.object(process_operations.subprocess, "Popen",
                               side_effect=OSError("injected spawn failure")):
                 with self.assertRaisesRegex(OSError, "spawn failure"):
@@ -155,6 +157,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
+            track_directory_pins(self, (processes.capture_root,))
             collision = processes.directory / "001-collision"
             collision.mkdir()
             sentinel = collision / "preexisting.txt"
@@ -170,6 +173,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes")
+            track_directory_pins(self, (processes.capture_root,))
             process = processes.start(
                 "signaled",
                 [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"],
@@ -262,6 +266,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
                 return original_write_json(path, *args, **kwargs)
 
             processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
+            track_directory_pins(self, (processes.capture_root,))
             lifecycle_owner = SimpleNamespace(process=None)
             with patch.object(process_operations.subprocess, "Popen", FakePopen), \
                     patch.object(process_operations, "write_json", side_effect=fail_started):
@@ -286,6 +291,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes")
+            track_directory_pins(self, (processes.capture_root,))
             with patch.object(supervisor_common.DirectoryOwner, "transfer_child_to",
                               side_effect=OSError("injected ownership transfer failure")):
                 with self.assertRaisesRegex(OSError, "ownership transfer failure"):
@@ -586,9 +592,11 @@ class AcceptanceArtifactCleanupTests(unittest.TestCase):
             owner = supervisor_common.DirectoryOwner()
             captures = owner.create("raw process captures", output / "processes", output)
             owner.adopt_created("state", state, state_parent)
+            directories = owner.transfer()
+            track_directory_pins(self, directories)
 
             self.assertFalse(supervisor_common.finalize_acceptance_artifacts(
-                output, False, owner.transfer(), True,
+                output, False, directories, True,
                 raw_process_captures_token=captures,
             ))
 
@@ -612,9 +620,11 @@ class AcceptanceArtifactCleanupTests(unittest.TestCase):
             state.mkdir(parents=True)
             owner = supervisor_common.DirectoryOwner()
             owner.adopt_created("state", state, state_parent)
+            directories = owner.transfer()
+            track_directory_pins(self, directories)
 
             self.assertFalse(supervisor_common.finalize_acceptance_artifacts(
-                output, True, owner.transfer(), True,
+                output, True, directories, True,
             ))
 
             self.assertTrue(state.exists())
@@ -677,9 +687,11 @@ class AcceptanceArtifactCleanupTests(unittest.TestCase):
             output.mkdir(parents=True)
             owner = supervisor_common.DirectoryOwner()
             owner.adopt_created("state", root / "state", root)
+            directories = owner.transfer()
+            track_directory_pins(self, directories)
 
             self.assertFalse(supervisor_common.finalize_acceptance_artifacts(
-                output, True, owner.transfer(), True,
+                output, True, directories, True,
             ))
 
             self.assertTrue(output.is_dir())

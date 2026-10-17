@@ -190,7 +190,11 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="acceptance-discovery-")
         self.addCleanup(directory.cleanup)
-        self.scripts = Path(directory.name) / "scripts"
+        workspace = Path(directory.name) / "source"
+        workspace.mkdir()
+        alias = Path(directory.name) / "alias"
+        alias.symlink_to(workspace, target_is_directory=True)
+        self.scripts = alias.resolve() / "scripts"
         self.scripts.mkdir()
         self.enterContext(patch.object(verifier, "SCRIPT_DIRECTORY", self.scripts))
 

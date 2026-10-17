@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import acceptance_supervisor_common as supervisor_common
 from scripts import acceptance_native as entry
+from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
     acceptance_lifecycle as lifecycle_impl,
@@ -101,6 +102,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation = object.__new__(gate.NativeAcceptance)
             operation.daemon = None
             processes = gate.Processes(root / "processes", {"PATH": "/usr/bin"})
+            track_directory_pins(self, (processes.capture_root,))
             with patch.object(processes_impl.subprocess, "Popen", FakePopen), \
                     patch.object(processes_impl, "write_json", side_effect=fail_started):
                 with self.assertRaisesRegex(OSError, "started receipt"):
@@ -133,6 +135,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.daemon = None
             operation.closed = False
             operation.processes = gate.Processes(root / "processes", {"PATH": "/usr/bin"})
+            track_directory_pins(self, (operation.processes.capture_root,))
             with patch.object(processes_impl.subprocess, "Popen", FakePopen):
                 process = operation.processes.start("pueued", ["/bin/sh"], cwd)
 
@@ -214,6 +217,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.state = base.directory / "state"
             operation.workspace = base.directory / "workspace"
             operation.owned_directories = (base, raw)
+            track_directory_pins(self, operation.owned_directories)
             operation.processes = SimpleNamespace(capture_root=raw)
             calls = []
             operation._write_failure_diagnostics = lambda: calls.append("diagnostics") or False
@@ -243,6 +247,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             base_token = owner.create("acceptance base", operation.base, operation.base_parent)
             raw_token = owner.create("raw process captures", operation.output / "processes", operation.output)
             operation.owned_directories = (base_parent, base_token, raw_token)
+            track_directory_pins(self, operation.owned_directories)
             operation.processes = SimpleNamespace(capture_root=raw_token)
             (operation.base / "state").mkdir()
             (operation.base / "state" / "record").write_text("disposable")
@@ -271,6 +276,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             base_token = owner.create("acceptance base", operation.base, operation.base_parent)
             raw_token = owner.create("raw process captures", operation.output / "processes", operation.output)
             operation.owned_directories = (base_parent, base_token, raw_token)
+            track_directory_pins(self, operation.owned_directories)
             operation.processes = SimpleNamespace(capture_root=raw_token)
             operation.closed = False
 
@@ -614,6 +620,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.output.mkdir()
             owner = supervisor_common.DirectoryOwner()
             base_token = owner.create("acceptance base", operation.base, operation.base_parent)
+            track_directory_pins(self, (base_token,))
             captures = operation.output / "processes"
             captures.mkdir()
             sentinel = captures / "keep.txt"

@@ -175,6 +175,7 @@
       "py:acceptance_provider_common",
       "py:acceptance_supervisor_common",
       "py:acceptance_tests.inspection.fixtures",
+      "py:acceptance_tests.resources",
       "py:copy",
       "py:delegate_acceptance.processes.operations",
       "py:delegate_acceptance.tasks.operations",
@@ -440,6 +441,43 @@
       "py:pathlib",
       "py:subprocess",
       "py:sys",
+      "py:tempfile",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.test_cleanup_journal_pins",
+    "owner": "py:delegate_acceptance.directories",
+    "layer": "test",
+    "imports": [
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.directories.operations",
+      "py:os",
+      "py:pathlib",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.resources",
+    "owner": "py:delegate_acceptance.directories",
+    "layer": "test",
+    "imports": [
+      "py:collections.abc",
+      "py:delegate_acceptance.directories.operations",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.test_resources",
+    "owner": "py:delegate_acceptance.directories",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.resources",
+      "py:delegate_acceptance.directories.operations",
+      "py:os",
+      "py:pathlib",
       "py:tempfile",
       "py:unittest"
     ]

@@ -18,6 +18,7 @@ from scripts.delegate_acceptance.private_cli import capacity_entry as capacity_e
 from scripts.delegate_acceptance.private_cli import handoff_cleanup as handoff_cleanup_impl
 from scripts.delegate_acceptance.processes import operations as process_owner_impl
 from scripts import acceptance_supervisor_common as common
+from scripts.acceptance_tests.resources import DirectoryPinOwner
 from scripts.acceptance_tests.private_cli.fixtures import (
     _release_live_directory_tokens,
 )
@@ -553,10 +554,8 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
         owners = []
         closure_calls = []
         shutdown_calls = []
-        real_owner = private_cli.DirectoryOwner
-
-        def tracked_owner(*args, **kwargs):
-            owner = real_owner(*args, **kwargs)
+        def tracked_owner():
+            owner = DirectoryPinOwner(self)
             owners.append(owner)
             return owner
 

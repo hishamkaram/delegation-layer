@@ -294,48 +294,49 @@ def prepare_directory_cleanup(journal_path, label, target_identity, quarantine_p
         target_token = target_owner.adopt_created(
             "cleanup target", Path(target["path"]), Path(target["parent"]),
         )
-        require(_cleanup_identity_matches_token(target, target_token),
-                "cleanup target identity changed before preparation")
-        transaction_id = secrets.token_hex(16)
-        quarantine = quarantine_parent / (".delegate-cleanup-" + transaction_id)
-        quarantine_parent_fd, quarantine_parent_identity = _open_parent_directory(
-            quarantine_parent,
-        )
         try:
-            require(target["device"] == quarantine_parent_identity[0],
-                    "cleanup quarantine must share the target filesystem")
+            require(_cleanup_identity_matches_token(target, target_token),
+                    "cleanup target identity changed before preparation")
+            transaction_id = secrets.token_hex(16)
+            quarantine = quarantine_parent / (".delegate-cleanup-" + transaction_id)
+            quarantine_parent_fd, quarantine_parent_identity = _open_parent_directory(
+                quarantine_parent,
+            )
             try:
-                os.stat(quarantine.name, dir_fd=quarantine_parent_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                pass
-            else:
-                raise RuntimeError("cleanup quarantine path is already occupied")
-            quarantine_identity = {
-                "path": str(quarantine.absolute()),
-                "parent": str(quarantine_parent),
-                "device": target["device"],
-                "inode": target["inode"],
-                "parent_device": quarantine_parent_identity[0],
-                "parent_inode": quarantine_parent_identity[1],
-            }
-            value = {
-                "schema_version": _CLEANUP_JOURNAL_VERSION,
-                "kind": _CLEANUP_JOURNAL_KIND,
-                "transaction_id": transaction_id,
-                "label": str(label),
-                "authorization_sha256": authorization_sha256,
-                "state": "prepared",
-                "target": target,
-                "quarantine": quarantine_identity,
-            }
-            write_json(journal_path, value)
-        except BaseException:
+                require(target["device"] == quarantine_parent_identity[0],
+                        "cleanup quarantine must share the target filesystem")
+                try:
+                    os.stat(quarantine.name, dir_fd=quarantine_parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise RuntimeError("cleanup quarantine path is already occupied")
+                quarantine_identity = {
+                    "path": str(quarantine.absolute()),
+                    "parent": str(quarantine_parent),
+                    "device": target["device"],
+                    "inode": target["inode"],
+                    "parent_device": quarantine_parent_identity[0],
+                    "parent_inode": quarantine_parent_identity[1],
+                }
+                value = {
+                    "schema_version": _CLEANUP_JOURNAL_VERSION,
+                    "kind": _CLEANUP_JOURNAL_KIND,
+                    "transaction_id": transaction_id,
+                    "label": str(label),
+                    "authorization_sha256": authorization_sha256,
+                    "state": "prepared",
+                    "target": target,
+                    "quarantine": quarantine_identity,
+                }
+                write_json(journal_path, value)
+            finally:
+                os.close(quarantine_parent_fd)
             target_owner.release()
-            raise
+            return value
         finally:
-            os.close(quarantine_parent_fd)
-        target_owner.release()
-        return value
+            if not target_token._consumed:
+                target_token.consume()
     finally:
         _cleanup_unlock(lock_fd)
 

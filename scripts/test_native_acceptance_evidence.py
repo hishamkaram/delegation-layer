@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -907,6 +908,14 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         original_prepare = evidence.prepare_directory_cleanup
         moved = self.root / "retention-original"
         swapped = False
+        adopted_pins = []
+        original_adopt = cleanup_journal.DirectoryOwner.adopt_created
+
+        def observe_adoption(owner, label, directory, parent):
+            token = original_adopt(owner, label, directory, parent)
+            if label == "cleanup target" and Path(directory) == old:
+                adopted_pins.extend((token.parent_fd, token.directory_fd))
+            return token
 
         def swap_before_prepare(journal, label, identity, quarantine_parent, authorization):
             nonlocal swapped
@@ -919,7 +928,9 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
                 journal, label, identity, quarantine_parent, authorization,
             )
 
-        with patch.object(retention_operations, "prepare_directory_cleanup", side_effect=swap_before_prepare):
+        with patch.object(cleanup_journal.DirectoryOwner, "adopt_created", observe_adoption), \
+                patch.object(retention_operations, "prepare_directory_cleanup",
+                             side_effect=swap_before_prepare):
             with self.assertRaisesRegex(evidence.EvidenceError, "aggregate_retention_incomplete"):
                 evidence.build_aggregate(
                     current, matrix, current / evidence.AGGREGATE_RECEIPT_NAME,
@@ -930,6 +941,10 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         self.assertEqual((value["status"], value["retention"]["status"]), ("FAIL", "partial"))
         self.assertTrue((old / "replacement-marker").is_file())
         self.assertTrue(moved.is_dir())
+        self.assertEqual(len(adopted_pins), 2)
+        for descriptor in adopted_pins:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
 
 
 if __name__ == "__main__":

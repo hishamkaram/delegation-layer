@@ -291,6 +291,7 @@
       "py:acceptance_private_cli",
       "py:acceptance_supervisor_common",
       "py:acceptance_tests.private_cli.fixtures",
+      "py:acceptance_tests.resources",
       "py:contextlib",
       "py:delegate_acceptance.private_cli.application",
       "py:delegate_acceptance.private_cli.capacity_entry",
