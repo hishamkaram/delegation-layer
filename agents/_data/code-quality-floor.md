@@ -5,6 +5,7 @@ This document specifies the non-negotiable engineering floor for the repository.
 ## 1. Toolchain & Environment
 - **Go Version**: `go 1.27.0` declared in `go.mod`.
 - **Compiler Pin**: Exactly `go1.27.2` in development and CI.
+- **Python Toolchain**: Python 3.12 for repository checks and acceptance scripts; CI selects it explicitly.
 - **Local Toolchain Guard**: `GOTOOLCHAIN=local` is strictly enforced to prevent ambient, untracked compiler downloads.
 - **Project Tools Pinning**:
   - `golangci-lint`: `v2.14.0`

@@ -5,7 +5,7 @@ provider differences explicit at the adapter boundary.
 
 ## Development setup
 
-Install Go 1.27.2, Python 3, Node.js 22 or newer, and the repository's pinned
+Install Go 1.27.2, Python 3.12, Node.js 22 or newer, and the repository's pinned
 verification tools. Node.js is used by the npm and plugin package checks.
 `make acceptance-private-cli` executes the current build against a Pi-shaped
 executable fixture and a real private supervisor on macOS and Linux. This gate
@@ -318,6 +318,12 @@ tag as its input, on a project-owned runner labeled `delegation-native`. That
 runner must already have the provider CLIs and their native authentication. The
 `opencode_model` input selects an available OpenCode control model explicitly.
 A passing control covers that model; it does not clear failures for other models.
+The runner must support `actions/setup-python` v6: Actions runner 2.327.1 or
+newer, an OS supported by its Python distributions, and a writable tool cache.
+On macOS, that cache must be `/Users/runner/hostedtoolcache`; on Linux, use a
+supported Ubuntu release. See the [self-hosted setup requirements](https://github.com/actions/setup-python/blob/ece7cb06caefa5fff74198d8649806c4678c61a1/docs/advanced-usage.md#using-setup-python-with-a-self-hosted-runner).
+The workflow logs `python3 --version` before archive verification. Prove these
+prerequisites on the actual `delegation-native` runner before release promotion.
 The workflow uses the current protected-main acceptance harness and the shared
 `scripts/verify_release_archive.py` verifier. The verifier checks the requested
 draft archive's checksum and attestation, exercises the released CLI through

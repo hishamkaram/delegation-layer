@@ -11,7 +11,12 @@ class SourceFingerprintTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="proof-source-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        temporary = Path(self.temporary.name)
+        physical = temporary / "source"
+        physical.mkdir()
+        alias = temporary / "source-alias"
+        alias.symlink_to(physical, target_is_directory=True)
+        self.root = alias.resolve(strict=True)
         self.write(source.PARSER_SOURCE, "raise RuntimeError('never execute the inspected parser')\n")
 
     def write(self, name: str, value: str):

@@ -104,6 +104,11 @@ jobs:
           name: release-assets-${{ inputs.tag }}
           path: ${{ runner.temp }}/delegation-layer-release
 
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
       - name: Verify the exact release archive and packaged default path
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,6 +117,7 @@ jobs:
           RECEIPT: ${{ runner.temp }}/delegation-layer-archive-receipt.json
         shell: bash
         run: |
+          python3 --version
           python3 scripts/verify_release_archive.py verify \
             --mode native-acceptance \
             --assets-dir "${RUNNER_TEMP}/delegation-layer-release" \
