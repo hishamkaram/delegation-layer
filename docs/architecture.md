@@ -42,6 +42,13 @@ and [lead-interface.sequence.json](../diagrams/lead-interface.sequence.json).
 The component view includes optional managed Git workspace coordination; the
 sequence keeps provider execution separate from its workspace helper operations.
 
+Download the complete diagrams as vectors or images:
+
+| Diagram | SVG | PNG |
+|---|---|---|
+| System components | [Light](../diagrams/components.light.svg) · [Dark](../diagrams/components.dark.svg) | [Light](../diagrams/components.light.png) · [Dark](../diagrams/components.dark.png) |
+| Task lifecycle | [Light](../diagrams/lead-interface.light.svg) · [Dark](../diagrams/lead-interface.dark.svg) | [Light](../diagrams/lead-interface.light.png) · [Dark](../diagrams/lead-interface.dark.png) |
+
 The plugin bootstrap is outside the task lifecycle. It only makes the
 provider-neutral control CLI available before the agent can use the skill; the
 CLI and its private supervisor still own admission, execution, evidence, and

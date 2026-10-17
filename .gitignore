@@ -13,6 +13,7 @@ __pycache__/
 /diagrams/*.delivery.json
 /diagrams/*.visual-check.json
 /diagrams/*.visual-check.html
+/diagrams/*.visual-check.*.png
 /diagrams/*.browser-check.json
 /diagrams/*.finalize.json
 /diagrams/*.finalize-summary.json

@@ -34,8 +34,48 @@
       "source": "diagrams/components.architecture.json"
     },
     {
+      "path": "diagrams/components.light.svg",
+      "generator": "archify 3.1.0 viewer Export",
+      "source": "diagrams/components.architecture.json"
+    },
+    {
+      "path": "diagrams/components.dark.svg",
+      "generator": "archify 3.1.0 viewer Export",
+      "source": "diagrams/components.architecture.json"
+    },
+    {
+      "path": "diagrams/components.light.png",
+      "generator": "archify 3.1.0 viewer Export",
+      "source": "diagrams/components.architecture.json"
+    },
+    {
+      "path": "diagrams/components.dark.png",
+      "generator": "archify 3.1.0 viewer Export",
+      "source": "diagrams/components.architecture.json"
+    },
+    {
       "path": "diagrams/lead-interface.html",
       "generator": "archify 3.1.0",
+      "source": "diagrams/lead-interface.sequence.json"
+    },
+    {
+      "path": "diagrams/lead-interface.light.svg",
+      "generator": "archify 3.1.0 viewer Export",
+      "source": "diagrams/lead-interface.sequence.json"
+    },
+    {
+      "path": "diagrams/lead-interface.dark.svg",
+      "generator": "archify 3.1.0 viewer Export",
+      "source": "diagrams/lead-interface.sequence.json"
+    },
+    {
+      "path": "diagrams/lead-interface.light.png",
+      "generator": "archify 3.1.0 viewer Export",
+      "source": "diagrams/lead-interface.sequence.json"
+    },
+    {
+      "path": "diagrams/lead-interface.dark.png",
+      "generator": "archify 3.1.0 viewer Export",
       "source": "diagrams/lead-interface.sequence.json"
     },
     {
