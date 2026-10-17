@@ -141,11 +141,17 @@ func TestAdmissionInspectionReplayAcceptsAuthorizedManagedSuccessor(t *testing.T
 		t.Fatalf("replay changed immutable worker binding: before=%+v after=%+v", original.Binding, replayed.Binding)
 	}
 	assertIncompleteInspectionReplayHasNoStartOrCompletion(t, fixture.Store, operation)
+	assertClaimedInspectionReplayDoesNotResubmit(t, fixture, operation, binding.WorkerExecutable)
+	assertIncompleteInspectionReplayHasNoStartOrCompletion(t, fixture.Store, operation)
+}
+
+func assertClaimedInspectionReplayDoesNotResubmit(t *testing.T, fixture admissionfixture.QueuedInspectionUpgradeFixture, operation *inspection.Operation, worker string) {
+	t.Helper()
 	before, err := os.ReadFile(fixture.LogPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = submitInspectionOnceWithState(t.Context(), operation, fixture.Supervisor, binding.WorkerExecutable, fixture.Store.Root); err != nil {
+	if _, err = submitInspectionOnceWithState(t.Context(), operation, fixture.Supervisor, worker, fixture.Store.Root); err != nil {
 		t.Fatalf("already-submitted inspection was not reconciled through its original journal: %v", err)
 	}
 	after, err := os.ReadFile(fixture.LogPath)
@@ -155,7 +161,6 @@ func TestAdmissionInspectionReplayAcceptsAuthorizedManagedSuccessor(t *testing.T
 	if string(after) != string(before) {
 		t.Fatalf("already-submitted replay launched another supervisor command: before=%q after=%q", before, after)
 	}
-	assertIncompleteInspectionReplayHasNoStartOrCompletion(t, fixture.Store, operation)
 }
 
 func assertIncompleteInspectionReplayHasNoStartOrCompletion(t *testing.T, store *taskdir.Store, operation *inspection.Operation) {
