@@ -126,5 +126,3 @@ def _validate_model_choices(value: object, label: str) -> None:
                 f"{label} contains an invalid choice")
         require(choice not in seen, f"{label} contains a duplicate choice")
         seen.add(choice)
-
-

@@ -46,5 +46,3 @@ def workspace_snapshot(directory: Path) -> dict[str, dict[str, object]]:
             entry["device"] = metadata.st_rdev
         result[str(path.relative_to(directory))] = entry
     return result
-
-

@@ -66,5 +66,3 @@ def _validate_bound_provider_record(
         _canonical_timestamp(evidence.get("started_at"), f"{label} started_at")
         _provider_runtime_identity(evidence, "started", label)
     return evidence
-
-

@@ -64,6 +64,3 @@ PROTECTED_CALLER_PHASES = frozenset(
         "managed-runner-collection",
     }
 )
-
-
-

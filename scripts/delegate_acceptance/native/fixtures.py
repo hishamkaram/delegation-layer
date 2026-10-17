@@ -100,5 +100,3 @@ def require_same_session(first: str, second: str) -> None:
 def require_replay_unchanged(before: dict[str, dict[str, object]],
                              after: dict[str, dict[str, object]]) -> None:
     require(before == after, "collection replay changed immutable evidence")
-
-

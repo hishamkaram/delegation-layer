@@ -358,7 +358,7 @@ class NativeAcceptance:
             self, task_id: str, meta: dict[str, object],
             launch_evidence: tuple[dict[str, object], dict[str, object]] | None = None,
             started_evidence: dict[str, object] | None = None) -> dict[str, str]:
-        return acceptance_operations._record_provider_runtime_identity(self, 
+        return acceptance_operations._record_provider_runtime_identity(self,
             task_id, meta, launch_evidence, started_evidence)
 
     def provider_runtime_receipt(self) -> dict[str, object]:
@@ -621,5 +621,3 @@ class NativeAcceptance:
 
     def _run_resumable(self) -> int:
         return acceptance_scenarios._run_resumable(self)
-
-

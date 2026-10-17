@@ -685,4 +685,3 @@ def _require_chain_execution_events(case, record):
                  position["stderr-eof"] < position["stderr-raw-closed"] <
                  position["completion-observed"],
                  "chain capture close events are out of order")
-

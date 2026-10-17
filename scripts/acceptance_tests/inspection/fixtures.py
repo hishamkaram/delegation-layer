@@ -481,4 +481,3 @@ class InspectionFixture:
         (directory / "lifetime-unlaunched.json").write_bytes(
             provider_common.canonical_go_json(fence))
         return directory
-
