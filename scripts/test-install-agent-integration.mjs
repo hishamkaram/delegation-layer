@@ -38,6 +38,42 @@ function runInstaller(args, { cwd, home, path, input = "" }) {
   return result;
 }
 
+async function testEntryWithoutResolvableHome(root) {
+  const preloadPath = join(root, "throw-homedir.mjs");
+  await writeFile(preloadPath, [
+    'import os from "node:os";',
+    'import { syncBuiltinESMExports } from "node:module";',
+    'os.homedir = () => { throw new Error("forced home lookup failure"); };',
+    "syncBuiltinESMExports();",
+    "",
+  ].join("\n"));
+  const environment = { ...process.env };
+  delete environment.DELEGATION_LAYER_HOME;
+  const runWithoutHome = (argumentsList) => spawnSync(process.execPath, [
+    "--import",
+    preloadPath,
+    installerPath,
+    ...argumentsList,
+  ], { cwd: root, encoding: "utf8", env: environment });
+
+  const target = join(root, "entry-legacy-target");
+  const legacy = runWithoutHome(["--target", target]);
+  assert.equal(legacy.status, 0, legacy.stderr);
+  await assertInstalled(target);
+
+  const cliHelp = runWithoutHome(["install-cli", "--help"]);
+  assert.equal(cliHelp.status, 0, cliHelp.stderr);
+  assert.equal(cliHelp.stdout, "");
+  assert.equal(cliHelp.stderr, "Usage: delegation-layer install-cli [--version VERSION] [--install-dir ABSOLUTE_DIR]\n");
+
+  const install = runWithoutHome([
+    "install", "--scope", "global", "--harness", "claude", "--yes", "--routing", "skill-only",
+  ]);
+  assert.equal(install.status, 1);
+  assert.equal(install.stdout, "");
+  assert.equal(install.stderr, "Error: forced home lookup failure\n");
+}
+
 async function assertInstalled(target) {
   async function files(directory, relative = "") {
     const entries = await readdir(join(directory, relative), { withFileTypes: true });
@@ -65,6 +101,8 @@ async function assertInstalled(target) {
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "delegation-layer-installer-")));
 try {
+  await testEntryWithoutResolvableHome(root);
+
   for (const target of [root, root + sep, join(root, "target") + sep, join(root, "target", "..", "other")]) {
     assert.deepEqual(parseLegacyArguments(["--target", target]), {
       kind: "options", options: { force: false, target: resolve(target) },
