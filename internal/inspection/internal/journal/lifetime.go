@@ -356,11 +356,3 @@ func (o *Operation) SealLifetimeUnlaunchedContext(ctx context.Context) (*task.Li
 	}
 	return records.SealLifetimeUnlaunchedContext(ctx)
 }
-
-func (o *Operation) withLifetimeLaunchPermissionContext(ctx context.Context, callback func(*taskdir.ControlTransaction) error) error {
-	records, err := o.controlLifetime(true)
-	if err != nil {
-		return err
-	}
-	return records.WithLifetimeLaunchPermissionContext(ctx, callback)
-}

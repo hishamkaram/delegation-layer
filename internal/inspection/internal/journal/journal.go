@@ -453,8 +453,12 @@ func (o *Operation) claimGuardContext(ctx context.Context, name string, now time
 		return false, contextErr
 	}
 	defer cancel()
+	records, lifetimeErr := o.controlLifetime(true)
+	if lifetimeErr != nil {
+		return false, lifetimeErr
+	}
 	var created bool
-	err := o.withLifetimeLaunchPermissionContext(claimCtx, func(tx *taskdir.ControlTransaction) error {
+	err := records.WithLifetimeLaunchPermissionOrReplayContext(claimCtx, func(tx *taskdir.ControlTransaction) error {
 		exists, readErr := readExistingClaim(tx, name, o.digest, createdFloor, o.deadline)
 		if readErr != nil {
 			return readErr
@@ -465,6 +469,8 @@ func (o *Operation) claimGuardContext(ctx context.Context, name string, now time
 		if exists {
 			return nil
 		}
+		return os.ErrNotExist
+	}, func(tx *taskdir.ControlTransaction) error {
 		record := makeRecord(createdAt)
 		if validateErr := validateOperationClaim(record, o.digest, createdFloor, o.deadline); validateErr != nil {
 			return validateErr

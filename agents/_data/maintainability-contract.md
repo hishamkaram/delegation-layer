@@ -262,6 +262,12 @@ contract. Preserve the original consumer's classifications when adding a typed
 cause; do not broaden a shared sentinel to satisfy a new helper's test. Pair
 the helper cases with the actual public command and independent joined faults.
 
+### Inspection claim replay
+
+| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
+|---|---|---|---|---|---|---|
+| IC-R1: validated immutable submission or start guard; native lifetime may already be closed while independent worker-exit proof is pending | Inspection journal / canonical control transaction | Read the existing guard without issuing another permit; only an absent guard may reach the shared lifetime launch gate | Exact existing guard validated against the request digest and original admission window under the same transaction | Invalid or unreadable guards retain their evidence or I/O failure; canceled or expired callers cannot obtain readback; missing guards remain fenced after closure | Submission replay awaits canonical terminal evidence; start replay refuses another execution; neither changes the guard or creates launch authority | TestInspectionClosedClaimReplayRemainsReadbackOnly, TestInspectionClosedLifetimeRefusesMissingClaim, TestInspectionClosedClaimReplayRejectsInvalidGuard, TestInspectionClosedClaimReplayHonorsCallerContext, TestInspectionUnlaunchedFenceRefusesLateAuthority, TestTerminalInspectionWakeRetriesConcurrentFailedCleanupWithoutAnotherCallback |
+
 ### Private supervisor generation transitions
 
 The private migration owner alone changes generation records under the existing
