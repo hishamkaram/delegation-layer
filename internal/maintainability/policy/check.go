@@ -121,6 +121,9 @@ func checkImports(module Module, source Source) []Finding {
 }
 
 func forbiddenPureImport(target string) bool {
+	if strings.HasPrefix(target, "js:") && !strings.HasPrefix(target, "js:node:") {
+		target = "js:node:" + strings.TrimPrefix(target, "js:")
+	}
 	for _, name := range []string{"go:os", "go:os/exec", "go:syscall", "go:unsafe", "go:net", "go:net/http", "go:crypto/rand", "go:math/rand", "go:C", "py:os", "py:subprocess", "py:socket", "py:random", "py:time", "py:importlib", "py:ctypes", "js:node:fs", "js:node:child_process", "js:node:http", "js:node:https", "js:node:net", "js:node:vm"} {
 		separator := "/"
 		if strings.HasPrefix(name, "py:") {

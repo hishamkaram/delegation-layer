@@ -3,8 +3,29 @@
 Patch the defining module when replacing implementation dependencies in tests.
 """
 
+# Preserve the facade's published standard-library exports for compatibility.
+from dataclasses import (
+    dataclass as dataclass,
+    field as field,
+)
 from pathlib import Path
+from typing import (
+    BinaryIO as BinaryIO,
+    Callable as Callable,
+    Protocol as Protocol,
+)
+import ctypes as ctypes
+import fcntl as fcntl
+import hashlib as hashlib
+import json as json
+import math as math
+import os as os
+import secrets as secrets
+import stat as stat
+import subprocess as subprocess
 import sys
+import tempfile as tempfile
+import time as time
 
 # Direct script execution and legacy flat imports place scripts/ on sys.path.
 # Add its parent so every implementation loads under one canonical namespace.

@@ -50,6 +50,54 @@ func TestJavaScriptAmbientReferencesReachPurePolicy(t *testing.T) {
 	}
 }
 
+func TestJavaScriptBuiltinImportAliasesReachPurePolicy(t *testing.T) {
+	cases := []struct {
+		specifier string
+		effectful bool
+	}{
+		{specifier: "fs", effectful: true},
+		{specifier: "node:fs", effectful: true},
+		{specifier: "fs/promises", effectful: true},
+		{specifier: "node:fs/promises", effectful: true},
+		{specifier: "child_process", effectful: true},
+		{specifier: "node:child_process", effectful: true},
+		{specifier: "http", effectful: true},
+		{specifier: "node:http", effectful: true},
+		{specifier: "https", effectful: true},
+		{specifier: "node:https", effectful: true},
+		{specifier: "net", effectful: true},
+		{specifier: "node:net", effectful: true},
+		{specifier: "vm", effectful: true},
+		{specifier: "node:vm", effectful: true},
+		{specifier: "path"},
+		{specifier: "node:path"},
+		{specifier: "path/posix"},
+		{specifier: "node:path/win32"},
+		{specifier: "fs-extra"},
+		{specifier: "net-extra"},
+		{specifier: "@scope/net"},
+		{specifier: "@scope/fs"},
+	}
+	for _, test := range cases {
+		t.Run(test.specifier, func(t *testing.T) {
+			source := javascriptEffectsFixture(t, "import * as value from '"+test.specifier+"'; export {value};")
+			target := "js:" + test.specifier
+			if !slices.Equal(source.Imports, []policy.Dependency{{Target: target}}) {
+				t.Fatalf("collector changed the actual import: %+v", source.Imports)
+			}
+			module := policy.Module{Name: source.Module, Owner: "fixture", Layer: "pure", Imports: []string{target}}
+			findings := policy.Check(policy.Manifest{Modules: []policy.Module{module}}, []policy.Source{source})
+			var want []policy.Finding
+			if test.effectful {
+				want = []policy.Finding{{Path: source.Path, Kind: "purity", Detail: "effectful import " + target}}
+			}
+			if !slices.Equal(findings, want) {
+				t.Fatalf("registered import %s: got %+v, want %+v", target, findings, want)
+			}
+		})
+	}
+}
+
 func TestJavaScriptPureAPIsAndLiteralDecoysRemainValid(t *testing.T) {
 	source := javascriptEffectsFixture(t, `import {join, normalize, isAbsolute} from 'node:path';
 export const parsed = Date.parse('2026-10-17');

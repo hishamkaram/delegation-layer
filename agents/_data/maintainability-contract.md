@@ -106,6 +106,12 @@ owner; do not add companion objects and forwarding caches to satisfy file
 budgets. Relocated behavior must preserve its real consumers and data flow,
 including values passed between newly extracted functions.
 
+Compatibility facades preserve their recorded export and signature contracts,
+including intentional standard-library re-exports. Mark those imports as
+explicit re-exports; no local usage does not authorize deleting a published
+name. Run the boundary's compatibility and module-identity tests before broader
+checks when those imports change.
+
 `make verify-maintainability` checks the maintained candidate, including
 untracked additions and build-excluded Go source. Ignored scratch files are
 outside that candidate. One policy validator consumes Go metadata/AST, Python

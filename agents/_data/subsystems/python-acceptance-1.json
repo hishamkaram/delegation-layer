@@ -191,6 +191,8 @@
     "owner": "py:acceptance_provider_common",
     "layer": "runtime",
     "imports": [
+      "py:copy",
+      "py:datetime",
       "py:delegate_acceptance.evidence.digests",
       "py:delegate_acceptance.evidence.encoding",
       "py:delegate_acceptance.evidence.files",
@@ -225,8 +227,19 @@
       "py:delegate_acceptance.workspaces.admission_identity",
       "py:delegate_acceptance.workspaces.closure",
       "py:delegate_acceptance.workspaces.specification",
+      "py:errno",
+      "py:fcntl",
+      "py:json",
+      "py:os",
       "py:pathlib",
-      "py:sys"
+      "py:pwd",
+      "py:re",
+      "py:shlex",
+      "py:stat",
+      "py:sys",
+      "py:time",
+      "py:typing",
+      "py:unicodedata"
     ]
   },
   {
@@ -253,6 +266,8 @@
     "owner": "py:acceptance_supervisor_common",
     "layer": "runtime",
     "imports": [
+      "py:ctypes",
+      "py:dataclasses",
       "py:delegate_acceptance.directories.finalization",
       "py:delegate_acceptance.directories.journal",
       "py:delegate_acceptance.directories.operations",
@@ -263,8 +278,19 @@
       "py:delegate_acceptance.processes.observation",
       "py:delegate_acceptance.processes.operations",
       "py:delegate_acceptance.supervisor.config_policy",
+      "py:fcntl",
+      "py:hashlib",
+      "py:json",
+      "py:math",
+      "py:os",
       "py:pathlib",
-      "py:sys"
+      "py:secrets",
+      "py:stat",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:time",
+      "py:typing"
     ]
   },
   {

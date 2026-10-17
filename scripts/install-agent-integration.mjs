@@ -11,7 +11,7 @@ process.exitCode = await runInstaller({
   argumentsList: process.argv.slice(2),
   packageRoot,
   cwd: process.cwd(),
-  home: resolve(process.env.DELEGATION_LAYER_HOME ?? homedir()),
+  resolveHome: () => resolve(process.env.DELEGATION_LAYER_HOME ?? homedir()),
   environment: process.env,
   platform: process.platform,
   input: process.stdin,

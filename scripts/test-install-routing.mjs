@@ -181,12 +181,69 @@ async function testTerminalCleanup() {
   assert.equal(failedInput.listenerCount("keypress"), 0);
   assert.ok(failedOutput.writes.at(-1).includes("\u001b[?25h"));
 }
+
+async function testLazyHomeResolution(cwd, root) {
+  const homeCalls = [];
+  const resolveHome = () => {
+    homeCalls.push("called");
+    throw new Error("home lookup failed");
+  };
+  const invoke = (argumentsList, { output = new FakeOutput(), errorOutput = new FakeOutput(), installCliMain } = {}) =>
+    runInteractiveInstaller({
+      argumentsList,
+      packageRoot: repositoryRoot,
+      cwd,
+      resolveHome,
+      environment: { PATH: "" },
+      platform: "linux",
+      input: new FakeInput(),
+      output,
+      errorOutput,
+      installCliMain: installCliMain ?? (async () => {}),
+    });
+
+  const installErrors = new FakeOutput();
+  assert.equal(await invoke(
+    ["install", "--scope", "global", "--harness", "claude", "--yes", "--routing", "skill-only"],
+    { errorOutput: installErrors },
+  ), 1);
+  assert.deepEqual(installErrors.writes, ["Error: home lookup failed\n"]);
+  assert.equal(homeCalls.length, 1);
+
+  const routingErrors = new FakeOutput();
+  assert.equal(await invoke(["routing", "status", "--harness", "claude"], { errorOutput: routingErrors }), 1);
+  assert.deepEqual(routingErrors.writes, ["Error: home lookup failed\n"]);
+  assert.equal(homeCalls.length, 2);
+
+  const usageErrors = new FakeOutput();
+  assert.equal(await invoke(["install", "--routing", "invalid"], { errorOutput: usageErrors }), 2);
+  assert.equal(homeCalls.length, 2, "invalid arguments must not resolve home");
+
+  const helpOutput = new FakeOutput();
+  assert.equal(await invoke(["install", "--help"], { output: helpOutput }), 0);
+  assert.match(helpOutput.writes.join(""), /Usage:/);
+  assert.equal(homeCalls.length, 2, "help must not resolve home");
+
+  const target = join(root, "lazy-home-target");
+  assert.equal(await invoke(["--target", target]), 0);
+  await readFile(join(target, "SKILL.md"));
+  assert.equal(homeCalls.length, 2, "legacy target installation must not resolve home");
+
+  let installCliCalls = 0;
+  assert.equal(await invoke(["install-cli", "--help"], {
+    installCliMain: async () => { installCliCalls += 1; },
+  }), 0);
+  assert.equal(installCliCalls, 1);
+  assert.equal(homeCalls.length, 2, "install-cli must not resolve home");
+}
+
 try {
   testRoutingRules();
   testPickerState();
   await testTerminalCleanup();
   await mkdir(join(home, ".claude"), { recursive: true });
   await mkdir(project);
+  await testLazyHomeResolution(project, root);
   const interactiveProject = join(root, "interactive-project");
   const interactiveHome = join(root, "interactive-home");
   await mkdir(join(interactiveProject, ".claude"), { recursive: true });
@@ -303,6 +360,14 @@ try {
     "rollback must restore the existing user config exactly",
   );
   assert.equal((await stat(rollbackClaudePath)).mode & 0o777, 0o640);
+  const absentRollbackHome = join(root, "rollback-absent");
+  const absentRollbackClaudePath = join(absentRollbackHome, ".claude", "settings.json");
+  await mkdir(join(absentRollbackHome, ".codex"), { recursive: true });
+  await writeFile(join(absentRollbackHome, ".codex/hooks.json.delegation-layer.lock"), "occupied");
+  const absentRollback = run(install, { DELEGATION_LAYER_HOME: absentRollbackHome });
+  assert.notEqual(absentRollback.status, 0);
+  assert.match(absentRollback.stderr, /rolled back/);
+  await assert.rejects(readFile(absentRollbackClaudePath), { code: "ENOENT" });
   const custom = { CLAUDE_CONFIG_DIR: join(root, "custom claude"), CODEX_HOME: join(root, "custom codex") };
   success(run(install, custom));
   await readFile(join(custom.CLAUDE_CONFIG_DIR, "skills/agent-integration/SKILL.md"));

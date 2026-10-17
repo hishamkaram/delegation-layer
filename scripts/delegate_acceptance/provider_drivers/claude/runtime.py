@@ -92,17 +92,6 @@ def acceptance_temp_parent() -> Path:
 def private_mkdtemp(prefix: str, label: str, owner: DirectoryOwner):
     """Allocate one private directory below the platform-specific parent."""
     return private_mkdtemp_under_parent(prefix, label, owner, acceptance_temp_parent())
-def _native_account(environment: dict[str, str]) -> str:
-    """Mirror the provider's non-secret Keychain account selection."""
-    account = environment.get("USER", "")
-    if account == "":
-        try:
-            account = pwd.getpwuid(os.getuid()).pw_name
-        except (KeyError, OSError):
-            account = ""
-    if account and all(char.isascii() and (char.isalnum() or char in "._-") for char in account):
-        return account
-    return "claude-code-user"
 def _native_environment(environment: dict[str, str]) -> list[str]:
     """Build bounded native discovery/session environment without secrets."""
     keys = NATIVE_ENVIRONMENT_KEYS + NATIVE_DISCOVERY_ENVIRONMENT_KEYS

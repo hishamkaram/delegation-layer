@@ -94,9 +94,6 @@ def _nonce_tool_uses(results: list[dict[str, object]], uses: list[dict[str, obje
             matches.append(use)
     require(matches, "Claude did not provide a successful tool read containing the hidden nonce")
     return matches
-def _string_field(value: object, label: str) -> str:
-    require(isinstance(value, str), label + " is not a string")
-    return value
 def _successful_tool_result(results: list[dict[str, object]], use: dict[str, object]) -> dict[str, object]:
     matches = [value for value in results if value.get("tool_use_id") == use["id"]]
     require(len(matches) == 1, "Claude tool use has no unique result")

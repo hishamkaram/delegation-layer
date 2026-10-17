@@ -3,8 +3,29 @@
 Patch the defining module when replacing implementation dependencies in tests.
 """
 
+# Preserve the facade's published standard-library exports for compatibility.
+from copy import deepcopy as deepcopy
+from datetime import (
+    datetime as datetime,
+    timedelta as timedelta,
+    timezone as timezone,
+)
 from pathlib import Path
+from typing import (
+    Callable as Callable,
+    Iterable as Iterable,
+)
+import errno as errno
+import fcntl as fcntl
+import json as json
+import os as os
+import pwd as pwd
+import re as re
+import shlex as shlex
+import stat as stat
 import sys
+import time as time
+import unicodedata as unicodedata
 
 # Direct script execution and legacy flat imports place scripts/ on sys.path.
 # Add its parent so every implementation loads under one canonical namespace.
