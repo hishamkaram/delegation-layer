@@ -4,29 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-)
 
-func canonicalAppTestTempDir(t *testing.T) string {
-	t.Helper()
-	directory, err := os.MkdirTemp("/tmp", "dla-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if cleanupErr := os.RemoveAll(directory); cleanupErr != nil {
-			t.Error(cleanupErr)
-		}
-	})
-	return canonicalAppTestPath(t, directory)
-}
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+)
 
 func canonicalAppTestPath(t *testing.T, path string) string {
 	t.Helper()
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resolved
+	return supervisorfixture.CanonicalPath(t, path)
 }
 
 func canonicalAppTestExecutable(t *testing.T) string {
@@ -39,7 +23,7 @@ func canonicalAppTestExecutable(t *testing.T) string {
 }
 
 func TestCanonicalAppTestPathResolvesSymlinkedTempRoot(t *testing.T) {
-	base := canonicalAppTestTempDir(t)
+	base := supervisorfixture.CanonicalTempDir(t)
 	target := filepath.Join(base, "target")
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)

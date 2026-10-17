@@ -5,31 +5,31 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	workspacefixture "github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
 
 func TestWorkspaceVerificationRecoversObligationAfterReservationCrash(t *testing.T) {
-	fixture := newWorkspaceRecoveryFixture(t)
+	fixture := workspacefixture.NewRecoveryFixture(t)
 	request, subject, deps := workspaceVerificationRecoveryAuthorization(t, fixture)
-	reservation, err := fixture.resource.Reserve(t.Context(), subject)
+	reservation, err := fixture.Resource.Reserve(t.Context(), subject)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.restart(t)
-	workspaceRecoveryUseOwner(t, fixture)
-	if err = reconcileWorkspaceUse(t.Context(), fixture.store, fixture.resource, deps); !errors.Is(err, workspace.ErrPending) {
+	fixture.Restart(t)
+	workspacefixture.RecoveryUseOwner(t, fixture)
+	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, deps); !errors.Is(err, workspace.ErrPending) {
 		t.Fatalf("interrupted verification recovery = %v, want pending original operation", err)
 	}
-	obligation, err := fixture.resource.CaptureObligation(t.Context(), reservation.Sequence)
-	if err != nil || obligation.Predecessor == nil || *obligation.Predecessor != subject || obligation.BudgetNanos != fixture.resource.Request().BudgetNanos {
+	obligation, err := fixture.Resource.CaptureObligation(t.Context(), reservation.Sequence)
+	if err != nil || obligation.Predecessor == nil || *obligation.Predecessor != subject || obligation.BudgetNanos != fixture.Resource.Request().BudgetNanos {
 		t.Fatalf("recovered verification obligation = %+v, error = %v", obligation, err)
 	}
-	loaded, err := workspace.LoadOperation(t.Context(), fixture.store, request.OperationID)
+	loaded, err := workspace.LoadOperation(t.Context(), fixture.Store, request.OperationID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,10 +46,10 @@ func TestWorkspaceVerificationRecoversObligationAfterReservationCrash(t *testing
 	}
 }
 
-func workspaceVerificationRecoveryAuthorization(t *testing.T, fixture *workspaceRecoveryFixture) (workspace.OperationRequest, workspace.Subject, Dependencies) {
+func workspaceVerificationRecoveryAuthorization(t *testing.T, fixture *workspacefixture.RecoveryFixture) (workspace.OperationRequest, workspace.Subject, Dependencies) {
 	t.Helper()
-	supervisor, _ := newTerminalEventInspectionSupervisor(t, fixture.store)
-	request := recoveryOperationRequest(t, fixture, strings.Repeat("d", 32), workspace.OperationVerify,
+	supervisor, _ := newTerminalEventInspectionSupervisor(t, fixture.Store)
+	request := workspacefixture.RecoveryOperationRequest(t, fixture, strings.Repeat("d", 32), workspace.OperationVerify,
 		workspace.Subject{Kind: workspace.SubjectAdmission, ID: strings.Repeat("e", 32), SHA256: task.ComputeSHA256([]byte("verification request"))})
 	request.Arguments = []string{"/fixture/verify"}
 	request.Supervisor = supervisor.Binding()
@@ -59,7 +59,7 @@ func workspaceVerificationRecoveryAuthorization(t *testing.T, fixture *workspace
 		t.Fatal(err)
 	}
 	request.WorkerSHA256 = digest
-	operation, err := workspace.OpenOperation(t.Context(), fixture.store, request)
+	operation, err := workspace.OpenOperation(t.Context(), fixture.Store, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,14 +79,14 @@ func TestWorkspaceVerificationRecoveryRejectsAnotherResourceOrReservation(t *tes
 
 func verifyWorkspaceVerificationRecoveryBinding(t *testing.T, foreign bool) {
 	t.Helper()
-	fixture := newWorkspaceRecoveryFixture(t)
-	request := recoveryOperationRequest(t, fixture, strings.Repeat("d", 32), workspace.OperationVerify,
+	fixture := workspacefixture.NewRecoveryFixture(t)
+	request := workspacefixture.RecoveryOperationRequest(t, fixture, strings.Repeat("d", 32), workspace.OperationVerify,
 		workspace.Subject{Kind: workspace.SubjectAdmission, ID: strings.Repeat("e", 32), SHA256: task.ComputeSHA256([]byte("verification request"))})
 	request.Arguments = []string{"/fixture/verify"}
 	if foreign {
 		request.WorkspaceID = strings.Repeat("f", 32)
 	}
-	operation, err := workspace.OpenOperation(t.Context(), fixture.store, request)
+	operation, err := workspace.OpenOperation(t.Context(), fixture.Store, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,81 +98,36 @@ func verifyWorkspaceVerificationRecoveryBinding(t *testing.T, foreign bool) {
 	if !foreign {
 		reserved.ID = strings.Repeat("e", 32)
 	}
-	reservation, err := fixture.resource.Reserve(t.Context(), reserved)
+	reservation, err := fixture.Resource.Reserve(t.Context(), reserved)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = fixture.resource.RecordCaptureObligation(t.Context(), reservation, subject); err != nil {
+	if err = fixture.Resource.RecordCaptureObligation(t.Context(), reservation, subject); err != nil {
 		t.Fatal(err)
 	}
-	fixture.restart(t)
-	workspaceRecoveryUseOwner(t, fixture)
+	fixture.Restart(t)
+	workspacefixture.RecoveryUseOwner(t, fixture)
 	var commands atomic.Int32
 	deps := Dependencies{SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
-	err = reconcileWorkspaceUse(t.Context(), fixture.store, fixture.resource, deps)
+	err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, deps)
 	if (!errors.Is(err, task.ErrEvidenceFault) && !errors.Is(err, task.ErrIdentityMismatch)) || commands.Load() != 0 {
 		t.Fatalf("invalid verification binding reached scheduling: commands=%d err=%v", commands.Load(), err)
 	}
 }
 
-func TestWorkspaceReleaseRecoversObligationAfterReservationCrash(t *testing.T) {
-	for _, discard := range []bool{false, true} {
-		t.Run(map[bool]string{false: "retain-on-capture-failure", true: "discard-authorized"}[discard], func(t *testing.T) {
-			fixture := newWorkspaceRecoveryFixture(t)
-			action := workspace.ReleaseAction{
-				SchemaVersion: task.SchemaVersion, WorkspaceID: fixture.resource.Request().WorkspaceID,
-				ID: strings.Repeat("e", 32), Discard: discard, BudgetNanos: int64(37 * time.Second),
-			}
-			subject, err := fixture.resource.RecordReleaseAction(t.Context(), action)
-			if err != nil {
-				t.Fatal(err)
-			}
-			reservation, err := fixture.resource.Reserve(t.Context(), subject)
-			if err != nil {
-				t.Fatal(err)
-			}
-			fixture.restart(t)
-			workspaceRecoveryUseOwner(t, fixture)
-			if err = restoreWorkspaceCaptureObligation(t.Context(), fixture.store, fixture.resource, reservation); err != nil {
-				t.Fatal(err)
-			}
-			obligation, err := fixture.resource.CaptureObligation(t.Context(), reservation.Sequence)
-			if err != nil || obligation.Subject != subject || obligation.Predecessor != nil || obligation.BudgetNanos != action.BudgetNanos {
-				t.Fatalf("recovered release obligation = %+v, error = %v", obligation, err)
-			}
-			if err = fixture.resource.ReleaseCaptureAuthorized(t.Context(), obligation); err != nil {
-				t.Fatalf("recovered release lost original authorization: %v", err)
-			}
-		})
-	}
-}
-
 func TestWorkspaceObligationRecoveryRejectsUnknownAuthorization(t *testing.T) {
-	fixture := newWorkspaceRecoveryFixture(t)
+	fixture := workspacefixture.NewRecoveryFixture(t)
 	subject := workspace.Subject{Kind: workspace.SubjectOperation, ID: strings.Repeat("e", 32), SHA256: task.ComputeSHA256([]byte("unknown authorization"))}
-	reservation, err := fixture.resource.Reserve(t.Context(), subject)
+	reservation, err := fixture.Resource.Reserve(t.Context(), subject)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture.restart(t)
-	workspaceRecoveryUseOwner(t, fixture)
-	if err = reconcileWorkspaceUse(t.Context(), fixture.store, fixture.resource, Dependencies{}); !errors.Is(err, task.ErrEvidenceFault) {
+	fixture.Restart(t)
+	workspacefixture.RecoveryUseOwner(t, fixture)
+	if err = reconcileWorkspaceUse(t.Context(), fixture.Store, fixture.Resource, Dependencies{}); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("unknown authorization = %v, want evidence fault", err)
 	}
-	if _, err = fixture.resource.CaptureObligation(t.Context(), reservation.Sequence); !workspace.OperationAbsent(err) {
+	if _, err = fixture.Resource.CaptureObligation(t.Context(), reservation.Sequence); !workspace.OperationAbsent(err) {
 		t.Fatalf("unknown authorization created an obligation: %v", err)
 	}
-}
-
-func workspaceRecoveryUseOwner(t *testing.T, fixture *workspaceRecoveryFixture) {
-	t.Helper()
-	owner, err := fixture.resource.TryAcquireUseOwner(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if releaseErr := owner.Release(); releaseErr != nil {
-			t.Error(releaseErr)
-		}
-	})
 }

@@ -6,9 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,11 +14,11 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
-
-const runnerReceiptPollInterval = 10 * time.Millisecond
 
 type runnerArguments struct {
 	Root               string
@@ -212,115 +210,6 @@ func validateRunnerModes(parsed runnerArguments) error {
 	return nil
 }
 
-func runTerminalEvent(parsed runnerArguments, deps Dependencies) error {
-	eventContext, cancelEvent := context.WithTimeout(context.Background(), pueue.DefaultObservationTimeout)
-	recorded, eventErr := pueue.RecordPrivateTerminalEventForMaintenance(eventContext, parsed.Root, parsed.PueueID, parsed.ExitCode)
-	cancelEvent()
-	if eventErr != nil {
-		// Candidate classification is a cleanup hint, not task authority. Keep a
-		// conservative full-scope wake durable even when its publication fails;
-		// application journals still decide whether any row may be removed.
-		log.Printf("delegate: terminal supervisor candidate deferred: %v", eventErr)
-	}
-	requestContext, cancelRequest := context.WithTimeout(context.Background(), pueue.DefaultObservationTimeout)
-	defer cancelRequest()
-	var requestErr error
-	if eventErr == nil && recorded {
-		requestErr = pueue.RequestPrivateCandidateQueueMaintenance(requestContext, parsed.Root)
-	} else {
-		// Legacy rows without a callback ticket and failed candidate publication
-		// take the conservative recovery scope. Current ordinary and inspection
-		// submissions both publish exact event-backed candidates.
-		requestErr = pueue.RequestPrivateQueueMaintenance(requestContext, parsed.Root)
-	}
-	if requestErr != nil {
-		if !recorded {
-			return errors.Join(eventErr, requestErr)
-		}
-		// The terminal event itself is a durable cleanup inbox entry. Continue
-		// with an elected pass even when the generation journal could not be
-		// advanced; a later root activation can recover the retained event too.
-		log.Printf("delegate: terminal supervisor cleanup request deferred: %v", requestErr)
-	}
-	// Pueue invokes this helper after a row reaches Done, so this process already
-	// outlives the task creator. It owns the persisted wake to completion; task
-	// and inspection journals remain the sole removal authority.
-	if err := runQueueMaintenance(parsed, deps); err != nil {
-		log.Printf("delegate: terminal supervisor cleanup deferred: %v", err)
-	}
-	return nil
-}
-
-func runQueueMaintenance(parsed runnerArguments, deps Dependencies) (resultErr error) {
-	binding, found, err := pueue.ReadPrivateSupervisorBinding(parsed.Root)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return pueue.ErrBinding
-	}
-	supervisor, err := pueue.NewClient(binding, deps.SupervisorOptions)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, supervisor.Close())
-	}()
-	if !supervisor.RunRequestedPrivateQueueMaintenance(context.Background()) {
-		return pueue.ErrConfiguration
-	}
-	return nil
-}
-
-func launchPrivateQueueMaintenanceOwner(ctx context.Context, executable, root string) error {
-	_, err := startPrivateQueueMaintenanceOwner(ctx, executable, root)
-	return err
-}
-
-func startPrivateQueueMaintenanceOwner(ctx context.Context, executable, root string) (<-chan error, error) {
-	if ctx == nil {
-		return nil, context.Canceled
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if !filepath.IsAbs(executable) || filepath.Clean(executable) != executable ||
-		!filepath.IsAbs(root) || filepath.Clean(root) != root {
-		return nil, pueue.ErrConfiguration
-	}
-	resolved, err := filepath.EvalSymlinks(executable)
-	if err != nil || resolved != executable {
-		return nil, errors.Join(pueue.ErrConfiguration, err)
-	}
-	info, err := os.Stat(executable)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return nil, errors.Join(pueue.ErrConfiguration, err)
-	}
-	command := exec.Command(executable, "--queue-maintenance", "--root", root)
-	command.Dir = filepath.Dir(executable)
-	command.Env = pueue.DefaultEnvironment()
-	if err = lifetime.ConfigureIndependentSession(command); err != nil {
-		return nil, err
-	}
-	if err = command.Start(); err != nil {
-		return nil, err
-	}
-	done := make(chan error, 1)
-	// Start transfers durable ownership to the independent process. Keep one
-	// asynchronous Wait while this caller lives so an early helper exit cannot
-	// become a zombie. If the caller exits first, the OS adopts the independent
-	// session and reaps it after natural completion.
-	go func() {
-		waitErr := command.Wait()
-		if waitErr != nil {
-			log.Printf("delegate: maintenance process deferred: %v", waitErr)
-		}
-		done <- waitErr
-		close(done)
-	}()
-	return done, nil
-}
-
 func orderRunnerFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 	options, positional := make([]string, 0, len(args)), make([]string, 0, 1)
 	seen := make(map[string]bool)
@@ -376,140 +265,11 @@ func recoverSealedTask(response Response, td *taskdir.TaskDir, inspection *taskd
 	} else {
 		response.Publication = task.PublicationRejected.String()
 	}
-	releaseErr := releaseContinuationSession(td, req, outcome)
+	releaseErr := tasklifecycle.ReleaseContinuationSession(td, req, outcome)
 	if err := errors.Join(cleanupErr, collectErr, releaseErr); err != nil {
 		return failed(response, err, 1), true
 	}
 	return commandResult{response: response, code: 0}, true
-}
-
-// releaseContinuationSession rotates a predecessor session only after the
-// current task has a validated terminal winner and its runner lease is gone.
-// A nil outcome deliberately retains the claim because there is no durable
-// evidence that permits a successor to continue the conversation.
-func releaseContinuationSession(td *taskdir.TaskDir, req *task.TaskRecord, outcome *task.OutcomeRecord) error {
-	if td == nil || req == nil || req.PriorSession == nil || outcome == nil {
-		return nil
-	}
-	return td.ReleaseSession(req.Provider, req.PriorSession.ConversationID, outcome.EvidenceSHA256)
-}
-
-func reconcileRunner(ctx context.Context, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string) (client *pueue.Client, observation pueue.Observation, resultErr error) {
-	submit, err := td.ReadSubmission()
-	if err != nil {
-		return nil, pueue.Observation{}, err
-	}
-	client, err = newSupervisorClient(ctx, root, submit.Supervisor, supervisorOptions, true, initialSupervisorExecutable)
-	if err != nil {
-		return nil, pueue.Observation{}, err
-	}
-	defer func(owner *pueue.Client) {
-		if resultErr != nil {
-			closeSupervisorMaintenance(owner, resultErr)
-			client = nil
-		}
-	}(client)
-	spec, metaHash, err := preparedHashes(td)
-	if err != nil {
-		return nil, pueue.Observation{}, err
-	}
-	receipt, receiptErr := td.ReadSupervisorReceipt()
-	if receiptErr != nil && !errors.Is(receiptErr, os.ErrNotExist) {
-		return nil, pueue.Observation{}, receiptErr
-	}
-	// This runner owns startup until its finite caller deadline; a short
-	// watcher timeout must not abandon the admitted task. Keep the original
-	// client for stop control and migration cleanup.
-	observer := client
-	if deadline, bounded := ctx.Deadline(); bounded {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return nil, pueue.Observation{}, context.DeadlineExceeded
-		}
-		observer, err = client.WithObservationTimeout(remaining)
-		if err != nil {
-			return nil, pueue.Observation{}, err
-		}
-	}
-	observation, reconcileErr := observer.Reconcile(ctx, taskIdentity(req, meta, spec, metaHash, receipt))
-	response.Supervisor = supervisorResponse(observation)
-	response.Liveness = mapPueueState(observation.State)
-	response.Pending = pendingResponse(observation)
-	if !observation.Matched {
-		response.Admission = task.AdmissionUnknown.String()
-		if reconcileErr == nil {
-			reconcileErr = pueue.ErrUnknown
-		}
-		return client, observation, reconcileErr
-	}
-	receiptErr = requireDurableSupervisorReceipt(td, observation)
-	if receiptErr == nil {
-		response.Admission = task.AdmissionAdmitted.String()
-	} else {
-		response.Admission = task.AdmissionUnknown.String()
-	}
-	reconcileErr = errors.Join(reconcileErr, receiptErr)
-	return client, observation, reconcileErr
-}
-
-// resumeSupervisedRunner consumes the dispatcher's durable admission receipt.
-// The supervisor already started this process, so bootstrapping it again or
-// scanning its full queue cannot add authority and creates avoidable fan-out
-// when many tasks start together.
-func resumeSupervisedRunner(ctx context.Context, response *Response, td *taskdir.TaskDir, supervisorOptions pueue.Options) (*pueue.Client, pueue.Observation, error) {
-	receipt, err := waitRunnerSupervisorReceipt(ctx, td, pueue.PrivateControlTimeout(supervisorOptions))
-	if err != nil {
-		return nil, pueue.Observation{}, err
-	}
-	client, err := pueue.NewClient(receipt.SupervisorRef(), supervisorOptions)
-	if err != nil {
-		return nil, pueue.Observation{}, err
-	}
-	numericTaskID := receipt.NumericTaskID
-	observation := pueue.Observation{
-		Matched: true,
-		State:   pueue.StateRunning,
-		Identity: pueue.Identity{
-			RootID:        receipt.RootID,
-			TaskID:        receipt.TaskID,
-			SpecSHA256:    receipt.SpecSHA256,
-			MetaSHA256:    receipt.MetaSHA256,
-			NumericTaskID: &numericTaskID,
-		},
-		Binding:       receipt.SupervisorRef(),
-		NumericTaskID: numericTaskID,
-	}
-	response.Supervisor = supervisorResponse(observation)
-	response.Admission = task.AdmissionAdmitted.String()
-	response.Liveness = mapPueueState(observation.State)
-	response.Pending = nil
-	return client, observation, nil
-}
-
-func waitRunnerSupervisorReceipt(parent context.Context, td *taskdir.TaskDir, timeout time.Duration) (*task.SupervisorReceipt, error) {
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
-	for {
-		receipt, err := td.ReadSupervisorReceipt()
-		if err == nil {
-			return receipt, nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		timer := time.NewTimer(runnerReceiptPollInterval)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return nil, fmt.Errorf("%w: supervisor receipt unavailable: %w", pueue.ErrUnknown, ctx.Err())
-		case <-timer.C:
-		}
-	}
 }
 
 func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, profile PreparedProfile, client *pueue.Client, lifetimeChild *openedLifetimeChild, deps Dependencies) commandResult {
@@ -552,7 +312,7 @@ func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, p
 			response.Publication = task.PublicationRejected.String()
 		}
 	}
-	releaseErr := releaseContinuationSession(td, req, runResult.Outcome)
+	releaseErr := tasklifecycle.ReleaseContinuationSession(td, req, runResult.Outcome)
 	combinedErr := errors.Join(combinedExecutionErrorValue(runResult), releaseErr)
 	if combinedErr != nil {
 		return failed(response, combinedErr, 1)
@@ -562,7 +322,7 @@ func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, p
 
 func runRunner(parsed runnerArguments, deps Dependencies) (result commandResult) {
 	response := newResponse("delegate-run")
-	root, err := resolveRoot(parsed.Root)
+	root, err := tasklifecycle.ResolveRoot(parsed.Root)
 	if err != nil {
 		return failed(response, err, 1)
 	}
@@ -598,14 +358,14 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	supervisorOptions := supervisorOptionsForCurrentEnvironment(deps.SupervisorOptions)
+	supervisorOptions := supervisor.OptionsForCurrentEnvironment(deps.SupervisorOptions)
 	restoreEnvironment, err := applySavedEnvironment(meta.Environment, meta.EnvironmentRecorded)
 	if err != nil {
 		return failed(response, err, 1)
 	}
 	defer restoreRunnerEnvironment(&result, restoreEnvironment)
-	if isTerminal(inspection) {
-		releaseErr := releaseContinuationSession(td, req, inspection.Outcome)
+	if supervisor.TaskTerminal(inspection) {
+		releaseErr := tasklifecycle.ReleaseContinuationSession(td, req, inspection.Outcome)
 		if releaseErr != nil {
 			return failed(response, releaseErr, 1)
 		}
@@ -625,14 +385,14 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 		return failed(response, err, classifyCode(err, 1))
 	}
 	taskSupervisorOptions := supervisorOptionsForMeta(supervisorOptions, *meta)
-	supervisorContext, cancelSupervisor := supervisorContextForRunner(req, taskSupervisorOptions)
+	supervisorContext, cancelSupervisor := tasklifecycle.SupervisorContextForRunner(req, taskSupervisorOptions)
 	defer cancelSupervisor()
 	client, observation, reconcileErr := reconcileRunnerMode(supervisorContext, parsed, root, &response, td, req, meta, taskSupervisorOptions, deps.InitialSupervisorExecutable)
-	defer func() { closeSupervisorMaintenance(client, result.err) }()
+	defer func() { supervisor.CloseMaintenance(client, result.err) }()
 	if reconcileErr != nil {
 		return failed(response, reconcileErr, 1)
 	}
-	if stateErr := runnerStartStateError(observation.State); stateErr != nil {
+	if stateErr := tasklifecycle.RunnerStartStateError(observation.State); stateErr != nil {
 		return failed(response, stateErr, 1)
 	}
 	profile, err := prepareRunnerProfile(deps, root, td, store, *req, *meta)
@@ -647,14 +407,6 @@ func reconcileRunnerMode(ctx context.Context, parsed runnerArguments, root strin
 		return resumeSupervisedRunner(ctx, response, td, supervisorOptions)
 	}
 	return reconcileRunner(ctx, root, response, td, req, meta, supervisorOptions, initialSupervisorExecutable)
-}
-
-func supervisorContextForRunner(req *task.TaskRecord, options pueue.Options) (context.Context, context.CancelFunc) {
-	controlTimeout := pueue.PrivateControlTimeout(options)
-	if budget := time.Duration(req.BudgetNanos); budget > controlTimeout {
-		controlTimeout = budget
-	}
-	return context.WithTimeout(context.Background(), controlTimeout)
 }
 
 func applySavedEnvironment(values []string, recorded bool) (func() error, error) {
@@ -688,7 +440,11 @@ func restoreRunnerEnvironment(result *commandResult, restore func() error) {
 	if result == nil || restore == nil {
 		return
 	}
-	if restoreErr := restore(); restoreErr != nil {
+	applyEnvironmentRestoreError(result, restore())
+}
+
+func applyEnvironmentRestoreError(result *commandResult, restoreErr error) {
+	if restoreErr != nil {
 		result.err = errors.Join(result.err, restoreErr)
 		if result.code == 0 {
 			result.code = 1
@@ -697,42 +453,16 @@ func restoreRunnerEnvironment(result *commandResult, restore func() error) {
 	}
 }
 
-// prepareMatchedProfile refreshes the provider's compiled launch profile and
-// checks it against the immutable admission record. Callers use it immediately
-// before any fresh submission and again after supervisor reconciliation, so a
-// policy or placement change cannot cross the next authority boundary.
 func prepareMatchedProfile(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {
-	candidate, facts, err := prepareExistingCandidate(deps, root, req, meta)
-	if err != nil {
-		return PreparedProfile{}, err
-	}
-	return finalizeMatchedProfile(candidate, facts, root, req, meta)
+	return admissionProfiles(deps).Match(root, req, meta)
 }
 
 func prepareRunnerProfile(deps Dependencies, root string, td *taskdir.TaskDir, store *taskdir.Store, req task.TaskRecord, meta task.MetaRecord) (PreparedProfile, error) {
-	runnerOwnership, err := runnerOwnershipForTask(root, td, &meta)
+	runnerOwnership, err := supervisor.RunnerOwnershipForTask(root, td, &meta)
 	if err != nil {
 		return PreparedProfile{}, err
 	}
 	return prepareMatchedProfileForRunner(deps, root, req, meta, store, "", runnerOwnership)
-}
-
-func runnerStartStateError(state pueue.State) error {
-	switch state {
-	case pueue.StateQueued, pueue.StateStashed, pueue.StateRunning:
-		return nil
-	case pueue.StateEnded:
-		return errors.New("supervisor task ended before runner start")
-	case pueue.StateUnknown:
-		return fmt.Errorf("%w: supervisor task state unknown before runner start", pueue.ErrUnknown)
-	default:
-		return fmt.Errorf("%w: unsupported supervisor task state %q before runner start", pueue.ErrUnknown, state)
-	}
-}
-
-func preparedHashes(td *taskdir.TaskDir) (string, string, error) {
-	_, _, spec, metaHash, err := requestHashes(td)
-	return spec, metaHash, err
 }
 
 func makeIdentityObserver(profile PreparedProfile, req task.TaskRecord, td *taskdir.TaskDir) (execution.IdentityObserver, error) {
@@ -806,14 +536,6 @@ func (s *budgetStopper) recordStopResult(ctx context.Context, request *task.Stop
 		recordErr = errors.Join(recordErr, s.taskDir.RecordStopObservationContext(ctx, request.RequestID, task.StopObservationFacts{NumericTaskID: *result.NumericTaskID, State: "ended", Terminated: true}))
 	}
 	return recordErr
-}
-
-func combinedExecutionError(result execution.Result) string {
-	err := combinedExecutionErrorValue(result)
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }
 
 func combinedExecutionErrorValue(result execution.Result) error {

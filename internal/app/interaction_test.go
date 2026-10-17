@@ -11,6 +11,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 func TestInteractionCommandArguments(t *testing.T) {
@@ -49,7 +50,7 @@ func TestInteractionCommandArguments(t *testing.T) {
 
 func TestInteractionContinuationPreservesOptIn(t *testing.T) {
 	for _, pair := range [][2]bool{{false, false}, {true, false}, {false, true}, {true, true}} {
-		got := continuationConfig(task.TaskConfig{Interactive: pair[0], Permission: "read-only", Model: "chosen"}, task.TaskConfig{Interactive: pair[1]})
+		got := tasklifecycle.ContinuationConfig(task.TaskConfig{Interactive: pair[0], Permission: "read-only", Model: "chosen"}, task.TaskConfig{Interactive: pair[1]})
 		if got.Interactive != (pair[0] || pair[1]) || got.Model != "chosen" || got.Permission != "read-only" {
 			t.Fatalf("continuation changed authority: %+v", got)
 		}

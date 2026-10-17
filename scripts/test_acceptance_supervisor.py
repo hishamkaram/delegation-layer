@@ -13,6 +13,13 @@ from unittest.mock import patch
 import acceptance_supervisor_common as supervisor_common
 import acceptance_supervisor_hermetic as hermetic
 from acceptance_supervisor_hermetic import Case, HermeticSuite
+from scripts.delegate_acceptance.hermetic import case as hermetic_case
+from scripts.delegate_acceptance.hermetic import suite as hermetic_suite
+from scripts.delegate_acceptance.hermetic import observations as hermetic_observations
+from scripts.delegate_acceptance.hermetic import scenarios_admission
+from scripts.acceptance_tests.hermetic.fixtures import retry_case
+from scripts.acceptance_tests.resources import track_directory_pins
+from scripts.delegate_acceptance.processes import operations as process_operations
 
 
 class OwnedDirectoryReadTests(unittest.TestCase):
@@ -85,8 +92,9 @@ class WaitUntilTests(unittest.TestCase):
     def test_custom_timeout_preserves_retry_and_success_value(self):
         result = {"ready": True}
         values = iter((False, result))
-        with patch.object(supervisor_common.time, "monotonic", return_value=0), \
-                patch.object(supervisor_common.time, "sleep"):
+        with patch("scripts.delegate_acceptance.processes.observation.time.monotonic",
+                   return_value=0), \
+                patch("scripts.delegate_acceptance.processes.observation.time.sleep"):
             observed = supervisor_common.wait_until(
                 lambda: next(values), timeout=1,
                 timeout_error=subprocess.TimeoutExpired(["fixture"], 1),
@@ -103,12 +111,12 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
                 base.mkdir()
                 return str(base)
 
-            with patch("acceptance_supervisor_hermetic.tempfile.mkdtemp",
+            with patch.object(hermetic_case.tempfile, "mkdtemp",
                        side_effect=allocate), \
                     patch.object(Case, "_create_layout",
                                  side_effect=OSError("injected layout failure")):
                 with self.assertRaisesRegex(OSError, "layout failure"):
-                    Case(SimpleNamespace(), "constructor")
+                    Case(suite=SimpleNamespace(), case_id="constructor")
             self.assertFalse(base.exists())
 
     def test_hermetic_case_constructor_rolls_back_when_base_resolve_fails(self):
@@ -120,24 +128,25 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
                 base.mkdir()
                 return str(base)
 
-            original_resolve = hermetic.Path.resolve
+            original_resolve = hermetic_case.Path.resolve
 
             def fail_base_resolve(path, *args, **kwargs):
                 if path == canonical_base:
                     raise OSError("injected base resolve failure")
                 return original_resolve(path, *args, **kwargs)
 
-            with patch.object(hermetic.tempfile, "mkdtemp", side_effect=allocate), \
-                    patch.object(hermetic.Path, "resolve", new=fail_base_resolve):
+            with patch.object(hermetic_case.tempfile, "mkdtemp", side_effect=allocate), \
+                    patch.object(hermetic_case.Path, "resolve", new=fail_base_resolve):
                 with self.assertRaisesRegex(OSError, "base resolve failure"):
-                    Case(SimpleNamespace(), "resolve")
+                    Case(suite=SimpleNamespace(), case_id="resolve")
             self.assertFalse(base.exists())
 
     def test_failed_process_construction_rolls_back_its_owned_capture(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
-            with patch.object(supervisor_common.subprocess, "Popen",
+            track_directory_pins(self, (processes.capture_root,))
+            with patch.object(process_operations.subprocess, "Popen",
                               side_effect=OSError("injected spawn failure")):
                 with self.assertRaisesRegex(OSError, "spawn failure"):
                     processes.start("failed", ["/bin/sh"], root)
@@ -148,6 +157,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
+            track_directory_pins(self, (processes.capture_root,))
             collision = processes.directory / "001-collision"
             collision.mkdir()
             sentinel = collision / "preexisting.txt"
@@ -163,6 +173,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes")
+            track_directory_pins(self, (processes.capture_root,))
             process = processes.start(
                 "signaled",
                 [sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"],
@@ -255,9 +266,10 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
                 return original_write_json(path, *args, **kwargs)
 
             processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
+            track_directory_pins(self, (processes.capture_root,))
             lifecycle_owner = SimpleNamespace(process=None)
-            with patch.object(supervisor_common.subprocess, "Popen", FakePopen), \
-                    patch.object(supervisor_common, "write_json", side_effect=fail_started):
+            with patch.object(process_operations.subprocess, "Popen", FakePopen), \
+                    patch.object(process_operations, "write_json", side_effect=fail_started):
                 with self.assertRaisesRegex(OSError, "started receipt"):
                     processes.start("caller", ["/bin/sh"], cwd,
                                     on_spawned=lambda process: setattr(lifecycle_owner, "process", process))
@@ -279,6 +291,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes")
+            track_directory_pins(self, (processes.capture_root,))
             with patch.object(supervisor_common.DirectoryOwner, "transfer_child_to",
                               side_effect=OSError("injected ownership transfer failure")):
                 with self.assertRaisesRegex(OSError, "ownership transfer failure"):
@@ -320,7 +333,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             suite = self.suite(temporary, "fail")
             stderr = io.StringIO()
-            with patch("acceptance_supervisor_hermetic.digest", return_value="test-digest"), redirect_stderr(stderr):
+            with patch.object(hermetic_suite, "digest", return_value="test-digest"), redirect_stderr(stderr):
                 with self.assertRaises(SystemExit) as exit_result:
                     suite.run_targeted(["C07-locked-unknown"])
             self.assertEqual(exit_result.exception.code, 1)
@@ -334,7 +347,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             suite = self.suite(temporary, "pass")
             stderr, stdout = io.StringIO(), io.StringIO()
-            with patch("acceptance_supervisor_hermetic.digest", return_value="test-digest"), redirect_stderr(stderr), redirect_stdout(stdout):
+            with patch.object(hermetic_suite, "digest", return_value="test-digest"), redirect_stderr(stderr), redirect_stdout(stdout):
                 suite.run_targeted(["C07-locked-unknown"])
             self.assertEqual(stderr.getvalue(), "")
             self.assertIn("PASS hermetic H targeted: 1 cases", stdout.getvalue())
@@ -412,8 +425,8 @@ class CaseFinalizationTests(unittest.TestCase):
             case.suite = self.suite(output)
             suite = case.suite
 
-            with patch.object(hermetic, "Case", return_value=case), \
-                    patch.object(hermetic, "rollback_owned_directories") as rollback:
+            with patch.object(hermetic_suite, "Case", return_value=case), \
+                    patch.object(hermetic_case, "rollback_owned_directories") as rollback:
                 suite.run_case(case.case_id, lambda _case: None)
 
             self.assertEqual(suite.results[0]["status"], "fail")
@@ -437,8 +450,8 @@ class CaseFinalizationTests(unittest.TestCase):
                 self.assertEqual(path.name, "receipt.json")
                 events.append("write-receipt")
 
-            with patch.object(hermetic, "rollback_owned_directories", side_effect=rollback), \
-                    patch.object(hermetic, "write_json", side_effect=write_receipt):
+            with patch.object(hermetic_case, "rollback_owned_directories", side_effect=rollback), \
+                    patch.object(hermetic_case, "write_json", side_effect=write_receipt):
                 result = case.finish()
 
             self.assertEqual(result["status"], "pass")
@@ -456,8 +469,8 @@ class CaseFinalizationTests(unittest.TestCase):
                 events.append("rollback")
                 raise RuntimeError("injected rollback failure")
 
-            with patch.object(hermetic, "Case", return_value=case), \
-                    patch.object(hermetic, "rollback_owned_directories", side_effect=rollback):
+            with patch.object(hermetic_suite, "Case", return_value=case), \
+                    patch.object(hermetic_case, "rollback_owned_directories", side_effect=rollback):
                 suite.run_case(case.case_id, lambda _case: None)
 
             self.assertEqual(suite.results[0]["status"], "fail")
@@ -471,109 +484,14 @@ class CaseFinalizationTests(unittest.TestCase):
 class A06RetryObservationTests(unittest.TestCase):
     def test_a06_waits_for_exact_retry_observer_before_counts(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            task_id = "b" * 32
-            root_id = "a" * 32
-            supervisor_records = root / "supervisor-records"
-            supervisor_records.mkdir()
-            task_dir = root / "tasks" / task_id
-            task_dir.mkdir(parents=True)
-            (task_dir / "supervisor.ref.json").write_text("{}\n")
-            events = []
-            add = {
-                "verb": "add",
-                "invocation_id": "add-invocation",
-                "pid": 701,
-                "argv": ["--label", "delegate:" + root_id + ":" + task_id],
-            }
-            first_enqueue = {
-                "verb": "enqueue",
-                "invocation_id": "enqueue-first",
-                "pid": 702,
-                "argv": ["-c", "config", "enqueue", "7"],
-                "executable": "/pueue",
-            }
-            retry_enqueue = {
-                "verb": "enqueue",
-                "invocation_id": "enqueue-retry",
-                "pid": 703,
-                "argv": ["-c", "config", "enqueue", "7"],
-                "executable": "/pueue",
-            }
-
-            class FakeProcess:
-                def __init__(self, response):
-                    self.response = response
-
-                def wait(self, *_args, **_kwargs):
-                    events.append("initial-dispatch-wait")
-
-                def json(self):
-                    return self.response
-
-            class FakeCase:
-                def __init__(self):
-                    self.base = root
-                    self.root = root
-                    self.case_id = "A06"
-                    self.task_id = task_id
-                    self.root_id = None
-                    self.supervisor_records = supervisor_records
-                    self.enqueue_release = root / "enqueue.release"
-
-                def update_fake(self, verb, **_changes):
-                    self.updated_verb = verb
-
-                def start_dispatch(self):
-                    return FakeProcess({
-                        "failure": {
-                            "code": "task_launch_uncertain",
-                            "stage": "enqueue-task",
-                            "next_action": "check_status",
-                        }
-                    })
-
-                def wait_entry(self, verb):
-                    return add if verb == "add" else first_enqueue
-
-                def set_status(self, state):
-                    events.append("status:" + state)
-
-                def release_add(self):
-                    events.append("release-add")
-
-                def wait_completion(self, entry):
-                    events.append("helper:" + entry["invocation_id"])
-                    return {"exit_code": 1 if entry is first_enqueue else 0}
-
-                def observe_helper_completion_if_present(self, entry, timeout=1.0):
-                    _ = timeout
-                    completion = self.wait_completion(entry)
-                    self.wait_supervisor_completion(entry)
-                    return completion
-
-                def wait_supervisor_completion(self, entry):
-                    events.append("observer:" + entry["invocation_id"])
-
-                def release(self, _path):
-                    events.append("release-enqueue")
-
-                def retry_dispatch(self, **_kwargs):
-                    events.append("retry-dispatch")
-                    return FakeProcess({"admission": "admitted"}), {"admission": "admitted"}
-
-                def wait_entry_after(self, verb, previous_invocation_ids):
-                    self.assertion = (verb, set(previous_invocation_ids))
-                    events.append("retry-entry")
-                    return retry_enqueue
-
-                def counts(self):
-                    events.append("counts")
-                    return {"A": 1, "Q": 2, "S": 0, "E": 0, "K": 0, "M": 0}
-
-            case = FakeCase()
-            hermetic.run_a06(case)
-
+            case, events = retry_case(Path(temporary))
+            with patch.object(scenarios_admission, "wait_entry", side_effect=lambda _case, *args, **kwargs: case.wait_entry(*args, **kwargs)), \
+                    patch.object(scenarios_admission, "observe_helper_completion_if_present", side_effect=lambda _case, *args, **kwargs: case.observe_helper_completion_if_present(*args, **kwargs)), \
+                    patch.object(scenarios_admission, "wait_entry_after", side_effect=lambda _case, *args, **kwargs: case.wait_entry_after(*args, **kwargs)), \
+                    patch.object(scenarios_admission, "wait_completion", side_effect=lambda _case, *args, **kwargs: case.wait_completion(*args, **kwargs)), \
+                    patch.object(scenarios_admission, "wait_supervisor_completion", side_effect=lambda _case, *args, **kwargs: case.wait_supervisor_completion(*args, **kwargs)), \
+                    patch.object(hermetic_observations, "invocation_counts", side_effect=lambda _case: case.counts()):
+                hermetic.run_a06(case)
             self.assertEqual(case.assertion, ("enqueue", {"enqueue-first"}))
             self.assertEqual(
                 events[events.index("observer:enqueue-first"):],
@@ -592,9 +510,9 @@ class A06RetryObservationTests(unittest.TestCase):
 
 class AcceptanceArtifactCleanupTests(unittest.TestCase):
     def test_failure_cleanup_budget_is_finite(self):
-        with patch.object(supervisor_common.time, "monotonic",
-                          side_effect=(10.0, 12.0, 16.0)), \
-                patch.object(supervisor_common.time, "sleep") as sleep:
+        with patch("scripts.delegate_acceptance.processes.observation.time.monotonic",
+                   side_effect=(10.0, 12.0, 16.0)), \
+                patch("scripts.delegate_acceptance.processes.observation.time.sleep") as sleep:
             deadline = supervisor_common.failure_cleanup_deadline(5)
             self.assertTrue(supervisor_common.wait_for_failure_cleanup(deadline, 10))
             self.assertFalse(supervisor_common.wait_for_failure_cleanup(deadline, 1))
@@ -674,9 +592,11 @@ class AcceptanceArtifactCleanupTests(unittest.TestCase):
             owner = supervisor_common.DirectoryOwner()
             captures = owner.create("raw process captures", output / "processes", output)
             owner.adopt_created("state", state, state_parent)
+            directories = owner.transfer()
+            track_directory_pins(self, directories)
 
             self.assertFalse(supervisor_common.finalize_acceptance_artifacts(
-                output, False, owner.transfer(), True,
+                output, False, directories, True,
                 raw_process_captures_token=captures,
             ))
 
@@ -700,9 +620,11 @@ class AcceptanceArtifactCleanupTests(unittest.TestCase):
             state.mkdir(parents=True)
             owner = supervisor_common.DirectoryOwner()
             owner.adopt_created("state", state, state_parent)
+            directories = owner.transfer()
+            track_directory_pins(self, directories)
 
             self.assertFalse(supervisor_common.finalize_acceptance_artifacts(
-                output, True, owner.transfer(), True,
+                output, True, directories, True,
             ))
 
             self.assertTrue(state.exists())
@@ -765,9 +687,11 @@ class AcceptanceArtifactCleanupTests(unittest.TestCase):
             output.mkdir(parents=True)
             owner = supervisor_common.DirectoryOwner()
             owner.adopt_created("state", root / "state", root)
+            directories = owner.transfer()
+            track_directory_pins(self, directories)
 
             self.assertFalse(supervisor_common.finalize_acceptance_artifacts(
-                output, True, owner.transfer(), True,
+                output, True, directories, True,
             ))
 
             self.assertTrue(output.is_dir())

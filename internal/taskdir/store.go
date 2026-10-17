@@ -12,6 +12,8 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 // Store manages the root-level delegation store and task directories.
@@ -62,7 +64,7 @@ func (s *Store) createNewRootContext(ctx context.Context, cleanRoot string) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	rootID, idErr := task.NewRootID()
+	rootID, idErr := randomid.NewRootID()
 	if idErr != nil {
 		return fmt.Errorf("generating root ID: %w", idErr)
 	}
@@ -89,10 +91,6 @@ func (s *Store) createNewRootContext(ctx context.Context, cleanRoot string) erro
 	}
 	s.RootID = rootID
 	return nil
-}
-
-func (s *Store) loadExistingRoot(rootJSONPath string) error {
-	return s.loadExistingRootContext(context.Background(), rootJSONPath)
 }
 
 func (s *Store) loadExistingRootContext(ctx context.Context, rootJSONPath string) error {
@@ -184,10 +182,6 @@ func InitStoreWithPredicatesContext(ctx context.Context, rootPath string, regist
 	}
 	keep = true
 	return s, nil
-}
-
-func openStoreForInitialization(cleanRoot string, registry predicate.Registry) (*Store, bool, error) {
-	return openStoreForInitializationContext(context.Background(), cleanRoot, registry)
 }
 
 func openStoreForInitializationContext(ctx context.Context, cleanRoot string, registry predicate.Registry) (*Store, bool, error) {
@@ -425,7 +419,7 @@ func (s *Store) probeFilesystemSupport(ctx context.Context) (resultErr error) {
 		return err
 	}
 
-	probeID, idErr := task.NewRandomID()
+	probeID, idErr := randomid.NewRandomID()
 	if idErr != nil {
 		return fmt.Errorf("filesystem probe id: %w", idErr)
 	}

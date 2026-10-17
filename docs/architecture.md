@@ -47,6 +47,32 @@ provider-neutral control CLI available before the agent can use the skill; the
 CLI and its private supervisor still own admission, execution, evidence, and
 continuation after dispatch.
 
+## Package boundaries
+
+The CLI composition layer is `internal/app`. Reusable subsystems own their
+state and decisions; command handlers compose them and project CLI responses.
+Data contracts and pure rules stay separate from filesystem, process, and
+supervisor operations.
+
+| Owner | Responsibility | Data / implementation boundary |
+|---|---|---|
+| `internal/task` | Immutable task contracts and evidence rules | Random ID creation belongs to `task/randomid`; durable records belong to `taskdir`. |
+| `internal/provider` | Provider preparation and evidence interpretation | `provider/contract` holds reusable pure facts; adapters do not own process lifetime. |
+| `internal/config` | Environment and configuration observations | `config/policy` owns pure defaults and validation. |
+| `internal/guardian` | The shared native lifetime state machine | `lifetime` supplies native primitives; production record stores retain durable evidence. |
+| `internal/supervisor` | Binding selection, generation recovery, and cleanup authorization | `pueue` provides control operations; its `protocol` contract is pure and its `internal` implementations are sealed. |
+| `internal/admission` | Required provider inspection and admission evidence | `inspection/contract` is pure; inspection journals and probes have sealed implementations. |
+| `internal/tasklifecycle` | Ordinary turn creation, reuse, submission, observation, and control | Admission supplies validated profiles; task storage and the guardian retain their own journal and lifetime authority. |
+| `internal/workspaces` | Managed workspace use, capture, release, and recovery | `workspace/contract` is pure; sealed Git and journal implementations execute its operations. |
+
+Interfaces belong to the consumer that needs them. Passing a primitive or a
+recovery operation across a boundary does not transfer policy ownership.
+Workspace inspection recovery, for example, calls admission's recovery policy;
+the workspace coordinator alone decides whether its reservation can close.
+The [maintainability contract](../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates)
+and [module registry](../agents/_data/subsystems.json) define the enforced
+source budgets, module roles, and exact dependency edges, including tests.
+
 ## Ownership boundaries
 
 The CLI validates user input, resolves the catalog entry, and persists the
@@ -213,6 +239,20 @@ probed only while repairing that exact-generation receipt; warm submissions
 and staged recovery consume the recorded capability without repeating help
 commands.
 
+Existing-task status uses saved-generation recovery independently of admission.
+Scheduling and queued-runner repair retain their existing owners for complete
+generations. A published predecessor with matching prepared intent remains
+observable before shutdown; it grants no new submission or repair authority.
+Task-status reading rechecks that phase inside its shared lease before reusing
+cached rows or reading fresh ones. If migration wins before optional repair,
+only an explicit pre-mutation completion refusal can defer that repair, and
+status must obtain a fresh canonical observation. Stashed tasks still need
+their matching durable receipts and remain stashed while enqueue is deferred.
+Deferral belongs to that observation attempt. A later collection poll starts
+with fresh preparation, so an earlier refusal cannot suppress healthy recovery.
+Unrelated faults and unfinished commands keep their existing failure and
+ownership semantics.
+
 | Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
 | --- | --- | --- | --- | --- | --- | --- |
 | `UPG-01` Verified staged pair | Application / bootstrap lock | Bind exact returned immutable paths | Pair inventory publication | Revalidate exact pair, independent of inventory pointer | Inventory never selects active generation | `TestMigrationPreparesInstalledPair` |
@@ -259,8 +299,8 @@ Normal passes stream one queue snapshot and expose only event-backed numeric
 IDs to Delegate's cleanup policy, for both ordinary and inspection rows. Every
 same-label row remains visible so ambiguity cannot be hidden. A conservative
 full-recovery wake is used when candidate publication fails or a historical row
-has no ticket; it additionally exposes ordinary managed rows while inspection
-rows still require candidate events. Durable task and inspection journals
+has no ticket; it exposes the complete current snapshot, including inspection
+rows with missing candidates. Durable task and inspection journals
 remain the sole authority for every removal. A later callback or accepted
 terminal observation wakes a retry for rows retained by an earlier failed pass.
 

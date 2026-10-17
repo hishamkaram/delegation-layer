@@ -14,8 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"golang.org/x/sys/unix"
 )
 
@@ -103,7 +106,7 @@ func newBlockedQueueMaintenanceFixture(t *testing.T) *blockedQueueMaintenanceFix
 
 func (fixture *blockedQueueMaintenanceFixture) waitBlocked(t *testing.T) {
 	t.Helper()
-	waitForTestPath(t, filepath.Join(fixture.base, "maintenance-remove-blocked"))
+	testsupport.WaitForTestPath(t, filepath.Join(fixture.base, "maintenance-remove-blocked"))
 }
 
 func (fixture *blockedQueueMaintenanceFixture) assertStillBlocked(t *testing.T) {
@@ -176,7 +179,7 @@ func TestQueueMaintenanceLaunchParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = launchPrivateQueueMaintenanceOwner(context.Background(), executable, root); err != nil {
+	if err = supervisor.LaunchQueueMaintenanceOwner(context.Background(), executable, root); err != nil {
 		t.Fatal(err)
 	}
 	if readyPath := os.Getenv(queueMaintenanceParentReady); readyPath != "" {
@@ -195,7 +198,7 @@ func TestQueueMaintenanceOwnerSurvivesCallerProcessGroupInterruption(t *testing.
 	}
 	fixture := newBlockedQueueMaintenanceFixture(t)
 	caller := startScopedQueueMaintenanceCaller(t, fixture.root, fixture.base)
-	waitForTestPath(t, caller.readyPath)
+	testsupport.WaitForTestPath(t, caller.readyPath)
 	fixture.waitBlocked(t)
 	caller.interrupt(t)
 	fixture.assertStillBlocked(t)
@@ -291,11 +294,11 @@ func TestQueueMaintenanceOwnerDoesNotInheritUnrelatedDescriptor(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("descriptor inheritance test requires Unix fcntl semantics")
 	}
-	root := canonicalAppTestTempDir(t)
+	root := testsupportcore.CanonicalTempDir(t)
 	descriptor := openQueueMaintenanceParentDescriptor(t)
 	writeQueueMaintenanceDescriptorMarker(t, root, descriptor)
 	executable := queueMaintenanceTestExecutable(t)
-	done, err := startPrivateQueueMaintenanceOwner(t.Context(), executable, root)
+	done, err := supervisor.StartQueueMaintenanceOwner(t.Context(), executable, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +391,7 @@ func waitForFailedQueueMaintenanceOwner(t *testing.T, done <-chan error) {
 func TestQueueMaintenanceOwnerIsReapedWhileCallerLives(t *testing.T) {
 	executable := queueMaintenanceTestExecutable(t)
 	var err error
-	done, err := startPrivateQueueMaintenanceOwner(t.Context(), executable, filepath.Join(t.TempDir(), "missing-state"))
+	done, err := supervisor.StartQueueMaintenanceOwner(t.Context(), executable, filepath.Join(t.TempDir(), "missing-state"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,8 +10,13 @@ import time
 import unittest
 from unittest.mock import patch
 
-import acceptance_agy as agy
 import acceptance_supervisor_common as common
+from scripts.delegate_acceptance.directories import finalization as directory_finalization
+from scripts.delegate_acceptance.directories import journal as directory_journal
+from scripts.delegate_acceptance.directories import operations as directory_operations
+from scripts.delegate_acceptance.evidence import files as evidence_files
+from scripts.delegate_acceptance.processes import operations as process_operations
+from scripts.acceptance_tests.resources import track_directory_pins
 
 
 class DirectoryOwnershipTests(unittest.TestCase):
@@ -38,12 +43,12 @@ class DirectoryOwnershipTests(unittest.TestCase):
             original = common._rename_noreplace
 
             def occupy_then_publish(source_fd, source_name, destination_fd, destination_name):
-                common.os.mkdir(destination_name, dir_fd=destination_fd)
+                os.mkdir(destination_name, dir_fd=destination_fd)
                 (root / destination_name / "keep.txt").write_text("replacement", encoding="utf-8")
                 return original(source_fd, source_name, destination_fd, destination_name)
 
             owner = common.DirectoryOwner()
-            with patch.object(common, "_rename_noreplace", side_effect=occupy_then_publish), \
+            with patch.object(directory_operations, "_rename_noreplace", side_effect=occupy_then_publish), \
                     self.assertRaises(FileExistsError):
                 owner.create("owned", root / "owned", root)
             self.assertEqual((root / "owned" / "keep.txt").read_text(), "replacement")
@@ -62,7 +67,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             owner.release()
             journal = root / "cleanup.json"
 
-            with patch.object(common, "_rename_noreplace", side_effect=OSError("journal publish")), \
+            with patch.object(evidence_files, "_rename_noreplace", side_effect=OSError("journal publish")), \
                     self.assertRaisesRegex(OSError, "journal publish"):
                 common.prepare_directory_cleanup(
                     journal, "test cleanup", identity, quarantine_parent, "b" * 64,
@@ -96,19 +101,19 @@ class DirectoryOwnershipTests(unittest.TestCase):
             journal_parent_identity = (
                 journal_parent.stat().st_dev, journal_parent.stat().st_ino,
             )
-            original_fsync = common.os.fsync
+            original_fsync = os.fsync
             failed = False
 
             def fail_first_journal_parent_sync(descriptor):
                 nonlocal failed
-                opened = common.os.fstat(descriptor)
+                opened = os.fstat(descriptor)
                 if (not failed and journal.exists()
                         and (opened.st_dev, opened.st_ino) == journal_parent_identity):
                     failed = True
                     raise OSError("simulated journal directory sync failure")
                 return original_fsync(descriptor)
 
-            with patch.object(common.os, "fsync", side_effect=fail_first_journal_parent_sync), \
+            with patch.object(directory_journal.os, "fsync", side_effect=fail_first_journal_parent_sync), \
                     self.assertRaisesRegex(OSError, "journal directory sync failure"):
                 common.prepare_directory_cleanup(
                     journal, "test cleanup", identity, quarantine_parent, authorization,
@@ -120,7 +125,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             original_rename = common._rename_noreplace
 
             def record_sync(descriptor):
-                opened = common.os.fstat(descriptor)
+                opened = os.fstat(descriptor)
                 opened_identity = (opened.st_dev, opened.st_ino)
                 if opened_identity == journal_parent_identity:
                     events.append("journal-parent-synced")
@@ -137,8 +142,8 @@ class DirectoryOwnershipTests(unittest.TestCase):
                     source_fd, source_name, destination_fd, destination_name,
                 )
 
-            with patch.object(common.os, "fsync", side_effect=record_sync), \
-                    patch.object(common, "_rename_noreplace", side_effect=record_rename):
+            with patch.object(directory_journal.os, "fsync", side_effect=record_sync), \
+                    patch.object(directory_journal, "_rename_noreplace", side_effect=record_rename):
                 common.prepare_directory_cleanup(
                     journal, "test cleanup", identity, quarantine_parent, authorization,
                 )
@@ -176,7 +181,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
                         raise OSError("simulated journal interruption")
                     return original(path, value, replace=replace)
 
-                with patch.object(common, "write_json", side_effect=interrupt_transition), \
+                with patch.object(directory_journal, "write_json", side_effect=interrupt_transition), \
                         self.assertRaisesRegex(OSError, "simulated journal interruption"):
                     common.resume_directory_cleanup(journal, authorization, identity)
                 self.assertEqual(
@@ -203,19 +208,19 @@ class DirectoryOwnershipTests(unittest.TestCase):
                     raise OSError("isolation journal interruption")
                 return original_write(path, value, replace=replace)
 
-            with patch.object(common, "write_json", side_effect=interrupt_isolated), \
+            with patch.object(directory_journal, "write_json", side_effect=interrupt_isolated), \
                     self.assertRaisesRegex(OSError, "isolation journal interruption"):
                 common.resume_directory_cleanup(journal, authorization, identity)
             prepared = common.read_directory_cleanup(journal, authorization)
             synced = set()
-            original_sync = common.os.fsync
+            original_sync = os.fsync
 
             def record_sync(descriptor):
-                metadata = common.os.fstat(descriptor)
+                metadata = os.fstat(descriptor)
                 synced.add((metadata.st_dev, metadata.st_ino))
                 return original_sync(descriptor)
 
-            with patch.object(common.os, "fsync", side_effect=record_sync):
+            with patch.object(directory_journal.os, "fsync", side_effect=record_sync):
                 common.resume_directory_cleanup(journal, authorization, identity)
             self.assertIn(
                 (prepared["target"]["parent_device"], prepared["target"]["parent_inode"]),
@@ -274,7 +279,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="acceptance-cleanup-replacement-") as directory:
             root = Path(directory)
             target, journal, authorization, identity = self._prepared_cleanup(root)
-            with patch.object(common, "_cleanup_empty", side_effect=RuntimeError("pause")), \
+            with patch.object(directory_journal, "_cleanup_empty", side_effect=RuntimeError("pause")), \
                     self.assertRaisesRegex(RuntimeError, "pause"):
                 common.resume_directory_cleanup(journal, authorization, identity)
             record = common.read_directory_cleanup(journal, authorization)
@@ -292,7 +297,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="acceptance-cleanup-quarantine-") as directory:
             root = Path(directory)
             _, journal, authorization, identity = self._prepared_cleanup(root)
-            with patch.object(common, "_cleanup_empty", side_effect=RuntimeError("pause")), \
+            with patch.object(directory_journal, "_cleanup_empty", side_effect=RuntimeError("pause")), \
                     self.assertRaisesRegex(RuntimeError, "pause"):
                 common.resume_directory_cleanup(journal, authorization, identity)
             record = common.read_directory_cleanup(journal, authorization)
@@ -333,7 +338,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
                 except BaseException as error:  # Preserve thread errors for the assertion.
                     errors.append(error)
 
-            with patch.object(common, "_cleanup_empty", side_effect=pause_once):
+            with patch.object(directory_journal, "_cleanup_empty", side_effect=pause_once):
                 first = threading.Thread(target=resume)
                 second = threading.Thread(target=resume)
                 first.start()
@@ -359,7 +364,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
                 [root / "a", root / "a" / "b", root / "a" / "b" / "c"],
             )
             removed = []
-            with patch.object(common, "remove_owned_directory",
+            with patch.object(directory_operations, "remove_owned_directory",
                               side_effect=lambda token: removed.append(token.directory)):
                 common.rollback_owned_directories(entries)
             self.assertEqual(removed, [entry.directory for entry in reversed(entries)])
@@ -414,9 +419,9 @@ class DirectoryOwnershipTests(unittest.TestCase):
 
                     self.assertEqual(marker.read_text(encoding="utf-8"), "replacement")
                     with self.assertRaises(OSError):
-                        common.os.fstat(directory_fd)
+                        os.fstat(directory_fd)
                     with self.assertRaises(OSError):
-                        common.os.fstat(parent_fd)
+                        os.fstat(parent_fd)
 
     def test_symlink_replacement_is_retained_and_not_followed(self):
         with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:
@@ -439,7 +444,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             moved = threading.Event()
             replacement_ready = threading.Event()
             errors = []
-            original_rename = common.os.rename
+            original_rename = os.rename
 
             def rename_then_pause(source, destination, *args, **kwargs):
                 result = original_rename(source, destination, *args, **kwargs)
@@ -455,7 +460,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
                 except BaseException as error:  # Preserve the worker failure for the test thread.
                     errors.append(error)
 
-            with patch.object(common.os, "rename", side_effect=rename_then_pause):
+            with patch.object(directory_operations.os, "rename", side_effect=rename_then_pause):
                 worker = threading.Thread(target=cleanup)
                 worker.start()
                 try:
@@ -479,7 +484,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             rename_ready = threading.Event()
             replacement_ready = threading.Event()
             errors = []
-            original_rename = common.os.rename
+            original_rename = os.rename
 
             def pause_before_rename(source, destination, *args, **kwargs):
                 if source == "owned" and destination == "entry":
@@ -494,7 +499,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
                 except BaseException as error:  # Preserve the worker failure for the test thread.
                     errors.append(error)
 
-            with patch.object(common.os, "rename", side_effect=pause_before_rename):
+            with patch.object(directory_operations.os, "rename", side_effect=pause_before_rename):
                 worker = threading.Thread(target=cleanup)
                 worker.start()
                 try:
@@ -660,7 +665,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             owner = common.DirectoryOwner()
             token = owner.create("owned", root / "owned", root)
             entries = owner.transfer()
-            with patch.object(common, "failure_cleanup_deadline", return_value=0):
+            with patch.object(directory_finalization, "failure_cleanup_deadline", return_value=0):
                 self.assertFalse(common.finalize_acceptance_artifacts(
                     output, True, entries, True, timeout=1))
             self.assertTrue(token.directory.is_dir())
@@ -855,9 +860,9 @@ class DirectoryOwnershipTests(unittest.TestCase):
 
             self.assertTrue(child_owner.transfer_child_to(parent))
             with self.assertRaises(OSError):
-                common.os.fstat(parent_descriptor)
+                os.fstat(parent_descriptor)
             with self.assertRaises(OSError):
-                common.os.fstat(directory_descriptor)
+                os.fstat(directory_descriptor)
             self.assertTrue(child.directory.is_dir())
             self.assertTrue(parent_owner.rollback())
             self.assertFalse(parent.directory.exists())
@@ -881,12 +886,12 @@ class DirectoryOwnershipTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:
             root = Path(directory)
-            before = len(common.os.listdir(descriptor_directory))
+            before = len(os.listdir(descriptor_directory))
             for index in range(200):
                 owner = common.DirectoryOwner()
                 common.Processes(root / f"processes-{index:03d}", {}, owner=owner)
                 common.rollback_owned_directories(owner.transfer())
-            after = len(common.os.listdir(descriptor_directory))
+            after = len(os.listdir(descriptor_directory))
             self.assertLessEqual(after, before)
 
     def test_raw_capture_replacement_keeps_replacement_and_fails_finalizer(self):
@@ -916,13 +921,13 @@ class DirectoryOwnershipTests(unittest.TestCase):
                     if child.exists():
                         child.rmdir()
                     if failure == "write":
-                        operation = patch.object(common, "write_json",
+                        operation = patch.object(process_operations, "write_json",
                                                  side_effect=OSError("setup write"))
                     elif failure == "open":
-                        operation = patch.object(common.Path, "open",
+                        operation = patch.object(process_operations.Path, "open",
                                                  side_effect=OSError("setup open"))
                     else:
-                        operation = patch.object(common.subprocess, "Popen",
+                        operation = patch.object(process_operations.subprocess, "Popen",
                                                  side_effect=OSError("setup start"))
                     with operation, self.assertRaises(OSError):
                         common.Process(child, [sys.executable, "-c", "pass"], root, {}, raw)
@@ -934,7 +939,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="acceptance-agy-start-") as directory:
             root = Path(directory)
             owner = common.DirectoryOwner()
-            book = agy.ProcessBook(root / "processes", {}, owner=owner)
+            book = process_operations.Processes(root / "processes", {}, owner=owner)
             original = common.write_json
 
             def fail_started(path, value, replace=False):
@@ -942,7 +947,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
                     raise OSError("started receipt")
                 return original(path, value, replace=replace)
 
-            with patch.object(common, "write_json", side_effect=fail_started), \
+            with patch.object(process_operations, "write_json", side_effect=fail_started), \
                     self.assertRaisesRegex(OSError, "started receipt"):
                 book.start("short", [str(Path(sys.executable).resolve()), "-c", "pass"], root)
             self.assertEqual(len(book.entries), 1)
@@ -958,6 +963,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             output.mkdir()
             owner = common.DirectoryOwner()
             raw = owner.create("raw process captures", output / "processes", output)
+            track_directory_pins(self, (raw,))
             processes = common.Processes(raw.directory, {}, capture_root=raw)
             process = processes.start(
                 "signaled", [sys.executable, "-c", "import os,signal; os.kill(os.getpid(), signal.SIGTERM)"], root)

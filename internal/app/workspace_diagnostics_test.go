@@ -10,16 +10,18 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
 
 func TestWorkspaceFailureDiagnosticSurvivesClosureAndReopen(t *testing.T) {
-	store, operation := newAppWorkspaceOperation(t)
+	store, operation := testsupport.NewOperation(t)
 	cause := errors.New("git worktree add: exit status 128: distinctive native diagnostic")
 	if err := recordWorkspaceWorkerFailure(t.Context(), store, operation, cause); !errors.Is(err, cause) {
 		t.Fatalf("failure lost its original cause: %v", err)
 	}
 	seedRealWorkspaceOperationClosure(t, store, operation)
-	if err := reconcileEndedWorkspaceOperation(t.Context(), operation, pueue.Job{}); err != nil {
+	if err := workspaces.ReconcileEndedWorkspaceOperation(t.Context(), operation, pueue.Job{}); err != nil {
 		t.Fatalf("closed helper was not eligible for queue cleanup: %v", err)
 	}
 	reopened, err := workspace.LoadOperation(t.Context(), store, operation.Request().OperationID)
@@ -31,9 +33,9 @@ func TestWorkspaceFailureDiagnosticSurvivesClosureAndReopen(t *testing.T) {
 			t.Error(closeErr)
 		}
 	}()
-	result, proof, resultErr := acceptedWorkspaceOperation(t.Context(), store, reopened)
-	var failure *workspaceOperationError
-	if !errors.As(resultErr, &failure) || result.Status != "failed" || len(result.Artifacts) != 1 || proof.workerWaitSHA256 == "" {
+	result, proof, resultErr := workspaces.AcceptedOperation(t.Context(), store, reopened)
+	var failure *workspaces.OperationError
+	if !errors.As(resultErr, &failure) || result.Status != "failed" || len(result.Artifacts) != 1 || proof.WorkerWaitSHA256() == "" {
 		t.Fatalf("reopened failure lost its qualified evidence: %+v %+v %v", result, proof, resultErr)
 	}
 	artifact := result.Artifacts[0]
@@ -47,7 +49,7 @@ func TestWorkspaceFailureDiagnosticSurvivesClosureAndReopen(t *testing.T) {
 }
 
 func TestWorkspaceFailureDiagnosticIsBoundedAndExplicitlyTruncated(t *testing.T) {
-	store, operation := newAppWorkspaceOperation(t)
+	store, operation := testsupport.NewOperation(t)
 	cause := errors.New(strings.Repeat("x", int(workspace.ArtifactLimit)+32))
 	if err := recordWorkspaceWorkerFailure(t.Context(), store, operation, cause); !errors.Is(err, cause) {
 		t.Fatalf("truncated diagnostic lost failure authority: %v", err)
@@ -60,13 +62,13 @@ func TestWorkspaceFailureDiagnosticIsBoundedAndExplicitlyTruncated(t *testing.T)
 	if !artifact.Truncated || artifact.Length != workspace.ArtifactLimit {
 		t.Fatalf("overflow did not retain an explicit bounded prefix: %+v", artifact)
 	}
-	if err = validateWorkspaceArtifact(t.Context(), store, operation.Request().OperationID, artifact); err != nil {
+	if err = workspaces.ValidateArtifact(t.Context(), store, operation.Request().OperationID, artifact); err != nil {
 		t.Fatalf("bounded prefix is not digest-qualified: %v", err)
 	}
 }
 
 func TestWorkspaceDiagnosticWriteFaultStillRecordsKnownFailure(t *testing.T) {
-	store, operation := newAppWorkspaceOperation(t)
+	store, operation := testsupport.NewOperation(t)
 	path := workspace.ScratchPath(store.Root, operation.Request().OperationID)
 	if err := os.WriteFile(path, []byte("existing non-directory"), 0o600); err != nil {
 		t.Fatal(err)
@@ -86,7 +88,7 @@ func TestWorkspaceDiagnosticWriteFaultStillRecordsKnownFailure(t *testing.T) {
 func TestWorkspaceArtifactDirectoryBarrierPrecedesResultPublication(t *testing.T) {
 	for _, status := range []string{"succeeded", "failed"} {
 		t.Run(status, func(t *testing.T) {
-			store, operation := newAppWorkspaceOperation(t)
+			store, operation := testsupport.NewOperation(t)
 			artifact := workspace.Artifact{Name: "diff.patch", SHA256: task.ComputeSHA256(nil)}
 			result := workspace.OperationResult{SchemaVersion: task.SchemaVersion, OperationID: operation.Request().OperationID, RequestSHA256: operation.Digest(), Status: status}
 			if status == "failed" {
@@ -113,28 +115,28 @@ func TestWorkspaceArtifactDirectoryBarrierPrecedesResultPublication(t *testing.T
 }
 
 func TestUnavailableCaptureDoesNotClaimFailureDiagnosticAsGitContent(t *testing.T) {
-	fixture := newWorkspaceRecoveryFixture(t)
+	fixture := testsupport.NewRecoveryFixture(t)
 	subject := workspace.Subject{Kind: workspace.SubjectTask, ID: strings.Repeat("c", 32), SHA256: task.ComputeSHA256([]byte("task"))}
-	operation := openRecoveryOperation(t, fixture, strings.Repeat("d", 32), workspace.OperationCapture, subject)
+	operation := testsupport.OpenRecoveryOperation(t, fixture, strings.Repeat("d", 32), workspace.OperationCapture, subject)
 	defer func() {
 		if err := operation.Close(); err != nil {
 			t.Error(err)
 		}
 	}()
 	cause := errors.New("capture command failed with a durable diagnostic")
-	if err := recordWorkspaceWorkerFailure(t.Context(), fixture.store, operation, cause); !errors.Is(err, cause) {
+	if err := recordWorkspaceWorkerFailure(t.Context(), fixture.Store, operation, cause); !errors.Is(err, cause) {
 		t.Fatal(err)
 	}
-	proof := seedRealWorkspaceOperationClosure(t, fixture.store, operation)
-	result, _, resultErr := acceptedWorkspaceOperation(t.Context(), fixture.store, operation)
+	proof := seedRealWorkspaceOperationClosure(t, fixture.Store, operation)
+	result, _, resultErr := workspaces.AcceptedOperation(t.Context(), fixture.Store, operation)
 	if len(result.Artifacts) != 1 || resultErr == nil {
 		t.Fatalf("failed capture lacks its independent diagnostic: %+v %v", result, resultErr)
 	}
-	receipt, err := buildWorkspaceCaptureReceipt(t.Context(), fixture.resource, operation.Request(), result, proof, resultErr)
+	receipt, err := workspaces.BuildCaptureReceipt(t.Context(), fixture.Resource, operation.Request(), result, proof, resultErr)
 	if err != nil || receipt.Status != "unavailable" || len(receipt.Artifacts) != 0 {
 		t.Fatalf("failure bytes became captured Git content: %+v %v", receipt, err)
 	}
-	if err = fixture.resource.RecordCaptureReceipt(t.Context(), receipt); err != nil {
+	if err = fixture.Resource.RecordCaptureReceipt(t.Context(), receipt); err != nil {
 		t.Fatalf("unavailable receipt was not a valid durable verdict: %v", err)
 	}
 }

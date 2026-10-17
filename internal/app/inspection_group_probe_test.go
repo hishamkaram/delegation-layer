@@ -7,6 +7,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 )
 
 func TestEstablishedInspectionGroupSharesSupervisorGeneration(t *testing.T) {
@@ -48,10 +49,10 @@ func TestEstablishedInspectionGroupSharesSupervisorGeneration(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("fixture did not acquire shared supervisor lease")
 	}
-	if ensureErr := ensureInspectionGroup(store, supervisor, 5*time.Second); ensureErr != nil {
+	if ensureErr := supervisorcore.EnsureInspectionGroup(store, supervisor, 5*time.Second); ensureErr != nil {
 		t.Fatalf("healthy group readiness required an exclusive transition: %v", ensureErr)
 	}
-	if ensureErr := ensureInspectionGroupWithoutMigration(store, supervisor, 5*time.Second); ensureErr != nil {
+	if ensureErr := supervisorcore.EnsureInspectionGroupWithoutMigration(store, supervisor, 5*time.Second); ensureErr != nil {
 		t.Fatalf("same-generation continuation required an exclusive transition: %v", ensureErr)
 	}
 }

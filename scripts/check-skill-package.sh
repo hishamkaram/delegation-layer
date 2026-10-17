@@ -3,12 +3,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+NODE_BINARY="${NODE_BINARY:-node}"
 TMP_DIR="$(mktemp -d)"
 TMP_DIR="$(cd "${TMP_DIR}" && pwd -P)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
 if ! command -v npm >/dev/null 2>&1; then
     echo "ERROR: npm is required for the agent skill package check." >&2
+    exit 1
+fi
+if ! command -v "${NODE_BINARY}" >/dev/null 2>&1; then
+    echo "ERROR: NODE_BINARY must name an executable Node.js runtime." >&2
     exit 1
 fi
 
@@ -53,11 +58,11 @@ INSTALL_ROOT="${TMP_DIR}/install"
 npm install --ignore-scripts --no-save --prefix "${INSTALL_ROOT}" "${PACKAGE_TARBALL}" >/dev/null
 INSTALLER="${INSTALL_ROOT}/node_modules/.bin/delegation-layer"
 TARGET="${TMP_DIR}/installed/agent-integration"
-node "${INSTALLER}" --target "${TARGET}"
+"${NODE_BINARY}" "${INSTALLER}" --target "${TARGET}"
 cmp "${REPO_ROOT}/skills/agent-integration/SKILL.md" "${TARGET}/SKILL.md"
-node "${INSTALLER}" --target "${TARGET}"
-node "${INSTALLER}" install-cli --help >/dev/null
-node "${REPO_ROOT}/scripts/test-install-agent-integration.mjs" "${INSTALLER}"
-node "${REPO_ROOT}/scripts/test-install-routing.mjs" "${INSTALLER}"
+"${NODE_BINARY}" "${INSTALLER}" --target "${TARGET}"
+"${NODE_BINARY}" "${INSTALLER}" install-cli --help >/dev/null
+"${NODE_BINARY}" "${REPO_ROOT}/scripts/test-install-agent-integration.mjs" "${INSTALLER}"
+"${NODE_BINARY}" "${REPO_ROOT}/scripts/test-install-routing.mjs" "${INSTALLER}"
 
 echo "Agent skill package check passed: ${PACKAGE_TARBALL}"

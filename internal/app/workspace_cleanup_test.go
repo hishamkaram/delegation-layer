@@ -8,6 +8,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
 
 func authorizeAppWorkspaceRemoval(t *testing.T, resource *workspace.Resource) {
@@ -18,7 +19,7 @@ func authorizeAppWorkspaceRemoval(t *testing.T, resource *workspace.Resource) {
 }
 
 func TestUnprovisionedWorkspaceRemovalRequiresNoGit(t *testing.T) {
-	_, resource := newAppWorkspaceResource(t)
+	_, resource := testsupport.NewResource(t)
 	authorizeAppWorkspaceRemoval(t, resource)
 	// A zero Git has no executable runner. Any Git command would fail.
 	if err := removeManagedCheckout(t.Context(), resource, workspace.Git{}); err != nil {
@@ -27,7 +28,7 @@ func TestUnprovisionedWorkspaceRemovalRequiresNoGit(t *testing.T) {
 }
 
 func TestSourceOnlyWorkspaceRemovalDoesNotAdoptFilesystem(t *testing.T) {
-	_, resource := newAppWorkspaceResource(t)
+	_, resource := testsupport.NewResource(t)
 	request := resource.Request()
 	source := workspace.Source{Root: request.SourceCwd, CommonDir: filepath.Join(request.SourceCwd, ".git"), GitDir: filepath.Join(request.SourceCwd, ".git"), BaseOID: strings.Repeat("e", 40), ObjectFormat: "sha1", RelativeCwd: "."}
 	if err := resource.RecordSource(t.Context(), source); err != nil {
@@ -40,14 +41,14 @@ func TestSourceOnlyWorkspaceRemovalDoesNotAdoptFilesystem(t *testing.T) {
 }
 
 func TestWorkspaceRemovalRequiresLeadAuthorization(t *testing.T) {
-	_, resource := newAppWorkspaceResource(t)
+	_, resource := testsupport.NewResource(t)
 	if err := removeManagedCheckout(t.Context(), resource, workspace.Git{}); !workspace.OperationAbsent(err) {
 		t.Fatalf("cleanup accepted missing release authority: %v", err)
 	}
 }
 
 func TestUnprovisionedRemovalRejectsContradictoryAnchor(t *testing.T) {
-	_, resource := newAppWorkspaceResource(t)
+	_, resource := testsupport.NewResource(t)
 	authorizeAppWorkspaceRemoval(t, resource)
 	if err := resource.RecordAnchor(t.Context(), workspace.AnchorRecord{SchemaVersion: task.SchemaVersion, WorkspaceID: resource.Request().WorkspaceID, Path: filepath.Join(resource.Request().Container, resource.Request().WorkspaceID), Identity: workspace.DirectoryIdentity{Inode: 1}}); err != nil {
 		t.Fatal(err)
@@ -58,7 +59,7 @@ func TestUnprovisionedRemovalRejectsContradictoryAnchor(t *testing.T) {
 }
 
 func TestWorkspaceSourceRetryRejectsSurvivingAnchor(t *testing.T) {
-	_, resource := newAppWorkspaceResource(t)
+	_, resource := testsupport.NewResource(t)
 	request := resource.Request()
 	if err := resource.RecordAnchor(t.Context(), workspace.AnchorRecord{
 		SchemaVersion: task.SchemaVersion, WorkspaceID: request.WorkspaceID,

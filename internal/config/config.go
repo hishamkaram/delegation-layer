@@ -5,101 +5,58 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
-// Supported default and mode constants.
 const (
-	DefaultBudgetDuration            = 30 * time.Minute
-	DefaultCodexReviewBudgetDuration = time.Hour
-	DefaultMode                      = "read-only"
-
-	ModeReadOnly       = "read-only"
-	ModeWorkspaceWrite = "workspace-write"
-
-	ProviderAntigravityPrint = "antigravity:print"
-	ProviderCodexExec        = "codex:exec"
-	ProviderCodexReview      = "codex:review"
-	ProviderClaudePrint      = "claude:print"
-	ProviderPiJSON           = "pi:json"
-	ProviderOpenCodeRun      = "opencode:run"
-	ProviderFixture          = "fixture:test"
+	DefaultBudgetDuration            = policy.DefaultBudgetDuration
+	DefaultCodexReviewBudgetDuration = policy.DefaultCodexReviewBudgetDuration
+	DefaultMode                      = policy.DefaultMode
+	ModeReadOnly                     = policy.ModeReadOnly
+	ModeWorkspaceWrite               = policy.ModeWorkspaceWrite
+	ProviderAntigravityPrint         = policy.ProviderAntigravityPrint
+	ProviderCodexExec                = policy.ProviderCodexExec
+	ProviderCodexReview              = policy.ProviderCodexReview
+	ProviderClaudePrint              = policy.ProviderClaudePrint
+	ProviderPiJSON                   = policy.ProviderPiJSON
+	ProviderOpenCodeRun              = policy.ProviderOpenCodeRun
+	ProviderFixture                  = policy.ProviderFixture
+	MaxBriefBytes                    = policy.MaxBriefBytes
 )
 
-// Sentinel configuration errors.
 var (
-	ErrInvalidBudget        = errors.New("budget must be a finite positive duration")
-	ErrInvalidMode          = errors.New("invalid permission mode: must be 'read-only' or 'workspace-write'")
-	ErrUnsupportedProvider  = errors.New("unsupported provider")
-	ErrInvalidCwd           = errors.New("working directory must be an absolute path to an existing directory")
-	ErrRootWorkspaceOverlap = errors.New("state root and workspace directory must be disjoint and must not overlap in either direction")
-	ErrTokenBudgetRejected  = errors.New("token and dollar budget ceilings are not supported; wall-clock budget is the sole enforced limit")
-	ErrRawArgvRejected      = errors.New("raw argv passthrough is forbidden")
-	ErrBriefNotFound        = errors.New("brief file not found")
-	ErrBriefNotRegular      = errors.New("brief must be a regular file")
-	ErrBriefTooLarge        = errors.New("brief file exceeds 8 MiB limit")
+	ErrInvalidBudget        = policy.ErrInvalidBudget
+	ErrInvalidMode          = policy.ErrInvalidMode
+	ErrUnsupportedProvider  = policy.ErrUnsupportedProvider
+	ErrInvalidCwd           = policy.ErrInvalidCwd
+	ErrRootWorkspaceOverlap = policy.ErrRootWorkspaceOverlap
+	ErrTokenBudgetRejected  = policy.ErrTokenBudgetRejected
+	ErrRawArgvRejected      = policy.ErrRawArgvRejected
+	ErrBriefNotFound        = policy.ErrBriefNotFound
+	ErrBriefNotRegular      = policy.ErrBriefNotRegular
+	ErrBriefTooLarge        = policy.ErrBriefTooLarge
 )
 
-// ParseBudget parses and validates a budget string, ensuring a finite positive duration.
+// ParseBudget preserves the legacy configuration package entry point.
 func ParseBudget(budgetStr string) (time.Duration, error) {
-	if budgetStr == "" {
-		return DefaultBudgetDuration, nil
-	}
-	d, err := time.ParseDuration(budgetStr)
-	if err != nil {
-		return 0, fmt.Errorf("%w: %w", ErrInvalidBudget, err)
-	}
-	if d <= 0 {
-		return 0, ErrInvalidBudget
-	}
-	return d, nil
+	return policy.ParseBudget(budgetStr)
 }
 
-// ParseBudgetForProvider applies the ordinary default unless a provider has a
-// deliberately longer operation-specific default. Explicit budgets always
-// win.
+// ParseBudgetForProvider preserves the legacy configuration package entry point.
 func ParseBudgetForProvider(provider, budgetStr string) (time.Duration, error) {
-	if budgetStr == "" && provider == ProviderCodexReview {
-		return DefaultCodexReviewBudgetDuration, nil
-	}
-	return ParseBudget(budgetStr)
+	return policy.ParseBudgetForProvider(provider, budgetStr)
 }
 
-// ValidateMode validates that mode is a recognized permission mode.
+// ValidateMode preserves the legacy configuration package entry point.
 func ValidateMode(mode string) error {
-	if mode == "" {
-		mode = DefaultMode
-	}
-	switch mode {
-	case ModeReadOnly, ModeWorkspaceWrite:
-		return nil
-	default:
-		return fmt.Errorf("%w: %q", ErrInvalidMode, mode)
-	}
+	return policy.ValidateMode(mode)
 }
 
-// ValidateProvider validates the structural provider:transport identifier.
-// Catalogs decide whether a structurally valid identifier is executable
-// support; config deliberately does not keep a provider allowlist.
+// ValidateProvider preserves the legacy configuration package entry point.
 func ValidateProvider(provider string) error {
-	name, transport, found := strings.Cut(provider, ":")
-	if !found || strings.ContainsRune(transport, ':') || !validProviderComponent(name) || !validProviderComponent(transport) {
-		return fmt.Errorf("%w: %q", ErrUnsupportedProvider, provider)
-	}
-	return nil
-}
-
-func validProviderComponent(value string) bool {
-	if value == "" || value[0] < 'a' || value[0] > 'z' {
-		return false
-	}
-	for _, char := range value[1:] {
-		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' && char != '_' && char != '.' {
-			return false
-		}
-	}
-	return true
+	return policy.ValidateProvider(provider)
 }
 
 // ResolveDefaultRoot returns the default persistent state root path.
@@ -195,34 +152,16 @@ func ValidateDirectories(root, cwd string) (canonicalRoot, canonicalCwd string, 
 		return "", "", fmt.Errorf("%w: %s is not a directory", ErrInvalidCwd, canonicalCwd)
 	}
 
-	if pathsOverlap(canonicalRoot, canonicalCwd) {
+	if policy.PathsOverlap(canonicalRoot, canonicalCwd) {
 		return "", "", fmt.Errorf("%w: root=%s, cwd=%s", ErrRootWorkspaceOverlap, canonicalRoot, canonicalCwd)
 	}
 
 	return canonicalRoot, canonicalCwd, nil
 }
 
-func isSubpath(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	if err != nil {
-		return false
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	return true
-}
-
-func pathsOverlap(p1, p2 string) bool {
-	return isSubpath(p1, p2) || isSubpath(p2, p1)
-}
-
 // PathsOverlap reports lexical containment of clean canonical paths. Callers
 // must resolve filesystem aliases before using this to validate ownership.
-func PathsOverlap(first, second string) bool { return pathsOverlap(first, second) }
-
-// MaxBriefBytes is the global maximum size of brief.md (8 MiB).
-const MaxBriefBytes = 8 * 1024 * 1024
+func PathsOverlap(first, second string) bool { return policy.PathsOverlap(first, second) }
 
 // ValidateBriefFile verifies that path points to an existing regular file within the 8 MiB limit.
 func ValidateBriefFile(path string) (int64, error) {

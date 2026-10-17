@@ -100,10 +100,6 @@ func (s *Store) OpenRunnerRepairContext(ctx context.Context, create bool) (*Cont
 	return s.openControlDirContext(ctx, filepath.Join(s.Root, "runner-repair"), create)
 }
 
-func (s *Store) openControlDir(path string, create bool) (*ControlDir, error) {
-	return s.openControlDirContext(context.Background(), path, create)
-}
-
 func (s *Store) openControlDirContext(ctx context.Context, path string, create bool) (result *ControlDir, err error) {
 	ctx, cancel, err := persistenceContext(ctx)
 	if err != nil {

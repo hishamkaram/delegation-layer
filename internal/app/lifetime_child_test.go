@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	guardianfixture "github.com/hishamkaram/delegation-layer/internal/guardian/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -75,7 +76,7 @@ func TestOpenTaskLifetimeChildRejectsValidTamperedScopeBeforeHello(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeLifetimeTestConnection(t, parent) })
+	t.Cleanup(func() { guardianfixture.CloseConnection(t, parent) })
 	t.Cleanup(func() {
 		if closeErr := childFile.Close(); closeErr != nil {
 			t.Errorf("close child file: %v", closeErr)
@@ -154,7 +155,7 @@ func TestOpenInspectionLifetimeChildRejectsValidTamperedScopeBeforeHello(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { closeLifetimeTestConnection(t, parent) })
+	t.Cleanup(func() { guardianfixture.CloseConnection(t, parent) })
 	t.Cleanup(func() {
 		if closeErr := childFile.Close(); closeErr != nil {
 			t.Errorf("close child file: %v", closeErr)
@@ -187,7 +188,7 @@ func assertLifetimeChildRejectsBeforeHello(t *testing.T, parent net.Conn, open f
 			t.Fatalf("control read error = %v, want timeout without hello", readErr)
 		}
 	}
-	closeLifetimeTestConnection(t, parent)
+	guardianfixture.CloseConnection(t, parent)
 
 	var openErr error
 	select {
@@ -200,12 +201,5 @@ func assertLifetimeChildRejectsBeforeHello(t *testing.T, parent net.Conn, open f
 	}
 	if !errors.Is(openErr, want) {
 		t.Fatalf("lifetime child error = %v, want %v", openErr, want)
-	}
-}
-
-func closeLifetimeTestConnection(t *testing.T, conn net.Conn) {
-	t.Helper()
-	if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		t.Errorf("close parent connection: %v", err)
 	}
 }

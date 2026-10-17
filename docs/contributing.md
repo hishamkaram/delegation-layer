@@ -5,7 +5,7 @@ provider differences explicit at the adapter boundary.
 
 ## Development setup
 
-Install Go 1.27.2, Python 3, Node.js 22 or newer, and the repository's pinned
+Install Go 1.27.2, Python 3.12, Node.js 22 or newer, and the repository's pinned
 verification tools. Node.js is used by the npm and plugin package checks.
 `make acceptance-private-cli` executes the current build against a Pi-shaped
 executable fixture and a real private supervisor on macOS and Linux. This gate
@@ -33,7 +33,8 @@ repository and run the local checks before editing:
 ```sh
 go test ./...
 make test-race
-python3 -m unittest discover -s scripts -p 'test_*.py'
+make verify-maintainability-strict
+make test-native-harness
 make check
 make skill-package-check
 make plugin-package-check
@@ -43,6 +44,39 @@ The repository's `AGENTS.md`, invariant contracts under `agents/_data/`, and
 focused skills under `skills/` are the authoritative contributor instructions.
 They cover ownership, path and process invariants, concurrency, testing, and
 documentation hygiene.
+
+## Maintainability checks
+
+The [maintainability contract](../agents/_data/maintainability-contract.md)
+defines subsystem ownership, dependency direction, source budgets, and the
+evidence required for a change. The [subsystem
+registry](../agents/_data/subsystems.json) records each module's owner, layer,
+and exact allowed imports, including test and fixture modules. Update the
+relevant fragment after reviewing a changed boundary. The checker reports
+observations; it never grants new dependency permissions.
+
+Run `make verify-maintainability-strict` before peer review. It checks maintained
+Go, Python, JavaScript, scripts, and documentation, including untracked files
+and Go files excluded by the host's build tags. Unknown modules, unused
+permissions, dependency cycles, parser failures, and exceeded budgets fail the
+gate. `make check` includes this strict target. A passing size check alone does
+not establish correct ownership; review the affected consumers and state
+transitions too.
+
+`make fmt` and `make fmt-check` use that same maintained-file inventory,
+including untracked source and excluding ignored scratch and proof snapshots.
+
+The migration inventory is only for staging this refactor against unchanged
+baseline bytes. Strict mode requires it to be empty. Changed source cannot use
+an old exemption, and finished changes must not leave exceptions behind.
+
+Python acceptance entry scripts import canonical implementations under
+`scripts.delegate_acceptance`. Import the same implementation namespace from
+helpers and tests; patch the module where a function is actually looked up.
+Use the shared process registry and directory owner instead of adding another
+subprocess or cleanup implementation. When moving tests, keep each case in one
+discovered module and reconcile its old and new IDs across both discovery
+commands in `make test-native-harness`.
 
 Agent integrations should follow the provider-agnostic
 [agent-integration skill](../skills/agent-integration/SKILL.md), which uses the
@@ -191,8 +225,9 @@ add provider-specific process control or raw argument passthrough to the core.
 
 ## Adding or changing a provider
 
-Start with the public contract in `internal/provider/contract.go` and the
-existing adapters under `internal/provider/`. Keep preparation free of
+Start with the runtime-facing contract in `internal/provider/contract.go`,
+the pure facts under `internal/provider/contract/`, and the existing adapters
+under `internal/provider/`. Keep preparation free of
 provider-process launches and writes. It may perform bounded executable
 discovery and policy metadata reads; provider version/help probes and other
 native inspection work must run through the shared core. Define the help
@@ -283,6 +318,12 @@ tag as its input, on a project-owned runner labeled `delegation-native`. That
 runner must already have the provider CLIs and their native authentication. The
 `opencode_model` input selects an available OpenCode control model explicitly.
 A passing control covers that model; it does not clear failures for other models.
+The runner must support `actions/setup-python` v6: Actions runner 2.327.1 or
+newer, an OS supported by its Python distributions, and a writable tool cache.
+On macOS, that cache must be `/Users/runner/hostedtoolcache`; on Linux, use a
+supported Ubuntu release. See the [self-hosted setup requirements](https://github.com/actions/setup-python/blob/ece7cb06caefa5fff74198d8649806c4678c61a1/docs/advanced-usage.md#using-setup-python-with-a-self-hosted-runner).
+The workflow logs `python3 --version` before archive verification. Prove these
+prerequisites on the actual `delegation-native` runner before release promotion.
 The workflow uses the current protected-main acceptance harness and the shared
 `scripts/verify_release_archive.py` verifier. The verifier checks the requested
 draft archive's checksum and attestation, exercises the released CLI through

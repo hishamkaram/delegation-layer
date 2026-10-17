@@ -5,7 +5,6 @@ package lifetime
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -405,59 +404,6 @@ func (p *darwinProcessGroupPin) wait(ctx context.Context) error {
 	}
 }
 
-func startDarwinProcessGroupPin() (*darwinProcessGroupPin, error) {
-	address, listenerFile, err := openDarwinProcessGroupPinListener()
-	if err != nil {
-		return nil, err
-	}
-	readyReader, readyWriter, err := os.Pipe()
-	if err != nil {
-		return nil, errors.Join(err, listenerFile.Close())
-	}
-	token, err := newProcessGroupPinToken()
-	if err != nil {
-		return nil, errors.Join(err, closeDarwinProcessGroupPinFiles(listenerFile, readyReader, readyWriter))
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return nil, errors.Join(err, closeDarwinProcessGroupPinFiles(listenerFile, readyReader, readyWriter))
-	}
-	cmd := exec.Command(executable)
-	cmd.Env = appendProcessGroupPinEnvironment(os.Environ(), token)
-	cmd.ExtraFiles = []*os.File{listenerFile, readyWriter}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err = cmd.Start(); err != nil {
-		return nil, errors.Join(err, closeDarwinProcessGroupPinFiles(listenerFile, readyReader, readyWriter))
-	}
-	if err = closeDarwinProcessGroupPinFiles(listenerFile, readyWriter); err != nil {
-		return nil, errors.Join(err, abortDarwinProcessGroupPin(cmd), readyReader.Close())
-	}
-	if err = waitDarwinProcessGroupPinReady(readyReader); err != nil {
-		return nil, errors.Join(err, abortDarwinProcessGroupPin(cmd))
-	}
-	pin, err := finishDarwinProcessGroupPinStart(cmd, address, token)
-	if err != nil {
-		return nil, errors.Join(err, abortDarwinProcessGroupPin(cmd))
-	}
-	return pin, nil
-}
-
-func openDarwinProcessGroupPinListener() (string, *os.File, error) {
-	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		return "", nil, fmt.Errorf("create Darwin process-group pin listener: %w", err)
-	}
-	listenerFile, err := listener.File()
-	if err != nil {
-		return "", nil, errors.Join(err, listener.Close())
-	}
-	address := listener.Addr().String()
-	if err = listener.Close(); err != nil {
-		return "", nil, errors.Join(err, listenerFile.Close())
-	}
-	return address, listenerFile, nil
-}
-
 func closeDarwinProcessGroupPinFiles(files ...*os.File) error {
 	var resultErr error
 	for _, file := range files {
@@ -466,83 +412,6 @@ func closeDarwinProcessGroupPinFiles(files ...*os.File) error {
 		}
 	}
 	return resultErr
-}
-
-func finishDarwinProcessGroupPinStart(cmd *exec.Cmd, address, token string) (*darwinProcessGroupPin, error) {
-	present, startToken, err := observeStartedProcessIdentity(cmd.Process.Pid)
-	if err != nil || !present {
-		return nil, errors.Join(err, ErrUnverifiableLaunch)
-	}
-	pgid, err := processGroupID(cmd.Process.Pid)
-	if err != nil || pgid != cmd.Process.Pid {
-		return nil, errors.Join(err, ErrUnverifiableLaunch)
-	}
-	ref, err := NewProcessRef(cmd.Process.Pid, startToken)
-	if err != nil {
-		return nil, err
-	}
-	pin := &darwinProcessGroupPin{ref: ref, address: address, token: token, cmd: cmd, owned: true}
-	ctx, cancel := context.WithTimeout(context.Background(), processGroupPinTimeout)
-	defer cancel()
-	if err = pin.probe(ctx); err != nil {
-		return nil, err
-	}
-	return pin, nil
-}
-
-func waitDarwinProcessGroupPinReady(reader *os.File) (resultErr error) {
-	defer func() {
-		resultErr = errors.Join(resultErr, reader.Close())
-	}()
-	result := make(chan error, 1)
-	go func() {
-		var ready [1]byte
-		_, err := io.ReadFull(reader, ready[:])
-		if err == nil && ready[0] != 1 {
-			err = ErrUnverifiableLaunch
-		}
-		result <- err
-	}()
-	timer := time.NewTimer(processGroupPinTimeout)
-	defer timer.Stop()
-	select {
-	case err := <-result:
-		return err
-	case <-timer.C:
-		return context.DeadlineExceeded
-	}
-}
-
-func abortDarwinProcessGroupPin(cmd *exec.Cmd) error {
-	if cmd == nil || cmd.Process == nil {
-		return nil
-	}
-	killErr := unix.Kill(cmd.Process.Pid, unix.SIGKILL)
-	waitErr := cmd.Wait()
-	var exitErr *exec.ExitError
-	if errors.As(waitErr, &exitErr) {
-		waitErr = nil
-	}
-	return errors.Join(killErr, waitErr)
-}
-
-func newProcessGroupPinToken() (string, error) {
-	var token [32]byte
-	if _, err := rand.Read(token[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(token[:]), nil
-}
-
-func appendProcessGroupPinEnvironment(environment []string, token string) []string {
-	result := make([]string, 0, len(environment)+1)
-	for _, entry := range environment {
-		if strings.HasPrefix(entry, processGroupPinTokenEnv+"=") || strings.HasPrefix(entry, processScopeMarkerEnvironment+"=") {
-			continue
-		}
-		result = append(result, entry)
-	}
-	return append(result, processGroupPinTokenEnv+"="+token)
 }
 
 func encodeDarwinProcessGroupPinReference(identifier string, pin *darwinProcessGroupPin) string {

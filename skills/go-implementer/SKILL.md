@@ -52,8 +52,10 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
    Keep shared lifecycle policy OS-neutral and isolate only primitives whose
    semantics differ; do not emulate one supported kernel to claim another.
 5. Run `make fmt-check`, the affected focused tests, and `make verify-skills`;
-   finish with the applicable project gate before handing off. Do not suppress
-   a linter or weaken an assertion to obtain a pass.
+   require `make verify-maintainability-strict` and the applicable project gate
+   before peer review. A staged checkpoint names any blocked shared gate and
+   remains incomplete. Do not suppress a linter or weaken an assertion to
+   obtain a pass.
 
 ## Deliverables
 

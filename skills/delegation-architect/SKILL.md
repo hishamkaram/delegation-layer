@@ -72,8 +72,9 @@ lifecycle or Git-subprocess execution policy in an adapter or a second layer.
   stopping, sealing, capture, or publication.
 - Existing persisted behavior and historical predicate revisions have an
   explicit preservation or migration decision.
-- The design has a meaningful test and acceptance path, with no arbitrary
-  coverage or file-size gate added.
+- The design has a meaningful test and acceptance path, complies with the
+  shared contract's [maintainability gates](../../agents/_data/maintainability-contract.md#subsystem-boundaries-and-maintainability-gates),
+  and introduces no unapproved coverage target or gate exception.
 - Every affected row has a composed test through its production stores and real
   consumers, or an explicit unresolved evidence item.
 - Root can reproduce and review the handoff without an unrecorded source,

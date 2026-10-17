@@ -10,33 +10,14 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/execution/plan"
 	"github.com/hishamkaram/delegation-layer/internal/providerjson"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// Plan is constructed by a trusted compiled adapter, never from public raw argv.
-type Plan struct {
-	Executable string
-	// ExecutableSHA256 binds the final launch to the executable admitted by the
-	// provider inspection. Historical records may carry the same identity in
-	// effective policy details when this field is empty.
-	ExecutableSHA256 string
-	// RuntimePreflightSHA256 binds a pending plan to the immutable admission
-	// contract. Only a successful PreflightPlan may clear it before Start.
-	// While nonempty, ProviderRuntime must be empty.
-	RuntimePreflightSHA256 string
-	// ProviderRuntime is the identity observed for this plan. It is populated
-	// by the app after provider finalization and recorded at start/seal so a
-	// runtime upgrade remains reconstructable without mutating meta.json.
-	ProviderRuntime      task.ProviderRuntimeIdentity
-	Arguments            []string
-	Directory            string
-	Environment          []string
-	Predicate            task.PredicateRef
-	InputFiles           []task.InputFile
-	OutputArtifacts      []task.OutputArtifact
-	OutputWriterContract string
-}
+// Plan is the immutable launch plan constructed by a trusted compiled adapter.
+// It is an alias of the pure plan.Plan, so both names denote one type.
+type Plan = plan.Plan
 
 // IdentityObserver observes stdout without deciding publication. It must retain
 // bounded parser state, continue accepting bytes after semantic faults, and only

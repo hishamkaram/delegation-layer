@@ -16,11 +16,14 @@ import time
 import traceback
 import uuid
 
-from acceptance_supervisor_common import (
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.acceptance_supervisor_common import (
     DirectoryOwner, Processes, config_for, digest, inherited_environment,
     read_json, finalize_acceptance_artifacts, require, sha, write_json,
 )
-from acceptance_provider_common import (
+from scripts.acceptance_provider_common import (
     task_snapshot,
     verify_collected_outcome as shared_verify_collected_outcome,
     wait_runner_done as shared_wait_runner_done,
@@ -316,6 +319,67 @@ class ContributorAcceptance:
             raw_process_captures_token=self.processes.capture_root,
         )
 
+    def _cleanup_failed_run(self, error):
+        active = []
+        cleanup_errors = []
+        drain_failed = False
+        artifact_finalized = False
+        try:
+            (self.output / "success.json").unlink(missing_ok=True)
+        except BaseException as removal_error:
+            cleanup_errors.append(removal_error)
+        try:
+            active = self.processes.drain(
+                timeout=5, exclude=(() if self.daemon is None else (self.daemon,)))
+        except BaseException as drain_error:
+            drain_failed = True
+            cleanup_errors.append(drain_error)
+
+        if self.daemon is not None and not drain_failed and not active:
+            try:
+                if self.daemon.poll() is None:
+                    self.shutdown()
+            except BaseException as shutdown_error:
+                cleanup_errors.append(shutdown_error)
+        elif self.daemon is None and not drain_failed and not active:
+            self.closed = True
+
+        try:
+            write_json(self.output / "failure.json", {
+                "error": str(error), "traceback": traceback.format_exc(),
+                "cleanup_error": str(cleanup_errors[0]) if cleanup_errors else None,
+                "natural_daemon_shutdown": self.closed,
+                "base": str(self.base), "tasks": self.tasks, "owned_clients": active,
+                "daemon_pid": None if self.daemon is None else self.daemon.pid,
+                "unknown_termination_preserved": True, "signals_sent": 0})
+        except BaseException as diagnostic_error:
+            print("WARNING contributor acceptance diagnostics were not written: "
+                  + str(diagnostic_error), file=sys.stderr, flush=True)
+
+        try:
+            if not self.finalize(False):
+                cleanup_errors.append(
+                    RuntimeError("acceptance artifact finalization was not completed"))
+            else:
+                artifact_finalized = True
+        except BaseException as finalize_error:
+            cleanup_errors.append(finalize_error)
+        try:
+            write_json(self.output / "failure-cleanup.json", {
+                "status": "completed" if not cleanup_errors else "failed",
+                "natural_daemon_shutdown": self.closed,
+                "owned_clients_remaining": len(active),
+                "artifact_finalization_completed": artifact_finalized,
+                "passed_receipt_absent": not (self.output / "success.json").exists(),
+                "signals_sent": 0,
+            }, replace=True)
+        except BaseException as evidence_error:
+            print("WARNING contributor cleanup evidence was not written: "
+                  + str(evidence_error), file=sys.stderr, flush=True)
+        if cleanup_errors:
+            raise RuntimeError("contributor acceptance cleanup failed: "
+                               + str(cleanup_errors[0])) from error
+
     def run(self):
         try:
             self.setup()
@@ -347,65 +411,7 @@ class ContributorAcceptance:
                 raise RuntimeError("completed contributor acceptance artifacts could not be cleaned")
             write_json(self.output / "success.json", success_receipt, replace=True)
         except BaseException as error:
-            active = []
-            cleanup_errors = []
-            drain_failed = False
-            artifact_finalized = False
-            try:
-                (self.output / "success.json").unlink(missing_ok=True)
-            except BaseException as removal_error:
-                cleanup_errors.append(removal_error)
-            try:
-                active = self.processes.drain(
-                    timeout=5, exclude=(() if self.daemon is None else (self.daemon,)))
-            except BaseException as drain_error:
-                drain_failed = True
-                cleanup_errors.append(drain_error)
-
-            if self.daemon is not None and not drain_failed and not active:
-                try:
-                    if self.daemon.poll() is None:
-                        self.shutdown()
-                except BaseException as shutdown_error:
-                    cleanup_errors.append(shutdown_error)
-            elif self.daemon is None and not drain_failed and not active:
-                self.closed = True
-
-            try:
-                write_json(self.output / "failure.json", {
-                    "error": str(error), "traceback": traceback.format_exc(),
-                    "cleanup_error": str(cleanup_errors[0]) if cleanup_errors else None,
-                    "natural_daemon_shutdown": self.closed,
-                    "base": str(self.base), "tasks": self.tasks, "owned_clients": active,
-                    "daemon_pid": None if self.daemon is None else self.daemon.pid,
-                    "unknown_termination_preserved": True, "signals_sent": 0})
-            except BaseException as diagnostic_error:
-                print("WARNING contributor acceptance diagnostics were not written: "
-                      + str(diagnostic_error), file=sys.stderr, flush=True)
-
-            try:
-                if not self.finalize(False):
-                    cleanup_errors.append(
-                        RuntimeError("acceptance artifact finalization was not completed"))
-                else:
-                    artifact_finalized = True
-            except BaseException as finalize_error:
-                cleanup_errors.append(finalize_error)
-            try:
-                write_json(self.output / "failure-cleanup.json", {
-                    "status": "completed" if not cleanup_errors else "failed",
-                    "natural_daemon_shutdown": self.closed,
-                    "owned_clients_remaining": len(active),
-                    "artifact_finalization_completed": artifact_finalized,
-                    "passed_receipt_absent": not (self.output / "success.json").exists(),
-                    "signals_sent": 0,
-                }, replace=True)
-            except BaseException as evidence_error:
-                print("WARNING contributor cleanup evidence was not written: "
-                      + str(evidence_error), file=sys.stderr, flush=True)
-            if cleanup_errors:
-                raise RuntimeError("contributor acceptance cleanup failed: "
-                                   + str(cleanup_errors[0])) from error
+            self._cleanup_failed_run(error)
             raise
 
 

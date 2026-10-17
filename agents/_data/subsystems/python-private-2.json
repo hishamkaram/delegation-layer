@@ -1,0 +1,578 @@
+[
+  {
+    "name": "py:delegate_acceptance.private_cli.admission",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.private_cli.commands",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.application",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.arguments",
+      "py:delegate_acceptance.private_cli.capacity_entry",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.contention_controls",
+      "py:delegate_acceptance.private_cli.contention_policy",
+      "py:delegate_acceptance.private_cli.finalization",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.fixture_setup",
+      "py:delegate_acceptance.private_cli.initial",
+      "py:delegate_acceptance.private_cli.legacy",
+      "py:delegate_acceptance.private_cli.scenario_entry",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.arguments",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:argparse",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.contention_policy",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.capacity",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:concurrent.futures",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.capacity_dispatch",
+      "py:delegate_acceptance.private_cli.capacity_inputs",
+      "py:delegate_acceptance.private_cli.capacity_ownership",
+      "py:delegate_acceptance.private_cli.capacity_records",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.fingerprints",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.queue_policy",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.private_cli.wrappers",
+      "py:hashlib",
+      "py:json",
+      "py:pathlib",
+      "py:threading",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.capacity_dispatch",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:concurrent.futures",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.capacity_inputs",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:json",
+      "py:pathlib",
+      "py:threading",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.capacity_entry",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.private_cli.capacity",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.private_cli.wrapper_policy",
+      "py:delegate_acceptance.private_cli.wrappers"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.capacity_inputs",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.capacity_ownership",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:errno",
+      "py:fcntl",
+      "py:os",
+      "py:pathlib",
+      "py:stat",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.capacity_records",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.lifetime.identity",
+      "py:delegate_acceptance.private_cli.capacity_policy",
+      "py:delegate_acceptance.private_cli.lease_policy",
+      "py:hashlib",
+      "py:json"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.capture",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.environment",
+      "py:delegate_acceptance.processes.observation",
+      "py:io",
+      "py:os",
+      "py:subprocess",
+      "py:threading",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.commands",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.environment",
+      "py:hashlib",
+      "py:json",
+      "py:subprocess"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.contention_controls",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.private_cli.capacity_ownership",
+      "py:delegate_acceptance.private_cli.capacity_records",
+      "py:delegate_acceptance.private_cli.contention_locks",
+      "py:delegate_acceptance.private_cli.contention_policy",
+      "py:delegate_acceptance.private_cli.control_fixture",
+      "py:delegate_acceptance.private_cli.fingerprints",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.fixture_records",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.pair_evidence",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.tasks.operations",
+      "py:delegate_acceptance.tasks.publication",
+      "py:hashlib",
+      "py:pathlib",
+      "py:shlex",
+      "py:sys",
+      "py:time",
+      "py:typing",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.contention_locks",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.private_cli.contention_policy",
+      "py:errno",
+      "py:fcntl",
+      "py:os",
+      "py:pathlib",
+      "py:stat"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.control_fixture",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:sys",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.finalization",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.errors",
+      "py:delegate_acceptance.private_cli.root_cleanup",
+      "py:delegate_acceptance.private_cli.supervisor"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.fingerprints",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:hashlib",
+      "py:os",
+      "py:pathlib",
+      "py:resource"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.fixture_lifetime",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:pathlib",
+      "py:subprocess",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.fixture_setup",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.errors",
+      "py:delegate_acceptance.private_cli.fixture_records",
+      "py:delegate_acceptance.private_cli.fixtures",
+      "py:delegate_acceptance.private_cli.installation",
+      "py:delegate_acceptance.private_cli.wrappers",
+      "py:os",
+      "py:pathlib",
+      "py:tempfile"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.fixtures",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:shlex",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.handoff",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:dataclasses",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.capacity_ownership",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.fingerprints",
+      "py:delegate_acceptance.private_cli.handoff_cleanup",
+      "py:delegate_acceptance.private_cli.handoff_journal",
+      "py:delegate_acceptance.private_cli.handoff_observation",
+      "py:delegate_acceptance.private_cli.handoff_policy",
+      "py:delegate_acceptance.private_cli.handoff_supervisor",
+      "py:delegate_acceptance.private_cli.handoff_tasks",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.pair_evidence",
+      "py:delegate_acceptance.private_cli.queue_policy",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:delegate_acceptance.private_cli.stop_policy",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.supervisor.config_policy",
+      "py:hashlib",
+      "py:json",
+      "py:pathlib",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.handoff_cleanup",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.supervisor"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.handoff_journal",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.directories.policy",
+      "py:json",
+      "py:pathlib"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.handoff_supervisor",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:json"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.handoff_tasks",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.capacity_records",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.private_cli.wrappers",
+      "py:hashlib",
+      "py:json",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.initial",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.fixture_records",
+      "py:delegate_acceptance.private_cli.packaged_defaults",
+      "py:delegate_acceptance.private_cli.pair_evidence",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.installation",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.private_cli.fingerprints",
+      "py:os",
+      "py:shutil"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.leases",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.errors",
+      "py:errno",
+      "py:fcntl",
+      "py:os",
+      "py:pathlib",
+      "py:stat",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.legacy",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.pair_evidence",
+      "py:delegate_acceptance.private_cli.queue_policy",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.private_cli.wrapper_policy",
+      "py:delegate_acceptance.private_cli.wrappers",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:shlex",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.packaged_defaults",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.errors",
+      "py:delegate_acceptance.private_cli.fingerprints",
+      "py:delegate_acceptance.private_cli.installation",
+      "py:delegate_acceptance.private_cli.pair_evidence",
+      "py:delegate_acceptance.private_cli.queue_policy",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:json",
+      "py:pathlib",
+      "py:platform",
+      "py:shutil",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.pair_evidence",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:hashlib",
+      "py:json"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.receipt",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.private_cli.errors",
+      "py:delegate_acceptance.private_cli.fingerprints",
+      "py:json",
+      "py:pathlib",
+      "py:platform",
+      "py:threading",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.root_cleanup",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.supervisor"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.scenario_entry",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.fixtures",
+      "py:delegate_acceptance.private_cli.handoff",
+      "py:delegate_acceptance.private_cli.handoff_cleanup",
+      "py:delegate_acceptance.private_cli.stop",
+      "py:delegate_acceptance.private_cli.upgrade",
+      "py:delegate_acceptance.private_cli.wrapper_policy",
+      "py:delegate_acceptance.private_cli.wrappers",
+      "py:os",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.stop",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.capacity_ownership",
+      "py:delegate_acceptance.private_cli.capacity_records",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.fingerprints",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.stop_policy",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:pathlib",
+      "py:time",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.supervisor",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.lifetime.closure",
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.environment",
+      "py:delegate_acceptance.private_cli.queue_policy",
+      "py:errno",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:socket",
+      "py:stat",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.upgrade",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "application",
+    "imports": [
+      "py:contextlib",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.encoding",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.private_cli.capacity_ownership",
+      "py:delegate_acceptance.private_cli.capacity_records",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:delegate_acceptance.private_cli.configuration",
+      "py:delegate_acceptance.private_cli.installation",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.pair_evidence",
+      "py:delegate_acceptance.private_cli.queue_policy",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.private_cli.wrappers",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.tasks.publication",
+      "py:fcntl",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:time",
+      "py:uuid"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.private_cli.wrappers",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "runtime",
+    "imports": [
+      "py:hashlib",
+      "py:pathlib",
+      "py:shlex"
+    ]
+  }
+]

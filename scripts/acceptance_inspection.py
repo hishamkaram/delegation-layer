@@ -167,6 +167,11 @@ def validate_expired_inspection(state: Path, task_id: str, row: dict[str, object
     else:
         _require_absent(start_path, "queued inspection start record")
 
+    _validate_expired_inspection_result(directory, request_digest, started)
+    _validate_expired_inspection_stop(directory, request, request_digest, numeric, deadline, started)
+
+
+def _validate_expired_inspection_result(directory: Path, request_digest: str, started: bool) -> None:
     result_path = directory / "result.json"
     completion_path = directory / "completion.json"
     result_present = result_path.exists() or result_path.is_symlink()
@@ -192,6 +197,11 @@ def validate_expired_inspection(state: Path, task_id: str, row: dict[str, object
         _require_absent(result_path, "queued inspection result")
         _require_absent(completion_path, "queued inspection completion")
 
+
+
+def _validate_expired_inspection_stop(directory: Path, request: dict[str, object],
+                                      request_digest: str, numeric: int, deadline: str,
+                                      started: bool) -> None:
     stop_request_path = directory / "stop-request.json"
     stop_reply_path = directory / "stop-reply.json"
     stop_observation_path = directory / "stop-observation.json"

@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -56,10 +59,10 @@ func assertExternalSupervisorGenerationError(t *testing.T, err error) {
 	if !errors.Is(err, inspection.ErrGroupMigrationRequired) {
 		t.Fatalf("external inspection head error=%v, want ErrGroupMigrationRequired", err)
 	}
-	if !errors.Is(err, errExternalInspectionHandoffRequired) {
+	if !errors.Is(err, supervisorcore.ErrExternalInspectionHandoffRequired) {
 		t.Fatalf("external inspection head error=%v, want errExternalInspectionHandoffRequired", err)
 	}
-	failure := dispatchFailure(withDispatchStage("start-supervisor", err), "not_created")
+	failure := dispatchFailure(admission.WithStage("start-supervisor", err), "not_created")
 	if failure.Code != "supervisor_upgrade_required" || failure.Stage != "start-supervisor" || failure.NextAction != "run_supervisor_migrate" {
 		t.Fatalf("external inspection error was not actionable: %+v", failure)
 	}
@@ -77,12 +80,12 @@ func resolveSupervisorGenerationTestWithLock(t *testing.T, store *taskdir.Store,
 	return err
 }
 
-func resolveSupervisorGenerationTestWithResult(t *testing.T, store *taskdir.Store, saved task.SupervisorRef) (privateSupervisorGeneration, error) {
+func resolveSupervisorGenerationTestWithResult(t *testing.T, store *taskdir.Store, saved task.SupervisorRef) (supervisorcore.Generation, error) {
 	t.Helper()
-	var resolution privateSupervisorGeneration
+	var resolution supervisorcore.Generation
 	err := pueue.WithBootstrapLockContext(t.Context(), store.Root, func(ctx context.Context) error {
 		var resolveErr error
-		resolution, resolveErr = resolvePrivateSupervisorGenerationWithLock(ctx, store, saved)
+		resolution, resolveErr = supervisorcore.ResolveGenerationWithLock(ctx, store, saved)
 		return resolveErr
 	})
 	return resolution, err

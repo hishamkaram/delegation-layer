@@ -12,8 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -66,7 +69,7 @@ func TestExternalInspectionHandoffRetryKeepsPublishedTarget(t *testing.T) {
 	store, deps, current := newSupervisorProbeTestFixture(t)
 	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
-	successor := privateInspectionGroup(store.RootID, current.Binding())
+	successor := supervisorcore.InspectionGroup(store.RootID, current.Binding())
 	// Model a crash after the private owner and pending edge are durable, but
 	// before the inspection journal commits its new head.
 	if err := inspection.PrepareGroupMigration(t.Context(), store, legacy, successor); err != nil {
@@ -92,7 +95,7 @@ func TestExternalInspectionHandoffCreatesPrivateSupervisorForExternalOnlyRoot(t 
 	store := newBareInspectionStore(t)
 	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
-	bundle := canonicalAppTestTempDir(t)
+	bundle := testsupport.CanonicalTempDir(t)
 	for _, source := range []string{template.Binding().ClientExecutable, template.Binding().DaemonExecutable} {
 		data := readSupervisorProbeTestFile(t, source)
 		data = []byte(strings.ReplaceAll(string(data), templateStore.RootID, store.RootID))
@@ -144,7 +147,7 @@ func TestExternalInspectionHandoffPreservesOrdinaryTasksAndLateAdmission(t *test
 	late := createExternalHandoffTask(t, store, operation.Request().Task, external.Binding())
 	finishExternalHandoffTask(t, late, external.Binding())
 	assertSupervisorProbeTestFile(t, metaPath, metaBefore)
-	rebound, err := rebindContinuationSupervisor(t.Context(), store.Root, external.Binding(), deps)
+	rebound, err := supervisorcore.RebindContinuation(t.Context(), store.Root, external.Binding(), continuationSupervisorOptions(deps))
 	if err != nil || rebound != external.Binding() {
 		t.Fatalf("historical continuation changed supervisors: binding=%+v err=%v", rebound, err)
 	}
@@ -167,7 +170,7 @@ func TestExternalInspectionHandoffAdoptsLegacyPrivateOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = pueue.WithBootstrapLockContext(t.Context(), store.Root, func(ctx context.Context) error {
-		return handoffExternalInspectionGroup(ctx, store, current, legacy, privateInspectionGroup(store.RootID, current.Binding()))
+		return supervisorcore.HandoffExternalInspectionGroup(ctx, store, current, legacy, supervisorcore.InspectionGroup(store.RootID, current.Binding()))
 	})
 	if err != nil {
 		t.Fatalf("legacy private owner was not adopted: %v", err)
@@ -184,10 +187,10 @@ func TestExternalInspectionHandoffAdoptsLegacyPrivateOwner(t *testing.T) {
 func TestExternalInspectionHandoffRejectsWrongSuccessorBeforePublication(t *testing.T) {
 	store, _, current := newSupervisorProbeTestFixture(t)
 	_, legacy, _ := newExternalInspectionHandoffFixture(t, store)
-	successor := privateInspectionGroup(store.RootID, current.Binding())
+	successor := supervisorcore.InspectionGroup(store.RootID, current.Binding())
 	successor.Supervisor.ClientSHA256 = task.ComputeSHA256([]byte("not the selected client"))
 	err := pueue.WithBootstrapLockContext(t.Context(), store.Root, func(ctx context.Context) error {
-		return handoffExternalInspectionGroup(ctx, store, current, legacy, successor)
+		return supervisorcore.HandoffExternalInspectionGroup(ctx, store, current, legacy, successor)
 	})
 	if !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("unbound successor error = %v", err)
@@ -210,7 +213,7 @@ func TestExternalInspectionHandoffPreservesCanceledContext(t *testing.T) {
 		if _, err := prepareInspectionHandoffSupervisor(canceled, "", Dependencies{}, pueue.Options{}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("prepare error = %v", err)
 		}
-		if err := handoffExternalInspectionGroup(canceled, nil, nil, inspection.GroupRequestRecord{}, inspection.GroupRequestRecord{}); !errors.Is(err, context.Canceled) {
+		if err := supervisorcore.HandoffExternalInspectionGroup(canceled, nil, nil, inspection.GroupRequestRecord{}, inspection.GroupRequestRecord{}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("handoff error = %v", err)
 		}
 	}
@@ -244,7 +247,7 @@ func assertHandoffSupervisorResult(t *testing.T, result commandResult, state, ac
 func assertExternalHandoffHead(t *testing.T, store *taskdir.Store, legacy inspection.GroupRequestRecord, binding task.SupervisorRef) {
 	t.Helper()
 	head, migrated, err := inspection.ReadGroupHead(t.Context(), store)
-	if err != nil || !migrated || head != privateInspectionGroup(store.RootID, binding) {
+	if err != nil || !migrated || head != supervisorcore.InspectionGroup(store.RootID, binding) {
 		t.Fatalf("handoff head = %+v migrated=%t err=%v", head, migrated, err)
 	}
 	seed, err := inspection.ReadGroupRequest(t.Context(), store)
@@ -314,9 +317,14 @@ func finishExternalHandoffInspection(t *testing.T, store *taskdir.Store, request
 	if err != nil || !succeeded || result == nil || result.Reason != inspection.ResultEligible {
 		t.Fatalf("historical external completion was rejected: result=%+v succeeded=%t err=%v", result, succeeded, err)
 	}
-	evaluation, err := evaluateInspectionAdmission(t.Context(), operation)
-	if err != nil || evaluation.decision != inspectionAdmissionEligible || string(evaluation.facts) != "{\"eligible\":true}\n" {
-		t.Fatalf("historical admission replay failed: decision=%d facts=%s err=%v", evaluation.decision, evaluation.facts, err)
+	assertExternalHandoffAdmission(t, operation)
+}
+
+func assertExternalHandoffAdmission(t *testing.T, operation *inspection.Operation) {
+	t.Helper()
+	facts, recorded, terminal, err := admission.RecordedInspectionFacts(t.Context(), operation)
+	if err != nil || !recorded || !terminal || string(facts) != "{\"eligible\":true}\n" {
+		t.Fatalf("historical admission replay failed: recorded=%t terminal=%t facts=%s err=%v", recorded, terminal, facts, err)
 	}
 }
 

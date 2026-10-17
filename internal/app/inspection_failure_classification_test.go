@@ -3,20 +3,63 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
+
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestInspectionFailureClassificationWorkerWithoutLocalEvidence(t *testing.T) {
-	// A worker can fail before ClaimStart or native inspection. A nil operation
-	// makes any attempt to treat absent local evidence as provider facts invalid.
-	facts, workerErr := completedInspectionFacts(t.Context(), nil, pueue.Job{
-		State: pueue.StateEnded, Succeeded: false,
+	store := supervisorfixture.NewInspectionStore(t)
+	bound, logPath, _ := admissionfixture.NewUncertainGroupSupervisor(t, store.RootID)
+	t.Cleanup(func() {
+		if closeErr := bound.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
 	})
+	client := admissionfixture.NewObservedInspectionTestClient(t, bound, logPath, inspection.AdmissionTimeout, nil)
+	operation := admissionfixture.NewInspectionPollTestOperation(t, store, client)
+	claim, err := operation.ClaimSubmissionContext(t.Context(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = claim.ConsumeInspectionSubmission(); err != nil {
+		t.Fatal(err)
+	}
+	if err = operation.RecordReceiptContext(t.Context(), 7); err != nil {
+		t.Fatal(err)
+	}
+	statusPath := filepath.Join(filepath.Dir(logPath), "status.json")
+	admissionfixture.WriteInspectionPollTestStatus(t, statusPath, operation, true)
+	assertNoInspectionStartOrCompletion(t, store, operation)
+	facts, _, workerErr := admissioncore.RunInspection(operation, client, operation.Request().Binding.WorkerExecutable, store.Root)
+	assertNoInspectionStartOrCompletion(t, store, operation)
 	assertInspectionWorkerFailureClassification(t, facts, workerErr)
+}
+
+func assertNoInspectionStartOrCompletion(t *testing.T, store *taskdir.Store, operation *inspection.Operation) {
+	t.Helper()
+	if _, _, err := operation.ReadCompletedContext(t.Context()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failure fixture unexpectedly has completion evidence: %v", err)
+	}
+	control, err := store.OpenInspectionContext(t.Context(), operation.Request().TaskID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start inspection.StartRecord
+	err = control.Read("start.json", &start)
+	closeErr := control.Close()
+	if !errors.Is(err, os.ErrNotExist) || closeErr != nil {
+		t.Fatalf("failure fixture start evidence err=%v close=%v", err, closeErr)
+	}
 }
 
 func TestInspectionFailureClassificationRecordedWorkerFailure(t *testing.T) {
@@ -24,7 +67,7 @@ func TestInspectionFailureClassificationRecordedWorkerFailure(t *testing.T) {
 	if recordErr := operation.RecordWorkerExitContext(t.Context(), job.ID, false); recordErr != nil {
 		t.Fatal(recordErr)
 	}
-	facts, recorded, terminal, workerErr := recordedInspectionFacts(t.Context(), operation)
+	facts, recorded, terminal, workerErr := admissioncore.RecordedInspectionFacts(t.Context(), operation)
 	if !recorded || !terminal {
 		t.Error("persisted independent worker failure was not recognized")
 	}
@@ -32,7 +75,7 @@ func TestInspectionFailureClassificationRecordedWorkerFailure(t *testing.T) {
 }
 
 func TestInspectionFailureClassificationActualProviderUnavailable(t *testing.T) {
-	failure := dispatchFailure(withDispatchStage("inspect-provider", ErrProfileUnavailable), "not_created")
+	failure := dispatchFailure(admissioncore.WithStage("inspect-provider", ErrProfileUnavailable), "not_created")
 	want := DispatchFailureResponse{
 		Code: "provider_unavailable", Stage: "inspect-provider", NextAction: "stop_and_report",
 		Inspection: &InspectionFailureResponse{Class: "provider_unavailable", DeadlineState: "unknown"},
@@ -47,10 +90,10 @@ func assertInspectionWorkerFailureClassification(t *testing.T, facts json.RawMes
 	if facts != nil {
 		t.Errorf("failed inspection worker produced provider facts: %s", facts)
 	}
-	if !errors.Is(workerErr, errInspectionWorkerUnavailable) || errors.Is(workerErr, ErrProfileUnavailable) {
-		t.Errorf("worker failure was interpreted as provider unavailability: err=%v want=%v", workerErr, errInspectionWorkerUnavailable)
+	if !errors.Is(workerErr, admissioncore.ErrInspectionWorkerUnavailable) || errors.Is(workerErr, ErrProfileUnavailable) {
+		t.Errorf("worker failure was interpreted as provider unavailability: err=%v want=%v", workerErr, admissioncore.ErrInspectionWorkerUnavailable)
 	}
-	failure := dispatchFailure(withDispatchStage("inspect-provider", workerErr), "not_created")
+	failure := dispatchFailure(admissioncore.WithStage("inspect-provider", workerErr), "not_created")
 	want := DispatchFailureResponse{
 		Code: "provider_preflight_failed", Stage: "inspect-provider", NextAction: "stop_and_report",
 		Inspection: &InspectionFailureResponse{Class: "inspection_worker_failed", DeadlineState: "unknown"},

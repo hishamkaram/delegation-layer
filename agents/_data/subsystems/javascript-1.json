@@ -1,0 +1,187 @@
+[
+  {
+    "name": "js:scripts/install-agent-integration.mjs",
+    "owner": "installer",
+    "layer": "application",
+    "imports": [
+      "js:node:os",
+      "js:node:path",
+      "js:node:url",
+      "js:scripts/install-cli.mjs",
+      "js:scripts/installer/application.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/install-cli.mjs",
+    "owner": "installer",
+    "layer": "application",
+    "imports": [
+      "js:node:child_process",
+      "js:node:path",
+      "js:scripts/installer/arguments.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/application.mjs",
+    "owner": "installer",
+    "layer": "application",
+    "imports": [
+      "js:node:path",
+      "js:scripts/installer/arguments.mjs",
+      "js:scripts/installer/catalog.mjs",
+      "js:scripts/installer/detection.mjs",
+      "js:scripts/installer/filesystem.mjs",
+      "js:scripts/installer/routing-store.mjs",
+      "js:scripts/installer/selection.mjs",
+      "js:scripts/installer/skill-store.mjs",
+      "js:scripts/installer/terminal.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/arguments.mjs",
+    "owner": "installer",
+    "layer": "pure",
+    "imports": [
+      "js:node:path",
+      "js:scripts/installer/catalog.mjs",
+      "js:scripts/installer/paths.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/catalog.mjs",
+    "owner": "installer",
+    "layer": "pure",
+    "imports": []
+  },
+  {
+    "name": "js:scripts/installer/detection.mjs",
+    "owner": "installer",
+    "layer": "runtime",
+    "imports": [
+      "js:node:fs",
+      "js:node:path",
+      "js:scripts/installer/catalog.mjs",
+      "js:scripts/installer/filesystem.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/filesystem.mjs",
+    "owner": "installer",
+    "layer": "runtime",
+    "imports": [
+      "js:node:fs/promises",
+      "js:node:path"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/picker-state.mjs",
+    "owner": "installer",
+    "layer": "pure",
+    "imports": []
+  },
+  {
+    "name": "js:scripts/installer/routing-rules.mjs",
+    "owner": "installer",
+    "layer": "pure",
+    "imports": [
+      "js:node:path",
+      "js:scripts/installer/paths.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/routing-store.mjs",
+    "owner": "installer",
+    "layer": "runtime",
+    "imports": [
+      "js:node:fs/promises",
+      "js:node:path",
+      "js:scripts/installer/catalog.mjs",
+      "js:scripts/installer/filesystem.mjs",
+      "js:scripts/installer/routing-rules.mjs",
+      "js:scripts/installer/selection.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/selection.mjs",
+    "owner": "installer",
+    "layer": "pure",
+    "imports": [
+      "js:node:path",
+      "js:scripts/installer/paths.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/skill-store.mjs",
+    "owner": "installer",
+    "layer": "runtime",
+    "imports": [
+      "js:node:fs/promises",
+      "js:node:path",
+      "js:scripts/installer/filesystem.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/terminal.mjs",
+    "owner": "installer",
+    "layer": "runtime",
+    "imports": [
+      "js:node:readline",
+      "js:scripts/installer/picker-state.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/maintainability/javascript-facts.mjs",
+    "owner": "js:scripts/maintainability/javascript-facts.mjs",
+    "layer": "tool",
+    "imports": [
+      "js:node:fs",
+      "js:node:path",
+      "js:node:vm"
+    ]
+  },
+  {
+    "name": "js:scripts/test-install-agent-integration.mjs",
+    "owner": "installer",
+    "layer": "test",
+    "imports": [
+      "js:node:assert/strict",
+      "js:node:child_process",
+      "js:node:events",
+      "js:node:fs/promises",
+      "js:node:os",
+      "js:node:path",
+      "js:node:url",
+      "js:scripts/install-cli.mjs",
+      "js:scripts/installer/arguments.mjs",
+      "js:scripts/installer/catalog.mjs",
+      "js:scripts/installer/routing-rules.mjs",
+      "js:scripts/installer/selection.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/test-install-routing.mjs",
+    "owner": "installer",
+    "layer": "test",
+    "imports": [
+      "js:node:assert/strict",
+      "js:node:child_process",
+      "js:node:events",
+      "js:node:fs/promises",
+      "js:node:os",
+      "js:node:path",
+      "js:node:url",
+      "js:scripts/installer/application.mjs",
+      "js:scripts/installer/picker-state.mjs",
+      "js:scripts/installer/routing-rules.mjs",
+      "js:scripts/installer/terminal.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/paths.mjs",
+    "owner": "installer",
+    "layer": "pure",
+    "imports": [
+      "js:node:path"
+    ]
+  }
+]

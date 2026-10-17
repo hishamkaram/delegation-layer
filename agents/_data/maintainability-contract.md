@@ -1,6 +1,6 @@
-# Provider maintainability contract
+# Project maintainability contract
 
-This is the shared engineering guidance for provider redesign work. The
+This is the shared engineering guidance for every maintained subsystem. The
 [delegation invariants](delegation-invariants.md), [adapter contract](adapter-contract.md),
 and [code-quality floor](code-quality-floor.md) remain authoritative for their
 respective requirements; this document adds the maintainability decisions that
@@ -57,8 +57,141 @@ For every substantial change or review, record evidence about:
 6. contributor effort, including whether the documented path is discoverable
    and repeatable.
 
-Do not add arbitrary file-size or coverage thresholds. Existing formatting,
-lint, race, build, and vulnerability thresholds remain the project floor.
+The agreed source budgets and exact dependency edges are owned by
+[`subsystems.json`](subsystems.json) and its module fragments. Existing
+formatting, complexity, error, race, build, and vulnerability checks remain the
+project floor. There is no percentage-coverage target or name-based function
+exemption.
+
+## Subsystem boundaries and maintainability gates
+
+Each subsystem has one responsibility and an explicit state owner. Data types
+may guard their validity; business decisions operate on supplied facts; thin
+I/O boundaries collect observations and execute authorized operations.
+Dependencies point inward. Interfaces belong to their consumers. Plain values
+and pure rules can share a cohesive package in separate files; effectful
+implementations must not leak into a reusable pure contract.
+
+The registry gives every module one role and the gate checks its observed
+project imports against this direction, as well as the exact import allowlist:
+
+| Role | Allowed project dependency roles |
+| --- | --- |
+| `pure` | `pure` |
+| `runtime` | `pure`, `runtime` |
+| `application` | `pure`, `runtime`, `application` |
+| `tool` | `pure`, `runtime`, `application`, `tool` |
+| `test` | all five roles |
+
+An application composes runtime owners. Contributor tools may invoke that
+application; the application cannot depend on contributor tools or test
+fixtures. Acceptance-only Go binaries and their composition helpers have the
+`test` role. Acceptance command entrypoints have the `tool` role. A finite
+control adapter remains `runtime` when it only executes supplied control
+operations; an executable entry does not make it an orchestration owner.
+Classify the actual responsibility from source before changing a role. Do not
+relabel a real inversion to satisfy the table.
+
+Runtime implementations under a subsystem's `internal/` directory are sealed.
+Other subsystems use the runtime facade or the canonical pure contract, as
+registered for that consumer. Compatibility aliases refer to the same type and
+state; they never own a second cache, client, or implementation. Do not add a
+package per helper, a universal workflow engine, or global model/store/service
+packages.
+
+A helper object that only holds the original owner is not an ownership
+boundary. Use stateless functions within a cohesive subsystem when no new
+state or resource owner is needed. Keep compatibility methods on the canonical
+owner; do not add companion objects and forwarding caches to satisfy file
+budgets. Relocated behavior must preserve its real consumers and data flow,
+including values passed between newly extracted functions.
+
+Compatibility facades preserve their recorded export and signature contracts,
+including intentional standard-library re-exports. Mark those imports as
+explicit re-exports; no local usage does not authorize deleting a published
+name. Run the boundary's compatibility and module-identity tests before broader
+checks when those imports change.
+
+`make verify-maintainability` checks the maintained candidate, including
+untracked additions and build-excluded Go source. Ignored scratch files are
+outside that candidate. One policy validator consumes Go metadata/AST, Python
+AST, and Node static-module facts. Collectors do not learn allowed edges or
+change policy. Tests have explicit import roles and are included in source
+budgets; their suffix is not a waiver from checking.
+
+The hard physical file limits are 800 lines for production code and scripts,
+1,000 for tests and handwritten fixtures, and 1,800 for documentation, including
+the Archify architecture and sequence authoring JSON under `diagrams/`. Other
+JSON remains subject to the code budget unless it is explicitly generated. Every
+Go declaration is measured from parsed source, including build-excluded files,
+using the pinned `funlen` measurement and limit of 80, including tests. A test
+oracle verifies measurement parity with the pinned linter; the production audit
+does not depend on which files the host can build. Python's AST declaration
+span is 80. The Python call-site rule rejects eight or more positional
+arguments, including elements in literal starred tuples and lists. Name the
+arguments at their actual call site, including record construction; preserved
+declaration signatures do not need a waiver. Dynamic starred values are not
+resolved by this bounded static check. Keep newly extracted large helpers
+keyword-only. Use an immutable record only for an existing cohesive value,
+never as a holder for unrelated caller state.
+JavaScript has syntax, static dependency, finite lexical effect, file-size,
+packaging, and behavior checks; its collector does not prove semantic purity or
+measure function semantics with a regex parser. Generated
+outputs require an explicit generator entry and remain inventoried separately.
+
+Pure Go packages have exact import allowlists. They reject effectful imports,
+dot imports, `unsafe`, `go:linkname`, and explicit clock/effect references.
+Go import references use parser-bound local declarations to distinguish local
+shadows. Python and JavaScript alias observations remain conservative; their
+bounded collectors do not resolve every dynamic binding. Static
+checks prove their bounded rules, not semantic purity or lifecycle correctness.
+Those remain independent review and composed-test obligations.
+
+The strict JSON codec may use read-only reflection to inspect required fields.
+Across every file in a reflection-using module, the gate rejects mutation,
+unsafe access, and reflective invocation selectors conservatively. Package
+references have a read-only metadata allowlist. Reflection is not classified
+as I/O merely because the codec reads its supplied types and values.
+
+Freeze the maintained inputs before running full gates and independent review.
+Formatting consumes the same canonical maintained-file inventory as the audit.
+Keep untracked source in scope and ignored scratch or proof snapshots outside
+it; do not create a separate formatter discovery policy.
+The audit rechecks the maintained inventory before returning its findings and
+fails when it observes an edit, addition, or removal during the run. This check
+does not replace the frozen source snapshot required by the evidence contract.
+
+The Node module collector parses without linking or evaluating inspected code.
+Its experimental flag is explicit. It must pass on the declared Node 18
+minimum and CI's Node 22, and an unavailable parser fails the gate. Dynamic
+imports are not static dependency evidence; runtime installer modules use
+static callable imports and have no import-time CLI execution.
+
+New or unused registry entries, unused import permissions, unknown modules,
+forbidden edges, cycles, parser failures, and missing collector observations fail explicitly. Every gate
+has rejecting and corrected fixtures, including renamed/nested source, native
+build tags, test imports, boundary sizes, raw strings, and purity bypasses.
+
+During the staged refactor, the migration inventory may contain only exact
+findings from the recorded baseline, with a source digest, owner, and removal
+stage. A modified file cannot use its old waiver; resolved or unused entries
+are errors. A touched subsystem must be compliant before review. Final
+acceptance requires an empty inventory, zero exceptions, the complete project
+gate, and independent review with no unresolved P0/P1 or maintainability finding.
+`make check` runs the strict target and rejects any nonempty migration inventory.
+The non-strict target is only a progress check during this staged refactor.
+
+Before a worker starts, freeze the moved symbols, private access, method
+ownership, build tags, callback ports, error identities, persisted layout, and
+test consumers. Missing native/provider evidence blocks only dependent work.
+Keep mechanical relocation separate from corrections backed by a reproducing
+test. Hidden state access, repeated policy copies, and unrelated-module edits
+are design findings that require root-cause investigation before proceeding.
+
+Cross-version coordination is a compatibility surface: preserve lock paths,
+flock modes/order, writer-intent values, staging prefixes, and synchronization
+points. Native baseline-versus-candidate contention tests prove that the old
+and refactored binaries still coordinate on the same owned state root.
 
 ## Lifecycle duplication guard
 
@@ -69,11 +202,27 @@ authorized primitive; they must not decide which Delegate records are safe to
 reap or which successor a continuation should use. Reviewers must reject a
 second predicate that answers the same lifecycle question, even when it is
 located in a command-specific helper or test-only path.
-Acceptance harnesses use `acceptance_supervisor_common.Process` and `Processes`
+Acceptance harnesses use `scripts.delegate_acceptance.processes.operations.Process`
+and `Processes`
 for child ownership, waiting, and process receipts. Provider-specific stdin or
 bounded stdout behavior is supplied through their narrow options; a provider
 harness must not define another process class or registry. The ownership
 verifier enforces this boundary.
+
+Python acceptance implementations use the canonical `scripts.delegate_acceptance`
+namespace. Executable entrypoints and exactly two supported flat import entrypoints,
+`acceptance_supervisor_common.py` and `acceptance_provider_common.py`, bootstrap
+the repository path from `__file__`. These import-only bridges own transport,
+not behavior: no class copies, module aliasing, business rules, or extra bootstrap
+wrapper. Flat-first and package-first imports outside the repository must share
+the defining canonical objects and keep repeated path setup idempotent.
+After moving code, patch the name
+looked up by its actual consumer, following Python's
+[mock namespace guidance](https://docs.python.org/3/library/unittest.mock.html#where-to-patch).
+Do not restore facade-global forwarding, dynamic loaders, or `__module__` rewrites
+to preserve obsolete mocks. Moved test classes have one discovery location and an
+explicit old-to-new ID map. Reconcile discovery counts as well as IDs so duplicate
+execution cannot pass unnoticed.
 
 Provider workspace preconditions must be explicit in the adapter contract and
 its acceptance scenarios. Generic fixtures must not erase a precondition by
@@ -100,6 +249,58 @@ the same row. An in-memory flag, queue observation, process disappearance, or
 successful return is not a durable fact unless an authoritative contract makes
 it one. A commit point is the first fact from which all named consumers can
 reach the row's verdict after restart.
+
+Before tightening a shared gate, trace all indirect callers to their public
+commands and classify observation, optional maintenance, and admission
+separately. A function name is not evidence of its consumer's role. Pair a
+public allowed-read test and refused-mutation test against the same durable
+state. Actual cached and fresh reads revalidate observability inside their
+read lease; an earlier readiness result never authorizes a later mutation.
+Only a classified pre-mutation completion refusal can defer optional
+maintenance after fresh canonical observation succeeds. Joined faults and
+pending commands remain failures with their existing owners; a deferred
+Stashed observation still requires the matching durable receipt.
+Preparation owns suppression for one attempt. Returned observations describe
+that attempt; reusing an observation in a watch loop must not preserve an old
+maintenance decision or error across fresh client recovery.
+Error identities, CLI exit codes and JSON failure guidance are one boundary
+contract. Preserve the original consumer's classifications when adding a typed
+cause; do not broaden a shared sentinel to satisfy a new helper's test. Pair
+the helper cases with the actual public command and independent joined faults.
+
+### Inspection claim replay
+
+| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
+|---|---|---|---|---|---|---|
+| IC-R1: validated immutable submission or start guard; native lifetime may already be closed while independent worker-exit proof is pending | Inspection journal / canonical control transaction | Read the existing guard without issuing another permit; only an absent guard may reach the shared lifetime launch gate | Exact existing guard validated against the request digest and original admission window under the same transaction | Invalid or unreadable guards retain their evidence or I/O failure; canceled or expired callers cannot obtain readback; missing guards remain fenced after closure | Submission replay awaits canonical terminal evidence; start replay refuses another execution; neither changes the guard or creates launch authority | TestInspectionClosedClaimReplayRemainsReadbackOnly, TestInspectionClosedLifetimeRefusesMissingClaim, TestInspectionClosedClaimReplayRejectsInvalidGuard, TestInspectionClosedClaimReplayHonorsCallerContext, TestInspectionUnlaunchedFenceRefusesLateAuthority, TestTerminalInspectionWakeRetriesConcurrentFailedCleanupWithoutAnotherCallback |
+
+### Private supervisor generation transitions
+
+The private migration owner alone changes generation records under the existing
+exclusive bootstrap lock. Shared observers use its canonical generation facts;
+observability and transition completion grant different authority.
+
+| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
+|---|---|---|---|---|---|---|
+| PM-O1: exact published binding and daemon; absent or matching pre-stop intent and recovery alias | Private generation owner / shared generation lease | Observe task rows without queue or generation mutation | Exact publication, alias/config digest, phase and endpoint proof | Conflicting publication or any shutdown flag rejects observation | Existing task observation is available; no submission or cleanup authority | TestPreparedPrivateMigrationAllowsPublishedLegacyObservationAfterBusy, TestStatusDuringPreparedMigrationObservesExistingTask, TestStatusDuringPreparedMigrationObservesQueuedAndReceiptedStashedTasks, TestPrivateTaskStatusKeepsPreparedRecoveryAliasObservable |
+| PM-O2: shutdown intent or conflicting generation facts appear after observer preparation | Private generation owner / actual task-status read lease | Refuse both fresh and overlapping cached rows | Canonical observability revalidation before cache reuse or publication | Reopen only through the saved-task recovery owner; no readiness or cache hint grants authority | No matched observation or cache publication from unsafe state | TestPrivateTaskStatusRechecksPhaseInsideObservationLease, TestPreparedPrivateMigrationRejectsUnsafePublishedObservation, TestStatusRejectsUnsafeMigrationProgressWithoutMutation |
+| PM-O3: preparation was Complete; optional Stashed recovery meets a new pre-stop intent | Task observation attempt; existing mutation gate and fresh shared read lease | Defer only the classified pre-mutation refusal, then observe the saved task again | Matched current row and matching durable supervisor receipt | Joined faults, pending commands and invalid receipts remain failures; the next attempt gets fresh preparation | Stashed remains admitted without enqueue; no remembered deferral suppresses a later healthy attempt | TestStashedStatusConsumerDefersWhenCompleteClientBecomesPrepared, TestReconcileStatusDoesNotReusePriorMaintenanceDeferral, TestTaskMaintenanceDeferralPreservesIndependentFailures, TestPredecessorTerminatedPreservesSubmissionDeferral, TestPredecessorTerminatedNonEndedRemainsUnknown |
+| PM-C1: exact published generation; every transition and recovery record settled | Private generation owner / operation's generation lease | Authorize submission, scheduling repair or terminal maintenance through its existing gate | Completed publication and matching runtime target, rechecked inside the mutation's existing lease; a compatible runtime pair need not own published executable provenance | Observable-only state remains ineligible; an earlier readiness probe grants no mutation authority | Completion-sensitive consumers stay strict; admission refuses before creating an ordinary task | TestPreparedPrivateMigrationDoesNotAuthorizeTerminalMaintenance, TestPreparedPrivateMigrationKeepsExclusiveConsumersStrict, TestPreparedPrivateMigrationKeepsHistoryTraversalStrict, TestPreparedMigrationRefusesAdmissionAndCleanupProbes, TestPreparedMigrationRefusesAdmissionAtLiveEndpoint, TestPreparedMigrationRefusesCompletedTaskRemovalFromHeldClient, TestPreparedMigrationRefusesCompletedTaskRemovalThroughRecoveryAlias, TestCompletedSuccessorAllowsCleanupThroughRecoveredPair, TestPreparedMigrationRefusesQueuedRunnerMutationFromHeldClient, TestHeldSupervisorDuringPreparedMigrationRefusesParallelSetter, TestDispatchDuringPreparedMigrationRefusesBeforeTaskCreation |
+| PM-C2: readiness-gated identity publication interrupted after binding publication, with exact restart intent still pending | Private generation owner / exclusive bootstrap lock | Replay the canonical publication, then evaluate completion without claiming a pre-mutation refusal | Exact daemon identity published, publication journal removed, unfinished restart intent unchanged | A post-replay incomplete transition retains the migration-required postcondition error; it cannot defer as an untouched maintenance attempt | Strict refusal until the canonical recovery owner completes the same generation; no duplicate daemon launch | TestPublishedPreparationReplayDoesNotAdvertisePremutationRefusal, TestPublishedPairRestartRecoversInterruptedIdentityPublication, TestBindingPublicationIncompleteFailureIsNotPremutationRefusal |
+| PM-A1: exact ready legacy daemon identity and saved binding; logical owner publication absent | Existing bootstrap or saved-task recovery owner / exclusive bootstrap lock | Adopt the verified owner through the canonical create-once publisher before scheduling | Exact logical binding published; daemon launch identity unchanged | Unproven or unavailable ownership remains refused; existing task records remain immutable | Legacy admission and observation recover without restarting the ready daemon | TestPrivateAdmissionAdoptsReadyLegacyOwnerBeforeScheduling, TestStatusAdoptsExactReadyLegacyOwnerBeforeObservation, TestEnsurePrivateSupervisorBindingAdoptsLiveDaemonWithoutReplacingIdentity |
+| PM-W1: exact predecessor; selected successor recorded before queue authorization | Explicit migration owner / exclusive bootstrap lock; application queue authorizer | Publish prepared target intent, then refuse shutdown while work is active | Create-once target journal; Busy retains the predecessor, alias and target with no PID or shutdown flags | Retry the managed migration command after work drains; resolve inspection proposals against that same target | Blocked; ordinary observation remains available | TestPrivateMigrationBusyRetainsPreparedTargetWithoutShutdown, TestPrivateMigrationPublishesTargetBeforeQueueAuthorization, TestExplicitMigrationBusyPreservesSelectedInspectionSuccessor |
+| PM-W2: published current generation, matching alias, no shutdown; no connected completed history; explicit writer selects that generation | Explicit migration owner / exclusive bootstrap lock; application queue authorizer | Withdraw matching pre-stop intent and retire the alias only when quiescent | Existing journal clear and canonical alias removal with directory sync | Busy retains the alias; generic retirement still requires history; post-stop targets remain fixed | Exact current generation becomes complete without a fabricated history edge | TestPrivateLegacyWriterWithdrawsPreparedIntent, TestPrivateSameGenerationMigrationRetiresOnlyQuiescentAlias, TestPrivateGenericRetirementKeepsSameGenerationHistoryGuard |
+| PM-H1: exact completed publication and connected completed history for a retained alias or orphan artifacts | Private generation owner / exclusive bootstrap lock | Retire the historical alias through the canonical remover without queue authorization | Existing alias deletion order and directory sync | Invalid history rejects removal; interrupted missing-config and orphan cleanup use the same history proof | Historical alias settled even when the current queue is active; no shutdown authority granted | TestPrivatePublishedSuccessorRetryRetiresHistoricalAlias, TestPrivateHistoricalSameLogicalActiveFullProvenance, TestPrivateHistoricalRetirementPreservesCorruptHistory |
+
+### Terminal maintenance recovery
+
+Candidate events select normal work; they never authorize removal. Full recovery
+uses the same evidence owner and mutation gates even when publication of a hint
+was interrupted.
+
+| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
+|---|---|---|---|---|---|---|
+| TM-R1: full-recovery wake, exact current queue snapshot, durable task or inspection evidence; candidate may be absent | Maintenance election owner; queue-identity lease for preparation and fresh mutation revalidation | Present all rows to the canonical evidence authorizer; remove only its revalidated exact terminal IDs | Successful removal, idempotent ticket/event retirement and completed wake generation | An unfinished publication command retains ownership through natural completion; full recovery does not depend on its missing hint | Proven rows reclaimed; active, ambiguous or unproven rows preserved; task and inspection outcomes unchanged | TestTerminalObservationPendingCannotLoseInspectionCleanupCandidate, TestPrivateTerminalEventJobsFiltersEventOnlyByNumericID, TestDelayedTerminalEventAfterNumericIDReuseCannotAuthorizeNewInspection |
 
 ### Managed workspace transitions
 
@@ -334,8 +535,9 @@ journal work.
 This election does not occupy the lifecycle-transition election used by
 admission or recovery. A normal pass exposes only event-backed ordinary and
 inspection rows from one streamed snapshot and retains all same-label rows for
-ambiguity checks. A full-recovery pass additionally exposes historical ordinary
-rows; inspection rows still require events. In both cases, Delegate's journals
+ambiguity checks. A full-recovery pass exposes the complete current snapshot,
+including ordinary and inspection rows without event candidates. Missing hints
+cannot hide durable terminal evidence. In both cases, Delegate's journals
 decide which exact rows may be removed. A later callback or independently
 accepted terminal observation creates the wake that retries rows whose earlier
 maintenance attempt failed; cleanup failure never changes task or inspection

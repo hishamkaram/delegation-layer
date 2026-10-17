@@ -15,10 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
 func TestReconcileRunnerUsesCallerObservationDeadline(t *testing.T) {
@@ -58,13 +60,13 @@ func TestReconcileRunnerUsesCallerObservationDeadline(t *testing.T) {
 func TestReconcileRunnerRetainsPendingAtCallerDeadline(t *testing.T) {
 	fixture := newRunnerRefreshFixture(t)
 	t.Cleanup(func() { fixture.close(t) })
-	ctx, cancel := newControllableDeadlineContext(t.Context(), 10*time.Second)
+	ctx, cancel := testsupport.NewControllableDeadlineContext(t.Context(), 10*time.Second)
 	defer cancel()
 	call := startRunnerObservationTestCall(t, ctx, fixture)
 	readyContext, cancelReady := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancelReady()
 	waitInspectionWorkerTimeoutSignal(t, readyContext, call.entered, "runner status completion gate")
-	ctx.expire()
+	ctx.Expire()
 	joinContext, cancelJoin := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancelJoin()
 	waitInspectionWorkerTimeoutSignal(t, joinContext, call.done, "expired runner reconciliation")
@@ -220,7 +222,7 @@ func TestWaitRunnerSupervisorReceiptStopsAtCallerCancellation(t *testing.T) {
 	t.Cleanup(func() { fixture.close(t) })
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := waitRunnerSupervisorReceipt(ctx, fixture.td, time.Minute); !errors.Is(err, context.Canceled) || !errors.Is(err, pueue.ErrUnknown) {
+	if _, err := tasklifecycle.WaitRunnerSupervisorReceipt(ctx, fixture.td, time.Minute); !errors.Is(err, context.Canceled) || !errors.Is(err, pueue.ErrUnknown) {
 		t.Fatalf("missing receipt did not retain bounded uncertainty: %v", err)
 	}
 }

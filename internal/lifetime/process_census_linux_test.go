@@ -100,68 +100,106 @@ func TestLinuxProcessCensusBrokerCancelsWhenLastObserverLeaves(t *testing.T) {
 }
 
 func TestLinuxProcessCensusBrokerStartsFreshScanAfterLastObserverCancels(t *testing.T) {
-	firstStarted := make(chan struct{})
-	firstCanceled := make(chan struct{})
-	firstFinished := make(chan struct{})
-	secondStarted := make(chan struct{})
-	allowFirstExit := make(chan struct{})
-	var scans atomic.Int32
-	broker := newLinuxProcessCensusBroker(func(ctx context.Context) ([]linuxProcessCensusEntry, error) {
-		switch scans.Add(1) {
+	fixture := newLinuxProcessCensusCancellationFixture(t)
+	fixture.cancelFirstObserver(t)
+	fixture.assertFirstObserverLeft(t)
+	fixture.startFreshObserver(t)
+}
+
+type linuxProcessCensusCancellationFixture struct {
+	broker             *linuxProcessCensusBroker
+	firstStarted       chan struct{}
+	firstCanceled      chan struct{}
+	firstFinished      chan struct{}
+	secondStarted      chan struct{}
+	allowFirstExit     chan struct{}
+	firstResult        chan error
+	firstObserverDone  chan struct{}
+	secondLaunched     chan struct{}
+	secondObserverDone chan struct{}
+	firstCancel        context.CancelFunc
+	releaseFirstOnce   sync.Once
+	scans              atomic.Int32
+}
+
+func newLinuxProcessCensusCancellationFixture(t *testing.T) *linuxProcessCensusCancellationFixture {
+	t.Helper()
+	fixture := &linuxProcessCensusCancellationFixture{
+		firstStarted:       make(chan struct{}),
+		firstCanceled:      make(chan struct{}),
+		firstFinished:      make(chan struct{}),
+		secondStarted:      make(chan struct{}),
+		allowFirstExit:     make(chan struct{}),
+		firstResult:        make(chan error, 1),
+		firstObserverDone:  make(chan struct{}),
+		secondLaunched:     make(chan struct{}),
+		secondObserverDone: make(chan struct{}),
+	}
+	fixture.broker = newLinuxProcessCensusBroker(func(ctx context.Context) ([]linuxProcessCensusEntry, error) {
+		switch fixture.scans.Add(1) {
 		case 1:
-			close(firstStarted)
+			close(fixture.firstStarted)
 			<-ctx.Done()
-			close(firstCanceled)
-			<-allowFirstExit
-			close(firstFinished)
+			close(fixture.firstCanceled)
+			<-fixture.allowFirstExit
+			close(fixture.firstFinished)
 			return nil, ctx.Err()
 		case 2:
-			close(secondStarted)
+			close(fixture.secondStarted)
 			return []linuxProcessCensusEntry{{snapshot: processScopeSnapshot{pid: 43}}}, nil
 		default:
 			return nil, errors.New("unexpected extra process census scan")
 		}
 	})
-
-	firstContext, cancelFirst := context.WithCancel(t.Context())
-	firstResult := make(chan error, 1)
+	firstContext, cancel := context.WithCancel(t.Context())
+	fixture.firstCancel = cancel
 	go func() {
-		_, err := broker.observe(firstContext)
-		firstResult <- err
+		defer close(fixture.firstObserverDone)
+		_, err := fixture.broker.observe(firstContext)
+		fixture.firstResult <- err
 	}()
-	<-firstStarted
-	cancelFirst()
-	if err := <-firstResult; !errors.Is(err, context.Canceled) {
+	t.Cleanup(func() { fixture.cleanup(t) })
+	return fixture
+}
+
+func (fixture *linuxProcessCensusCancellationFixture) cancelFirstObserver(t *testing.T) {
+	t.Helper()
+	if !waitForLinuxProcessCensusSignal(fixture.firstStarted) {
+		t.Fatal("first census scan did not start")
+	}
+	fixture.firstCancel()
+	if err := <-fixture.firstResult; !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled observer error = %v", err)
 	}
-	select {
-	case <-firstCanceled:
-	case <-time.After(5 * time.Second):
+	if !waitForLinuxProcessCensusSignal(fixture.firstCanceled) {
 		t.Fatal("census scan did not observe cancellation")
 	}
+}
 
-	broker.mu.Lock()
-	active := broker.active
-	broker.mu.Unlock()
+func (fixture *linuxProcessCensusCancellationFixture) assertFirstObserverLeft(t *testing.T) {
+	t.Helper()
+	fixture.broker.mu.Lock()
+	active := fixture.broker.active
+	fixture.broker.mu.Unlock()
 	if active != nil {
 		t.Fatal("canceled census remained joinable after its last observer left")
 	}
+}
 
+func (fixture *linuxProcessCensusCancellationFixture) startFreshObserver(t *testing.T) {
+	t.Helper()
 	type censusResult struct {
 		entries []linuxProcessCensusEntry
 		err     error
 	}
 	secondResult := make(chan censusResult, 1)
+	close(fixture.secondLaunched)
 	go func() {
-		entries, err := broker.observe(t.Context())
+		defer close(fixture.secondObserverDone)
+		entries, err := fixture.broker.observe(t.Context())
 		secondResult <- censusResult{entries: entries, err: err}
 	}()
-	select {
-	case <-secondStarted:
-	case <-time.After(5 * time.Second):
-		close(allowFirstExit)
-		<-firstFinished
-		<-secondResult
+	if !waitForLinuxProcessCensusSignal(fixture.secondStarted) {
 		t.Fatal("new observer did not start a fresh census")
 	}
 	result := <-secondResult
@@ -171,15 +209,48 @@ func TestLinuxProcessCensusBrokerStartsFreshScanAfterLastObserverCancels(t *test
 	if len(result.entries) != 1 || result.entries[0].snapshot.pid != 43 {
 		t.Fatalf("fresh observer entries = %#v", result.entries)
 	}
-
-	close(allowFirstExit)
-	select {
-	case <-firstFinished:
-	case <-time.After(5 * time.Second):
+	fixture.releaseFirst()
+	if !waitForLinuxProcessCensusSignal(fixture.firstFinished) {
 		t.Fatal("canceled census did not finish")
 	}
-	if got := scans.Load(); got != 2 {
+	<-fixture.firstObserverDone
+	<-fixture.secondObserverDone
+	if got := fixture.scans.Load(); got != 2 {
 		t.Fatalf("process census scans = %d, want 2", got)
+	}
+}
+
+func (fixture *linuxProcessCensusCancellationFixture) releaseFirst() {
+	fixture.releaseFirstOnce.Do(func() { close(fixture.allowFirstExit) })
+}
+
+func (fixture *linuxProcessCensusCancellationFixture) cleanup(t *testing.T) {
+	t.Helper()
+	fixture.firstCancel()
+	fixture.releaseFirst()
+	if !waitForLinuxProcessCensusSignal(fixture.firstFinished) {
+		t.Error("census scan did not finish during cleanup")
+		<-fixture.firstFinished
+	}
+	<-fixture.firstObserverDone
+	select {
+	case <-fixture.secondLaunched:
+		if !waitForLinuxProcessCensusSignal(fixture.secondObserverDone) {
+			t.Error("fresh observer did not finish during cleanup")
+			<-fixture.secondObserverDone
+		}
+	default:
+	}
+}
+
+func waitForLinuxProcessCensusSignal(signal <-chan struct{}) bool {
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-signal:
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 

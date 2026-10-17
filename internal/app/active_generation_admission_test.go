@@ -13,6 +13,8 @@ import (
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
@@ -24,15 +26,15 @@ func TestPrivateSubmissionGateRejectsCapturedGenerationAfterPublishedSuccessor(t
 	assertHistoricalActiveSupervisor(t, fixture)
 	assertHistoricalMigrationComplete(t, fixture)
 
-	if err := publishPrivateOrdinaryScheduling(fixture.root, generationB, pueue.StagedLaunchCapability{AddStashed: true, EnqueueByID: true}); err != nil {
+	if err := writePrivateSchedulingFixture(fixture.root, generationB, pueue.StagedLaunchCapability{AddStashed: true, EnqueueByID: true}); err != nil {
 		t.Fatalf("publish generation B scheduling receipt: %v", err)
 	}
-	recorded, err := privateOrdinarySchedulingRecorded(fixture.root, generationB)
+	recorded, err := supervisorcore.OrdinarySchedulingRecorded(fixture.root, generationB)
 	if err != nil || !recorded {
 		t.Fatalf("generation B scheduling receipt was not durable: recorded=%t err=%v", recorded, err)
 	}
 
-	gate := privateSubmissionGate(fixture.root)
+	gate := supervisorcore.SubmissionGate(fixture.root)
 	if _, gateErr := gate(t.Context(), generationA); !errors.Is(gateErr, pueue.ErrBinding) {
 		t.Fatalf("captured generation A was admitted after generation B publication: %v", gateErr)
 	}
@@ -75,7 +77,7 @@ func TestPrivateSubmissionGateRejectsIncompleteStagedCapabilityEvidence(t *testi
 		t.Fatal(err)
 	}
 
-	authorization, gateErr := privateSubmissionGate(store.Root)(t.Context(), binding)
+	authorization, gateErr := supervisorcore.SubmissionGate(store.Root)(t.Context(), binding)
 	if !errors.Is(gateErr, task.ErrEvidenceFault) || authorization.StagedLaunchCapability != nil {
 		t.Fatalf("incomplete staged capability was admitted: authorization=%+v err=%v", authorization, gateErr)
 	}
@@ -332,7 +334,7 @@ func TestPrivateStatusRepairUpgradesCapabilitylessGenerationReceipt(t *testing.T
 	clearActiveGenerationSupervisorCommands(t, base)
 
 	controlContext, cancel := context.WithTimeout(t.Context(), pueue.PrivateStatusObservationTimeout)
-	err = ensurePrivateAdmissionSchedulingContext(controlContext, store.Root, supervisor)
+	err = supervisorcore.EnsureAdmissionSchedulingContext(controlContext, store.Root, supervisor)
 	cancel()
 	if err != nil {
 		t.Fatal(err)
@@ -433,7 +435,7 @@ func TestPrivateAdmissionWithoutPublishedGenerationBootstrapsStagedPair(t *testi
 	if err != nil || admitted == nil {
 		t.Fatalf("fresh staged-pair admission failed: client=%v err=%v", admitted, err)
 	}
-	if !strings.Contains(admitted.Binding().ClientExecutable, stateSupervisorPairDirectoryPrefix) {
+	if !strings.Contains(admitted.Binding().ClientExecutable, "pueue-pair-") {
 		t.Fatalf("fresh admission did not bootstrap the staged state-root pair: %s", admitted.Binding().ClientExecutable)
 	}
 	wantClientSHA, err := commonprovider.FingerprintExecutable(clientPath)
@@ -459,18 +461,18 @@ func TestPrivateAdmissionWithoutPublishedGenerationBootstrapsStagedPair(t *testi
 
 func stagePublishedGenerationSuccessor(t *testing.T, root string, active task.SupervisorRef, templateClient, templateDaemon string) (task.SupervisorRef, []string) {
 	t.Helper()
-	sourceDirectory := canonicalAppTestTempDir(t)
+	sourceDirectory := testsupport.CanonicalTempDir(t)
 	clientSource := filepath.Join(sourceDirectory, "pueue-b")
 	daemonSource := filepath.Join(sourceDirectory, "pueued-b")
 	copyActiveGenerationExecutable(t, templateClient, clientSource, "# staged successor client")
 	copyActiveGenerationExecutable(t, templateDaemon, daemonSource, "# staged successor daemon")
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if err := installStateSupervisorPairForAdmission(ctx, root, clientSource, daemonSource); err != nil {
+	if err := supervisorcore.PrepareStateSupervisorPair(ctx, root, clientSource, daemonSource); err != nil {
 		t.Fatalf("stage successor supervisor pair: %v", err)
 	}
 	base := filepath.Join(root, ".supervisor")
-	client, daemon, found, err := resolveStateSupervisorPair(base)
+	client, daemon, found, err := supervisorcore.ResolveStateSupervisorPair(base)
 	if err != nil || !found {
 		t.Fatalf("resolve staged successor pair: client=%s daemon=%s found=%t err=%v", client, daemon, found, err)
 	}
@@ -489,7 +491,7 @@ func stagePublishedGenerationSuccessor(t *testing.T, root string, active task.Su
 	candidate.DaemonSHA256 = daemonSHA
 	pairDirectory := filepath.Dir(client)
 	return candidate, []string{
-		filepath.Join(base, stateSupervisorPairRecordName),
+		filepath.Join(base, "pueue-pair.json"),
 		filepath.Join(pairDirectory, "pueue"),
 		filepath.Join(pairDirectory, "pueued"),
 	}
@@ -498,7 +500,7 @@ func stagePublishedGenerationSuccessor(t *testing.T, root string, active task.Su
 func newFreshStagedGenerationFixture(t *testing.T) (*taskdir.Store, Dependencies, string, string) {
 	t.Helper()
 	templateStore, templateDeps, templateClient := newSupervisorProbeTestFixture(t)
-	root := filepath.Join(canonicalAppTestTempDir(t), "state")
+	root := filepath.Join(testsupport.CanonicalTempDir(t), "state")
 	store, err := taskdir.InitStore(root)
 	if err != nil {
 		t.Fatal(err)
@@ -508,14 +510,14 @@ func newFreshStagedGenerationFixture(t *testing.T) (*taskdir.Store, Dependencies
 			t.Error(closeErr)
 		}
 	})
-	sourceDirectory := canonicalAppTestTempDir(t)
+	sourceDirectory := testsupport.CanonicalTempDir(t)
 	clientPath := filepath.Join(sourceDirectory, "pueue-b")
 	daemonPath := filepath.Join(sourceDirectory, "pueued-b")
 	copyActiveGenerationExecutable(t, templateClient.Binding().ClientExecutable, clientPath, templateStore.RootID+" -> "+store.RootID)
 	copyActiveGenerationExecutable(t, templateClient.Binding().DaemonExecutable, daemonPath, templateStore.RootID+" -> "+store.RootID)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	if err = installStateSupervisorPairForAdmission(ctx, root, clientPath, daemonPath); err != nil {
+	if err = supervisorcore.PrepareStateSupervisorPair(ctx, root, clientPath, daemonPath); err != nil {
 		t.Fatalf("stage fresh successor pair: %v", err)
 	}
 	return store, Dependencies{InitialSupervisorExecutable: clientPath, SupervisorOptions: templateDeps.SupervisorOptions}, clientPath, daemonPath
@@ -559,7 +561,7 @@ func writeIncompleteActiveGenerationSchedulingReceipt(t *testing.T, root string,
 	t.Helper()
 	data, err := task.MarshalCanonical(map[string]any{
 		"schema_version": task.SchemaVersion,
-		"revision":       privateOrdinarySchedulingDaemonRevision,
+		"revision":       "unlimited-v2",
 		"supervisor": map[string]string{
 			"executable": binding.DaemonExecutable,
 			"sha256":     binding.DaemonSHA256,
@@ -581,7 +583,7 @@ func writeCapabilitylessActiveGenerationSchedulingReceipt(t *testing.T, root str
 	if err := task.DecodeStrict(data, &record); err != nil {
 		t.Fatal(err)
 	}
-	revision, err := json.Marshal(privateOrdinarySchedulingCapabilitylessRevision)
+	revision, err := json.Marshal("unlimited-v3")
 	if err != nil {
 		t.Fatal(err)
 	}

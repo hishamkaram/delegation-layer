@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -228,7 +231,7 @@ func TestLegacyEndedInspectionJobUsesInspectionJournalEvidence(t *testing.T) {
 		RootID: store.RootID, Supervisor: supervisor.Binding(),
 		Name: job.Group, ParallelTasks: 1,
 	}
-	if err = prepareEndedInspectionEvidence(t.Context(), store, legacy, request.TaskID, job); err != nil {
+	if err = privateCleanupOwner().PrepareEndedInspectionEvidence(t.Context(), store, legacy, request.TaskID, job); err != nil {
 		t.Fatal(err)
 	}
 	if err = inspectLegacyEndedJob(context.Background(), store, legacy, job); err != nil {
@@ -313,7 +316,7 @@ func TestEnsureInspectionGroupHonorsBootstrapLockDeadline(t *testing.T) {
 		})
 	}()
 	<-locked
-	err := ensureInspectionGroup(store, client, 25*time.Millisecond)
+	err := supervisorcore.EnsureInspectionGroup(store, client, 25*time.Millisecond)
 	close(release)
 	if lockResult := <-lockErr; lockResult != nil {
 		t.Fatalf("bootstrap lock holder failed: %v", lockResult)
@@ -327,7 +330,7 @@ func TestRebindContinuationSupervisorHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	saved := task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath("/state")}
-	_, err := rebindContinuationSupervisor(ctx, "/state", saved, Dependencies{})
+	_, err := supervisorcore.RebindContinuation(ctx, "/state", saved, continuationSupervisorOptions(Dependencies{}))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled continuation rebind was not bounded: %v", err)
 	}
@@ -336,8 +339,8 @@ func TestRebindContinuationSupervisorHonorsCanceledContext(t *testing.T) {
 func TestRebindContinuationSupervisorUsesPublishedSuccessor(t *testing.T) {
 	store := newBareInspectionStore(t)
 	digest := strings.Repeat("a", 64)
-	legacy := continuationSupervisorRef(store.Root, digest, "unix:/legacy.sock")
-	successor := continuationSupervisorRef(store.Root, strings.Repeat("b", 64), "unix:/successor.sock")
+	legacy := admissionfixture.ContinuationSupervisorRef(store.Root, digest, "unix:/legacy.sock")
+	successor := admissionfixture.ContinuationSupervisorRef(store.Root, strings.Repeat("b", 64), "unix:/successor.sock")
 	legacyGroup := inspection.GroupRequestRecord{
 		SchemaVersion: task.SchemaVersion,
 		RootID:        store.RootID,
@@ -354,7 +357,7 @@ func TestRebindContinuationSupervisorUsesPublishedSuccessor(t *testing.T) {
 	successorGroup.Supervisor = successor
 	publishAppTestGroupMigration(t, store, legacyGroup, successorGroup)
 
-	got, err := rebindContinuationSupervisor(context.Background(), store.Root, legacy, Dependencies{})
+	got, err := supervisorcore.RebindContinuation(context.Background(), store.Root, legacy, continuationSupervisorOptions(Dependencies{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,26 +422,12 @@ func TestRebindContinuationSupervisorRejectsPrivateEndpointDriftWithoutInspectio
 	saved.ConfigDigest = strings.Repeat("a", 64)
 	saved.ResolvedConfigSHA256 = strings.Repeat("b", 64)
 
-	_, err = rebindContinuationSupervisor(context.Background(), store.Root, saved, Dependencies{
+	_, err = supervisorcore.RebindContinuation(context.Background(), store.Root, saved, continuationSupervisorOptions(Dependencies{
 		InitialSupervisorExecutable: clientPath,
 		SupervisorOptions:           options,
-	})
+	}))
 	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("continuation accepted private endpoint drift without a migration journal: %v", err)
-	}
-}
-
-func continuationSupervisorRef(root, digest, endpoint string) task.SupervisorRef {
-	return task.SupervisorRef{
-		ClientExecutable:     "/usr/bin/true",
-		ClientSHA256:         digest,
-		DaemonExecutable:     "/usr/bin/true",
-		DaemonSHA256:         digest,
-		ResolvedConfigSHA256: digest,
-		ConfigPath:           pueue.PrivateConfigPath(root),
-		ConfigDigest:         digest,
-		Endpoint:             endpoint,
-		ObservedVersion:      pueue.FixtureVersion,
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"io"
 	"slices"
 
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -157,18 +159,10 @@ func cloneCapabilityStrings(values []string) []string {
 	return slices.Clone(values)
 }
 
-func runtimeCapability(providerID string, candidate commonprovider.ProfileCandidate, profile commonprovider.PreparedProfile, descriptions ...commonprovider.Description) (CapabilityReport, error) {
-	description := commonprovider.Description{ID: providerID}
-	if len(descriptions) > 0 {
-		description = descriptions[0]
+func describeRuntimeCapability(providerID string, description commonprovider.Description, runtime *admissioncore.RuntimeCapabilityEvidence) CapabilityReport {
+	if runtime == nil {
+		return declaredCapability(description)
 	}
-	if candidate.Inspection == nil || candidate.Inspection.Runtime == nil {
-		return declaredCapability(description), nil
-	}
-	if profile.RuntimePreflightSHA256 != "" {
-		return declaredCapability(description), nil
-	}
-	runtime := candidate.Inspection.Runtime
 	report := CapabilityReport{
 		Contract:         commonprovider.RuntimeInspectionRevision,
 		Provider:         providerID,
@@ -188,12 +182,12 @@ func runtimeCapability(providerID string, candidate commonprovider.ProfileCandid
 			ReasonCode:     capabilityReasonNotRun,
 		},
 	}
-	if len(profile.ObservedVersion) <= maxCapabilityVersionBytes {
-		report.Version = profile.ObservedVersion
+	if len(runtime.Version) <= maxCapabilityVersionBytes {
+		report.Version = runtime.Version
 	}
 	report.ExecutableSHA256 = runtime.ExecutableSHA256
 	report.HelpArgs = cloneCapabilityStrings(runtime.HelpArgs)
-	return report, nil
+	return report
 }
 
 func writeCapabilityJSON(w io.Writer, response CapabilityResponse) error {

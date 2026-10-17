@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -9,19 +8,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
 func verifyManagedCheckout(scope execution.PreflightScope, store *taskdir.Store, resource *workspace.Resource, request workspace.OperationRequest) (exit *int, artifacts []workspace.Artifact, resultErr error) {
 	if len(request.Arguments) == 0 {
 		return nil, nil, task.ErrIdentityMismatch
 	}
-	checkout, err := registeredExecutionCheckout(scope.Context(), resource)
+	checkout, err := workspacescore.RegisteredExecutionCheckout(scope.Context(), resource)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -124,64 +123,4 @@ func (w *workspaceDiagnostic) Close() error {
 
 func (w *workspaceDiagnostic) Artifact() workspace.Artifact {
 	return workspace.Artifact{Name: w.name, Length: w.length, SHA256: hex.EncodeToString(w.digest.Sum(nil)), Truncated: w.truncated}
-}
-
-func validateWorkspaceArtifact(ctx context.Context, store *taskdir.Store, operationID string, artifact workspace.Artifact) error {
-	if err := workspace.ValidateArtifact(artifact); err != nil {
-		return err
-	}
-	if artifact.Omitted != "" {
-		return validateWorkspaceOmittedArtifact(artifact)
-	}
-	err := store.VerifyWorkspaceArtifact(ctx, operationID, artifact.Name, artifact.Length, artifact.SHA256)
-	if !isWorkspaceArtifactMissing(err) {
-		return err
-	}
-	return validateIntentionallyForgottenArtifact(ctx, store, operationID, artifact, err)
-}
-
-func isWorkspaceArtifactMissing(err error) bool {
-	if err == nil || !errors.Is(err, os.ErrNotExist) {
-		return false
-	}
-	var joined workspaceJoinedError
-	if errors.As(err, &joined) {
-		return false
-	}
-	var pathError *os.PathError
-	if errors.As(err, &pathError) {
-		return true
-	}
-	var errno syscall.Errno
-	return errors.As(err, &errno) && errno == syscall.ENOENT
-}
-
-func validateWorkspaceOmittedArtifact(artifact workspace.Artifact) error {
-	return workspace.ValidateArtifact(artifact)
-}
-
-func validateIntentionallyForgottenArtifact(ctx context.Context, store *taskdir.Store, operationID string, artifact workspace.Artifact, missingErr error) (resultErr error) {
-	operation, err := workspace.LoadOperation(ctx, store, operationID)
-	if err != nil {
-		return errors.Join(missingErr, err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
-	resource, err := workspace.LoadResource(ctx, store, operation.Request().WorkspaceID)
-	if err != nil {
-		return errors.Join(missingErr, err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, resource.Close()) }()
-	intent, err := resource.ForgetIntent(ctx)
-	if workspace.OperationAbsent(err) {
-		return missingErr
-	}
-	if err != nil {
-		return errors.Join(missingErr, err)
-	}
-	for _, forgotten := range intent.Artifacts {
-		if forgotten.OperationID == operationID && forgotten.Name == artifact.Name && forgotten.Length == artifact.Length && forgotten.SHA256 == artifact.SHA256 {
-			return nil
-		}
-	}
-	return missingErr
 }

@@ -101,19 +101,6 @@ func (s *eventState) markSemantic(reason string) {
 
 func (s eventState) semanticFault() bool { return s.semanticErr != nil }
 
-// parseStdout consumes every byte supplied by the capture reader. Semantic
-// faults stop state growth but never stop reads, preserving the core's ability
-// to reach EOF and seal a finite provider invocation. Only one bounded line and
-// completion-relevant scalar fields are retained by the shared framer and this
-// provider callback.
-func parseHistoricalStdout(reader io.Reader) (eventState, error) {
-	return parseHistoricalStdoutForMode(reader, Mode)
-}
-
-func parseHistoricalStdoutForMode(reader io.Reader, mode string) (eventState, error) {
-	return parseStdoutForModeWithPolicy(reader, mode, false)
-}
-
 func parseLegacyStdoutForMode(reader io.Reader, mode string) (eventState, error) {
 	return parseStdoutForModeWithPolicy(reader, mode, true)
 }
@@ -130,6 +117,11 @@ func parseStdoutForModeWithPolicy(reader io.Reader, mode string, strict bool) (e
 	return parseStdoutForModeWithOptions(reader, mode, strict, false)
 }
 
+// parseStdoutForModeWithOptions consumes every byte supplied by the capture
+// reader. Semantic faults stop state growth but never stop reads, preserving
+// the core's ability to reach EOF and seal a finite provider invocation. Only
+// one bounded line and completion-relevant scalar fields are retained by the
+// shared framer and this provider callback.
 func parseStdoutForModeWithOptions(reader io.Reader, mode string, strict, nativeHistorical bool) (eventState, error) {
 	if mode != Mode && mode != WorkspaceWriteMode {
 		return eventState{mode: mode, strict: strict, nativeHistorical: nativeHistorical, semanticErr: fmt.Errorf("unsupported Claude permission mode %q", mode)}, nil
@@ -265,18 +257,6 @@ func applyInitEvent(state *eventState, fields map[string]json.RawMessage) {
 	state.init = init
 }
 
-func decodeInit(fields map[string]json.RawMessage) (initState, error) {
-	return decodeInitForMode(fields, Mode)
-}
-
-func decodeInitForMode(fields map[string]json.RawMessage, mode string) (initState, error) {
-	return decodeInitForModeWithPolicy(fields, mode, true)
-}
-
-func decodeInitForModeWithPolicy(fields map[string]json.RawMessage, mode string, strict bool) (initState, error) {
-	return decodeInitForModeWithOptions(fields, mode, strict, false)
-}
-
 func decodeInitForModeWithOptions(fields map[string]json.RawMessage, mode string, strict, nativeHistorical bool) (initState, error) {
 	sessionID, version, err := decodeInitIdentity(fields)
 	if err != nil {
@@ -315,18 +295,6 @@ func decodeInitIdentity(fields map[string]json.RawMessage) (string, string, erro
 		return "", "", errors.New("system/init claude_code_version is invalid")
 	}
 	return sessionID, version, nil
-}
-
-func decodeInitPolicy(fields map[string]json.RawMessage) (string, string, error) {
-	return decodeInitPolicyForMode(fields, Mode)
-}
-
-func decodeInitPolicyForMode(fields map[string]json.RawMessage, mode string) (string, string, error) {
-	return decodeInitPolicyForModeWithPolicy(fields, mode, true)
-}
-
-func decodeInitPolicyForModeWithPolicy(fields map[string]json.RawMessage, mode string, strict bool) (string, string, error) {
-	return decodeInitPolicyForModeWithOptions(fields, mode, strict, false)
 }
 
 func decodeInitPolicyForModeWithOptions(fields map[string]json.RawMessage, mode string, strict, nativeHistorical bool) (string, string, error) {
@@ -381,14 +349,6 @@ func decodeInitModel(fields map[string]json.RawMessage) (string, error) {
 		return "", errors.New("system/init model is invalid")
 	}
 	return model, nil
-}
-
-func allowedTools(fields map[string]json.RawMessage) ([]string, error) {
-	return allowedToolsForMode(fields, Mode)
-}
-
-func allowedToolsForMode(fields map[string]json.RawMessage, mode string) ([]string, error) {
-	return allowedToolsForModeWithPolicy(fields, mode, true)
 }
 
 func allowedToolsForModeWithPolicy(fields map[string]json.RawMessage, mode string, strict bool) ([]string, error) {
@@ -456,10 +416,6 @@ func validateLegacyToolList(tools []string, mode string) ([]string, error) {
 	return tools, nil
 }
 
-func emptyMCPServers(fields map[string]json.RawMessage) (int, error) {
-	return mcpServersWithPolicy(fields, true)
-}
-
 func mcpServersWithPolicy(fields map[string]json.RawMessage, strict bool) (int, error) {
 	raw, ok := fields["mcp_servers"]
 	if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
@@ -503,10 +459,6 @@ func applyUserEvent(state *eventState, fields map[string]json.RawMessage) {
 	}
 }
 
-func validateMessageContent(fields map[string]json.RawMessage, eventType, mode string) error {
-	return validateMessageContentWithPolicy(fields, eventType, mode, true)
-}
-
 func validateMessageContentWithPolicy(fields map[string]json.RawMessage, eventType, mode string, strict bool) error {
 	rawMessage, exists := fields["message"]
 	if !exists || bytes.Equal(bytes.TrimSpace(rawMessage), []byte("null")) {
@@ -532,10 +484,6 @@ func validateMessageContentWithPolicy(fields map[string]json.RawMessage, eventTy
 	return nil
 }
 
-func validateContentBlock(rawBlock json.RawMessage, eventType, mode string) error {
-	return validateContentBlockWithPolicy(rawBlock, eventType, mode, true)
-}
-
 func validateContentBlockWithPolicy(rawBlock json.RawMessage, eventType, mode string, strict bool) error {
 	var block map[string]json.RawMessage
 	if err := json.Unmarshal(rawBlock, &block); err != nil || block == nil {
@@ -546,10 +494,6 @@ func validateContentBlockWithPolicy(rawBlock json.RawMessage, eventType, mode st
 		return fmt.Errorf("%s message content block type is invalid", eventType)
 	}
 	return validateContentBlockKindWithPolicy(block, kind, eventType, mode, strict)
-}
-
-func validateContentBlockKind(block map[string]json.RawMessage, kind, eventType, mode string) error {
-	return validateContentBlockKindWithPolicy(block, kind, eventType, mode, true)
 }
 
 func validateContentBlockKindWithPolicy(block map[string]json.RawMessage, kind, eventType, mode string, strict bool) error {
@@ -588,10 +532,6 @@ func validateRedactedThinkingBlock(block map[string]json.RawMessage, eventType s
 		return nil
 	}
 	return fmt.Errorf("%s redacted thinking block has no data", eventType)
-}
-
-func validateToolUseBlock(block map[string]json.RawMessage, eventType, mode string) error {
-	return validateToolUseBlockWithPolicy(block, eventType, mode, true)
 }
 
 func validateToolUseBlockWithPolicy(block map[string]json.RawMessage, eventType, mode string, strict bool) error {
@@ -633,10 +573,6 @@ func validateToolResultErrorFlag(block map[string]json.RawMessage) error {
 	}
 	_, err := requiredBool(map[string]json.RawMessage{"is_error": rawError}, "is_error")
 	return err
-}
-
-func allowedToolName(name string) bool {
-	return allowedToolNameForMode(name, Mode)
 }
 
 func allowedToolNameForMode(name, mode string) bool {
@@ -692,180 +628,6 @@ func validToolResultContent(raw json.RawMessage) bool {
 	default:
 		return false
 	}
-}
-
-func applyResultEvent(state *eventState, fields map[string]json.RawMessage) {
-	if state.resultSeen {
-		state.markSemantic("multiple result events")
-		return
-	}
-	if !state.initSeen {
-		state.markSemantic("result precedes system/init")
-		return
-	}
-	result, err := decodeResult(fields, state.init.sessionID)
-	if err != nil {
-		state.markSemantic(err.Error())
-		return
-	}
-	state.resultSeen = true
-	state.result = result
-}
-
-func decodeResult(fields map[string]json.RawMessage, initSessionID string) (resultState, error) {
-	subtype, isError, sessionID, err := decodeResultHeader(fields, initSessionID)
-	if err != nil {
-		return resultState{}, err
-	}
-	answer, answerSeen, stopReason, stopReasonSeen, stopReasonNull, diagnostic, errorsPresent, err := decodeResultText(fields)
-	if err != nil {
-		return resultState{}, err
-	}
-	metadata, err := decodeResultUsage(fields)
-	if err != nil {
-		return resultState{}, err
-	}
-	return resultState{
-		sessionID: sessionID, subtype: subtype, isError: isError, isErrorSeen: true,
-		answer: answer, answerSeen: answerSeen, stopReason: stopReason,
-		stopReasonSeen: stopReasonSeen, stopReasonNull: stopReasonNull,
-		diagnostic: diagnostic, errorsPresent: errorsPresent, usage: metadata.usage, modelUsage: metadata.modelUsage,
-		totalCostUSD: metadata.totalCostUSD, durationMS: metadata.durationMS, numTurns: metadata.numTurns,
-	}, nil
-}
-
-func decodeResultHeader(fields map[string]json.RawMessage, initSessionID string) (string, bool, string, error) {
-	subtype, err := requiredString(fields, "subtype")
-	if err != nil {
-		return "", false, "", errors.New("result subtype is missing or not a string")
-	}
-	if _, known := knownResultSubtypes[subtype]; !known {
-		return "", false, "", errors.New("unknown result subtype: " + subtype)
-	}
-	isError, err := requiredBool(fields, "is_error")
-	if err != nil {
-		return "", false, "", errors.New("result is_error is missing or not a boolean")
-	}
-	sessionID, err := requiredString(fields, "session_id")
-	if err != nil || !validSessionID(sessionID) || sessionID != initSessionID {
-		return "", false, "", errors.New("result session identity conflicts with system/init")
-	}
-	if err := validateResultFlags(subtype, isError); err != nil {
-		return "", false, "", err
-	}
-	return subtype, isError, sessionID, nil
-}
-
-func validateResultFlags(subtype string, isError bool) error {
-	if subtype == resultSuccess && isError {
-		return errors.New("successful result has is_error=true")
-	}
-	if subtype != resultSuccess && !isError {
-		return errors.New("error result has is_error=false")
-	}
-	return nil
-}
-
-func decodeResultText(fields map[string]json.RawMessage) (string, bool, string, bool, bool, string, bool, error) {
-	answer, answerSeen, err := optionalStringField(fields, "result")
-	if err != nil {
-		return "", false, "", false, false, "", false, errors.New("result answer is not a string")
-	}
-	stopReason, stopReasonSeen, stopReasonNull, err := optionalStringOrNull(fields, "stop_reason")
-	if err != nil {
-		return "", false, "", false, false, "", false, errors.New("result stop_reason is not a string or null")
-	}
-	diagnostic, errorsPresent, err := resultDiagnostic(fields)
-	if err != nil {
-		return "", false, "", false, false, "", false, err
-	}
-	return answer, answerSeen, stopReason, stopReasonSeen, stopReasonNull, diagnostic, errorsPresent, nil
-}
-
-type resultUsage struct {
-	usage         *usageEnvelope
-	modelUsage    []modelUsageRecord
-	totalCostUSD  *string
-	durationMS    *int64
-	numTurns      *int64
-	usagePresent  bool
-	usageReliable bool
-}
-
-func decodeResultUsage(fields map[string]json.RawMessage) (resultUsage, error) {
-	usage, err := parseUsageEnvelope(fields)
-	if err != nil {
-		return resultUsage{}, err
-	}
-	modelUsage, err := parseModelUsage(fields)
-	if err != nil {
-		return resultUsage{}, err
-	}
-	totalCostUSD, err := optionalDecimalField(fields, "total_cost_usd")
-	if err != nil {
-		return resultUsage{}, err
-	}
-	durationMS, err := optionalNonnegativeIntField(fields, "duration_ms")
-	if err != nil {
-		return resultUsage{}, err
-	}
-	numTurns, err := optionalNonnegativeIntField(fields, "num_turns")
-	if err != nil {
-		return resultUsage{}, err
-	}
-	if err := validatePermissionDenials(fields); err != nil {
-		return resultUsage{}, err
-	}
-	return resultUsage{usage: usage, modelUsage: modelUsage, totalCostUSD: totalCostUSD, durationMS: durationMS, numTurns: numTurns}, nil
-}
-
-func resultDiagnostic(fields map[string]json.RawMessage) (string, bool, error) {
-	raw, ok := fields["errors"]
-	if !ok {
-		return "", false, nil
-	}
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return "", false, errors.New("result errors must be an array of strings")
-	}
-	var diagnostics []json.RawMessage
-	if err := json.Unmarshal(raw, &diagnostics); err != nil || diagnostics == nil {
-		return "", false, errors.New("result errors are not an array of strings")
-	}
-	firstDiagnostic := ""
-	for _, rawDiagnostic := range diagnostics {
-		diagnostic, err := decodeString(rawDiagnostic)
-		if err != nil {
-			return "", false, errors.New("result error diagnostic is invalid")
-		}
-		if !validDiagnostic(diagnostic) {
-			return "", false, errors.New("result error diagnostic is invalid")
-		}
-		if firstDiagnostic == "" && strings.TrimSpace(diagnostic) != "" {
-			firstDiagnostic = diagnostic
-		}
-	}
-	return firstDiagnostic, len(diagnostics) != 0, nil
-}
-
-func validatePermissionDenials(fields map[string]json.RawMessage) error {
-	raw, ok := fields["permission_denials"]
-	if !ok {
-		return nil
-	}
-	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		return errors.New("result permission_denials must be an array")
-	}
-	var denials []json.RawMessage
-	if err := json.Unmarshal(raw, &denials); err != nil || denials == nil {
-		return errors.New("result permission_denials are not an array")
-	}
-	for _, rawDenial := range denials {
-		var denial map[string]json.RawMessage
-		if err := json.Unmarshal(rawDenial, &denial); err != nil || denial == nil {
-			return errors.New("result permission_denials entry is not an object")
-		}
-	}
-	return nil
 }
 
 func ambiguousSystemSubtype(subtype string) bool {

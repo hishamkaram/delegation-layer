@@ -17,6 +17,7 @@ import acceptance_provider_common as provider_common
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps
 import acceptance_supervisor_common as supervisor_common
 from acceptance_supervisor_common import digest, write_json
+from scripts.acceptance_tests.resources import DirectoryPinOwner
 
 
 class InspectionDriverTests(unittest.TestCase):
@@ -35,7 +36,7 @@ class InspectionDriverTests(unittest.TestCase):
             args = SimpleNamespace(tools=str(tools), pueue=str(pueue),
                                    pueued=str(pueued), output=str(output))
 
-            with patch("acceptance_provider_common.reject_tmp"), \
+            with patch("scripts.delegate_acceptance.paths.operations.reject_tmp"), \
                     patch.object(inspection_acceptance.shutil, "copyfile",
                                  side_effect=OSError("injected copy failure")):
                 with self.assertRaisesRegex(OSError, "copy failure"):
@@ -122,7 +123,7 @@ class InspectionDriverTests(unittest.TestCase):
         with self.assertRaises(AcceptanceFailure):
             ops.record_admission("success", task, response)
         ops.dispatch_attempts.add(task)
-        with patch("acceptance_provider_common.write_json", side_effect=OSError("receipt failure")):
+        with patch("scripts.delegate_acceptance.tasks.operations.write_json", side_effect=OSError("receipt failure")):
             with self.assertRaises(OSError):
                 ops.record_admission("success", task, response)
         self.assertEqual(ops.tasks, {"success": task})
@@ -397,7 +398,9 @@ class InspectionDriverSetupTests(unittest.TestCase):
             with patch.object(inspection_acceptance, "ensure_private_directory",
                               side_effect=private_directory), \
                     patch.object(inspection_acceptance.secrets, "token_hex",
-                                 side_effect=lambda count: "a" * (count * 2)):
+                                 side_effect=lambda count: "a" * (count * 2)), \
+                    patch.object(inspection_acceptance, "DirectoryOwner",
+                                 side_effect=lambda: DirectoryPinOwner(self)):
                 driver = inspection_acceptance.InspectionAcceptance(args)
                 driver.ops.direct = direct
                 driver.processes.start = before_daemon

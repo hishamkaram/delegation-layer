@@ -121,8 +121,9 @@ the exact retained state-root pair when the endpoint and old process are
 proven absent and neither identity has a migration-history reference. Historical
 migration edges remain immutable and use the explicit migration protocol.
 Recovery retains the recorded resolver context. A live endpoint
-whose published executables disappeared requires explicit migration; Delegate
-does not relabel that running process. If the exact pair cannot be recovered,
+whose published executables disappeared may still be observed through a verified
+compatible pair. Changing its launch provenance requires explicit migration;
+Delegate does not relabel that running process. If the exact pair cannot be recovered,
 Delegate returns the migration-required failure; `supervisor migrate` then
 transfers authority to the staged pair. Launch provenance is updated only after
 the authorized generation becomes ready.
@@ -144,6 +145,14 @@ delegate --root "$HOME/delegation-state" supervisor migrate --json
 `state_unreadable`. These optional fields retain the existing schema version,
 failure codes, and next actions. Wait for active work to finish before retrying
 migration; report conflicting or unreadable state without manual surgery.
+
+An older failed migration may leave prepared intent or a recovery alias. Current
+Delegate can still observe the exact published predecessor before shutdown
+starts. Existing-task status does not require fresh admission. Optional repair
+may be deferred, and a receipted Stashed task remains stashed until recovery can
+authorize enqueue. That observation does not authorize new submissions or cleanup. Let
+active work finish, then use the same managed migration command to settle the
+transition; do not remove its records manually.
 
 Once shutdown starts, migration retains its recorded target. If an older
 transaction named an external installation that was removed after shutdown,
@@ -231,11 +240,12 @@ failed attempt waits for a later terminal trigger and does not spin. A
 validated later root activation resumes retained inbox or journal work.
 Candidate-event publication failure records a conservative full-recovery wake.
 Normal passes expose only event-backed ordinary and inspection rows, while the
-recovery scope retains exact historical ordinary-row reconciliation. Delegate
+recovery scope reconciles ordinary and inspection rows even when their candidate
+event is missing. Delegate
 validates its own receipts and durable outcomes, rechecks each unchanged
 terminal row under the queue-identity mutation, and removes only those exact
 numeric IDs. Dispatch does not wait for this maintenance. Active, incomplete,
-ambiguous, unrelated, or not-yet-observed inspection rows remain available
+ambiguous, unrelated, or unproven inspection rows remain available
 without blocking cleanup of validated rows. Failed removal retains the
 candidate for a later terminal trigger to retry, so no Pueue command or
 state-file editing is required.

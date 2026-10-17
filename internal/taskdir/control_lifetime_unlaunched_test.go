@@ -50,88 +50,99 @@ func TestControlLifetimeUnlaunchedDeadlineAndImmutableReplay(t *testing.T) {
 }
 
 func TestControlLifetimeUnlaunchedRejectsNativeStateAndUnreadableFence(t *testing.T) {
-	t.Run("intent", func(t *testing.T) {
-		deadline := time.Date(2026, time.February, 2, 3, 4, 5, 0, time.UTC)
-		_, _, lifetime := newWorkspaceControlLifetime(t, deadline)
-		must(t, recordWorkspaceLifetimeIntent(t, lifetime, deadline))
-		if record, err := lifetime.sealLifetimeUnlaunchedContextWithNow(t.Context(), func() time.Time { return deadline.Add(time.Hour) }); record != nil || !errors.Is(err, task.ErrAlreadyStarted) {
-			t.Fatalf("seal with intent = (%+v, %v), want nil/ErrAlreadyStarted", record, err)
-		}
-	})
+	t.Run("intent", testControlLifetimeUnlaunchedRejectsIntent)
+	t.Run("registration", testControlLifetimeUnlaunchedRejectsRegistration)
+	t.Run("terminal", testControlLifetimeUnlaunchedRejectsTerminal)
+	t.Run("unreadable", testControlLifetimeUnlaunchedRejectsUnreadable)
+	t.Run("conflicting-native-record", testControlLifetimeUnlaunchedRejectsConflict)
+}
 
-	t.Run("registration", func(t *testing.T) {
-		deadline := time.Date(2026, time.February, 3, 3, 4, 5, 0, time.UTC)
-		_, _, lifetime := newWorkspaceControlLifetime(t, deadline)
-		must(t, recordWorkspaceLifetimeIntent(t, lifetime, deadline))
-		_, err := lifetime.RecordLifetimeRegistrationContext(t.Context(), LifetimeRegistrationFacts{
-			ScopeKind: task.LifetimeScopeProcessGroup,
-			Assurance: task.LifetimeAssuranceCooperative,
-			ScopeID:   "workspace-scope",
-			BootID:    "workspace-boot",
-			Deadline:  deadline,
-		})
-		must(t, err)
-		if record, err := lifetime.sealLifetimeUnlaunchedContextWithNow(t.Context(), func() time.Time { return deadline.Add(time.Hour) }); record != nil || !errors.Is(err, task.ErrAlreadyStarted) {
-			t.Fatalf("seal with registration = (%+v, %v), want nil/ErrAlreadyStarted", record, err)
-		}
-	})
+func testControlLifetimeUnlaunchedRejectsIntent(t *testing.T) {
+	t.Helper()
+	deadline := time.Date(2026, time.February, 2, 3, 4, 5, 0, time.UTC)
+	_, _, lifetime := newWorkspaceControlLifetime(t, deadline)
+	must(t, recordWorkspaceLifetimeIntent(t, lifetime, deadline))
+	if record, err := lifetime.sealLifetimeUnlaunchedContextWithNow(t.Context(), func() time.Time { return deadline.Add(time.Hour) }); record != nil || !errors.Is(err, task.ErrAlreadyStarted) {
+		t.Fatalf("seal with intent = (%+v, %v), want nil/ErrAlreadyStarted", record, err)
+	}
+}
 
-	t.Run("terminal", func(t *testing.T) {
-		deadline := time.Date(2026, time.February, 4, 3, 4, 5, 0, time.UTC)
-		_, _, lifetime := newWorkspaceControlLifetime(t, deadline)
-		must(t, recordWorkspaceLifetimeIntent(t, lifetime, deadline))
-		_, err := lifetime.RecordLifetimeRegistrationContext(t.Context(), LifetimeRegistrationFacts{
-			ScopeKind: task.LifetimeScopeProcessGroup,
-			Assurance: task.LifetimeAssuranceCooperative,
-			ScopeID:   "workspace-scope",
-			BootID:    "workspace-boot",
-			Deadline:  deadline,
-		})
-		must(t, err)
-		_, err = lifetime.RecordLifetimeTerminationContext(t.Context(), task.LifetimeTerminationBudget)
-		must(t, err)
-		err = lifetime.WithLifetimeLaunchPermissionContext(t.Context(), func(*ControlTransaction) error { return nil })
-		if !errors.Is(err, task.ErrTerminalTask) {
-			t.Fatalf("permission after termination = %v, want callback refusal", err)
-		}
+func testControlLifetimeUnlaunchedRejectsRegistration(t *testing.T) {
+	t.Helper()
+	deadline := time.Date(2026, time.February, 3, 3, 4, 5, 0, time.UTC)
+	_, _, lifetime := newWorkspaceControlLifetime(t, deadline)
+	must(t, recordWorkspaceLifetimeIntent(t, lifetime, deadline))
+	_, err := lifetime.RecordLifetimeRegistrationContext(t.Context(), LifetimeRegistrationFacts{
+		ScopeKind: task.LifetimeScopeProcessGroup,
+		Assurance: task.LifetimeAssuranceCooperative,
+		ScopeID:   "workspace-scope",
+		BootID:    "workspace-boot",
+		Deadline:  deadline,
 	})
+	must(t, err)
+	if record, err := lifetime.sealLifetimeUnlaunchedContextWithNow(t.Context(), func() time.Time { return deadline.Add(time.Hour) }); record != nil || !errors.Is(err, task.ErrAlreadyStarted) {
+		t.Fatalf("seal with registration = (%+v, %v), want nil/ErrAlreadyStarted", record, err)
+	}
+}
 
-	t.Run("unreadable", func(t *testing.T) {
-		deadline := time.Date(2026, time.February, 5, 3, 4, 5, 0, time.UTC)
-		_, control, lifetime := newWorkspaceControlLifetime(t, deadline)
-		_, err := control.Put(controlLifetimeUnlaunchedName, controlTestRecord{Request: "malformed-fence"})
-		must(t, err)
-		if record, err := lifetime.ReadLifetimeUnlaunchedContext(t.Context()); record != nil || task.RecordAbsent(err) || err == nil {
-			t.Fatalf("malformed fence = (%+v, %v), want strict non-absence error", record, err)
-		}
-		if record, err := lifetime.sealLifetimeUnlaunchedContextWithNow(t.Context(), func() time.Time { return deadline.Add(time.Hour) }); record != nil || task.RecordAbsent(err) || err == nil {
-			t.Fatalf("seal with malformed fence = (%+v, %v), want strict non-absence error", record, err)
-		}
+func testControlLifetimeUnlaunchedRejectsTerminal(t *testing.T) {
+	t.Helper()
+	deadline := time.Date(2026, time.February, 4, 3, 4, 5, 0, time.UTC)
+	_, _, lifetime := newWorkspaceControlLifetime(t, deadline)
+	must(t, recordWorkspaceLifetimeIntent(t, lifetime, deadline))
+	_, err := lifetime.RecordLifetimeRegistrationContext(t.Context(), LifetimeRegistrationFacts{
+		ScopeKind: task.LifetimeScopeProcessGroup,
+		Assurance: task.LifetimeAssuranceCooperative,
+		ScopeID:   "workspace-scope",
+		BootID:    "workspace-boot",
+		Deadline:  deadline,
 	})
+	must(t, err)
+	_, err = lifetime.RecordLifetimeTerminationContext(t.Context(), task.LifetimeTerminationBudget)
+	must(t, err)
+	err = lifetime.WithLifetimeLaunchPermissionContext(t.Context(), func(*ControlTransaction) error { return nil })
+	if !errors.Is(err, task.ErrTerminalTask) {
+		t.Fatalf("permission after termination = %v, want callback refusal", err)
+	}
+}
 
-	t.Run("conflicting-native-record", func(t *testing.T) {
-		deadline := time.Date(2026, time.February, 6, 3, 4, 5, 0, time.UTC)
-		_, control, lifetime := newWorkspaceControlLifetime(t, deadline)
-		_, err := lifetime.sealLifetimeUnlaunchedContextWithNow(t.Context(), func() time.Time { return deadline.Add(time.Hour) })
-		must(t, err)
-		_, err = control.Put(controlLifetimeIntentName, task.LifetimeIntentRecord{
-			SchemaVersion: task.SchemaVersion,
-			RootID:        lifetime.rootID,
-			TaskID:        lifetime.operationID,
-			OwnerKind:     lifetime.ownerKind,
-			OwnerSHA256:   lifetime.ownerSHA256,
-			ScopeKind:     task.LifetimeScopeProcessGroup,
-			Assurance:     task.LifetimeAssuranceCooperative,
-			ScopePlan:     "contradictory-plan",
-			BootID:        "contradictory-boot",
-			Deadline:      lifetime.deadlineText(),
-			CreatedAt:     deadline.Add(time.Hour).Format(time.RFC3339Nano),
-		})
-		must(t, err)
-		if record, err := lifetime.ReadLifetimeUnlaunchedContext(t.Context()); record != nil || task.RecordAbsent(err) || err == nil {
-			t.Fatalf("fence with contradictory intent = (%+v, %v), want strict non-absence error", record, err)
-		}
+func testControlLifetimeUnlaunchedRejectsUnreadable(t *testing.T) {
+	t.Helper()
+	deadline := time.Date(2026, time.February, 5, 3, 4, 5, 0, time.UTC)
+	_, control, lifetime := newWorkspaceControlLifetime(t, deadline)
+	_, err := control.Put(controlLifetimeUnlaunchedName, controlTestRecord{Request: "malformed-fence"})
+	must(t, err)
+	if record, err := lifetime.ReadLifetimeUnlaunchedContext(t.Context()); record != nil || task.RecordAbsent(err) || err == nil {
+		t.Fatalf("malformed fence = (%+v, %v), want strict non-absence error", record, err)
+	}
+	if record, err := lifetime.sealLifetimeUnlaunchedContextWithNow(t.Context(), func() time.Time { return deadline.Add(time.Hour) }); record != nil || task.RecordAbsent(err) || err == nil {
+		t.Fatalf("seal with malformed fence = (%+v, %v), want strict non-absence error", record, err)
+	}
+}
+
+func testControlLifetimeUnlaunchedRejectsConflict(t *testing.T) {
+	t.Helper()
+	deadline := time.Date(2026, time.February, 6, 3, 4, 5, 0, time.UTC)
+	_, control, lifetime := newWorkspaceControlLifetime(t, deadline)
+	_, err := lifetime.sealLifetimeUnlaunchedContextWithNow(t.Context(), func() time.Time { return deadline.Add(time.Hour) })
+	must(t, err)
+	_, err = control.Put(controlLifetimeIntentName, task.LifetimeIntentRecord{
+		SchemaVersion: task.SchemaVersion,
+		RootID:        lifetime.rootID,
+		TaskID:        lifetime.operationID,
+		OwnerKind:     lifetime.ownerKind,
+		OwnerSHA256:   lifetime.ownerSHA256,
+		ScopeKind:     task.LifetimeScopeProcessGroup,
+		Assurance:     task.LifetimeAssuranceCooperative,
+		ScopePlan:     "contradictory-plan",
+		BootID:        "contradictory-boot",
+		Deadline:      lifetime.deadlineText(),
+		CreatedAt:     deadline.Add(time.Hour).Format(time.RFC3339Nano),
 	})
+	must(t, err)
+	if record, err := lifetime.ReadLifetimeUnlaunchedContext(t.Context()); record != nil || task.RecordAbsent(err) || err == nil {
+		t.Fatalf("fence with contradictory intent = (%+v, %v), want strict non-absence error", record, err)
+	}
 }
 
 func TestControlLifetimeUnlaunchedCommitFaultReplaysMatchingWinner(t *testing.T) {

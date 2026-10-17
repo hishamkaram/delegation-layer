@@ -8,18 +8,18 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
-	"strings"
 
-	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
+	"github.com/hishamkaram/delegation-layer/internal/provider/contract"
+	providerruntime "github.com/hishamkaram/delegation-layer/internal/provider/runtime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 var (
 	// ErrProfileUnavailable identifies a provider mode or runtime that cannot
 	// be prepared for this request.
-	ErrProfileUnavailable = errors.New("provider permission profile is not available")
+	ErrProfileUnavailable = contract.ErrProfileUnavailable
 	// ErrDuplicateProvider identifies a catalog containing two registrations for
 	// the same provider identifier.
 	ErrDuplicateProvider = errors.New("duplicate provider registration")
@@ -36,51 +36,37 @@ var (
 	ErrAuthenticationBlocked = errors.New("provider authentication unavailable")
 )
 
+// The pure discovery vocabulary lives in provider/contract; these names are
+// the same types and constants.
 const (
-	OptionInteractive   = "interactive"
-	OptionContinuation  = "continuation"
-	OptionEffort        = "effort"
-	OptionModel         = "model"
-	OptionNativeTimeout = "native-timeout"
-	OptionReviewTarget  = "review-target"
+	OptionInteractive   = contract.OptionInteractive
+	OptionContinuation  = contract.OptionContinuation
+	OptionEffort        = contract.OptionEffort
+	OptionModel         = contract.OptionModel
+	OptionNativeTimeout = contract.OptionNativeTimeout
+	OptionReviewTarget  = contract.OptionReviewTarget
 )
 
-// ContinuationMode describes how a provider resumes a predecessor session.
-// The value is discovery metadata; the adapter still proves the exact
-// session identity at launch and publication time.
-type ContinuationMode string
-
-const (
-	ContinuationNative      ContinuationMode = "native"
-	ContinuationCheckpoint  ContinuationMode = "checkpoint"
-	ContinuationUnsupported ContinuationMode = "unsupported"
+type (
+	ContinuationMode    = contract.ContinuationMode
+	ReadOnlyMechanism   = contract.ReadOnlyMechanism
+	ReadOnlyContainment = contract.ReadOnlyContainment
+	ReadOnlyCapability  = contract.ReadOnlyCapability
+	RuntimeCapability   = contract.RuntimeCapability
+	Description         = contract.Description
 )
 
-// ReadOnlyMechanism identifies the native behavior selected for a provider's
-// read-only request. It describes the adapter contract; it is not a delegate
-// owned sandbox guarantee.
-type ReadOnlyMechanism string
-
 const (
-	ReadOnlyNativePlan    ReadOnlyMechanism = "native-plan"
-	ReadOnlyNativeSandbox ReadOnlyMechanism = "native-sandbox"
-	ReadOnlyToolAllowlist ReadOnlyMechanism = "tool-allowlist"
+	ContinuationNative      = contract.ContinuationNative
+	ContinuationCheckpoint  = contract.ContinuationCheckpoint
+	ContinuationUnsupported = contract.ContinuationUnsupported
+
+	ReadOnlyNativePlan    = contract.ReadOnlyNativePlan
+	ReadOnlyNativeSandbox = contract.ReadOnlyNativeSandbox
+	ReadOnlyToolAllowlist = contract.ReadOnlyToolAllowlist
+
+	ReadOnlyProviderOwned = contract.ReadOnlyProviderOwned
 )
-
-// ReadOnlyContainment identifies who owns the effective boundary around the
-// provider's configuration, extensions, and native tools.
-type ReadOnlyContainment string
-
-const ReadOnlyProviderOwned ReadOnlyContainment = "provider-owned"
-
-// ReadOnlyCapability is static metadata for a provider's read-only mode.
-// Supported is false and the other fields are empty when read-only is not
-// advertised.
-type ReadOnlyCapability struct {
-	Supported   bool                `json:"supported"`
-	Mechanism   ReadOnlyMechanism   `json:"mechanism,omitempty"`
-	Containment ReadOnlyContainment `json:"containment,omitempty"`
-}
 
 // PreparedProfile is the immutable, provider-produced execution input. It
 // carries no process, pipe, stop, capture, sealing, collection, or publication
@@ -102,26 +88,8 @@ type PreparedProfile struct {
 // ValidateStatePlacement rejects state that overlaps any provider-writable
 // tree. It runs before admission and again in the runner after policy refresh.
 func (p PreparedProfile) ValidateStatePlacement(root string) error {
-	canonicalRoot, err := config.CanonicalizePath(root)
-	if err != nil || canonicalRoot != root {
-		return fmt.Errorf("%w: state root is not canonical", ErrProfileUnavailable)
-	}
 	roots := append([]string{p.Plan.Directory}, p.WritableRoots...)
-	for _, writable := range roots {
-		canonical, pathErr := config.CanonicalizePath(writable)
-		if pathErr != nil || canonical != writable {
-			return fmt.Errorf("%w: provider writable root is not canonical: %s", ErrProfileUnavailable, writable)
-		}
-		if pathContains(root, writable) || pathContains(writable, root) {
-			return fmt.Errorf("%w: state root overlaps provider-writable tree %s", ErrProfileUnavailable, writable)
-		}
-	}
-	return nil
-}
-
-func pathContains(parent, child string) bool {
-	relative, err := filepath.Rel(parent, child)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	return providerruntime.ValidateStatePlacement(root, roots)
 }
 
 // Validate checks the provider-produced profile against the requested task.
@@ -312,32 +280,6 @@ func validatePlanBindings(plan execution.Plan) error {
 // PrepareProfile is the narrow preparation function accepted by the app and
 // by hermetic acceptance compositions.
 type PrepareProfile func(task.TaskRecord) (PreparedProfile, error)
-
-// RuntimeCapability describes the command-level checks performed when a
-// launch profile is prepared. VersionArgs selects the provider's version
-// command and defaults to ["--version"] when empty; HelpArgs are prepended
-// before --help (for example, Codex uses ["exec"]); RequiredFlags are the
-// flags the adapter puts in its argv. These are requirements, not a release
-// manifest.
-type RuntimeCapability struct {
-	VersionArgs   []string `json:"version_args,omitempty"`
-	HelpArgs      []string `json:"help_args,omitempty"`
-	RequiredFlags []string `json:"required_flags"`
-}
-
-// Description is the bounded metadata exposed by the providers command.
-// Discoverable controls whether this registration appears in that response.
-type Description struct {
-	Interaction      task.InteractionCapabilities `json:"interaction"`
-	ID               string                       `json:"id"`
-	SupportedModes   []string                     `json:"supported_modes"`
-	SupportedOptions []string                     `json:"supported_options"`
-	RequiredOptions  []string                     `json:"required_options,omitempty"`
-	Continuation     ContinuationMode             `json:"continuation"`
-	ReadOnly         ReadOnlyCapability           `json:"read_only"`
-	Runtime          RuntimeCapability            `json:"runtime"`
-	Discoverable     bool                         `json:"-"`
-}
 
 // Registration is one explicit catalog entry. A nil Prepare function is
 // valid for historical-only predicate registrations and never grants launch

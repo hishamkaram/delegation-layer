@@ -632,25 +632,6 @@ func decodeContentBlocks(raw json.RawMessage) ([]byte, error) {
 	return text, nil
 }
 
-func decodeContentBlock(raw json.RawMessage) (string, error) {
-	fields, err := decodeObject(raw)
-	if err != nil {
-		return "", errors.New("message content block is not an object")
-	}
-	typeName, err := requiredString(fields, "type")
-	if err != nil {
-		return "", errors.New("message content block type is missing or invalid")
-	}
-	if typeName != "text" {
-		return "", nil
-	}
-	blockText, err := decodeString(fields["text"])
-	if err != nil || !utf8.ValidString(blockText) {
-		return "", errors.New("text content block is invalid")
-	}
-	return blockText, nil
-}
-
 func decodeObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {

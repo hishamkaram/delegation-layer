@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"time"
 )
 
@@ -39,7 +39,7 @@ const (
 // Store readers must add ErrIdentityMismatch or ErrEvidenceFault after a
 // primary record has been read and a required dependency is missing.
 func RecordAbsent(err error) bool {
-	return errors.Is(err, os.ErrNotExist) &&
+	return errors.Is(err, fs.ErrNotExist) &&
 		!errors.Is(err, ErrIdentityMismatch) &&
 		!errors.Is(err, ErrEvidenceFault) &&
 		!errors.Is(err, context.Canceled) &&

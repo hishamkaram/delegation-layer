@@ -10,13 +10,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
+	"github.com/hishamkaram/delegation-layer/internal/guardian/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
+	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestLifetimeGuardianPersistsIntentBeforeNativeCgroupCreation(t *testing.T) {
-	store, err := taskdir.InitStore(filepath.Join(canonicalAppTestTempDir(t), "state"))
+	store, err := taskdir.InitStore(filepath.Join(testsupportcore.CanonicalTempDir(t), "state"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,21 +36,21 @@ func TestLifetimeGuardianPersistsIntentBeforeNativeCgroupCreation(t *testing.T) 
 
 	var persistedIntentRead atomic.Bool
 	deadline := time.Now().Add(time.Minute).UTC()
-	fixture := newProductionRecordGuardianFixture(
+	fixture := testsupport.NewRecordFixture(
 		t,
 		request.RootID,
 		request.TaskID,
 		task.LifetimeOwnerTask,
 		deadline,
 		td,
-		func(ctx context.Context) (lifetimeGuardianOwner, error) {
+		func(ctx context.Context) (guardian.Owner, error) {
 			return td.AcquireLifetimeOwner(ctx)
 		},
-		func(options *lifetimeGuardianOptions) {
-			options.planFactory = func(string, string, string) (lifetime.Plan, error) {
+		func(options *guardian.Options) {
+			options.PlanFactory = func(string, string, string) (lifetime.Plan, error) {
 				return plan, nil
 			}
-			options.scopeFactory = func(lifetime.Plan) (lifetimeGuardianScope, error) {
+			options.ScopeFactory = func(lifetime.Plan) (guardian.Scope, error) {
 				intent, readErr := td.ReadLifetimeIntent()
 				if readErr != nil {
 					return nil, fmt.Errorf("read persisted lifetime intent before native creation: %w", readErr)
@@ -71,10 +74,10 @@ func TestLifetimeGuardianPersistsIntentBeforeNativeCgroupCreation(t *testing.T) 
 		},
 	)
 
-	callProductionRecordGuardian(t, fixture, request.TaskID, lifetimeMessageHello)
-	callProductionRecordGuardian(t, fixture, request.TaskID, lifetimeMessageClose)
-	fixture.worker.release()
-	if runErr := fixture.waitRun(t); runErr != nil {
+	fixture.Hello(t)
+	fixture.CloseTask(t)
+	fixture.ReleaseWorker()
+	if runErr := fixture.WaitRun(t); runErr != nil {
 		t.Fatalf("guardian with native cgroup: %v", runErr)
 	}
 	if !persistedIntentRead.Load() {

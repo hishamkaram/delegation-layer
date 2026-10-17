@@ -92,10 +92,6 @@ func profileEnvironmentValues(entries map[string]string, native bool) []string {
 	return values
 }
 
-func profileWritableRoots(home, claudeHome string, entries map[string]string, native bool) ([]string, error) {
-	return profileWritableRootsWithOptions(home, claudeHome, entries, native, native)
-}
-
 func profileWritableRootsWithOptions(home, claudeHome string, entries map[string]string, native, rejectRelativeNativeDiscovery bool) ([]string, error) {
 	roots := []string{claudeHome, filepath.Join(home, ".claude.json"), filepath.Join(home, ".cache"), filepath.Join(home, "Library/Application Support/Claude"), filepath.Join(home, "Library/Caches"), filepath.Join(home, "Library/Logs"), filepath.Join(home, "Library/Keychains"), "/tmp", "/var/tmp", "/var/folders", "/dev"}
 	var err error

@@ -258,25 +258,7 @@ def executable_digest(path):
         return None
 
 
-def run_case(output, harness, model, case, repetition, mode="live", budget=180,
-             routing_context=False, delegate_bin=None):
-    run = output / f"{case['name']}-{repetition}"
-    run.mkdir(mode=0o700)
-    ownership = DirectoryOwner()
-    workspace = run / "workspace"
-    workspace = ownership.create("disposable workspace", workspace, run).directory
-    prepare_workspace(workspace, harness)
-    prompt = case["prompt"]
-    (run / "prompt.txt").write_text(prompt, encoding="utf-8")
-    argv, stdin = command(harness, model, prompt)
-    if routing_context:
-        argv += routing_hook_arguments(harness, workspace)
-    # Keep supervisor state beside the captured evidence. This makes the
-    # acceptance run self-contained and works when the user's home is read-only.
-    state_path = Path(tempfile.mkdtemp(prefix="state-", dir=output))
-    state = ownership.adopt_created("Delegate state", state_path, output).directory
-    env = dict(os.environ, DELEGATE_ROOT=str(state))
-    env.pop("DELEGATE_PUEUE_CONFIG", None)
+def _candidate_environment(run, ownership, env, delegate_bin) -> Path | None:
     candidate_path = None
     if delegate_bin is not None:
         delegate_bin = Path(delegate_bin).resolve()
@@ -291,29 +273,125 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
         setup += "export PATH=" + shlex.quote(str(candidate_path)) + ':"$PATH"\n'
         candidate_env.write_text(setup, encoding="utf-8")
         env["BASH_ENV"] = str(candidate_env)
-    receipt = {"case": case, "repetition": repetition, "harness": harness,
-               "model_requested": model, "argv": argv, "status": "unreviewed", "mode": mode,
-               "budget_seconds": budget, "state_root": str(state), "candidate": candidate_digests(),
-               "routing_context": routing_context,
-               "hook_trust": "vetted-per-invocation" if routing_context and harness == "codex" else "native",
-               "fixture_scenario": case.get("fixture_scenario") if mode == "routing" else None}
-    if delegate_bin is not None:
-        receipt["delegate_executable"] = str(delegate_bin)
-        receipt["delegate_sha256"] = executable_digest(delegate_bin)
+    return delegate_bin
+
+
+def _candidate_shadow_reason(harness) -> str | None:
+    if harness == "claude":
+        # Personal Claude skills take precedence over project skills of the same name.
+        personal = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "skills/agent-integration"
+        if (personal / "SKILL.md").exists() and candidate_digests(personal) != candidate_digests():
+            return "claude_candidate_shadowed_by_personal_skill"
+    if harness == "hermes":
+        # Installed Hermes reads HERMES_HOME/skills, not project .hermes/skills.
+        installed = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "skills/agent-integration"
+        if candidate_digests(installed) != candidate_digests():
+            return "hermes_candidate_not_installed"
+    return None
+
+
+def _prepare_routing_fixture(run, owner, env, case, delegate_bin) -> None:
+    fixture = run / "fixture"
+    fixture.mkdir()
+    delegate = str(delegate_bin) if delegate_bin is not None else shutil.which("delegate")
+    if not delegate:
+        raise FileNotFoundError("Delegate catalog executable missing")
+    private_path = fixture / "supervisor-bin"
+    private_path.mkdir()
+    for name, path in (("pueue", owner.client), ("pueued", owner.daemon_path)):
+        (private_path / name).symlink_to(Path(path).resolve())
+    write_json(fixture / "runtime.json", {
+        "delegate": str(Path(delegate).resolve()), "path": str(private_path),
+        "delegate_sha256": digest(Path(delegate)),
+        "case": case["name"],
+        "scenario": case.get("fixture_scenario"),
+        "provider": case.get("provider") if isinstance(case.get("provider"), str) else None,
+    })
+    executable = fixture / "delegate"
+    shutil.copyfile(REPO / "scripts/skill_routing_delegate_fixture.py", executable)
+    executable.chmod(0o700)
+    owner.processes.environment["PATH"] = str(fixture) + os.pathsep + env.get("PATH", "")
+    owner.processes.environment["DELEGATE_ROUTING_FIXTURE"] = str(fixture)
+    # Bash login profiles can replace PATH. Preserve the caller's BASH_ENV
+    # behavior, then restore only this disposable command-recording fixture.
+    bash_env = fixture / "bash-env.sh"
+    previous = env.get("BASH_ENV")
+    setup = (". " + shlex.quote(previous) + "\n") if previous else ""
+    setup += "export PATH=" + shlex.quote(str(fixture)) + ':"$PATH"\n'
+    bash_env.write_text(setup, encoding="utf-8")
+    owner.processes.environment["BASH_ENV"] = str(bash_env)
+
+
+def _finalize_routing_attempt(run, owner, ownership, receipt) -> None:
+    supervisor_closed = owner is None
+    if owner is not None:
+        try:
+            owner.close()
+            supervisor_closed = True
+        except (OSError, ValueError, RuntimeError, KeyError):
+            receipt.update(status="failed", reason="supervisor_cleanup_unproven")
+    owned_directories = ownership.transfer()
+    candidate_raw_token = None if owner is None else getattr(owner.processes, "capture_root", None)
+    raw_token = candidate_raw_token if isinstance(candidate_raw_token, OwnedDirectory) else None
+    try:
+        cleaned = finalize_acceptance_artifacts(
+            run,
+            supervisor_closed,
+            owned_directories,
+            receipt["status"] not in ("failed", "blocked"),
+            raw_process_captures_token=raw_token,
+        )
+        if not cleaned and supervisor_closed:
+            receipt.update(status="failed", reason="acceptance_artifact_cleanup_failed")
+    except (OSError, RuntimeError, ValueError) as error:
+        receipt.update(status="failed", reason="acceptance_artifact_cleanup_failed",
+                       error_type=type(error).__name__)
+    for name in ("stdout.txt", "stderr.txt", "fixture/calls.jsonl",
+                 "fixture/routing-events.jsonl", "fixture/routing-state.json"):
+        if (run / name).exists():
+            receipt[name + "_sha256"] = digest(run / name)
+    write_json(run / "receipt.json", receipt)
+
+
+def run_case(*, output, harness, model, case, repetition, mode="live", budget=180,
+             routing_context=False, delegate_bin=None):
+    run = output / f"{case['name']}-{repetition}"
+    run.mkdir(mode=0o700)
+    ownership = DirectoryOwner()
+    try:
+        workspace = run / "workspace"
+        workspace = ownership.create("disposable workspace", workspace, run).directory
+        prepare_workspace(workspace, harness)
+        prompt = case["prompt"]
+        (run / "prompt.txt").write_text(prompt, encoding="utf-8")
+        argv, stdin = command(harness, model, prompt)
+        if routing_context:
+            argv += routing_hook_arguments(harness, workspace)
+        # Keep supervisor state beside the captured evidence. This makes the
+        # acceptance run self-contained and works when the user's home is read-only.
+        state_path = Path(tempfile.mkdtemp(prefix="state-", dir=output))
+        state = ownership.adopt_created("Delegate state", state_path, output).directory
+        env = dict(os.environ, DELEGATE_ROOT=str(state))
+        env.pop("DELEGATE_PUEUE_CONFIG", None)
+        delegate_bin = _candidate_environment(run, ownership, env, delegate_bin)
+        receipt = {"case": case, "repetition": repetition, "harness": harness,
+                   "model_requested": model, "argv": argv, "status": "unreviewed", "mode": mode,
+                   "budget_seconds": budget, "state_root": str(state), "candidate": candidate_digests(),
+                   "routing_context": routing_context,
+                   "hook_trust": "vetted-per-invocation" if routing_context and harness == "codex" else "native",
+                   "fixture_scenario": case.get("fixture_scenario") if mode == "routing" else None}
+        if delegate_bin is not None:
+            receipt["delegate_executable"] = str(delegate_bin)
+            receipt["delegate_sha256"] = executable_digest(delegate_bin)
+    except BaseException:
+        ownership.rollback()
+        raise
     owner = None
     try:
-        if harness == "claude":
-            # Personal Claude skills take precedence over project skills of the same name.
-            personal = Path(os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))) / "skills/agent-integration"
-            if (personal / "SKILL.md").exists() and candidate_digests(personal) != candidate_digests():
-                receipt.update(status="blocked", reason="claude_candidate_shadowed_by_personal_skill")
-                return receipt
-        if harness == "hermes":
-            # Installed Hermes reads HERMES_HOME/skills, not project .hermes/skills.
-            installed = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes"))) / "skills/agent-integration"
-            if candidate_digests(installed) != candidate_digests():
-                receipt.update(status="blocked", reason="hermes_candidate_not_installed")
-                return receipt
+        shadow_reason = _candidate_shadow_reason(harness)
+        if shadow_reason is not None:
+            receipt.update(status="blocked", reason=shadow_reason)
+            return receipt
         if delegate_bin is not None:
             if not delegate_bin.is_file() or not os.access(delegate_bin, os.X_OK):
                 raise FileNotFoundError("candidate Delegate binary missing; build before acceptance")
@@ -333,35 +411,7 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
             raise FileNotFoundError("git is required for disposable provider workspaces")
         owner.capture("git-init", [git, "init", "--quiet", str(workspace)])
         if mode == "routing":
-            fixture = run / "fixture"
-            fixture.mkdir()
-            delegate = str(delegate_bin) if delegate_bin is not None else shutil.which("delegate")
-            if not delegate:
-                raise FileNotFoundError("Delegate catalog executable missing")
-            private_path = fixture / "supervisor-bin"
-            private_path.mkdir()
-            for name, path in (("pueue", owner.client), ("pueued", owner.daemon_path)):
-                (private_path / name).symlink_to(Path(path).resolve())
-            write_json(fixture / "runtime.json", {
-                "delegate": str(Path(delegate).resolve()), "path": str(private_path),
-                "delegate_sha256": digest(Path(delegate)),
-                "case": case["name"],
-                "scenario": case.get("fixture_scenario"),
-                "provider": case.get("provider") if isinstance(case.get("provider"), str) else None,
-            })
-            executable = fixture / "delegate"
-            shutil.copyfile(REPO / "scripts/skill_routing_delegate_fixture.py", executable)
-            executable.chmod(0o700)
-            owner.processes.environment["PATH"] = str(fixture) + os.pathsep + env.get("PATH", "")
-            owner.processes.environment["DELEGATE_ROUTING_FIXTURE"] = str(fixture)
-            # Bash login profiles can replace PATH. Preserve the caller's BASH_ENV
-            # behavior, then restore only this disposable command-recording fixture.
-            bash_env = fixture / "bash-env.sh"
-            previous = env.get("BASH_ENV")
-            setup = (". " + shlex.quote(previous) + "\n") if previous else ""
-            setup += "export PATH=" + shlex.quote(str(fixture)) + ':"$PATH"\n'
-            bash_env.write_text(setup, encoding="utf-8")
-            owner.processes.environment["BASH_ENV"] = str(bash_env)
+            _prepare_routing_fixture(run, owner, env, case, delegate_bin)
         if delegate_bin is not None:
             receipt["delegate_version"] = owner.capture("delegate-version", [str(delegate_bin), "--version"]).read_text().strip()
             catalog = owner.capture("delegate-catalog", [str(delegate_bin), "providers", "--json"])
@@ -376,39 +426,12 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
         receipt.update(status="blocked", reason="prerequisite_or_supervisor_failed",
                        error_type=type(error).__name__)
     finally:
-        supervisor_closed = owner is None
-        if owner is not None:
-            try:
-                owner.close()
-                supervisor_closed = True
-            except (OSError, ValueError, RuntimeError, KeyError):
-                receipt.update(status="failed", reason="supervisor_cleanup_unproven")
-        owned_directories = ownership.transfer()
-        candidate_raw_token = None if owner is None else getattr(owner.processes, "capture_root", None)
-        raw_token = candidate_raw_token if isinstance(candidate_raw_token, OwnedDirectory) else None
-        try:
-            cleaned = finalize_acceptance_artifacts(
-                run,
-                supervisor_closed,
-                owned_directories,
-                receipt["status"] not in ("failed", "blocked"),
-                raw_process_captures_token=raw_token,
-            )
-            if not cleaned and supervisor_closed:
-                receipt.update(status="failed", reason="acceptance_artifact_cleanup_failed")
-        except (OSError, RuntimeError, ValueError) as error:
-            receipt.update(status="failed", reason="acceptance_artifact_cleanup_failed",
-                           error_type=type(error).__name__)
-        for name in ("stdout.txt", "stderr.txt", "fixture/calls.jsonl",
-                     "fixture/routing-events.jsonl", "fixture/routing-state.json"):
-            if (run / name).exists():
-                receipt[name + "_sha256"] = digest(run / name)
-        write_json(run / "receipt.json", receipt)
+        _finalize_routing_attempt(run, owner, ownership, receipt)
     print(f"{run.name}: {receipt['status']}", flush=True)
     return receipt
 
 
-def summarize(output, cases, repetitions, harness, mode="live", model=None, budget=180,
+def summarize(*, output, cases, repetitions, harness, mode="live", model=None, budget=180,
               routing_context=False, delegate_bin=None):
     rows = []
     for case in cases:
@@ -489,13 +512,16 @@ def main():
         parser.error("selection contains no cases")
     output = args.output.resolve()
     if args.summarize:
-        report = summarize(output, cases, args.repetitions, args.harness, args.mode, args.model, args.budget_seconds, args.routing_context, args.delegate_bin)
+        report = summarize(output=output, cases=cases, repetitions=args.repetitions, harness=args.harness,
+            mode=args.mode, model=args.model, budget=args.budget_seconds, routing_context=args.routing_context,
+            delegate_bin=args.delegate_bin)
         print(json.dumps(report, indent=2))
         return {"passed": 0, "failed": 1, "blocked": 2}[report["status"]]
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     for case in cases:
         for repetition in range(1, args.repetitions + 1):
-            receipt = run_case(output, args.harness, args.model, case, repetition, args.mode, args.budget_seconds, args.routing_context, args.delegate_bin)
+            receipt = run_case(output=output, harness=args.harness, model=args.model, case=case, repetition=repetition,
+                mode=args.mode, budget=args.budget_seconds, routing_context=args.routing_context, delegate_bin=args.delegate_bin)
             if receipt.get("reason") == "supervisor_cleanup_unproven":
                 return 1
     # Executing a harness is not proof of routing success.

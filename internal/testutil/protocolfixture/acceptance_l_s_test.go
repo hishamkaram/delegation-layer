@@ -11,6 +11,8 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 func TestAcceptance_GroupL_and_S(t *testing.T) {
@@ -144,7 +146,7 @@ func testL04(t *testing.T) {
 func siblingCase(t *testing.T, c *fixtureCase) *fixtureCase {
 	t.Helper()
 	copyCase := *c
-	id, err := task.NewTaskID()
+	id, err := randomid.NewTaskID()
 	if err != nil {
 		t.Fatal(err)
 	}

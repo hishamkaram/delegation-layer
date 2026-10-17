@@ -40,22 +40,11 @@ func closeLock(l *taskdir.LockFile) {
 	}
 }
 
-func closeFile(f *os.File) {
-	if f != nil {
-		reportCleanup(f.Close())
-	}
-}
-
 func signalRendezvous(path, msg string) error {
 	if path == "" {
 		return nil
 	}
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d:%s\n", os.Getpid(), msg)), 0o600)
-}
-
-func signalRendezvousQuietly(path, msg string) {
-	// Callers without an immediate return still fail through command cleanup status.
-	reportCleanup(signalRendezvous(path, msg))
 }
 
 func recordFakeSinkEvent(path, event, taskID string) error {

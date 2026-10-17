@@ -14,6 +14,8 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"golang.org/x/sys/unix"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 const (
@@ -149,7 +151,7 @@ func prepareProvider(cfg ProviderConfig, literalArgs []string, input io.Reader, 
 	if err := os.MkdirAll(cfg.ArtifactDir, 0o700); err != nil {
 		return nil, providerReceipt{}, fmt.Errorf("creating provider artifact directory: %w", err)
 	}
-	invocationID, err := task.NewRandomID()
+	invocationID, err := randomid.NewRandomID()
 	if err != nil {
 		return nil, providerReceipt{}, err
 	}

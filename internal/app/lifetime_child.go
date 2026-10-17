@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -15,7 +16,7 @@ import (
 )
 
 type openedLifetimeChild struct {
-	control  *lifetimeWorkerClient
+	control  *guardian.WorkerClient
 	deadline time.Time
 }
 
@@ -65,15 +66,15 @@ func openLifetimeChild(parsed runnerArguments, records lifetimeRegistrationReade
 	}
 	conn, err := lifetimeConnectionFromFD(parsed.LifetimeFD)
 	if err != nil {
-		return nil, errors.Join(err, releaseLifetimeScopeUncanceled(context.Background(), scope))
+		return nil, errors.Join(err, guardian.ReleaseScopeUncanceled(context.Background(), scope))
 	}
 	runner, err := os.Executable()
 	if err != nil {
-		return nil, errors.Join(err, conn.Close(), releaseLifetimeScopeUncanceled(context.Background(), scope))
+		return nil, errors.Join(err, conn.Close(), guardian.ReleaseScopeUncanceled(context.Background(), scope))
 	}
-	client, err := newLifetimeWorkerClient(conn, scope, parsed.TaskID, deadline, newRunnerLifetimeLaunchGateFactory(runner))
+	client, err := guardian.NewWorkerClient(conn, scope, parsed.TaskID, deadline, guardian.NewLaunchGateFactory(runner))
 	if err != nil {
-		return nil, errors.Join(err, conn.Close(), releaseLifetimeScopeUncanceled(context.Background(), scope))
+		return nil, errors.Join(err, conn.Close(), guardian.ReleaseScopeUncanceled(context.Background(), scope))
 	}
 	return &openedLifetimeChild{control: client, deadline: deadline}, nil
 }

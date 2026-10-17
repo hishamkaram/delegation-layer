@@ -3,10 +3,6 @@
   "diagram_type": "sequence",
   "meta": {
     "title": "Delegation Layer \u2014 Ordinary Task Lifecycle",
-    "viewBox": [
-      1680,
-      1080
-    ],
     "legend": {
       "mode": "hidden"
     },
@@ -20,10 +16,10 @@
           "caller",
           "delegate",
           "inspect",
-          "store",
-          "pueue"
+          "pueue",
+          "store"
         ],
-        "note": "Managed runtime-only tasks persist a static contract before receipt and enqueue. Other paths retain strict admission inspections."
+        "note": "Static admission or conditional strict inspection precedes task creation. The exact numeric receipt is durable before enqueue."
       },
       {
         "id": "publish",
@@ -34,10 +30,10 @@
           "runner",
           "inspect",
           "provider",
-          "predicate",
-          "store"
+          "store",
+          "predicate"
         ],
-        "note": "Inside the guardian scope, fresh capability preflight and strict plan validation must succeed before provider Start."
+        "note": "Fresh launch checks run inside the guardian scope. TaskDir evaluates sealed evidence and commits the terminal outcome."
       },
       {
         "id": "observe",
@@ -49,180 +45,223 @@
           "pueue",
           "guardian"
         ],
-        "note": "Collection reads durable evidence; cancellation persists one request, and the lifetime lease selects the sole stopping owner."
+        "note": "Observation reads durable evidence. The lifetime lease selects the stopping owner; continuation creates a new linked task."
       }
     ],
     "output": "diagrams/lead-interface.html",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "cb71d7474371b9bd37b93ec34442cee339305687",
+      "revision": "98b22640e61b575267929aa79fff5cb610ff2e8d",
       "link_mode": "local-only"
-    }
+    },
+    "animation": "none"
   },
   "participants": [
     {
       "id": "caller",
       "type": "external",
       "label": "Caller",
+      "sublabel": "lead / automation",
       "sources": [
         {
           "path": "cmd/delegate/main.go",
           "line": 15,
-          "end_line": 20
+          "end_line": 20,
+          "label": "CLI entry"
+        },
+        {
+          "path": "scripts/acceptance_native.py",
+          "line": 127,
+          "end_line": 159,
+          "label": "Acceptance automation"
+        },
+        {
+          "path": "scripts/acceptance_native_all.sh",
+          "line": 48,
+          "end_line": 74,
+          "label": "Neutral BLOCKED result"
         }
       ]
     },
     {
       "id": "delegate",
       "type": "backend",
-      "label": "delegate",
+      "label": "Task lifecycle",
+      "sublabel": "app\u2192tasklifecycle",
       "sources": [
         {
-          "path": "cmd/delegate/main.go",
-          "line": 15,
-          "end_line": 20
-        },
-        {
           "path": "internal/app/runtime.go",
-          "line": 364,
-          "end_line": 454
+          "line": 157,
+          "end_line": 231,
+          "label": "CLI routing and presentation"
         },
         {
-          "path": "internal/app/runtime.go",
-          "line": 586,
-          "end_line": 620
-        }
-      ]
-    },
-    {
-      "id": "store",
-      "type": "database",
-      "label": "Task store",
-      "sources": [
-        {
-          "path": "internal/taskdir/taskdir.go",
-          "line": 206,
-          "end_line": 238
+          "path": "internal/tasklifecycle/queue_observation.go",
+          "line": 14,
+          "end_line": 85,
+          "label": "Typed per-attempt status reconciliation"
         },
         {
-          "path": "internal/taskdir/supervisor_records.go",
-          "line": 96,
-          "end_line": 111
-        },
-        {
-          "path": "internal/taskdir/publication.go",
-          "line": 193,
-          "end_line": 219
+          "path": "internal/tasklifecycle/creation.go",
+          "line": 12,
+          "end_line": 46,
+          "label": "Lifecycle admission and creation"
         }
       ]
     },
     {
       "id": "inspect",
       "type": "security",
-      "label": "Inspection",
+      "label": "Admission",
+      "sublabel": "policy + probes",
       "sources": [
         {
-          "path": "internal/app/inspection_profile.go",
-          "line": 455,
-          "end_line": 491
+          "path": "internal/admission/preparation.go",
+          "line": 9,
+          "end_line": 64,
+          "label": "Static or strict admission"
         },
         {
-          "path": "internal/inspection/inspect.go",
-          "line": 14,
-          "end_line": 53
+          "path": "internal/admission/profile_recovery.go",
+          "line": 57,
+          "end_line": 86,
+          "label": "Fresh probe and strict profile match"
         },
         {
-          "path": "internal/inspection/runtime_probe.go",
+          "path": "internal/inspection/internal/probe/runtime_probe.go",
           "line": 39,
-          "end_line": 104
+          "end_line": 105,
+          "label": "Sealed runtime probe implementation"
         }
       ]
     },
     {
       "id": "pueue",
       "type": "messagebus",
-      "label": "pueued",
+      "label": "Pueue",
+      "sublabel": "policy + rows",
       "sources": [
         {
-          "path": "internal/app/runtime.go",
-          "line": 857,
-          "end_line": 894
+          "path": "internal/supervisor/task_observation.go",
+          "line": 15,
+          "end_line": 94,
+          "label": "Existing-task observation"
         },
         {
-          "path": "internal/pueue/private.go",
-          "line": 965,
-          "end_line": 996
+          "path": "internal/supervisor/scheduling.go",
+          "line": 82,
+          "end_line": 103,
+          "label": "Shared submission gate"
         },
         {
-          "path": "internal/pueue/staged.go",
-          "line": 207,
-          "end_line": 240
+          "path": "internal/pueue/internal/control/staged.go",
+          "line": 175,
+          "end_line": 240,
+          "label": "Stash, commit receipt, then enqueue"
         }
       ]
     },
     {
       "id": "guardian",
       "type": "security",
-      "label": "Lifetime guardian",
+      "label": "Lifetime owner",
+      "sublabel": "native lifetime",
       "sources": [
         {
-          "path": "internal/app/lifetime_guardian.go",
-          "line": 301,
-          "end_line": 344
+          "path": "internal/guardian/registration.go",
+          "line": 113,
+          "end_line": 146,
+          "label": "Intent and registration writer calls"
         },
         {
-          "path": "internal/app/lifetime_guardian.go",
-          "line": 693,
-          "end_line": 744
+          "path": "internal/guardian/worker.go",
+          "line": 15,
+          "end_line": 130,
+          "label": "Exact worker identity and Wait"
         },
         {
-          "path": "internal/app/lifetime_guardian.go",
-          "line": 1274,
-          "end_line": 1321
+          "path": "internal/guardian/finalization.go",
+          "line": 168,
+          "end_line": 215,
+          "label": "Empty-scope termination proof"
         }
       ]
     },
     {
       "id": "runner",
       "type": "backend",
-      "label": "delegate-run",
+      "label": "Runner",
+      "sublabel": "delegate-run",
       "sources": [
         {
-          "path": "cmd/delegate-run/main.go",
-          "line": 13,
-          "end_line": 18
-        },
-        {
-          "path": "internal/app/runner.go",
-          "line": 515,
-          "end_line": 561
+          "path": "internal/execution/run.go",
+          "line": 88,
+          "end_line": 162,
+          "label": "Preflight and closure before sealing"
         },
         {
           "path": "internal/execution/run.go",
-          "line": 76,
-          "end_line": 163
+          "line": 421,
+          "end_line": 532,
+          "label": "Provider Start/Wait, seal and finalize"
+        },
+        {
+          "path": "internal/app/workspace_operation_worker.go",
+          "line": 66,
+          "end_line": 98,
+          "label": "Finite helpers use the same lifetime"
         }
       ]
     },
     {
       "id": "provider",
       "type": "external",
-      "label": "Provider CLI",
+      "label": "Provider",
+      "sublabel": "native CLI",
       "sources": [
         {
           "path": "internal/app/catalog.go",
           "line": 20,
-          "end_line": 44
+          "end_line": 45,
+          "label": "Native provider registrations"
         },
         {
           "path": "internal/execution/run.go",
-          "line": 314,
-          "end_line": 324
+          "line": 288,
+          "end_line": 325,
+          "label": "Verified command and directory"
         },
         {
           "path": "internal/execution/run.go",
           "line": 421,
-          "end_line": 437
+          "end_line": 438,
+          "label": "Provider Start and Wait"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "TaskDir",
+      "sublabel": "records + outcome",
+      "sources": [
+        {
+          "path": "internal/taskdir/taskdir.go",
+          "line": 199,
+          "end_line": 232,
+          "label": "Immutable task-set writer"
+        },
+        {
+          "path": "internal/taskdir/supervisor_records.go",
+          "line": 96,
+          "end_line": 112,
+          "label": "Exact supervisor receipt writer"
+        },
+        {
+          "path": "internal/taskdir/publication.go",
+          "line": 165,
+          "end_line": 219,
+          "label": "Predicate orchestration and commit"
         }
       ]
     },
@@ -230,16 +269,25 @@
       "id": "predicate",
       "type": "security",
       "label": "Predicate",
+      "sublabel": "sealed data rules",
       "sources": [
         {
           "path": "internal/predicate/contract.go",
           "line": 31,
-          "end_line": 48
+          "end_line": 48,
+          "label": "Typed sealed-evidence interpreter"
         },
         {
           "path": "internal/taskdir/predicate_publication.go",
-          "line": 133,
-          "end_line": 184
+          "line": 135,
+          "end_line": 187,
+          "label": "TaskDir invokes and publishes"
+        },
+        {
+          "path": "internal/taskdir/publication.go",
+          "line": 165,
+          "end_line": 219,
+          "label": "TaskDir resolves and commits outcome"
         }
       ]
     }
@@ -247,18 +295,18 @@
   "segments": [
     {
       "from": 140,
-      "to": 376,
-      "label": "Static admission and durable enqueue"
+      "to": 427.56,
+      "label": "Admission and durable enqueue"
     },
     {
-      "from": 376,
-      "to": 797,
-      "label": "Guardian-owned preflight, run and publication"
+      "from": 430.67,
+      "to": 958.67,
+      "label": "Guardian scope, fresh launch and publication"
     },
     {
-      "from": 797,
-      "to": 1014,
-      "label": "Observation, stop request and continuation"
+      "from": 964.0,
+      "to": 1248,
+      "label": "Observe, cancel or continue"
     }
   ],
   "messages": [
@@ -267,71 +315,83 @@
       "from": "caller",
       "to": "delegate",
       "y": 160,
-      "label": "dispatch --provider / --auto \u00b7 brief",
-      "variant": "emphasis",
-      "note": "Validate the request and prepare its static provider candidate before binding the private supervisor."
+      "label": "dispatch / --auto",
+      "variant": "emphasis"
+    },
+    {
+      "id": "candidate",
+      "from": "delegate",
+      "to": "inspect",
+      "y": 188,
+      "label": "prepare candidate",
+      "variant": "emphasis"
     },
     {
       "id": "bind-supervisor",
-      "from": "delegate",
+      "from": "inspect",
       "to": "pueue",
-      "label": "bind or prepare private supervisor",
-      "y": 188
+      "y": 216,
+      "label": "prepare supervisor"
     },
     {
       "id": "strict-admission",
       "from": "delegate",
       "to": "inspect",
-      "label": "otherwise: strict admission inspection",
-      "variant": "dashed",
-      "note": "Mixed/native policy projections, CCR preparation selection, custom runners and historical tasks keep their strict admission inspection. The inspection returns non-secret facts for strict finalization before task persistence.",
-      "y": 216
+      "y": 244,
+      "label": "strict, when required",
+      "variant": "dashed"
+    },
+    {
+      "id": "prepared",
+      "from": "inspect",
+      "to": "delegate",
+      "y": 272,
+      "label": "admission plan",
+      "variant": "return"
     },
     {
       "id": "persist",
       "from": "delegate",
       "to": "store",
-      "y": 244,
-      "label": "admit contract; persist immutable task",
-      "variant": "emphasis",
-      "note": "Managed runtime-only profiles use ProfileCandidate.Admit without version/help workers. Immutable metadata stores Meta.RuntimePreflightSHA256 and empty ProviderVersion. Other paths finalize their strict inspection facts before persistence."
+      "y": 300,
+      "label": "persist immutable task",
+      "variant": "emphasis"
     },
     {
       "id": "stage",
       "from": "delegate",
       "to": "pueue",
-      "label": "add exact stashed row",
-      "y": 272
+      "y": 328,
+      "label": "add exact stashed row"
     },
     {
       "id": "receipt",
       "from": "delegate",
       "to": "store",
-      "label": "persist exact numeric supervisor receipt",
-      "variant": "emphasis",
-      "y": 300
+      "y": 356,
+      "label": "persist numeric receipt",
+      "variant": "emphasis"
     },
     {
       "id": "enqueue",
       "from": "delegate",
       "to": "pueue",
-      "y": 328,
-      "label": "enqueue that exact numeric row",
-      "note": "A managed row cannot launch before Delegate durably owns its exact supervisor identity."
+      "y": 384,
+      "label": "enqueue after receipt"
     },
     {
       "id": "accepted",
       "from": "delegate",
       "to": "caller",
-      "y": 356,
-      "label": "task id + admission/status fields",
+      "y": 412,
+      "label": "task id + admission",
       "variant": "return"
     },
     {
       "id": "schedule",
       "from": "pueue",
       "to": "guardian",
-      "y": 384,
+      "y": 440,
       "label": "schedule guardian row",
       "variant": "emphasis"
     },
@@ -339,147 +399,169 @@
       "id": "scope-intent",
       "from": "guardian",
       "to": "store",
-      "y": 412,
-      "label": "persist scope intent + registration",
-      "note": "Persist scope intent, create the native scope, then persist registration before starting the managed worker."
+      "y": 468,
+      "label": "scope intent + registration"
     },
     {
       "id": "spawn",
       "from": "guardian",
       "to": "runner",
-      "y": 440,
-      "label": "start exact managed child",
+      "y": 496,
+      "label": "start exact worker",
       "variant": "emphasis"
     },
     {
-      "id": "launch-ack",
+      "id": "worker-identity",
+      "from": "guardian",
+      "to": "store",
+      "y": 524,
+      "label": "record worker identity"
+    },
+    {
+      "id": "worker-ack",
       "from": "guardian",
       "to": "runner",
-      "y": 468,
-      "label": "acknowledge identity-bound worker",
-      "variant": "return",
-      "note": "The guardian records the observed native child identity before acknowledging hello; the worker waits for that acknowledgement."
+      "y": 552,
+      "label": "identity acknowledged",
+      "variant": "return"
     },
     {
       "id": "reconstruct",
       "from": "runner",
       "to": "store",
-      "y": 496,
-      "label": "read receipt and recheck recorded profile"
+      "y": 580,
+      "label": "read task + receipt"
     },
     {
       "id": "fresh-probe",
       "from": "runner",
       "to": "inspect",
-      "label": "check capability digest; fresh version/help",
-      "variant": "security",
-      "note": "freshPreflightProfile checks the exact required digest and probes this task\u2019s current runtime.",
-      "y": 524
+      "y": 608,
+      "label": "fresh runtime preflight",
+      "variant": "security"
+    },
+    {
+      "id": "launch-plan",
+      "from": "inspect",
+      "to": "runner",
+      "y": 636,
+      "label": "matched launch plan",
+      "variant": "return"
     },
     {
       "id": "invoke",
       "from": "runner",
       "to": "provider",
-      "y": 552,
-      "label": "Start only after strict validation",
-      "variant": "emphasis",
-      "note": "finalizeCandidate strictly validates; freshPreflightProfile matches the admitted contract before Start. Runtime verification must be complete."
+      "y": 664,
+      "label": "Start after strict match",
+      "variant": "emphasis"
     },
     {
       "id": "capture",
       "from": "provider",
       "to": "runner",
-      "y": 580,
-      "label": "stdout, stderr, identity, exit",
+      "y": 692,
+      "label": "streams + exact Wait",
       "variant": "return"
     },
     {
       "id": "close-lifetime",
       "from": "runner",
       "to": "guardian",
-      "y": 608,
-      "label": "close lifetime",
-      "variant": "security",
-      "note": "Before sealing evidence, the runner closes the task lifetime and waits for the guardian acknowledgement."
+      "y": 720,
+      "label": "close task lifetime",
+      "variant": "security"
     },
     {
       "id": "empty-scope",
       "from": "guardian",
       "to": "store",
-      "y": 636,
-      "label": "persist termination + empty scope",
-      "variant": "emphasis",
-      "note": "The guardian persists independently proven empty-scope termination before acknowledging the runner close."
+      "y": 748,
+      "label": "termination + empty scope",
+      "variant": "emphasis"
+    },
+    {
+      "id": "close-ack",
+      "from": "guardian",
+      "to": "runner",
+      "y": 776,
+      "label": "close acknowledged",
+      "variant": "return"
     },
     {
       "id": "seal",
       "from": "runner",
       "to": "store",
-      "y": 664,
-      "label": "provider.exit seals raw evidence",
+      "y": 804,
+      "label": "seal evidence; finalize",
       "variant": "emphasis"
     },
     {
       "id": "interpret",
-      "from": "runner",
+      "from": "store",
       "to": "predicate",
-      "y": 692,
-      "label": "validate sealed behavior"
+      "y": 832,
+      "label": "evaluate sealed evidence"
     },
     {
       "id": "verdict",
       "from": "predicate",
-      "to": "runner",
-      "label": "return interpreted verdict",
-      "variant": "return",
-      "y": 720
+      "to": "store",
+      "y": 860,
+      "label": "interpretation",
+      "variant": "return"
     },
     {
       "id": "outcome",
+      "from": "store",
+      "to": "runner",
+      "y": 888,
+      "label": "outcome.json verdict",
+      "variant": "return"
+    },
+    {
+      "id": "worker-exit",
       "from": "runner",
-      "to": "store",
-      "y": 748,
-      "label": "publish outcome.json: committed or rejected",
-      "variant": "emphasis",
-      "note": "outcome.json is the terminal authority; result.txt and publish.reject are payload evidence."
+      "to": "guardian",
+      "y": 916,
+      "label": "managed worker exits",
+      "variant": "return"
     },
     {
       "id": "lifetime-proof",
       "from": "guardian",
       "to": "store",
-      "y": 776,
-      "label": "persist exact managed-worker Wait",
-      "variant": "emphasis",
-      "note": "Empty-scope termination was persisted before sealing. After the managed worker exits, the guardian records its exact child Wait before disposing the scope and releasing ownership."
+      "y": 944,
+      "label": "persist exact child Wait",
+      "variant": "emphasis"
     },
     {
       "id": "observe",
       "from": "caller",
       "to": "delegate",
-      "y": 801,
+      "y": 972,
       "label": "status / logs / collect"
     },
     {
       "id": "read",
       "from": "delegate",
       "to": "store",
-      "y": 829,
-      "label": "observe and reconcile this task",
-      "note": "Status can recover the exact previously stashed row. Collection can publish an existing seal. Neither creates another provider turn or replays a consumed launch."
+      "y": 1000,
+      "label": "observe and reconcile"
     },
     {
       "id": "returned",
       "from": "delegate",
       "to": "caller",
-      "y": 857,
-      "label": "bounded control response",
+      "y": 1028,
+      "label": "bounded response",
       "variant": "return"
     },
     {
       "id": "cancel",
       "from": "caller",
       "to": "delegate",
-      "y": 885,
+      "y": 1056,
       "label": "cancel TASK_ID",
       "variant": "dashed"
     },
@@ -487,162 +569,157 @@
       "id": "cancel-request",
       "from": "delegate",
       "to": "store",
-      "y": 913,
-      "label": "persist immutable user stop request",
-      "variant": "emphasis",
-      "note": "The durable request is the single cancellation intent; a queue row is never native lifetime authority."
+      "y": 1084,
+      "label": "persist one stop request",
+      "variant": "emphasis"
     },
     {
       "id": "guardian-cancel",
       "from": "guardian",
       "to": "store",
-      "y": 941,
-      "label": "active owner: terminate scope + record empty proof",
+      "y": 1112,
+      "label": "active owner: terminate scope",
       "variant": "dashed"
     },
     {
       "id": "stop",
       "from": "delegate",
       "to": "pueue",
-      "y": 969,
-      "label": "otherwise: stop row while holding lifetime lease",
-      "variant": "dashed",
-      "note": "Direct row mutation is allowed only when cancellation owns the lease, so no guardian can launch or own a provider concurrently."
+      "y": 1140,
+      "label": "else, lease: stop row",
+      "variant": "dashed"
     },
     {
       "id": "continue",
       "from": "caller",
       "to": "delegate",
-      "y": 997,
-      "label": "continue --task TASK_ID [--brief FILE]",
+      "y": 1168,
+      "label": "continue TASK_ID",
       "variant": "emphasis"
+    },
+    {
+      "id": "successor",
+      "from": "delegate",
+      "to": "store",
+      "y": 1196,
+      "label": "create linked successor",
+      "variant": "emphasis"
+    },
+    {
+      "id": "new-task",
+      "from": "delegate",
+      "to": "caller",
+      "y": 1224,
+      "label": "new task id",
+      "variant": "return"
     }
   ],
   "activations": [
     {
       "participant": "delegate",
-      "from": 164,
-      "to": 376,
+      "from": 163.11,
+      "to": 422.89,
       "type": "backend"
     },
     {
       "participant": "inspect",
-      "from": 212,
-      "to": 234,
+      "from": 184.89,
+      "to": 278.22,
       "type": "security"
     },
     {
-      "participant": "store",
-      "from": 236,
-      "to": 792,
-      "type": "database"
-    },
-    {
-      "participant": "pueue",
-      "from": 184,
-      "to": 394,
-      "type": "messagebus"
-    },
-    {
       "participant": "guardian",
-      "from": 377,
-      "to": 792,
+      "from": 436.89,
+      "to": 956.0,
       "type": "security"
     },
     {
       "participant": "runner",
-      "from": 433,
-      "to": 770,
+      "from": 492.89,
+      "to": 925.33,
       "type": "backend"
     },
     {
       "participant": "inspect",
-      "from": 520,
-      "to": 544,
+      "from": 604.89,
+      "to": 645.33,
       "type": "security"
     },
     {
       "participant": "provider",
-      "from": 548,
-      "to": 588,
+      "from": 660.89,
+      "to": 701.33,
       "type": "external"
     },
     {
       "participant": "predicate",
-      "from": 685,
-      "to": 728,
+      "from": 828.89,
+      "to": 869.33,
       "type": "security"
     },
     {
       "participant": "delegate",
-      "from": 797,
-      "to": 1005,
+      "from": 969.33,
+      "to": 1240,
       "type": "backend"
-    },
-    {
-      "participant": "pueue",
-      "from": 964,
-      "to": 979,
-      "type": "messagebus"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "Admission",
+      "title": "Grouped source owners",
       "items": [
-        "Managed runtime-only admission uses a static contract; no version/help worker or shared capability cache",
-        "Meta.RuntimePreflightSHA256 binds the required capability; ProviderVersion remains empty on the static path",
-        "Mixed/native projections, CCR selection, custom runners and historical tasks retain strict admission inspection",
-        "An immutable task and exact stashed-row receipt are durable before enqueue"
-      ]
-    },
-    {
-      "dot": "amber",
-      "title": "Fresh launch authority",
-      "items": [
-        "The managed runner probes the current runtime within its guardian scope and finite task budget",
-        "Strict finalization and matching preserve the admitted permission, workspace, environment, predicate and artifacts",
-        "Provider Start requires successful fresh preflight; observations from another task cannot authorize execution",
-        "The guardian records each observed provider launch before acknowledging it"
+        "Control is app composition calling tasklifecycle behavior. Admission groups profile policy with sealed inspection workers.",
+        "supervisor owns binding and gates; Pueue owns queue rows. guardian owns lifetime; execution owns provider Start/Wait and sealing.",
+        "Status uses ObserveTaskSupervisor. A shared-lease canonical generation check precedes cached or fresh task rows; optional repair remains mutation-gated.",
+        "prepare candidate: app composes tasklifecycle; task creation calls admission.Prepare. Managed runtime-only profiles admit a static capability contract without version/help workers.",
+        "prepare supervisor: supervisor owns binding and submission policy; Pueue owns the private queue and row state. Legacy logical binding adoption is create-once and precedes scheduling changes.",
+        "strict, when required: This is the conditional phase inside admission.Prepare: candidate inspection is finalized only when runtime checks were not deferred. The grouped participant includes sealed inspection workers.",
+        "persist immutable task: tasklifecycle requests creation; TaskDir writes brief.md, task.json and meta.json before supervisor submission.",
+        "persist numeric receipt: The staged submission invokes tasklifecycle\u2019s commit callback, which calls TaskDir.RecordSupervisorReceipt. The queue row is still stashed.",
+        "enqueue that exact row: The Pueue adapter enqueues only after the receipt callback succeeds; commit failure leaves the stashed row recoverable."
       ]
     },
     {
       "dot": "emerald",
-      "title": "Publication",
+      "title": "Publication authority",
       "items": [
-        "Pueue owns queueing and guardian-row state",
-        "The guardian owns native stopping and durable exact child-Wait proof",
-        "delegate-run owns provider Start/Wait, capture, and sealing",
-        "Only outcome.json establishes a terminal verdict"
-      ]
-    },
-    {
-      "dot": "violet",
-      "title": "Observation",
-      "items": [
-        "Observation can reconcile the exact stashed submission and publish an existing seal; it never creates another provider turn",
-        "Cancellation persists one request; the lifetime lease selects its sole stopping owner",
-        "Continuation creates a new task with an exact predecessor"
+        "TaskDir calls the predicate on sealed evidence and commits outcome.json. Only that record establishes a terminal verdict.",
+        "The guardian\u2019s termination and exact worker Wait are separate durable lifetime facts.",
+        "Full maintenance sends all current rows to the same durable authorizer. With terminal events enabled, event-only starts from inbox IDs.",
+        "scope intent + registration: The guardian writes intent before scope creation and registration before starting its managed worker.",
+        "identity acknowledged: The worker cannot receive its hello acknowledgement until its observed identity is durable.",
+        "fresh runtime preflight: Admission reconstructs the candidate, probes the current runtime inside the guardian scope and finite budget, finalizes strictly, and matches the admitted contract.",
+        "Start after strict match: Strict profile matching precedes Start. The guardian records each observed native launch before acknowledging it (internal/guardian/control.go:198-224).",
+        "termination + empty scope: The guardian proves the native scope empty and persists termination before acknowledging close.",
+        "seal evidence; finalize: execution seals provider.exit and calls TaskDir.Finalize only after successful lifetime closure.",
+        "final outcome: TaskDir commits outcome.json as committed or rejected, then returns it to execution. Payload files are evidence, not terminal authority.",
+        "persist exact child Wait: The guardian retains scope and owner until termination and its exact managed-worker Wait disposition are durable."
       ]
     },
     {
       "dot": "amber",
-      "title": "Optional managed Git workspaces",
+      "title": "Observation and continuation",
       "items": [
-        "This sequence shows an ordinary provider task; Git isolation is optional",
-        "Managed dispatch provisions before the provider turn; separate finite helpers capture only after exact lifetime closure",
-        "Workspace capture receipts never change outcome.json; the lead verifies the retained checkout and explicitly releases or forgets it",
-        "See the system component view for the workspace coordinator and its separate evidence ownership"
+        "observe and reconcile: tasklifecycle can recover the exact stashed row or publish an existing seal. A typed pre-mutation refusal during stashed recovery triggers fresh same-client observation. Each attempt replaces derived maintenance deferral; no new provider turn.",
+        "active owner: terminate scope: The active guardian reads the durable request and persists native termination proof.",
+        "otherwise: stop exact row: Direct queue stopping requires the task lifetime lease, so no guardian can concurrently own or launch the provider.",
+        "create linked successor: Continuation creates a new task and reuses admission and submission; it does not replay the predecessor\u2019s consumed launch."
       ]
     },
     {
-      "dot": "slate",
-      "title": "Committed source snapshot",
+      "dot": "violet",
+      "title": "Optional workspaces",
       "items": [
-        "Source revision: cb71d7474371",
-        "Node source links identify committed code",
-        "Admission and runtime preflight retain separate owners"
+        "This sequence shows an ordinary provider task. workspaces coordinates optional Git isolation and finite helpers on the same supervised path.",
+        "Workspace journals keep independent capture receipts; the lead verifies and explicitly releases or forgets the retained checkout."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Live acceptance",
+      "items": [
+        "Native acceptance is auth-gated; BLOCKED is neutral."
       ]
     }
   ]

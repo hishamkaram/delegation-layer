@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import acceptance_ccr_fixture as gate
 from acceptance_supervisor_common import DirectoryOwner
+from scripts.acceptance_tests.resources import track_directory_pins
 
 
 class FixtureCleanupTests(unittest.TestCase):
@@ -80,9 +81,13 @@ class FixtureCleanupTests(unittest.TestCase):
                     def __exit__(self, *_args):
                         return None
 
+                def fixture_acceptance(_args, directories):
+                    track_directory_pins(self, directories)
+                    return run
+
                 argv = ["acceptance_ccr_fixture.py", "--output", str(output)]
                 with patch.object(gate, "choose_output", return_value=output), \
-                        patch.object(gate, "FixtureAcceptance", return_value=run), \
+                        patch.object(gate, "FixtureAcceptance", side_effect=fixture_acceptance), \
                         patch.object(gate, "Fixture", return_value=FixtureContext()), \
                         patch.dict(gate.os.environ, {}, clear=False), \
                         patch.object(sys, "argv", argv):
@@ -139,6 +144,7 @@ class FixtureCleanupTests(unittest.TestCase):
             output.mkdir()
             owner = DirectoryOwner()
             profile_token = owner.create("CCR fixture profile", output / "profile", output)
+            track_directory_pins(self, (profile_token,))
             profile = profile_token.directory
             run = gate.FixtureAcceptance.__new__(gate.FixtureAcceptance)
             run.fixture_directories = (profile_token,)

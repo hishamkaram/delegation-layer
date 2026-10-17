@@ -1,0 +1,434 @@
+[
+  {
+    "name": "py:acceptance_tests.private_cli.capture_pressure_fixture",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:concurrent.futures",
+      "py:errno",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:resource",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.fixtures",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_supervisor_common",
+      "py:pathlib",
+      "py:tempfile"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.modern_application_fixture",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:argparse",
+      "py:fcntl",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.modern_fixtures",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.private_cli.modern_application_fixture",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.contention_controls",
+      "py:delegate_acceptance.private_cli.contention_policy",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.tasks.operations",
+      "py:json",
+      "py:pathlib",
+      "py:shlex",
+      "py:sys",
+      "py:tempfile"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_compatibility",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:ast",
+      "py:collections",
+      "py:importlib",
+      "py:json",
+      "py:pathlib",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_created_admission",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:hashlib",
+      "py:json",
+      "py:pathlib",
+      "py:subprocess",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_ended_task_observation",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:pathlib",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_historical_upgrade_seed",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_supervisor_common",
+      "py:hashlib",
+      "py:pathlib",
+      "py:tempfile",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_modern_controls",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.private_cli.modern_fixtures",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.private_cli.contention_controls",
+      "py:delegate_acceptance.private_cli.contention_locks",
+      "py:delegate_acceptance.private_cli.contention_policy",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.tasks.operations",
+      "py:hashlib",
+      "py:pathlib",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_modern_entry",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:contextlib",
+      "py:delegate_acceptance.private_cli.application",
+      "py:delegate_acceptance.private_cli.arguments",
+      "py:delegate_acceptance.private_cli.contention_policy",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:io",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_modern_facade_port",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.private_cli.modern_application_fixture",
+      "py:acceptance_tests.private_cli.modern_fixtures",
+      "py:delegate_acceptance.private_cli.contention_controls",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.fixture_records",
+      "py:delegate_acceptance.private_cli.receipt",
+      "py:delegate_acceptance.tasks.operations",
+      "py:pathlib",
+      "py:sys",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_modern_fixture",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.private_cli.modern_fixtures",
+      "py:delegate_acceptance.private_cli.contention_controls",
+      "py:delegate_acceptance.private_cli.control_fixture",
+      "py:json",
+      "py:os",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_modern_locks",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.private_cli.modern_fixtures",
+      "py:delegate_acceptance.private_cli.contention_locks",
+      "py:errno",
+      "py:fcntl",
+      "py:os",
+      "py:pathlib",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_modern_policy",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:copy",
+      "py:delegate_acceptance.private_cli.contention_policy",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_modern_scenario",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.private_cli.modern_fixtures",
+      "py:delegate_acceptance.private_cli.contention_controls",
+      "py:delegate_acceptance.private_cli.contention_locks",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.tasks.operations",
+      "py:hashlib",
+      "py:json",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_packaged_default_path",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:pathlib",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_captured_process",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:subprocess",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_control_capture",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:errno",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:subprocess",
+      "py:sys",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_default_stop_scenario",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.stop",
+      "py:pathlib",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_dispatch_arguments",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_supervisor_common",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:acceptance_tests.resources",
+      "py:contextlib",
+      "py:delegate_acceptance.private_cli.application",
+      "py:delegate_acceptance.private_cli.capacity_entry",
+      "py:delegate_acceptance.private_cli.finalization",
+      "py:delegate_acceptance.private_cli.handoff_cleanup",
+      "py:delegate_acceptance.private_cli.initial",
+      "py:delegate_acceptance.private_cli.scenario_entry",
+      "py:delegate_acceptance.processes.operations",
+      "py:hashlib",
+      "py:io",
+      "py:json",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_dispatch_concurrency",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:concurrent.futures",
+      "py:contextlib",
+      "py:delegate_acceptance.private_cli.admission",
+      "py:delegate_acceptance.private_cli.capacity",
+      "py:delegate_acceptance.private_cli.capacity_dispatch",
+      "py:io",
+      "py:json",
+      "py:pathlib",
+      "py:tempfile",
+      "py:threading",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_guardian_evidence",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_lifetime_owner_cohort",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:pathlib",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:time",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_live_lease",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:os",
+      "py:pathlib",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_queue_evidence",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_private_wrapper_evidence",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:pathlib",
+      "py:tempfile",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_task_status_receipt",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_tests.private_cli.fixtures",
+      "py:delegate_acceptance.private_cli.commands",
+      "py:hashlib",
+      "py:json",
+      "py:pathlib",
+      "py:subprocess",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.private_cli.test_modern_expectations",
+    "owner": "py:delegate_acceptance.private_cli",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.private_cli.modern_fixtures",
+      "py:copy",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.private_cli.contention_controls",
+      "py:delegate_acceptance.private_cli.contention_policy",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:json",
+      "py:pathlib",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  }
+]

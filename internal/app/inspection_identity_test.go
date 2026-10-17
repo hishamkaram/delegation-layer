@@ -7,10 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
+	testsupportcore "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
 
 type admissionInspectionTestFixture struct {
@@ -23,7 +27,7 @@ type admissionInspectionTestFixture struct {
 
 func newAdmissionInspectionTestFixture(t *testing.T) admissionInspectionTestFixture {
 	t.Helper()
-	store, resource := newAppWorkspaceResource(t)
+	store, resource := testsupport.NewResource(t)
 	owner, err := resource.AcquireUseOwner(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +47,7 @@ func newAdmissionInspectionTestFixture(t *testing.T) admissionInspectionTestFixt
 			DefinitionRevision: "inspection-v1", DefinitionSHA256: digest,
 			HelperExecutable: "/fixture/helper", HelperSHA256: digest, WorkerExecutable: "/fixture/worker", WorkerSHA256: digest,
 			RunnerOwnership: task.RunnerOwnershipManaged, WorkerExitProof: inspection.WorkerExitProofGuardianWaitV1,
-			Supervisor: continuationSupervisorRef(store.Root, digest, "unix:/fixture/pueue.sock"),
+			Supervisor: testsupportcore.ContinuationSupervisorRef(store.Root, digest, "unix:/fixture/pueue.sock"),
 		},
 	}
 }
@@ -55,7 +59,7 @@ func openTestAdmissionAttempt(t *testing.T, fixture admissionInspectionTestFixtu
 		ID: fixture.resource.Request().WorkspaceID, Reservation: reservation.Sequence,
 		RequestSHA256: fixture.subject.SHA256, BudgetNanos: int64(time.Minute),
 	}
-	operation, err := createAdmissionInspectionOperationContext(t.Context(), fixture.store, request, fixture.binding, created)
+	operation, err := admission.CreateAdmissionInspectionOperationContext(t.Context(), fixture.store, request, fixture.binding, created)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +79,7 @@ func TestWorkspaceAdmissionRetryResolvesFreshInspectionWithoutRevivingOldWorker(
 	}
 	created := time.Now().Add(-2 * inspection.AdmissionTimeout)
 	old, _ := openTestAdmissionAttempt(t, fixture, first, created)
-	if err = workspaceAdmissionInspectionClosed(t.Context(), fixture.store, fixture.resource, first); err != nil {
+	if err = workspaces.AdmissionInspectionClosed(t.Context(), fixture.store, fixture.resource, first, admission.RecoverInspectionLifetime); err != nil {
 		t.Fatal(err)
 	}
 	if err = fixture.resource.RecordAdmissionAborted(t.Context(), first); err != nil {
@@ -100,7 +104,7 @@ func TestWorkspaceAdmissionRetryResolvesFreshInspectionWithoutRevivingOldWorker(
 
 func assertAdmissionAttemptConsumers(t *testing.T, store *taskdir.Store, operation *inspection.Operation, request task.TaskRecord) {
 	t.Helper()
-	loaded, err := loadAdmissionInspectionOperationContext(t.Context(), store, request)
+	loaded, err := admission.LoadInspectionOperationContext(t.Context(), store, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,19 +124,19 @@ func assertAdmissionAttemptConsumers(t *testing.T, store *taskdir.Store, operati
 }
 
 func TestWorkspaceProvisionReuseRequiresOriginalHelperClosure(t *testing.T) {
-	fixture := newWorkspaceRecoveryFixture(t)
-	subject := workspace.Subject{Kind: workspace.SubjectAdmission, ID: fixture.resource.Request().TaskID, SHA256: fixture.resource.Request().RequestSHA256}
-	operation := openRecoveryOperation(t, fixture, strings.Repeat("a", 32), workspace.OperationProvision, subject)
+	fixture := testsupport.NewRecoveryFixture(t)
+	subject := workspace.Subject{Kind: workspace.SubjectAdmission, ID: fixture.Resource.Request().TaskID, SHA256: fixture.Resource.Request().RequestSHA256}
+	operation := testsupport.OpenRecoveryOperation(t, fixture, strings.Repeat("a", 32), workspace.OperationProvision, subject)
 	t.Cleanup(func() {
 		if err := operation.Close(); err != nil {
 			t.Error(err)
 		}
 	})
-	if err := requireWorkspaceProvisionHelpersClosed(t.Context(), fixture.store, fixture.resource); !errors.Is(err, workspace.ErrPending) {
+	if err := workspaces.RequireProvisionHelpersClosed(t.Context(), fixture.Store, fixture.Resource); !errors.Is(err, workspace.ErrPending) {
 		t.Fatalf("reused checkout bypassed unfinished provision helper: %v", err)
 	}
-	seedRealWorkspaceOperationClosure(t, fixture.store, operation)
-	if err := requireWorkspaceProvisionHelpersClosed(t.Context(), fixture.store, fixture.resource); err != nil {
+	seedRealWorkspaceOperationClosure(t, fixture.Store, operation)
+	if err := workspaces.RequireProvisionHelpersClosed(t.Context(), fixture.Store, fixture.Resource); err != nil {
 		t.Fatalf("closed provision helper prevented retained checkout reuse: %v", err)
 	}
 }

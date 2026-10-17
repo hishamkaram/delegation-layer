@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -119,7 +122,7 @@ func TestGuardianInspectionWorkerRejectsMissingAuthenticatedChild(t *testing.T) 
 		t.Fatal(err)
 	}
 	var nativeStarts atomic.Int32
-	err := runInspectionWorkerOperationMode(fixture.store.Root, fixture.operation.Request().TaskID, true, Dependencies{
+	err := runInspectionWorkerOperationModeWithLifetime(fixture.store.Root, fixture.operation.Request().TaskID, true, nil, Dependencies{
 		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 			nativeStarts.Add(1)
 			return commonprovider.ProfileCandidate{}, errors.New("unexpected native inspection")
@@ -150,7 +153,7 @@ func testSupervisedInspectionMarkerReconcilesNonManagedBinding(t *testing.T, own
 	}
 
 	var nativeStarts atomic.Int32
-	err := runInspectionWorkerOperationMode(fixture.store.Root, taskID, true, Dependencies{
+	err := runInspectionWorkerOperationModeWithLifetime(fixture.store.Root, taskID, true, nil, Dependencies{
 		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 			nativeStarts.Add(1)
 			return commonprovider.ProfileCandidate{}, errors.New("native inspection crossed reconciliation guard")
@@ -160,7 +163,7 @@ func testSupervisedInspectionMarkerReconcilesNonManagedBinding(t *testing.T, own
 			ObservationTimeout: time.Second,
 		},
 	}, fixture.store)
-	if !errors.Is(err, errInspectionWorkerUnavailable) {
+	if !errors.Is(err, admissioncore.ErrInspectionWorkerUnavailable) {
 		t.Fatalf("marker bypass returned %v, want fixed worker error", err)
 	}
 	if got := nativeStarts.Load(); got != 0 {
@@ -269,13 +272,13 @@ func TestReconcileInspectionWorkerUsesInspectionObservationWindow(t *testing.T) 
 func TestReconcileInspectionWorkerRetainsPendingAtContextDeadline(t *testing.T) {
 	fixture := newInspectionWorkerTimeoutFixture(t)
 	deadline := fixture.operation.Deadline()
-	ctx, cancel := newControllableDeadlineContext(t.Context(), 10*time.Second)
+	ctx, cancel := testsupport.NewControllableDeadlineContext(t.Context(), 10*time.Second)
 	defer cancel()
 	call := fixture.start(t, ctx)
 	readyContext, cancelReady := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancelReady()
 	waitInspectionWorkerTimeoutSignal(t, readyContext, fixture.entered, "status completion gate")
-	ctx.expire()
+	ctx.Expire()
 	joinContext, cancelJoin := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancelJoin()
 	waitInspectionWorkerTimeoutSignal(t, joinContext, call.done, "expired worker reconciliation")

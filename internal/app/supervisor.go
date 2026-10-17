@@ -4,255 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
-
-const supervisorMigrationTimeout = 30 * time.Second
-
-// privateQueueAuthorizationWorkers bounds only the filesystem work used to
-// publish queue observations. It does not limit admitted or running tasks.
-const privateQueueAuthorizationWorkers = 32
 
 var errSupervisorCleanup = errors.New("supervisor migration client cleanup failed")
 
-// supervisorClientOwner is the application boundary for every acquired Pueue
-// client. Bind may return both a client and an error when a version probe is
-// still in flight, so ownership is installed before callers inspect the error.
-type supervisorClientOwner struct {
-	client *pueue.Client
-}
-
-func acquireSupervisorClient(client *pueue.Client, err error) (*supervisorClientOwner, error) {
-	return &supervisorClientOwner{client: client}, err
-}
-
-func (owner *supervisorClientOwner) Client() *pueue.Client {
-	if owner == nil {
-		return nil
-	}
-	return owner.client
-}
-
-func (owner *supervisorClientOwner) Release() *pueue.Client {
-	if owner == nil {
-		return nil
-	}
-	client := owner.client
-	owner.client = nil
-	return client
-}
-
-func (owner *supervisorClientOwner) CloseAfterPending(cause error) error {
-	client := owner.Release()
-	if client == nil {
-		return nil
-	}
-	return client.CloseAfterPending(cause)
-}
-
-func closeSupervisorOwnerMaintenance(owner *supervisorClientOwner, cause error) {
-	if owner == nil {
-		return
-	}
-	closeSupervisorMaintenance(owner.Release(), cause)
-}
-
-// closeSupervisorMaintenance releases a recovered supervisor client without
-// changing the command's authority result. A temporary migration config may
-// still be owned by an in-flight pueue command; CloseAfterPending records that
-// cleanup boundary and the next lifecycle pass can finish it. Cleanup failure
-// is maintenance telemetry, never evidence that changes a successful task.
-func closeSupervisorMaintenance(client *pueue.Client, cause error) {
-	if client == nil {
-		return
-	}
-	if err := client.CloseAfterPending(cause); err != nil {
-		log.Printf("delegate: supervisor cleanup deferred: %v", err)
-	}
-}
-
-type privateCleanupCandidate struct {
-	job      pueue.Job
-	taskID   string
-	settling bool
-}
-
-type privateCleanupDecision struct {
-	remove   bool
-	settling bool
-}
-
-func privateSuccessfulCleanupCandidates(rootID string, jobs []pueue.Job) []privateCleanupCandidate {
-	labelCounts := privateQueueLabelCounts(jobs)
-	candidates := make([]privateCleanupCandidate, 0, len(jobs))
-	for _, job := range jobs {
-		if job.Label == nil || labelCounts[*job.Label] != 1 {
-			continue
-		}
-		taskID, managed, inspectionWorker, labelErr := legacyJobTaskID(*job.Label, rootID)
-		if labelErr != nil || !managed {
-			continue
-		}
-		switch job.State {
-		case pueue.StateEnded:
-			candidates = append(candidates, privateCleanupCandidate{job: job, taskID: taskID})
-		case pueue.StateRunning:
-			if inspectionWorker {
-				candidates = append(candidates, privateCleanupCandidate{job: job, taskID: taskID, settling: true})
-			}
-		case pueue.StateUnknown, pueue.StateQueued, pueue.StateStashed:
-			continue
-		}
-	}
-	return candidates
-}
-
-func authorizePrivateSuccessfulCleanupCandidates(ctx context.Context, store *taskdir.Store, group inspection.GroupRequestRecord, candidates []privateCleanupCandidate) (plan pueue.PrivateQueueCleanupPlan, resultErr error) {
-	decisions := make([]privateCleanupDecision, len(candidates))
-	work := make(chan int, len(candidates))
-	for index := range candidates {
-		work <- index
-	}
-	close(work)
-	workers := min(len(candidates), privateQueueAuthorizationWorkers)
-	var groupWorkers sync.WaitGroup
-	groupWorkers.Add(workers)
-	for range workers {
-		go func() {
-			defer groupWorkers.Done()
-			for index := range work {
-				if ctx.Err() != nil {
-					return
-				}
-				candidate := candidates[index]
-				if candidate.settling {
-					decisions[index].settling = inspectPrivateSettlingInspection(ctx, store, group, candidate.taskID, candidate.job) == nil
-					continue
-				}
-				decisions[index].remove = inspectLegacyEndedJob(ctx, store, group, candidate.job) == nil
-			}
-		}()
-	}
-	groupWorkers.Wait()
-	for index, candidate := range candidates {
-		if decisions[index].remove {
-			plan.RemoveIDs = append(plan.RemoveIDs, candidate.job.ID)
-		}
-		plan.Settling = plan.Settling || decisions[index].settling
-	}
-	return plan, ctx.Err()
-}
-
-func inspectPrivateSettlingInspection(ctx context.Context, store *taskdir.Store, group inspection.GroupRequestRecord, taskID string, job pueue.Job) (resultErr error) {
-	if found, err := inspectPrivateWorkspaceOperation(ctx, store, group, taskID, job); found || err != nil {
-		return err
-	}
-	operation, err := inspection.LoadOperationContext(ctx, store, taskID)
-	if err != nil {
-		return err
-	}
-	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
-	if err = validateLegacyEndedInspectionBinding(ctx, store, group, operation, taskID, job); err != nil {
-		return err
-	}
-	_, _, terminal, decisionErr := recordedInspectionFacts(ctx, operation)
-	if !terminal {
-		if decisionErr != nil {
-			return decisionErr
-		}
-		return os.ErrNotExist
-	}
-	if decisionErr != nil && !errors.Is(decisionErr, errInspectionWorkerUnavailable) {
-		return decisionErr
-	}
-	return nil
-}
-
-// authorizePrivateSuccessfulCleanup selects exact terminal rows using the same
-// evidence validator as migration. Active or incomplete records are preserved
-// individually; they cannot veto cleanup of an unrelated validated result.
 func authorizePrivateSuccessfulCleanup(ctx context.Context, stateRoot string, supervisor task.SupervisorRef, jobs []pueue.Job) (plan pueue.PrivateQueueCleanupPlan, resultErr error) {
-	if ctx == nil {
-		return pueue.PrivateQueueCleanupPlan{}, context.Canceled
-	}
-	if err := ctx.Err(); err != nil {
-		return pueue.PrivateQueueCleanupPlan{}, err
-	}
-	store, err := taskdir.OpenStoreWithPredicatesContext(ctx, stateRoot, predicate.Default())
-	if err != nil {
-		return pueue.PrivateQueueCleanupPlan{}, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
-	group := privateInspectionGroup(store.RootID, supervisor)
-	candidates := privateSuccessfulCleanupCandidates(store.RootID, jobs)
-	plan, err = authorizePrivateSuccessfulCleanupCandidates(ctx, store, group, candidates)
-	return plan, err
-}
-
-func privateInspectionGroup(rootID string, supervisor task.SupervisorRef) inspection.GroupRequestRecord {
-	return inspection.GroupRequestRecord{
-		SchemaVersion: task.SchemaVersion,
-		RootID:        rootID,
-		Supervisor:    supervisor,
-		Name:          (pueue.InspectionIdentity{RootID: rootID}).Group(), ParallelTasks: 1,
-	}
-}
-
-func privateQueueLabelCounts(jobs []pueue.Job) map[string]int {
-	counts := make(map[string]int)
-	for _, job := range jobs {
-		if job.Label != nil {
-			counts[*job.Label]++
-		}
-	}
-	return counts
-}
-
-type privateTaskEvidence struct {
-	submission *task.SubmitRecord
-	receipt    *task.SupervisorReceipt
-	inspection *taskdir.TaskInspection
-}
-
-func readPrivateTaskEvidence(ctx context.Context, store *taskdir.Store, taskID string) (evidence privateTaskEvidence, resultErr error) {
-	if ctx == nil {
-		return privateTaskEvidence{}, context.Canceled
-	}
-	if err := ctx.Err(); err != nil {
-		return privateTaskEvidence{}, err
-	}
-	td, err := store.OpenTask(taskID)
-	if err != nil {
-		return privateTaskEvidence{}, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
-	evidence.submission, err = td.ReadSubmission()
-	if err != nil {
-		return privateTaskEvidence{}, err
-	}
-	evidence.receipt, err = td.ReadSupervisorReceipt()
-	if err != nil {
-		return privateTaskEvidence{}, err
-	}
-	evidence.inspection, err = td.Inspect()
-	if err != nil {
-		return privateTaskEvidence{}, err
-	}
-	if err = ctx.Err(); err != nil {
-		return privateTaskEvidence{}, err
-	}
-	return evidence, nil
+	return privateCleanupOwner().AuthorizeSuccessfulCleanup(ctx, stateRoot, supervisor, jobs)
 }
 
 // authorizePrivateMigrationQueue is the application-owned migration policy.
@@ -271,7 +40,7 @@ func authorizePrivateMigrationQueue(ctx context.Context, stateRoot string, legac
 			resultErr = errors.Join(resultErr, store.Close())
 		}
 	}()
-	if err := rejectAmbiguousPrivateMigrationLabels(ctx, stateRoot, &store, privateQueueLabelCounts(jobs)); err != nil {
+	if err := rejectAmbiguousPrivateMigrationLabels(ctx, stateRoot, &store, supervisorcore.PrivateQueueLabelCounts(jobs)); err != nil {
 		return err
 	}
 	for _, job := range jobs {
@@ -290,7 +59,7 @@ func rejectAmbiguousPrivateMigrationLabels(ctx context.Context, stateRoot string
 		if err := openPrivateMigrationStore(ctx, stateRoot, store); err != nil {
 			return err
 		}
-		_, managed, _, labelErr := legacyJobTaskID(label, (*store).RootID)
+		_, managed, _, labelErr := supervisorcore.LegacyJobTaskID(label, (*store).RootID)
 		if labelErr != nil || managed {
 			return fmt.Errorf("%w: duplicate Delegate supervisor label", pueue.ErrPrivateSupervisorMigrationRequired)
 		}
@@ -329,7 +98,7 @@ func authorizeEndedPrivateMigrationJob(ctx context.Context, stateRoot string, le
 	if err := openPrivateMigrationStore(ctx, stateRoot, store); err != nil {
 		return err
 	}
-	if err := inspectLegacyEndedJob(ctx, *store, privateInspectionGroup((*store).RootID, legacy), job); err != nil {
+	if err := inspectLegacyEndedJob(ctx, *store, supervisorcore.InspectionGroup((*store).RootID, legacy), job); err != nil {
 		return fmt.Errorf("%w: %w", pueue.ErrPrivateSupervisorMigrationRequired, err)
 	}
 	return nil
@@ -356,7 +125,7 @@ func supervisorCommand(a Arguments, deps Dependencies) (result commandResult) {
 		ActiveWork:         "unknown",
 		NextAction:         "stop_and_report",
 	}
-	root, err := resolveRoot(a.Root)
+	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failedSupervisor(response, "supervisor state root is unavailable", 1)
 	}
@@ -368,7 +137,7 @@ func supervisorCommand(a Arguments, deps Dependencies) (result commandResult) {
 
 func supervisorStatus(root string, deps Dependencies, response Response) (result commandResult) {
 	options := supervisorControlOptions(deps)
-	controlContext, cancel := supervisorControlContext(options)
+	controlContext, cancel := supervisorcore.ControlContext(options)
 	defer cancel()
 	store, err := openStoreContext(controlContext, root, deps.storeDependencies(), false)
 	if errors.Is(err, os.ErrNotExist) {
@@ -402,13 +171,13 @@ func supervisorStatusFromStore(ctx context.Context, root string, deps Dependenci
 		response.SupervisorControl.NextAction = "run_supervisor_migrate"
 		return commandResult{response: response, code: 0}
 	}
-	resolution, err := resolvePrivateSupervisorGeneration(controlContext, store, seed.Supervisor)
+	resolution, err := supervisorcore.ResolveGeneration(controlContext, store, seed.Supervisor)
 	if err != nil {
 		return failedSupervisorCause(response, "supervisor migration journal could not be resolved", err, 1)
 	}
 	active := resolution.GroupHead
 	if !resolution.GroupPresent || active.Supervisor != resolution.Active {
-		active = privateInspectionGroup(store.RootID, resolution.Active)
+		active = supervisorcore.InspectionGroup(store.RootID, resolution.Active)
 	}
 	migrated := resolution.GroupMigrated || (resolution.PrivateAuthority && seed.Supervisor != resolution.Active)
 	return supervisorLegacyStatus(controlContext, root, deps, options, response, active, migrated)
@@ -424,9 +193,9 @@ func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, de
 	} else if err != nil {
 		return failedSupervisor(response, "private supervisor state could not be inspected", 1)
 	}
-	currentOwner, currentErr := acquireSupervisorClient(currentPrivateSupervisor(ctx, root, deps, options))
+	currentOwner, currentErr := supervisorcore.AcquireClient(currentPrivateSupervisor(ctx, root, deps, options))
 	cleanupCause := currentErr
-	defer func() { closeSupervisorOwnerMaintenance(currentOwner, cleanupCause) }()
+	defer func() { supervisorcore.CloseOwnerMaintenance(currentOwner, cleanupCause) }()
 	if currentErr != nil {
 		response.SupervisorControl.State = supervisorStatusState(true, false)
 		response.SupervisorControl.LegacyReachability = "incompatible"
@@ -492,9 +261,9 @@ func supervisorStatusState(drift, ready bool) string {
 }
 
 func supervisorLegacyStatus(ctx context.Context, root string, deps Dependencies, options pueue.Options, response Response, legacy inspection.GroupRequestRecord, migrated bool) (result commandResult) {
-	currentOwner, currentErr := acquireSupervisorClient(currentPrivateSupervisor(ctx, root, deps, options))
+	currentOwner, currentErr := supervisorcore.AcquireClient(currentPrivateSupervisor(ctx, root, deps, options))
 	cleanupCause := currentErr
-	defer func() { closeSupervisorOwnerMaintenance(currentOwner, cleanupCause) }()
+	defer func() { supervisorcore.CloseOwnerMaintenance(currentOwner, cleanupCause) }()
 	current := currentOwner.Client()
 	if currentErr != nil && current != nil {
 		response.SupervisorControl.State = "unavailable"
@@ -591,7 +360,7 @@ func legacySupervisorStateResult(response Response, legacy inspection.GroupReque
 }
 
 func legacySupervisorWorkStatus(ctx context.Context, options pueue.Options, response Response, legacy inspection.GroupRequestRecord, fallbackClient string) (result commandResult) {
-	clientOwner, err := acquireSupervisorClient(pueue.BindSavedForMigrationWithClient(ctx, legacy.Supervisor, fallbackClient, options))
+	clientOwner, err := supervisorcore.AcquireClient(pueue.BindSavedForMigrationWithClient(ctx, legacy.Supervisor, fallbackClient, options))
 	cleanupCause := err
 	defer func() {
 		if cleanupErr := clientOwner.CloseAfterPending(cleanupCause); cleanupErr != nil {
@@ -640,18 +409,6 @@ func privateSupervisorDaemonDrift(root string, deps Dependencies) (bool, error) 
 	return pueue.PrivateDaemonIdentityDrift(root, daemonExecutable)
 }
 
-func supervisorControlContext(options pueue.Options) (context.Context, context.CancelFunc) {
-	return supervisorControlContextWithParent(context.Background(), options)
-}
-
-func supervisorControlContextWithParent(parent context.Context, options pueue.Options) (context.Context, context.CancelFunc) {
-	timeout := pueue.PrivateControlTimeout(options)
-	if timeout <= 0 {
-		timeout = supervisorMigrationTimeout
-	}
-	return context.WithTimeout(parent, timeout)
-}
-
 func supervisorControlOptions(deps Dependencies) pueue.Options {
 	options := deps.SupervisorOptions
 	if options.ObservationTimeout == 0 {
@@ -673,7 +430,7 @@ func prepareCurrentPrivateSupervisor(ctx context.Context, root string, deps Depe
 	if err != nil {
 		return nil, err
 	}
-	clientExecutable, daemonExecutable, err = installStateSupervisorPairPaths(ctx, root, clientExecutable, daemonExecutable)
+	clientExecutable, daemonExecutable, err = supervisorcore.InstallStateSupervisorPairPaths(ctx, root, clientExecutable, daemonExecutable)
 	if err != nil {
 		return nil, err
 	}
@@ -690,7 +447,7 @@ type supervisorMigrationState struct {
 
 func supervisorMigrate(root string, deps Dependencies, response Response) (result commandResult) {
 	options := supervisorControlOptions(deps)
-	controlContext, cancel := supervisorControlContext(options)
+	controlContext, cancel := supervisorcore.ControlContext(options)
 	defer cancel()
 	store, err := openStoreContext(controlContext, root, deps.storeDependencies(), false)
 	if errors.Is(err, os.ErrNotExist) {
@@ -703,7 +460,7 @@ func supervisorMigrate(root string, deps Dependencies, response Response) (resul
 	response.RootID = store.RootID
 	state, err := inspectSupervisorMigration(controlContext, root, deps, options, store)
 	if state.current != nil {
-		defer closeSupervisorMaintenance(state.current, err)
+		defer supervisorcore.CloseMaintenance(state.current, err)
 	}
 	if err == nil && state.notInitialized {
 		return notInitializedSupervisor(response)
@@ -760,7 +517,7 @@ func privateSupervisorStatePresent(root string) (bool, error) {
 }
 
 func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dependencies, options pueue.Options, store *taskdir.Store, observationTimeout time.Duration, state *supervisorMigrationState) error {
-	if err := reconcilePublishedSupervisorWithLock(ctx, store, options, true); err != nil {
+	if err := supervisorcore.ReconcilePublishedSupervisorWithLock(ctx, store, options, true); err != nil {
 		return err
 	}
 	legacy, _, journalErr := inspection.ReadGroupHead(ctx, store)
@@ -786,16 +543,16 @@ func inspectSupervisorMigrationLocked(ctx context.Context, root string, deps Dep
 		return err
 	}
 	if state.externalInspectionGroup {
-		if err = migrateInspectionGroup(ctx, store, current, observationTimeout, legacy); err != nil {
+		if err = supervisorcore.MigrateInspectionGroup(ctx, store, current, observationTimeout, legacy); err != nil {
 			return err
 		}
 	}
 	if !state.externalInspectionGroup {
-		if err = migrateInspectionSupervisorLocked(ctx, store, current, observationTimeout); err != nil {
+		if err = supervisorcore.MigrateInspectionSupervisorLocked(ctx, store, current, observationTimeout); err != nil {
 			return err
 		}
 	}
-	if err = ensureInspectionGroupLocked(ctx, store, current, observationTimeout, false); err != nil {
+	if err = supervisorcore.EnsureInspectionGroupLocked(ctx, store, current, observationTimeout, false); err != nil {
 		return err
 	}
 	return verifyCommittedPrivateSupervisor(root, current)

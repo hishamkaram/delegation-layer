@@ -3,6 +3,8 @@ package app
 import (
 	"testing"
 
+	tasklifecycle "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -23,7 +25,7 @@ func TestContinuationBudgetClampsInheritedNativeTimeout(t *testing.T) {
 		CanonicalCwd:    "/workspace",
 		RequestedConfig: task.TaskConfig{Budget: "10m", NativeTimeout: "10m"},
 	}
-	args, err := buildContinuationArguments(Arguments{Config: task.TaskConfig{Budget: "1m"}}, "/state", predecessor, nil, []byte("follow-up"))
+	args, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{Config: task.TaskConfig{Budget: "1m"}}), "/state", predecessor, nil, []byte("follow-up"))
 	if err != nil {
 		t.Fatal(err)
 	}

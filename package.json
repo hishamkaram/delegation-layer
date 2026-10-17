@@ -27,7 +27,8 @@
     "skills/agent-integration/",
     "plugins/delegation-layer/",
     "scripts/install-agent-integration.mjs",
-    "scripts/install-cli.mjs"
+    "scripts/install-cli.mjs",
+    "scripts/installer/"
   ],
   "engines": {
     "node": ">=18"

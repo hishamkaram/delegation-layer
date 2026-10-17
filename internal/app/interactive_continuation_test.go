@@ -10,12 +10,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 func TestInteractiveContinuationUsesFreshCatalogCandidate(t *testing.T) {
-	workspace := canonicalAppTestTempDir(t)
-	root := canonicalAppTestTempDir(t)
+	workspace := testsupport.CanonicalTempDir(t)
+	root := testsupport.CanonicalTempDir(t)
 	interpreter, err := predicate.Default().Resolve(task.FixturePredicateRef())
 	if err != nil {
 		t.Fatal(err)
@@ -64,14 +65,14 @@ func TestInteractiveContinuationUsesFreshCatalogCandidate(t *testing.T) {
 
 	interactive := base
 	interactive.RequestedConfig.Interactive = true
-	if _, _, err := prepareExistingCandidateContext(context.Background(), deps, root, interactive, task.MetaRecord{}); err != nil {
+	if _, _, err := admissionProfiles(deps).ExistingContext(context.Background(), root, interactive, task.MetaRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	if freshCalls != 1 || existingCalls != 0 {
 		t.Fatalf("interactive continuation candidate calls: fresh=%d existing=%d", freshCalls, existingCalls)
 	}
 
-	if _, _, err := prepareExistingCandidateContext(context.Background(), deps, root, base, task.MetaRecord{}); err != nil {
+	if _, _, err := admissionProfiles(deps).ExistingContext(context.Background(), root, base, task.MetaRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	if freshCalls != 1 || existingCalls != 1 {

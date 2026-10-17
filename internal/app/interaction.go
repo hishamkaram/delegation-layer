@@ -9,27 +9,12 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
-
-func fillInteraction(response *Response, td *taskdir.TaskDir) error {
-	req, _, err := td.PreparedRecords()
-	if err != nil {
-		return err
-	}
-	if !req.RequestedConfig.Interactive {
-		return nil
-	}
-	state, err := td.InteractionState()
-	if err != nil {
-		return err
-	}
-	response.Interaction = &state
-	return nil
-}
 
 func interactionCommand(a Arguments, deps storeDependencies) (result commandResult) {
 	response := newResponse(a.Command)
-	root, err := resolveRoot(a.Root)
+	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
 		return failed(response, err, 1)
 	}
@@ -65,7 +50,7 @@ func interactionCommand(a Arguments, deps storeDependencies) (result commandResu
 func interactionMessage(a Arguments) (task.InteractionMessage, error) {
 	message := task.InteractionMessage{ID: a.MessageID, Kind: a.Command, RequestID: a.RequestID}
 	if a.Command == "steer" {
-		data, err := readBrief(a.Brief)
+		data, err := tasklifecycle.ReadBrief(a.Brief)
 		message.Text = string(data)
 		return message, err
 	}
@@ -98,32 +83,11 @@ func observeInteraction(a Arguments, td *taskdir.TaskDir, response Response) com
 		if len(events) > 0 || response.Interaction.Closed {
 			return commandResult{response: response}
 		}
-		if collectionWatchExpired(a.Watch, deadline) || !waitForCollection(deadline) {
+		if tasklifecycle.CollectionWatchExpired(a.Watch, deadline) || !tasklifecycle.WaitForCollection(deadline) {
 			response.Pending = &PendingResponse{Kind: "interaction"}
 			return commandResult{response: response, code: 3}
 		}
 	}
-}
-
-func collectWithInteraction(td *taskdir.TaskDir, ref task.PredicateRef, response *Response) (*task.OutcomeRecord, error) {
-	outcome, collectErr := collectAttempt(td, ref)
-	interactionErr := fillInteraction(response, td)
-	if outcome != nil {
-		return outcome, collectErr
-	}
-	return nil, errors.Join(collectErr, interactionErr)
-}
-
-func interactionWaiting(state *task.InteractionState) bool {
-	return state != nil && !state.Closed && len(state.PendingRequests) > 0
-}
-
-func fillInspectedInteraction(response *Response, td *taskdir.TaskDir, inspection *taskdir.TaskInspection) error {
-	err := fillInteraction(response, td)
-	if isTerminal(inspection) {
-		return nil
-	}
-	return err
 }
 
 func writeHumanInteraction(output *strings.Builder, response Response) error {

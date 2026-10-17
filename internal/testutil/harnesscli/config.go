@@ -63,14 +63,6 @@ type loadedHarnessConfig struct {
 	Raw    []byte
 }
 
-func siblingConfigPath(executable string) (string, error) {
-	canonical, err := canonicalExecutable(executable)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(canonical), fixtureConfigName), nil
-}
-
 func canonicalExecutable(path string) (string, error) {
 	if path == "" {
 		var err error

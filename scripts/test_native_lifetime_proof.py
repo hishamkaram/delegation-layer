@@ -3,8 +3,15 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+import sys
 
-from native_lifetime_proof import (
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts import native_lifetime_proof as proof
+from scripts.native_lifetime_proof import (
     MAX_RECEIPT_BYTES,
     native_go_architecture,
     read_receipt,
@@ -83,6 +90,57 @@ def fixture_receipt(host_os: str, backend: str, assurance_name: str) -> dict[str
 
 
 class NativeLifetimeProofTests(unittest.TestCase):
+    def test_json_containers_in_primitive_verdict_return_validation_errors(self) -> None:
+        for verdict in ([], {}):
+            with self.subTest(verdict=verdict):
+                receipt = fixture_receipt("linux", "process-group", "cooperative")
+                receipt["primitive_receipt"]["verdict"] = verdict
+                errors = validate_receipt(receipt, "linux", "amd64", expected_source())
+                self.assertIn("primitive proof verdict is invalid", errors)
+
+    def test_json_containers_in_failure_code_return_validation_errors(self) -> None:
+        for code in ([], {}):
+            with self.subTest(code=code):
+                receipt = fixture_receipt("linux", "process-group", "cooperative")
+                receipt["verdict"] = "failed"
+                receipt["failure"] = {"code": code, "stage": "scope-released", "message": "failure"}
+                errors = validate_receipt(receipt, "linux", "amd64", expected_source())
+                self.assertIn("receipt failure details are invalid", errors)
+
+    def test_json_containers_in_cleanup_status_return_validation_errors(self) -> None:
+        for status in ([], {}):
+            with self.subTest(status=status):
+                receipt = fixture_receipt("linux", "process-group", "cooperative")
+                receipt["cleanup_status"] = status
+                errors = validate_receipt(receipt, "linux", "amd64", expected_source())
+                self.assertIn("receipt cleanup status is missing or unresolved", errors)
+
+    def test_source_fingerprint_includes_extracted_contract_and_native_files(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="native-fingerprint-") as temporary:
+            root = Path(temporary)
+            sources = (
+                "internal/lifetime/first.go", "internal/lifetime/process_marker_darwin.go",
+                "scripts/native_lifetime_proof.py", "scripts/test_native_lifetime_proof.py",
+                "scripts/delegate_acceptance/native_lifetime/__init__.py",
+                "scripts/delegate_acceptance/native_lifetime/contract.py",
+            )
+            for name in sources:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(name, encoding="utf-8")
+            with patch.object(proof.subprocess, "run", return_value=SimpleNamespace(stdout="a" * 40)):
+                first = proof.source_fingerprint(root)
+                contract = root / sources[-1]
+                contract.write_text("changed pure receipt validation", encoding="utf-8")
+                changed_gate = proof.source_fingerprint(root)
+                self.assertEqual(first[:2], changed_gate[:2])
+                self.assertNotEqual(first[2], changed_gate[2])
+                (root / sources[1]).write_text("changed Darwin backend", encoding="utf-8")
+                changed_package = proof.source_fingerprint(root)
+                self.assertEqual(changed_gate[0], changed_package[0])
+                self.assertNotEqual(changed_gate[1], changed_package[1])
+                self.assertEqual(changed_gate[2], changed_package[2])
+
     def test_maps_uname_architecture_to_go_architecture(self) -> None:
         self.assertEqual(native_go_architecture("x86_64"), "amd64")
         self.assertEqual(native_go_architecture("aarch64"), "arm64")

@@ -44,12 +44,21 @@ class HandoffEvidenceTests(unittest.TestCase):
         )
         return result.stdout
 
-    def _run(self, output: Path, *arguments: str) -> tuple[int, str]:
+    def _run(self, output: Path, arguments: tuple[str, ...] = ()) -> tuple[int, str]:
         stderr = io.StringIO()
         argv = ["--root", os.fspath(self.repo), "--output", os.fspath(output), *arguments]
         with contextlib.redirect_stderr(stderr):
             code = evidence.main(argv)
         return code, stderr.getvalue()
+
+    def test_run_preserves_each_argv_sequence_element(self) -> None:
+        output = self.output_dir / "output with spaces.json"
+        arguments = ("--transition-row", "SUPERVISOR-01", "", "a b", "literal*value")
+        with patch.object(evidence, "main", return_value=0) as main:
+            self.assertEqual(self._run(output, arguments), (0, ""))
+        main.assert_called_once_with([
+            "--root", os.fspath(self.repo), "--output", os.fspath(output), *arguments,
+        ])
 
     @staticmethod
     def _load(path: Path) -> dict:
@@ -97,8 +106,8 @@ class HandoffEvidenceTests(unittest.TestCase):
         )
         first, second = self.output_dir / "first.json", self.output_dir / "second.json"
 
-        self.assertEqual(self._run(first, *arguments)[0], 0)
-        self.assertEqual(self._run(second, *arguments)[0], 0)
+        self.assertEqual(self._run(first, arguments)[0], 0)
+        self.assertEqual(self._run(second, arguments)[0], 0)
 
         self.assertEqual(first.read_bytes(), second.read_bytes())
         document = self._load(first)
@@ -117,9 +126,9 @@ class HandoffEvidenceTests(unittest.TestCase):
         missing = self.output_dir / "missing.json"
         code, _ = self._run(
             missing,
-            "--require-source", "missing.go",
+            ("--require-source", "missing.go",
             "--require-binary", "delegate",
-            "--require-receipt", "native",
+            "--require-receipt", "native"),
         )
         self.assertEqual(code, 1)
         document = self._load(missing)
@@ -128,7 +137,7 @@ class HandoffEvidenceTests(unittest.TestCase):
         self.assertEqual(document["missing_required"]["source_paths"], ["missing.go"])
 
         unresolved = self.output_dir / "unresolved.json"
-        code, _ = self._run(unresolved, "--unresolved", "native macOS test pending")
+        code, _ = self._run(unresolved, ("--unresolved", "native macOS test pending"))
         self.assertEqual(code, 2)
         self.assertEqual(self._load(unresolved)["verdict"], "incomplete")
 
@@ -159,23 +168,23 @@ class HandoffEvidenceTests(unittest.TestCase):
         duplicate = self.output_dir / "duplicate.json"
         code, _ = self._run(
             duplicate,
-            "--binary", "delegate", os.fspath(binary), "build-a",
-            "--binary", "delegate", os.fspath(binary), "build-b",
+            ("--binary", "delegate", os.fspath(binary), "build-a",
+            "--binary", "delegate", os.fspath(binary), "build-b"),
         )
         self.assertEqual(code, 1)
         self.assertEqual(self._load(duplicate)["failure"]["code"], "duplicate_binary_role")
 
         overlap = self.base / "output-is-input.bin"
         overlap.write_bytes(b"do not replace this binary")
-        code, _ = self._run(overlap, "--binary", "delegate", os.fspath(overlap), "build-a")
+        code, _ = self._run(overlap, ("--binary", "delegate", os.fspath(overlap), "build-a"))
         self.assertEqual(code, 1)
         self.assertEqual(overlap.read_bytes(), b"do not replace this binary")
 
         duplicate_path = self.output_dir / "duplicate-path.json"
         code, _ = self._run(
             duplicate_path,
-            "--binary", "delegate-a", os.fspath(binary), "build-a",
-            "--binary", "delegate-b", os.fspath(binary), "build-b",
+            ("--binary", "delegate-a", os.fspath(binary), "build-a",
+            "--binary", "delegate-b", os.fspath(binary), "build-b"),
         )
         self.assertEqual(code, 1)
         self.assertEqual(self._load(duplicate_path)["failure"]["code"], "duplicate_input_path")
@@ -184,24 +193,24 @@ class HandoffEvidenceTests(unittest.TestCase):
         target.write_bytes(b"target bytes")
         link.symlink_to(target)
         symlink_output = self.output_dir / "symlink.json"
-        code, _ = self._run(symlink_output, "--binary", "delegate", os.fspath(link), "build")
+        code, _ = self._run(symlink_output, ("--binary", "delegate", os.fspath(link), "build"))
         self.assertEqual(code, 1)
         self.assertEqual(self._load(symlink_output)["failure"]["code"], "input_not_regular")
 
         malformed = self.output_dir / "malformed.json"
-        code, _ = self._run(malformed, "--transition-row", "not a row id")
+        code, _ = self._run(malformed, ("--transition-row", "not a row id"))
         self.assertEqual(code, 1)
         self.assertEqual(self._load(malformed)["failure"]["code"], "transition_row_invalid")
 
         bad_claim = self.output_dir / "bad-claim.json"
-        code, _ = self._run(bad_claim, "--require-receipt", "unknown")
+        code, _ = self._run(bad_claim, ("--require-receipt", "unknown"))
         self.assertEqual(code, 1)
         self.assertEqual(self._load(bad_claim)["failure"]["code"], "claim_class_invalid")
 
         secret = "token=DO_NOT_LEAK_THIS_VALUE"
         failed = self.output_dir / "sensitive.json"
         with patch.dict(os.environ, {"GH_TOKEN": secret}):
-            code, stderr = self._run(failed, "--unresolved", secret)
+            code, stderr = self._run(failed, ("--unresolved", secret))
         self.assertEqual(code, 1)
         self.assertNotIn(secret, stderr)
         self.assertNotIn(secret, failed.read_text(encoding="utf-8"))
@@ -210,7 +219,7 @@ class HandoffEvidenceTests(unittest.TestCase):
     def test_atomic_output_replacement_and_failed_replace_preserves_previous_file(self) -> None:
         output = self.output_dir / "index.json"
         output.write_text("previous\n", encoding="utf-8")
-        self.assertEqual(self._run(output, "--transition-row", "SUPERVISOR-01")[0], 0)
+        self.assertEqual(self._run(output, ("--transition-row", "SUPERVISOR-01"))[0], 0)
         previous = output.read_bytes()
         self.assertNotEqual(previous, b"previous\n")
 

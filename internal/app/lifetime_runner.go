@@ -11,9 +11,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	"golang.org/x/sys/unix"
 )
@@ -22,8 +25,8 @@ const lifetimeChildFD = 3
 
 type lifetimeGuardianRunState struct {
 	ownerKind      string
-	records        lifetimeGuardianRecords
-	acquireOwner   func(context.Context) (lifetimeGuardianOwner, error)
+	records        guardian.Records
+	acquireOwner   func(context.Context) (guardian.Owner, error)
 	reconcileOwned func(context.Context) error
 	userStop       func() (bool, error)
 	deadline       time.Time
@@ -42,11 +45,11 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 		}
 		state.ownerKind = task.LifetimeOwnerInspection
 		state.records = operation
-		state.acquireOwner = func(ctx context.Context) (lifetimeGuardianOwner, error) {
+		state.acquireOwner = func(ctx context.Context) (guardian.Owner, error) {
 			return operation.AcquireLifetimeOwner(ctx)
 		}
 		state.reconcileOwned = func(ctx context.Context) error {
-			return reconcileInspectionLifetimeOwned(ctx, operation)
+			return admission.ReconcileInspectionLifetimeOwned(ctx, operation)
 		}
 		state.deadline = operation.Deadline()
 		state.closeOwner = operation.Close
@@ -65,14 +68,14 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 		return lifetimeGuardianRunState{}, errors.Join(task.ErrEvidenceFault, td.Close())
 	}
 	state.records = td
-	state.acquireOwner = func(ctx context.Context) (lifetimeGuardianOwner, error) {
+	state.acquireOwner = func(ctx context.Context) (guardian.Owner, error) {
 		return td.AcquireLifetimeOwner(ctx)
 	}
 	state.reconcileOwned = func(ctx context.Context) error {
-		return reconcileTaskLifetimeOwned(ctx, td)
+		return guardian.ReconcileTaskLifetimeOwned(ctx, td)
 	}
 	state.userStop = func() (bool, error) {
-		return taskUserStopRequested(td)
+		return td.UserStopRequested()
 	}
 	state.deadline = time.Now().Add(time.Duration(req.BudgetNanos))
 	state.closeOwner = td.Close
@@ -83,7 +86,7 @@ func loadLifetimeGuardianRunState(store *taskdir.Store, parsed runnerArguments) 
 // process lifetime ownership. Pueue starts this guardian; the guardian alone
 // owns the child worker, containment scope, and durable empty-scope proof.
 func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultErr error) {
-	canonicalRoot, err := resolveRoot(parsed.Root)
+	canonicalRoot, err := tasklifecycle.ResolveRoot(parsed.Root)
 	if err != nil {
 		return err
 	}
@@ -129,18 +132,18 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 	defer func() { resultErr = errors.Join(resultErr, state.closeOwner()) }()
 
 	var inheritedCloseErr error
-	guardian, err := newLifetimeGuardian(lifetimeGuardianOptions{
-		rootID:         store.RootID,
-		taskID:         parsed.TaskID,
-		ownerKind:      state.ownerKind,
-		deadline:       state.deadline,
-		records:        state.records,
-		acquireOwner:   state.acquireOwner,
-		reconcileOwned: state.reconcileOwned,
-		userStop:       state.userStop,
-		worker:         worker,
-		connection:     parentConnection,
-		startWorker: func(cmd *exec.Cmd) error {
+	lifetimeOwner, err := guardian.New(guardian.Options{
+		RootID:         store.RootID,
+		TaskID:         parsed.TaskID,
+		OwnerKind:      state.ownerKind,
+		Deadline:       state.deadline,
+		Records:        state.records,
+		AcquireOwner:   state.acquireOwner,
+		ReconcileOwned: state.reconcileOwned,
+		UserStop:       state.userStop,
+		Worker:         worker,
+		Connection:     parentConnection,
+		StartWorker: func(cmd *exec.Cmd) error {
 			startErr := cmd.Start()
 			closeErr := childFile.Close()
 			if closeErr == nil || errors.Is(closeErr, os.ErrClosed) {
@@ -159,12 +162,12 @@ func runLifetimeGuardianMode(parsed runnerArguments, deps Dependencies) (resultE
 	if err != nil {
 		return err
 	}
-	guardianErr := runGuardianWithWorkspaceCompletion(guardian, store, parsed, deps)
+	guardianErr := runGuardianWithWorkspaceCompletion(lifetimeOwner, store, parsed, deps)
 	return errors.Join(guardianErr, inheritedCloseErr)
 }
 
-func runGuardianWithWorkspaceCompletion(guardian *lifetimeGuardian, store *taskdir.Store, parsed runnerArguments, deps Dependencies) error {
-	guardianErr := guardian.Run(context.Background())
+func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, store *taskdir.Store, parsed runnerArguments, deps Dependencies) error {
+	guardianErr := lifetimeOwner.Run(context.Background())
 	if parsed.Inspection {
 		return guardianErr
 	}
@@ -250,7 +253,7 @@ func newLifetimeControlPair() (net.Conn, *os.File, error) {
 }
 
 var (
-	_ lifetimeGuardianRecords = (*taskdir.TaskDir)(nil)
-	_ lifetimeGuardianRecords = (*inspection.Operation)(nil)
-	_ lifetimeGuardianRecords = (*workspace.Operation)(nil)
+	_ guardian.Records = (*taskdir.TaskDir)(nil)
+	_ guardian.Records = (*inspection.Operation)(nil)
+	_ guardian.Records = (*workspace.Operation)(nil)
 )

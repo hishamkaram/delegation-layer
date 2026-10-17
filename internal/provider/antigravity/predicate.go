@@ -94,10 +94,6 @@ func (v printInterpreter) Evaluate(input predicate.Input, raw predicate.Evidence
 	return interpretEnvelopeWithOptions(input, stdout, timeout, v.classifyErrorBeforeIdentity, v.classifyAuthentication), nil
 }
 
-func interpretEnvelope(input predicate.Input, stdout stdoutResult, timeout, classifyErrorBeforeIdentity bool) task.Interpretation {
-	return interpretEnvelopeWithOptions(input, stdout, timeout, classifyErrorBeforeIdentity, false)
-}
-
 func interpretEnvelopeWithOptions(input predicate.Input, stdout stdoutResult, timeout, classifyErrorBeforeIdentity, classifyAuthentication bool) task.Interpretation {
 	if input.Seal.InvocationState == task.InvocationStartFailed {
 		return rejectedWithUsage(refusalProviderFailed+": start_failed", usageFromEnvelope(stdout.envelope, task.UsageReliabilityUnreliable))

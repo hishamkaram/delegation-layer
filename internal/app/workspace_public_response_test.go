@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
@@ -29,7 +30,7 @@ func assertManagedAdmissionWireRecovery(t *testing.T, command, state string) {
 	if state == "busy" {
 		description.Path = "/checkout"
 	}
-	result := failed(response, withDispatchStage("prepare-workspace", workspace.ErrPending), 3)
+	result := failed(response, admission.WithStage("prepare-workspace", workspace.ErrPending), 3)
 	setManagedAdmissionPendingFailure("/state", operationID, description, &result)
 	expected := *result.response.Failure
 	var output bytes.Buffer
@@ -68,7 +69,7 @@ func TestManagedAdmissionConcreteFaultIsNotReplacedByPendingRecovery(t *testing.
 func TestManagedAdmissionCloseFaultInvalidatesPendingRecovery(t *testing.T) {
 	response := newResponse("continue")
 	response.TaskRecord = "not_created"
-	result := failed(response, withDispatchStage("prepare-workspace", workspace.ErrPending), 3)
+	result := failed(response, admission.WithStage("prepare-workspace", workspace.ErrPending), 3)
 	setManagedAdmissionPendingFailure("/state", "", WorkspaceResponse{ID: strings.Repeat("b", 32), State: "busy"}, &result)
 	mergeCommandClose(&result, func() error { return errors.New("concrete storage close fault") })
 	var output bytes.Buffer

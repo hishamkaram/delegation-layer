@@ -5,6 +5,7 @@ This document specifies the non-negotiable engineering floor for the repository.
 ## 1. Toolchain & Environment
 - **Go Version**: `go 1.27.0` declared in `go.mod`.
 - **Compiler Pin**: Exactly `go1.27.2` in development and CI.
+- **Python Toolchain**: Python 3.12 for repository checks and acceptance scripts; CI selects it explicitly.
 - **Local Toolchain Guard**: `GOTOOLCHAIN=local` is strictly enforced to prevent ambient, untracked compiler downloads.
 - **Project Tools Pinning**:
   - `golangci-lint`: `v2.14.0`
@@ -17,7 +18,7 @@ This document specifies the non-negotiable engineering floor for the repository.
 - Configuration in `.golangci.yml` using schema `version: "2"`, `linters.default: none`, and explicit linters:
   - `errcheck`: `check-type-assertions: true`, `check-blank: true` (blank assignments `_ = fn()` on error-returning calls are forbidden).
   - `govet`: `enable-all: true`, `disable: [fieldalignment]`.
-  - `staticcheck`, `ineffassign`, `nilerr`, `errorlint`, `errname`, `forcetypeassert`, `contextcheck`.
+  - `staticcheck`, `unused`, `ineffassign`, `nilerr`, `errorlint`, `errname`, `forcetypeassert`, `contextcheck`.
   - `exhaustive`: `default-signifies-exhaustive: false` (all enum constants must be explicitly enumerated in switch statements).
   - `gocognit`: `min-complexity: 20`.
   - `gocyclo`: `min-complexity: 15`.

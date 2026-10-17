@@ -13,6 +13,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 const hookCapturePrefix = 4096
@@ -99,7 +101,7 @@ func (r *eventRecorder) begin(argv []string) error {
 		r.recordErrorLocked(err)
 		return err
 	}
-	id, err := task.NewRandomID()
+	id, err := randomid.NewRandomID()
 	if err != nil {
 		r.recordErrorLocked(err)
 		return err

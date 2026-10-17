@@ -163,10 +163,6 @@ func processGroupID(pid int) (int, error) {
 	return pgid, nil
 }
 
-func signalProcessGroup(pgid int, signal syscall.Signal) error {
-	return rawProcessSignal(-pgid, signal)
-}
-
 type linuxProcessHandle struct {
 	pid int
 	fd  int

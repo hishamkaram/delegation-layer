@@ -7,13 +7,16 @@ import (
 	"strings"
 	"testing"
 
+	testsupportcore "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
 
 func newMappedWorkspaceExecutionFixture(t *testing.T) (*workspace.Resource, string) {
 	t.Helper()
-	store, original := newAppWorkspaceResource(t)
-	sourceRoot := filepath.Join(canonicalAppTestTempDir(t), "source")
+	store, original := testsupport.NewResource(t)
+	sourceRoot := filepath.Join(testsupportcore.CanonicalTempDir(t), "source")
 	source := workspace.Source{Root: sourceRoot, CommonDir: filepath.Join(sourceRoot, ".git"), GitDir: filepath.Join(sourceRoot, ".git"), RelativeCwd: "nested", BaseOID: strings.Repeat("a", 40), ObjectFormat: "sha1"}
 	request := original.Request()
 	request.WorkspaceID, request.TaskID = strings.Repeat("d", 32), strings.Repeat("e", 32)
@@ -56,20 +59,20 @@ func newMappedWorkspaceExecutionFixture(t *testing.T) (*workspace.Resource, stri
 
 func TestWorkspaceExecutionRejectsEscapedMappedDirectory(t *testing.T) {
 	resource, cwd := newMappedWorkspaceExecutionFixture(t)
-	if _, err := registeredExecutionCheckout(t.Context(), resource); err != nil {
+	if _, err := workspaces.RegisteredExecutionCheckout(t.Context(), resource); err != nil {
 		t.Fatal(err)
 	}
-	outside := canonicalAppTestTempDir(t)
+	outside := testsupportcore.CanonicalTempDir(t)
 	if err := os.Remove(cwd); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, cwd); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registeredExecutionCheckout(t.Context(), resource); !errors.Is(err, workspace.ErrIdentity) {
+	if _, err := workspaces.RegisteredExecutionCheckout(t.Context(), resource); !errors.Is(err, workspace.ErrIdentity) {
 		t.Fatalf("execution followed an external symlink in the retained checkout: %v", err)
 	}
-	if _, err := registeredCheckout(t.Context(), resource); err != nil {
+	if _, err := workspaces.RegisteredCheckout(t.Context(), resource); err != nil {
 		t.Fatalf("checkout-root evidence was lost with its mapped cwd: %v", err)
 	}
 }
@@ -79,10 +82,10 @@ func TestWorkspaceExecutionRequiresCwdWhileCaptureRetainsDeletedMapping(t *testi
 	if err := os.Remove(cwd); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registeredExecutionCheckout(t.Context(), resource); !errors.Is(err, workspace.ErrIdentity) {
+	if _, err := workspaces.RegisteredExecutionCheckout(t.Context(), resource); !errors.Is(err, workspace.ErrIdentity) {
 		t.Fatalf("execution accepted a removed mapped cwd: %v", err)
 	}
-	if _, err := registeredCheckout(t.Context(), resource); err != nil {
+	if _, err := workspaces.RegisteredCheckout(t.Context(), resource); err != nil {
 		t.Fatalf("a removed mapped cwd blocked capture/removal of its owned root: %v", err)
 	}
 }

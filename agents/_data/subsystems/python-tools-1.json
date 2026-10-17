@@ -1,0 +1,177 @@
+[
+  {
+    "name": "py:handoff_evidence",
+    "owner": "py:handoff_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:re",
+      "py:stat",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:unicodedata"
+    ]
+  },
+  {
+    "name": "py:maintainability.python_facts",
+    "owner": "py:maintainability.python_facts",
+    "layer": "tool",
+    "imports": [
+      "py:json",
+      "py:maintainability.python_ast",
+      "py:pathlib",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:native_acceptance_evidence",
+    "owner": "py:native_acceptance_evidence",
+    "layer": "tool",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:delegate_acceptance.directories.finalization",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.directories.policy",
+      "py:delegate_acceptance.evidence.digests",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.native_evidence.aggregate",
+      "py:delegate_acceptance.native_evidence.cases",
+      "py:delegate_acceptance.native_evidence.cli",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.directories",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.proof",
+      "py:delegate_acceptance.native_evidence.retention",
+      "py:delegate_acceptance.native_evidence.retention_records",
+      "py:delegate_acceptance.native_evidence.staging",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:delegate_acceptance.processes.contracts",
+      "py:delegate_acceptance.processes.observation",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.supervisor.config_policy",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:re",
+      "py:stat",
+      "py:sys",
+      "py:tempfile",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:native_lifetime_proof",
+    "owner": "py:native_lifetime_proof",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:delegate_acceptance.native_lifetime.contract",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:platform",
+      "py:re",
+      "py:stat",
+      "py:subprocess",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:skill_routing_delegate_fixture",
+    "owner": "py:skill_routing_delegate_fixture",
+    "layer": "runtime",
+    "imports": [
+      "py:contextlib",
+      "py:fcntl",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:re",
+      "py:subprocess",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:verify_acceptance_ownership",
+    "owner": "py:verify_acceptance_ownership",
+    "layer": "runtime",
+    "imports": [
+      "py:ast",
+      "py:dataclasses",
+      "py:pathlib",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:verify_release_archive",
+    "owner": "py:verify_release_archive",
+    "layer": "tool",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.evidence.bounded_files",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:delegate_acceptance.release_verification.assets",
+      "py:delegate_acceptance.release_verification.cleanup",
+      "py:delegate_acceptance.release_verification.cli",
+      "py:delegate_acceptance.release_verification.commands",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.filesystem",
+      "py:delegate_acceptance.release_verification.source",
+      "py:delegate_acceptance.release_verification.verification",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:platform",
+      "py:re",
+      "py:selectors",
+      "py:shutil",
+      "py:stat",
+      "py:struct",
+      "py:subprocess",
+      "py:sys",
+      "py:tarfile",
+      "py:tempfile",
+      "py:time"
+    ]
+  },
+  {
+    "name": "py:verify_skills",
+    "owner": "py:verify_skills",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:collections",
+      "py:dataclasses",
+      "py:pathlib",
+      "py:re",
+      "py:sys",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:maintainability.python_ast",
+    "owner": "py:maintainability.python_ast",
+    "layer": "pure",
+    "imports": [
+      "py:ast"
+    ]
+  }
+]

@@ -10,15 +10,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestMigrationPreparesInstalledPair(t *testing.T) {
 	store := newBareInspectionStore(t)
-	bundle := canonicalAppTestTempDir(t)
+	bundle := testsupport.CanonicalTempDir(t)
 	clientPath, daemonPath := filepath.Join(bundle, "pueue"), filepath.Join(bundle, "pueued")
 	writeRunnerFixture(t, clientPath, "#!/bin/sh\nprintf 'pueue 4.0.4\\n'\n")
 	writeRunnerFixture(t, daemonPath, "#!/bin/sh\nexit 0\n")
@@ -33,7 +36,7 @@ func TestMigrationPreparesInstalledPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := prepared.Binding()
-	client, daemon, err := resolveRetainedSupervisorPair(store.Root, binding)
+	client, daemon, err := supervisor.ResolveRetainedSupervisorPair(store.Root, binding)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,10 +45,10 @@ func TestMigrationPreparesInstalledPair(t *testing.T) {
 	}
 	// Staging a newer inventory must not change the exact returned generation.
 	writeRunnerFixture(t, daemonPath, "#!/bin/sh\nexit 0\n# newer\n")
-	if err = installStateSupervisorPair(t.Context(), store.Root, clientPath, daemonPath); err != nil {
+	if err = supervisor.PrepareStateSupervisorPair(t.Context(), store.Root, clientPath, daemonPath); err != nil {
 		t.Fatal(err)
 	}
-	gotClient, gotDaemon, err := resolveRetainedSupervisorPair(store.Root, binding)
+	gotClient, gotDaemon, err := supervisor.ResolveRetainedSupervisorPair(store.Root, binding)
 	if err != nil || gotClient != client || gotDaemon != daemon {
 		t.Fatalf("mutable inventory redirected retained pair: %s %s %v", gotClient, gotDaemon, err)
 	}
@@ -54,7 +57,7 @@ func TestMigrationPreparesInstalledPair(t *testing.T) {
 func TestAdmissionReconcilesPublishedPair(t *testing.T) {
 	store, deps, originalClient := newSupervisorProbeTestFixture(t)
 	original := originalClient.Binding()
-	clientPath, daemonPath, err := installStateSupervisorPairPaths(t.Context(), store.Root, original.ClientExecutable, original.DaemonExecutable)
+	clientPath, daemonPath, err := supervisor.InstallStateSupervisorPairPaths(t.Context(), store.Root, original.ClientExecutable, original.DaemonExecutable)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +75,7 @@ func TestAdmissionReconcilesPublishedPair(t *testing.T) {
 	var repaired *pueue.Client
 	err = pueue.WithBootstrapLockContext(t.Context(), store.Root, func(ctx context.Context) error {
 		var prepareErr error
-		repaired, prepareErr = preparePrivateAdmissionTransition(ctx, deps, store, deps.SupervisorOptions)
+		repaired, prepareErr = supervisor.PreparePrivateAdmissionTransition(ctx, deps.InitialSupervisorExecutable, store, deps.SupervisorOptions)
 		return prepareErr
 	})
 	settleSupervisorProbeTestClient(t, repaired, err)
@@ -96,7 +99,7 @@ func TestSupervisorFailureReasonsPreserveCausesAndRedactPaths(t *testing.T) {
 	cause := errors.Join(pueue.ErrBinding, errors.New("secret /private/user/config"))
 	for _, reason := range []string{"identity_conflict", "transition_pending", "published_pair_unavailable_live", "predecessor_pair_unavailable", "active_work", "observation_failed", "state_unreadable"} {
 		err := &pueue.PrivateRecoveryError{ReasonCode: reason, Err: cause}
-		failure := dispatchFailure(withDispatchStage("start-supervisor", errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err)), "not_created")
+		failure := dispatchFailure(admission.WithStage("start-supervisor", errors.Join(pueue.ErrPrivateSupervisorMigrationRequired, err)), "not_created")
 		if failure.ReasonCode != reason {
 			t.Fatalf("reason lost: %+v", failure)
 		}
@@ -109,7 +112,7 @@ func TestSupervisorFailureReasonsPreserveCausesAndRedactPaths(t *testing.T) {
 
 func TestHealthyPublishedPairIgnoresUnusedRetainedInventory(t *testing.T) {
 	store, deps, current := newSupervisorProbeTestFixture(t)
-	client, _, err := installStateSupervisorPairPaths(t.Context(), store.Root, current.Binding().ClientExecutable, current.Binding().DaemonExecutable)
+	client, _, err := supervisor.InstallStateSupervisorPairPaths(t.Context(), store.Root, current.Binding().ClientExecutable, current.Binding().DaemonExecutable)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +122,7 @@ func TestHealthyPublishedPairIgnoresUnusedRetainedInventory(t *testing.T) {
 	var admitted *pueue.Client
 	err = pueue.WithBootstrapLockContext(t.Context(), store.Root, func(ctx context.Context) error {
 		var prepareErr error
-		admitted, prepareErr = preparePrivateAdmissionTransition(ctx, deps, store, deps.SupervisorOptions)
+		admitted, prepareErr = supervisor.PreparePrivateAdmissionTransition(ctx, deps.InitialSupervisorExecutable, store, deps.SupervisorOptions)
 		return prepareErr
 	})
 	settleSupervisorProbeTestClient(t, admitted, err)
@@ -129,7 +132,7 @@ func TestHealthyPublishedPairIgnoresUnusedRetainedInventory(t *testing.T) {
 }
 
 func TestMissingInstallationDoesNotSuggestSupervisorMigration(t *testing.T) {
-	cause := withDispatchStage("prepare-supervisor-executables", &os.PathError{Op: "stat", Path: "/missing/private/pueued", Err: os.ErrNotExist})
+	cause := admission.WithStage("prepare-supervisor-executables", &os.PathError{Op: "stat", Path: "/missing/private/pueued", Err: os.ErrNotExist})
 	response := newResponse("dispatch")
 	response.TaskRecord = "not_created"
 	var stdout bytes.Buffer
@@ -147,7 +150,7 @@ func TestMissingInstallationDoesNotSuggestSupervisorMigration(t *testing.T) {
 func TestRestartIntentDoesNotYieldToMissingPair(t *testing.T) {
 	store, deps, current := newSupervisorProbeTestFixture(t)
 	original := current.Binding()
-	client, daemon, err := installStateSupervisorPairPaths(t.Context(), store.Root, original.ClientExecutable, original.DaemonExecutable)
+	client, daemon, err := supervisor.InstallStateSupervisorPairPaths(t.Context(), store.Root, original.ClientExecutable, original.DaemonExecutable)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +205,7 @@ func TestSavedSupervisorReconciliationBoundsBackgroundLockWait(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	err := reconcileSavedSupervisor(context.Background(), store.Root, pueue.Options{ObservationTimeout: time.Millisecond})
+	err := supervisor.ReconcileSaved(context.Background(), store.Root, pueue.Options{ObservationTimeout: time.Millisecond}, openNativeSupervisorStore)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("background recovery did not receive a finite deadline: %v", err)
 	}
@@ -233,10 +236,10 @@ func TestSupervisorMigrateReplacesRemovedPackagePair(t *testing.T) {
 		if prepareErr != nil {
 			return prepareErr
 		}
-		if prepareErr = recoverInspectionGroupGenerationWithLock(ctx, fixture.store, successor, false); prepareErr != nil {
+		if prepareErr = supervisor.RecoverInspectionGroupGenerationWithLock(ctx, fixture.store, successor, false); prepareErr != nil {
 			return prepareErr
 		}
-		return migrateInspectionSupervisorLocked(ctx, fixture.store, successor, pueue.DefaultObservationTimeout)
+		return supervisor.MigrateInspectionSupervisorLocked(ctx, fixture.store, successor, pueue.DefaultObservationTimeout)
 	})
 	if successor != nil {
 		fixture.current = successor
@@ -377,7 +380,7 @@ func TestExplicitMigrationRetargetsMissingPreShutdownSuccessor(t *testing.T) {
 	fixture := scenario.fixture
 	prepareInterruptedInspectionMigration(t, scenario, true)
 	oldClient, oldDaemon := fixture.clientB, fixture.daemonB
-	directory := canonicalAppTestTempDir(t)
+	directory := testsupport.CanonicalTempDir(t)
 	for _, source := range []string{oldClient, oldDaemon} {
 		data, err := os.ReadFile(source)
 		if err != nil {
@@ -426,7 +429,7 @@ func TestInspectionMigrationUsesActivePredecessorAfterPathRelocation(t *testing.
 		if writeErr := os.WriteFile(scenario.configPath, scenario.config, 0o600); writeErr != nil {
 			return writeErr
 		}
-		client, daemon, prepareErr := installStateSupervisorPairPaths(ctx, fixture.root, fixture.clientA, fixture.daemonA)
+		client, daemon, prepareErr := supervisor.InstallStateSupervisorPairPaths(ctx, fixture.root, fixture.clientA, fixture.daemonA)
 		if prepareErr != nil {
 			return prepareErr
 		}
@@ -453,7 +456,7 @@ func TestInspectionMigrationUsesActivePredecessorAfterPathRelocation(t *testing.
 		}
 		fixture.current = successor
 		scenario.successorGroup.Supervisor = successor.Binding()
-		return migrateInspectionGroup(ctx, fixture.store, successor, pueue.DefaultObservationTimeout, scenario.legacyGroup)
+		return supervisor.MigrateInspectionGroup(ctx, fixture.store, successor, pueue.DefaultObservationTimeout, scenario.legacyGroup)
 	})
 	if err != nil {
 		t.Fatalf("retained inspection head could not follow the actual private predecessor: %v", err)

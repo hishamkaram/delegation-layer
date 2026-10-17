@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 import unittest
 
-import acceptance_claude as gate
+from scripts.delegate_acceptance.provider_drivers.claude import protocol as gate
 from acceptance_provider_common import AcceptanceFailure
-from test_acceptance_claude import NONCE, answer_event, fresh_stream, init_event, stream
+from scripts.acceptance_tests.provider_drivers.claude_fixtures import NONCE, answer_event, fresh_stream, init_event, stream
 
 
 class ToolEvidenceTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class ToolEvidenceTests(unittest.TestCase):
     def test_tool_argument_and_provenance(self):
         workspace = Path('/workspace')
         nonce_file = workspace / 'nonce.txt'
-        baseline = [json.loads(line) for line in fresh_stream(nonce_file, workspace).splitlines()]
+        baseline = [json.loads(line) for line in fresh_stream(nonce_file=nonce_file, workspace=workspace).splitlines()]
         for mutation in ('nonce_aux', 'result_first', 'assistant_result', 'user_use', 'duplicate_use'):
             values = json.loads(json.dumps(baseline))
             if mutation.endswith('_aux'):

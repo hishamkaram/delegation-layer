@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import acceptance_provider_common as provider_common
-import test_acceptance_inspection as inspection_fixtures
+from scripts.acceptance_tests.inspection import fixtures as inspection_fixtures
 from acceptance_provider_common import AcceptanceFailure, NativeTaskOps, _inspection_group
 from acceptance_supervisor_common import read_json, write_json
 
@@ -516,7 +516,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
                 "completed_at": "2026-09-15T00:00:08Z",
                 "native_exit": "successful-exit" if reason == "eligible" else "unavailable",
             })
-        inspection_fixtures.InspectionHarnessTests.managed_inspection_lifetime(
+        inspection_fixtures.InspectionFixture.managed_inspection_lifetime(
             directory, request, request_sha, reason or "unavailable")
         self.rewrite_lifetime_identity(directory, directory.name)
 
@@ -852,7 +852,7 @@ class AdmissionAttemptOracleTests(unittest.TestCase):
             "completed_at": "2026-09-15T00:00:02Z",
             "native_exit": "successful-exit",
         })
-        inspection_fixtures.InspectionHarnessTests.managed_inspection_lifetime(
+        inspection_fixtures.InspectionFixture.managed_inspection_lifetime(
             directory, request, request_sha, "eligible")
         self.rewrite_lifetime_identity(directory, operation_id)
 

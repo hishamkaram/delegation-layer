@@ -9,6 +9,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+
+	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
 type helperMarker struct {
@@ -84,7 +86,7 @@ func newInvocationDirectory(artifactDir string) (string, error) {
 		return "", err
 	}
 	for attempt := 0; attempt < 3; attempt++ {
-		id, err := task.NewRandomID()
+		id, err := randomid.NewRandomID()
 		if err != nil {
 			return "", err
 		}

@@ -42,9 +42,14 @@ Git-subprocess lifecycle policy in the review skill.
 
 1. Validate the [handoff evidence
    manifest](../../agents/_data/maintainability-contract.md#handoff-evidence),
-   then read the full changed surface and relevant consumers. Verify that each
+   including a passing `make verify-maintainability-strict` for the exact
+   snapshot before peer review. Missing, failed, or stale gate evidence leaves
+   review incomplete. Then read the full changed surface and relevant consumers. Verify that each
    claimed contract follows from that exact source and binary snapshot or an
    executed test.
+   Trace shared gates through indirect callers to public commands. A helper's
+   name or immediate caller does not establish its role. Pair allowed reader
+   behavior with refused mutations using the same durable-state fixture.
 2. Assess ownership and lifetimes, dependency direction, interface ownership,
    duplicated lifecycle/capability-check/harness logic, error diagnostics and
    secret handling, compatibility, and contributor effort. Review every affected

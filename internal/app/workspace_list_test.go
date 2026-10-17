@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	"github.com/hishamkaram/delegation-layer/internal/workspaces/testsupport"
 )
 
 func TestWorkspaceListUsesBoundedSummaryPages(t *testing.T) {
-	store, original := newAppWorkspaceResource(t)
+	store, original := testsupport.NewResource(t)
 	for index := 1; index <= 3; index++ {
 		request := original.Request()
 		request.WorkspaceID, request.TaskID = fmt.Sprintf("%032x", index), fmt.Sprintf("%032x", index+10)
@@ -36,7 +37,7 @@ func TestWorkspaceListUsesBoundedSummaryPages(t *testing.T) {
 }
 
 func TestWorkspaceListRejectsOversizedPages(t *testing.T) {
-	store, _ := newAppWorkspaceResource(t)
+	store, _ := testsupport.NewResource(t)
 	invalid := listManagedWorkspaces(Arguments{WorkspaceLimit: defaultWorkspacePageSize + 1}, store, newResponse("workspace"))
 	if invalid.code != 2 {
 		t.Fatalf("invalid page size: %+v", invalid)

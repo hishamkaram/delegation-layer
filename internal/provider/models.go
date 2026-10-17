@@ -6,15 +6,17 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/hishamkaram/delegation-layer/internal/provider/contract"
 )
 
 // ModelsRevision identifies the provider model-discovery contract. It is
 // independent of any provider release and changes when the discovery
 // definition or its facts change.
-const ModelsRevision = "model-discovery-v1"
+const ModelsRevision = contract.ModelsRevision
 
 // MaxModelFactsBytes is the journal bound for one sanitized model catalog.
-const MaxModelFactsBytes = 512 << 10
+const MaxModelFactsBytes = contract.MaxModelFactsBytes
 
 const maxModelFactsRows = 4096
 

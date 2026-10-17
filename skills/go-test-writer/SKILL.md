@@ -57,7 +57,9 @@ create a duplicate Git-subprocess lifecycle harness.
 4. Add compatibility fixtures for existing IDs and historical interpretations.
    Assert that collection remains observational and that rejected tasks retain
    their authoritative outcome/payload relationship.
-5. Run the focused tests, then `make test-race` and the applicable gate. Keep
+5. Run the focused tests, then `make test-race` and the applicable gate.
+   Tests and handwritten fixtures must pass `make verify-maintainability-strict`
+   before peer review, under the shared contract's test budgets and import roles. Keep
    assertions independent of incidental timestamps or internal helper names;
    assert ordering when ordering is the contract, such as closing writers
    before committing a seal. Apply the shared contract's [concurrency ordering

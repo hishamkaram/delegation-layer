@@ -108,6 +108,7 @@ func TestExistingNativeReadOnlyReconstructsRecordedLaunchContract(t *testing.T) 
 			},
 		},
 	}
+	slices.Sort(meta.EffectiveConfig.Policy.WritableRoots)
 	candidate, err := PrepareExistingCandidate(request, meta)
 	if err != nil {
 		t.Fatal(err)
@@ -196,6 +197,7 @@ func TestExistingNativeWorkspaceWriteReconstructsAcceptEditsContract(t *testing.
 			},
 		},
 	}
+	slices.Sort(meta.EffectiveConfig.Policy.WritableRoots)
 	candidate, err := PrepareExistingCandidate(request, meta)
 	if err != nil {
 		t.Fatal(err)

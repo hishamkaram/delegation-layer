@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -73,7 +76,7 @@ func TestAdmissionHandoffBootstrapsExternalOnlyRoot(t *testing.T) {
 	_, legacy, externalLog := newExternalInspectionHandoffFixture(t, store)
 	externalCalls := readSupervisorProbeTestFile(t, externalLog)
 
-	bundle := canonicalAppTestTempDir(t)
+	bundle := testsupport.CanonicalTempDir(t)
 	for _, source := range []string{template.Binding().ClientExecutable, template.Binding().DaemonExecutable} {
 		data := readSupervisorProbeTestFile(t, source)
 		data = []byte(strings.ReplaceAll(string(data), templateStore.RootID, store.RootID))
@@ -86,7 +89,7 @@ func TestAdmissionHandoffBootstrapsExternalOnlyRoot(t *testing.T) {
 		t.Fatalf("external-only fixture already contains private state: %v", err)
 	}
 
-	admitted, err := prepareAdmissionSupervisor(Arguments{}, deps, store, commonprovider.ProfileCandidate{}, "", deps.SupervisorOptions, true)
+	admitted, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{}), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	if err != nil || admitted == nil {
 		t.Fatalf("external-only dispatch admission failed: client=%v err=%v", admitted, err)
 	}
@@ -126,11 +129,11 @@ func TestAdmissionHandoffRefusesPrivateInspectionMigration(t *testing.T) {
 	legacy.Endpoint = "unix:" + filepath.Join(store.Root, ".supervisor", "run", "private-legacy.sock")
 	openHistoricalInspectionGroup(t, store, legacy)
 
-	_, err = prepareAdmissionSupervisor(Arguments{}, deps, store, commonprovider.ProfileCandidate{}, "", deps.SupervisorOptions, true)
+	_, err = supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{}), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	if err == nil {
 		t.Fatal("private inspection migration was admitted automatically")
 	}
-	if errors.Is(err, errExternalInspectionHandoffRequired) {
+	if errors.Is(err, supervisorcore.ErrExternalInspectionHandoffRequired) {
 		t.Fatalf("private inspection migration took the external handoff path: %v", err)
 	}
 	head, migrated, readErr := inspection.ReadGroupHead(t.Context(), store)
@@ -160,7 +163,7 @@ func TestAdmissionHandoffConcurrentCallersElectOneOwner(t *testing.T) {
 
 func runExternalHandoffDispatchAdmission(t *testing.T, store *taskdir.Store, deps Dependencies, _ task.SupervisorRef) {
 	t.Helper()
-	admitted, err := prepareAdmissionSupervisor(Arguments{}, deps, store, commonprovider.ProfileCandidate{}, "", deps.SupervisorOptions, true)
+	admitted, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{}), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	if err != nil || admitted == nil {
 		t.Fatalf("dispatch admission failed to hand off the external journal: client=%v err=%v", admitted, err)
 	}

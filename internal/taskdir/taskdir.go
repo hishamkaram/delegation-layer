@@ -37,13 +37,6 @@ func closeTaskQuietly(td *TaskDir) {
 	}
 }
 
-func unlockLockQuietly(l *LockFile) {
-	if l != nil {
-		if err := l.Unlock(); err != nil {
-			return
-		}
-	}
-}
 func timestamp() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
 func (s *Store) newTaskHandle(id string, createLocks bool) (*TaskDir, error) {

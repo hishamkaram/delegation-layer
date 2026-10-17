@@ -3,7 +3,7 @@ package task
 import (
 	"errors"
 
-	"github.com/hishamkaram/delegation-layer/internal/config"
+	"github.com/hishamkaram/delegation-layer/internal/config/policy"
 )
 
 // SessionIdentity is an observed provider conversation, never a launch instruction.
@@ -27,7 +27,7 @@ type (
 )
 
 func ValidateSessionIdentity(v SessionIdentity) error {
-	if config.ValidateProvider(v.Provider) != nil || !nonblank(v.ConversationID) {
+	if policy.ValidateProvider(v.Provider) != nil || !nonblank(v.ConversationID) {
 		return ErrIdentityMismatch
 	}
 	return nil

@@ -38,11 +38,66 @@ ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery.
 
 # Agent Roles and Responsibilities
 
+## Golden engineering rules
+
+Maintainability and clear state ownership are acceptance conditions for every
+change. Delivery speed does not waive them. The shared
+[maintainability contract](agents/_data/maintainability-contract.md) owns the
+detailed rules; the [subsystem registry](agents/_data/subsystems.json) owns
+machine-checked boundaries and budgets.
+
+1. Name the authoritative owner, writers, readers, and invariant before changing
+   state, a journal, a lease, a cache, or an interface.
+2. Give each subsystem one cohesive responsibility and an isolated package
+   boundary. Keep data declarations, pure decisions, and I/O separate. A small
+   pure domain may keep its values and validity rules in separate files of one
+   package; do not create empty layers or generic dumping grounds.
+3. Depend inward through narrow consumer-owned ports. Runtime implementations
+   stay sealed; other subsystems consume their public boundary or pure contracts.
+4. Reuse the canonical policy, resolver, transaction, and finalizer. Do not copy
+   a decision for another command, provider, record family, or test harness.
+   Relocated tests call their owning subsystem directly; do not retain a private
+   forwarding API solely to keep those tests at their old call sites.
+   Before tightening a shared gate, trace its indirect public-command consumers
+   and pair permitted observations with refused mutations in the same state.
+   Preserve each consumer's error identities, exit codes and JSON guidance;
+   helper tests must not replace the public command's existing contract.
+   Do not replace a long function with helpers that pass its entire local state
+   through long positional argument lists. Use named call contracts; introduce
+   an immutable record only when it represents an actual cohesive domain value.
+5. Verify an OS primitive or provider protocol on the real supported OS/provider
+   before implementing work that depends on it. Missing evidence blocks that
+   work and its dependents; independent proven work may continue.
+6. Treat copying policy, exposing private mutable state, or changing unrelated
+   modules to make an ordinary change as a design finding. Stop the dependent
+   change, trace the cause, and resolve ownership before adding another patch.
+7. Run all maintainability gates and applicable tests before peer review. Tests,
+   fixtures, acceptance tools, installers, and contributor tools are maintained
+   code. A passing size check alone does not prove cohesion or correct ownership.
+8. Never weaken assertions, suppress a meaningful check, relabel handwritten
+   code as generated, or add an exception to make a change pass. The refactor's
+   baseline inventory permits only unchanged, owned findings; completion requires
+   an empty inventory and zero size exceptions.
+9. Give each worker exact file ownership and interface prerequisites. One
+   writer owns each module; consumers wait for their dependencies. Root owns
+   integration and Git operations. Independent reviewers verify the final result.
+10. Bind claims to source and binary fingerprints, commands, exit codes, native
+    receipts, and unresolved facts. Preserve owned resources until cleanup is
+    authorized by lifetime closure; tests clean their own resources automatically.
+    Never dump inherited environments or enable diagnostics such as
+    `NODE_DEBUG=child_process` that print them. Keep credentials out of transcripts
+    and evidence; report only sanitized facts needed for the task.
+
 ## Orchestrator and Reviewer: Root Codex
 Root Codex owns task orchestration, code review, branch commits, PR lifecycle, waiting for CI, and squash merges. No other agent may commit, push, create PRs, or squash merge unless explicitly requested.
 
 ## Implementation and testing
-Root Codex implements directly or delegates bounded implementation and review fixes to agents using `gpt-5.6-luna` with `max` reasoning effort. Delegated agents have explicit file ownership and must not modify git history or remote repositories.
+Root Codex implements directly or assigns bounded work to the session-authorized
+native models. Use Luna for bounded Go implementation, Sol for tooling, and
+Astra for architecture and independent review. Other explicitly requested
+models remain available. External workers use Delegate with the exact requested
+model, effort, and permission mode. Delegated agents have explicit file
+ownership and must not modify git history or remote repositories.
 
 The installed Antigravity CLI (`agy`) is used only to test its provider integration and live acceptance. Do not use agy to implement code or fix review findings. Native tests retain the required finite inputs, isolated supervision, and recorded evidence.
 

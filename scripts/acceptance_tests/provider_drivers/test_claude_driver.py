@@ -1,0 +1,797 @@
+"""Hermetic Claude acceptance-parser and profile-driver regressions.
+
+The tests exercise only bounded in-memory streams and temporary files.  They
+never invoke Claude, the shipped delegate, pueue, or a network service.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import scripts.acceptance_claude as gate
+import scripts.acceptance_provider_common as provider_common
+import scripts.acceptance_supervisor_common as common
+from scripts.delegate_acceptance.provider_drivers.claude import constants as claude_constants
+from scripts.delegate_acceptance.provider_drivers.claude import evidence as claude_evidence
+from scripts.delegate_acceptance.provider_drivers.claude import protocol as claude_protocol
+from scripts.delegate_acceptance.provider_drivers.claude import runner as claude_runner
+from scripts.delegate_acceptance.provider_drivers.claude import runtime as claude_runtime
+from scripts.acceptance_provider_common import AcceptanceFailure, unique_object
+from scripts.acceptance_supervisor_common import DirectoryOwner, sha
+
+
+from scripts.acceptance_tests.provider_drivers.claude_fixtures import (
+    SESSION,
+    NONCE,
+    init_event,
+    tool_use,
+    tool_result,
+    answer_event,
+    permission_denial,
+    stream,
+    fresh_stream,
+    bash_plain_stream,
+    native_numbered_read_stream,
+)
+
+
+
+class ClaudeOracleTests(unittest.TestCase):
+    def test_behavioral_success_is_not_published_when_finalization_fails(self):
+        for failure in (False, OSError("injected finalization failure")):
+            with self.subTest(failure=repr(failure)), \
+                    tempfile.TemporaryDirectory(prefix="claude-finalize-unit-") as temporary:
+                root = Path(temporary)
+                output = root / "evidence"
+                output.mkdir()
+                owner = object.__new__(gate.ClaudeAcceptance)
+                owner.output = output
+                owner.state = root / "state"
+                owner.workspace = root / "workspace"
+                owner.closed = True
+                owner.daemon = None
+                owner.dispatch_attempts = set()
+                owner.tasks = {"fresh": "a" * 32, "resume": "b" * 32}
+                owner.records = {}
+                for name in ("fresh", "resume"):
+                    directory = root / name
+                    directory.mkdir()
+                    (directory / "outcome.json").write_text("{}")
+                    owner.records[name] = {
+                        "reference": {"conversation_id": SESSION},
+                        "directory": directory,
+                        "outcome": {"evidence_sha256": "c" * 64},
+                    }
+                owner.setup = lambda: None
+                owner.run_fresh = lambda: owner.records["fresh"]
+                owner.run_resume = lambda _fresh: owner.records["resume"]
+                owner.replay = lambda: None
+                owner.shutdown = lambda: None
+                owner.retain_failure_ownership = lambda: True
+                calls = []
+
+                def finalize(success):
+                    calls.append(success)
+                    if success and isinstance(failure, BaseException):
+                        raise failure
+                    return not success or failure is not False
+
+                owner.finalize = finalize
+                argv = ["--tools", str(root), "--pueue", "/pueue", "--pueued", "/pueued",
+                        "--output", str(output)]
+                with patch.object(gate, "ClaudeAcceptance", return_value=owner):
+                    code = gate.main(argv)
+
+                self.assertEqual(code, 1)
+                self.assertEqual(calls, [True, False])
+                self.assertFalse((output / "success.json").exists())
+                self.assertTrue((output / "failure.json").is_file())
+                cleanup = json.loads((output / "failure-cleanup.json").read_text())
+                self.assertTrue(cleanup["passed_receipt_absent"])
+                self.assertTrue(cleanup["artifact_finalization_completed"])
+
+    def test_failure_diagnostic_write_cannot_skip_retained_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            owner = object.__new__(gate.ClaudeAcceptance)
+            owner.output = root / "evidence"
+            owner.output.mkdir()
+            owner.state = root / "state"
+            owner.workspace = root / "workspace"
+            owner.tasks = {}
+            owner.dispatch_attempts = set()
+            owner.daemon = None
+            owner.closed = False
+
+            def fail_setup():
+                raise RuntimeError("primary acceptance failure")
+
+            retained = []
+            owner.setup = fail_setup
+            owner.retain_failure_ownership = lambda: retained.append(True) or True
+            original_write_json = claude_runner.write_json
+
+            def fail_diagnostics(path, *args, **kwargs):
+                if Path(path).name == "failure.json":
+                    raise OSError("injected diagnostics write failure")
+                return original_write_json(path, *args, **kwargs)
+
+            with patch.object(claude_runner, "write_json", side_effect=fail_diagnostics):
+                with self.assertRaisesRegex(RuntimeError, "primary acceptance failure"):
+                    owner.run()
+
+            self.assertEqual(retained, [True])
+            cleanup = json.loads((owner.output / "failure-cleanup.json").read_text())
+            self.assertTrue(cleanup["natural_daemon_shutdown"])
+            self.assertFalse(cleanup["failure_diagnostics_written"])
+
+    def test_duplicate_key_oracle_matches_go_simple_fold(self):
+        for raw, expected in (
+                ('{"ß":1,"ss":2}', {"ß": 1, "ss": 2}),
+                ('{"ﬀ":1,"ff":2}', {"ﬀ": 1, "ff": 2})):
+            with self.subTest(raw=raw):
+                self.assertEqual(json.loads(raw, object_pairs_hook=unique_object), expected)
+        for keys in (("K", "K"), ("session_id", "Session_ID")):
+            with self.subTest(keys=keys), self.assertRaises(AcceptanceFailure):
+                json.loads(json.dumps({keys[0]: 1, keys[1]: 2}),
+                           object_pairs_hook=unique_object)
+        # U+ A7CE/U+ A7CF is a cased pair added in Unicode 17.0.0.  Python's
+        # Unicode 16.0.0 tables do not know this pair, so a Python casefold()
+        # based duplicate check would incorrectly accept it.
+        with self.assertRaises(AcceptanceFailure):
+            json.loads('{"\\uA7CE":1,"\\uA7CF":2}', object_pairs_hook=unique_object)
+
+    def test_parser_requires_init_and_terminal_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = fresh_stream(nonce_file=root / "nonce.txt", workspace=root)
+            parsed = claude_protocol.parse_claude_events(raw)
+            self.assertEqual(parsed["session_id"], SESSION)
+            self.assertEqual(parsed["result_event"]["subtype"], "success")
+            self.assertEqual(claude_protocol.validate_claude_result(parsed), NONCE)
+            with self.assertRaisesRegex(RuntimeError, "system/init|init event"):
+                claude_protocol.parse_claude_events(stream([answer_event()]))
+            with self.assertRaisesRegex(RuntimeError, "terminal result"):
+                claude_protocol.parse_claude_events(stream([init_event(), {
+                    "type": "assistant", "session_id": SESSION,
+                    "message": {"role": "assistant", "content": [
+                        {"type": "text", "text": "answer"}]}}]))
+
+    def test_result_predicate_rejects_errors_blank_assistant_only_and_bad_stop(self):
+        with tempfile.TemporaryDirectory():
+            for mutation, message in (
+                    (lambda value: value.update({"subtype": "error_max_turns", "is_error": True}), "successful subtype"),
+                    (lambda value: value.update({"is_error": True}), "is_error"),
+                    (lambda value: value.update({"result": " \n"}), "blank"),
+                    (lambda value: value.update({"stop_reason": "max_tokens"}), "incomplete")):
+                values = [init_event(), answer_event()]
+                mutation(values[-1])
+                if message == "is_error":
+                    with self.assertRaisesRegex(RuntimeError, "is_error"):
+                        claude_protocol.parse_claude_events(stream(values))
+                    continue
+                parsed = claude_protocol.parse_claude_events(stream(values))
+                with self.assertRaisesRegex(RuntimeError, message):
+                    claude_protocol.validate_claude_result(parsed)
+            with self.assertRaisesRegex(RuntimeError, "nonempty errors"):
+                values = [init_event(), answer_event()]
+                values[-1]["errors"] = ["warning"]
+                claude_protocol.parse_claude_events(stream(values))
+            with self.assertRaisesRegex(RuntimeError, "substantive output"):
+                claude_protocol.parse_claude_events(stream([
+                    init_event(), answer_event(),
+                    {"type": "assistant", "session_id": SESSION,
+                     "message": {"role": "assistant", "content": [
+                         {"type": "text", "text": "late"}]}}]))
+
+    def test_conflicting_terminal_evidence_cannot_become_success(self):
+        for value in (None, 0, "false"):
+            result = answer_event()
+            result["is_error"] = value
+            with self.subTest(is_error=value), self.assertRaisesRegex(RuntimeError, "is_error"):
+                claude_protocol.parse_claude_events(stream([init_event(), result]))
+        for diagnostic in ("", " "):
+            result = answer_event()
+            result["errors"] = [diagnostic]
+            with self.subTest(diagnostic=diagnostic), self.assertRaisesRegex(RuntimeError, "nonempty errors"):
+                claude_protocol.parse_claude_events(stream([init_event(), result]))
+        for subtype in ("interrupted", "error", "cancel"):
+            event = {"type": "system", "subtype": subtype, "session_id": SESSION}
+            with self.subTest(subtype=subtype), self.assertRaisesRegex(RuntimeError, "lifecycle"):
+                claude_protocol.parse_claude_events(stream([init_event(), event, answer_event()]))
+        for reason in ("interrupted", "abort", "new_stop_reason", "tool_use"):
+            result = answer_event()
+            result["stop_reason"] = reason
+            parsed = claude_protocol.parse_claude_events(stream([init_event(), result]))
+            with self.subTest(reason=reason), self.assertRaisesRegex(RuntimeError, "stop reason"):
+                claude_protocol.validate_claude_result(parsed)
+        with self.assertRaisesRegex(RuntimeError, "substantive output"):
+            claude_protocol.parse_claude_events(stream([init_event(), answer_event(), tool_result("late", "late")]))
+
+    def test_duplicate_keys_unknown_event_and_malformed_content_reject(self):
+        duplicate = (b'{"type":"system","subtype":"init","session_id":"' +
+                     SESSION.encode() + b'","tools":["Read"],"tools":["Read"]}')
+        with self.assertRaisesRegex(RuntimeError, "duplicate JSON object key"):
+            claude_protocol.parse_claude_events(duplicate)
+        folded_top_level = (b'{"type":"system","subtype":"init","session_id":"' +
+                            SESSION.encode() + b'","Session_ID":"' + SESSION.encode() + b'"}')
+        folded_nested = b'{"type":"message","details":{"result":1,"RESULT":2}}'
+        for folded in (folded_top_level, folded_nested):
+            with self.assertRaisesRegex(RuntimeError, "duplicate JSON object key"):
+                claude_protocol.parse_claude_events(folded)
+        tolerated = claude_protocol.parse_claude_events(stream([init_event(), {"type": "message", "x": 1}, answer_event()]))
+        self.assertEqual(tolerated["session_id"], SESSION)
+        with self.assertRaisesRegex(RuntimeError, "lifecycle"):
+            claude_protocol.parse_claude_events(stream([init_event(), {"type": "turn.progress"}, answer_event()]))
+        trailing_identity = {"type": "system", "subtype": "status",
+                             "session_id": "0199a213-81c0-7800-8aa1-bbab2a035a54"}
+        with self.assertRaisesRegex(RuntimeError, "identity|precedes system/init"):
+            claude_protocol.parse_claude_events(stream([init_event(), answer_event(), trailing_identity]))
+        bad = tool_use("x", "Read", file_path="/x")
+        bad["message"]["content"][0]["input"] = []
+        with self.assertRaisesRegex(RuntimeError, "input is not an object"):
+            claude_protocol.parse_claude_events(stream([init_event(), bad, answer_event()]))
+
+    def test_init_profile_preserves_identity_and_provider_owned_policy(self):
+        with tempfile.TemporaryDirectory():
+            parsed = claude_protocol.parse_claude_events(stream([init_event(), answer_event()]))
+            profile = claude_protocol.validate_init_profile(parsed, SESSION)
+            self.assertEqual(profile["tools"], ["Read", "Glob", "Grep"])
+            self.assertEqual(profile["permission_mode"], "plan")
+            self.assertEqual(parsed["init"].get("apiKeySource"), "none")
+            for tools in (["Read", "Glob", "Grep", "Bash"], ["Read", "Glob"], ["Read", "Read", "Glob", "Grep"]):
+                changed = init_event(tools=list(tools))
+                changed_stream = claude_protocol.parse_claude_events(stream([changed, answer_event()]))
+                if len(tools) != len(set(tools)):
+                    with self.assertRaisesRegex(RuntimeError, "duplicated"):
+                        claude_protocol.validate_init_profile(changed_stream)
+                else:
+                    claude_protocol.validate_init_profile(changed_stream)
+            changed = claude_protocol.parse_claude_events(stream([init_event(permission="acceptEdits"), answer_event()]))
+            with self.assertRaisesRegex(RuntimeError, "permission mode"):
+                claude_protocol.validate_init_profile(changed)
+            alias = init_event()
+            alias["permission_mode"] = alias.pop("permissionMode")
+            with self.assertRaisesRegex(RuntimeError, "permission mode"):
+                claude_protocol.validate_init_profile(claude_protocol.parse_claude_events(stream([alias, answer_event()])))
+            changed = init_event()
+            changed["mcp_servers"] = [{"name": "unexpected"}]
+            profile = claude_protocol.validate_init_profile(claude_protocol.parse_claude_events(stream([changed, answer_event()])))
+            self.assertEqual(profile["mcp_server_count"], 1)
+            for source in ("env", None):
+                changed = init_event()
+                if source is None:
+                    del changed["apiKeySource"]
+                else:
+                    changed["apiKeySource"] = source
+                if source is None:
+                    with self.assertRaisesRegex(RuntimeError, "apiKeySource"):
+                        claude_protocol.validate_init_profile(
+                            claude_protocol.parse_claude_events(stream([changed, answer_event()])))
+                else:
+                    self.assertEqual(
+                        claude_protocol.validate_init_profile(
+                            claude_protocol.parse_claude_events(stream([changed, answer_event()])))["api_key_source"],
+                        source)
+
+    def test_fresh_controls_require_exact_nonce_tool_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            sibling = root / "sibling"
+            workspace.mkdir()
+            sibling.mkdir()
+            nonce_file = workspace / "nonce.txt"
+            parsed = claude_protocol.parse_claude_events(bash_plain_stream(nonce_file, workspace))
+            controls = claude_protocol.validate_fresh_controls(parsed, nonce_file, workspace, sibling, NONCE)
+            self.assertTrue(controls["nonce_read"])
+            self.assertEqual(controls["nonce_tool_name"], "Bash")
+            self.assertEqual(controls["nonce_read_count"], 1)
+            self.assertEqual(controls["tool_use_count"], 1)
+            self.assertEqual(controls["mcp_server_count"], 0)
+            self.assertEqual(controls["permission_denial_count"], 0)
+            native_read = claude_protocol.parse_claude_events(native_numbered_read_stream(nonce_file, workspace))
+            native_controls = claude_protocol.validate_fresh_controls(
+                native_read, nonce_file, workspace, sibling, NONCE)
+            self.assertEqual(native_controls["nonce_tool_name"], "Read")
+            self.assertEqual(native_controls["nonce_read_count"], 2)
+            provider_owned = fresh_stream(nonce_file=nonce_file, workspace=workspace).decode().replace(
+                '"tools":["Bash"]', '"tools":["NativeRead"]')
+            provider_owned = provider_owned.replace('"name":"Bash"', '"name":"NativeRead"')
+            provider_controls = claude_protocol.validate_fresh_controls(
+                claude_protocol.parse_claude_events(provider_owned.encode()), nonce_file, workspace, sibling, NONCE)
+            self.assertEqual(provider_controls["nonce_tool_name"], "NativeRead")
+            wrong_path = claude_protocol.parse_claude_events(fresh_stream(nonce_file=nonce_file, workspace=workspace))
+            wrong_path["tool_uses"][0]["input"]["command"] = f"cat -- {root / 'other'}"
+            with self.assertRaisesRegex(RuntimeError, "hidden nonce"):
+                claude_protocol.validate_fresh_controls(wrong_path, nonce_file, workspace, sibling, NONCE)
+            wrong_session = claude_runtime.fresh_session_id(
+                "fedcba9876543210fedcba9876543210",
+                "0123456789abcdef0123456789abcdef",
+            )
+            with self.assertRaisesRegex(RuntimeError, "session identity mismatch"):
+                claude_protocol.validate_fresh_controls(
+                    parsed, nonce_file, workspace, sibling, NONCE,
+                    expected_session=wrong_session,
+                )
+            denied = claude_protocol.parse_claude_events(
+                fresh_stream(nonce_file=nonce_file, workspace=workspace, denied_tools=("Bash",)))
+            denied_controls = claude_protocol.validate_fresh_controls(
+                denied, nonce_file, workspace, sibling, NONCE)
+            self.assertEqual(denied_controls["permission_denial_count"], 1)
+
+    def test_fresh_controls_reject_tool_failure_and_missing_nonce_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            sibling = root / "sibling"
+            workspace.mkdir()
+            sibling.mkdir()
+            nonce_file = workspace / "nonce.txt"
+            values = [json.loads(line) for line in fresh_stream(nonce_file=nonce_file, workspace=workspace).splitlines()]
+            for value in values:
+                if value.get("type") == "user" and value["message"]["content"][0].get("tool_use_id") == "nonce":
+                    value["message"]["content"][0]["is_error"] = True
+            with self.assertRaisesRegex(RuntimeError, "tool failed"):
+                claude_protocol.validate_fresh_controls(claude_protocol.parse_claude_events(stream(values)), nonce_file, workspace, sibling, NONCE)
+            values = [value for value in values if not (
+                value.get("type") == "user" and value["message"]["content"][0].get("tool_use_id") == "nonce")]
+            with self.assertRaisesRegex(RuntimeError, "unique result"):
+                claude_protocol.validate_fresh_controls(claude_protocol.parse_claude_events(stream(values)), nonce_file, workspace, sibling, NONCE)
+
+    def test_resume_is_tool_free_and_exact_identity(self):
+        values = [init_event(), {"type": "assistant", "session_id": SESSION,
+                                 "message": {"role": "assistant", "content": [
+                                     {"type": "thinking", "thinking": "recall"}]}}, answer_event()]
+        parsed = claude_protocol.parse_claude_events(stream(values))
+        result = claude_protocol.validate_tool_free_resume(parsed, NONCE, SESSION)
+        self.assertTrue(result["tool_free"])
+        self.assertEqual(result["item_types"], ["thinking"])
+        for bad in (tool_use("x", "Read", file_path="/tmp/n"),
+                    tool_use("x", "Bash", command="true"),
+                    tool_result("x", "denied", is_error=True)):
+            values = [init_event(), bad, answer_event()]
+            if bad["type"] == "user":
+                # A tool result without a corresponding tool use is still a
+                # tool-bearing continuation and must fail closed.
+                pass
+            with self.assertRaisesRegex(RuntimeError, "tool"):
+                claude_protocol.validate_tool_free_resume(claude_protocol.parse_claude_events(stream(values)), NONCE, SESSION)
+        with self.assertRaisesRegex(RuntimeError, "unexpected continuation answer"):
+            claude_protocol.validate_tool_free_resume(claude_protocol.parse_claude_events(stream([init_event(), answer_event(b"other")])), NONCE)
+        denied = answer_event()
+        denied["permission_denials"] = [permission_denial("Bash")]
+        with self.assertRaisesRegex(RuntimeError, "permission-denial"):
+            claude_protocol.validate_tool_free_resume(
+                claude_protocol.parse_claude_events(stream([init_event(), denied])), NONCE, SESSION)
+
+    def test_parser_binds_preinit_identity_and_accepts_provider_owned_tools(self):
+        preinit = {"type": "user", "session_id": "0199a213-81c0-7800-8aa1-bbab2a035a54",
+                   "message": {"content": []}}
+        with self.assertRaisesRegex(RuntimeError, "identity|precedes system/init"):
+            claude_protocol.parse_claude_events(stream([preinit, init_event(), answer_event()]))
+        provider_owned = tool_use("provider-owned", "Bash", command="true")
+        parsed = claude_protocol.parse_claude_events(stream([init_event(), provider_owned, answer_event()]))
+        self.assertEqual(parsed["tool_uses"][0]["name"], "Bash")
+        malformed = tool_use("malformed", "", command="true")
+        with self.assertRaisesRegex(RuntimeError, "no name"):
+            claude_protocol.parse_claude_events(stream([init_event(), malformed, answer_event()]))
+
+    def test_nullable_usage_envelopes_are_absent_and_fresh_session_is_uuidv5(self):
+        result = answer_event()
+        result["usage"] = None
+        result["modelUsage"] = None
+        parsed = claude_protocol.parse_claude_events(stream([init_event(), result]))
+        self.assertIsNone(parsed["usage"])
+        self.assertIsNone(parsed["model_usage"])
+        self.assertEqual(claude_runtime.fresh_session_id(
+            "fedcba9876543210fedcba9876543210", "0123456789abcdef0123456789abcdef"),
+            "99b93a5f-a02f-5975-8eea-ea1dd72facb2")
+
+    def test_empty_model_usage_does_not_invent_records(self):
+        result = answer_event()
+        result.pop("usage", None)
+        result["modelUsage"] = {}
+        parsed = claude_protocol.parse_claude_events(stream([init_event(), result]))
+        for outcome in ({}, {"usage": None}, {"usage": []}):
+            claude_evidence.validate_record_usage(outcome, parsed, "empty-model-usage")
+        with self.assertRaisesRegex(AcceptanceFailure, "invented usage"):
+            claude_evidence.validate_record_usage({"usage": [{}]}, parsed, "empty-model-usage")
+
+    def test_record_usage_preserves_native_scopes_and_nullable_fields(self):
+        init = init_event()
+        init["model"] = "claude-test"
+        result = answer_event()
+        result.update({"duration_ms": 1500, "num_turns": 1, "total_cost_usd": 0.0012,
+                       "usage": {"input_tokens": 11, "output_tokens": 3,
+                                  "thinking_tokens": None, "total_tokens": None},
+                       "modelUsage": {"claude-sonnet": {"inputTokens": 11,
+                                                           "outputTokens": 3,
+                                                           "costUSD": None}}})
+        parsed = claude_protocol.parse_claude_events(stream([init, result]))
+        outcome = {"usage": [
+            {"scope": "main-agent", "source": "provider-envelope", "reliability": "reported",
+             "input_tokens": 11, "output_tokens": 3, "num_turns": 1,
+             "duration_seconds": "1.5", "model": "claude-test"},
+            {"scope": "whole-tree", "source": "provider-envelope", "reliability": "reported",
+             "estimated_cost_usd": "0.0012"},
+            {"scope": "whole-tree", "source": "provider-envelope", "reliability": "reported",
+             "model": "claude-sonnet", "input_tokens": 11, "output_tokens": 3},
+        ]}
+        claude_evidence.validate_record_usage(outcome, parsed, "usage")
+        outcome["usage"][0]["input_tokens"] = False
+        with self.assertRaisesRegex(RuntimeError, "input_tokens"):
+            claude_evidence.validate_record_usage(outcome, parsed, "usage")
+        outcome["usage"][0]["input_tokens"] = 11
+        outcome["usage"].pop()
+        with self.assertRaisesRegex(RuntimeError, "omitted or synthesized"):
+            claude_evidence.validate_record_usage(outcome, parsed, "usage")
+
+    def test_manifest_digest_covers_canonical_descriptors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            raw = directory / "raw"
+            raw.mkdir()
+            stdout = raw / "stdout"
+            stderr = raw / "stderr"
+            stdout.write_bytes(b"stdout")
+            stderr.write_bytes(b"")
+            manifest = [
+                {"path": "raw/stderr", "size": 0, "sha256": sha(b"")},
+                {"path": "raw/stdout", "size": 6, "sha256": sha(b"stdout")},
+            ]
+            canonical = json.dumps(manifest, separators=(",", ":")) + "\n"
+            seal = {"raw_manifest": manifest, "manifest_sha256": sha(canonical.encode())}
+            claude_evidence.validate_manifest(directory, seal)
+            seal["manifest_sha256"] = sha(b"arbitrary")
+            with self.assertRaisesRegex(RuntimeError, "manifest_sha256"):
+                claude_evidence.validate_manifest(directory, seal)
+
+    def test_provider_argv_fresh_resume_parity_and_prompt_transport(self):
+        owner = object.__new__(gate.ClaudeAcceptance)
+        owner.claude = Path("/opt/homebrew/Caskroom/claude-code@latest/2.1.270/claude")
+        fresh = owner.provider_argv(SESSION)
+        resume = owner.provider_argv(SESSION, resume=True)
+        self.assertIn("--session-id", fresh)
+        self.assertNotIn("--resume", fresh)
+        self.assertIn("--resume", resume)
+        self.assertNotIn("--session-id", resume)
+        self.assertEqual(fresh[:-2], resume[:-2])
+        for removed in ("--safe-mode", "--restricted", "--tools", "--disallowedTools",
+                        "--strict-mcp-config", "--mcp-config", "--settings",
+                        "--disable-slash-commands", "--no-chrome"):
+            self.assertNotIn(removed, fresh)
+        with tempfile.TemporaryDirectory() as temporary:
+            brief = Path(temporary) / "brief.md"
+            brief.write_text("sensitive prompt $(touch nope)")
+            no_prompt_argv = provider_common.no_prompt_argv
+            no_prompt_argv(["delegate", "--brief", str(brief)], [brief])
+            with self.assertRaisesRegex(RuntimeError, "leaked"):
+                no_prompt_argv(["delegate", brief.read_text()], [brief])
+
+    def test_fresh_brief_uses_available_native_tool_without_fixed_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            owner = object.__new__(gate.ClaudeAcceptance)
+            owner.briefs = root / "briefs"
+            owner.briefs.mkdir()
+            owner.workspace = root / "workspace"
+            owner.nonce_file = owner.workspace / "nonce.txt"
+            owner.nonce = NONCE
+            brief = owner.fresh_brief()
+            text = brief.read_text()
+            self.assertIn("available native read-only tool", text)
+            self.assertIn(str(owner.nonce_file), text)
+            self.assertNotIn(NONCE.decode(), text)
+            for unavailable in ("Read", "Glob", "Grep"):
+                self.assertNotIn(unavailable, text)
+
+    def test_expected_inspection_binding_matches_native_runtime_and_go_hashes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = root / "pueue"
+            (base / "state").mkdir(parents=True)
+            (base / "run").mkdir()
+            config = root / "pueue.yml"
+            common.write_json(config, common.config_for(base))
+            pueue = root / "pueue-bin"
+            runner = root / "delegate-run"
+            claude = root / "claude"
+            for path, content in ((pueue, b"pueue"), (runner, b"runner"),
+                                  (claude, b"claude")):
+                path.write_bytes(content)
+                path.chmod(0o700)
+            home = root / "home"
+            home.mkdir()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            environment = {"HOME": str(home), "PATH": "/usr/bin", "USER": "fixture-user", "LANG": "C",
+                           "XDG_CONFIG_HOME": str(root / "config")}
+
+            binding = claude_runtime.expected_claude_inspection_binding(
+                pueue=pueue, config=config, base=base, config_digest=common.digest(config), workspace=workspace,
+                executable=claude,
+                runner=runner, environment=environment, pueue_version="pueue fixture")
+            definition = {
+                "revision": claude_constants.RUNTIME_INSPECTION_REVISION,
+                "executable": str(claude.resolve()),
+                "executable_sha256": common.digest(claude),
+                "arguments": None,
+                "directory": str(workspace.resolve()),
+                "environment": ["HOME=" + str(home), "LANG=C", "PATH=/usr/bin",
+                                "USER=fixture-user", "XDG_CONFIG_HOME=" + str(root / "config")],
+                "output_limit": 1 << 20,
+                "runtime": {
+                    "executable": str(claude.resolve()),
+                    "executable_sha256": common.digest(claude),
+                    "directory": str(workspace.resolve()),
+                    "environment": ["HOME=" + str(home), "LANG=C", "PATH=/usr/bin",
+                                    "USER=fixture-user", "XDG_CONFIG_HOME=" + str(root / "config")],
+                    "help_args": None,
+                    "required_flags": list(claude_constants.RUNTIME_REQUIRED_FLAGS),
+                },
+            }
+            self.assertEqual(binding["definition_sha256"],
+                             sha(provider_common.canonical_go_json(definition)))
+            self.assertNotEqual(binding["definition_sha256"],
+                                sha(provider_common.canonical_go_json(definition, newline=False)))
+            self.assertEqual(binding["helper_executable"], str(claude.resolve()))
+            self.assertEqual(binding["worker_executable"], str(runner.resolve()))
+            self.assertEqual(binding["environment"], definition["environment"])
+            self.assertEqual(binding["supervisor"]["config_digest"], common.digest(config))
+            self.assertEqual(binding["supervisor"]["endpoint"],
+                             "unix:" + str(base.resolve() / "run" / "p.sock"))
+
+    def test_expected_inspection_binding_keeps_native_discovery_without_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = root / "pueue"
+            (base / "state").mkdir(parents=True)
+            (base / "run").mkdir()
+            config = root / "pueue.yml"
+            common.write_json(config, common.config_for(base))
+            paths = []
+            for name in ("pueue-bin", "delegate-run", "claude"):
+                path = root / name
+                path.write_bytes(name.encode())
+                path.chmod(0o700)
+                paths.append(path)
+            home = root / "home"
+            home.mkdir()
+            environment = {"HOME": str(home), "PATH": "/usr/bin", "USER": "bad/user",
+                           "XDG_CONFIG_HOME": str(root / "config"),
+                           "CLAUDE_CONFIG_DIR": str(root / "claude-config"),
+                           "ANTHROPIC_API_KEY": "ambient-secret"}
+            binding = claude_runtime.expected_claude_inspection_binding(
+                pueue=paths[0], config=config, base=base, config_digest=common.digest(config), workspace=home,
+                executable=paths[2], runner=paths[1], environment=environment,
+                pueue_version="pueue fixture")
+            self.assertIn("XDG_CONFIG_HOME=" + str(root / "config"), binding["environment"])
+            self.assertIn("CLAUDE_CONFIG_DIR=" + str(root / "claude-config"), binding["environment"])
+            self.assertNotIn("ANTHROPIC_API_KEY=ambient-secret", binding["environment"])
+
+    def test_dispatch_registers_complete_expected_binding_before_admission(self):
+        class FakeOps:
+            root_id = None
+
+            def __init__(self):
+                self.expected = None
+
+            def expect_inspection(self, task, binding):
+                self.expected = task, binding
+
+            def dispatch(self, name, task, argv):
+                self.dispatched = name, task, argv
+                return {"root_id": "a" * 32}
+
+        owner = object.__new__(gate.ClaudeAcceptance)
+        owner.root_id = None
+        owner.inspection_binding = {
+            "definition_revision": claude_constants.RUNTIME_INSPECTION_REVISION,
+            "definition_sha256": "a" * 64,
+            "helper_executable": "/fixture/claude",
+            "helper_sha256": "b" * 64,
+            "worker_executable": "/fixture/runner",
+            "worker_sha256": "c" * 64,
+            "environment": ["HOME=/fixture/home"],
+            "supervisor": {"expected": True},
+        }
+        owner.ops = FakeOps()
+        owner.dispatch_arguments = lambda task, brief, predecessor=None: ["delegate", task]
+        binding = owner.inspection_binding
+        response = owner.dispatch("fresh", "b" * 32, Path("/fixture/brief"))
+        self.assertEqual(response["root_id"], "a" * 32)
+        self.assertEqual(owner.ops.expected, ("b" * 32, binding))
+
+    def test_executable_alias_and_runtime_roots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "claude-real"
+            target.write_bytes(b"#!/bin/sh\n")
+            target.chmod(0o700)
+            alias = root / "claude"
+            alias.symlink_to(target)
+            self.assertEqual(claude_runtime.resolve_executable(str(alias), root / "unused", "claude"), target.resolve())
+        with self.assertRaisesRegex(RuntimeError, "temporary roots"):
+            provider_common.reject_tmp(Path("/tmp/claude-evidence"), "evidence")
+        environment = {"HOME": str(Path.home())}
+        with self.assertRaisesRegex(RuntimeError, "runtime root"):
+            claude_runtime.reject_runtime_roots(Path.home() / ".claude" / "sessions", "state", environment)
+
+    def test_runtime_roots_scope_xdg_to_claude_and_split_lists(self):
+        environment = {
+            "HOME": "/fixture/home",
+            "XDG_CONFIG_HOME": "/fixture/config:personal",
+            "XDG_CONFIG_DIRS": os.pathsep.join(("/fixture/config-a", "/fixture/config-b")),
+            "XDG_DATA_HOME": "/fixture/data",
+            "XDG_DATA_DIRS": os.pathsep.join(("/fixture/data-a", "/fixture/data-b")),
+            "XDG_STATE_HOME": "/fixture/state",
+            "XDG_CACHE_HOME": "/fixture/cache",
+            "XDG_RUNTIME_DIR": "/fixture/runtime",
+            "CLAUDE_CONFIG_DIR": "/fixture/claude-config",
+        }
+        roots = claude_runtime.provider_runtime_roots(environment)
+        for shared in ("/fixture/config:personal", "/fixture/config-a", "/fixture/config-b",
+                       "/fixture/data", "/fixture/data-a", "/fixture/data-b",
+                       "/fixture/state", "/fixture/cache", "/fixture/runtime"):
+            self.assertNotIn(Path(shared), roots)
+        for provider_root in ("/fixture/config:personal/claude", "/fixture/config-a/claude",
+                              "/fixture/config-b/claude", "/fixture/data/claude",
+                              "/fixture/data-a/claude", "/fixture/data-b/claude",
+                              "/fixture/state/claude", "/fixture/cache/claude",
+                              "/fixture/claude-config"):
+            self.assertIn(Path(provider_root), roots)
+        self.assertNotIn(Path("/fixture/config-a:/fixture/config-b"), roots)
+        claude_runtime.reject_runtime_roots(Path("/fixture/config:personal/delegation-layer"), "state", environment)
+
+    def test_live_parent_is_platform_specific_and_private_before_mkdtemp(self):
+        home = Path("/Users/example")
+        self.assertEqual(claude_runtime.pueue_parent_for_platform("darwin", home), Path("/Users/Shared"))
+        self.assertEqual(claude_runtime.pueue_parent_for_platform("linux", home), home / ".dl-acceptance")
+        with tempfile.TemporaryDirectory(dir=str(Path.home())) as temporary:
+            root = Path(temporary)
+            owner = DirectoryOwner()
+            with patch.object(claude_runtime, "PUEUE_PARENT", root / "parent"):
+                parent = claude_runtime.acceptance_temp_parent()
+                child = claude_runtime.private_mkdtemp("claude-", "test acceptance directory", owner)
+            self.assertEqual(parent, (root / "parent").resolve())
+            self.assertEqual(child.directory.parent, parent)
+            self.assertEqual(parent.stat().st_mode & 0o077, 0)
+            owner.rollback()
+
+    def test_private_mkdtemp_rolls_back_a_child_that_fails_validation(self):
+        with tempfile.TemporaryDirectory(dir=str(Path.home())) as temporary:
+            root = Path(temporary)
+            parent = root / "parent"
+            child = parent / "claude-failed"
+
+            def allocate(**_kwargs):
+                child.mkdir()
+                return str(child)
+
+            original_chmod = os.chmod
+
+            def fail_child_chmod(path, mode):
+                if Path(path) == child:
+                    raise OSError("injected validation failure")
+                return original_chmod(path, mode)
+
+            with patch.object(claude_runtime, "PUEUE_PARENT", parent), \
+                    patch.object(claude_runtime.tempfile, "mkdtemp", side_effect=allocate), \
+                    patch.object(os, "chmod", side_effect=fail_child_chmod):
+                owner = DirectoryOwner()
+                with self.assertRaisesRegex(OSError, "validation failure"):
+                    claude_runtime.private_mkdtemp("claude-", "test acceptance directory", owner)
+                owner.rollback()
+            self.assertFalse(child.exists())
+            self.assertTrue(parent.is_dir())
+
+    def test_live_profile_environment_is_task_owned(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            scratch = root / "tmp"
+            inherited = {
+                "HOME": "/real/user",
+                "PATH": "/usr/bin",
+                "USER": "fixture-user",
+                "CLAUDE_CODE_COZY_TEAPOT": "relaxed",
+                "ANTHROPIC_API_KEY": "ambient-secret",
+                "XDG_CONFIG_HOME": "/real/config",
+                "CLAUDE_CONFIG_DIR": "/real/claude-config",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/real/run/bus",
+                "TMPDIR": "/real/tmp",
+            }
+            isolated = claude_runtime.isolated_acceptance_environment(inherited, home, scratch)
+            self.assertEqual(isolated["HOME"], str(home.resolve()))
+            self.assertEqual(isolated["TMPDIR"], str(scratch.resolve()))
+            self.assertEqual(isolated["TMP"], str(scratch.resolve()))
+            self.assertEqual(isolated["TEMP"], str(scratch.resolve()))
+            self.assertNotIn("CLAUDE_CODE_COZY_TEAPOT", isolated)
+            self.assertNotIn("ANTHROPIC_API_KEY", isolated)
+            self.assertNotIn("XDG_CONFIG_HOME", isolated)
+            validation = claude_runtime.path_validation_environment(inherited)
+            self.assertEqual(validation["HOME"], "/real/user")
+            self.assertEqual(validation["TMPDIR"], "/real/tmp")
+            self.assertNotIn("ANTHROPIC_API_KEY", validation)
+            self.assertNotIn("CLAUDE_CODE_COZY_TEAPOT", validation)
+            self.assertEqual(validation["XDG_CONFIG_HOME"], "/real/config")
+            self.assertEqual(validation["CLAUDE_CONFIG_DIR"], "/real/claude-config")
+
+    def test_native_account_environment_keeps_login_and_relocates_mutable_temp(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            scratch = root / "tmp"
+            scratch.mkdir()
+            inherited = {
+                "HOME": "/real/user",
+                "PATH": "/usr/bin",
+                "USER": "fixture-user",
+                "TMPDIR": "/real/tmp",
+                "XDG_CONFIG_HOME": "/real/config",
+                "CLAUDE_CONFIG_DIR": "/real/claude-config",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/real/run/bus",
+                "ANTHROPIC_API_KEY": "ambient-secret",
+            }
+            environment = claude_runtime.native_account_acceptance_environment(inherited, home, scratch)
+            self.assertEqual(environment["HOME"], str(home.resolve()))
+            self.assertEqual(environment["TMPDIR"], str(scratch.resolve()))
+            self.assertEqual(environment["TMP"], str(scratch.resolve()))
+            self.assertEqual(environment["TEMP"], str(scratch.resolve()))
+            self.assertEqual(environment["XDG_CONFIG_HOME"], "/real/config")
+            self.assertEqual(environment["CLAUDE_CONFIG_DIR"], "/real/claude-config")
+            self.assertEqual(environment["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/real/run/bus")
+            self.assertNotIn("ANTHROPIC_API_KEY", environment)
+
+    def test_acceptance_receipt_labels_are_neutral(self):
+        self.assertEqual(claude_constants.ACCEPTANCE_STATUS, "acceptance-passed")
+        self.assertEqual(claude_constants.PRELAUNCH_STATUS, "planned")
+        self.assertNotIn("candidate", claude_constants.ACCEPTANCE_STATUS.lower())
+
+    def test_finalize_removes_closed_private_roots_and_raw_process_captures(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_parent = root / "states"
+            pueue_parent = root / "pueue"
+            output = root / "evidence"
+            state = state_parent / "claude-run"
+            workspace = pueue_parent / "workspace-run"
+            pueue = pueue_parent / "claude-pueue"
+            state_parent.mkdir()
+            pueue_parent.mkdir()
+            output.mkdir()
+            owner = DirectoryOwner()
+            state_token = owner.create("acceptance state", state, state_parent)
+            workspace_token = owner.create("acceptance workspace", workspace, pueue_parent)
+            raw_token = owner.create("raw process captures", output / "processes", output)
+            pueue_token = owner.create("private pueue", pueue, pueue_parent)
+            owner = object.__new__(gate.ClaudeAcceptance)
+            owner.output = output
+            owner.closed = True
+            owner.state_parent = state
+            owner.workspace_parent = workspace
+            owner.owned_directories = (
+                state_token, workspace_token, raw_token,
+            )
+            owner.pueue_base = pueue
+            owner.pueue_owned_directories = (pueue_token,)
+            owner.processes = type("Processes", (), {"capture_root": raw_token})()
+            with patch.object(claude_runner, "DEFAULT_STATE_PARENT", state_parent), \
+                    patch.object(claude_runtime, "PUEUE_PARENT", pueue_parent):
+                self.assertTrue(owner.finalize(True))
+
+            self.assertFalse(state.exists())
+            self.assertFalse(workspace.exists())
+            self.assertFalse(pueue.exists())
+            self.assertFalse((output / "processes").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

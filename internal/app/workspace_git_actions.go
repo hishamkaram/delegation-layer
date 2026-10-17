@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
 	"golang.org/x/sys/unix"
 )
 
@@ -24,7 +24,7 @@ func runWorkspaceAction(scope execution.PreflightScope, store *taskdir.Store, op
 		return candidate, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, resource.Close()) }()
-	if err = validateWorkspaceActionRequest(scope.Context(), resource, request); err != nil {
+	if err = workspacescore.ValidateActionRequest(scope.Context(), resource, request); err != nil {
 		return candidate, err
 	}
 	git := workspace.Git{Runner: workspaceCommandRunner{scope: scope}}
@@ -54,14 +54,14 @@ func provisionManagedCheckout(ctx context.Context, store *taskdir.Store, resourc
 	if err != nil {
 		return err
 	}
-	if managedPathsOverlap(request.Container, source.Root) || managedPathsOverlap(request.Container, source.CommonDir) || managedPathsOverlap(request.Container, store.Root) {
+	if config.PathsOverlap(request.Container, source.Root) || config.PathsOverlap(request.Container, source.CommonDir) || config.PathsOverlap(request.Container, store.Root) {
 		return fmt.Errorf("%w: managed container overlaps the source or state root", workspace.ErrIdentity)
 	}
 	anchor, err := prepareManagedAnchor(ctx, store.Root, resource)
 	if err != nil {
 		return err
 	}
-	if err = git.PinBase(ctx, source, managedBaseRef(request.RootID, request.WorkspaceID)); err != nil {
+	if err = git.PinBase(ctx, source, workspacescore.ManagedBaseRef(request.RootID, request.WorkspaceID)); err != nil {
 		return err
 	}
 	checkout, err := provisionOrInspectCheckout(ctx, git, source, filepath.Join(anchor, "checkout"))
@@ -95,7 +95,7 @@ func prepareManagedAnchor(ctx context.Context, root string, resource *workspace.
 	if err := os.MkdirAll(anchor, 0o700); err != nil {
 		return "", err
 	}
-	if err := verifyCanonicalManagedDirectory(anchor); err != nil {
+	if err := workspacescore.VerifyCanonicalDirectory(anchor); err != nil {
 		return "", err
 	}
 	if err := ensureWorkspaceMarker(root, request.WorkspaceID, anchor); err != nil {
@@ -103,7 +103,7 @@ func prepareManagedAnchor(ctx context.Context, root string, resource *workspace.
 	}
 	anchorRecord, err := resource.Anchor(ctx)
 	if workspace.OperationAbsent(err) {
-		identity, identityErr := managedDirectoryIdentity(anchor)
+		identity, identityErr := workspacescore.DirectoryIdentity(anchor)
 		if identityErr != nil {
 			return "", identityErr
 		}
@@ -113,7 +113,7 @@ func prepareManagedAnchor(ctx context.Context, root string, resource *workspace.
 	if err != nil {
 		return "", err
 	}
-	if err = verifyManagedDirectoryIdentity(anchor, anchorRecord.Identity); err != nil {
+	if err = workspacescore.VerifyDirectoryIdentity(anchor, anchorRecord.Identity); err != nil {
 		return "", err
 	}
 	return anchor, nil
@@ -135,10 +135,10 @@ func recordManagedRegistration(ctx context.Context, resource *workspace.Resource
 	if err != nil {
 		return err
 	}
-	if err = verifyManagedDirectoryIdentity(anchor.Path, anchor.Identity); err != nil {
+	if err = workspacescore.VerifyDirectoryIdentity(anchor.Path, anchor.Identity); err != nil {
 		return err
 	}
-	checkoutIdentity, err := managedDirectoryIdentity(checkout.CheckoutPath)
+	checkoutIdentity, err := workspacescore.DirectoryIdentity(checkout.CheckoutPath)
 	if err != nil {
 		return err
 	}
@@ -148,58 +148,13 @@ func recordManagedRegistration(ctx context.Context, resource *workspace.Resource
 		AdminDir: checkout.AdminDir, AdminBacklink: checkout.AdminBacklink,
 		CheckoutPath: checkout.CheckoutPath, CanonicalCwd: checkout.Workdir,
 		RelativeCwd: source.RelativeCwd, BaseOID: source.BaseOID, ObjectFormat: source.ObjectFormat,
-		BaseRef: managedBaseRef(request.RootID, request.WorkspaceID), SourceChangesExcluded: source.Dirty,
+		BaseRef: workspacescore.ManagedBaseRef(request.RootID, request.WorkspaceID), SourceChangesExcluded: source.Dirty,
 		ContainerIdentity: anchor.Identity, CheckoutIdentity: checkoutIdentity,
 	})
 }
 
-func registeredCheckout(ctx context.Context, resource *workspace.Resource) (workspace.Checkout, error) {
-	registration, err := resource.Registration(ctx)
-	if err != nil {
-		return workspace.Checkout{}, err
-	}
-	source, err := resource.Source(ctx)
-	if err != nil {
-		return workspace.Checkout{}, err
-	}
-	if source.Root != registration.SourceRoot || source.CommonDir != registration.CommonDir || source.GitDir != registration.GitDir || source.BaseOID != registration.BaseOID || source.ObjectFormat != registration.ObjectFormat || source.RelativeCwd != registration.RelativeCwd {
-		return workspace.Checkout{}, task.ErrIdentityMismatch
-	}
-	anchor := filepath.Join(resource.Request().Container, resource.Request().WorkspaceID)
-	if registration.CheckoutPath != filepath.Join(anchor, "checkout") {
-		return workspace.Checkout{}, workspace.ErrIdentity
-	}
-	if err = verifyManagedDirectoryIdentity(anchor, registration.ContainerIdentity); err != nil {
-		return workspace.Checkout{}, err
-	}
-	if err = verifyWorkspaceMarker(resource, anchor); err != nil {
-		return workspace.Checkout{}, err
-	}
-	if err = verifyManagedDirectoryIdentity(registration.CheckoutPath, registration.CheckoutIdentity); err != nil {
-		return workspace.Checkout{}, err
-	}
-	return workspace.Checkout{Source: source, CheckoutPath: registration.CheckoutPath, Workdir: registration.CanonicalCwd, AdminDir: registration.AdminDir, AdminBacklink: registration.AdminBacklink}, nil
-}
-
-// Execution requires the exact mapped directory. Capture and removal instead
-// inspect the checkout root so deleting a mapped subdirectory remains capturable.
-func registeredExecutionCheckout(ctx context.Context, resource *workspace.Resource) (workspace.Checkout, error) {
-	checkout, err := registeredCheckout(ctx, resource)
-	if err != nil {
-		return checkout, err
-	}
-	if err = verifyCanonicalManagedDirectory(checkout.Workdir); err != nil {
-		return checkout, errors.Join(workspace.ErrIdentity, err)
-	}
-	relative, err := filepath.Rel(checkout.CheckoutPath, checkout.Workdir)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return checkout, errors.Join(workspace.ErrIdentity, err)
-	}
-	return checkout, nil
-}
-
 func captureManagedCheckout(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, operation *workspace.Operation, git workspace.Git) ([]workspace.Artifact, error) {
-	checkout, err := registeredCheckout(ctx, resource)
+	checkout, err := workspacescore.RegisteredCheckout(ctx, resource)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +219,7 @@ func removeManagedCheckout(ctx context.Context, resource *workspace.Resource, gi
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, parent.Close()) }()
-	if err = verifyWorkspaceMarker(resource, anchor.Path); err != nil {
+	if err = workspacescore.VerifyMarker(resource, anchor.Path); err != nil {
 		return err
 	}
 	checkout, err := recoverWorkspaceCleanupTarget(ctx, resource, git, source, anchor)
@@ -297,7 +252,7 @@ func workspaceCleanupIdentity(ctx context.Context, resource *workspace.Resource,
 		// Interrupted initial provisioning has no published checkout inode.
 		// Pin the current native-inspected checkout for this removal; the
 		// durable Anchor and Checkout still supply its ownership coordinates.
-		return managedDirectoryIdentity(path)
+		return workspacescore.DirectoryIdentity(path)
 	}
 	if err != nil {
 		return workspace.DirectoryIdentity{}, err
@@ -345,61 +300,8 @@ func recoverWorkspaceCleanupTarget(ctx context.Context, resource *workspace.Reso
 	return checkout, nil
 }
 
-func managedBaseRef(rootID, workspaceID string) string {
-	return "refs/delegate/" + rootID + "/workspaces/" + workspaceID + "/base"
-}
-
 func managedCaptureRef(rootID, workspaceID, operationID string) string {
 	return "refs/delegate/" + rootID + "/workspaces/" + workspaceID + "/captures/" + operationID
-}
-
-func managedPathsOverlap(first, second string) bool {
-	return config.PathsOverlap(first, second)
-}
-
-func verifyCanonicalManagedDirectory(path string) error {
-	canonical, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return err
-	}
-	if canonical != path {
-		return workspace.ErrIdentity
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return workspace.ErrIdentity
-	}
-	return nil
-}
-
-func managedDirectoryIdentity(path string) (workspace.DirectoryIdentity, error) {
-	if err := verifyCanonicalManagedDirectory(path); err != nil {
-		return workspace.DirectoryIdentity{}, err
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return workspace.DirectoryIdentity{}, err
-	}
-	var stat unix.Stat_t
-	statErr := unix.Fstat(int(file.Fd()), &stat)
-	if err = errors.Join(statErr, file.Close()); err != nil {
-		return workspace.DirectoryIdentity{}, err
-	}
-	return workspace.DirectoryIdentity{Device: uint64(stat.Dev), Inode: uint64(stat.Ino)}, nil
-}
-
-func verifyManagedDirectoryIdentity(path string, expected workspace.DirectoryIdentity) error {
-	current, err := managedDirectoryIdentity(path)
-	if err != nil {
-		return err
-	}
-	if current != expected {
-		return workspace.ErrIdentity
-	}
-	return nil
 }
 
 func pinManagedDirectory(path string, expected workspace.DirectoryIdentity) (*os.File, error) {
@@ -432,16 +334,4 @@ func ensureWorkspaceMarker(root, id, anchor string) error {
 		return workspace.ErrIdentity
 	}
 	return taskdir.SyncDirectoryEntry(anchor)
-}
-
-func verifyWorkspaceMarker(resource *workspace.Resource, anchor string) error {
-	target, err := os.Readlink(filepath.Join(anchor, ".delegate-workspace"))
-	if err != nil {
-		return err
-	}
-	request := resource.Request()
-	if target != filepath.Join(resource.StateRoot(), "workspaces", request.WorkspaceID) {
-		return workspace.ErrIdentity
-	}
-	return nil
 }

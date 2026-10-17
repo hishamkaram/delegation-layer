@@ -11,7 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hishamkaram/delegation-layer/internal/config"
+	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -22,13 +26,13 @@ import (
 
 func TestRunInspectionWorkerRejectsInvalidTaskBeforeOpeningState(t *testing.T) {
 	called := false
-	got := runInspectionWorker(filepath.Join(canonicalAppTestTempDir(t), "missing"), "invalid", Dependencies{
+	got := runInspectionWorkerMode(filepath.Join(testsupport.CanonicalTempDir(t), "missing"), "invalid", false, Dependencies{
 		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 			called = true
 			return commonprovider.ProfileCandidate{}, nil
 		},
 	})
-	if !errors.Is(got, errInspectionWorkerUnavailable) {
+	if !errors.Is(got, admissioncore.ErrInspectionWorkerUnavailable) {
 		t.Fatalf("error=%v, want fixed worker error", got)
 	}
 	if called {
@@ -37,9 +41,9 @@ func TestRunInspectionWorkerRejectsInvalidTaskBeforeOpeningState(t *testing.T) {
 }
 
 func TestRunInspectionWorkerNeverCreatesMissingStore(t *testing.T) {
-	root := filepath.Join(canonicalAppTestTempDir(t), "missing-state")
-	got := runInspectionWorker(root, strings.Repeat("a", 32), Dependencies{})
-	if !errors.Is(got, errInspectionWorkerUnavailable) {
+	root := filepath.Join(testsupport.CanonicalTempDir(t), "missing-state")
+	got := runInspectionWorkerMode(root, strings.Repeat("a", 32), false, Dependencies{})
+	if !errors.Is(got, admissioncore.ErrInspectionWorkerUnavailable) {
 		t.Fatalf("error=%v, want fixed worker error", got)
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
@@ -49,14 +53,14 @@ func TestRunInspectionWorkerNeverCreatesMissingStore(t *testing.T) {
 
 func TestInspectionWorkerFailureExposesOnlySafeStage(t *testing.T) {
 	err := inspectionWorkerFailure("prepare-environment")
-	if !errors.Is(err, errInspectionWorkerUnavailable) {
+	if !errors.Is(err, admissioncore.ErrInspectionWorkerUnavailable) {
 		t.Fatalf("staged failure lost worker classification: %v", err)
 	}
 	public := inspectionWorkerPublicError(err)
 	if got, want := public.Error(), "native inspection unavailable: stage=prepare-environment"; got != want {
 		t.Fatalf("public failure = %q, want %q", got, want)
 	}
-	if got := inspectionWorkerPublicError(errors.New("provider secret detail")).Error(); got != errInspectionWorkerUnavailable.Error() {
+	if got := inspectionWorkerPublicError(errors.New("provider secret detail")).Error(); got != admissioncore.ErrInspectionWorkerUnavailable.Error() {
 		t.Fatalf("unclassified failure leaked detail: %q", got)
 	}
 }
@@ -64,7 +68,7 @@ func TestInspectionWorkerFailureExposesOnlySafeStage(t *testing.T) {
 func TestValidateInspectionWorkerExecutableRejectsWrongExecutable(t *testing.T) {
 	_, operation := newInspectionWorkerOperation(t, time.Unix(100, 0).UTC())
 	binding := operation.Request().Binding
-	if err := validateInspectionWorkerExecutable(context.Background(), canonicalAppTestTempDir(t), operation, binding, filepath.Join(canonicalAppTestTempDir(t), "current-worker")); !errors.Is(err, task.ErrEvidenceFault) {
+	if err := validateInspectionWorkerExecutable(context.Background(), testsupport.CanonicalTempDir(t), operation, binding, filepath.Join(testsupport.CanonicalTempDir(t), "current-worker")); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("wrong worker executable was accepted: %v", err)
 	}
 }
@@ -290,7 +294,7 @@ func TestCompleteInspectionFailureSealsExpiredResult(t *testing.T) {
 	if err = permit.Consume(); err != nil {
 		t.Fatal(err)
 	}
-	if got := completeInspectionFailure(operation); !errors.Is(got, errInspectionWorkerUnavailable) {
+	if got := completeInspectionFailureAt(operation, "run-inspection"); !errors.Is(got, admissioncore.ErrInspectionWorkerUnavailable) {
 		t.Fatalf("error=%v, want fixed worker error", got)
 	}
 	result, _, err := operation.ReadCompleted()
@@ -347,76 +351,16 @@ func readInspectionWorkerRecord(t *testing.T, store *taskdir.Store, taskID, name
 }
 
 func newInspectionWorkerOperation(t *testing.T, created time.Time) (*taskdir.Store, *inspection.Operation) {
-	return newInspectionWorkerOperationWithRunnerOwnership(t, created, "")
+	t.Helper()
+	return admissionfixture.NewInspectionWorkerOperation(t, created)
 }
 
 func newInspectionWorkerOperationWithRunnerOwnership(t *testing.T, created time.Time, runnerOwnership string) (*taskdir.Store, *inspection.Operation) {
-	return newInspectionWorkerOperationWithExitProof(t, created, runnerOwnership, "")
+	t.Helper()
+	return admissionfixture.NewInspectionWorkerOperationWithRunnerOwnership(t, created, runnerOwnership)
 }
 
 func newInspectionWorkerOperationWithExitProof(t *testing.T, created time.Time, runnerOwnership, workerExitProof string) (*taskdir.Store, *inspection.Operation) {
 	t.Helper()
-	stateRoot := filepath.Join(canonicalAppTestTempDir(t), "state")
-	store, err := taskdir.InitStore(stateRoot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspace, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		if closeErr := store.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-		t.Fatal(err)
-	}
-	request := task.TaskRecord{
-		SchemaVersion: task.SchemaVersion,
-		RootID:        store.RootID,
-		TaskID:        strings.Repeat("a", 32),
-		Provider:      config.ProviderFixture,
-		Mode:          config.ModeReadOnly,
-		CanonicalCwd:  workspace,
-		RequestedConfig: task.TaskConfig{
-			Permission: config.ModeReadOnly,
-			Budget:     "1m0s",
-		},
-		BudgetNanos: int64(time.Minute),
-		BriefSHA256: task.ComputeSHA256([]byte("inspection brief")),
-		BriefLength: int64(len("inspection brief")),
-	}
-	digest := strings.Repeat("0", 64)
-	binding := inspection.Binding{
-		DefinitionRevision: "inspection-v1",
-		DefinitionSHA256:   digest,
-		HelperExecutable:   "/bin/sh",
-		HelperSHA256:       digest,
-		WorkerExecutable:   "/bin/sh",
-		WorkerSHA256:       digest,
-		RunnerOwnership:    runnerOwnership,
-		WorkerExitProof:    workerExitProof,
-		Supervisor: task.SupervisorRef{
-			ClientExecutable:     "/bin/sh",
-			ClientSHA256:         digest,
-			ResolvedConfigSHA256: digest,
-			Endpoint:             "/private/pueue.sock",
-			ConfigPath:           filepath.Join(workspace, "pueue.yml"),
-			ConfigDigest:         digest,
-			ObservedVersion:      pueue.FixtureVersion,
-		},
-	}
-	operation, err := inspection.OpenOperation(store, request, binding, created)
-	if err != nil {
-		if closeErr := store.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if closeErr := operation.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-		if closeErr := store.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	return store, operation
+	return admissionfixture.NewInspectionWorkerOperationWithExitProof(t, created, runnerOwnership, workerExitProof)
 }
