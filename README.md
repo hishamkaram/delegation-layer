@@ -310,8 +310,8 @@ feature does not automatically apply, commit, branch, or merge worker changes.
   behavior.
 - [Provider guide](docs/providers.md) — profiles and runtime compatibility.
 - [Architecture](docs/architecture.md) — lifecycle and ownership boundaries.
-- [System components](diagrams/components.html) — interactive Archify view.
-- [Task lifecycle](diagrams/lead-interface.html) — interactive lifecycle view.
+- [System components](diagrams/components.html) — interactive Archify view; [SVG](diagrams/components.light.svg) · [PNG](diagrams/components.light.png).
+- [Task lifecycle](diagrams/lead-interface.html) — interactive lifecycle view; [SVG](diagrams/lead-interface.light.svg) · [PNG](diagrams/lead-interface.light.png).
 - [Security](docs/security.md) — isolation, policy, and result integrity.
 - [Troubleshooting](docs/troubleshooting.md) — common setup and runtime
   failures.

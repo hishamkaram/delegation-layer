@@ -48,8 +48,13 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
    every capture before claiming visual acceptance. Keep raw receipts unchanged
    in the ignored local archive: their absolute paths and hashes bind exact
    artifacts. Archive obsolete contact sheets and proof only after replacement
-   captures pass. Publish the canonical specs, HTML, and accepted PNGs, then
-   generate `diagrams/SHA256SUMS` last. Run `make verify-diagram-checksums`.
+   captures pass. Keep viewport captures in the ignored local archive; they
+   may show only part of a tall diagram and are not published illustrations.
+   Use the viewer's Export menu to publish full-diagram SVG and PNG assets in
+   both themes. Verify that every authored node and relationship is present,
+   inspect the bottom edge for clipping, and exclude viewer controls. Publish
+   those exports with the canonical specs and HTML, then generate
+   `diagrams/SHA256SUMS` last. Run `make verify-diagram-checksums`.
    Checksums prove byte integrity only; they do not prove capture freshness or
    visual correctness. Do not rewrite receipt paths to make proof publishable.
 7. Run `make verify-skills` for skill/link/command changes and the affected
