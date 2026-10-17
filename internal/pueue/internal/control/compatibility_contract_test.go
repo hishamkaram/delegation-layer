@@ -89,8 +89,12 @@ func TestPrivateMigrationLoadKeepsUnsupportedSchemaError(t *testing.T) {
 }
 
 func TestPrivateLockPathsModesAndWriterIntentRemainCompatible(t *testing.T) {
-	stateRoot := filepath.Join(t.TempDir(), "state")
-	if err := os.Mkdir(stateRoot, 0o700); err != nil {
+	temporary, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(temporary, "state")
+	if err = os.Mkdir(stateRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	base := filepath.Join(stateRoot, privateSupervisorDirectory)

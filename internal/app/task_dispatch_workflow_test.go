@@ -55,7 +55,9 @@ func TestContinuationMissingProfilePortRetainsPreparedJournal(t *testing.T) {
 }
 
 func TestDispatchWorkflowClosesRealStoreAfterCandidateRefusal(t *testing.T) {
-	fixture := preflightFixture{root: filepath.Join(t.TempDir(), "state"), cwd: t.TempDir(), prepareFault: commonprovider.ErrAuthenticationBlocked}
+	temporary, err := filepath.EvalSymlinks(t.TempDir())
+	testsupport.RequireAppTest(t, err)
+	fixture := preflightFixture{root: filepath.Join(temporary, "state"), cwd: t.TempDir(), prepareFault: commonprovider.ErrAuthenticationBlocked}
 	deps := Dependencies{Catalog: preflightFixtureCatalog(t, fixture.candidate)}
 	options := dispatchOptions(deps, false)
 	var opened *taskdir.Store
