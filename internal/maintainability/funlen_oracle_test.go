@@ -28,6 +28,11 @@ type funlenReport struct {
 
 // collectFunlen is a test oracle, never a second production policy path.
 func collectFunlen(root, binary, config string, sources []policy.Source) ([]policy.Finding, error) {
+	canonical, err := canonicalRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	root = canonical
 	command := exec.Command(binary, "run", "--config", config, "--allow-serial-runners", "--enable-only", "funlen", "--max-issues-per-linter", "0", "--max-same-issues", "0", "--output.json.path", "stdout", "--output.text.path", "/dev/null", "./...")
 	command.Dir = root
 	var diagnostic bytes.Buffer

@@ -1,6 +1,7 @@
 package maintainability
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -61,10 +62,23 @@ func TestGoLengthMatchesPinnedFunlen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings, err := collectFunlen(root, filepath.Join(repository, "bin", "golangci-lint"), filepath.Join(repository, ".golangci.yml"), sources)
-	if err != nil {
+	linked := filepath.Join(t.TempDir(), "source")
+	if err = os.Symlink(root, linked); err != nil {
 		t.Fatal(err)
 	}
+	for _, test := range []struct{ name, root string }{{"direct", root}, {"symlink", linked}} {
+		t.Run(test.name, func(t *testing.T) {
+			findings, err := collectFunlen(test.root, filepath.Join(repository, "bin", "golangci-lint"), filepath.Join(repository, ".golangci.yml"), sources)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPinnedFunlenFindings(t, sources, findings)
+		})
+	}
+}
+
+func assertPinnedFunlenFindings(t *testing.T, sources []policy.Source, findings []policy.Finding) {
+	t.Helper()
 	for _, source := range sources {
 		function := source.Functions[0]
 		matched := slices.ContainsFunc(findings, func(finding policy.Finding) bool { return finding.Path == source.Path })
