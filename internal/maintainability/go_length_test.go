@@ -36,7 +36,7 @@ func TestGoLengthIncludesUncompiledSourceAtPinnedBoundary(t *testing.T) {
 }
 
 func TestGoLengthMatchesPinnedFunlen(t *testing.T) {
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "nested", "module")
 	writeCollectorFixture(t, root, "go.mod", "module example.test\n\ngo 1.27.0\n")
 	var sources []policy.Source
 	cases := []string{

@@ -33,7 +33,7 @@ func collectFunlen(root, binary, config string, sources []policy.Source) ([]poli
 		return nil, err
 	}
 	root = canonical
-	command := exec.Command(binary, "run", "--config", config, "--allow-serial-runners", "--enable-only", "funlen", "--max-issues-per-linter", "0", "--max-same-issues", "0", "--output.json.path", "stdout", "--output.text.path", "/dev/null", "./...")
+	command := exec.Command(binary, "run", "--config", config, "--allow-serial-runners", "--enable-only", "funlen", "--max-issues-per-linter", "0", "--max-same-issues", "0", "--output.json.path", "stdout", "--output.text.path", "/dev/null", "--path-mode", "abs", "./...")
 	command.Dir = root
 	var diagnostic bytes.Buffer
 	command.Stderr = &diagnostic
@@ -68,7 +68,7 @@ func funlenFindings(root string, issues []funlenIssue, sources []policy.Source) 
 		}
 		path := issue.Pos.Filename
 		if !filepath.IsAbs(path) {
-			path = filepath.Join(root, path)
+			return nil, errors.New("go function diagnostic is not absolute")
 		}
 		relative, err := filepath.Rel(root, path)
 		if err != nil || !validRelativePath(relative) {
