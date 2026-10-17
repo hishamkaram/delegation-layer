@@ -41,7 +41,11 @@ class AcceptanceModuleIdentityTests(unittest.TestCase):
         scripts = Path(__file__).resolve().parent
         bridges = (
             ("acceptance_supervisor_common", "Process", "scripts.delegate_acceptance.processes.operations"),
+            ("acceptance_supervisor_common", "OutputCapture", "scripts.delegate_acceptance.processes.contracts"),
+            ("acceptance_supervisor_common", "OwnedDirectory", "scripts.delegate_acceptance.directories.operations"),
             ("acceptance_provider_common", "canonical_go_json", "scripts.delegate_acceptance.evidence.encoding"),
+            ("acceptance_provider_common", "AcceptanceFailure", "scripts.delegate_acceptance.evidence.validation"),
+            ("acceptance_provider_common", "NativeTaskOps", "scripts.delegate_acceptance.tasks.operations"),
         )
         for bridge, symbol, owner in bridges:
             for order in ("flat-first", "package-first"):

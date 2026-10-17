@@ -44,7 +44,7 @@ func TestAwaitInspectionRejectsFailedPrivateTerminalEventAfterCurrentQueueReconc
 	if event, found, readErr := supervisor.ReadPrivateTerminalEvent(ctx, job.ID); readErr != nil || !found || !event.Succeeded {
 		t.Fatalf("successful callback hint for failed row = %+v found=%t err=%v", event, found, readErr)
 	}
-	facts, err := AwaitInspection(ctx, operation, supervisor)
+	facts, err := awaitInspectionWithSubmissionState(ctx, operation, supervisor, inspectionSubmissionState{})
 	if facts != nil || !errors.Is(err, ErrInspectionWorkerUnavailable) {
 		t.Fatalf("failed terminal event admission facts=%s err=%v", facts, err)
 	}

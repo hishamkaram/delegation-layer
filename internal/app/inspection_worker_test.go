@@ -26,7 +26,7 @@ import (
 
 func TestRunInspectionWorkerRejectsInvalidTaskBeforeOpeningState(t *testing.T) {
 	called := false
-	got := runInspectionWorker(filepath.Join(testsupport.CanonicalTempDir(t), "missing"), "invalid", Dependencies{
+	got := runInspectionWorkerMode(filepath.Join(testsupport.CanonicalTempDir(t), "missing"), "invalid", false, Dependencies{
 		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 			called = true
 			return commonprovider.ProfileCandidate{}, nil
@@ -42,7 +42,7 @@ func TestRunInspectionWorkerRejectsInvalidTaskBeforeOpeningState(t *testing.T) {
 
 func TestRunInspectionWorkerNeverCreatesMissingStore(t *testing.T) {
 	root := filepath.Join(testsupport.CanonicalTempDir(t), "missing-state")
-	got := runInspectionWorker(root, strings.Repeat("a", 32), Dependencies{})
+	got := runInspectionWorkerMode(root, strings.Repeat("a", 32), false, Dependencies{})
 	if !errors.Is(got, admissioncore.ErrInspectionWorkerUnavailable) {
 		t.Fatalf("error=%v, want fixed worker error", got)
 	}
@@ -294,7 +294,7 @@ func TestCompleteInspectionFailureSealsExpiredResult(t *testing.T) {
 	if err = permit.Consume(); err != nil {
 		t.Fatal(err)
 	}
-	if got := completeInspectionFailure(operation); !errors.Is(got, admissioncore.ErrInspectionWorkerUnavailable) {
+	if got := completeInspectionFailureAt(operation, "run-inspection"); !errors.Is(got, admissioncore.ErrInspectionWorkerUnavailable) {
 		t.Fatalf("error=%v, want fixed worker error", got)
 	}
 	result, _, err := operation.ReadCompleted()

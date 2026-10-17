@@ -123,7 +123,7 @@ func TestAdmissionRejectsCompletedRuntimeProofAfterIdentityDrift(t *testing.T) {
 	if err = operation.Close(); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := OpenAdmissionInspectionOperation(store, request, currentBinding, time.Now().UTC())
+	replayed, err := OpenInspectionOperationContext(t.Context(), store, request, currentBinding, time.Now().UTC())
 	if replayed != nil || !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("completed runtime proof crossed identity drift: operation=%v err=%v", replayed, err)
 	}
@@ -163,7 +163,7 @@ func TestAdmissionReplayReprobesIncompleteMarkerlessRuntimeAfterRefresh(t *testi
 	if err = operation.Close(); err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := OpenAdmissionInspectionOperation(store, request, currentBinding, time.Unix(101, 0).UTC())
+	replayed, err := OpenInspectionOperationContext(t.Context(), store, request, currentBinding, time.Unix(101, 0).UTC())
 	if err != nil {
 		t.Fatalf("incomplete markerless runtime journal was not reopened for re-probe: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestAwaitInspectionRetainsInFlightSupervisorObservation(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	facts, err := AwaitInspection(ctx, operation, client)
+	facts, err := awaitInspectionWithSubmissionState(ctx, operation, client, inspectionSubmissionState{})
 	pending := admissionfixture.AssertRetainedInspectionPending(t, err)
 	if facts != nil || !errors.Is(err, pueue.ErrInFlight) {
 		t.Fatalf("in-flight observation result facts=%s err=%v", facts, err)
@@ -254,7 +254,7 @@ func TestSubmitInspectionOnceRetainsInFlightSupervisorCommand(t *testing.T) {
 			t.Error(closeErr)
 		}
 	})
-	err = SubmitInspectionOnce(ctx, operation, client, runner, store.Root)
+	_, err = submitInspectionOnceWithState(ctx, operation, client, runner, store.Root)
 	pending := admissionfixture.AssertRetainedInspectionPending(t, err)
 	if !errors.Is(err, pueue.ErrInFlight) {
 		t.Fatalf("in-flight submission returned %v", err)
@@ -314,7 +314,7 @@ func TestSubmitInspectionOnceRejectsWorkerChangedAfterClaim(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err = SubmitInspectionOnce(ctx, operation, client, changedRunner, store.Root)
+	_, err = submitInspectionOnceWithState(ctx, operation, client, changedRunner, store.Root)
 	if !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("changed worker reached supervisor boundary: %v", err)
 	}

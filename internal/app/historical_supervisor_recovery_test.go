@@ -179,7 +179,7 @@ func TestHistoricalSupervisorRecoveryRejectsUnrelatedBinding(t *testing.T) {
 	unrelated := fixture.predecessor
 	unrelated.Endpoint = "unix:" + filepath.Join(fixture.root, ".supervisor", "run", "unrelated.sock")
 
-	client, err := newSupervisorClient(t.Context(), fixture.root, unrelated, fixture.options, true, fixture.clientB)
+	client, err := supervisor.NewClient(t.Context(), fixture.root, unrelated, fixture.options, true, fixture.clientB, openNativeSupervisorStore)
 	if client != nil {
 		if closeErr := client.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -286,7 +286,7 @@ func prepareHistoricalInspectionRecovery(t *testing.T, scenario *historicalInspe
 func assertHistoricalInspectionRecoverySelectsSuccessor(t *testing.T, scenario *historicalInspectionMigrationScenario, deps Dependencies) task.SupervisorRef {
 	t.Helper()
 	fixture := scenario.fixture
-	rebound, err := rebindContinuationSupervisor(t.Context(), fixture.root, fixture.predecessor, deps)
+	rebound, err := supervisor.RebindContinuation(t.Context(), fixture.root, fixture.predecessor, continuationSupervisorOptions(deps))
 	if err != nil || rebound != fixture.successor {
 		t.Fatalf("continuation rebind selected %+v, want successor B %+v: %v", rebound, fixture.successor, err)
 	}
@@ -303,7 +303,9 @@ func completeHistoricalInspectionRecovery(t *testing.T, scenario *historicalInsp
 	var revalidated task.SupervisorRef
 	err := pueue.WithBootstrapLock(t.Context(), fixture.root, func() error {
 		var revalidateErr error
-		revalidated, revalidateErr = revalidateContinuationSuccessor(t.Context(), fixture.root, rebound, deps.storeDependencies())
+		revalidated, revalidateErr = supervisor.RevalidateContinuationSuccessor(t.Context(), fixture.root, rebound, func(ctx context.Context, root string) (*taskdir.Store, error) {
+			return openStoreContext(ctx, root, deps.storeDependencies(), false)
+		})
 		return revalidateErr
 	})
 	if err != nil || revalidated != fixture.successor {

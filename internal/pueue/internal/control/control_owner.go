@@ -224,7 +224,7 @@ func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd 
 		if cmd != nil {
 			transport.EmitCommand(observer, commandID, "completed", cmd, result)
 		}
-		pending.Complete(result)
+		transport.CompletePending(pending, result)
 		return pending
 	}
 	if ctx == nil || !validExternalControlCommand(ownerExecutable, cmd) {
@@ -393,7 +393,7 @@ func completeControlOwnerPending(owner *exec.Cmd, observed *CommandResult, pendi
 		result.Err = errors.Join(result.Err, errors.New("supervisor control owner exited unsuccessfully"), waitErr)
 	}
 	transport.EmitCommand(observer, commandID, "completed", command, result)
-	pending.Complete(result)
+	transport.CompletePending(pending, result)
 }
 
 func controlOwnerConnection(fd int) (net.Conn, error) {

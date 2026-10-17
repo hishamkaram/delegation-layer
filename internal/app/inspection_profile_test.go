@@ -51,7 +51,7 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 			return profile, nil
 		},
 	}).normalized()
-	candidate, facts, err := prepareExistingCandidateContext(context.Background(), deps, root, request, task.MetaRecord{})
+	candidate, facts, err := admissionProfiles(deps).ExistingContext(context.Background(), root, request, task.MetaRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,9 +132,9 @@ func TestRefreshAdmissionCandidateUsesCurrentRuntimeDefinition(t *testing.T) {
 	request := newBareInspectionRequest(t, store)
 	admitted := runtimeAdmissionCandidate(t, request, "provider-old", "--run")
 	current := runtimeAdmissionCandidate(t, request, "provider-new", "--run")
-	refreshed, err := refreshAdmissionCandidate(Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	refreshed, err := admissionProfiles(Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 		return current, nil
-	}}, store.Root, request, admitted)
+	}}).Refresh(store.Root, request, admitted)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,9 +148,9 @@ func TestRefreshAdmissionCandidateRejectsCapabilityContractDrift(t *testing.T) {
 	request := newBareInspectionRequest(t, store)
 	admitted := runtimeAdmissionCandidate(t, request, "provider-old", "--run")
 	changed := runtimeAdmissionCandidate(t, request, "provider-new", "--changed")
-	_, err := refreshAdmissionCandidate(Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	_, err := admissionProfiles(Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 		return changed, nil
-	}}, store.Root, request, admitted)
+	}}).Refresh(store.Root, request, admitted)
 	if !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("capability contract drift was accepted: %v", err)
 	}
@@ -771,16 +771,16 @@ func TestBadInspectionProofRefusesBeforeNativeOrFinalize(t *testing.T) {
 func TestOrdinarySubmissionRemainsBoundToInspectedRunner(t *testing.T) {
 	fixture := newAppInspectionProofFixture(t, true)
 	td := &taskdir.TaskDir{Dir: filepath.Join(fixture.store.Root, "tasks", fixture.req.TaskID)}
-	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, &fixture.meta, fixture.workerPath); err != nil {
+	if err := admission.ValidateSubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &fixture.meta, fixture.workerPath); err != nil {
 		t.Fatalf("admitted worker was rejected: %v", err)
 	}
-	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, &fixture.meta, fixture.candidate.Inspection.Executable); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err := admission.ValidateSubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &fixture.meta, fixture.candidate.Inspection.Executable); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("different runner crossed binding: %v", err)
 	}
 	if err := os.WriteFile(fixture.workerPath, []byte("changed worker bytes"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := validateSubmissionRunner(Dependencies{}, td, &fixture.req, &fixture.meta, fixture.workerPath); !errors.Is(err, task.ErrEvidenceFault) {
+	if err := admission.ValidateSubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &fixture.meta, fixture.workerPath); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("changed inspected runner was accepted: %v", err)
 	}
 }
@@ -800,7 +800,7 @@ func TestManagedRetryAcceptsCurrentRunnerAfterInspectionWorkerUpgrade(t *testing
 	if err = supervisorcore.ValidateManagedRetryRunner(td, &meta, currentRunner); err != nil {
 		t.Fatalf("managed retry rejected the verified current runner: %v", err)
 	}
-	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err = admission.ValidateSubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("strict submission accepted a runner that differs from the immutable historical binding: %v", err)
 	}
 	custom := filepath.Join(testsupport.CanonicalTempDir(t), "custom-runner")
@@ -836,7 +836,7 @@ func TestManagedRetryProofAcceptsVerifiedStateRootSuccessor(t *testing.T) {
 	meta := fixture.meta
 	meta.RunnerExecutable = runner
 	meta.RunnerOwnership = task.RunnerOwnershipManaged
-	if err = validateManagedRetrySubmissionRunner(Dependencies{}, td, &fixture.req, &meta, runner); err != nil {
+	if err = admission.ValidateManagedRetrySubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &meta, runner); err != nil {
 		t.Fatalf("proof-only managed retry rejected a verified state-root successor: %v", err)
 	}
 }
@@ -866,17 +866,17 @@ func TestManagedRetrySubmissionRequiresInspectionUpgradeAuthority(t *testing.T) 
 			t.Error(closeErr)
 		}
 	})
-	if err = validateManagedRetrySubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err = admission.ValidateManagedRetrySubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("legacy retry without ownership metadata crossed inspection binding: %v", err)
 	}
 	meta.RunnerOwnership = task.RunnerOwnershipManaged
-	if err = validateManagedRetrySubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err = admission.ValidateManagedRetrySubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("managed retry crossed inspection binding without authorization: %v", err)
 	}
 	if err = fixture.operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err = validateManagedRetrySubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); err != nil {
+	if err = admission.ValidateManagedRetrySubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &meta, currentRunner); err != nil {
 		t.Fatalf("authorized managed retry was rejected: %v", err)
 	}
 }
@@ -893,19 +893,19 @@ func TestSubmissionAcceptsAuthorizedManagedInspectionWorkerSuccessor(t *testing.
 	}
 	meta.RunnerExecutable = currentRunner
 	meta.RunnerOwnership = task.RunnerOwnershipManaged
-	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err = admission.ValidateSubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &meta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("unapproved inspection worker successor was accepted: %v", err)
 	}
 	if err = fixture.operation.AuthorizeManagedWorkerUpgradeContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &meta, currentRunner); err != nil {
+	if err = admission.ValidateSubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &meta, currentRunner); err != nil {
 		t.Fatalf("authorized managed inspection worker successor was rejected: %v", err)
 	}
 
 	customMeta := meta
 	customMeta.RunnerOwnership = task.RunnerOwnershipCustom
-	if err = validateSubmissionRunner(Dependencies{}, td, &fixture.req, &customMeta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err = admission.ValidateSubmissionRunner(submissionValidationStore(Dependencies{}), td, &fixture.req, &customMeta, currentRunner); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("inspection migration authority bypassed custom task ownership: %v", err)
 	}
 }
@@ -914,10 +914,10 @@ func TestOrdinarySubmissionRemainsBoundWithoutInspectionJournal(t *testing.T) {
 	store, td, req := newAppTestTask(t, false)
 	defer closeAppTestTask(t, store, td)
 	meta := &task.MetaRecord{RunnerExecutable: "/tmp/recorded-runner"}
-	if err := validateSubmissionRunner(Dependencies{}, td, req, meta, meta.RunnerExecutable); err != nil {
+	if err := admission.ValidateSubmissionRunner(submissionValidationStore(Dependencies{}), td, req, meta, meta.RunnerExecutable); err != nil {
 		t.Fatalf("recorded worker was rejected without inspection evidence: %v", err)
 	}
-	if err := validateSubmissionRunner(Dependencies{}, td, req, meta, "/tmp/other-runner"); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err := admission.ValidateSubmissionRunner(submissionValidationStore(Dependencies{}), td, req, meta, "/tmp/other-runner"); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("different worker crossed recorded binding without inspection evidence: %v", err)
 	}
 }

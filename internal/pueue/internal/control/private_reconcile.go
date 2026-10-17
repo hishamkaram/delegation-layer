@@ -87,7 +87,7 @@ func ReconcilePublishedPrivatePairWithLock(ctx context.Context, stateRoot, exact
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := recoverPrivateIdentityPublication(stateRoot); err != nil {
+	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return privateRecoveryFailure("state_unreadable", err)
 	}
 	published, found, err := loadPrivateSupervisorBinding(stateRoot)

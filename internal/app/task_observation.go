@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
-	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
@@ -129,12 +129,4 @@ func collectionResult(response Response, outcome *task.OutcomeRecord, collectErr
 		return failed(response, collectErr, 1)
 	}
 	return commandResult{response: response, code: 4}
-}
-
-func collectionInspectionResult(response Response, inspection *taskdir.TaskInspection, collectErr, inspectErr, descriptorErr error) (commandResult, bool) {
-	outcome, err, handled := tasklifecycle.CollectionInspectionOutcome(inspection, collectErr, inspectErr, descriptorErr)
-	if !handled {
-		return commandResult{}, false
-	}
-	return collectionResult(response, outcome, err), true
 }

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -158,10 +160,7 @@ func TestRuntimeCapabilityReportRequiresObservedBehaviorForReady(t *testing.T) {
 		SupportedOptions: []string{commonprovider.OptionContinuation},
 		ReadOnly:         commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativeSandbox, Containment: commonprovider.ReadOnlyProviderOwned},
 	}
-	report, err := runtimeCapability("example:run", candidate, profile, description)
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := describeRuntimeCapability("example:run", description, admissioncore.RuntimeCapabilityFor(candidate, profile))
 	if report.Status != capabilityStatusReady || report.Verification != capabilityVerificationRuntime {
 		t.Fatalf("runtime probe did not produce ready report: %+v", report)
 	}
@@ -177,10 +176,7 @@ func TestRuntimeCapabilityReportRequiresObservedBehaviorForReady(t *testing.T) {
 }
 
 func TestRuntimeCapabilityReportDoesNotClaimReadyWithoutProbe(t *testing.T) {
-	report, err := runtimeCapability("example:run", commonprovider.ProfileCandidate{}, commonprovider.PreparedProfile{ObservedVersion: "arbitrary-release"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := describeRuntimeCapability("example:run", commonprovider.Description{ID: "example:run"}, admissioncore.RuntimeCapabilityFor(commonprovider.ProfileCandidate{}, commonprovider.PreparedProfile{ObservedVersion: "arbitrary-release"}))
 	if report.Status != capabilityStatusUnknown || report.Verification != capabilityVerificationCatalog || report.ReasonCode != capabilityReasonNotRun {
 		t.Fatalf("static profile claimed runtime readiness: %+v", report)
 	}
@@ -190,10 +186,7 @@ func TestRuntimeCapabilityOmitsOversizedVersionObservation(t *testing.T) {
 	digest := strings.Repeat("a", 64)
 	candidate := commonprovider.ProfileCandidate{Inspection: &commonprovider.InspectionDefinition{Runtime: &commonprovider.RuntimeProbeDefinition{ExecutableSHA256: digest}}}
 	profile := commonprovider.PreparedProfile{ObservedVersion: strings.Repeat("v", maxCapabilityVersionBytes+1)}
-	report, err := runtimeCapability("example:run", candidate, profile)
-	if err != nil {
-		t.Fatal(err)
-	}
+	report := describeRuntimeCapability("example:run", commonprovider.Description{ID: "example:run"}, admissioncore.RuntimeCapabilityFor(candidate, profile))
 	if report.Status != capabilityStatusReady || report.Version != "" {
 		t.Fatalf("oversized version was not omitted from the bounded projection: %+v", report)
 	}

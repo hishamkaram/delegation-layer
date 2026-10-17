@@ -22,6 +22,42 @@ func TestPureBoundaryRejectsEffectfulImportsEvenWhenRegistered(t *testing.T) {
 	}
 }
 
+func TestPureBoundaryUsesPythonModuleSeparators(t *testing.T) {
+	cases := []struct {
+		target        string
+		wantEffectful bool
+	}{
+		{target: "py:os.path", wantEffectful: true},
+		{target: "py:importlib.util", wantEffectful: true},
+		{target: "py:ctypes.util", wantEffectful: true},
+		{target: "py:pathlib"},
+		{target: "py:datetime"},
+		{target: "py:posixpath"},
+		{target: "py:typing"},
+	}
+	for _, test := range cases {
+		t.Run(test.target, func(t *testing.T) {
+			manifest := Manifest{Limits: testManifest().Limits, Modules: []Module{{
+				Name: "py:domain", Owner: "domain", Layer: "pure", Imports: []string{test.target},
+			}}}
+			source := Source{
+				Path: "domain/value.py", Module: "py:domain",
+				Imports: []Dependency{{Target: test.target}},
+			}
+			findings := Check(manifest, []Source{source})
+			if test.wantEffectful {
+				if len(findings) != 1 || findings[0].Kind != "purity" {
+					t.Fatalf("effectful Python import accepted: %+v", findings)
+				}
+				return
+			}
+			if len(findings) != 0 {
+				t.Fatalf("registered pure standard-library import rejected: %+v", findings)
+			}
+		})
+	}
+}
+
 func TestDataImportsAndCorrectedCounterpartPass(t *testing.T) {
 	manifest := testManifest()
 	manifest.Modules[0].Imports = []string{"go:time", "go:io/fs"}

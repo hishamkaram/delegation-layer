@@ -255,7 +255,7 @@ func (c *Client) StartPrivate(ctx context.Context, stateRoot string) error {
 	if !IsPrivateConfig(stateRoot, c.binding.ConfigPath) {
 		return ErrConfiguration
 	}
-	if err := recoverPrivateIdentityPublication(stateRoot); err != nil {
+	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return err
 	}
 	ready, err := c.availableForBootstrap(ctx)
@@ -304,14 +304,19 @@ func PreparePrivateForMigrationWithLock(ctx context.Context, clientExecutable, d
 // consulting staged successor inventory. The bool reports whether a published
 // generation exists.
 func PreparePublishedPrivateWithLock(ctx context.Context, stateRoot string, options Options) (*Client, bool, error) {
-	if err := recoverPrivateIdentityPublication(stateRoot); err != nil {
+	replayed, err := recoverPrivateIdentityPublication(stateRoot)
+	if err != nil {
 		return nil, false, privatePublishedRecoveryError(err)
 	}
 	published, found, err := loadPrivateSupervisorBinding(stateRoot)
 	if err != nil || !found {
 		return nil, found, err
 	}
-	if err = ensurePrivateSupervisorMigrationComplete(stateRoot, published, ErrPrivateSupervisorTransitionIncomplete); err != nil {
+	incompleteErr := ErrPrivateSupervisorTransitionIncomplete
+	if replayed {
+		incompleteErr = privateTransitionPostconditionError()
+	}
+	if err = ensurePrivateSupervisorMigrationComplete(stateRoot, published, incompleteErr); err != nil {
 		return nil, true, err
 	}
 	options, err = optionsForPublishedPrivateBinding(published, options)
@@ -386,7 +391,7 @@ func preparePrivateWithLock(ctx context.Context, clientExecutable, daemonExecuta
 	if err = ensurePrivateBase(base); err != nil {
 		return nil, err
 	}
-	if err = recoverPrivateIdentityPublication(stateRoot); err != nil {
+	if _, err = recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return nil, err
 	}
 	if published, found, readErr := loadPrivateSupervisorBinding(stateRoot); readErr != nil {

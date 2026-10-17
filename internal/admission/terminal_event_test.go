@@ -43,7 +43,7 @@ func TestAwaitInspectionAcceptsPrivateTerminalEventAfterCurrentQueueReconciliati
 	if event, found, readErr := supervisor.ReadPrivateTerminalEvent(ctx, job.ID); readErr != nil || !found || !event.Succeeded {
 		t.Fatalf("terminal event before await = %+v found=%t err=%v", event, found, readErr)
 	}
-	facts, err := AwaitInspection(ctx, operation, supervisor)
+	facts, err := awaitInspectionWithSubmissionState(ctx, operation, supervisor, inspectionSubmissionState{})
 	if err != nil || string(facts) != "{\"eligible\":true}\n" {
 		t.Fatalf("terminal event admission facts=%s err=%v", facts, err)
 	}
@@ -95,7 +95,7 @@ func TestConcurrentCompletedInspectionsUseExactQueueObservations(t *testing.T) {
 	results := make(chan result, count)
 	for _, operation := range operations {
 		go func() {
-			facts, err := AwaitInspection(ctx, operation, supervisor)
+			facts, err := awaitInspectionWithSubmissionState(ctx, operation, supervisor, inspectionSubmissionState{})
 			results <- result{taskID: operation.Request().TaskID, facts: facts, err: err}
 		}()
 	}

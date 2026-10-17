@@ -45,7 +45,7 @@ func TestWorkspaceSchedulingSurvivesObserverCancellationAfterAdd(t *testing.T) {
 	var receiptFault atomic.Bool
 	options := pueue.Options{Environment: os.Environ(), Observer: workspaceAddCancellationObserver(t, operation, cancel, &adds, &enqueues, &receiptFault)}
 	deps := Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: options}
-	err = scheduleExistingWorkspaceOperation(observer, fixture.Store, operation, deps)
+	err = workspaces.ScheduleExistingOperation(observer, fixture.Store, operation, workspaceRuntimeOptions(deps))
 	if err != nil || !errors.Is(observer.Err(), context.Canceled) || receiptFault.Load() {
 		t.Fatalf("scheduling lost receipt-before-enqueue at observer cancellation: %v, observer=%v, receiptFault=%t", err, observer.Err(), receiptFault.Load())
 	}
@@ -97,7 +97,7 @@ func TestWorkspaceSchedulingExpiredReplayOnlyClosesOriginalHelper(t *testing.T) 
 	deps := Dependencies{SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
 	observer, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err = scheduleExistingWorkspaceOperation(observer, store, operation, deps); err != nil {
+	if err = workspaces.ScheduleExistingOperation(observer, store, operation, workspaceRuntimeOptions(deps)); err != nil {
 		t.Fatal(err)
 	}
 	fence, err := operation.ReadLifetimeUnlaunchedContext(t.Context())
@@ -133,10 +133,10 @@ func TestWorkspaceRunningHelperObservationDoesNotContactSupervisor(t *testing.T)
 	})
 	var commands atomic.Int32
 	deps := Dependencies{SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }}}
-	if err = submitWorkspaceOperation(t.Context(), store, operation, deps); err != nil {
+	if err = workspaces.SubmitOperation(t.Context(), store, operation, workspaceRuntimeOptions(deps)); err != nil {
 		t.Fatal(err)
 	}
-	if err = scheduleExistingWorkspaceOperation(t.Context(), store, operation, deps); err != nil {
+	if err = workspaces.ScheduleExistingOperation(t.Context(), store, operation, workspaceRuntimeOptions(deps)); err != nil {
 		t.Fatal(err)
 	}
 	if commands.Load() != 0 {
@@ -152,7 +152,7 @@ func TestWorkspaceVerificationBeforeAuthorizationIsNotIndexed(t *testing.T) {
 	supervisor, _ := newTerminalEventInspectionSupervisor(t, fixture.Store)
 	subject := workspace.Subject{Kind: workspace.SubjectAdmission, ID: lifetimeGuardianTestTaskID, SHA256: task.ComputeSHA256([]byte("verification authorization"))}
 	deps := Dependencies{RunnerExecutable: executablePath(t), InitialSupervisorExecutable: supervisor.Binding().ClientExecutable}
-	operation, err := scheduleWorkspaceOperation(t.Context(), fixture.Store, fixture.Resource, deps, workspaces.OperationSpec{Purpose: "verify-" + lifetimeGuardianTestTaskID + ".json", Kind: workspace.OperationVerify, Subject: subject, Budget: time.Minute, Arguments: []string{"/fixture/verify"}}, func(context.Context, *workspace.Operation) error { return context.DeadlineExceeded })
+	operation, err := workspaces.ScheduleOperation(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps), workspaces.OperationSpec{Purpose: "verify-" + lifetimeGuardianTestTaskID + ".json", Kind: workspace.OperationVerify, Subject: subject, Budget: time.Minute, Arguments: []string{"/fixture/verify"}}, func(context.Context, *workspace.Operation) error { return context.DeadlineExceeded })
 	defer func() {
 		if closeErr := workspaces.CloseOperation(operation); closeErr != nil {
 			t.Error(closeErr)
@@ -185,7 +185,7 @@ func TestWorkspaceExpiredFirstForgetCreatesOnlyMetadataAndFence(t *testing.T) {
 		RunnerExecutable: executablePath(t), InitialSupervisorExecutable: supervisor.Binding().ClientExecutable,
 		SupervisorOptions: pueue.Options{Observer: func(pueue.CommandEvent) { commands.Add(1) }},
 	}
-	id, handled, err := reconcileWorkspaceForgetOperation(t.Context(), fixture.Store, fixture.Resource, deps, false, 0)
+	id, handled, err := workspaces.ReconcileForgetOperation(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps), false, 0)
 	if !handled || id == "" || !workspaces.PendingError(err) || commands.Load() != 0 {
 		t.Fatalf("expired metadata recovery contacted the supervisor: id=%s commands=%d err=%v", id, commands.Load(), err)
 	}
@@ -232,7 +232,7 @@ func verifyWorkspaceSchedulingReplay(t *testing.T, timeout time.Duration) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduled, err := scheduleWorkspaceOperation(t.Context(), fixture.Store, fixture.Resource, Dependencies{SupervisorOptions: options}, workspaces.OperationSpec{Purpose: workspaces.ForgetPurpose(intent), Kind: workspace.OperationForget, Subject: subject, Budget: time.Hour}, before)
+	scheduled, err := workspaces.ScheduleOperation(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(Dependencies{SupervisorOptions: options}), workspaces.OperationSpec{Purpose: workspaces.ForgetPurpose(intent), Kind: workspace.OperationForget, Subject: subject, Budget: time.Hour}, before)
 	if !errors.Is(err, barrier) || scheduled == nil || scheduled.Request().Deadline != request.Deadline {
 		t.Fatalf("replay replaced its original request: operation=%v err=%v", scheduled, err)
 	}
@@ -262,7 +262,7 @@ func verifyExpiredFirstWorkspaceForgetRecovery(t *testing.T, associated bool) {
 		seedWorkspaceForgetPurposeWithoutResourceReference(t, fixture, intent, supervisor.Binding())
 	}
 	deps := Dependencies{RunnerExecutable: executablePath(t), InitialSupervisorExecutable: supervisor.Binding().ClientExecutable}
-	operationID, handled, err := reconcileWorkspaceForgetOperation(t.Context(), fixture.Store, fixture.Resource, deps, true, time.Minute)
+	operationID, handled, err := workspaces.ReconcileForgetOperation(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps), true, time.Minute)
 	if !handled || !workspaces.PendingError(err) || operationID == "" {
 		t.Fatalf("explicit retry could not advance an expired uncreated first helper: id=%s handled=%t err=%v", operationID, handled, err)
 	}

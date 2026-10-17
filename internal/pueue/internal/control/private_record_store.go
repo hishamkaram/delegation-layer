@@ -286,15 +286,21 @@ func privateDaemonIdentityPath(base string) string {
 	return filepath.Join(base, "daemon.identity.json")
 }
 
-func recoverPrivateIdentityPublication(stateRoot string) error {
+// recoverPrivateIdentityPublication reports whether readiness-gated publication
+// was replayed. Callers may not classify a later refusal as pre-mutation after
+// a successful replay.
+func recoverPrivateIdentityPublication(stateRoot string) (bool, error) {
 	if !filepath.IsAbs(stateRoot) || filepath.Clean(stateRoot) != stateRoot {
-		return ErrConfiguration
+		return false, ErrConfiguration
 	}
 	pending, found, err := readPrivateIdentityPublication(stateRoot)
 	if err != nil || !found {
-		return err
+		return false, err
 	}
-	return publishPrivateIdentityPublication(stateRoot, pending)
+	if err = publishPrivateIdentityPublication(stateRoot, pending); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func readPrivateIdentityPublication(stateRoot string) (privateIdentityPublicationRecord, bool, error) {
@@ -370,7 +376,7 @@ func publishPrivateDaemonIdentity(base string, binding task.SupervisorRef) error
 	if err != nil {
 		return fmt.Errorf("%w: marshal private daemon identity: %w", ErrConfiguration, err)
 	}
-	if err = recoverPrivateIdentityPublication(stateRoot); err != nil {
+	if _, err = recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return err
 	}
 	bindingData, err := task.MarshalCanonical(privateSupervisorBindingRecord{SchemaVersion: task.SchemaVersion, Binding: binding})

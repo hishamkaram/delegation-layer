@@ -52,7 +52,7 @@ func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot 
 	if err := ensurePrivateBase(base); err != nil {
 		return nil, err
 	}
-	if err := recoverPrivateIdentityPublication(stateRoot); err != nil {
+	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return nil, err
 	}
 	configPath, base, err := privateBindingConfig(stateRoot, base, resolution, expected)

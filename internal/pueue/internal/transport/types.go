@@ -64,11 +64,13 @@ func NewPending(args []string) *Pending {
 
 func NewCompletedPending(args []string, result CommandResult) *Pending {
 	pending := NewPending(args)
-	pending.Complete(result)
+	CompletePending(pending, result)
 	return pending
 }
 
-func (p *Pending) Complete(result CommandResult) {
+// CompletePending publishes the owning command's completed result. Started
+// commands must have finished their exact Wait before this call.
+func CompletePending(p *Pending, result CommandResult) {
 	if p == nil {
 		return
 	}
@@ -91,7 +93,8 @@ func (p *Pending) VersionProbe() bool {
 	return p != nil && len(p.args) > 0 && p.args[len(p.args)-1] == "--version"
 }
 
-func (p *Pending) SetStatusIdentity(binding task.SupervisorRef, version string) {
+// SetPendingStatusIdentity binds the status command before its handle is exposed.
+func SetPendingStatusIdentity(p *Pending, binding task.SupervisorRef, version string) {
 	if p == nil {
 		return
 	}

@@ -164,7 +164,7 @@ base=${config%/*}
 	missingDelegate := filepath.Join(supervisorfixture.CanonicalTempDir(t), "missing", "delegate")
 	// This verifies executable-pair resolution, so use the production window;
 	// race instrumentation must not turn scheduler delay into a timeout test.
-	client, err := bindInitialWithOptions(Arguments{}, Dependencies{InitialSupervisorExecutable: missingDelegate}, root, pueue.Options{ObservationTimeout: pueue.DefaultObservationTimeout})
+	client, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{}), supervisorAdmissionOptions(Dependencies{InitialSupervisorExecutable: missingDelegate}, pueue.Options{ObservationTimeout: pueue.DefaultObservationTimeout}), root, true)
 	if err != nil {
 		t.Fatalf("private supervisor did not bind from its verified state-root pair: %v", err)
 	}

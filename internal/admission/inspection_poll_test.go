@@ -201,7 +201,7 @@ func TestAwaitInspectionPollCompletionDoesNotAdmitRunningWorker(t *testing.T) {
 			cancel()
 		}
 	})
-	facts, awaitErr := AwaitInspection(ctx, operation, client)
+	facts, awaitErr := awaitInspectionWithSubmissionState(ctx, operation, client, inspectionSubmissionState{})
 	if facts != nil || !errors.Is(awaitErr, inspection.ErrAdmissionExpired) || polls.Load() != 2 {
 		t.Fatalf("local completion admitted a running worker: facts=%s polls=%d err=%v", facts, polls.Load(), awaitErr)
 	}
@@ -241,7 +241,7 @@ func TestAwaitInspectionPollWatchdogObservesFailureWithoutCompletion(t *testing.
 			cancel()
 		}
 	})
-	facts, awaitErr := AwaitInspection(ctx, operation, client)
+	facts, awaitErr := awaitInspectionWithSubmissionState(ctx, operation, client, inspectionSubmissionState{})
 	select {
 	case publishErr := <-published:
 		if publishErr != nil {
@@ -266,7 +266,7 @@ func TestAwaitInspectionPollReadsRecordedProofBeforeQueue(t *testing.T) {
 	}
 	// A queue read would dereference the nil supervisor. Only the independently
 	// recorded exit, combined with the local completion, can finish admission.
-	facts, awaitErr := AwaitInspection(t.Context(), operation, nil)
+	facts, awaitErr := awaitInspectionWithSubmissionState(t.Context(), operation, nil, inspectionSubmissionState{})
 	if awaitErr != nil || string(facts) != "{\"eligible\":true}\n" {
 		t.Fatalf("saved proof required another queue read: facts=%s err=%v", facts, awaitErr)
 	}

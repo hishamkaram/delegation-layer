@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
 )
 
 func TestWithSupervisorLeaseCallbacksOverlap(t *testing.T) {
@@ -71,8 +73,8 @@ func withPrivateTransitionForTest(ctx context.Context, stateRoot string, callbac
 
 func TestWithSupervisorLeaseRetainsLockUntilPendingCompletion(t *testing.T) {
 	stateRoot := supervisorLeaseTestRoot(t)
-	pending := newPending(nil)
-	complete := sync.OnceFunc(func() { pending.Complete(CommandResult{}) })
+	pending := transport.NewPending(nil)
+	complete := sync.OnceFunc(func() { transport.CompletePending(pending, CommandResult{}) })
 	t.Cleanup(func() {
 		complete()
 		// Join the retained lock's eventual release even after a failed assertion.

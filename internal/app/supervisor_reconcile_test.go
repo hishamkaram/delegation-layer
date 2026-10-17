@@ -75,7 +75,7 @@ func TestAdmissionReconcilesPublishedPair(t *testing.T) {
 	var repaired *pueue.Client
 	err = pueue.WithBootstrapLockContext(t.Context(), store.Root, func(ctx context.Context) error {
 		var prepareErr error
-		repaired, prepareErr = preparePrivateAdmissionTransition(ctx, deps, store, deps.SupervisorOptions)
+		repaired, prepareErr = supervisor.PreparePrivateAdmissionTransition(ctx, deps.InitialSupervisorExecutable, store, deps.SupervisorOptions)
 		return prepareErr
 	})
 	settleSupervisorProbeTestClient(t, repaired, err)
@@ -122,7 +122,7 @@ func TestHealthyPublishedPairIgnoresUnusedRetainedInventory(t *testing.T) {
 	var admitted *pueue.Client
 	err = pueue.WithBootstrapLockContext(t.Context(), store.Root, func(ctx context.Context) error {
 		var prepareErr error
-		admitted, prepareErr = preparePrivateAdmissionTransition(ctx, deps, store, deps.SupervisorOptions)
+		admitted, prepareErr = supervisor.PreparePrivateAdmissionTransition(ctx, deps.InitialSupervisorExecutable, store, deps.SupervisorOptions)
 		return prepareErr
 	})
 	settleSupervisorProbeTestClient(t, admitted, err)
@@ -205,7 +205,7 @@ func TestSavedSupervisorReconciliationBoundsBackgroundLockWait(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	err := reconcileSavedSupervisor(context.Background(), store.Root, pueue.Options{ObservationTimeout: time.Millisecond})
+	err := supervisor.ReconcileSaved(context.Background(), store.Root, pueue.Options{ObservationTimeout: time.Millisecond}, openNativeSupervisorStore)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("background recovery did not receive a finite deadline: %v", err)
 	}

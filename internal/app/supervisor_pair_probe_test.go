@@ -39,7 +39,7 @@ func TestSupervisorPairProbeHealthyAdmissionSharesLeaseWithoutWrites(t *testing.
 	release()
 }
 
-func TestSupervisorPairProbeRecoveryFallbackSharesLeaseWithoutWrites(t *testing.T) {
+func TestSupervisorPairProbeRecoveryFallbackAvoidsExclusiveLeaseAndWrites(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		missingMember bool
@@ -71,24 +71,37 @@ func testSupervisorPairProbeRecoveryFallback(t *testing.T, missingMember bool) {
 	freezeSupervisorPairProbeTimes(t, fixture)
 	before := snapshotSupervisorPairProbe(t, fixture.base)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	err := supervisor.InstallStateSupervisorPairForRecovery(ctx, fixture.root, missingDelegate, binding)
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		t.Fatalf("recovery fallback waited for exclusive ownership: %v", err)
+	type resolution struct {
+		client string
+		daemon string
+		err    error
+	}
+	resolved := make(chan resolution, 1)
+	go func() {
+		client, daemon, err := supervisor.ResolveRecoveryPrivateSupervisorExecutables(fixture.root, binding, missingDelegate)
+		resolved <- resolution{client: client, daemon: daemon, err: err}
+	}()
+	var result resolution
+	select {
+	case result = <-resolved:
+	case <-time.After(5 * time.Second):
+		release()
+		result = <-resolved
+		t.Fatalf("recovery resolution waited for exclusive ownership: %v", result.err)
 	}
 	if missingMember {
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("missing member without an available package was not rejected: %v", err)
+		if !errors.Is(result.err, os.ErrNotExist) {
+			t.Fatalf("missing member without an available package was not rejected: %v", result.err)
 		}
 	} else {
-		if err != nil {
-			t.Fatalf("recovery rejected the healthy published pair: %v", err)
+		if result.err != nil {
+			t.Fatalf("recovery rejected the healthy published pair: %v", result.err)
 		}
-		client, daemon := requireResolvedSupervisorPair(t, fixture.base, "saved client", "saved daemon")
-		if client != fixture.client || daemon != fixture.daemon {
-			t.Fatal("recovery changed the published pair identity")
+		if result.client != fixture.client || result.daemon != fixture.daemon {
+			t.Fatalf("recovery selected pair client=%q daemon=%q, want published pair %q / %q", result.client, result.daemon, fixture.client, fixture.daemon)
 		}
+		requireRunnerFixture(t, result.client, "saved client")
+		requireRunnerFixture(t, result.daemon, "saved daemon")
 	}
 	assertSupervisorPairProbeUnchanged(t, fixture.base, before)
 	assertSupervisorPairProbeNoStages(t, fixture.base)

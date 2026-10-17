@@ -17,7 +17,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -263,7 +263,7 @@ func TestPrepareAdmissionSupervisorConfiguresContinuationScheduling(t *testing.T
 	parallelLog := filepath.Join(base, "parallel")
 	saved := original.Binding()
 
-	continuation, err := prepareAdmissionSupervisor(Arguments{savedSupervisor: &saved}, deps, store, commonprovider.ProfileCandidate{}, "", deps.SupervisorOptions, true)
+	continuation, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	settleSupervisorProbeTestClient(t, continuation, err)
 	if err != nil || continuation == nil {
 		t.Fatalf("continuation admission did not configure private scheduling: client=%v err=%v", continuation, err)
@@ -284,7 +284,7 @@ func TestPrepareAdmissionSupervisorConfiguresContinuationScheduling(t *testing.T
 		t.Fatalf("continuation did not publish ordinary scheduling receipt: configured=%t err=%v", configured, err)
 	}
 
-	warm, err := prepareAdmissionSupervisor(Arguments{savedSupervisor: &saved}, deps, store, commonprovider.ProfileCandidate{}, "", deps.SupervisorOptions, true)
+	warm, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	settleSupervisorProbeTestClient(t, warm, err)
 	if err != nil || warm == nil {
 		t.Fatalf("warm continuation admission failed: client=%v err=%v", warm, err)
@@ -367,14 +367,11 @@ func TestRepairPrivateQueueForTaskElectsOneQueueScanAcrossCallers(t *testing.T) 
 		go func() {
 			defer calls.Done()
 			<-start
-			errs <- repairPrivateQueueForTask(
-				t.Context(), store, supervisor.Binding(), meta,
-				Dependencies{
-					InitialSupervisorExecutable: deps.InitialSupervisorExecutable,
-					SupervisorOptions:           deps.SupervisorOptions,
-					RunnerExecutable:            runner,
-				},
-			)
+			errs <- supervisorcore.RepairQueueForTask(t.Context(), store, supervisor.Binding(), meta, supervisorAdmissionOptions(Dependencies{
+				InitialSupervisorExecutable: deps.InitialSupervisorExecutable,
+				SupervisorOptions:           deps.SupervisorOptions,
+				RunnerExecutable:            runner,
+			}, deps.SupervisorOptions))
 		}()
 	}
 	close(start)

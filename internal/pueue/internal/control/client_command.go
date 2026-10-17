@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
@@ -54,7 +55,7 @@ func (c *Client) command(ctx context.Context, consume func() error, args ...stri
 		finishPending()
 	}()
 	if statusVersion != "" {
-		pending.SetStatusIdentity(c.runtimeBinding, statusVersion)
+		transport.SetPendingStatusIdentity(pending, c.runtimeBinding, statusVersion)
 	}
 	result, observeErr := observeCommand(ctx, pending, c.options.ObservationTimeout)
 	if statusVersion == "" {

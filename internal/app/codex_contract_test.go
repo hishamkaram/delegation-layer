@@ -118,11 +118,11 @@ func TestCodexContinuationPreservesRecordedContract(t *testing.T) {
 				prior, err := tasklifecycle.ContinuationPrior(td, &fixture.request)
 				testsupport.RequireAppTest(t, err)
 				testsupport.RequireAppTest(t, td.Close())
-				deps, _, err := continuationDependenciesForTask(fixture.store, Dependencies{Catalog: NativeCatalog()}, fixture.request.TaskID)
+				options, _, err := tasklifecycle.ContinuationOptionsForTask(fixture.store, dispatchOptions(Dependencies{Catalog: NativeCatalog()}, true), fixture.request.TaskID)
 				testsupport.RequireAppTest(t, err)
 				next := fixture.request
 				next.TaskID, next.PriorSession = strings.Repeat("b", 32), prior
-				candidate, err := prepareCandidate(deps, fixture.store.Root, next)
+				candidate, err := options.Creation.Admission.Profiles.Prepare(fixture.store.Root, next)
 				testsupport.RequireAppTest(t, err)
 				if !slices.Equal(candidate.Inspection.Runtime.RequiredFlags, fixture.flags) {
 					t.Fatalf("continuation requirements drifted: %+v", candidate.Inspection.Runtime)

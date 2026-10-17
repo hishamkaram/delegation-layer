@@ -14,10 +14,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func OpenAdmissionInspectionOperation(store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (operation *inspection.Operation, resultErr error) {
-	return OpenInspectionOperationContext(context.Background(), store, request, binding, now)
-}
-
 func OpenInspectionOperationContext(ctx context.Context, store *taskdir.Store, request task.TaskRecord, binding inspection.Binding, now time.Time) (operation *inspection.Operation, resultErr error) {
 	operation, err := LoadInspectionOperationContext(ctx, store, request)
 	if task.RecordAbsent(err) {

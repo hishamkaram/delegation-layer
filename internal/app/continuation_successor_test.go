@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
+
 	"github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -558,11 +560,11 @@ func assertContinuationSuccessorTestGate(t *testing.T, fixture continuationSucce
 	var err error
 	switch gate {
 	case "rebind":
-		got, err = rebindContinuationSupervisor(ctx, fixture.store.Root, saved, Dependencies{})
+		got, err = supervisorcore.RebindContinuation(ctx, fixture.store.Root, saved, continuationSupervisorOptions(Dependencies{}))
 	case "exclusive revalidation":
 		// Exercise the actual exclusive owner, including its recovery-alias
 		// handling, rather than invoking the revalidation helper in isolation.
-		got, err = prepareContinuationSuccessor(ctx, fixture.store.Root, saved, Dependencies{})
+		got, err = supervisorcore.PrepareContinuationSuccessor(ctx, fixture.store.Root, saved, continuationSupervisorOptions(Dependencies{}))
 	default:
 		t.Fatalf("unknown continuation gate %q", gate)
 	}

@@ -54,6 +54,16 @@ jobs:
           go-version: '1.27.2'
           cache: false
 
+      - name: Set up minimum Node.js for collector checks
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '18.x'
+
+      - name: Check the JavaScript collector on Node 18
+        env:
+          GOTOOLCHAIN: local
+        run: go test -race -count=1 ./internal/maintainability -run '^TestJavaScript'
+
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -154,6 +164,16 @@ jobs:
         with:
           go-version: '1.27.2'
           cache: false
+
+      - name: Set up minimum Node.js for collector checks
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '18.x'
+
+      - name: Check the JavaScript collector on Node 18
+        env:
+          GOTOOLCHAIN: local
+        run: go test -race -count=1 ./internal/maintainability -run '^TestJavaScript'
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020

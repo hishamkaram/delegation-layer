@@ -65,7 +65,7 @@ func TestPrivateRecoveryUsesStateRootPairWhenInstallPairsAreUnavailable(t *testi
 	t.Setenv("PATH", testsupport.CanonicalTempDir(t))
 
 	missingDelegate := filepath.Join(testsupport.CanonicalTempDir(t), "missing", "delegate")
-	_, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, missingDelegate)
+	_, err := supervisor.NewClient(context.Background(), root, saved, pueue.Options{}, true, missingDelegate, openNativeSupervisorStore)
 	if err == nil || !strings.Contains(err.Error(), "saved private supervisor config is unavailable") {
 		t.Fatalf("recovery did not reach the saved private config check using the state-root pair: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestPrivateRecoveryRejectsTamperedStateRootSupervisorPair(t *testing.T) {
 			saved.ConfigPath = pueue.PrivateConfigPath(root)
 			tc.tamper(t, client, clientSource)
 
-			if _, err = newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, filepath.Join(testsupport.CanonicalTempDir(t), "delegate")); !errors.Is(err, pueue.ErrBinding) {
+			if _, err = supervisor.NewClient(context.Background(), root, saved, pueue.Options{}, true, filepath.Join(testsupport.CanonicalTempDir(t), "delegate"), openNativeSupervisorStore); !errors.Is(err, pueue.ErrBinding) {
 				t.Fatalf("tampered state-root supervisor pair error = %v, want binding error", err)
 			}
 		})

@@ -255,7 +255,7 @@ func assertDefaultQueueCleanupAndMigration(t *testing.T, migrate bool) {
 		}
 	}
 	assertCleanupInspectionTestProof(t, operation, true)
-	facts, err := admissioncore.AwaitInspection(t.Context(), operation, nil)
+	facts, _, err := admissioncore.RunInspection(operation, nil, operation.Request().Binding.WorkerExecutable, store.Root)
 	if err != nil || string(facts) != "{\"eligible\":true}\n" {
 		t.Fatalf("admission lost removed default worker evidence: facts=%s err=%v", facts, err)
 	}

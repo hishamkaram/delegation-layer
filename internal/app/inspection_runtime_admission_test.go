@@ -228,7 +228,7 @@ func TestInspectionAdmissionRejectsStaticCandidateBeforeSupervisorBinding(t *tes
 				InitialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
 			}
 			args := Arguments{PueueConfig: filepath.Join(t.TempDir(), "missing-pueue.yml")}
-			if _, err := prepareAdmission(args, deps, store, request); !errors.Is(err, ErrProfileUnavailable) {
+			if _, err := admission.Prepare(supervisorAdmissionSelection(args), admissionPreparationOptions(deps), store, request); !errors.Is(err, ErrProfileUnavailable) {
 				t.Fatalf("static candidate crossed supervisor binding: %v", err)
 			}
 			assertAppInspectionNoOrdinaryTasks(t, store)

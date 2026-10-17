@@ -31,7 +31,7 @@ func TestAwaitInspectionPollRetainsPendingWithoutAnotherObservation(t *testing.T
 	completeInspectionPollTestOperation(t, operation)
 	ctx, cancel := context.WithTimeout(t.Context(), inspection.AdmissionTimeout)
 	defer cancel()
-	facts, awaitErr := AwaitInspection(ctx, operation, client)
+	facts, awaitErr := awaitInspectionWithSubmissionState(ctx, operation, client, inspectionSubmissionState{})
 	pending := admissionfixture.AssertRetainedInspectionPending(t, awaitErr)
 	t.Cleanup(func() { admissionfixture.DrainInspectionPending(t, pending) })
 	if facts != nil || !errors.Is(awaitErr, pueue.ErrInFlight) {
@@ -141,7 +141,7 @@ func TestAwaitInspectionRetriesTransientStatusUntilDurableProof(t *testing.T) {
 		}
 	}, "FAKE_STATUS_FAIL_ONCE="+failOnce)
 
-	facts, err := AwaitInspection(t.Context(), operation, client)
+	facts, err := awaitInspectionWithSubmissionState(t.Context(), operation, client, inspectionSubmissionState{})
 	if err != nil || string(facts) != "{\"eligible\":true}\n" {
 		t.Fatalf("transient operational status ended admission: facts=%s polls=%d err=%v", facts, polls.Load(), err)
 	}
@@ -275,7 +275,7 @@ func TestAwaitInspectionPollReturnsAtCallerDeadlineWithPendingCommand(t *testing
 	}
 	done := make(chan result, 1)
 	go func() {
-		facts, observeErr := AwaitInspection(ctx, operation, client)
+		facts, observeErr := awaitInspectionWithSubmissionState(ctx, operation, client, inspectionSubmissionState{})
 		done <- result{facts: facts, err: observeErr}
 	}()
 
@@ -355,7 +355,7 @@ func TestAwaitInspectionPollRejectsMalformedCompletionBeforeQueue(t *testing.T) 
 	if completed, completionErr := inspectionCompletionHint(t.Context(), operation); completed || completionErr == nil || errors.Is(completionErr, os.ErrNotExist) {
 		t.Fatalf("malformed completion became a usable or absent hint: completed=%t err=%v", completed, completionErr)
 	}
-	facts, awaitErr := AwaitInspection(t.Context(), operation, nil)
+	facts, awaitErr := awaitInspectionWithSubmissionState(t.Context(), operation, nil, inspectionSubmissionState{})
 	if facts != nil || awaitErr == nil || errors.Is(awaitErr, os.ErrNotExist) {
 		t.Fatalf("malformed completion reached queue observation: facts=%s err=%v", facts, awaitErr)
 	}
@@ -363,7 +363,7 @@ func TestAwaitInspectionPollRejectsMalformedCompletionBeforeQueue(t *testing.T) 
 
 func TestAwaitInspectionPollDoesNotProbeAfterAdmissionDeadline(t *testing.T) {
 	_, operation := admissionfixture.NewInspectionWorkerOperation(t, time.Unix(100, 0).UTC())
-	facts, awaitErr := AwaitInspection(t.Context(), operation, nil)
+	facts, awaitErr := awaitInspectionWithSubmissionState(t.Context(), operation, nil, inspectionSubmissionState{})
 	if facts != nil || !errors.Is(awaitErr, inspection.ErrAdmissionExpired) {
 		t.Fatalf("expired admission reached queue observation: facts=%s err=%v", facts, awaitErr)
 	}

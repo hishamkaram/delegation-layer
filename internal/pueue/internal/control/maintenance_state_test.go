@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
+
 	"github.com/hishamkaram/delegation-layer/internal/lifetime"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -189,7 +191,7 @@ func TestPrivateQueueMaintenancePendingCompletionWaitsForElectionRelease(t *test
 		t.Fatal("maintenance election holder did not start")
 	}
 
-	pending := newCompletedPending(nil, CommandResult{})
+	pending := transport.NewCompletedPending(nil, CommandResult{})
 	inFlight := &InFlightError{Pending: pending}
 	waitContext, cancelWait := context.WithTimeout(ctx, 100*time.Millisecond)
 	resume, err := waitPrivateQueueMaintenancePending(waitContext, fixture.stateRoot, true, inFlight)

@@ -194,8 +194,11 @@ func (c *Client) ensurePrivateSupervisorBindingWithReady(ctx context.Context, st
 	}
 	// Binding publication has already run. Preserve the migration postcondition
 	// error without claiming that this operation stopped before mutation.
-	incompleteErr := fmt.Errorf("%w: published private supervisor transition is incomplete", ErrPrivateSupervisorMigrationRequired)
-	return ensurePrivateSupervisorMigrationComplete(stateRoot, c.binding, incompleteErr)
+	return ensurePrivateSupervisorMigrationComplete(stateRoot, c.binding, privateTransitionPostconditionError())
+}
+
+func privateTransitionPostconditionError() error {
+	return fmt.Errorf("%w: published private supervisor transition is incomplete", ErrPrivateSupervisorMigrationRequired)
 }
 
 func ensurePrivateSupervisorMigrationComplete(stateRoot string, binding task.SupervisorRef, incompleteErr error) error {

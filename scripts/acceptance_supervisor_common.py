@@ -3,24 +3,8 @@
 Patch the defining module when replacing implementation dependencies in tests.
 """
 
-from dataclasses import dataclass
-from dataclasses import field
 from pathlib import Path
-from typing import BinaryIO
-from typing import Callable
-from typing import Protocol
-import ctypes
-import fcntl
-import hashlib
-import json
-import math
-import os
-import secrets
-import stat
-import subprocess
 import sys
-import tempfile
-import time
 
 # Direct script execution and legacy flat imports place scripts/ on sys.path.
 # Add its parent so every implementation loads under one canonical namespace.

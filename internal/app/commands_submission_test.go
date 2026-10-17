@@ -87,7 +87,7 @@ func TestOrdinaryStagedRecoveryAcceptsRunningRaceOnlyWithDurableReceipt(t *testi
 	}
 	response := newResponse("dispatch")
 	response.RootID, response.TaskID, response.TaskRecord = fixture.req.RootID, fixture.req.TaskID, "created"
-	result := submitWithClient(fixture.td, fixture.req, &fixture.meta, fixture.supervisor, fixture.runner, fixture.permit, response)
+	result := submissionCommandResult(response, tasklifecycle.SubmitWithClient(fixture.td, fixture.req, &fixture.meta, fixture.supervisor, fixture.runner, fixture.permit))
 	if result.err != nil || result.code != 0 {
 		t.Fatalf("initial staged submission = %+v", result)
 	}
@@ -135,10 +135,12 @@ func TestReconcileStatusRefusesQueueObservationWithoutDurableReceipt(t *testing.
 		t.Fatal(err)
 	}
 	response := newResponse("status")
-	observation, reconcileErr := reconcileStatusWithClient(
+	var observed tasklifecycle.Observation
+	observation, reconcileErr := tasklifecycle.ReconcileStatusWithClient(
 		t.Context(), fixture.stateRoot, fixture.td, fixture.req, &fixture.meta,
-		spec, metaHash, fixture.supervisor, &response,
+		spec, metaHash, fixture.supervisor, &observed,
 	)
+	applyTaskObservation(&response, observed, fixture.stateRoot)
 	if !observation.Matched || observation.State != pueue.StateRunning {
 		t.Fatalf("queue observation was not reproduced: %+v", observation)
 	}
@@ -249,7 +251,7 @@ func submitOrdinarySubmissionReceiptFailure(t *testing.T, fixture *ordinarySubmi
 	}
 	response := newResponse("dispatch")
 	response.RootID, response.TaskID, response.TaskRecord = fixture.req.RootID, fixture.req.TaskID, "created"
-	result := submitWithClient(fixture.td, fixture.req, &fixture.meta, fixture.supervisor, fixture.runner, fixture.permit, response)
+	result := submissionCommandResult(response, tasklifecycle.SubmitWithClient(fixture.td, fixture.req, &fixture.meta, fixture.supervisor, fixture.runner, fixture.permit))
 	return markDispatchSubmissionFailure(result)
 }
 

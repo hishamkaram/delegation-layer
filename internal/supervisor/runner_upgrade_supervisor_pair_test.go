@@ -223,46 +223,64 @@ func inspectSupervisorPairGeneration(base string) error {
 	return nil
 }
 
-func TestInstallStateSupervisorPairForRecoveryUsesCurrentBundle(t *testing.T) {
+func TestPreparePrivateAdmissionExecutablesPublishesCurrentBundle(t *testing.T) {
 	root := supervisorfixture.CanonicalTempDir(t)
 	bundle := supervisorfixture.CanonicalTempDir(t)
 	delegate := filepath.Join(bundle, "delegate")
+	runner := filepath.Join(bundle, "delegate-run")
 	client := filepath.Join(bundle, "pueue")
 	daemon := filepath.Join(bundle, "pueued")
 	supervisorfixture.WriteExecutable(t, delegate, "delegate")
+	supervisorfixture.WriteExecutable(t, runner, "fake runner")
 	supervisorfixture.WriteExecutable(t, client, "current client")
 	supervisorfixture.WriteExecutable(t, daemon, "current daemon")
 
-	if err := InstallStateSupervisorPairForRecovery(context.Background(), root, delegate, task.SupervisorRef{}); err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	preparation, err := PreparePrivateAdmissionExecutablesContext(
+		ctx,
+		AdmissionSelection{},
+		AdmissionOptions{InitialExecutable: delegate, RunnerExecutable: runner},
+		root,
+		runner,
+		task.RunnerOwnershipCustom,
+	)
+	if err != nil {
+		t.Fatalf("prepare private admission executables: %v", err)
+	}
+	if preparation.Executable != runner {
+		t.Fatalf("admission runner = %q, want %q", preparation.Executable, runner)
 	}
 	requireResolvedSupervisorPair(t, filepath.Join(root, ".supervisor"), "current client", "current daemon")
 }
 
-func TestInstallStateSupervisorPairForRecoveryUsesOnlyVerifiedSavedFallback(t *testing.T) {
-	t.Run("saved pair matches", func(t *testing.T) {
-		root := supervisorfixture.CanonicalTempDir(t)
-		client, daemon := writeSavedSupervisorPair(t)
-		binding := savedSupervisorPairRef(t, client, daemon)
-		missingDelegate := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate")
-		if err := InstallStateSupervisorPairForRecovery(context.Background(), root, missingDelegate, binding); err != nil {
-			t.Fatal(err)
-		}
-		requireResolvedSupervisorPair(t, filepath.Join(root, ".supervisor"), "saved client", "saved daemon")
-	})
-	t.Run("saved pair digest differs", func(t *testing.T) {
-		root := supervisorfixture.CanonicalTempDir(t)
-		client, daemon := writeSavedSupervisorPair(t)
-		binding := savedSupervisorPairRef(t, client, daemon)
-		binding.DaemonSHA256 = strings.Repeat("a", 64)
-		missingDelegate := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate")
-		if err := InstallStateSupervisorPairForRecovery(context.Background(), root, missingDelegate, binding); !errors.Is(err, pueue.ErrBinding) {
-			t.Fatalf("mismatched saved pair error = %v, want binding error", err)
-		}
-		if _, err := os.Lstat(filepath.Join(root, ".supervisor", stateSupervisorPairRecordName)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("unverified saved pair was published: %v", err)
-		}
-	})
+func TestPreparePrivateAdmissionExecutablesPublishesSavedPair(t *testing.T) {
+	root := supervisorfixture.CanonicalTempDir(t)
+	runner := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate-run")
+	supervisorfixture.WriteExecutable(t, runner, "fake runner")
+	client, daemon := writeSavedSupervisorPair(t)
+	binding := savedSupervisorPairRef(t, client, daemon)
+	binding.ConfigPath = pueue.PrivateConfigPath(root)
+	delegate := filepath.Join(supervisorfixture.CanonicalTempDir(t), "delegate")
+	supervisorfixture.WriteExecutable(t, delegate, "delegate")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	preparation, err := PreparePrivateAdmissionExecutablesContext(
+		ctx,
+		AdmissionSelection{SavedSupervisor: &binding},
+		AdmissionOptions{InitialExecutable: delegate, RunnerExecutable: runner},
+		root,
+		runner,
+		task.RunnerOwnershipCustom,
+	)
+	if err != nil {
+		t.Fatalf("prepare private admission executables: %v", err)
+	}
+	if preparation.Executable != runner {
+		t.Fatalf("admission runner = %q, want %q", preparation.Executable, runner)
+	}
+	requireResolvedSupervisorPair(t, filepath.Join(root, ".supervisor"), "saved client", "saved daemon")
 }
 
 func TestPrivateRecoveryPrefersSavedHistoricalSupervisorPair(t *testing.T) {
@@ -322,7 +340,7 @@ func TestValidateSavedStateSupervisorPairAcceptsHistoricalGeneration(t *testing.
 	}
 }
 
-func TestInstallStateSupervisorPairForRecoveryUsesVerifiedStatePair(t *testing.T) {
+func TestResolveRecoveryPrivateSupervisorExecutablesUsesVerifiedStatePair(t *testing.T) {
 	root := supervisorfixture.CanonicalTempDir(t)
 	client, daemon := writeSavedSupervisorPair(t)
 	binding := savedSupervisorPairRef(t, client, daemon)
@@ -347,19 +365,19 @@ func TestInstallStateSupervisorPairForRecoveryUsesVerifiedStatePair(t *testing.T
 	}
 	t.Setenv("PATH", supervisorfixture.CanonicalTempDir(t))
 	missingDelegate := filepath.Join(supervisorfixture.CanonicalTempDir(t), "missing", "delegate")
-	if err = InstallStateSupervisorPairForRecovery(context.Background(), root, missingDelegate, binding); err != nil {
+	resolvedClient, resolvedDaemon, err := ResolveRecoveryPrivateSupervisorExecutables(root, binding, missingDelegate)
+	if err != nil {
 		t.Fatalf("recovery rejected the verified state-root pair: %v", err)
 	}
-	resolvedClient, resolvedDaemon, found, err := ResolveStateSupervisorPair(base)
-	if err != nil || !found || resolvedClient != stateClient || resolvedDaemon != stateDaemon {
-		t.Fatalf("recovery changed the state-root pair: client=%q daemon=%q found=%t err=%v", resolvedClient, resolvedDaemon, found, err)
+	if resolvedClient != stateClient || resolvedDaemon != stateDaemon {
+		t.Fatalf("recovery selected pair client=%q daemon=%q, want state-root pair %q / %q", resolvedClient, resolvedDaemon, stateClient, stateDaemon)
 	}
 	recordAfter, err := os.ReadFile(recordPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(recordAfter, recordBefore) {
-		t.Fatal("recovery rewrote the verified state-root pair record")
+		t.Fatal("recovery resolution rewrote the verified state-root pair record")
 	}
 }
 

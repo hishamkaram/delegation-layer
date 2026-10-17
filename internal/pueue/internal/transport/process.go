@@ -46,7 +46,7 @@ func StartOwnedCaptured(cmd *exec.Cmd, commandID string, observer func(CommandEv
 			emitCommand(observer, commandID, "started", cmd, started)
 		})
 		emitCommand(observer, commandID, "completed", cmd, result)
-		p.Complete(result)
+		CompletePending(p, result)
 	}()
 	return p
 }

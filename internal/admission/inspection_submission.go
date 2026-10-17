@@ -11,11 +11,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func SubmitInspectionOnce(ctx context.Context, operation *inspection.Operation, supervisor *pueue.Client, runner, root string) error {
-	_, err := submitInspectionOnceWithState(ctx, operation, supervisor, runner, root)
-	return err
-}
-
 func submitInspectionOnceWithState(ctx context.Context, operation *inspection.Operation, supervisor *pueue.Client, runner, root string) (inspectionSubmissionState, error) {
 	permit, err := operation.ClaimSubmissionContext(ctx, time.Now())
 	if errors.Is(err, task.ErrAlreadySubmitted) {

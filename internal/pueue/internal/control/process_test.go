@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
 )
 
 func finiteExecutable(t *testing.T, body string) string {
@@ -35,7 +37,7 @@ func waitPending(t *testing.T, pending *Pending) CommandResult {
 
 func TestStatusObservationErrorMarksOnlyTransientCommandFailures(t *testing.T) {
 	executable := finiteExecutable(t, "exit 23")
-	_, exitErr := observeCommand(context.Background(), startOwned(exec.Command(executable)), time.Second)
+	_, exitErr := observeCommand(context.Background(), transport.StartOwned(exec.Command(executable)), time.Second)
 	if classified := statusObservationError(exitErr); !errors.Is(classified, ErrStatusOperational) || !errors.Is(classified, ErrStatusTransient) {
 		t.Fatalf("nonzero status was not transient: %v", classified)
 	}
@@ -51,7 +53,7 @@ func TestStatusObservationErrorMarksOnlyTransientCommandFailures(t *testing.T) {
 
 func TestCommandAcknowledgmentAcceptsOnlyNormalCompletedRefusal(t *testing.T) {
 	executable := finiteExecutable(t, "exit 7")
-	result, err := observeCommand(context.Background(), startOwned(exec.Command(executable)), time.Second)
+	result, err := observeCommand(context.Background(), transport.StartOwned(exec.Command(executable)), time.Second)
 	if err == nil {
 		t.Fatal("nonzero fake command unexpectedly succeeded")
 	}

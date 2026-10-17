@@ -46,7 +46,7 @@ func verifyPrivatePreparationGenerationOwner(t *testing.T, exclusive bool) {
 	if err != nil || len(plan.RemoveIDs) != 1 || plan.RemoveIDs[0] != job.ID {
 		t.Fatalf("prepared row did not authorize from durable evidence: %+v, %v", plan, err)
 	}
-	facts, awaitErr := AwaitInspection(ctx, operation, nil)
+	facts, awaitErr := awaitInspectionWithSubmissionState(ctx, operation, nil, inspectionSubmissionState{})
 	if facts != nil || !errors.Is(awaitErr, ErrInspectionWorkerUnavailable) {
 		t.Fatalf("admission lost terminal evidence after queue removal: %s, %v", facts, awaitErr)
 	}

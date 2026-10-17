@@ -419,7 +419,9 @@
     "imports": [
       "go:context",
       "go:internal/pueue",
-      "go:internal/task"
+      "go:internal/task",
+      "go:reflect",
+      "go:testing"
     ]
   },
   {

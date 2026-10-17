@@ -133,7 +133,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.daemon = None
             operation.closed = False
             operation.processes = gate.Processes(root / "processes", {"PATH": "/usr/bin"})
-            with patch.object(supervisor_common.subprocess, "Popen", FakePopen):
+            with patch.object(processes_impl.subprocess, "Popen", FakePopen):
                 process = operation.processes.start("pueued", ["/bin/sh"], cwd)
 
             self.assertFalse(operation.safe_shutdown())

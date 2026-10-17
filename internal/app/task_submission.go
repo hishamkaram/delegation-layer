@@ -3,9 +3,6 @@ package app
 import (
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
-
-	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
@@ -33,8 +30,4 @@ func submissionCommandResult(response Response, submitted tasklifecycle.Submissi
 	mergeCommandClose(&result, func() error { return submitted.PermitReleaseError })
 	mergeCommandClose(&result, func() error { return submitted.TaskCloseError })
 	return result
-}
-
-func submitWithClient(td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, client *pueue.Client, runner string, permit *taskdir.SubmissionPermit, response Response) commandResult {
-	return submissionCommandResult(response, tasklifecycle.SubmitWithClient(td, req, meta, client, runner, permit))
 }

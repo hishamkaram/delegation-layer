@@ -44,7 +44,3 @@ func taskRecordPresence(record tasklifecycle.TaskRecordPresence) string {
 	}
 	return "unknown"
 }
-
-func dispatchTaskRecordLookup(requestedTaskID string, exists bool, lookupErr error) string {
-	return taskRecordPresence(tasklifecycle.DispatchRecordLookup(requestedTaskID, exists, lookupErr))
-}

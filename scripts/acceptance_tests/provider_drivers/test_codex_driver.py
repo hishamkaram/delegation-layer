@@ -12,7 +12,7 @@ import shlex
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import scripts.acceptance_codex as gate
 import scripts.acceptance_provider_common as provider_common
@@ -597,9 +597,9 @@ class CodexOracleTests(unittest.TestCase):
             self.assertGreater(timeout, 0)
             return SimpleNamespace(json=lambda: statuses.pop(0))
 
-        with patch("scripts.acceptance_provider_common.time.sleep") as sleep:
-            row = wait_runner_done(client, ROOT, TASK, timeout=150,
-                                   sleep_fn=sleep, monotonic_fn=iter([0, 0, 0, 1, 1]).__next__)
+        sleep = Mock()
+        row = wait_runner_done(client, ROOT, TASK, timeout=150,
+                               sleep_fn=sleep, monotonic_fn=iter([0, 0, 0, 1, 1]).__next__)
         self.assertEqual(row["label"], f"delegate:{ROOT}:{TASK}")
         sleep.assert_called_once_with(0.1)
         self.assertEqual(len(calls), 2)

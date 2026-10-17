@@ -159,14 +159,6 @@ func cloneCapabilityStrings(values []string) []string {
 	return slices.Clone(values)
 }
 
-func runtimeCapability(providerID string, candidate commonprovider.ProfileCandidate, profile commonprovider.PreparedProfile, descriptions ...commonprovider.Description) (CapabilityReport, error) {
-	description := commonprovider.Description{ID: providerID}
-	if len(descriptions) > 0 {
-		description = descriptions[0]
-	}
-	return describeRuntimeCapability(providerID, description, admissioncore.RuntimeCapabilityFor(candidate, profile)), nil
-}
-
 func describeRuntimeCapability(providerID string, description commonprovider.Description, runtime *admissioncore.RuntimeCapabilityEvidence) CapabilityReport {
 	if runtime == nil {
 		return declaredCapability(description)

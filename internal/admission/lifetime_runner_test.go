@@ -129,7 +129,7 @@ func TestAwaitInspectionUsesDurableManagedFailureBeforeQueue(t *testing.T) {
 				t.Fatal(err)
 			}
 			admissionfixture.RecordManagedInspectionLifetimeExit(t, operation, task.LifetimeWorkerWaitExitError, test.created.Add(2*time.Second))
-			facts, err := AwaitInspection(t.Context(), operation, nil)
+			facts, err := awaitInspectionWithSubmissionState(t.Context(), operation, nil, inspectionSubmissionState{})
 			if facts != nil || !errors.Is(err, ErrInspectionWorkerUnavailable) {
 				t.Fatalf("saved failed worker required a queue read: facts=%s err=%v", facts, err)
 			}

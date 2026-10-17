@@ -53,15 +53,6 @@ func inspectionWorkerPublicError(err error) error {
 	return admissioncore.ErrInspectionWorkerUnavailable
 }
 
-// runInspectionWorker executes one already-admitted inspection operation. It
-// opens only existing durable state, reconstructs the immutable candidate, and
-// performs native work inside the same finite supervisor lifetime as its stop
-// observer. The worker never records supervisor success; the admission
-// observer owns that independent proof.
-func runInspectionWorker(root, taskID string, deps Dependencies) (resultErr error) {
-	return runInspectionWorkerMode(root, taskID, false, deps)
-}
-
 func runInspectionWorkerMode(root, taskID string, supervised bool, deps Dependencies) (resultErr error) {
 	return runInspectionWorkerWithLifetime(root, taskID, supervised, nil, deps)
 }
@@ -89,10 +80,6 @@ func runInspectionWorkerWithLifetime(root, taskID string, supervised bool, lifet
 		}
 	}()
 	return runInspectionWorkerOperationModeWithLifetime(canonicalRoot, taskID, supervised, lifetimeArgs, deps, store)
-}
-
-func runInspectionWorkerOperationMode(canonicalRoot, taskID string, supervised bool, deps Dependencies, store *taskdir.Store) (resultErr error) {
-	return runInspectionWorkerOperationModeWithLifetime(canonicalRoot, taskID, supervised, nil, deps, store)
 }
 
 func runInspectionWorkerOperationModeWithLifetime(canonicalRoot, taskID string, supervised bool, lifetimeArgs *runnerArguments, deps Dependencies, store *taskdir.Store) (resultErr error) {
@@ -427,13 +414,6 @@ func sameInspectionWorkerBinding(saved, current inspection.Binding) bool {
 
 func managedInspectionWorkerBinding(saved, binding inspection.Binding) bool {
 	return saved.RunnerOwnership == task.RunnerOwnershipManaged && binding.RunnerOwnership == task.RunnerOwnershipManaged
-}
-
-// completeInspectionFailure seals a started operation as unavailable or
-// expired, while retaining the fixed worker error for its caller. It is only
-// called after the durable start guard exists.
-func completeInspectionFailure(operation *inspection.Operation) error {
-	return completeInspectionFailureAt(operation, "run-inspection")
 }
 
 func completeInspectionFailureAt(operation *inspection.Operation, stage string) error {

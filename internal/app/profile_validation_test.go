@@ -29,7 +29,7 @@ func TestDispatchExistingRefreshesProfileBeforeSubmission(t *testing.T) {
 		profile.Effective.Digest = task.ComputeSHA256([]byte("changed-policy"))
 		return profile, nil
 	}}
-	result := dispatchExisting(Arguments{}, deps, store, td, *req, newResponse("dispatch"))
+	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief")}, deps)
 	if result.code != 2 || !errors.Is(result.err, task.ErrIdentityMismatch) {
 		t.Fatalf("changed profile was admitted: %+v", result)
 	}

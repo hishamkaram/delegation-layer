@@ -79,7 +79,7 @@ func TestWorkspaceAdmissionRetryResolvesFreshInspectionWithoutRevivingOldWorker(
 	}
 	created := time.Now().Add(-2 * inspection.AdmissionTimeout)
 	old, _ := openTestAdmissionAttempt(t, fixture, first, created)
-	if err = workspaceAdmissionInspectionClosed(t.Context(), fixture.store, fixture.resource, first); err != nil {
+	if err = workspaces.AdmissionInspectionClosed(t.Context(), fixture.store, fixture.resource, first, admission.RecoverInspectionLifetime); err != nil {
 		t.Fatal(err)
 	}
 	if err = fixture.resource.RecordAdmissionAborted(t.Context(), first); err != nil {

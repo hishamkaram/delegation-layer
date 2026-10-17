@@ -459,7 +459,7 @@ func TestPrivateAdmissionRejectsLogicalMigrationBeforeStartingSuccessor(t *testi
 	if err = group.Close(); err != nil {
 		t.Fatal(err)
 	}
-	err = rejectPrivateAdmissionMigration(context.Background(), store, current, true)
+	err = supervisorcore.RejectPrivateAdmissionMigrationWithEndpointProof(context.Background(), store, current, true, false)
 	if !errors.Is(err, inspection.ErrGroupMigrationRequired) {
 		t.Fatalf("private logical drift was not blocked before startup: %v", err)
 	}
@@ -482,7 +482,7 @@ func TestPrivateAdmissionRejectsUnreachableNoJournalSupervisorWithIdentity(t *te
 	if err = os.WriteFile(filepath.Join(store.Root, ".supervisor", "daemon.identity.json"), identity, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err = rejectPrivateAdmissionMigration(context.Background(), store, current, true)
+	err = supervisorcore.RejectPrivateAdmissionMigrationWithEndpointProof(context.Background(), store, current, true, false)
 	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("unreachable no-journal supervisor was allowed to start: %v", err)
 	}
@@ -494,7 +494,7 @@ func TestPrivateAdmissionRejectsUnreachableNoJournalSupervisorWithoutIdentity(t 
 	if err := os.Remove(filepath.Join(filepath.Dir(logPath), "status.json")); err != nil {
 		t.Fatal(err)
 	}
-	err := rejectPrivateAdmissionMigration(context.Background(), store, current, true)
+	err := supervisorcore.RejectPrivateAdmissionMigrationWithEndpointProof(context.Background(), store, current, true, false)
 	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("unreachable pre-existing supervisor without identity was allowed to start: %v", err)
 	}
@@ -506,7 +506,7 @@ func TestPrivateAdmissionAllowsFreshUnreachableSupervisorWithoutJournal(t *testi
 	if err := os.Remove(filepath.Join(filepath.Dir(logPath), "status.json")); err != nil {
 		t.Fatal(err)
 	}
-	if err := rejectPrivateAdmissionMigration(context.Background(), store, current, false); err != nil {
+	if err := supervisorcore.RejectPrivateAdmissionMigrationWithEndpointProof(context.Background(), store, current, false, false); err != nil {
 		t.Fatalf("fresh supervisor was incorrectly blocked before its first start: %v", err)
 	}
 }
@@ -520,7 +520,7 @@ func TestPrivateAdmissionAllowsIncompleteConfigOnlyBootstrap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(store.Root, ".supervisor", "bootstrap.pending"), []byte(`{"schema_version":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := rejectPrivateAdmissionMigration(context.Background(), store, current, true); err != nil {
+	if err := supervisorcore.RejectPrivateAdmissionMigrationWithEndpointProof(context.Background(), store, current, true, false); err != nil {
 		t.Fatalf("incomplete private bootstrap was treated as an existing predecessor: %v", err)
 	}
 }

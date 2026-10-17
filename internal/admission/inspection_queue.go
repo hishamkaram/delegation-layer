@@ -114,23 +114,3 @@ func recoverStagedInspectionObservation(ctx context.Context, operation *inspecti
 	}
 	return supervisorcore.RecoverStagedAuxiliaryObservation(ctx, supervisor, root, observation, receiptCommit, receiptMatches, commit)
 }
-
-func CompletedInspectionFacts(ctx context.Context, operation *inspection.Operation, job pueue.Job) (json.RawMessage, error) {
-	if operation == nil {
-		if !job.Succeeded {
-			return nil, ErrInspectionWorkerUnavailable
-		}
-		return nil, task.ErrEvidenceFault
-	}
-	if !job.Succeeded {
-		return nil, ErrInspectionWorkerUnavailable
-	}
-	if err := operation.RecordWorkerExitContext(ctx, job.ID, true); err != nil {
-		return nil, err
-	}
-	facts, _, terminal, err := RecordedInspectionFacts(ctx, operation)
-	if err != nil || terminal {
-		return facts, err
-	}
-	return nil, os.ErrNotExist
-}

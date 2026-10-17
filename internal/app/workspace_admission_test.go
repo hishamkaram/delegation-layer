@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+
 	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -18,7 +20,7 @@ import (
 )
 
 func TestOrdinaryContinuationDoesNotOpenWorkspaceStore(t *testing.T) {
-	response, err := prepareManagedContinuation("/nonexistent/state", Dependencies{}, task.TaskRecord{})
+	response, err := tasklifecycle.PrepareContinuationWorkspace("/nonexistent/state", dispatchOptions(Dependencies{}, false), task.TaskRecord{})
 	if err != nil || response != nil {
 		t.Fatalf("ordinary continuation touched optional workspace state: %+v, %v", response, err)
 	}
@@ -30,7 +32,7 @@ func TestManagedContinuationRejectsReleasedWorkspaceBeforeCwdAccess(t *testing.T
 		t.Fatal(err)
 	}
 	predecessor := task.TaskRecord{CanonicalCwd: "/removed/checkout", Workspace: &task.WorkspaceBinding{ID: resource.Request().WorkspaceID}}
-	response, err := prepareManagedContinuation(store.Root, Dependencies{}, predecessor)
+	response, err := tasklifecycle.PrepareContinuationWorkspace(store.Root, dispatchOptions(Dependencies{}, false), predecessor)
 	if !errors.Is(err, workspace.ErrReleased) || response == nil || response.State != "cleanup_pending" {
 		t.Fatalf("released workspace fell through to provider/cwd preparation: %+v, %v", response, err)
 	}
@@ -48,7 +50,7 @@ func TestManagedContinuationDoesNotStealWorkspaceUseOwner(t *testing.T) {
 		}
 	})
 	predecessor := task.TaskRecord{Workspace: &task.WorkspaceBinding{ID: resource.Request().WorkspaceID}}
-	if _, err = prepareManagedContinuation(store.Root, Dependencies{}, predecessor); !errors.Is(err, workspace.ErrBusy) {
+	if _, err = tasklifecycle.PrepareContinuationWorkspace(store.Root, dispatchOptions(Dependencies{}, false), predecessor); !errors.Is(err, workspace.ErrBusy) {
 		t.Fatalf("continuation bypassed active workspace owner: %v", err)
 	}
 }
@@ -58,16 +60,16 @@ func TestInitialWorkspaceAttachRetainsAdmissionDigest(t *testing.T) {
 	request := resource.Request()
 	arguments := Arguments{Provider: "codex:exec", Isolation: "git-worktree", Base: request.BaseRef}
 	brief := []byte("bounded task")
-	initial, err := managedDispatchDigest(arguments, request.TaskID, request.SourceCwd, brief, time.Minute, nil)
+	initial, err := workspaces.DispatchDigest(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), request.TaskID, request.SourceCwd, brief, time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	arguments.Isolation, arguments.WorkspaceID = "", request.WorkspaceID
-	attached, err := managedDispatchDigest(arguments, request.TaskID, "/irrelevant/checkout", brief, time.Minute, resource)
+	attached, err := workspaces.DispatchDigest(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), request.TaskID, "/irrelevant/checkout", brief, time.Minute, resource)
 	if err != nil || initial != attached {
 		t.Fatalf("known not-created attachment changed admission identity: initial=%s attached=%s err=%v", initial, attached, err)
 	}
-	changed, err := managedDispatchDigest(arguments, request.TaskID, "/irrelevant/checkout", []byte("changed task"), time.Minute, resource)
+	changed, err := workspaces.DispatchDigest(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), request.TaskID, "/irrelevant/checkout", []byte("changed task"), time.Minute, resource)
 	if err != nil || changed == initial {
 		t.Fatalf("changed provider input reused immutable admission identity: %s, %v", changed, err)
 	}
@@ -145,7 +147,7 @@ func TestManagedWorkspaceRejectsCustomRunnerBeforeResourceCreation(t *testing.T)
 		}
 	}()
 	arguments := Arguments{Isolation: "git-worktree", Runner: "/unused/custom-runner"}
-	managed, _, err := prepareManagedDispatch(arguments, Dependencies{}, store, strings.Repeat("a", 32), testsupport.CanonicalTempDir(t), []byte("bounded task"))
+	managed, _, err := workspaces.PrepareDispatch(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), workspaceRuntimeOptions(Dependencies{}), store, strings.Repeat("a", 32), testsupport.CanonicalTempDir(t), []byte("bounded task"))
 	if managed != nil || !errors.Is(err, task.ErrInvalidPermit) {
 		t.Fatalf("custom runner provisioned managed state: managed=%+v err=%v", managed, err)
 	}
@@ -155,7 +157,7 @@ func TestManagedWorkspaceRejectsCustomRunnerBeforeResourceCreation(t *testing.T)
 	}
 	arguments.Isolation = ""
 	cwd := testsupport.CanonicalTempDir(t)
-	managed, effective, err := prepareManagedDispatch(arguments, Dependencies{}, store, strings.Repeat("a", 32), cwd, []byte("ordinary task"))
+	managed, effective, err := workspaces.PrepareDispatch(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(arguments)), workspaceRuntimeOptions(Dependencies{}), store, strings.Repeat("a", 32), cwd, []byte("ordinary task"))
 	if err != nil || managed != nil || effective != cwd {
 		t.Fatalf("ordinary custom runner behavior changed: managed=%+v cwd=%q err=%v", managed, effective, err)
 	}

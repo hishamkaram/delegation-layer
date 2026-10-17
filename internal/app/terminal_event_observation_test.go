@@ -11,12 +11,10 @@ import (
 	"time"
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
-	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -62,7 +60,7 @@ func TestAwaitInspectionDoesNotWaitForBlockedPrivateCleanup(t *testing.T) {
 	}
 	results := make(chan result, 1)
 	go func() {
-		facts, err := admissioncore.AwaitInspection(ctx, operation, supervisor)
+		facts, _, err := admissioncore.RunInspection(operation, supervisor, operation.Request().Binding.WorkerExecutable, store.Root)
 		results <- result{facts: facts, err: err}
 	}()
 
@@ -137,7 +135,7 @@ func TestTerminalInspectionWakeRetriesConcurrentFailedCleanupWithoutAnotherCallb
 		)
 	}()
 	waitForTestPathWithin(t, filepath.Join(base, "terminal-event-status-blocked"), 15*time.Second)
-	facts, err := admissioncore.AwaitInspection(ctx, operation, supervisor)
+	facts, _, err := admissioncore.RunInspection(operation, supervisor, operation.Request().Binding.WorkerExecutable, store.Root)
 	if err != nil || string(facts) != "{\"eligible\":true}\n" {
 		t.Fatalf("terminal inspection facts=%s err=%v", facts, err)
 	}
@@ -210,56 +208,6 @@ func waitForTestFileContent(t *testing.T, path, want string) {
 	admissionfixture.WaitForTestFileContent(t, path, want)
 }
 
-func TestSubmitInspectionOnceUsesConcurrentAddReceiptWithoutQueueSnapshot(t *testing.T) {
-	store := newBareInspectionStore(t)
-	supervisor, statusCalls := newTerminalEventInspectionSupervisor(t, store)
-	runner, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner, err = filepath.EvalSymlinks(runner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runnerSHA, err := commonprovider.FingerprintExecutable(runner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := newBareInspectionRequest(t, store)
-	operation, err := inspection.OpenConcurrentOperation(store, request, inspection.Binding{
-		DefinitionRevision: commonprovider.RuntimeInspectionRevision,
-		DefinitionSHA256:   task.ComputeSHA256([]byte("runtime-definition")),
-		CapabilitySHA256:   task.ComputeSHA256([]byte("runtime-capability")),
-		HelperExecutable:   runner,
-		HelperSHA256:       runnerSHA,
-		WorkerExecutable:   runner,
-		WorkerSHA256:       runnerSHA,
-		Supervisor:         supervisor.Binding(),
-	}, time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if closeErr := operation.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	})
-	ctx, cancel := context.WithTimeout(t.Context(), inspection.AdmissionTimeout)
-	defer cancel()
-
-	assertTerminalEventInspectionGenerationReady(t, store, supervisor, ctx)
-	if err = admissioncore.SubmitInspectionOnce(ctx, operation, supervisor, runner, store.Root); err != nil {
-		t.Fatal(err)
-	}
-	receipt, err := operation.ReceiptContext(ctx)
-	if err != nil || receipt.NumericTaskID == nil || *receipt.NumericTaskID != 9 {
-		t.Fatalf("concurrent inspection receipt = %+v err=%v", receipt, err)
-	}
-	if calls := statusCalls.Load(); calls != 0 {
-		t.Fatalf("concurrent submission made %d queue-wide status calls", calls)
-	}
-}
-
 func newTerminalEventInspectionSupervisor(t *testing.T, store *taskdir.Store) (*pueue.Client, *atomic.Int32) {
 	t.Helper()
 	return admissionfixture.NewTerminalEventInspectionSupervisor(t, store, admissioncore.TerminalEvidence{})
@@ -268,30 +216,6 @@ func newTerminalEventInspectionSupervisor(t *testing.T, store *taskdir.Store) (*
 func newTerminalEventInspectionSupervisorWithEnvironment(t *testing.T, store *taskdir.Store, extraEnvironment ...string) (*pueue.Client, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	return admissionfixture.NewTerminalEventInspectionSupervisorWithEnvironment(t, store, admissioncore.TerminalEvidence{}, extraEnvironment...)
-}
-
-func assertTerminalEventInspectionGenerationReady(t *testing.T, store *taskdir.Store, supervisor *pueue.Client, ctx context.Context) {
-	t.Helper()
-	complete, completeErr := pueue.PrivateSupervisorMigrationComplete(store.Root, supervisor.Binding())
-	if completeErr != nil || !complete {
-		migration, migrationErr := pueue.PrivateSupervisorMigrationPending(store.Root)
-		recovery, recoveryErr := pueue.PrivateRecoveryBindingPresent(store.Root)
-		bootstrap, bootstrapErr := pueue.PrivateBootstrapPending(store.Root)
-		daemon, daemonErr := pueue.PrivateDaemonIdentityPresent(store.Root)
-		entries, readErr := os.ReadDir(filepath.Join(store.Root, ".supervisor"))
-		names := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			names = append(names, entry.Name())
-		}
-		t.Fatalf("private generation incomplete: complete=%t err=%v migration=%t/%v recovery=%t/%v bootstrap=%t/%v daemon=%t/%v files=%v read=%v binding=%+v runtime=%+v", complete, completeErr, migration, migrationErr, recovery, recoveryErr, bootstrap, bootstrapErr, daemon, daemonErr, names, readErr, supervisor.Binding(), supervisor.RuntimeBinding())
-	}
-	recorded, recordErr := supervisorcore.OrdinarySchedulingRecorded(store.Root, supervisor.Binding())
-	if recordErr != nil || !recorded {
-		t.Fatalf("private scheduling unrecorded: recorded=%t err=%v binding=%+v runtime=%+v", recorded, recordErr, supervisor.Binding(), supervisor.RuntimeBinding())
-	}
-	if _, gateErr := supervisorcore.SubmissionGate(store.Root)(ctx, supervisor.Binding()); gateErr != nil {
-		t.Fatalf("submission gate: %v", gateErr)
-	}
 }
 
 func writeTerminalEventStatus(t *testing.T, store *taskdir.Store, job pueue.Job, state map[string]any) {

@@ -6,7 +6,7 @@ import (
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
-	"github.com/hishamkaram/delegation-layer/internal/task"
+
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 )
 
@@ -15,15 +15,6 @@ const (
 	preflightStatusBlocked     = "blocked"
 	preflightStatusUnsupported = "unsupported"
 )
-
-// selectAutoProvider performs provider-owned static admission before a task is
-// created. The selected provider is dispatched once by the normal path, which
-// performs the stronger supervised runtime probe. A runtime failure after
-// selection is returned to the caller; this function never silently retries a
-// dispatched task with another provider.
-func selectAutoProvider(deps Dependencies, root, rootID, taskID, cwd string, requested task.TaskConfig, brief []byte) (string, error) {
-	return admissioncore.SelectAutoProvider(staticAdmissionOptions(deps), root, rootID, taskID, cwd, requested, brief)
-}
 
 func preflight(a Arguments, deps Dependencies) commandResult {
 	response := newResponse("preflight")

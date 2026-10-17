@@ -12,10 +12,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func reconcileSavedSupervisor(ctx context.Context, root string, options pueue.Options) (resultErr error) {
-	return supervisorcore.ReconcileSaved(ctx, root, options, openNativeSupervisorStore)
-}
-
 func prepareInspectionMigrationSupervisorWithLock(ctx context.Context, store *taskdir.Store, deps Dependencies, options pueue.Options) (*pueue.Client, error) {
 	pending, err := pueue.PrivateSupervisorMigrationPending(store.Root)
 	if err != nil {

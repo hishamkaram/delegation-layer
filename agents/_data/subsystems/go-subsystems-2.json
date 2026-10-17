@@ -411,6 +411,7 @@
       "go:fmt",
       "go:golang.org/x/sys/unix",
       "go:internal/lifetime",
+      "go:internal/pueue/internal/transport",
       "go:internal/pueue/protocol",
       "go:internal/task",
       "go:internal/task/randomid",

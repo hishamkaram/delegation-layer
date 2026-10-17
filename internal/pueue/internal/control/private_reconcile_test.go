@@ -214,6 +214,22 @@ func TestPublishedPairRestartRecoversInterruptedIdentityPublication(t *testing.T
 
 func testPrivateRestartPublicationFault(t *testing.T, faultMarker, faultDirectory string) {
 	t.Helper()
+	fixture, candidate := interruptPrivateRestartPublication(t, faultMarker)
+	if err := os.Remove(filepath.Join(filepath.Dir(candidate.ConfigPath), faultDirectory)); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcilePrivateTestPair(t, fixture, candidate); err != nil {
+		t.Fatal(err)
+	}
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
+	complete, err := PrivateSupervisorMigrationComplete(fixture.stateRoot, candidate)
+	if err != nil || !complete {
+		t.Fatalf("restart did not finish publication: complete=%t err=%v", complete, err)
+	}
+}
+
+func interruptPrivateRestartPublication(t *testing.T, faultMarker string) (privateSupervisorTestFixture, task.SupervisorRef) {
+	t.Helper()
 	fixture, original, candidate := newPrivateReconciliationFixture(t)
 	base := filepath.Dir(original.ConfigPath)
 	for _, path := range []string{original.ClientExecutable, original.DaemonExecutable, filepath.Join(base, "ready")} {
@@ -232,17 +248,7 @@ func testPrivateRestartPublicationFault(t *testing.T, faultMarker, faultDirector
 	if err != nil || !found || record.Restart == nil || record.Restart.Target != candidate {
 		t.Fatalf("exact restart intent lost after actual launch: %+v found=%t err=%v", record, found, err)
 	}
-	if err = os.Remove(filepath.Join(base, faultDirectory)); err != nil {
-		t.Fatal(err)
-	}
-	if err = reconcilePrivateTestPair(t, fixture, candidate); err != nil {
-		t.Fatal(err)
-	}
-	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
-	complete, err := PrivateSupervisorMigrationComplete(fixture.stateRoot, candidate)
-	if err != nil || !complete {
-		t.Fatalf("restart did not finish publication: complete=%t err=%v", complete, err)
-	}
+	return fixture, candidate
 }
 
 func reconcilePrivateTestPair(t *testing.T, fixture privateSupervisorTestFixture, candidate task.SupervisorRef) error {

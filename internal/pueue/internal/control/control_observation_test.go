@@ -6,14 +6,16 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
 )
 
 func TestSettlePendingControlObservationReconcilesAfterPendingStatus(t *testing.T) {
 	client := &Client{options: Options{ObservationTimeout: time.Second}}
-	pending := newPending(nil)
+	pending := transport.NewPending(nil)
 	firstObservation := make(chan struct{})
 	complete := sync.OnceFunc(func() {
-		pending.Complete(CommandResult{Started: true, ExitCode: 0})
+		transport.CompletePending(pending, CommandResult{Started: true, ExitCode: 0})
 	})
 	t.Cleanup(complete)
 	go func() {
@@ -50,8 +52,8 @@ func TestSettlePendingControlObservationReconcilesAfterPendingStatus(t *testing.
 
 func TestSettlePendingControlObservationRetainsUnsettledStatus(t *testing.T) {
 	client := &Client{options: Options{ObservationTimeout: time.Hour}}
-	pending := newPending(nil)
-	t.Cleanup(func() { pending.Complete(CommandResult{}) })
+	pending := transport.NewPending(nil)
+	t.Cleanup(func() { transport.CompletePending(pending, CommandResult{}) })
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 

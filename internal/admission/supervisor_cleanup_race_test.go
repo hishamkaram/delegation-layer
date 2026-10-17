@@ -60,7 +60,7 @@ func assertCleanupInspectionExitSaved(t *testing.T, reason inspection.ResultReas
 	// row. A nil supervisor makes any queue fallback invalid.
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	facts, awaitErr := AwaitInspection(ctx, operation, nil)
+	facts, awaitErr := awaitInspectionWithSubmissionState(ctx, operation, nil, inspectionSubmissionState{})
 	if !errors.Is(awaitErr, wantErr) {
 		t.Fatalf("admission did not finish from the saved worker result: facts=%s err=%v wantErr=%v", facts, awaitErr, wantErr)
 	}

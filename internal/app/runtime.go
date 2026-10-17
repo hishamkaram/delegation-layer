@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
-
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
@@ -272,16 +270,8 @@ func openStoreContext(ctx context.Context, root string, deps storeDependencies, 
 	return taskdir.OpenStoreWithPredicatesContext(ctx, root, deps.registry())
 }
 
-func resolveInitialConfig(a Arguments) (string, error) {
-	return supervisorcore.ResolveInitialConfig(supervisorAdmissionSelection(a))
-}
-
 func resolveCurrentPrivateSupervisorExecutables(root string, deps Dependencies) (client, daemon string, resultErr error) {
 	return supervisorcore.ResolveCurrentPrivateSupervisorExecutables(root, deps.InitialSupervisorExecutable)
-}
-
-func newSupervisorClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, recoverPrivate bool, initialSupervisorExecutable string) (*pueue.Client, error) {
-	return supervisorcore.NewClient(ctx, root, saved, options, recoverPrivate, initialSupervisorExecutable, openNativeSupervisorStore)
 }
 
 // newSupervisorControlClient proves the task's exact saved endpoint ready before
@@ -292,20 +282,12 @@ func newSupervisorControlClient(ctx context.Context, root string, saved task.Sup
 	return supervisorcore.NewControlClient(ctx, root, saved, options, initialSupervisorExecutable, openNativeSupervisorStore)
 }
 
-func bindInitialWithOptions(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options) (*pueue.Client, error) {
-	return bindInitialWithStart(a, deps, root, supervisorOptions, true)
-}
-
 func bindInitialForAdmission(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options, deferPrivateStart bool) (*pueue.Client, error) {
 	return bindInitialWithStart(a, deps, root, supervisorOptions, !deferPrivateStart)
 }
 
 func bindInitialWithStart(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options, startPrivate bool) (*pueue.Client, error) {
 	return supervisorcore.BindInitialWithStart(supervisorAdmissionSelection(a), supervisorAdmissionOptions(deps, supervisorOptions), root, startPrivate)
-}
-
-func sameExistingRequest(args Arguments, request, existing *task.TaskRecord) bool {
-	return tasklifecycle.SameExistingRequest(args.Config.Budget, request, existing)
 }
 
 func continuationExpectation(req *task.TaskRecord) task.SessionExpectation {

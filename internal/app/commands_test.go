@@ -548,7 +548,11 @@ func TestCollectionInspectionWinnerUsesVerdictAfterPendingRace(t *testing.T) {
 			response := newResponse("collect")
 			outcome := &task.OutcomeRecord{Verdict: tc.verdict, Payload: task.PayloadDescriptor{Basename: "result.txt"}}
 			inspection := &taskdir.TaskInspection{Publication: tc.publication, Outcome: outcome}
-			result, handled := collectionInspectionResult(response, inspection, errors.Join(task.ErrNoSeal, task.ErrLockBusy), nil, nil)
+			winner, collectErr, handled := tasklifecycle.CollectionInspectionOutcome(inspection, errors.Join(task.ErrNoSeal, task.ErrLockBusy), nil, nil)
+			if !handled || winner == nil {
+				t.Fatalf("pending race lost terminal inspection: handled=%t winner=%+v err=%v", handled, winner, collectErr)
+			}
+			result := collectionResult(response, winner, collectErr)
 			if !handled || result.code != tc.code || result.err != nil || result.response.Outcome != outcome {
 				t.Fatalf("pending race lost terminal verdict: handled=%t result=%+v", handled, result)
 			}
@@ -558,7 +562,11 @@ func TestCollectionInspectionWinnerUsesVerdictAfterPendingRace(t *testing.T) {
 	response := newResponse("collect")
 	outcome := &task.OutcomeRecord{Verdict: task.VerdictRejected, Payload: task.PayloadDescriptor{Basename: "publish.reject"}}
 	inspection := &taskdir.TaskInspection{Publication: task.PublicationRejected, Outcome: outcome}
-	result, handled := collectionInspectionResult(response, inspection, errors.Join(task.ErrNoSeal, infra), nil, nil)
+	winner, collectErr, handled := tasklifecycle.CollectionInspectionOutcome(inspection, errors.Join(task.ErrNoSeal, infra), nil, nil)
+	if !handled || winner == nil {
+		t.Fatalf("infrastructure fault lost terminal inspection: handled=%t winner=%+v err=%v", handled, winner, collectErr)
+	}
+	result := collectionResult(response, winner, collectErr)
 	if !handled || result.code != 1 || !errors.Is(result.err, infra) || result.response.Outcome != outcome {
 		t.Fatalf("joined infrastructure fault was downgraded: handled=%t result=%+v", handled, result)
 	}
@@ -624,16 +632,13 @@ func assertLogDescriptors(t *testing.T, sealed bool) {
 
 func TestDispatchExistingRejectsChangedExplicitSupervisorConfig(t *testing.T) {
 	store, td, req := newAppTestTask(t, false)
-	response := newResponse("dispatch")
-	result := dispatchExisting(Arguments{PueueConfig: "/tmp/other-pueue.yml"}, Dependencies{}, store, td, *req, response)
+	defer closeAppTestTask(t, store, td)
+	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief"), PueueConfig: "/tmp/other-pueue.yml"}, Dependencies{})
 	if result.code != 2 || !errors.Is(result.err, task.ErrRequestConflict) {
 		t.Fatalf("changed explicit config was not refused: %+v", result)
 	}
 	if _, err := td.ReadSubmission(); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("changed explicit config mutated admission: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -651,25 +656,23 @@ func TestSameExistingRequestPreservesOmittedBudgetAcrossDefaultChanges(t *testin
 	current := *existing
 	current.RequestedConfig.Budget = "1h0m0s"
 	current.BudgetNanos = int64(time.Hour)
-	if !sameExistingRequest(Arguments{Config: task.TaskConfig{Permission: config.ModeReadOnly}}, &current, existing) {
+	if !tasklifecycle.SameExistingRequest("", &current, existing) {
 		t.Fatal("omitted retry budget did not preserve the existing request")
 	}
-	if sameExistingRequest(Arguments{Config: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1h"}}, &current, existing) {
+	if tasklifecycle.SameExistingRequest("1h", &current, existing) {
 		t.Fatal("explicit retry budget bypassed immutable request comparison")
 	}
 }
 
 func TestDispatchExistingAcceptsMatchingExplicitSupervisorConfig(t *testing.T) {
 	store, td, req := newAppTestTask(t, true)
+	defer closeAppTestTask(t, store, td)
 	if _, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef()); cleanupErr != nil || collectErr != nil {
 		t.Fatalf("preparing terminal task cleanup=%v collect=%v", cleanupErr, collectErr)
 	}
-	result := dispatchExisting(Arguments{PueueConfig: "/tmp/app-pueue.yml"}, Dependencies{}, store, td, *req, newResponse("dispatch"))
+	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief"), PueueConfig: "/tmp/app-pueue.yml"}, Dependencies{})
 	if result.code != 0 || result.err != nil || result.response.Publication != task.PublicationCommitted.String() {
 		t.Fatalf("matching explicit config was not accepted: %+v", result)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -679,15 +682,13 @@ func TestDispatchExistingRejectsChangedRunnerBeforePrivateQueueRepair(t *testing
 		t.Fatal(err)
 	}
 	td, req := newAppTaskInStoreWithSupervisorConfig(t, store, strings.Repeat("a", 32), false, nil, pueue.PrivateConfigPath(store.Root))
-	result := dispatchExisting(Arguments{Runner: filepath.Join(t.TempDir(), "other-runner")}, Dependencies{}, store, td, *req, newResponse("dispatch"))
+	defer closeAppTestTask(t, store, td)
+	result := dispatch(Arguments{Root: store.Root, TaskID: req.TaskID, Provider: req.Provider, Cwd: req.CanonicalCwd, Config: req.RequestedConfig, BriefBytes: []byte("brief"), Runner: filepath.Join(t.TempDir(), "other-runner")}, Dependencies{})
 	if result.code != 2 || !errors.Is(result.err, task.ErrIdentityMismatch) {
 		t.Fatalf("changed runner was not refused before supervisor repair: %+v", result)
 	}
 	if _, err = os.Lstat(filepath.Join(store.Root, ".supervisor")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected runner override mutated private supervisor state: %v", err)
-	}
-	if err = store.Close(); err != nil {
-		t.Fatal(err)
 	}
 }
 

@@ -61,7 +61,7 @@ func TestExistingRetryRestoresSavedEnvironmentAfterProfileRefusal(t *testing.T) 
 		}
 		return PreparedProfile{}, task.ErrIdentityMismatch
 	}}
-	result := dispatchExisting(Arguments{}, deps, store, retry, successor, newResponse("dispatch"))
+	result := dispatch(Arguments{Root: store.Root, TaskID: successor.TaskID, Provider: successor.Provider, Cwd: successor.CanonicalCwd, Config: successor.RequestedConfig, BriefBytes: []byte("brief")}, deps)
 	if result.code != 2 || !errors.Is(result.err, task.ErrIdentityMismatch) || calls != 1 {
 		t.Fatalf("retry did not refuse at the real profile boundary: %+v, calls=%d", result, calls)
 	}

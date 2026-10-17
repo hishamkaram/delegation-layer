@@ -3,26 +3,8 @@
 Patch the defining module when replacing implementation dependencies in tests.
 """
 
-from __future__ import annotations
-
-from copy import deepcopy
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
 from pathlib import Path
-from typing import Callable
-from typing import Iterable
-import errno
-import fcntl
-import json
-import os
-import pwd
-import re
-import shlex
-import stat
 import sys
-import time
-import unicodedata
 
 # Direct script execution and legacy flat imports place scripts/ on sys.path.
 # Add its parent so every implementation loads under one canonical namespace.

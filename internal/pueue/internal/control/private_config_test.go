@@ -322,7 +322,8 @@ func TestPrivateIdentityPublicationRecoversTornPair(t *testing.T) {
 	}
 
 	if err = WithBootstrapLock(context.Background(), fixture.stateRoot, func() error {
-		return recoverPrivateIdentityPublication(fixture.stateRoot)
+		_, recoverErr := recoverPrivateIdentityPublication(fixture.stateRoot)
+		return recoverErr
 	}); err != nil {
 		t.Fatalf("torn private identity publication was not recovered: %v", err)
 	}

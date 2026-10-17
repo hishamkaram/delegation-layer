@@ -42,13 +42,3 @@ func continueTask(a Arguments, deps Dependencies) commandResult {
 	options := tasklifecycle.ContinuationOptions{Dispatch: dispatchOptions(deps, true), Supervisor: continuationSupervisorOptions(deps.normalized())}
 	return continuationCommandResult(tasklifecycle.Continue(dispatchRequest(a), options))
 }
-
-func argumentsFromDispatch(a Arguments, request tasklifecycle.DispatchRequest) Arguments {
-	a.Root, a.TaskID, a.generatedTaskID, a.ResumeTask = request.Root, request.TaskID, request.GeneratedTaskID, request.ResumeTask
-	a.Provider, a.Auto, a.Config, a.Cwd = request.Provider, request.Auto, request.Config, request.Cwd
-	a.Brief, a.BriefBytes = request.BriefPath, request.BriefBytes
-	a.Isolation, a.WorkspaceID, a.Base, a.WorkspaceBudget = request.Isolation, request.WorkspaceID, request.Base, request.WorkspaceBudget
-	a.workspaceBinding = request.WorkspaceBinding
-	a.Runner, a.runnerOwnership, a.PueueConfig, a.savedSupervisor = request.Selection.Runner, request.Selection.RunnerOwnership, request.Selection.ConfigPath, request.Selection.SavedSupervisor
-	return a
-}

@@ -2,6 +2,7 @@ package tasklifecycle
 
 import (
 	"context"
+	"errors"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -61,7 +62,7 @@ func reconcilePredecessor(root string, td *taskdir.TaskDir, req *task.TaskRecord
 		return nil, err
 	}
 	if observation.State != pueue.StateEnded {
-		return nil, pueue.ErrUnknown
+		return nil, errors.Join(pueue.ErrUnknown, response.MaintenanceError)
 	}
 	return td.Inspect()
 }

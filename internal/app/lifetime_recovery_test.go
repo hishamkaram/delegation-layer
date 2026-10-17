@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	tasklifecycle "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+
 	lifecyclefixture "github.com/hishamkaram/delegation-layer/internal/tasklifecycle/testsupport"
 
 	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
@@ -92,10 +94,12 @@ func TestUpdateStatusKeepsIntentOnlyLifetimeRunningWhileOwnerBusy(t *testing.T) 
 	}()
 
 	response := newResponse("status")
+	var observed tasklifecycle.Observation
 	observation := pueue.Observation{Matched: true, State: pueue.StateEnded, NumericTaskID: 7}
-	if err = updateStatusStopsContext(t.Context(), td, &response, observation); err != nil {
+	if err = tasklifecycle.UpdateStatusStops(t.Context(), td, &observed, observation); err != nil {
 		t.Fatal(err)
 	}
+	applyTaskObservation(&response, observed, "")
 	if response.Liveness != task.LivenessRunning.String() {
 		t.Fatalf("liveness = %q, want running while intent owner is active", response.Liveness)
 	}
@@ -190,10 +194,12 @@ func TestUpdateStatusKeepsRegisteredLifetimeRunningWhileOwnerBusy(t *testing.T) 
 	}()
 
 	response := newResponse("status")
+	var observed tasklifecycle.Observation
 	observation := pueue.Observation{Matched: true, State: pueue.StateEnded, NumericTaskID: 7}
-	if err = updateStatusStopsContext(t.Context(), td, &response, observation); err != nil {
+	if err = tasklifecycle.UpdateStatusStops(t.Context(), td, &observed, observation); err != nil {
 		t.Fatal(err)
 	}
+	applyTaskObservation(&response, observed, "")
 	if response.Liveness != task.LivenessRunning.String() {
 		t.Fatalf("liveness = %q, want running while lifetime owner is active", response.Liveness)
 	}
@@ -211,11 +217,13 @@ func TestUpdateStatusKeepsUnprovenRegisteredLifetimeRunning(t *testing.T) {
 	recordRecoverableLifetime(t, td, admissionfixture.CurrentBootID(t))
 
 	response := newResponse("status")
+	var observed tasklifecycle.Observation
 	observation := pueue.Observation{Matched: true, State: pueue.StateEnded, NumericTaskID: 7}
-	err := updateStatusStopsContext(t.Context(), td, &response, observation)
+	err := tasklifecycle.UpdateStatusStops(t.Context(), td, &observed, observation)
 	if !errors.Is(err, lifetime.ErrUnverifiableLaunch) {
 		t.Fatalf("status recovery error = %v, want unverifiable launch", err)
 	}
+	applyTaskObservation(&response, observed, "")
 	if response.Liveness != task.LivenessRunning.String() {
 		t.Fatalf("liveness = %q, want running without lifetime termination proof", response.Liveness)
 	}
@@ -226,10 +234,12 @@ func TestUpdateStatusKeepsHistoricalEndedCompatibility(t *testing.T) {
 	defer closeAppTestTask(t, store, td)
 
 	response := newResponse("status")
+	var observed tasklifecycle.Observation
 	observation := pueue.Observation{Matched: true, State: pueue.StateEnded, NumericTaskID: 7}
-	if err := updateStatusStopsContext(t.Context(), td, &response, observation); err != nil {
+	if err := tasklifecycle.UpdateStatusStops(t.Context(), td, &observed, observation); err != nil {
 		t.Fatal(err)
 	}
+	applyTaskObservation(&response, observed, "")
 	if response.Liveness != task.LivenessEnded.String() {
 		t.Fatalf("historical liveness = %q, want ended", response.Liveness)
 	}
@@ -255,8 +265,9 @@ func TestUpdateStatusRecoversLifetimeBeforePublishingStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := newResponse("status")
+	var observed tasklifecycle.Observation
 	observation := pueue.Observation{Matched: true, State: pueue.StateEnded, NumericTaskID: 7}
-	if err = updateStatusStopsContext(t.Context(), td, &response, observation); err != nil {
+	if err = tasklifecycle.UpdateStatusStops(t.Context(), td, &observed, observation); err != nil {
 		t.Fatal(err)
 	}
 	records, err := td.ReadStopRecords()
@@ -266,6 +277,7 @@ func TestUpdateStatusRecoversLifetimeBeforePublishingStop(t *testing.T) {
 	if len(records) != 1 || records[0].Observation == nil || !records[0].Observation.Terminated {
 		t.Fatalf("stop was not published after lifetime recovery: %+v", records)
 	}
+	applyTaskObservation(&response, observed, "")
 	if response.Liveness != task.LivenessEnded.String() {
 		t.Fatalf("liveness = %q, want ended after lifetime recovery", response.Liveness)
 	}

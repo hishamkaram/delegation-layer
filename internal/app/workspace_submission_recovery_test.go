@@ -136,9 +136,9 @@ func writeWorkspaceRecoveryQueue(t *testing.T, path string, operation *workspace
 func observeWorkspaceCleanupRecovery(t *testing.T, fixture *testsupport.RecoveryFixture, kind string, deps Dependencies) error {
 	t.Helper()
 	if kind == workspace.OperationRemove {
-		return reconcileWorkspaceRemoval(t.Context(), fixture.Store, fixture.Resource, deps, false)
+		return workspaces.ReconcileRemoval(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps), false)
 	}
-	_, handled, err := reconcileWorkspaceForgetOperation(t.Context(), fixture.Store, fixture.Resource, deps, false, 0)
+	_, handled, err := workspaces.ReconcileForgetOperation(t.Context(), fixture.Store, fixture.Resource, workspaceRuntimeOptions(deps), false, 0)
 	if !handled {
 		return errors.New("forget recovery ignored its existing intent")
 	}

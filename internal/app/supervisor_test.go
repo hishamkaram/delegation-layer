@@ -231,7 +231,7 @@ func TestLegacyEndedInspectionJobUsesInspectionJournalEvidence(t *testing.T) {
 		RootID: store.RootID, Supervisor: supervisor.Binding(),
 		Name: job.Group, ParallelTasks: 1,
 	}
-	if err = prepareEndedInspectionEvidence(t.Context(), store, legacy, request.TaskID, job); err != nil {
+	if err = privateCleanupOwner().PrepareEndedInspectionEvidence(t.Context(), store, legacy, request.TaskID, job); err != nil {
 		t.Fatal(err)
 	}
 	if err = inspectLegacyEndedJob(context.Background(), store, legacy, job); err != nil {
@@ -330,7 +330,7 @@ func TestRebindContinuationSupervisorHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	saved := task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath("/state")}
-	_, err := rebindContinuationSupervisor(ctx, "/state", saved, Dependencies{})
+	_, err := supervisorcore.RebindContinuation(ctx, "/state", saved, continuationSupervisorOptions(Dependencies{}))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled continuation rebind was not bounded: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestRebindContinuationSupervisorUsesPublishedSuccessor(t *testing.T) {
 	successorGroup.Supervisor = successor
 	publishAppTestGroupMigration(t, store, legacyGroup, successorGroup)
 
-	got, err := rebindContinuationSupervisor(context.Background(), store.Root, legacy, Dependencies{})
+	got, err := supervisorcore.RebindContinuation(context.Background(), store.Root, legacy, continuationSupervisorOptions(Dependencies{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,10 +422,10 @@ func TestRebindContinuationSupervisorRejectsPrivateEndpointDriftWithoutInspectio
 	saved.ConfigDigest = strings.Repeat("a", 64)
 	saved.ResolvedConfigSHA256 = strings.Repeat("b", 64)
 
-	_, err = rebindContinuationSupervisor(context.Background(), store.Root, saved, Dependencies{
+	_, err = supervisorcore.RebindContinuation(context.Background(), store.Root, saved, continuationSupervisorOptions(Dependencies{
 		InitialSupervisorExecutable: clientPath,
 		SupervisorOptions:           options,
-	})
+	}))
 	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("continuation accepted private endpoint drift without a migration journal: %v", err)
 	}

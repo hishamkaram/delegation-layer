@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	tasklifecycle "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+
 	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -159,7 +161,7 @@ func TestDispatchTaskRecordLookupIsConservativeForExplicitIDs(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := dispatchTaskRecordLookup(test.taskID, test.exists, test.lookupErr); got != test.wantRecord {
+			if got := taskRecordPresence(tasklifecycle.DispatchRecordLookup(test.taskID, test.exists, test.lookupErr)); got != test.wantRecord {
 				t.Fatalf("task record state=%q, want %q", got, test.wantRecord)
 			}
 		})

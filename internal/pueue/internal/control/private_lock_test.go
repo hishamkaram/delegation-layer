@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
+
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
@@ -27,8 +29,8 @@ func TestFinishPrivateBootstrapRetainsLockForEveryPendingCommand(t *testing.T) {
 	}
 	releasePath := filepath.Join(base, "release")
 	waitScript := `while [ ! -f "$1" ]; do sleep 0.01; done`
-	first := startOwned(exec.Command("sh", "-c", waitScript, "wait", releasePath))
-	second := startOwned(exec.Command("sh", "-c", waitScript, "wait", releasePath))
+	first := transport.StartOwned(exec.Command("sh", "-c", waitScript, "wait", releasePath))
+	second := transport.StartOwned(exec.Command("sh", "-c", waitScript, "wait", releasePath))
 	resultErr := errors.Join(&InFlightError{Pending: first}, &InFlightError{Pending: second})
 	finishPrivateBootstrap(&lock, &resultErr)
 
@@ -69,7 +71,7 @@ func TestRetainBootstrapLockReportsDeferredReleaseFailure(t *testing.T) {
 	lock := &bootstrapLock{file: file}
 	reported := make(chan error, 1)
 
-	retainBootstrapLock(&lock, []*Pending{newCompletedPending(nil, CommandResult{})}, func(releaseErr error) {
+	retainBootstrapLock(&lock, []*Pending{transport.NewCompletedPending(nil, CommandResult{})}, func(releaseErr error) {
 		reported <- releaseErr
 	})
 	if lock != nil {

@@ -18,8 +18,6 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 	result.Interaction, result.Inspection = interaction, inspection
 	if !supervisorcore.TaskTerminal(inspection) {
 		err = errors.Join(err, interactionErr)
-	} else {
-		err = errors.Join(err, nil)
 	}
 	if err != nil {
 		return result, err

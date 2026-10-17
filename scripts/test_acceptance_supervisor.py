@@ -91,8 +91,9 @@ class WaitUntilTests(unittest.TestCase):
     def test_custom_timeout_preserves_retry_and_success_value(self):
         result = {"ready": True}
         values = iter((False, result))
-        with patch.object(supervisor_common.time, "monotonic", return_value=0), \
-                patch.object(supervisor_common.time, "sleep"):
+        with patch("scripts.delegate_acceptance.processes.observation.time.monotonic",
+                   return_value=0), \
+                patch("scripts.delegate_acceptance.processes.observation.time.sleep"):
             observed = supervisor_common.wait_until(
                 lambda: next(values), timeout=1,
                 timeout_error=subprocess.TimeoutExpired(["fixture"], 1),
@@ -143,7 +144,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
-            with patch.object(supervisor_common.subprocess, "Popen",
+            with patch.object(process_operations.subprocess, "Popen",
                               side_effect=OSError("injected spawn failure")):
                 with self.assertRaisesRegex(OSError, "spawn failure"):
                     processes.start("failed", ["/bin/sh"], root)
@@ -262,7 +263,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
 
             processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
             lifecycle_owner = SimpleNamespace(process=None)
-            with patch.object(supervisor_common.subprocess, "Popen", FakePopen), \
+            with patch.object(process_operations.subprocess, "Popen", FakePopen), \
                     patch.object(process_operations, "write_json", side_effect=fail_started):
                 with self.assertRaisesRegex(OSError, "started receipt"):
                     processes.start("caller", ["/bin/sh"], cwd,
@@ -503,9 +504,9 @@ class A06RetryObservationTests(unittest.TestCase):
 
 class AcceptanceArtifactCleanupTests(unittest.TestCase):
     def test_failure_cleanup_budget_is_finite(self):
-        with patch.object(supervisor_common.time, "monotonic",
-                          side_effect=(10.0, 12.0, 16.0)), \
-                patch.object(supervisor_common.time, "sleep") as sleep:
+        with patch("scripts.delegate_acceptance.processes.observation.time.monotonic",
+                   side_effect=(10.0, 12.0, 16.0)), \
+                patch("scripts.delegate_acceptance.processes.observation.time.sleep") as sleep:
             deadline = supervisor_common.failure_cleanup_deadline(5)
             self.assertTrue(supervisor_common.wait_for_failure_cleanup(deadline, 10))
             self.assertFalse(supervisor_common.wait_for_failure_cleanup(deadline, 1))

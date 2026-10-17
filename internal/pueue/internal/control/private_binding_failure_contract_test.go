@@ -20,8 +20,17 @@ func TestBindingPublicationIncompleteFailureIsNotPremutationRefusal(t *testing.T
 	if readErr != nil || !found || published != fixture.legacy.Binding() {
 		t.Fatalf("fixture did not reach actual binding publication: found=%t err=%v published=%+v", found, readErr, published)
 	}
+	assertPrivateTransitionPostconditionError(t, err)
+}
+
+func assertPrivateTransitionPostconditionError(t *testing.T, err error) {
+	t.Helper()
 	if !errors.Is(err, ErrPrivateSupervisorMigrationRequired) || errors.Is(err, ErrBinding) {
 		t.Fatalf("post-publication failure changed its original contract: %v", err)
+	}
+	want := ErrPrivateSupervisorMigrationRequired.Error() + ": published private supervisor transition is incomplete"
+	if err.Error() != want {
+		t.Fatalf("post-publication failure changed its error context: got=%q want=%q", err, want)
 	}
 	if errors.Is(err, ErrPrivateSupervisorTransitionIncomplete) {
 		t.Errorf("post-publication failure advertised a pre-mutation refusal: %v", err)

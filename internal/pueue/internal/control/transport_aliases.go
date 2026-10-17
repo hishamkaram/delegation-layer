@@ -16,14 +16,6 @@ type (
 
 var ErrInFlight = transport.ErrInFlight
 
-func newPending(args []string) *Pending { return transport.NewPending(args) }
-
-func newCompletedPending(args []string, result CommandResult) *Pending {
-	return transport.NewCompletedPending(args, result)
-}
-
-func startOwned(command *exec.Cmd) *Pending { return transport.StartOwned(command) }
-
 func startOwnedCaptured(command *exec.Cmd, commandID string, observer func(CommandEvent), statusVersion string) *Pending {
 	return transport.StartOwnedCaptured(command, commandID, observer, statusVersion)
 }

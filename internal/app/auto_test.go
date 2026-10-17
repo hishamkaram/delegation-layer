@@ -10,6 +10,10 @@ import (
 	"testing"
 	"time"
 
+	tasklifecycle "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+
+	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
@@ -82,7 +86,7 @@ func TestSelectAutoProviderUsesStaticReadinessAndDefaultPermission(t *testing.T)
 		t.Fatal(err)
 	}
 	deps := Dependencies{Catalog: catalog}.normalized()
-	provider, err := selectAutoProvider(deps, root, strings.Repeat("a", 32), strings.Repeat("b", 32), workspace, task.TaskConfig{Budget: "1m"}, []byte("brief"))
+	provider, err := admissioncore.SelectAutoProvider(staticAdmissionOptions(deps), root, strings.Repeat("a", 32), strings.Repeat("b", 32), workspace, task.TaskConfig{Budget: "1m"}, []byte("brief"))
 	if err != nil || provider != "zulu:run" {
 		t.Fatalf("auto provider=%q err=%v calls=%v", provider, err, calls)
 	}
@@ -95,12 +99,12 @@ func TestTimeoutContinuationRequiresDurableTermination(t *testing.T) {
 	request := &task.StopRequestRecord{Cause: "budget"}
 	response := newResponse("status")
 	records := []taskdir.StopRecord{{Request: request}}
-	applyTimeoutContinuation(&response, "/tmp/state", &task.TaskRecord{TaskID: strings.Repeat("a", 32), Provider: "pi:json"}, records, NativeCatalog(), nil, "", nil)
+	applyContinuationOffer(&response, "/tmp/state", tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: strings.Repeat("a", 32), Provider: "pi:json"}, records, NativeCatalog(), nil, "", "", nil, true, false))
 	if response.Status != "" || response.Continuation != nil {
 		t.Fatalf("unobserved budget stop was treated as timeout: %+v", response)
 	}
 	records[0].Observation = &task.StopObservedRecord{Terminated: true}
-	applyTimeoutContinuationWithRunnerState(&response, "/tmp/state", &task.TaskRecord{TaskID: strings.Repeat("a", 32), Provider: "pi:json"}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, "/usr/bin/delegate-run", nil, true, true)
+	applyContinuationOffer(&response, "/tmp/state", tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: strings.Repeat("a", 32), Provider: "pi:json"}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, "/usr/bin/delegate-run", "/usr/bin/delegate-run", nil, true, true))
 	if response.Status != "timed_out" || response.Continuation == nil || !response.Continuation.Resumable {
 		t.Fatalf("terminated budget stop was not resumable: %+v", response)
 	}
@@ -112,7 +116,7 @@ func TestTimeoutContinuationWaitsForRunnerLeaseRelease(t *testing.T) {
 	request := &task.TaskRecord{TaskID: taskID, Provider: "pi:json"}
 	session := &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}
 	response := newResponse("status")
-	applyTimeoutContinuationWithRunnerState(&response, "/tmp/state", request, records, NativeCatalog(), session, "/usr/bin/delegate-run", nil, false, true)
+	applyContinuationOffer(&response, "/tmp/state", tasklifecycle.TimeoutContinuation(request, records, NativeCatalog(), session, "/usr/bin/delegate-run", "/usr/bin/delegate-run", nil, false, true))
 	if response.Status != "timed_out" || response.Continuation == nil || response.Continuation.Resumable || response.Continuation.ContinueCommand != "" {
 		t.Fatalf("active runner lease was advertised as resumable: %+v", response.Continuation)
 	}
@@ -125,7 +129,7 @@ func TestTimeoutContinuationWithoutRecordedRunnerOmitsCommand(t *testing.T) {
 	taskID := strings.Repeat("e", 32)
 	records := []taskdir.StopRecord{{Request: &task.StopRequestRecord{Cause: "budget"}, Observation: &task.StopObservedRecord{Terminated: true}}}
 	response := newResponse("status")
-	applyTimeoutContinuationWithRunnerState(&response, "/tmp/state", &task.TaskRecord{TaskID: taskID, Provider: "pi:json"}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, "", nil, true, true)
+	applyContinuationOffer(&response, "/tmp/state", tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: taskID, Provider: "pi:json"}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, "", "", nil, true, true))
 	if response.Continuation == nil || response.Continuation.Resumable || response.Continuation.ContinueCommand != "" {
 		t.Fatalf("legacy task advertised an unusable continuation: %+v", response.Continuation)
 	}
@@ -138,7 +142,7 @@ func TestTimeoutContinuationWithoutRecordedEnvironmentOmitsCommand(t *testing.T)
 	taskID := strings.Repeat("f", 32)
 	records := []taskdir.StopRecord{{Request: &task.StopRequestRecord{Cause: "budget"}, Observation: &task.StopObservedRecord{Terminated: true}}}
 	response := newResponse("status")
-	applyTimeoutContinuationWithRunnerState(&response, "/tmp/state", &task.TaskRecord{TaskID: taskID, Provider: "pi:json"}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, "/usr/bin/delegate-run", nil, true, false)
+	applyContinuationOffer(&response, "/tmp/state", tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: taskID, Provider: "pi:json"}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, "/usr/bin/delegate-run", "/usr/bin/delegate-run", nil, true, false))
 	if response.Continuation == nil || response.Continuation.Resumable || response.Continuation.ContinueCommand != "" {
 		t.Fatalf("legacy task advertised an unusable continuation: %+v", response.Continuation)
 	}
@@ -158,8 +162,7 @@ func TestTimeoutContinuationSurfacesInvalidProviderIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	records := []taskdir.StopRecord{{Request: &task.StopRequestRecord{Cause: "budget"}, Observation: &task.StopObservedRecord{Terminated: true}}}
-	response := newResponse("status")
-	if err = applyTimeoutContinuationWithRecords(&response, store.Root, td, req, meta, records, NativeCatalog()); err == nil {
+	if _, err = tasklifecycle.ObserveTimeoutContinuationWithRecords(store.Root, td, req, meta, records, NativeCatalog()); err == nil {
 		t.Fatal("invalid provider identity was hidden")
 	}
 }
@@ -178,8 +181,7 @@ func TestTimeoutContinuationFromTaskSurfacesMalformedStopEvidence(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := newResponse("status")
-	if err = applyTimeoutContinuationFromTask(&response, store.Root, td, req, meta, NativeCatalog()); err == nil {
+	if _, err = tasklifecycle.ObserveTimeoutContinuation(store.Root, td, req, meta, NativeCatalog()); err == nil {
 		t.Fatal("malformed timeout evidence was hidden")
 	}
 }
@@ -207,7 +209,7 @@ func TestNonresumableTimeoutOmitsContinuationCommand(t *testing.T) {
 	taskID := strings.Repeat("c", 32)
 	response := newResponse("status")
 	records := []taskdir.StopRecord{{Request: &task.StopRequestRecord{Cause: "budget"}, Observation: &task.StopObservedRecord{Terminated: true}}}
-	applyTimeoutContinuation(&response, "/tmp/state", &task.TaskRecord{TaskID: taskID, Provider: config.ProviderFixture}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: config.ProviderFixture, ConversationID: "session"}, "", nil)
+	applyContinuationOffer(&response, "/tmp/state", tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: taskID, Provider: config.ProviderFixture}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: config.ProviderFixture, ConversationID: "session"}, "", "", nil, true, false))
 	if response.Continuation == nil || response.Continuation.Resumable || response.Continuation.ContinueCommand != "" {
 		t.Fatalf("nonresumable timeout advertised a command: %+v", response.Continuation)
 	}

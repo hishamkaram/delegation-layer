@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
+
 	"github.com/hishamkaram/delegation-layer/internal/pueue/protocol"
 )
 
@@ -178,7 +180,7 @@ func TestAwaitReadyPendingClassifiesCompletedStatusCapture(t *testing.T) {
 				Err:      tc.err,
 			}
 			pendingResult.SetSnapshot(QueueSnapshot{})
-			pending := newCompletedPending([]string{"finite-supervisor", "status", "--json"}, pendingResult)
+			pending := transport.NewCompletedPending([]string{"finite-supervisor", "status", "--json"}, pendingResult)
 			got, err := awaitReadyPending(t.Context(), nil, pending)
 			if !errors.Is(err, tc.wantErr) || !errors.Is(err, tc.err) {
 				t.Fatalf("completed status error = %v, want classification %v and cause %v", err, tc.wantErr, tc.err)

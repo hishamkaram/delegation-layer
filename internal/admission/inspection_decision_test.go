@@ -256,7 +256,7 @@ func TestInspectionAwaitRetriesJournalContentionWithinAdmissionDeadline(t *testi
 	store.SetFaultInjector(fault)
 	defer store.SetFaultInjector(nil)
 
-	facts, err := AwaitInspection(t.Context(), operation, nil)
+	facts, err := awaitInspectionWithSubmissionState(t.Context(), operation, nil, inspectionSubmissionState{})
 	if err != nil || string(facts) != "{\"eligible\":true}\n" {
 		t.Fatalf("transient journal contention ended admission: facts=%s err=%v", facts, err)
 	}

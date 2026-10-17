@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
+	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
@@ -22,24 +23,24 @@ import (
 )
 
 func TestQueuedInspectionWorkerAcceptsAuthorizedUpgradeAfterOldBinaryRemoval(t *testing.T) {
-	fixture := newQueuedInspectionUpgradeFixture(t)
-	operation, err := inspection.LoadOperation(fixture.store, fixture.request.TaskID)
+	fixture := admissionfixture.NewQueuedInspectionUpgradeFixture(t)
+	operation, err := inspection.LoadOperation(fixture.Store, fixture.Request.TaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = validateInspectionWorkerExecutable(context.Background(), fixture.store.Root, operation, operation.Request().Binding, fixture.replacement.NewRunner); !errors.Is(err, task.ErrEvidenceFault) {
+	if err = validateInspectionWorkerExecutable(context.Background(), fixture.Store.Root, operation, operation.Request().Binding, fixture.Replacement.NewRunner); !errors.Is(err, task.ErrEvidenceFault) {
 		t.Fatalf("unrecorded managed successor was accepted: %v", err)
 	}
 	if err = operation.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err = supervisorcore.AuthorizeQueuedInspectionRunnerUpgrade(context.Background(), fixture.store, fixture.replacement); err != nil {
+	if err = supervisorcore.AuthorizeQueuedInspectionRunnerUpgrade(context.Background(), fixture.Store, fixture.Replacement); err != nil {
 		t.Fatalf("managed queue migration was not durably authorized: %v", err)
 	}
-	if err = os.Remove(fixture.oldRunner); err != nil {
+	if err = os.Remove(fixture.OldRunner); err != nil {
 		t.Fatal(err)
 	}
-	operation, err = inspection.LoadOperation(fixture.store, fixture.request.TaskID)
+	operation, err = inspection.LoadOperation(fixture.Store, fixture.Request.TaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,57 +49,8 @@ func TestQueuedInspectionWorkerAcceptsAuthorizedUpgradeAfterOldBinaryRemoval(t *
 			t.Error(closeErr)
 		}
 	}()
-	if err = validateInspectionWorkerExecutable(context.Background(), fixture.store.Root, operation, operation.Request().Binding, fixture.replacement.NewRunner); err != nil {
+	if err = validateInspectionWorkerExecutable(context.Background(), fixture.Store.Root, operation, operation.Request().Binding, fixture.Replacement.NewRunner); err != nil {
 		t.Fatalf("verified managed successor failed after old worker removal: %v", err)
-	}
-}
-
-func TestAdmissionInspectionReplayAcceptsAuthorizedManagedSuccessor(t *testing.T) {
-	fixture := newQueuedInspectionUpgradeFixture(t)
-	operation, err := inspection.LoadOperation(fixture.store, fixture.request.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	original := operation.Request()
-	if _, err = operation.ClaimSubmissionContext(context.Background(), time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if err = operation.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	workerDigest, err := commonprovider.FingerprintExecutable(fixture.replacement.NewRunner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	binding := original.Binding
-	binding.WorkerExecutable = fixture.replacement.NewRunner
-	binding.WorkerSHA256 = workerDigest
-	if _, err = admission.OpenAdmissionInspectionOperation(fixture.store, fixture.request, binding, time.Now()); !errors.Is(err, task.ErrEvidenceFault) {
-		t.Fatalf("unverified managed successor was accepted: %v", err)
-	}
-
-	if err = supervisorcore.AuthorizeQueuedInspectionRunnerUpgrade(context.Background(), fixture.store, fixture.replacement); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.Remove(fixture.oldRunner); err != nil {
-		t.Fatal(err)
-	}
-	operation, err = admission.OpenAdmissionInspectionOperation(fixture.store, fixture.request, binding, time.Now())
-	if err != nil {
-		t.Fatalf("authorized inspection admission replay failed: %v", err)
-	}
-	defer func() {
-		if closeErr := operation.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	}()
-	replayed := operation.Request()
-	if replayed.Binding.WorkerExecutable != original.Binding.WorkerExecutable || replayed.Binding.WorkerSHA256 != original.Binding.WorkerSHA256 {
-		t.Fatalf("replay changed immutable worker binding: before=%+v after=%+v", original.Binding, replayed.Binding)
-	}
-	if err = admission.SubmitInspectionOnce(context.Background(), operation, fixture.supervisor, binding.WorkerExecutable, fixture.store.Root); err != nil {
-		t.Fatalf("already-submitted inspection was not reconciled through its original journal: %v", err)
 	}
 }
 
@@ -191,7 +143,7 @@ func TestAdmissionInspectionReplayAcceptsCompletedManagedSuccessor(t *testing.T)
 	binding := fixture.binding
 	binding.WorkerExecutable = fixture.newRunner
 	binding.WorkerSHA256 = fixture.newDigest
-	replayed, err := admission.OpenAdmissionInspectionOperation(fixture.store, fixture.request, binding, time.Now().UTC())
+	replayed, err := admission.OpenInspectionOperationContext(t.Context(), fixture.store, fixture.request, binding, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("completed operation could not be reopened after worker upgrade: %v", err)
 	}
@@ -220,8 +172,9 @@ func TestAdmissionInspectionReplayAcceptsCompletedManagedSuccessor(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = admission.SubmitInspectionOnce(context.Background(), replayed, fixture.supervisor, fixture.newRunner, fixture.store.Root); err != nil {
-		t.Fatalf("completed submitted operation was not replayable: %v", err)
+	facts, _, err := admission.RunInspection(replayed, fixture.supervisor, fixture.newRunner, fixture.store.Root)
+	if err != nil || string(facts) != "{\"eligible\":true}\n" {
+		t.Fatalf("completed submitted operation facts=%s err=%v", facts, err)
 	}
 	after, err := os.ReadFile(fixture.logPath)
 	if err != nil {
@@ -230,55 +183,6 @@ func TestAdmissionInspectionReplayAcceptsCompletedManagedSuccessor(t *testing.T)
 	if string(after) != string(before) {
 		t.Fatalf("replay launched or inspected another worker: before=%q after=%q", before, after)
 	}
-}
-
-type queuedInspectionUpgradeFixture struct {
-	store       *taskdir.Store
-	supervisor  *pueue.Client
-	request     task.TaskRecord
-	replacement pueue.RunnerCommandReplacement
-	oldRunner   string
-}
-
-func newQueuedInspectionUpgradeFixture(t *testing.T) queuedInspectionUpgradeFixture {
-	t.Helper()
-	store := newBareInspectionStore(t)
-	request := newBareInspectionRequest(t, store)
-	supervisor, _ := newBlockingInspectionSupervisor(t, store.RootID)
-	oldSource := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
-	writeRunnerFixture(t, oldSource, "old inspection worker")
-	oldRunner := installStateRunnerFixture(t, store.Root, oldSource)
-	digest, err := commonprovider.FingerprintExecutable(oldRunner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operation, err := inspection.OpenOperation(store, request, inspection.Binding{
-		DefinitionRevision: "inspection-v1", DefinitionSHA256: strings.Repeat("a", 64),
-		HelperExecutable: "/usr/bin/true", HelperSHA256: strings.Repeat("a", 64),
-		WorkerExecutable: oldRunner, WorkerSHA256: digest,
-		RunnerOwnership: task.RunnerOwnershipManaged,
-		Supervisor:      supervisor.Binding(),
-	}, time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = operation.Close(); err != nil {
-		t.Fatal(err)
-	}
-	identity := pueue.InspectionIdentity{RootID: store.RootID, TaskID: request.TaskID}
-	label := identity.Label()
-	job := pueue.Job{ID: 17, Label: &label, Group: identity.Group(), State: pueue.StateQueued}
-	replacement, eligible, err := supervisorcore.PrepareQueuedInspectionRunnerCommand(context.Background(), store, supervisor, job, request.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !eligible {
-		t.Fatal("managed inspection worker was not eligible for queue migration")
-	}
-	newSource := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
-	writeRunnerFixture(t, newSource, "new inspection worker")
-	replacement.NewRunner = installStateRunnerFixture(t, store.Root, newSource)
-	return queuedInspectionUpgradeFixture{store: store, supervisor: supervisor, request: request, replacement: replacement, oldRunner: oldRunner}
 }
 
 func TestTimeoutContinuationDoesNotPinManagedRunner(t *testing.T) {
@@ -294,7 +198,7 @@ func TestTimeoutContinuationDoesNotPinManagedRunner(t *testing.T) {
 	runner := meta.RunnerExecutable
 	response := newResponse("status")
 	records := []taskdir.StopRecord{{Request: &task.StopRequestRecord{Cause: "budget"}, Observation: &task.StopObservedRecord{Terminated: true}}}
-	applyTimeoutContinuationWithRunnerStateAndCommandRunner(&response, root, &task.TaskRecord{TaskID: strings.Repeat("d", 32), Provider: "pi:json"}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, runner, commandRunner, nil, true, true)
+	applyContinuationOffer(&response, root, tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: strings.Repeat("d", 32), Provider: "pi:json"}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, runner, commandRunner, nil, true, true))
 	if response.Continuation == nil || !response.Continuation.Resumable || strings.Contains(response.Continuation.ContinueCommand, "--runner") {
 		t.Fatalf("managed continuation command = %+v", response.Continuation)
 	}
@@ -329,15 +233,15 @@ func TestLegacyManagedRunnerMigrationSurvivesRemovedInstallation(t *testing.T) {
 
 func requireLegacyRunnerContinuation(t *testing.T, root string, req *task.TaskRecord) {
 	t.Helper()
-	loadedReq, loadedMeta, loadedBrief, err := loadContinuationInput(root, Arguments{TaskID: req.TaskID}, Dependencies{})
+	loadedReq, loadedMeta, loadedBrief, err := tasklifecycle.LoadContinuationInput(root, dispatchRequest(Arguments{TaskID: req.TaskID}), dispatchOptions(Dependencies{}, false))
 	if err != nil {
 		t.Fatal(err)
 	}
-	continuation, err := buildContinuationArguments(Arguments{}, root, loadedReq, loadedMeta, loadedBrief)
+	continuation, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}), root, loadedReq, loadedMeta, loadedBrief)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if continuation.Runner != "" || requestedRunnerOwnership(continuation) != task.RunnerOwnershipManaged {
+	if continuation.Selection.Runner != "" || supervisorcore.RequestedRunnerOwnership(continuation.Selection) != task.RunnerOwnershipManaged {
 		t.Fatalf("continuation retained removed legacy runner: %+v", continuation)
 	}
 }
@@ -347,11 +251,7 @@ func requireLegacyRunnerTimeoutContinuation(t *testing.T, root string, req *task
 	commandRunner := tasklifecycle.TimeoutContinuationCommandRunner(meta, ownership)
 	response := newResponse("status")
 	stopRecords := []taskdir.StopRecord{{Request: &task.StopRequestRecord{Cause: "budget"}, Observation: &task.StopObservedRecord{Terminated: true}}}
-	applyTimeoutContinuationWithRunnerStateAndCommandRunner(
-		&response, root, &task.TaskRecord{TaskID: req.TaskID, Provider: "pi:json"}, stopRecords,
-		NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"},
-		runner, commandRunner, nil, true, true,
-	)
+	applyContinuationOffer(&response, root, tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: req.TaskID, Provider: "pi:json"}, stopRecords, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, runner, commandRunner, nil, true, true))
 	if response.Continuation == nil || !response.Continuation.Resumable || strings.Contains(response.Continuation.ContinueCommand, "--runner") {
 		t.Fatalf("migrated legacy timeout continuation = %+v", response.Continuation)
 	}
@@ -361,8 +261,8 @@ func requireLegacyRunnerRetry(t *testing.T, root string, store *taskdir.Store, t
 	t.Helper()
 	currentRunner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, currentRunner, "current managed runner")
-	refreshed, allowUpgrade, err := refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: currentRunner}, root, store, td, meta)
-	if err != nil || !allowUpgrade || refreshed.runnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.IsStateRunnerPath(root, refreshed.Runner) {
+	refreshed, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), currentRunner, root, store, td, meta)
+	if err != nil || !allowUpgrade || refreshed.RunnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.IsStateRunnerPath(root, refreshed.Runner) {
 		t.Fatalf("migrated legacy retry runner = %+v, allowUpgrade=%v, err=%v", refreshed, allowUpgrade, err)
 	}
 }
@@ -380,8 +280,8 @@ func TestLegacyManagedRetryRecordsOwnershipForContinuation(t *testing.T) {
 
 	currentRunner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, currentRunner, "current managed runner")
-	refreshed, allowUpgrade, err := refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: currentRunner}, root, store, td, meta)
-	if err != nil || !allowUpgrade || refreshed.runnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.CurrentManagedRunnerExecutable(root, refreshed.Runner) {
+	refreshed, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), currentRunner, root, store, td, meta)
+	if err != nil || !allowUpgrade || refreshed.RunnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.CurrentManagedRunnerExecutable(root, refreshed.Runner) {
 		t.Fatalf("legacy retry did not select the current managed runner: args=%+v allowUpgrade=%v err=%v", refreshed, allowUpgrade, err)
 	}
 	if recorded, recordErr := td.HasManagedRunnerMigration(); recordErr != nil || !recorded {
@@ -415,8 +315,8 @@ func TestLegacyInspectionRetryKeepsOriginalRunner(t *testing.T) {
 	currentRunner := filepath.Join(testsupport.CanonicalTempDir(t), "delegate-run")
 	writeRunnerFixture(t, currentRunner, "current managed inspection runner")
 
-	refreshed, allowUpgrade, err := refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: currentRunner}, fixture.store.Root, fixture.store, td, &meta)
-	if err != nil || allowUpgrade || refreshed.Runner != oldRunner || refreshed.runnerOwnership != "" {
+	refreshed, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), currentRunner, fixture.store.Root, fixture.store, td, &meta)
+	if err != nil || allowUpgrade || refreshed.Runner != oldRunner || refreshed.RunnerOwnership != "" {
 		t.Fatalf("legacy inspection retry did not remain pinned: args=%+v allowUpgrade=%v err=%v", refreshed, allowUpgrade, err)
 	}
 	if recorded, recordErr := td.HasManagedRunnerMigration(); recordErr != nil || recorded {
@@ -493,11 +393,11 @@ func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
 		SupervisorConfig: task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath(root)},
 	}
 
-	got, allowUpgrade, err := refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: source}, root, nil, nil, meta)
+	got, allowUpgrade, err := supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), source, root, nil, nil, meta)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !allowUpgrade || got.runnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.IsStateRunnerPath(root, got.Runner) {
+	if !allowUpgrade || got.RunnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.IsStateRunnerPath(root, got.Runner) {
 		t.Fatalf("managed retry selection = %+v, allowUpgrade=%v", got, allowUpgrade)
 	}
 	if !supervisorcore.CurrentManagedRunnerExecutable(root, got.Runner) {
@@ -505,11 +405,11 @@ func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
 	}
 
 	meta.SupervisorConfig.ConfigPath = filepath.Join(testsupport.CanonicalTempDir(t), "external-pueue.yml")
-	got, allowUpgrade, err = refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: source}, root, nil, nil, meta)
+	got, allowUpgrade, err = supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), source, root, nil, nil, meta)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !allowUpgrade || got.runnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.IsStateRunnerPath(root, got.Runner) {
+	if !allowUpgrade || got.RunnerOwnership != task.RunnerOwnershipManaged || !supervisorcore.IsStateRunnerPath(root, got.Runner) {
 		t.Fatalf("external-supervisor retry selection = %+v, allowUpgrade=%v", got, allowUpgrade)
 	}
 	if !supervisorcore.CurrentManagedRunnerExecutable(root, got.Runner) {
@@ -520,7 +420,7 @@ func TestRefreshManagedRetryRunnerUsesCurrentStateRunner(t *testing.T) {
 	writeRunnerFixture(t, custom, "custom runner")
 	meta.RunnerExecutable = custom
 	meta.RunnerOwnership = task.RunnerOwnershipCustom
-	got, allowUpgrade, err = refreshManagedRetryRunner(Arguments{}, Dependencies{RunnerExecutable: source}, root, nil, nil, meta)
+	got, allowUpgrade, err = supervisorcore.RefreshManagedRetryRunner(supervisorAdmissionSelection(Arguments{}), source, root, nil, nil, meta)
 	if err != nil || allowUpgrade || got.Runner != "" {
 		t.Fatalf("custom retry was rewritten: args=%+v allowUpgrade=%v err=%v", got, allowUpgrade, err)
 	}
@@ -537,14 +437,14 @@ func TestManagedContinuationKeepsRunnerOwnership(t *testing.T) {
 		SupervisorConfig: task.SupervisorRef{ConfigPath: filepath.Join(testsupport.CanonicalTempDir(t), "pueue.yml")},
 	}
 	arguments := Arguments{Runner: managedRunner}
-	if err := validateContinuationMetadata(root, arguments, meta); err != nil {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(arguments), meta); err != nil {
 		t.Fatal(err)
 	}
-	got, err := buildContinuationArguments(arguments, root, &task.TaskRecord{TaskID: "continuation"}, meta, nil)
+	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(arguments), root, &task.TaskRecord{TaskID: "continuation"}, meta, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Runner != "" || requestedRunnerOwnership(got) != task.RunnerOwnershipManaged {
+	if got.Selection.Runner != "" || supervisorcore.RequestedRunnerOwnership(got.Selection) != task.RunnerOwnershipManaged {
 		t.Fatalf("managed continuation lost runner ownership: args=%+v", got)
 	}
 }

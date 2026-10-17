@@ -42,7 +42,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             original = common._rename_noreplace
 
             def occupy_then_publish(source_fd, source_name, destination_fd, destination_name):
-                common.os.mkdir(destination_name, dir_fd=destination_fd)
+                os.mkdir(destination_name, dir_fd=destination_fd)
                 (root / destination_name / "keep.txt").write_text("replacement", encoding="utf-8")
                 return original(source_fd, source_name, destination_fd, destination_name)
 
@@ -100,12 +100,12 @@ class DirectoryOwnershipTests(unittest.TestCase):
             journal_parent_identity = (
                 journal_parent.stat().st_dev, journal_parent.stat().st_ino,
             )
-            original_fsync = common.os.fsync
+            original_fsync = os.fsync
             failed = False
 
             def fail_first_journal_parent_sync(descriptor):
                 nonlocal failed
-                opened = common.os.fstat(descriptor)
+                opened = os.fstat(descriptor)
                 if (not failed and journal.exists()
                         and (opened.st_dev, opened.st_ino) == journal_parent_identity):
                     failed = True
@@ -124,7 +124,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             original_rename = common._rename_noreplace
 
             def record_sync(descriptor):
-                opened = common.os.fstat(descriptor)
+                opened = os.fstat(descriptor)
                 opened_identity = (opened.st_dev, opened.st_ino)
                 if opened_identity == journal_parent_identity:
                     events.append("journal-parent-synced")
@@ -212,10 +212,10 @@ class DirectoryOwnershipTests(unittest.TestCase):
                 common.resume_directory_cleanup(journal, authorization, identity)
             prepared = common.read_directory_cleanup(journal, authorization)
             synced = set()
-            original_sync = common.os.fsync
+            original_sync = os.fsync
 
             def record_sync(descriptor):
-                metadata = common.os.fstat(descriptor)
+                metadata = os.fstat(descriptor)
                 synced.add((metadata.st_dev, metadata.st_ino))
                 return original_sync(descriptor)
 
@@ -418,9 +418,9 @@ class DirectoryOwnershipTests(unittest.TestCase):
 
                     self.assertEqual(marker.read_text(encoding="utf-8"), "replacement")
                     with self.assertRaises(OSError):
-                        common.os.fstat(directory_fd)
+                        os.fstat(directory_fd)
                     with self.assertRaises(OSError):
-                        common.os.fstat(parent_fd)
+                        os.fstat(parent_fd)
 
     def test_symlink_replacement_is_retained_and_not_followed(self):
         with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:
@@ -443,7 +443,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             moved = threading.Event()
             replacement_ready = threading.Event()
             errors = []
-            original_rename = common.os.rename
+            original_rename = os.rename
 
             def rename_then_pause(source, destination, *args, **kwargs):
                 result = original_rename(source, destination, *args, **kwargs)
@@ -483,7 +483,7 @@ class DirectoryOwnershipTests(unittest.TestCase):
             rename_ready = threading.Event()
             replacement_ready = threading.Event()
             errors = []
-            original_rename = common.os.rename
+            original_rename = os.rename
 
             def pause_before_rename(source, destination, *args, **kwargs):
                 if source == "owned" and destination == "entry":
@@ -859,9 +859,9 @@ class DirectoryOwnershipTests(unittest.TestCase):
 
             self.assertTrue(child_owner.transfer_child_to(parent))
             with self.assertRaises(OSError):
-                common.os.fstat(parent_descriptor)
+                os.fstat(parent_descriptor)
             with self.assertRaises(OSError):
-                common.os.fstat(directory_descriptor)
+                os.fstat(directory_descriptor)
             self.assertTrue(child.directory.is_dir())
             self.assertTrue(parent_owner.rollback())
             self.assertFalse(parent.directory.exists())
@@ -885,12 +885,12 @@ class DirectoryOwnershipTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="acceptance-owner-") as directory:
             root = Path(directory)
-            before = len(common.os.listdir(descriptor_directory))
+            before = len(os.listdir(descriptor_directory))
             for index in range(200):
                 owner = common.DirectoryOwner()
                 common.Processes(root / f"processes-{index:03d}", {}, owner=owner)
                 common.rollback_owned_directories(owner.transfer())
-            after = len(common.os.listdir(descriptor_directory))
+            after = len(os.listdir(descriptor_directory))
             self.assertLessEqual(after, before)
 
     def test_raw_capture_replacement_keeps_replacement_and_fails_finalizer(self):

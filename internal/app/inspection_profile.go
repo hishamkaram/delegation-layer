@@ -1,9 +1,6 @@
 package app
 
 import (
-	"context"
-	"encoding/json"
-
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
@@ -11,20 +8,8 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func prepareCandidate(deps Dependencies, root string, req task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return admissionProfiles(deps).Prepare(root, req)
-}
-
-func refreshAdmissionCandidate(deps Dependencies, root string, req task.TaskRecord, admitted commonprovider.ProfileCandidate) (commonprovider.ProfileCandidate, error) {
-	return admissionProfiles(deps).Refresh(root, req, admitted)
-}
-
 func prepareMatchedProfileForRunner(deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord, store *taskdir.Store, currentExecutable, runnerOwnership string) (profile PreparedProfile, resultErr error) {
 	return admissionProfiles(deps).ForRunner(root, req, meta, store, currentExecutable, runnerOwnership)
-}
-
-func prepareExistingCandidateContext(ctx context.Context, deps Dependencies, root string, req task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, json.RawMessage, error) {
-	return admissionProfiles(deps).ExistingContext(ctx, root, req, meta)
 }
 
 func prepareInspectionWorkerCandidate(deps Dependencies, root string, req task.TaskRecord, meta *task.MetaRecord) (commonprovider.ProfileCandidate, error) {

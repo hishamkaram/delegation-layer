@@ -57,10 +57,6 @@ func RunInspection(operation *inspection.Operation, supervisor *pueue.Client, ru
 	return facts, deadline, nil
 }
 
-func AwaitInspection(ctx context.Context, operation *inspection.Operation, supervisor *pueue.Client) (facts json.RawMessage, resultErr error) {
-	return awaitInspectionWithSubmissionState(ctx, operation, supervisor, inspectionSubmissionState{})
-}
-
 func awaitInspectionWithSubmissionState(ctx context.Context, operation *inspection.Operation, supervisor *pueue.Client, submission inspectionSubmissionState) (facts json.RawMessage, resultErr error) {
 	defer func() {
 		facts, resultErr = finalizeInspectionAwait(ctx, operation, facts, resultErr)

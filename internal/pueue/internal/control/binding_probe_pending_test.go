@@ -9,6 +9,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
 )
 
 func TestBindingVersionProbePendingIsNotBindingDrift(t *testing.T) {
@@ -191,7 +193,7 @@ func TestBindingReadyProbeCompletedFailureRemainsBinding(t *testing.T) {
 }
 
 func TestBindingProbeErrorPreservesGenuineFailureWithPending(t *testing.T) {
-	pending := newPending(nil)
+	pending := transport.NewPending(nil)
 	inFlight := &InFlightError{Pending: pending}
 	bindingFailure := errors.Join(ErrBinding, errors.New("fixture configuration digest changed"))
 	for _, tc := range []struct {

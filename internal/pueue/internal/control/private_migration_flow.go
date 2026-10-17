@@ -18,7 +18,7 @@ func (c *Client) MigratePrivateSupervisorWithLock(ctx context.Context, stateRoot
 	if err := validatePrivateMigrationClient(c, stateRoot); err != nil {
 		return err
 	}
-	if err := recoverPrivateIdentityPublication(stateRoot); err != nil {
+	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return fmt.Errorf("%w: recover private identity publication: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	base := filepath.Dir(c.binding.ConfigPath)

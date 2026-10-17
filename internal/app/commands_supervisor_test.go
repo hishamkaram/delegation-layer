@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	tasklifecycle "github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
+
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor"
@@ -18,7 +20,7 @@ import (
 
 func TestMissingInitialSupervisorConfigUsesPrivateSupervisorPath(t *testing.T) {
 	t.Setenv("DELEGATE_PUEUE_CONFIG", "")
-	path, err := resolveInitialConfig(Arguments{})
+	path, err := supervisor.ResolveInitialConfig(supervisorAdmissionSelection(Arguments{}))
 	if err != nil || path != "" {
 		t.Fatalf("missing initial config was not left for private supervisor resolution: path=%q err=%v", path, err)
 	}
@@ -26,7 +28,7 @@ func TestMissingInitialSupervisorConfigUsesPrivateSupervisorPath(t *testing.T) {
 
 func TestExplicitSupervisorConfigCannotClaimPrivateStatePath(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "state")
-	_, err := bindInitialWithOptions(Arguments{PueueConfig: pueue.PrivateConfigPath(root)}, Dependencies{}, root, pueue.Options{})
+	_, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{PueueConfig: pueue.PrivateConfigPath(root)}), supervisorAdmissionOptions(Dependencies{}, pueue.Options{}), root, true)
 	if !errors.Is(err, pueue.ErrConfiguration) {
 		t.Fatalf("private state config was accepted as an explicit supervisor: %v", err)
 	}
@@ -50,7 +52,7 @@ func TestLegacyPrivateBindingWithoutDaemonIdentityRequiresResolvedPair(t *testin
 		ConfigDigest:         digest,
 		ObservedVersion:      "legacy-pueue",
 	}
-	if _, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, initialExecutable); !errors.Is(err, pueue.ErrBinding) {
+	if _, err := supervisor.NewClient(context.Background(), root, saved, pueue.Options{}, true, initialExecutable, openNativeSupervisorStore); !errors.Is(err, pueue.ErrBinding) {
 		t.Fatalf("legacy private binding without a resolvable executable pair was accepted: %v", err)
 	}
 }
@@ -64,7 +66,7 @@ func TestPartialPrivateDaemonIdentityIsRejected(t *testing.T) {
 		Endpoint: "unix:/tmp/pueue.sock", ConfigPath: pueue.PrivateConfigPath(root),
 		ConfigDigest: digest, ObservedVersion: "legacy-pueue",
 	}
-	if _, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, ""); !errors.Is(err, pueue.ErrBinding) {
+	if _, err := supervisor.NewClient(context.Background(), root, saved, pueue.Options{}, true, "", openNativeSupervisorStore); !errors.Is(err, pueue.ErrBinding) {
 		t.Fatalf("partial private daemon identity was accepted: %v", err)
 	}
 }
@@ -96,7 +98,7 @@ func TestPrivateRecoveryResolvesPairBesideActiveExecutable(t *testing.T) {
 	}
 	emptyPath := testsupport.CanonicalTempDir(t)
 	t.Setenv("PATH", emptyPath)
-	_, err := newSupervisorClient(context.Background(), root, saved, pueue.Options{}, true, activeExecutable)
+	_, err := supervisor.NewClient(context.Background(), root, saved, pueue.Options{}, true, activeExecutable, openNativeSupervisorStore)
 	if err == nil || !strings.Contains(err.Error(), "saved private supervisor config is unavailable") {
 		t.Fatalf("recovery did not resolve the active executable pair before validating saved state: %v", err)
 	}
@@ -138,21 +140,21 @@ func TestSupervisorOptionsSnapshotPreservesCurrentControlEnvironment(t *testing.
 func TestContinuationMetadataRequiresRecordedLaunchState(t *testing.T) {
 	root := filepath.Clean(t.TempDir())
 	meta := &task.MetaRecord{SupervisorConfig: task.SupervisorRef{ConfigPath: filepath.Join(t.TempDir(), "pueue.yml")}}
-	if err := validateContinuationMetadata(root, Arguments{}, meta); err == nil || !strings.Contains(err.Error(), "launch environment") {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{}), meta); err == nil || !strings.Contains(err.Error(), "launch environment") {
 		t.Fatalf("missing launch environment was accepted: %v", err)
 	}
 	meta.Environment = []string{"HOME=/task"}
-	if err := validateContinuationMetadata(root, Arguments{}, meta); err == nil || !strings.Contains(err.Error(), "runner executable") {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{}), meta); err == nil || !strings.Contains(err.Error(), "runner executable") {
 		t.Fatalf("missing runner was accepted: %v", err)
 	}
 	meta.RunnerExecutable = "/task/runner"
-	if err := validateContinuationMetadata(root, Arguments{Runner: "/other/runner"}, meta); !errors.Is(err, task.ErrIdentityMismatch) {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{Runner: "/other/runner"}), meta); !errors.Is(err, task.ErrIdentityMismatch) {
 		t.Fatalf("runner override error=%v", err)
 	}
-	if err := validateContinuationMetadata(root, Arguments{PueueConfig: "/other/pueue.yml"}, meta); !errors.Is(err, task.ErrRequestConflict) {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{PueueConfig: "/other/pueue.yml"}), meta); !errors.Is(err, task.ErrRequestConflict) {
 		t.Fatalf("supervisor override error=%v", err)
 	}
-	if err := validateContinuationMetadata(root, Arguments{Runner: meta.RunnerExecutable, PueueConfig: meta.SupervisorConfig.ConfigPath}, meta); err != nil {
+	if err := tasklifecycle.ValidateContinuationMetadata(root, supervisorAdmissionSelection(Arguments{Runner: meta.RunnerExecutable, PueueConfig: meta.SupervisorConfig.ConfigPath}), meta); err != nil {
 		t.Fatalf("matching continuation metadata rejected: %v", err)
 	}
 }
@@ -178,15 +180,15 @@ func TestBuildContinuationArgumentsPinsResolvedRoot(t *testing.T) {
 		},
 	}
 	meta := &task.MetaRecord{Environment: []string{"HOME=/task"}, RunnerExecutable: "/task/runner", RunnerOwnership: task.RunnerOwnershipManaged, SupervisorConfig: savedSupervisor}
-	arguments, err := buildContinuationArguments(Arguments{}, root, predecessor, meta, []byte("brief"))
+	arguments, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}), root, predecessor, meta, []byte("brief"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if arguments.Root != root {
 		t.Fatalf("continuation root=%q, want resolved predecessor root %q", arguments.Root, root)
 	}
-	if arguments.savedSupervisor == nil || *arguments.savedSupervisor != savedSupervisor {
-		t.Fatalf("continuation supervisor binding=%+v, want %+v", arguments.savedSupervisor, savedSupervisor)
+	if arguments.Selection.SavedSupervisor == nil || *arguments.Selection.SavedSupervisor != savedSupervisor {
+		t.Fatalf("continuation supervisor binding=%+v, want %+v", arguments.Selection.SavedSupervisor, savedSupervisor)
 	}
 }
 
@@ -202,7 +204,7 @@ func TestContinuationAdmissionUsesSavedSupervisorBinding(t *testing.T) {
 		ConfigDigest:         digest,
 		ObservedVersion:      "saved-pueue",
 	}
-	client, err := bindInitialWithOptions(Arguments{savedSupervisor: &saved}, Dependencies{}, root, pueue.Options{})
+	client, err := supervisor.BindInitialWithStart(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}), supervisorAdmissionOptions(Dependencies{}, pueue.Options{}), root, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +220,7 @@ func TestContinuationClearsAmbientPrivateSupervisorConfig(t *testing.T) {
 		SupervisorConfig: task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath(root)},
 	}
 	t.Setenv("DELEGATE_PUEUE_CONFIG", "/ambient/pueue.yml")
-	restore, err := applyContinuationEnvironment(root, meta)
+	restore, err := supervisor.ApplyContinuationEnvironment(root, meta, applySavedEnvironment)
 	if err != nil {
 		t.Fatal(err)
 	}

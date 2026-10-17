@@ -147,7 +147,7 @@ func TestExternalInspectionHandoffPreservesOrdinaryTasksAndLateAdmission(t *test
 	late := createExternalHandoffTask(t, store, operation.Request().Task, external.Binding())
 	finishExternalHandoffTask(t, late, external.Binding())
 	assertSupervisorProbeTestFile(t, metaPath, metaBefore)
-	rebound, err := rebindContinuationSupervisor(t.Context(), store.Root, external.Binding(), deps)
+	rebound, err := supervisorcore.RebindContinuation(t.Context(), store.Root, external.Binding(), continuationSupervisorOptions(deps))
 	if err != nil || rebound != external.Binding() {
 		t.Fatalf("historical continuation changed supervisors: binding=%+v err=%v", rebound, err)
 	}

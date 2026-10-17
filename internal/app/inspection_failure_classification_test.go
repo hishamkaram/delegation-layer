@@ -3,22 +3,63 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	admissioncore "github.com/hishamkaram/delegation-layer/internal/admission"
+	admissionfixture "github.com/hishamkaram/delegation-layer/internal/admission/testsupport"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
-	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
+	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
 func TestInspectionFailureClassificationWorkerWithoutLocalEvidence(t *testing.T) {
-	// A worker can fail before ClaimStart or native inspection. A nil operation
-	// makes any attempt to treat absent local evidence as provider facts invalid.
-	facts, workerErr := admissioncore.CompletedInspectionFacts(t.Context(), nil, pueue.Job{
-		State: pueue.StateEnded, Succeeded: false,
+	store := supervisorfixture.NewInspectionStore(t)
+	bound, logPath, _ := admissionfixture.NewUncertainGroupSupervisor(t, store.RootID)
+	t.Cleanup(func() {
+		if closeErr := bound.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
 	})
+	client := admissionfixture.NewObservedInspectionTestClient(t, bound, logPath, inspection.AdmissionTimeout, nil)
+	operation := admissionfixture.NewInspectionPollTestOperation(t, store, client)
+	claim, err := operation.ClaimSubmissionContext(t.Context(), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = claim.ConsumeInspectionSubmission(); err != nil {
+		t.Fatal(err)
+	}
+	if err = operation.RecordReceiptContext(t.Context(), 7); err != nil {
+		t.Fatal(err)
+	}
+	statusPath := filepath.Join(filepath.Dir(logPath), "status.json")
+	admissionfixture.WriteInspectionPollTestStatus(t, statusPath, operation, true)
+	assertNoInspectionStartOrCompletion(t, store, operation)
+	facts, _, workerErr := admissioncore.RunInspection(operation, client, operation.Request().Binding.WorkerExecutable, store.Root)
+	assertNoInspectionStartOrCompletion(t, store, operation)
 	assertInspectionWorkerFailureClassification(t, facts, workerErr)
+}
+
+func assertNoInspectionStartOrCompletion(t *testing.T, store *taskdir.Store, operation *inspection.Operation) {
+	t.Helper()
+	if _, _, err := operation.ReadCompletedContext(t.Context()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failure fixture unexpectedly has completion evidence: %v", err)
+	}
+	control, err := store.OpenInspectionContext(t.Context(), operation.Request().TaskID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start inspection.StartRecord
+	err = control.Read("start.json", &start)
+	closeErr := control.Close()
+	if !errors.Is(err, os.ErrNotExist) || closeErr != nil {
+		t.Fatalf("failure fixture start evidence err=%v close=%v", err, closeErr)
+	}
 }
 
 func TestInspectionFailureClassificationRecordedWorkerFailure(t *testing.T) {

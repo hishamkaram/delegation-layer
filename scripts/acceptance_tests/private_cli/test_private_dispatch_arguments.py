@@ -318,7 +318,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                     def wait():
                         return 0
 
-                with patch.object(common.subprocess, "Popen", FakePopen):
+                with patch.object(process_owner_impl.subprocess, "Popen", FakePopen):
                     process = processes.start(
                         "external-daemon",
                         [str(self.sources["pueued"]), "-c",
