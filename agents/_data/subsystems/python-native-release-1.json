@@ -578,7 +578,7 @@
       "py:delegate_acceptance.release_verification.filesystem",
       "py:hashlib",
       "py:json",
-      "py:maintainability.python_facts",
+      "py:maintainability.python_ast",
       "py:pathlib"
     ]
   },

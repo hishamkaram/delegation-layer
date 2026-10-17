@@ -73,8 +73,18 @@ def _create_layout(
         provider_bin, gate_path, waiter_directory, lease_nonce, fixture_session_marker,
     )
     return WorkspaceLayout(
-        base, state, source, provider_bin, waiter_directory, response_directory,
-        home_dir, install, libexec, gate_path, fixture_session_marker, lease_nonce,
+        base=base,
+        state=state,
+        source=source,
+        provider_bin=provider_bin,
+        waiter_directory=waiter_directory,
+        response_directory=response_directory,
+        home_dir=home_dir,
+        install=install,
+        libexec=libexec,
+        gate_path=gate_path,
+        fixture_session_marker=fixture_session_marker,
+        lease_nonce=lease_nonce,
     )
 
 

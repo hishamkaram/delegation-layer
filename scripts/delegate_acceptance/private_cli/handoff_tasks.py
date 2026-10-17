@@ -18,7 +18,7 @@ class HandoffTaskCommands:
 
     def __init__(
         self,
-        delegate,
+        *, delegate,
         env,
         state,
         workspace,

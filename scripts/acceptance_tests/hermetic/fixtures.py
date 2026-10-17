@@ -13,7 +13,7 @@ class RetryProcess:
 
 
 class RetryCase:
-    def __init__(self, root, events, task_id, supervisor_records, add, first_enqueue, retry_enqueue):
+    def __init__(self, *, root, events, task_id, supervisor_records, add, first_enqueue, retry_enqueue):
         self.events = events
         self.add = add
         self.first_enqueue = first_enqueue
@@ -106,5 +106,6 @@ def retry_case(root):
         "argv": ["-c", "config", "enqueue", "7"],
         "executable": "/pueue",
     }
-    case = RetryCase(root, events, task_id, supervisor_records, add, first_enqueue, retry_enqueue)
+    case = RetryCase(root=root, events=events, task_id=task_id, supervisor_records=supervisor_records,
+        add=add, first_enqueue=first_enqueue, retry_enqueue=retry_enqueue)
     return case, events

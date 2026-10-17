@@ -395,8 +395,8 @@ def task_binding(owner, task_id: str, predecessor: str | None = None,
     manifest_digest = acceptance._validate_task_provider_receipts(
         task_id, directory, meta_digest, spec_digest, predicate)
     acceptance._validate_task_outcome(
-        task_id, directory, meta_digest, spec_digest, predicate,
-        record, predecessor, predecessor_session, manifest_digest)
+        task_id=task_id, directory=directory, meta_digest=meta_digest, spec_digest=spec_digest, predicate=predicate,
+        record=record, predecessor=predecessor, predecessor_session=predecessor_session, manifest_digest=manifest_digest)
 
 def _validate_task_selection(owner, task_id: str, record: dict[str, object]) -> None:
     acceptance = owner
@@ -478,7 +478,7 @@ def _validate_task_provider_receipts(
     return manifest_digest
 
 def _validate_task_outcome(
-        owner, task_id: str, directory: Path, meta_digest: str, spec_digest: str,
+        *, owner, task_id: str, directory: Path, meta_digest: str, spec_digest: str,
         predicate: dict[str, object], record: dict[str, object],
         predecessor: str | None, predecessor_session: str | None, manifest_digest: str) -> None:
     acceptance = owner

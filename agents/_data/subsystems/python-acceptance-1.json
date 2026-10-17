@@ -2,7 +2,7 @@
   {
     "name": "py:acceptance_agy",
     "owner": "py:acceptance_agy",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:__future__",
       "py:acceptance_provider_common",
@@ -22,7 +22,7 @@
   {
     "name": "py:acceptance_ccr_fixture",
     "owner": "py:acceptance_ccr_fixture",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:acceptance_native",
       "py:acceptance_provider_common",
@@ -40,7 +40,7 @@
   {
     "name": "py:acceptance_claude",
     "owner": "py:acceptance_claude",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:__future__",
       "py:acceptance_provider_common",
@@ -54,7 +54,7 @@
   {
     "name": "py:acceptance_codex",
     "owner": "py:acceptance_codex",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:__future__",
       "py:acceptance_provider_common",
@@ -105,7 +105,7 @@
   {
     "name": "py:acceptance_native",
     "owner": "py:acceptance_native",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:__future__",
       "py:argparse",
@@ -128,7 +128,7 @@
   {
     "name": "py:acceptance_private_cli",
     "owner": "py:acceptance_private_cli",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:acceptance_provider_common",
       "py:acceptance_supervisor_common",
@@ -179,7 +179,6 @@
       "py:shutil",
       "py:socket",
       "py:stat",
-      "py:subprocess",
       "py:sys",
       "py:tempfile",
       "py:threading",
@@ -298,7 +297,7 @@
   {
     "name": "py:acceptance_supervisor_hermetic",
     "owner": "py:acceptance_supervisor_hermetic",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:delegate_acceptance.hermetic.case",
       "py:delegate_acceptance.hermetic.chain",
@@ -352,7 +351,7 @@
   {
     "name": "py:acceptance_workspaces",
     "owner": "py:acceptance_workspaces",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:acceptance_private_cli",
       "py:acceptance_provider_common",

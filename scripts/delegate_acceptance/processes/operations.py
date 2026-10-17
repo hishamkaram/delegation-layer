@@ -51,7 +51,7 @@ class Process:
         started = False
         try:
             ownership.create("process capture", self.directory, self.directory.parent)
-            _record_process_invocation(cwd, environment_keys_only, self, stdin)
+            _record_process_invocation(cwd=cwd, environment_keys_only=environment_keys_only, process=self, stdin=stdin)
             self.stdout = self.stdout_path.open("xb")
             self.stderr = self.stderr_path.open("xb")
             self.process = subprocess.Popen(
@@ -73,7 +73,7 @@ class Process:
             if self._stdout_capture is not None:
                 self._stdout_capture.writer.close()
         except BaseException as error:
-            _cleanup_failed_process_start(ownership, self, started)
+            _cleanup_failed_process_start(ownership=ownership, process=self, started=started)
             if (isinstance(error, RuntimeError) and self._failure_type is not RuntimeError and
                     not isinstance(error, self._failure_type)):
                 raise self._failure_type(str(error)) from error
@@ -334,55 +334,55 @@ class Processes:
 
 
 def _record_process_invocation(
-        cwd: Path,
+        *, cwd: Path,
         environment_keys_only: bool,
-        self: Process,
+        process: Process,
         stdin: bytes | None,
 ) -> None:
-    executable = Path(self.argv[0])
+    executable = Path(process.argv[0])
     require(executable.is_absolute(), "executable must be absolute")
     invocation = {
-        "argv": self.argv,
+        "argv": process.argv,
         "cwd": str(cwd),
         "executable_sha256": digest(executable),
         "stdin": "PIPE" if stdin is not None else "DEVNULL",
-        "stdin_bytes": len(self._stdin_data) if self._stdin_data is not None else 0,
-        "stdin_sha256": sha(self._stdin_data) if self._stdin_data is not None else None,
+        "stdin_bytes": len(process._stdin_data) if process._stdin_data is not None else 0,
+        "stdin_sha256": sha(process._stdin_data) if process._stdin_data is not None else None,
         "shell": False,
     }
     if environment_keys_only:
         invocation.update({
-            "environment_keys": sorted(self.environment),
+            "environment_keys": sorted(process.environment),
             "environment_values_in_record": False,
             "harness_environment_preserved": True,
         })
     else:
         invocation["environment_sha256"] = sha(
-            json.dumps(self.environment, sort_keys=True).encode())
-    write_json(self.directory / "invocation.json", invocation)
+            json.dumps(process.environment, sort_keys=True).encode())
+    write_json(process.directory / "invocation.json", invocation)
 
 
 def _cleanup_failed_process_start(
-        ownership: DirectoryOwner,
-        self: Process,
+        *, ownership: DirectoryOwner,
+        process: Process,
         started: bool,
 ) -> None:
-    if self.process is not None and getattr(self.process, "stdin", None) is not None:
+    if process.process is not None and getattr(process.process, "stdin", None) is not None:
         try:
-            self.process.stdin.close()
+            process.process.stdin.close()
         except (BrokenPipeError, OSError, ValueError):
             pass
-    if self._stdout_capture is not None:
+    if process._stdout_capture is not None:
         try:
-            self._stdout_capture.writer.close()
+            process._stdout_capture.writer.close()
         except (OSError, ValueError):
             pass
-        if self.process is None:
-            self._stdout_capture.close()
-    if self.stdout is not None:
-        self.stdout.close()
-    if self.stderr is not None:
-        self.stderr.close()
+        if process.process is None:
+            process._stdout_capture.close()
+    if process.stdout is not None:
+        process.stdout.close()
+    if process.stderr is not None:
+        process.stderr.close()
     if not started:
         try:
             ownership.rollback()

@@ -194,7 +194,7 @@ def validate_command_execution_controls(parsed: dict[str, object], probe: Path,
     }
 
 
-def require_probe_file_unchanged(probe: Path, state_parent: Path, state: Path,
+def require_probe_file_unchanged(*, probe: Path, state_parent: Path, state: Path,
                                  workspace: Path, sibling: Path, phase: str,
                                  expected_size: int, expected_digest: str,
                                  nonce: bytes) -> None:

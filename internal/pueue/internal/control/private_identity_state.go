@@ -192,16 +192,23 @@ func (c *Client) ensurePrivateSupervisorBindingWithReady(ctx context.Context, st
 	if err = publishPrivateSupervisorBindingIfAbsentContext(ctx, stateRoot, c.binding); err != nil {
 		return privatePublishedRecoveryError(err)
 	}
-	return ensurePrivateSupervisorMigrationComplete(stateRoot, c.binding)
+	// Binding publication has already run. Preserve the migration postcondition
+	// error without claiming that this operation stopped before mutation.
+	incompleteErr := fmt.Errorf("%w: published private supervisor transition is incomplete", ErrPrivateSupervisorMigrationRequired)
+	return ensurePrivateSupervisorMigrationComplete(stateRoot, c.binding, incompleteErr)
 }
 
-func ensurePrivateSupervisorMigrationComplete(stateRoot string, binding task.SupervisorRef) error {
+func ensurePrivateSupervisorMigrationComplete(stateRoot string, binding task.SupervisorRef, incompleteErr error) error {
+	// A missing caller-supplied failure must never authorize incomplete state.
+	if incompleteErr == nil {
+		return ErrBinding
+	}
 	complete, err := PrivateSupervisorMigrationComplete(stateRoot, binding)
 	if err != nil {
 		return privatePublishedRecoveryError(err)
 	}
 	if !complete {
-		return ErrPrivateSupervisorTransitionIncomplete
+		return incompleteErr
 	}
 	return nil
 }
@@ -217,7 +224,7 @@ func (c *Client) authorizePrivateMutationWithLock(stateRoot string) error {
 	if !found {
 		return ErrPrivateSupervisorMigrationRequired
 	}
-	if err = ensurePrivateSupervisorMigrationComplete(stateRoot, published); err != nil {
+	if err = ensurePrivateSupervisorMigrationComplete(stateRoot, published, ErrPrivateSupervisorTransitionIncomplete); err != nil {
 		return err
 	}
 	if !privateBindingsMatch(c.runtimeBinding, published) {

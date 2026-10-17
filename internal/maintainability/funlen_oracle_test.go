@@ -26,9 +26,9 @@ type funlenReport struct {
 	Issues []funlenIssue
 }
 
-// collectFunlen delegates Go measurement to the pinned AST linter, including tests.
-func collectFunlen(root string, sources []policy.Source) ([]policy.Finding, error) {
-	command := exec.Command(filepath.Join(root, "bin/golangci-lint"), "run", "--allow-serial-runners", "--enable-only", "funlen", "--output.json.path", "stdout", "--output.text.path", "/dev/null", "./...")
+// collectFunlen is a test oracle, never a second production policy path.
+func collectFunlen(root, binary, config string, sources []policy.Source) ([]policy.Finding, error) {
+	command := exec.Command(binary, "run", "--config", config, "--allow-serial-runners", "--enable-only", "funlen", "--max-issues-per-linter", "0", "--max-same-issues", "0", "--output.json.path", "stdout", "--output.text.path", "/dev/null", "./...")
 	command.Dir = root
 	var diagnostic bytes.Buffer
 	command.Stderr = &diagnostic

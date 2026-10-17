@@ -353,7 +353,7 @@ def _finalize_routing_attempt(run, owner, ownership, receipt) -> None:
     write_json(run / "receipt.json", receipt)
 
 
-def run_case(output, harness, model, case, repetition, mode="live", budget=180,
+def run_case(*, output, harness, model, case, repetition, mode="live", budget=180,
              routing_context=False, delegate_bin=None):
     run = output / f"{case['name']}-{repetition}"
     run.mkdir(mode=0o700)
@@ -431,7 +431,7 @@ def run_case(output, harness, model, case, repetition, mode="live", budget=180,
     return receipt
 
 
-def summarize(output, cases, repetitions, harness, mode="live", model=None, budget=180,
+def summarize(*, output, cases, repetitions, harness, mode="live", model=None, budget=180,
               routing_context=False, delegate_bin=None):
     rows = []
     for case in cases:
@@ -512,13 +512,16 @@ def main():
         parser.error("selection contains no cases")
     output = args.output.resolve()
     if args.summarize:
-        report = summarize(output, cases, args.repetitions, args.harness, args.mode, args.model, args.budget_seconds, args.routing_context, args.delegate_bin)
+        report = summarize(output=output, cases=cases, repetitions=args.repetitions, harness=args.harness,
+            mode=args.mode, model=args.model, budget=args.budget_seconds, routing_context=args.routing_context,
+            delegate_bin=args.delegate_bin)
         print(json.dumps(report, indent=2))
         return {"passed": 0, "failed": 1, "blocked": 2}[report["status"]]
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     for case in cases:
         for repetition in range(1, args.repetitions + 1):
-            receipt = run_case(output, args.harness, args.model, case, repetition, args.mode, args.budget_seconds, args.routing_context, args.delegate_bin)
+            receipt = run_case(output=output, harness=args.harness, model=args.model, case=case, repetition=repetition,
+                mode=args.mode, budget=args.budget_seconds, routing_context=args.routing_context, delegate_bin=args.delegate_bin)
             if receipt.get("reason") == "supervisor_cleanup_unproven":
                 return 1
     # Executing a harness is not proof of routing success.

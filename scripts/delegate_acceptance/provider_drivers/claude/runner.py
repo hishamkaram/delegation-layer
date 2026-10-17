@@ -187,7 +187,8 @@ class ClaudeAcceptance:
             raise
         config_digest = digest(self.pueue_config)
         pueue_version = self.ops.direct("pueue-version", [self.pueue, "--version"], timeout=15)
-        pueued_version = self.ops.direct("pueued-version", [self.pueued, "-c", self.pueue_config, "--version"], timeout=15)
+        pueued_version = self.ops.direct("pueued-version", [self.pueued, "-c", self.pueue_config, "--version"],
+            timeout=15)
         self.pueue_version = observed_pueue_version(
             bounded_text(pueue_version.directory / "stdout", "pueue version output"), "pueue")
         self.pueued_version = observed_pueue_version(
@@ -197,9 +198,9 @@ class ClaudeAcceptance:
         require(observed, "Claude returned an empty version")
         self.provider_version = observed
         self.inspection_binding = expected_claude_inspection_binding(
-            self.pueue, self.pueue_config, self.pueue_base, config_digest,
-            self.workspace, self.claude, self.runner, self.environment,
-            self.pueue_version)
+            pueue=self.pueue, config=self.pueue_config, base=self.pueue_base, config_digest=config_digest,
+            workspace=self.workspace, executable=self.claude, runner=self.runner, environment=self.environment,
+            pueue_version=self.pueue_version)
         self.daemon = self.processes.start("private-daemon", [self.pueued, "-c", self.pueue_config], self.state_parent)
         self.ops.bind_supervisor(self.pueue_config, self.daemon)
         for _ in range(200):
@@ -308,7 +309,8 @@ class ClaudeAcceptance:
         meta = self._validate_task_meta(name, task, directory)
         seal = self._validate_task_publication(name, task, directory, meta)
         return self._validate_task_outcome(
-            name, task, directory, expected_answer, predecessor, expected_session, request, meta, seal)
+            name=name, task=task, directory=directory, expected_answer=expected_answer, predecessor=predecessor,
+            expected_session=expected_session, request=request, meta=meta, seal=seal)
 
     @staticmethod
     def _require_task_records(directory: Path, name: str) -> None:
@@ -319,15 +321,17 @@ class ClaudeAcceptance:
     def _validate_task_request(self, name: str, task: str, directory: Path,
                                predecessor: str | None) -> dict[str, object]:
         return validate_claude_task_request(
-            name, task, directory, self.root_id, self.workspace, predecessor,
-            PROVIDER, MODE, CANONICAL_TASK_BUDGET)
+            name=name, task=task, directory=directory, root_id=self.root_id, workspace=self.workspace,
+            predecessor=predecessor,
+            provider=PROVIDER, mode=MODE, budget=CANONICAL_TASK_BUDGET)
 
     def _validate_task_meta(self, name: str, task: str,
                             directory: Path) -> dict[str, object]:
         meta, profile_revision = validate_claude_task_meta(
-            name, task, directory, self.root_id, self.claude, self.provider_version,
-            self.workspace, self.provider_sha256, PROVIDER, MODE, APPROVAL,
-            NATIVE_PROFILE_REVISION)
+            name=name, task=task, directory=directory, root_id=self.root_id, claude=self.claude, provider_version=self.provider_version,
+            workspace=self.workspace, provider_sha256=self.provider_sha256, provider=PROVIDER, mode=MODE,
+            approval=APPROVAL,
+            revision=NATIVE_PROFILE_REVISION)
         if self.profile_revision is None:
             self.profile_revision = profile_revision
         require(profile_revision == self.profile_revision,
@@ -339,16 +343,18 @@ class ClaudeAcceptance:
     def _validate_task_publication(self, name: str, task: str, directory: Path,
                                    meta: dict[str, object]) -> dict[str, object]:
         return validate_claude_task_publication(
-            name, task, directory, self.root_id, self.labels[name], self.pueue_config,
-            self.pueue_version, self.pueue, meta)
+            name=name, task=task, directory=directory, root_id=self.root_id, label=self.labels[name],
+            pueue_config=self.pueue_config,
+            pueue_version=self.pueue_version, pueue=self.pueue, meta=meta)
 
-    def _validate_task_outcome(self, name: str, task: str, directory: Path,
+    def _validate_task_outcome(self, *, name: str, task: str, directory: Path,
                                expected_answer: bytes, predecessor: str | None,
                                expected_session: str | None, request: dict[str, object],
                                meta: dict[str, object], seal: dict[str, object]) -> dict[str, object]:
         return validate_claude_task_outcome(
-            name, task, directory, expected_answer, predecessor, expected_session,
-            request, meta, seal, self.root_id, self.workspace, PROVIDER)
+            name=name, task=task, directory=directory, expected_answer=expected_answer, predecessor=predecessor,
+            expected_session=expected_session,
+            request=request, meta=meta, seal=seal, root_id=self.root_id, workspace=self.workspace, provider=PROVIDER)
 
     def run_fresh(self) -> dict[str, object]:
         brief = self.fresh_brief()

@@ -38,6 +38,27 @@ class PrivateLiveLeaseTests(unittest.TestCase):
         self.addCleanup(self.reap, process)
         return process
 
+    def test_empty_waiter_check_uses_the_canonical_lease_owner(self):
+        self.assertIs(private_cli.require_empty_fixture_waiters,
+                      leases_impl.require_empty_fixture_waiters)
+        self.assertEqual(leases_impl.require_empty_fixture_waiters.__module__, leases_impl.__name__)
+        self.assertIsNone(leases_impl.require_empty_fixture_waiters(self.root))
+
+    def test_empty_waiter_check_retains_all_unexpected_entries(self):
+        retained = self.root / "retained"
+        retained.write_bytes(b"fixture evidence")
+        (self.root / "nested").mkdir()
+        with self.assertRaisesRegex(RuntimeError, "lease entries remained.*2"):
+            leases_impl.require_empty_fixture_waiters(self.root)
+        self.assertEqual(retained.read_bytes(), b"fixture evidence")
+        self.assertTrue((self.root / "nested").is_dir())
+
+    def test_empty_waiter_check_does_not_create_an_absent_directory(self):
+        missing = self.root / "missing"
+        with self.assertRaises(FileNotFoundError):
+            leases_impl.require_empty_fixture_waiters(missing)
+        self.assertFalse(missing.exists())
+
     def start_fifo_mock_writer_cohort(self, fifos):
         script = (
             "import os,sys,time\n"

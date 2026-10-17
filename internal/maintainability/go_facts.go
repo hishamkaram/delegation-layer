@@ -37,7 +37,7 @@ func collectGoFile(root, module string, source *policy.Source) error {
 	aliases := make(map[string]string)
 	for _, declaration := range file.Decls {
 		if function, ok := declaration.(*ast.FuncDecl); ok {
-			source.Functions = append(source.Functions, policy.Function{Name: function.Name.Name, Line: positions.Position(function.Pos()).Line})
+			source.Functions = append(source.Functions, goFunctionFact(positions, function))
 		}
 	}
 	for _, imported := range file.Imports {
@@ -60,6 +60,18 @@ func collectGoFile(root, module string, source *policy.Source) error {
 	return nil
 }
 
+// goFunctionFact uses funlen v0.2.0's configured measurement: comments count,
+// statements are unlimited, and declarations without bodies are not measured.
+// Definition: https://github.com/ultraware/funlen/blob/v0.2.0/funlen.go#L58-L63.
+// Keep this in parity with the pinned linter via TestGoLengthMatchesPinnedFunlen.
+func goFunctionFact(positions *token.FileSet, function *ast.FuncDecl) policy.Function {
+	fact := policy.Function{Name: function.Name.Name, Line: positions.Position(function.Name.Pos()).Line}
+	if function.Body != nil {
+		fact.Length = positions.Position(function.End()).Line - positions.Position(function.Pos()).Line - 1
+	}
+	return fact
+}
+
 func goTarget(module, imported string) string {
 	return "go:" + strings.TrimPrefix(imported, module+"/")
 }
@@ -78,7 +90,7 @@ func collectGoEffects(file *ast.File, positions *token.FileSet, aliases map[stri
 			return true
 		}
 		identifier, ok := selector.X.(*ast.Ident)
-		if !ok {
+		if !ok || identifier.Obj != nil {
 			return true
 		}
 		name := aliases[identifier.Name] + "." + selector.Sel.Name
@@ -91,7 +103,15 @@ func collectGoEffects(file *ast.File, positions *token.FileSet, aliases map[stri
 
 func effectfulGoReference(name string) bool {
 	switch name {
-	case "time.Now", "time.Sleep", "time.After", "time.AfterFunc", "time.NewTimer", "time.NewTicker", "time.Tick", "context.WithTimeout", "context.WithDeadline", "context.WithTimeoutCause", "context.WithDeadlineCause", "fmt.Print", "fmt.Printf", "fmt.Println", "fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln", "fmt.Scan", "fmt.Scanf", "fmt.Scanln":
+	case "time.Now", "time.Since", "time.Until", "time.Sleep", "time.After", "time.AfterFunc", "time.NewTimer", "time.NewTicker", "time.Tick", "context.WithTimeout", "context.WithDeadline", "context.WithTimeoutCause", "context.WithDeadlineCause", "fmt.Print", "fmt.Printf", "fmt.Println", "fmt.Fprint", "fmt.Fprintf", "fmt.Fprintln", "fmt.Scan", "fmt.Scanf", "fmt.Scanln":
+		return true
+	case "io/ioutil.ReadFile", "io/ioutil.WriteFile", "io/ioutil.ReadDir", "io/ioutil.TempFile", "io/ioutil.TempDir":
+		return true
+	case "path/filepath.Abs", "path/filepath.EvalSymlinks", "path/filepath.Glob", "path/filepath.Walk", "path/filepath.WalkDir":
+		return true
+	case "log.Print", "log.Printf", "log.Println", "log.Fatal", "log.Fatalf", "log.Fatalln", "log.Panic", "log.Panicf", "log.Panicln", "log.Output", "log.Default", "log.Writer", "log.SetOutput", "log.Flags", "log.SetFlags", "log.Prefix", "log.SetPrefix":
+		return true
+	case "runtime.Caller", "runtime.Callers", "runtime.Stack", "runtime.ReadMemStats", "runtime.NumCPU", "runtime.NumGoroutine", "runtime.NumCgoCall", "runtime.GC", "runtime.GOMAXPROCS", "runtime.Gosched", "runtime.Goexit", "runtime.LockOSThread", "runtime.UnlockOSThread", "runtime.SetFinalizer", "runtime.AddCleanup", "runtime.SetCPUProfileRate", "runtime.SetBlockProfileRate", "runtime.SetMutexProfileFraction":
 		return true
 	default:
 		return false

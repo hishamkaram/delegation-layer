@@ -8,7 +8,6 @@ import re
 import time
 
 import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
-import scripts.delegate_acceptance.private_cli.stop as private_cli_stop
 from scripts.delegate_acceptance.workspaces.closure import (
     validate_managed_workspace_operation_closure,
 )
@@ -101,8 +100,14 @@ def _capture_binding(state: Path, capture: dict[str, object]) -> CaptureBinding:
     if previous_boot:
         _verify_previous_boot_capture(state, operation_id, ref_match.group(1), termination_sha256)
     return CaptureBinding(
-        workspace_id, operation_id, base_oid, observed_head, tree_oid, snapshot_ref,
-        ref_match.group(1), subject,
+        workspace_id=workspace_id,
+        operation_id=operation_id,
+        base_oid=base_oid,
+        observed_head=observed_head,
+        tree_oid=tree_oid,
+        snapshot_ref=snapshot_ref,
+        root_id=ref_match.group(1),
+        subject=subject,
     )
 
 
@@ -340,5 +345,5 @@ def _finish_cohort(context: WorkspaceContext, cohort: private_cli_leases.LiveFIF
     cohort.close()
     if cohort in context.cohorts:
         context.cohorts.remove(cohort)
-    private_cli_stop.require_empty_fixture_waiters(context.waiter_directory)
+    private_cli_leases.require_empty_fixture_waiters(context.waiter_directory)
     return evidence

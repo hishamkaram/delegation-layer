@@ -210,21 +210,21 @@ def _confirm_capacity_cohort(capacity_proof, case, expected_labels, held, specif
     if final_running != case.parallel_tasks:
         raise RuntimeError("capacity fixture left Running during lifetime-owner proof")
     _record_capacity_cohort(
-        capacity_proof,
-        case,
-        confirmation_metrics,
-        confirmed_running,
-        counted_tasks,
-        final_confirmation,
-        final_confirmation_metrics,
-        final_running,
-        held,
-        owner_cohort,
+        capacity_proof=capacity_proof,
+        case=case,
+        confirmation_metrics=confirmation_metrics,
+        confirmed_running=confirmed_running,
+        counted_tasks=counted_tasks,
+        final_confirmation=final_confirmation,
+        final_confirmation_metrics=final_confirmation_metrics,
+        final_running=final_running,
+        held=held,
+        owner_cohort=owner_cohort,
     )
 
 
 def _record_capacity_cohort(
-    capacity_proof,
+    *, capacity_proof,
     case,
     confirmation_metrics,
     confirmed_running,

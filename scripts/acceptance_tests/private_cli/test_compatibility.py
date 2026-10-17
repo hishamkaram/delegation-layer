@@ -30,6 +30,13 @@ class PrivateCompatibilityTests(unittest.TestCase):
                 self.assertEqual(ast.dump(defining_node(getattr(private_cli, name)).args), expected)
         for name, expected in contract["classes"].items():
             node = defining_node(getattr(private_cli, name))
+            expected = dict(expected)
+            if name == "LiveFIFOLease":
+                # Only this private helper changed; public lease APIs keep the baseline.
+                signature = ast.parse(
+                    "def _acquire_with_parent(cls, *, task_id, pid, path, nonce, "
+                    "parent_descriptor, parent_identity, timeout, owns_parent_descriptor): pass")
+                expected["_acquire_with_parent"] = ast.dump(signature.body[0].args)
             actual = {method.name: ast.dump(method.args) for method in node.body
                       if isinstance(method, ast.FunctionDef)}
             with self.subTest(owner=name):

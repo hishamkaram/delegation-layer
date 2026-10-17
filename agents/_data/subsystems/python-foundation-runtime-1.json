@@ -550,7 +550,6 @@
       "py:delegate_acceptance.directories.policy",
       "py:delegate_acceptance.evidence.files",
       "py:delegate_acceptance.private_cli.leases",
-      "py:delegate_acceptance.private_cli.stop",
       "py:delegate_acceptance.workspaces.closure",
       "py:delegate_acceptance.workspaces.scenarios.context",
       "py:delegate_acceptance.workspaces.scenarios.evidence",

@@ -30,12 +30,12 @@
   "generated": [
     {
       "path": "diagrams/components.html",
-      "generator": "archify 3.0.1",
+      "generator": "archify 3.1.0",
       "source": "diagrams/components.architecture.json"
     },
     {
       "path": "diagrams/lead-interface.html",
-      "generator": "archify 3.0.1",
+      "generator": "archify 3.1.0",
       "source": "diagrams/lead-interface.sequence.json"
     },
     {

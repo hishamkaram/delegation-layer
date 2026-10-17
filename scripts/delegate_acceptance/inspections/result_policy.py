@@ -8,7 +8,7 @@ from scripts.delegate_acceptance.evidence.validation import _exact_keys, require
 
 
 def _validate_inspection_verdict(
-        allow_failure: bool,
+        *, allow_failure: bool,
         authority: dict[str, object],
         completion: dict[str, object] | None,
         deadline: tuple[datetime, int],

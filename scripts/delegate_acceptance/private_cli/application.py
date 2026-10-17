@@ -59,19 +59,20 @@ def main():
         initial = prepare_initial_observations(args, legacy_mode, lifetime, response_directory, run_receipt, fixture)
         if not legacy_mode:
             run_capacity_scenario(
-                args, dispatch_workers, lease_nonce, lifetime, response_directory, run_receipt, fixture, initial
+                args=args, dispatch_workers=dispatch_workers, lease_nonce=lease_nonce, lifetime=lifetime,
+                response_directory=response_directory, run_receipt=run_receipt, fixture=fixture, initial=initial
             )
             success = True
             return
         run_legacy_scenario(
-            inspection_runner_check,
-            legacy_mode,
-            lifetime,
-            queued_runner_check,
-            response_directory,
-            run_receipt,
-            fixture,
-            initial,
+            inspection_runner_check=inspection_runner_check,
+            legacy_mode=legacy_mode,
+            lifetime=lifetime,
+            queued_runner_check=queued_runner_check,
+            response_directory=response_directory,
+            run_receipt=run_receipt,
+            fixture=fixture,
+            initial=initial,
         )
         success = True
     except BaseException as error:

@@ -182,8 +182,9 @@ class CodexAcceptance:
     def require_probe_unchanged(self, phase: str) -> None:
         """Bind the probe as one regular, immutable, exact-byte fixture."""
         require_probe_file_unchanged(
-            self.probe, self.state_parent, self.state, self.workspace, self.sibling,
-            phase, self.probe_size, self.probe_sha256, self.nonce)
+            probe=self.probe, state_parent=self.state_parent, state=self.state, workspace=self.workspace,
+            sibling=self.sibling,
+            phase=phase, expected_size=self.probe_size, expected_digest=self.probe_sha256, nonce=self.nonce)
 
     def direct(self, name: str, argv: list[object], expected: int | set[int] = 0,
                timeout: float = 30):
@@ -239,9 +240,10 @@ class CodexAcceptance:
         require(observed, "Codex returned an empty version")
         self.provider_version = observed
         self.inspection_binding = expected_codex_inspection_binding(
-            self.pueue, self.pueue_config, self.pueue_base, digest(self.pueue_config),
-            self.runner, self.workspace, self.environment, self.codex, self.provider_sha256,
-            self.pueue_version)
+            pueue=self.pueue, config=self.pueue_config, base=self.pueue_base, config_digest=digest(self.pueue_config),
+            runner=self.runner, workspace=self.workspace, environment=self.environment, provider=self.codex,
+            provider_digest=self.provider_sha256,
+            pueue_version=self.pueue_version)
 
     def _start_private_daemon(self) -> None:
         self.daemon = self.processes.start("private-daemon", [self.pueued, "-c", self.pueue_config], self.state_parent)
@@ -309,8 +311,9 @@ class CodexAcceptance:
     def dispatch_arguments(self, task: str, brief: Path, predecessor: str | None = None) -> list[object]:
         require(self.pueue_config is not None, "pueue is not configured")
         return codex_dispatch_arguments(
-            self.delegate, self.state, self.pueue_config, self.runner, task, brief,
-            self.workspace, PROVIDER, MODE, predecessor)
+            delegate=self.delegate, state=self.state, pueue_config=self.pueue_config, runner=self.runner,
+            task=task, brief=brief,
+            workspace=self.workspace, provider=PROVIDER, mode=MODE, predecessor=predecessor)
 
     def dispatch(self, name: str, task: str, brief: Path, predecessor: str | None = None) -> dict[str, object]:
         self.ops.root_id = self.root_id
@@ -347,41 +350,48 @@ class CodexAcceptance:
         meta = self._validate_task_meta(name, task, directory)
         seal = self._validate_task_seal(name, task, directory, meta)
         return self._validate_task_result(
-            name, task, directory, expected_answer, predecessor, request, meta, seal)
+            name=name, task=task, directory=directory, expected_answer=expected_answer, predecessor=predecessor,
+            request=request, meta=meta, seal=seal)
 
     def _validate_task_request(self, name: str, task: str, directory: Path,
                                predecessor: str | None) -> dict[str, object]:
         return validate_codex_task_request(
-            name, task, directory, self.root_id, self.workspace, predecessor,
-            PROVIDER, MODE, CANONICAL_TASK_BUDGET)
+            name=name, task=task, directory=directory, root_id=self.root_id, workspace=self.workspace,
+            predecessor=predecessor,
+            provider=PROVIDER, mode=MODE, budget=CANONICAL_TASK_BUDGET)
 
     def _validate_task_meta(self, name: str, task: str,
                             directory: Path) -> dict[str, object]:
         meta, policy, profile_revision = validate_codex_task_meta(
-            name, task, directory, self.root_id, self.codex, self.provider_version,
-            self.workspace, self.provider_sha256, MODE, APPROVAL, NATIVE_PROFILE_REVISION)
+            name=name, task=task, directory=directory, root_id=self.root_id, codex=self.codex, provider_version=self.provider_version,
+            workspace=self.workspace, provider_sha256=self.provider_sha256, mode=MODE, approval=APPROVAL,
+            revision=NATIVE_PROFILE_REVISION)
         if self.profile_revision is None:
             self.profile_revision = profile_revision
         require(profile_revision == self.profile_revision,
                 f"{name} effective policy revision drifted")
         validate_codex_task_policy(
-            name, meta, policy, self.environment, PROVIDER, MODE, PREDICATE_VERSION,
-            PREDICATE_SHA256, OUTPUT_WRITER_CONTRACT, OUTPUT_NAME, OUTPUT_ARGUMENT_INDEX)
+            name=name, meta=meta, policy=policy, environment=self.environment, provider=PROVIDER, mode=MODE,
+            predicate_version=PREDICATE_VERSION,
+            predicate_sha256=PREDICATE_SHA256, output_contract=OUTPUT_WRITER_CONTRACT, output_name=OUTPUT_NAME,
+            output_argument_index=OUTPUT_ARGUMENT_INDEX)
         return meta
 
     def _validate_task_seal(self, name: str, task: str, directory: Path,
                             meta: dict[str, object]) -> dict[str, object]:
         return validate_codex_task_seal(
-            name, task, directory, self.root_id, self.labels[name], self.pueue_config,
-            self.pueue_version, self.pueue, meta)
+            name=name, task=task, directory=directory, root_id=self.root_id, label=self.labels[name],
+            pueue_config=self.pueue_config,
+            pueue_version=self.pueue_version, pueue=self.pueue, meta=meta)
 
-    def _validate_task_result(self, name: str, task: str, directory: Path,
+    def _validate_task_result(self, *, name: str, task: str, directory: Path,
                               expected_answer: bytes, predecessor: str | None,
                               request: dict[str, object], meta: dict[str, object],
                               seal: dict[str, object]) -> dict[str, object]:
         return validate_codex_task_result(
-            name, task, directory, expected_answer, predecessor, request, meta, seal,
-            self.root_id, PROVIDER)
+            name=name, task=task, directory=directory, expected_answer=expected_answer, predecessor=predecessor,
+            request=request, meta=meta, seal=seal,
+            root_id=self.root_id, provider=PROVIDER)
 
     def run_fresh(self) -> dict[str, object]:
         self.require_probe_unchanged("before fresh dispatch")

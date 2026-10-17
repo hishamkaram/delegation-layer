@@ -68,7 +68,7 @@ def _validate_unsubmitted_inspection_records(directory: Path, task: str) -> None
         _read_control_record(proof_reference, f"inspection proof reference for {task}")
 
 
-def _inspection_exit_authority(directory: Path, root: str, task: str,
+def _inspection_exit_authority(*, directory: Path, root: str, task: str,
                                binding: dict[str, object], request_digest: str,
                                request_created: tuple[datetime, int],
                                request_deadline: str,

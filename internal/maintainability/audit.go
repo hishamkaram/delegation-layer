@@ -40,10 +40,6 @@ func Audit(root string, strict, includeFacts bool) (Report, error) {
 	}
 	all := append(append([]policy.Source(nil), sources...), packages...)
 	report := Report{Findings: policy.Check(manifest, all)}
-	functionFindings, err := collectFunlen(root, sources)
-	if err != nil {
-		return Report{}, err
-	}
 	current, err := Inventory(root, manifest.Generated)
 	if err != nil {
 		return Report{}, err
@@ -51,7 +47,6 @@ func Audit(root string, strict, includeFacts bool) (Report, error) {
 	if changed := policy.ChangedSources(sources, current); len(changed) != 0 {
 		return Report{}, fmt.Errorf("maintained sources changed during audit: %s; rerun after edits finish", changed[0])
 	}
-	report.Findings = append(report.Findings, functionFindings...)
 	report.Findings, report.Deferred = policy.ApplyMigration(report.Findings, sources, migration, strict)
 	if includeFacts {
 		report.Sources = all

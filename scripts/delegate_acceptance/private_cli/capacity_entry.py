@@ -13,7 +13,7 @@ from scripts.delegate_acceptance.private_cli.capacity import verify_current_inst
 
 
 def run_capacity_scenario(
-    args, dispatch_workers, lease_nonce, lifetime, response_directory, run_receipt, fixture, initial
+    *, args, dispatch_workers, lease_nonce, lifetime, response_directory, run_receipt, fixture, initial
 ):
     lifetime.release_gate = LockedReleaseGate.acquire(lifetime.gate)
     default_group = (
@@ -31,21 +31,21 @@ def run_capacity_scenario(
         raise RuntimeError("private ordinary supervisor did not enable unlimited parallelism")
     acceptance_evidence = {}
     upgraded_tasks, status_bytes = verify_current_installation_upgrade(
-        fixture.upgraded_install / "delegate",
-        fixture.state,
-        fixture.workspace,
-        fixture.brief,
-        lifetime.release_gate,
-        fixture.waiter_directory,
-        lifetime.env,
-        lifetime.base / "old",
-        lifetime.old_layout_owned,
-        initial.initial_pair_directory / "pueue",
-        lifetime.private_config,
-        args.parallel_tasks,
-        dispatch_workers,
-        response_directory,
-        acceptance_evidence,
+        delegate=fixture.upgraded_install / "delegate",
+        state=fixture.state,
+        workspace=fixture.workspace,
+        brief=fixture.brief,
+        release_gate=lifetime.release_gate,
+        waiter_directory=fixture.waiter_directory,
+        env=lifetime.env,
+        old_layout=lifetime.base / "old",
+        old_layout_owned=lifetime.old_layout_owned,
+        client=initial.initial_pair_directory / "pueue",
+        config=lifetime.private_config,
+        parallel_tasks=args.parallel_tasks,
+        dispatch_workers=dispatch_workers,
+        response_directory=response_directory,
+        evidence=acceptance_evidence,
         lease_nonce=lease_nonce,
         client_call_log=lifetime.base / "old-client-starts-calls",
         attempted_task_ids=lifetime.attempted_task_ids,
@@ -64,12 +64,13 @@ def run_capacity_scenario(
         capture_root=lifetime.base_token,
     )
     record_capacity_scenario(
-        acceptance_evidence, args, dispatch_workers, initial, lifetime, run_receipt, status_bytes, upgraded_tasks
+        acceptance_evidence=acceptance_evidence, args=args, dispatch_workers=dispatch_workers, initial=initial,
+        lifetime=lifetime, run_receipt=run_receipt, status_bytes=status_bytes, upgraded_tasks=upgraded_tasks
     )
 
 
 def record_capacity_scenario(
-    acceptance_evidence, args, dispatch_workers, initial, lifetime, run_receipt, status_bytes, upgraded_tasks
+    *, acceptance_evidence, args, dispatch_workers, initial, lifetime, run_receipt, status_bytes, upgraded_tasks
 ):
     wrapper_calls = (
         wrapper_call_records(lifetime.base / "old-client-starts-calls", "client", "old")

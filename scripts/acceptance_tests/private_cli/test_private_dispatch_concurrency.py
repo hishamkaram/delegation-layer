@@ -263,11 +263,13 @@ class PrivateDispatchConcurrencyTests(unittest.TestCase):
                 patch.object(capacity_impl, "shutdown_private_supervisor", side_effect=self.stop), \
                 patch.object(private_cli.time, "sleep"), redirect_stdout(io.StringIO()):
             return private_cli.verify_current_installation_upgrade(
-                Path("/fixture/delegate"), self.state, self.root, self.brief, self.release_gate,
-                self.waiters, {},
-                self.old_layout, self.old_layout_owned,
-                Path("/fixture/pueue"), Path("/fixture/pueue.yml"),
-                self.total, 2, self.root / "dispatch-responses", self.evidence,
+                delegate=Path("/fixture/delegate"), state=self.state, workspace=self.root, brief=self.brief,
+                release_gate=self.release_gate,
+                waiter_directory=self.waiters, env={},
+                old_layout=self.old_layout, old_layout_owned=self.old_layout_owned,
+                client=Path("/fixture/pueue"), config=Path("/fixture/pueue.yml"),
+                parallel_tasks=self.total, dispatch_workers=2, response_directory=self.root / "dispatch-responses",
+                evidence=self.evidence,
                 lease_nonce="e" * 32,
                 client_call_log=self.client_call_log,
                 attempted_task_ids=self.attempted_task_ids,

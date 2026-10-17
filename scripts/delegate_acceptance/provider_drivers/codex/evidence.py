@@ -18,7 +18,7 @@ from scripts.delegate_acceptance.provider_drivers.codex.protocol import (
 from scripts.delegate_acceptance.provider_drivers.codex.identity import is_thread_id
 
 
-def binding_record(provider: str, mode: str, approval: str, codex: Path,
+def binding_record(*, provider: str, mode: str, approval: str, codex: Path,
                    codex_version: str, codex_digest: str, delegate: Path,
                    delegate_digest: str, runner: Path, runner_digest: str,
                    pueue: Path, pueue_digest: str, pueued: Path, pueued_digest: str,
@@ -164,7 +164,7 @@ def _read_task_record(directory: Path, task: str, record: str) -> dict[str, obje
     return value
 
 
-def validate_task_request(name: str, task: str, directory: Path, root_id: str,
+def validate_task_request(*, name: str, task: str, directory: Path, root_id: str,
                           workspace: Path, predecessor: str | None,
                           provider: str, mode: str, budget: str) -> dict[str, object]:
     for record in ("brief.md", "task.json", "meta.json", "submit.json", "provider.start",
@@ -194,7 +194,7 @@ def validate_task_request(name: str, task: str, directory: Path, root_id: str,
     return request
 
 
-def validate_task_meta(name: str, task: str, directory: Path, root_id: str,
+def validate_task_meta(*, name: str, task: str, directory: Path, root_id: str,
                        codex: Path, provider_version: str | None, workspace: Path,
                        provider_sha256: str, mode: str, approval: str,
                        revision: str) -> tuple[dict[str, object], dict[str, object], str]:
@@ -218,7 +218,7 @@ def validate_task_meta(name: str, task: str, directory: Path, root_id: str,
     return meta, policy, revision
 
 
-def validate_task_policy(name: str, meta: dict[str, object], policy: dict[str, object],
+def validate_task_policy(*, name: str, meta: dict[str, object], policy: dict[str, object],
                          environment: dict[str, str], provider: str, mode: str,
                          predicate_version: str, predicate_sha256: str,
                          output_contract: str, output_name: str,
@@ -243,7 +243,7 @@ def validate_task_policy(name: str, meta: dict[str, object], policy: dict[str, o
             f"{name} Codex output staging declaration is absent")
 
 
-def validate_task_seal(name: str, task: str, directory: Path, root_id: str,
+def validate_task_seal(*, name: str, task: str, directory: Path, root_id: str,
                        label: str, pueue_config: Path, pueue_version: str | None,
                        pueue: Path, meta: dict[str, object]) -> dict[str, object]:
     predicate = meta.get("predicate")
@@ -280,7 +280,7 @@ def validate_task_seal(name: str, task: str, directory: Path, root_id: str,
     return seal
 
 
-def validate_task_result(name: str, task: str, directory: Path,
+def validate_task_result(*, name: str, task: str, directory: Path,
                          expected_answer: bytes, predecessor: str | None,
                          request: dict[str, object], meta: dict[str, object],
                          seal: dict[str, object], root_id: str,

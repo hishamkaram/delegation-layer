@@ -4,7 +4,7 @@ from scripts.delegate_acceptance.directories.operations import OwnedDirectory
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner as SupervisorDirectoryOwner
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
 from scripts.delegate_acceptance.directories.policy import require
-from scripts.delegate_acceptance.private_cli.stop import require_empty_fixture_waiters
+from scripts.delegate_acceptance.private_cli.leases import require_empty_fixture_waiters
 
 
 def prepare_external_supervisor_directories(ownership, external_root_token, case_label):

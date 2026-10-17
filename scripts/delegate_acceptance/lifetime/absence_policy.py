@@ -17,7 +17,7 @@ def _stable_lifetime_boot_identity(value: object) -> tuple[str, str] | None:
 
 
 def _validate_lifetime_absence_completion(
-        wait: dict[str, object], root: str, task: str, recorded_boot: str,
+        *, wait: dict[str, object], root: str, task: str, recorded_boot: str,
         registration_digest: str, intent_digest: str,
         worker: dict[str, object] | None, worker_digest: str,
         termination: dict[str, object] | None) -> None:

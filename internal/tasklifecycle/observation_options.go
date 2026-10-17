@@ -23,6 +23,9 @@ type CollectionOptions struct {
 	Supervisor        SupervisorOptions
 	Catalog           commonprovider.Catalog
 	Registry          func() predicate.Registry
+	// ReportMaintenanceDeferral receives an observed refusal within its polling
+	// attempt, before a later attempt replaces the derived observation fields.
+	ReportMaintenanceDeferral func(error)
 }
 
 const RunnerReceiptPollInterval = 10 * time.Millisecond

@@ -24,6 +24,9 @@ func reconcileCollectionTimeout(ctx context.Context, root string, td *taskdir.Ta
 		return err
 	}
 	observation, reconcileErr := ReconcileStatus(ctx, root, td, req, meta, spec, metaHash, options.Supervisor, response)
+	if response.MaintenanceError != nil && options.ReportMaintenanceDeferral != nil {
+		options.ReportMaintenanceDeferral(response.MaintenanceError)
+	}
 	if reconcileErr != nil {
 		if IsPureSupervisorUncertaintyError(reconcileErr) {
 			return reapSupervisorObservation(ctx, reconcileErr)

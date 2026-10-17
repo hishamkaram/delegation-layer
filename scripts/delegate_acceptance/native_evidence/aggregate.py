@@ -287,8 +287,10 @@ def _build_case(row: MatrixRow, aggregate_root: Path) -> dict[str, object]:
             evidence_error = "case_directory_identity_unavailable"
         else:
             prepared = _sanitize_case(
-                row, source, source_digest, cleanup, before, before, "RESOLVED", None,
-                proof, creation_identity, "published-before-cleanup", False,
+                row=row, source=source, source_digest=source_digest, cleanup=cleanup, before=before,
+                after=before, evidence_status="RESOLVED", evidence_error=None,
+                source_proof=proof, creation_identity=creation_identity, terminal_state="published-before-cleanup",
+                raw_deleted=False,
             )
             _prepare_case_cleanup(
                 compact_path, prepared, cleanup_root, creation_identity,
@@ -305,10 +307,11 @@ def _build_case(row: MatrixRow, aggregate_root: Path) -> dict[str, object]:
              else _empty_summary())
     evidence_status = "UNRESOLVED"
     compact = _sanitize_case(
-        row, source, source_digest, cleanup, before, after, evidence_status, evidence_error,
-        proof, creation_identity,
-        "published-unresolved",
-        False,
+        row=row, source=source, source_digest=source_digest, cleanup=cleanup, before=before, after=after,
+        evidence_status=evidence_status, evidence_error=evidence_error,
+        source_proof=proof, creation_identity=creation_identity,
+        terminal_state="published-unresolved",
+        raw_deleted=False,
     )
     compact["raw_deletion"] = {
         "state": "retained",
@@ -324,7 +327,7 @@ def _build_case(row: MatrixRow, aggregate_root: Path) -> dict[str, object]:
 
 
 def _new_aggregate_receipt(
-        aggregate_root: Path, rows_tuple: tuple[MatrixRow, ...],
+        *, aggregate_root: Path, rows_tuple: tuple[MatrixRow, ...],
         compact_cases: list[dict[str, object]], unresolved: list[str],
         raw_before: dict[str, int | bool], existing_nonterminal: dict[str, object] | None,
         tag: str | None, source_revision: str | None,
@@ -375,7 +378,7 @@ def _new_aggregate_receipt(
 
 
 def _publish_aggregate(
-        aggregate_root: Path, receipt_path: Path, receipt: dict[str, object],
+        *, aggregate_root: Path, receipt_path: Path, receipt: dict[str, object],
         retention: int, unresolved: list[str], raw_before: dict[str, int | bool],
         cases_root: Path, receipts_root: Path) -> tuple[dict[str, object], int]:
     # The provisional receipt makes this aggregate visible to the retention scan.
@@ -438,10 +441,12 @@ def _build_aggregate_locked(
     unresolved = [case["case_id"] for case in compact_cases if case["evidence_status"] == "UNRESOLVED"]
     retention = _retention_count(retention_count)
     receipt = _new_aggregate_receipt(
-        aggregate_root, tuple(rows), compact_cases, unresolved, raw_before, existing,
-        tag, source_revision, require_pass, retention,
+        aggregate_root=aggregate_root, rows_tuple=tuple(rows), compact_cases=compact_cases, unresolved=unresolved,
+        raw_before=raw_before, existing_nonterminal=existing,
+        tag=tag, source_revision=source_revision, require_pass=require_pass, retention=retention,
     )
     return _publish_aggregate(
-        aggregate_root, receipt_path, receipt, retention, unresolved, raw_before,
-        cases_root, receipts_root,
+        aggregate_root=aggregate_root, receipt_path=receipt_path, receipt=receipt, retention=retention,
+        unresolved=unresolved, raw_before=raw_before,
+        cases_root=cases_root, receipts_root=receipts_root,
     )

@@ -32,7 +32,7 @@ from .validation import (
 
 
 def _sanitize_case(
-        row: MatrixRow,
+        *, row: MatrixRow,
         source: dict[str, object] | None,
         source_digest: str | None,
         cleanup: dict[str, object],

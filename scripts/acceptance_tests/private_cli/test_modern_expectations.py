@@ -22,10 +22,10 @@ class ModernMigrationExpectationTests(unittest.TestCase):
 
     def test_healthy_baseline_writer_succeeds_while_candidate_reader_holds_shared_lease(self):
         result = controls.prove_contention_round(
-            self.fixture.processes, self.fixture.candidate.delegate, self.fixture.baseline,
-            self.fixture.state, self.fixture.controls, "healthy-current", self.fixture.task_id,
-            lambda: {"task": (self.fixture.state / "tasks" / self.fixture.task_id / "meta.json").read_bytes()},
-            lambda: None,
+            processes=self.fixture.processes, reader=self.fixture.candidate.delegate, writer=self.fixture.baseline,
+            state=self.fixture.state, controls=self.fixture.controls, label="healthy-current", task_id=self.fixture.task_id,
+            immutable_content=lambda: {"task": (self.fixture.state / "tasks" / self.fixture.task_id / "meta.json").read_bytes()},
+            assert_live=lambda: None,
         )
         self.assertFalse(result["active_work_refused"])
         self.assertTrue(self.fixture.processes.finished_naturally())
@@ -58,7 +58,8 @@ class ModernMigrationExpectationTests(unittest.TestCase):
             controls.collect_modern_tasks(tasks, self.fixture.baseline, self.fixture.candidate)
         self.assertEqual(observed, [
             (self.fixture.candidate.delegate, installation.runner, task_id)
-            for installation, task_id in zip((self.fixture.baseline, self.fixture.candidate), tasks.tasks.values(), strict=True)
+            for installation, task_id in zip((self.fixture.baseline, self.fixture.candidate), tasks.tasks.values(),
+                strict=True)
         ])
         self.assertEqual(wait.call_count, 2)
         self.assertEqual(verify.call_count, 2)
@@ -103,8 +104,10 @@ class ModernMigrationExpectationTests(unittest.TestCase):
                 fixture.write_options(**changes)
                 with self.assertRaisesRegex(RuntimeError, error):
                     controls.prove_contention_round(
-                        fixture.processes, fixture.baseline.delegate, fixture.candidate, fixture.state,
-                        fixture.controls, "bad-response", fixture.task_id, lambda: {}, lambda: None,
+                        processes=fixture.processes, reader=fixture.baseline.delegate, writer=fixture.candidate,
+                        state=fixture.state,
+                        controls=fixture.controls, label="bad-response", task_id=fixture.task_id, immutable_content=lambda: {},
+                        assert_live=lambda: None,
                     )
                 self.assertTrue(fixture.processes.finished_naturally())
 
@@ -153,8 +156,10 @@ class ModernMigrationExpectationTests(unittest.TestCase):
                 fixture.write_options(mutate_daemon=record)
                 with self.assertRaisesRegex(RuntimeError, "immutable|PID record"):
                     controls.prove_contention_round(
-                        fixture.processes, fixture.baseline.delegate, fixture.candidate, fixture.state,
-                        fixture.controls, "daemon-drift", fixture.task_id, lambda: {}, lambda: None,
+                        processes=fixture.processes, reader=fixture.baseline.delegate, writer=fixture.candidate,
+                        state=fixture.state,
+                        controls=fixture.controls, label="daemon-drift", task_id=fixture.task_id, immutable_content=lambda: {},
+                        assert_live=lambda: None,
                     )
                 self.assertTrue(fixture.processes.finished_naturally())
 

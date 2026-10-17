@@ -67,7 +67,7 @@ def validate_task_request(name: str, task: str, request: dict[str, object], root
 
 
 def validate_submit_record(
-        name: str, task: str, submit: dict[str, object], root_id: str, label: str,
+        *, name: str, task: str, submit: dict[str, object], root_id: str, label: str,
         pueue_config: Path, pueue_version: str, pueue: Path) -> dict[str, object]:
     require(submit.get("root_id") == root_id and submit.get("task_id") == task and
             submit.get("label") == label, f"{name} submit evidence identity mismatch")
@@ -130,7 +130,7 @@ def validate_policy_sources(
 
 
 def validate_provider_exit(
-        name: str, task: str, meta: dict[str, object], started: dict[str, object],
+        *, name: str, task: str, meta: dict[str, object], started: dict[str, object],
         provider_exit: dict[str, object], pending_runtime: bool, agy: Path,
         root_id: str, predicate: dict[str, object], expected_verdict: str) -> None:
     launch_identity = validate_provider_runtime_metadata(

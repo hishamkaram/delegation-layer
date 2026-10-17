@@ -27,11 +27,9 @@ PROCESS_FACTORY_MODULE = "functools"
 PROCESS_FACTORY_NAME = "partial"
 SUBPROCESS_LIFECYCLE_APIS = frozenset({"Popen"})
 
-# The private-CLI acceptance driver is the documented narrow exception for a
-# directly controlled fixture subprocess. Provider/native harnesses have no
-# exception and must use the shared process owner.
+# Only the identity-pinned fixture capture primitive may directly start its
+# controlled subprocess. Acceptance entrypoints use the shared process owner.
 DIRECT_FIXTURE_SUBPROCESS_FILES = frozenset({
-    (SCRIPT_DIRECTORY / "acceptance_private_cli.py").resolve(),
     (PACKAGE_DIRECTORY / "private_cli" / "capture.py").resolve(),
 })
 

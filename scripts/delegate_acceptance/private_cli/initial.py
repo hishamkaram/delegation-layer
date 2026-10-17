@@ -27,23 +27,23 @@ def prepare_initial_observations(args, legacy_mode, lifetime, response_directory
     )
     primary_client = lifetime.old_libexec / "pueue" if legacy_mode else initial_pair_directory / "pueue"
     packaged_evidence = verify_packaged_default_path(
-        lifetime.ownership,
-        lifetime.base,
-        {
+        owner=lifetime.ownership,
+        base=lifetime.base,
+        sources={
             "delegate": fixture.upgraded_delegate_binary,
             "delegate-run": fixture.upgraded_runner_binary,
             "pueue": fixture.pueue_binary,
             "pueued": fixture.pueued_binary,
         },
-        fixture.provider_bin,
-        fixture.brief,
-        primary_client,
-        lifetime.private_config,
-        lifetime.env,
-        response_directory,
-        lifetime.supervisor_cleanups,
-        run_receipt,
-        lifetime.managed_state_roots,
+        provider_bin=fixture.provider_bin,
+        brief=fixture.brief,
+        primary_client=primary_client,
+        primary_config=lifetime.private_config,
+        primary_env=lifetime.env,
+        response_directory=response_directory,
+        supervisor_cleanups=lifetime.supervisor_cleanups,
+        run_receipt=run_receipt,
+        managed_state_roots=lifetime.managed_state_roots,
         capture_root=lifetime.base_token,
     )
 
@@ -76,18 +76,18 @@ def prepare_initial_observations(args, legacy_mode, lifetime, response_directory
         ] != ["openai/gpt-4.1"]:
             raise RuntimeError("legacy CLI could not complete its initial model inspection")
     return InitialObservation(
-        dispatch,
-        task_id,
-        initial_pair_directory,
-        initial_daemon,
-        identity_path,
-        old_digest,
-        upgraded_daemon,
-        upgraded_daemon_digest,
-        packaged_evidence,
-        inspection_group,
-        inspection_prefix,
-        models_args,
+        dispatch=dispatch,
+        task_id=task_id,
+        initial_pair_directory=initial_pair_directory,
+        initial_daemon=initial_daemon,
+        identity_path=identity_path,
+        old_digest=old_digest,
+        upgraded_daemon=upgraded_daemon,
+        upgraded_daemon_digest=upgraded_daemon_digest,
+        packaged_evidence=packaged_evidence,
+        inspection_group=inspection_group,
+        inspection_prefix=inspection_prefix,
+        models_args=models_args,
     )
 
 

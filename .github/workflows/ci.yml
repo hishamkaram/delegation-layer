@@ -22,12 +22,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - name: Set up Node.js
+      - name: Set up minimum Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '18.x'
+
+      - name: Check the installable skill package on Node 18
+        run: make skill-package-check
+
+      - name: Set up CI Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.x'
 
-      - name: Check the installable skill package
+      - name: Check the installable skill package on Node 22
         run: make skill-package-check
 
   gate-linux:

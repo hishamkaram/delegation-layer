@@ -221,7 +221,7 @@ def _read_task_record(directory: Path, task: str, record: str) -> dict[str, obje
     return value
 
 
-def validate_task_request(name: str, task: str, directory: Path, root_id: str,
+def validate_task_request(*, name: str, task: str, directory: Path, root_id: str,
                           workspace: Path, predecessor: str | None,
                           provider: str, mode: str, budget: str) -> dict[str, object]:
     request = _read_task_record(directory, task, "task.json")
@@ -248,7 +248,7 @@ def validate_task_request(name: str, task: str, directory: Path, root_id: str,
     return request
 
 
-def validate_task_meta(name: str, task: str, directory: Path, root_id: str,
+def validate_task_meta(*, name: str, task: str, directory: Path, root_id: str,
                        claude: Path, provider_version: str | None, workspace: Path,
                        provider_sha256: str,
                        provider: str, mode: str, approval: str,
@@ -290,7 +290,7 @@ def validate_task_contract(name: str, meta: dict[str, object], provider: str,
             f"{name} unexpectedly declared a Claude output artifact")
 
 
-def validate_task_publication(name: str, task: str, directory: Path,
+def validate_task_publication(*, name: str, task: str, directory: Path,
                               root_id: str, label: str, pueue_config: Path,
                               pueue_version: str | None, pueue: Path,
                               meta: dict[str, object]) -> dict[str, object]:
@@ -328,7 +328,7 @@ def validate_task_publication(name: str, task: str, directory: Path,
     return seal
 
 
-def validate_task_outcome(name: str, task: str, directory: Path,
+def validate_task_outcome(*, name: str, task: str, directory: Path,
                           expected_answer: bytes, predecessor: str | None,
                           expected_session: str | None, request: dict[str, object],
                           meta: dict[str, object], seal: dict[str, object],

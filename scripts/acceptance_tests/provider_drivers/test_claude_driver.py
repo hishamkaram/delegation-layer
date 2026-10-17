@@ -149,7 +149,7 @@ class ClaudeOracleTests(unittest.TestCase):
     def test_parser_requires_init_and_terminal_result(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            raw = fresh_stream(root / "nonce.txt", root)
+            raw = fresh_stream(nonce_file=root / "nonce.txt", workspace=root)
             parsed = claude_protocol.parse_claude_events(raw)
             self.assertEqual(parsed["session_id"], SESSION)
             self.assertEqual(parsed["result_event"]["subtype"], "success")
@@ -300,13 +300,13 @@ class ClaudeOracleTests(unittest.TestCase):
                 native_read, nonce_file, workspace, sibling, NONCE)
             self.assertEqual(native_controls["nonce_tool_name"], "Read")
             self.assertEqual(native_controls["nonce_read_count"], 2)
-            provider_owned = fresh_stream(nonce_file, workspace).decode().replace(
+            provider_owned = fresh_stream(nonce_file=nonce_file, workspace=workspace).decode().replace(
                 '"tools":["Bash"]', '"tools":["NativeRead"]')
             provider_owned = provider_owned.replace('"name":"Bash"', '"name":"NativeRead"')
             provider_controls = claude_protocol.validate_fresh_controls(
                 claude_protocol.parse_claude_events(provider_owned.encode()), nonce_file, workspace, sibling, NONCE)
             self.assertEqual(provider_controls["nonce_tool_name"], "NativeRead")
-            wrong_path = claude_protocol.parse_claude_events(fresh_stream(nonce_file, workspace))
+            wrong_path = claude_protocol.parse_claude_events(fresh_stream(nonce_file=nonce_file, workspace=workspace))
             wrong_path["tool_uses"][0]["input"]["command"] = f"cat -- {root / 'other'}"
             with self.assertRaisesRegex(RuntimeError, "hidden nonce"):
                 claude_protocol.validate_fresh_controls(wrong_path, nonce_file, workspace, sibling, NONCE)
@@ -320,7 +320,7 @@ class ClaudeOracleTests(unittest.TestCase):
                     expected_session=wrong_session,
                 )
             denied = claude_protocol.parse_claude_events(
-                fresh_stream(nonce_file, workspace, denied_tools=("Bash",)))
+                fresh_stream(nonce_file=nonce_file, workspace=workspace, denied_tools=("Bash",)))
             denied_controls = claude_protocol.validate_fresh_controls(
                 denied, nonce_file, workspace, sibling, NONCE)
             self.assertEqual(denied_controls["permission_denial_count"], 1)
@@ -333,7 +333,7 @@ class ClaudeOracleTests(unittest.TestCase):
             workspace.mkdir()
             sibling.mkdir()
             nonce_file = workspace / "nonce.txt"
-            values = [json.loads(line) for line in fresh_stream(nonce_file, workspace).splitlines()]
+            values = [json.loads(line) for line in fresh_stream(nonce_file=nonce_file, workspace=workspace).splitlines()]
             for value in values:
                 if value.get("type") == "user" and value["message"]["content"][0].get("tool_use_id") == "nonce":
                     value["message"]["content"][0]["is_error"] = True
@@ -514,8 +514,9 @@ class ClaudeOracleTests(unittest.TestCase):
                            "XDG_CONFIG_HOME": str(root / "config")}
 
             binding = claude_runtime.expected_claude_inspection_binding(
-                pueue, config, base, common.digest(config), workspace, claude,
-                runner, environment, "pueue fixture")
+                pueue=pueue, config=config, base=base, config_digest=common.digest(config), workspace=workspace,
+                executable=claude,
+                runner=runner, environment=environment, pueue_version="pueue fixture")
             definition = {
                 "revision": claude_constants.RUNTIME_INSPECTION_REVISION,
                 "executable": str(claude.resolve()),
@@ -567,8 +568,9 @@ class ClaudeOracleTests(unittest.TestCase):
                            "CLAUDE_CONFIG_DIR": str(root / "claude-config"),
                            "ANTHROPIC_API_KEY": "ambient-secret"}
             binding = claude_runtime.expected_claude_inspection_binding(
-                paths[0], config, base, common.digest(config), home, paths[2], paths[1], environment,
-                "pueue fixture")
+                pueue=paths[0], config=config, base=base, config_digest=common.digest(config), workspace=home,
+                executable=paths[2], runner=paths[1], environment=environment,
+                pueue_version="pueue fixture")
             self.assertIn("XDG_CONFIG_HOME=" + str(root / "config"), binding["environment"])
             self.assertIn("CLAUDE_CONFIG_DIR=" + str(root / "claude-config"), binding["environment"])
             self.assertNotIn("ANTHROPIC_API_KEY=ambient-secret", binding["environment"])

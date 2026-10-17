@@ -62,6 +62,9 @@ machine-checked boundaries and budgets.
    and pair permitted observations with refused mutations in the same state.
    Preserve each consumer's error identities, exit codes and JSON guidance;
    helper tests must not replace the public command's existing contract.
+   Do not replace a long function with helpers that pass its entire local state
+   through long positional argument lists. Use named call contracts; introduce
+   an immutable record only when it represents an actual cohesive domain value.
 5. Verify an OS primitive or provider protocol on the real supported OS/provider
    before implementing work that depends on it. Missing evidence blocks that
    work and its dependents; independent proven work may continue.

@@ -13,7 +13,7 @@ import acceptance_native as gate
 import acceptance_supervisor_common as common
 import native_acceptance_evidence as evidence
 from scripts.delegate_acceptance.native import acceptance as acceptance_impl
-from test_acceptance_native import fake_native_python_script
+from scripts.acceptance_tests.native.support import fake_native_python_script
 
 
 def isolate_git_ancestors(root):

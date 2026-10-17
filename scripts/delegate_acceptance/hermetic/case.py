@@ -39,7 +39,7 @@ import traceback
 class Case:
     """One fresh task/root/supervisor fixture and its owned processes."""
 
-    def __init__(self, suite, case_id, scenario="success", hook="normal",
+    def __init__(self, *, suite, case_id, scenario="success", hook="normal",
                  budget="1m0s", add_release=True, answer=None,
                  provider_kwargs=None):
         self.suite = suite
@@ -267,7 +267,7 @@ class Case:
         profile["provider_config_sha256"] = digest(self.provider_config)
         write_json(self.profile_config, profile, replace=True)
 
-    def dispatch_argv(self, brief=None, cwd=None, budget=None, task=None,
+    def dispatch_argv(self, *, brief=None, cwd=None, budget=None, task=None,
                       pueue_config=None, provider=PREDICATE, extra=(),
                       omit_budget=False):
         argv = [

@@ -53,7 +53,7 @@ def stream(values: list[dict[str, object]]) -> bytes:
     return b"\n".join(event(value) for value in values)
 
 
-def fresh_stream(nonce_file: Path, workspace: Path, nonce: bytes = NONCE,
+def fresh_stream(*, nonce_file: Path, workspace: Path, nonce: bytes = NONCE,
                  denied_tools: tuple[str, ...] = (), tool_name: str = "Bash",
                  tool_input: dict[str, object] | None = None, tool_output: str | None = None,
                  repeated_reads: int = 0) -> bytes:
@@ -73,12 +73,12 @@ def fresh_stream(nonce_file: Path, workspace: Path, nonce: bytes = NONCE,
 
 
 def bash_plain_stream(nonce_file: Path, workspace: Path, nonce: bytes = NONCE) -> bytes:
-    return fresh_stream(nonce_file, workspace, nonce, tool_name="Bash",
+    return fresh_stream(nonce_file=nonce_file, workspace=workspace, nonce=nonce, tool_name="Bash",
                         tool_input={"command": f"cat -- {nonce_file}"},
                         tool_output=nonce.decode() + "\n")
 
 
 def native_numbered_read_stream(nonce_file: Path, workspace: Path, nonce: bytes = NONCE) -> bytes:
-    return fresh_stream(nonce_file, workspace, nonce, tool_name="Read",
+    return fresh_stream(nonce_file=nonce_file, workspace=workspace, nonce=nonce, tool_name="Read",
                         tool_input={"file_path": str(nonce_file)},
                         tool_output=f"     1→{nonce.decode()}\n", repeated_reads=1)

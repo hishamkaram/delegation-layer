@@ -1,5 +1,6 @@
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute } from "node:path";
 import { harnesses, isHarnessName } from "./catalog.mjs";
+import { normalizeAbsolute } from "./paths.mjs";
 
 function error(message) {
   return { kind: "error", message };
@@ -34,7 +35,7 @@ export function parseLegacyArguments(argumentsList) {
 
   if (!target) return error("--target is required");
   if (!isAbsolute(target)) return error("--target must be an absolute path");
-  return { kind: "options", options: { force, target: resolve(target) } };
+  return { kind: "options", options: { force, target: normalizeAbsolute(target) } };
 }
 
 export function parseInstallArguments(argumentsList) {
@@ -117,6 +118,6 @@ export function parseInstallCliArguments(argumentsList, { platform }) {
   }
   return {
     kind: "options",
-    options: { installDir: installDir ? resolve(installDir) : undefined, version },
+    options: { installDir: installDir ? normalizeAbsolute(installDir) : undefined, version },
   };
 }

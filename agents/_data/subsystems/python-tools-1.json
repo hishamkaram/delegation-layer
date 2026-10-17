@@ -23,8 +23,8 @@
     "owner": "py:maintainability.python_facts",
     "layer": "tool",
     "imports": [
-      "py:ast",
       "py:json",
+      "py:maintainability.python_ast",
       "py:pathlib",
       "py:sys"
     ]
@@ -32,7 +32,7 @@
   {
     "name": "py:native_acceptance_evidence",
     "owner": "py:native_acceptance_evidence",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:__future__",
       "py:argparse",
@@ -117,7 +117,7 @@
   {
     "name": "py:verify_release_archive",
     "owner": "py:verify_release_archive",
-    "layer": "runtime",
+    "layer": "tool",
     "imports": [
       "py:__future__",
       "py:argparse",
@@ -164,6 +164,14 @@
       "py:re",
       "py:sys",
       "py:typing"
+    ]
+  },
+  {
+    "name": "py:maintainability.python_ast",
+    "owner": "py:maintainability.python_ast",
+    "layer": "pure",
+    "imports": [
+      "py:ast"
     ]
   }
 ]

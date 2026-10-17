@@ -45,7 +45,8 @@ def capacity_lease_specifications(state, responses, waiter_directory, lease_nonc
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError("task lifetime evidence is unreadable: " + task_id) from error
         registration_digest = _validate_capacity_launch_records(
-            intent, launches, owner_digest, registration, registration_bytes, root_id, task_id, worker
+            intent=intent, launches=launches, owner_digest=owner_digest, registration=registration, registration_bytes=registration_bytes,
+            root_id=root_id, task_id=task_id, worker=worker
         )
         pid = launches[-1]["pid"]
         specifications.append(

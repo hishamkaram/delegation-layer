@@ -1,4 +1,5 @@
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { resolveFrom } from "./paths.mjs";
 
 export function defaultHarnessNames(detections) {
   const detected = detections
@@ -25,7 +26,7 @@ export function resolveInstallSelection({ force, harnessNames, scope, routing, c
 export function targetFor(harness, scope, cwd, home, environment = {}) {
   if (!harness) throw new Error("cannot resolve an install target for an unknown harness");
   if (scope === "global" && harness.name === "claude" && environment.CLAUDE_CONFIG_DIR) {
-    return join(resolve(environment.CLAUDE_CONFIG_DIR), "skills", "agent-integration");
+    return join(resolveFrom(cwd, environment.CLAUDE_CONFIG_DIR), "skills", "agent-integration");
   }
   const root = scope === "global" ? home : cwd;
   const relativePath = scope === "global" ? harness.globalPath : harness.projectPath;

@@ -34,15 +34,15 @@ class ModernBinaryControlTests(unittest.TestCase):
         if reverse:
             reader, writer = writer, reader
         return controls.prove_contention_round(
-            self.fixture.processes,
-            reader.delegate,
-            writer,
-            self.fixture.state,
-            self.fixture.controls,
-            label,
-            self.fixture.task_id,
-            self.immutable,
-            self.live,
+            processes=self.fixture.processes,
+            reader=reader.delegate,
+            writer=writer,
+            state=self.fixture.state,
+            controls=self.fixture.controls,
+            label=label,
+            task_id=self.fixture.task_id,
+            immutable_content=self.immutable,
+            assert_live=self.live,
         )
 
     def test_actual_two_fixture_binaries_share_root_then_exclude_writer_both_directions(self):

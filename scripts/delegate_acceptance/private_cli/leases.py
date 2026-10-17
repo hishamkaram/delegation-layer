@@ -48,6 +48,14 @@ class LockedReleaseGate:
             os.close(descriptor)
 
 
+def require_empty_fixture_waiters(waiter_directory):
+    entries = tuple(Path(waiter_directory).iterdir())
+    if entries:
+        raise RuntimeError(
+            "fixture provider lease entries remained after canonical lifetime closure: " + str(len(entries))
+        )
+
+
 def _validate_live_parent_pin(path, parent_descriptor, parent_identity, task_id):
     """Validate the path and descriptor still identify the original parent."""
     require(
@@ -95,7 +103,8 @@ class LiveFIFOLease:
         parent_descriptor, parent_identity = _open_parent_directory(path.parent)
         try:
             return cls._acquire_with_parent(
-                task_id, pid, path, nonce, parent_descriptor, parent_identity, timeout, owns_parent_descriptor=True
+                task_id=task_id, pid=pid, path=path, nonce=nonce, parent_descriptor=parent_descriptor,
+                parent_identity=parent_identity, timeout=timeout, owns_parent_descriptor=True
             )
         except BaseException:
             _close_parent_descriptor(parent_descriptor)
@@ -103,7 +112,7 @@ class LiveFIFOLease:
 
     @classmethod
     def _acquire_with_parent(
-        cls, task_id, pid, path, nonce, parent_descriptor, parent_identity, timeout, owns_parent_descriptor
+        cls, *, task_id, pid, path, nonce, parent_descriptor, parent_identity, timeout, owns_parent_descriptor
     ):
         path = Path(path).absolute()
         descriptor = -1
@@ -149,14 +158,14 @@ class LiveFIFOLease:
             if received != expected:
                 raise RuntimeError("capacity fixture lease handshake is invalid: " + task_id)
             lease = cls(
-                task_id,
-                pid,
-                path,
-                descriptor,
-                parent_descriptor,
-                (opened.st_dev, opened.st_ino),
-                parent_identity,
-                owns_parent_descriptor,
+                task_id=task_id,
+                pid=pid,
+                path=path,
+                descriptor=descriptor,
+                parent_descriptor=parent_descriptor,
+                identity=(opened.st_dev, opened.st_ino),
+                parent_identity=parent_identity,
+                owns_parent_descriptor=owns_parent_descriptor,
             )
             lease.assert_live()
             return lease
@@ -231,13 +240,13 @@ class LiveFIFOLeaseCohort:
                     parent_pins[path.parent] = parent_pin
                 leases.append(
                     LiveFIFOLease._acquire_with_parent(
-                        specification["task_id"],
-                        specification["pid"],
-                        path,
-                        nonce,
-                        parent_pin[0],
-                        parent_pin[1],
-                        timeout,
+                        task_id=specification["task_id"],
+                        pid=specification["pid"],
+                        path=path,
+                        nonce=nonce,
+                        parent_descriptor=parent_pin[0],
+                        parent_identity=parent_pin[1],
+                        timeout=timeout,
                         owns_parent_descriptor=False,
                     )
                 )

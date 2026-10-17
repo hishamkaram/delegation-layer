@@ -6,12 +6,12 @@ import hashlib
 import json
 from pathlib import Path
 
-from scripts.maintainability.python_facts import module_name, parse_source_facts
+from scripts.maintainability.python_ast import module_name, parse_source_facts
 from .contract import MAX_SOURCE_FILE, SOURCE_FILES, VerificationError
 from .filesystem import _bounded_file_bytes
 
 
-PARSER_SOURCE = "scripts/maintainability/python_facts.py"
+PARSER_SOURCE = "scripts/maintainability/python_ast.py"
 
 
 def _python_modules(root: Path) -> dict[str, list[str]]:

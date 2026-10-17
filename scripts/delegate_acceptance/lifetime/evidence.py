@@ -39,7 +39,7 @@ from pathlib import Path
 
 
 def _validate_managed_lifetime(
-        directory: Path, root: str, task: str, owner_kind: str, owner_digest: str,
+        *, directory: Path, root: str, task: str, owner_kind: str, owner_digest: str,
         created_floor: tuple[datetime, int] | None = None,
         expected_deadline: str | None = None,
         window_deadline: tuple[datetime, int] | None = None) -> dict[str, object]:
@@ -58,8 +58,9 @@ def _validate_managed_lifetime(
     intent_path = directory / _lifetime_record_name(owner_kind, "intent")
     intent = _read_control_record(intent_path, f"{evidence} lifetime intent for {task}")
     scope_kind, assurance, intent_created = _validate_lifetime_intent(
-        created_floor, evidence, expected_deadline, intent, owner_digest, owner_kind, recovered,
-        root, task, window_deadline,
+        created_floor=created_floor, evidence=evidence, expected_deadline=expected_deadline, intent=intent,
+        owner_digest=owner_digest, owner_kind=owner_kind, recovered=recovered,
+        root=root, task=task, window_deadline=window_deadline,
     )
     registration_path = directory / _lifetime_record_name(owner_kind, "registration")
     registration = _read_optional_control_record(
@@ -68,36 +69,41 @@ def _validate_managed_lifetime(
         return _validate_intent_only_lifetime_absence(
             directory, root, task, owner_kind, intent, intent_path, wait)
     registration_created = _validate_lifetime_registration(
-        assurance, evidence, intent, intent_created, owner_digest, owner_kind, recovered,
-        registration, root, scope_kind, task, window_deadline,
+        assurance=assurance, evidence=evidence, intent=intent, intent_created=intent_created, owner_digest=owner_digest,
+        owner_kind=owner_kind, recovered=recovered,
+        registration=registration, root=root, scope_kind=scope_kind, task=task, window_deadline=window_deadline,
     )
     registration_digest = digest(registration_path)
 
     worker_path = directory / _lifetime_record_name(owner_kind, "worker")
     worker = _read_optional_control_record(worker_path, f"{evidence} lifetime worker for {task}")
     worker_started, worker_digest = _read_lifetime_worker(
-        evidence, recovered, registration, registration_created, registration_digest, root, task,
-        worker, worker_path,
+        evidence=evidence, recovered=recovered, registration=registration, registration_created=registration_created,
+        registration_digest=registration_digest, root=root, task=task,
+        worker=worker, worker_path=worker_path,
     )
     _validate_lifetime_wait(
-        assurance, evidence, recovered, registration_digest, root, task, wait, worker,
-        worker_digest, worker_started,
+        assurance=assurance, evidence=evidence, recovered=recovered, registration_digest=registration_digest,
+        root=root, task=task, wait=wait, worker=worker,
+        worker_digest=worker_digest, worker_started=worker_started,
     )
     launches = _read_lifetime_launches(
-        directory, evidence, owner_kind, recovered, registration_created, registration_digest,
-        root, task, window_deadline,
+        directory=directory, evidence=evidence, owner_kind=owner_kind, recovered=recovered, registration_created=registration_created,
+        registration_digest=registration_digest,
+        root=root, task=task, window_deadline=window_deadline,
     )
     termination = _read_control_record(
         directory / _lifetime_record_name(owner_kind, "termination"),
         f"{evidence} lifetime termination for {task}")
     _validate_lifetime_termination(
-        evidence, launches, recovered, registration_created, registration_digest, root, task,
-        termination, wait,
+        evidence=evidence, launches=launches, recovered=recovered, registration_created=registration_created,
+        registration_digest=registration_digest, root=root, task=task,
+        termination=termination, wait=wait,
     )
     if recovered:
         _validate_lifetime_absence_completion(
-            wait, root, task, str(registration["boot_id"]), registration_digest,
-            "", worker, worker_digest, termination)
+            wait=wait, root=root, task=task, recorded_boot=str(registration["boot_id"]), registration_digest=registration_digest,
+            intent_digest="", worker=worker, worker_digest=worker_digest, termination=termination)
     return {"intent": intent, "registration": registration, "worker": worker,
             "worker_wait": wait, "launches": launches, "termination": termination}
 
@@ -127,7 +133,8 @@ def _validate_intent_only_lifetime_absence(
         ),
                 f"unregistered lifetime has a worker start guard for {task}")
     _validate_lifetime_absence_completion(
-        wait, root, task, str(intent["boot_id"]), "", digest(intent_path), None, "", None)
+        wait=wait, root=root, task=task, recorded_boot=str(intent["boot_id"]), registration_digest="",
+        intent_digest=digest(intent_path), worker=None, worker_digest="", termination=None)
     return {"intent": intent, "registration": None, "worker": None,
             "worker_wait": wait, "launches": [], "termination": None}
 
@@ -139,7 +146,7 @@ def _validate_managed_inspection_lifetime(directory: Path, root: str, task: str,
                                           deadline: tuple[datetime, int]) -> dict[str, object]:
     """Validate the guardian-owned Wait and empty-scope proof for one inspection."""
     return _validate_managed_lifetime(
-        directory, root, task, "inspection", request_digest,
+        directory=directory, root=root, task=task, owner_kind="inspection", owner_digest=request_digest,
         created_floor=request_created, expected_deadline=request_deadline,
         window_deadline=deadline)
 
@@ -149,8 +156,8 @@ def _validate_managed_ordinary_lifetime(directory: Path, root: str, task: str,
                                         meta_digest: str) -> dict[str, object]:
     """Validate taskdir's managed lifetime records for one ordinary task."""
     return _validate_managed_lifetime(
-        directory / "lifetime", root, task, "task",
-        ordinary_lifetime_owner_digest(spec_digest, meta_digest))
+        directory=directory / "lifetime", root=root, task=task, owner_kind="task",
+        owner_digest=ordinary_lifetime_owner_digest(spec_digest, meta_digest))
 
 
 
@@ -158,7 +165,7 @@ def _validate_managed_ordinary_lifetime(directory: Path, root: str, task: str,
 
 
 def _read_lifetime_worker(
-        evidence: str,
+        *, evidence: str,
         recovered: bool,
         registration: dict[str, object],
         registration_created: tuple[datetime, int],
@@ -194,7 +201,7 @@ def _read_lifetime_worker(
 
 
 def _read_lifetime_launches(
-        directory: Path,
+        *, directory: Path,
         evidence: str,
         owner_kind: str,
         recovered: bool,

@@ -17,6 +17,7 @@ func Check(manifest Manifest, sources []Source) []Finding {
 	var findings []Finding
 	for _, source := range sources {
 		findings = append(findings, checkSize(manifest.Limits, source)...)
+		findings = append(findings, checkPositionalCalls(source)...)
 		if source.Module == "" {
 			continue
 		}
@@ -62,16 +63,17 @@ func checkRegistryUse(modules map[string]Module, used map[string]map[string]bool
 }
 
 func checkImportLayers(module Module, source Source, modules map[string]Module) []Finding {
-	if module.Layer != "pure" {
-		return nil
-	}
 	var findings []Finding
 	for _, dependency := range source.Imports {
 		target, registered := modules[dependency.Target]
-		if registered && target.Layer != "pure" {
+		if registered && !allowedLayerDependency(module.Layer, target.Layer) {
+			detail := module.Layer + " module imports " + target.Layer + " boundary " + dependency.Target
+			if module.Layer == "pure" {
+				detail = "pure module imports non-pure boundary " + dependency.Target
+			}
 			findings = append(findings, Finding{
 				Path: source.Path, Line: dependency.Line, Kind: "dependency",
-				Detail: "pure module imports non-pure boundary " + dependency.Target,
+				Detail: detail,
 			})
 		}
 	}
@@ -95,7 +97,11 @@ func checkSize(limits Limits, source Source) []Finding {
 	}
 	for _, function := range source.Functions {
 		if function.Length > limits.Function {
-			findings = append(findings, Finding{Path: source.Path, Line: function.Line, Kind: "function", Symbol: function.Name, Detail: "function exceeds AST span budget", Actual: function.Length, Limit: limits.Function})
+			detail := "function exceeds AST span budget"
+			if strings.HasPrefix(source.Module, "go:") {
+				detail = "function exceeds pinned funlen line budget"
+			}
+			findings = append(findings, Finding{Path: source.Path, Line: function.Line, Kind: "function", Symbol: function.Name, Detail: detail, Actual: function.Length, Limit: limits.Function})
 		}
 	}
 	return findings

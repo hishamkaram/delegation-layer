@@ -586,10 +586,12 @@ class NativeAcceptance:
         return acceptance_collection._validate_task_provider_receipts(self, task_id, directory, meta_digest, spec_digest, predicate)
 
     def _validate_task_outcome(
-            self, task_id: str, directory: Path, meta_digest: str, spec_digest: str,
+            self, *, task_id: str, directory: Path, meta_digest: str, spec_digest: str,
             predicate: dict[str, object], record: dict[str, object],
             predecessor: str | None, predecessor_session: str | None, manifest_digest: str) -> None:
-        return acceptance_collection._validate_task_outcome(self, task_id, directory, meta_digest, spec_digest, predicate, record, predecessor, predecessor_session, manifest_digest)
+        return acceptance_collection._validate_task_outcome(owner=self, task_id=task_id, directory=directory,
+            meta_digest=meta_digest, spec_digest=spec_digest, predicate=predicate, record=record, predecessor=predecessor,
+            predecessor_session=predecessor_session, manifest_digest=manifest_digest)
 
     def session_ref(self, task_id: str) -> str:
         return acceptance_collection.session_ref(self, task_id)

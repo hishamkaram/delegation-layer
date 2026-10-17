@@ -151,10 +151,10 @@ def run_session_chain(case, expect_session_block=False):
 
 
 def _run_initial_chain_turn(case, conversation, records):
-    record_a = configure_chain_task(case,
-        "A",
-        "chain A answer: α\nliteral \\n Ω\n",
-        conversation,
+    record_a = configure_chain_task(case=case,
+        label="A",
+        answer="chain A answer: α\nliteral \\n Ω\n",
+        session_id=conversation,
         scenario="success",
         lifetime_ms=250,
         task_value=case.task_id,
@@ -174,10 +174,10 @@ def _run_initial_chain_turn(case, conversation, records):
 
 
 def _run_held_chain_turn(case, conversation, records, record_a, expect_session_block):
-    record_b = configure_chain_task(case,
-        "B",
-        "chain B answer: β\nheld until release\n",
-        conversation,
+    record_b = configure_chain_task(case=case,
+        label="B",
+        answer="chain B answer: β\nheld until release\n",
+        session_id=conversation,
         scenario="hold",
         lifetime_ms=5000,
         provider_hold=True,
@@ -213,10 +213,10 @@ def _run_held_chain_turn(case, conversation, records, record_a, expect_session_b
 
 
 def _prepare_final_chain_turn(case, conversation, records):
-    record_c = configure_chain_task(case,
-        "C",
-        "chain C answer: γ\nthird terminal successor\n",
-        conversation,
+    record_c = configure_chain_task(case=case,
+        label="C",
+        answer="chain C answer: γ\nthird terminal successor\n",
+        session_id=conversation,
         scenario="success",
         lifetime_ms=250,
         provider_hold=False,
@@ -325,7 +325,7 @@ def run_session_chain_baseline(case):
     run_session_chain(case, expect_session_block=True)
 
 
-def configure_chain_task(case, label, answer, session_id, scenario="success",
+def configure_chain_task(*, case, label, answer, session_id, scenario="success",
                          lifetime_ms=250, provider_hold=False,
                          task_value=None, brief=None):
     """Retarget the acceptance-only provider config for one chain task.

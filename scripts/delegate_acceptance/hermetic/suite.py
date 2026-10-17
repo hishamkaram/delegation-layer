@@ -67,7 +67,7 @@ class HermeticSuite:
     def run_case(self, case_id, fn, **kwargs):
         case = None
         try:
-            case = Case(self, case_id, **kwargs)
+            case = Case(suite=self, case_id=case_id, **kwargs)
             fn(case)
             result = case.finish("pass")
             self.results.append(result)

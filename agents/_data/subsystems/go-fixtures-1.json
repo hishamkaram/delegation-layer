@@ -2,7 +2,7 @@
   {
     "name": "go:internal/testutil/claudeacceptance/cmd/delegate",
     "owner": "go:internal/testutil/claudeacceptance/cmd/delegate",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/app",
       "go:internal/provider/claude",
@@ -12,7 +12,7 @@
   {
     "name": "go:internal/testutil/claudeacceptance/cmd/delegate-run",
     "owner": "go:internal/testutil/claudeacceptance/cmd/delegate-run",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/app",
       "go:internal/provider/claude",
@@ -22,7 +22,7 @@
   {
     "name": "go:internal/testutil/codexacceptance/cmd/delegate",
     "owner": "go:internal/testutil/codexacceptance/cmd/delegate",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/app",
       "go:internal/provider/codex",
@@ -32,7 +32,7 @@
   {
     "name": "go:internal/testutil/codexacceptance/cmd/delegate-run",
     "owner": "go:internal/testutil/codexacceptance/cmd/delegate-run",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/app",
       "go:internal/provider/codex",
@@ -42,7 +42,7 @@
   {
     "name": "go:internal/testutil/contributorcli",
     "owner": "go:internal/testutil/contributorcli",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:errors",
       "go:fmt",
@@ -71,7 +71,7 @@
   {
     "name": "go:internal/testutil/contributorcli/cmd/delegate",
     "owner": "go:internal/testutil/contributorcli/cmd/delegate",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/testutil/contributorcli",
       "go:os"
@@ -80,7 +80,7 @@
   {
     "name": "go:internal/testutil/contributorcli/cmd/delegate-run",
     "owner": "go:internal/testutil/contributorcli/cmd/delegate-run",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/testutil/contributorcli",
       "go:os"
@@ -292,7 +292,7 @@
   {
     "name": "go:internal/testutil/harnesscli",
     "owner": "go:internal/testutil/harnesscli",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:crypto/sha256",
       "go:encoding/hex",
@@ -341,7 +341,7 @@
   {
     "name": "go:internal/testutil/harnesscli/cmd/delegate",
     "owner": "go:internal/testutil/harnesscli/cmd/delegate",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/testutil/harnesscli",
       "go:os"
@@ -350,7 +350,7 @@
   {
     "name": "go:internal/testutil/harnesscli/cmd/delegate-run",
     "owner": "go:internal/testutil/harnesscli/cmd/delegate-run",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/testutil/harnesscli",
       "go:os"
@@ -388,7 +388,7 @@
   {
     "name": "go:internal/testutil/inspectionfixture",
     "owner": "go:internal/testutil/inspectionfixture",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:crypto/sha256",
       "go:encoding/hex",
@@ -432,7 +432,7 @@
   {
     "name": "go:internal/testutil/inspectionfixture/cmd/delegate",
     "owner": "go:internal/testutil/inspectionfixture/cmd/delegate",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/testutil/inspectionfixture",
       "go:os"
@@ -441,7 +441,7 @@
   {
     "name": "go:internal/testutil/inspectionfixture/cmd/delegate-run",
     "owner": "go:internal/testutil/inspectionfixture/cmd/delegate-run",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:internal/testutil/inspectionfixture",
       "go:os"
@@ -450,7 +450,7 @@
   {
     "name": "go:internal/testutil/inspectionfixture/cmd/inspection-helper",
     "owner": "go:internal/testutil/inspectionfixture/cmd/inspection-helper",
-    "layer": "runtime",
+    "layer": "test",
     "imports": [
       "go:fmt",
       "go:internal/testutil/inspectionfixture",

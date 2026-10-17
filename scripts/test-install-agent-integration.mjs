@@ -1,16 +1,26 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { main as installCliMain } from "./install-cli.mjs";
 import { parseInstallArguments, parseLegacyArguments } from "./installer/arguments.mjs";
+import { harnesses } from "./installer/catalog.mjs";
+import { routingPath } from "./installer/routing-rules.mjs";
+import { targetFor } from "./installer/selection.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const installerPath = resolve(process.argv[2] ?? join(repositoryRoot, "scripts", "install-agent-integration.mjs"));
 const sourceDirectory = join(repositoryRoot, "skills", "agent-integration");
+
+if (process.platform !== "win32") {
+  const sourcePath = await realpath(installerPath);
+  for (const entrypoint of [sourcePath, join(dirname(sourcePath), "install-cli.mjs")]) {
+    assert.equal((await stat(entrypoint)).mode & 0o111, 0o111, `Installer is not executable: ${entrypoint}`);
+  }
+}
 
 function runInstaller(args, { cwd, home, path, input = "" }) {
   const result = spawnSync(process.execPath, [installerPath, ...args], {
@@ -55,6 +65,21 @@ async function assertInstalled(target) {
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "delegation-layer-installer-")));
 try {
+  for (const target of [root, root + sep, join(root, "target") + sep, join(root, "target", "..", "other")]) {
+    assert.deepEqual(parseLegacyArguments(["--target", target]), {
+      kind: "options", options: { force: false, target: resolve(target) },
+    });
+  }
+  const claudeHarness = harnesses.find((harness) => harness.name === "claude");
+  assert.ok(claudeHarness);
+  for (const cwd of [join(root, "first project"), join(root, "second project")]) {
+    assert.equal(targetFor(claudeHarness, "global", cwd, root, { CLAUDE_CONFIG_DIR: "relative claude" }),
+      join(cwd, "relative claude", "skills", "agent-integration"));
+    assert.equal(routingPath("claude", { scope: "global", cwd, home: root, claudeConfigDir: "relative claude" }),
+      join(cwd, "relative claude", "settings.json"));
+    assert.equal(routingPath("codex", { scope: "global", cwd, home: root, codexHome: "relative codex" }),
+      join(cwd, "relative codex", "hooks.json"));
+  }
   assert.deepEqual(
     parseInstallArguments(["--scope", "project", "--harness", "Claude,Codex", "-y", "--force", "--routing", "default"]),
     {

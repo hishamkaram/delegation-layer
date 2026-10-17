@@ -407,6 +407,7 @@
       "py:delegate_acceptance.evidence.validation",
       "py:delegate_acceptance.inspections.result_policy",
       "py:delegate_acceptance.lifetime.policy",
+      "py:delegate_acceptance.tasks.specification",
       "py:pathlib",
       "py:unittest",
       "py:unittest.mock"

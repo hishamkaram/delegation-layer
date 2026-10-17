@@ -204,7 +204,7 @@ def observe_migration(state: Path, writer: ModernInstallation) -> dict[str, obje
 
 
 def prove_contention_round(
-    processes: Processes,
+    *, processes: Processes,
     reader: Path,
     writer: ModernInstallation,
     state: Path,
@@ -568,15 +568,15 @@ def run_live_contention(
     active_before = immutable()
     rounds = [
         prove_contention_round(
-            tasks.processes,
-            reader.delegate,
-            writer,
-            tasks.state,
-            fixture.controls,
-            label,
-            tasks.tasks[name],
-            immutable,
-            cohort.assert_live,
+            processes=tasks.processes,
+            reader=reader.delegate,
+            writer=writer,
+            state=tasks.state,
+            controls=fixture.controls,
+            label=label,
+            task_id=tasks.tasks[name],
+            immutable_content=immutable,
+            assert_live=cohort.assert_live,
         )
         for reader, writer, label, name in (
             (candidate, baseline, "new-reader-old-writer", "modern-candidate"),

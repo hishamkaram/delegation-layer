@@ -70,21 +70,21 @@ def prepare_fixture(args, lease_nonce, legacy_mode, lifetime, response_directory
 
     brief = configure_private_environment(home, lifetime, provider_bin)
     return FixtureInstallation(
-        delegate_binary,
-        runner_binary,
-        upgraded_delegate_binary,
-        upgraded_runner_binary,
-        pueue_binary,
-        pueued_binary,
-        workspace,
-        provider_bin,
-        brief,
-        upgraded_install,
-        old_daemon_marker,
-        upgraded_daemon_marker,
-        state,
-        waiter_directory,
-        lease_nonce,
+        delegate_binary=delegate_binary,
+        runner_binary=runner_binary,
+        upgraded_delegate_binary=upgraded_delegate_binary,
+        upgraded_runner_binary=upgraded_runner_binary,
+        pueue_binary=pueue_binary,
+        pueued_binary=pueued_binary,
+        workspace=workspace,
+        provider_bin=provider_bin,
+        brief=brief,
+        upgraded_install=upgraded_install,
+        old_daemon_marker=old_daemon_marker,
+        upgraded_daemon_marker=upgraded_daemon_marker,
+        state=state,
+        waiter_directory=waiter_directory,
+        lease_nonce=lease_nonce,
     )
 
 

@@ -11,6 +11,40 @@ from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.inspections.result_policy import _validate_inspection_verdict
 from scripts.delegate_acceptance.lifetime.policy import _validate_lifetime_termination
+from scripts.delegate_acceptance.tasks.specification import _canonical_task_bytes
+
+
+class CanonicalEncodingTests(unittest.TestCase):
+    def test_go_json_preserves_utf8_and_escapes_html_and_line_separators(self):
+        value = '雪😀<&>\u2028\u2029"\\/\n'
+        expected = ('"雪😀'.encode() +
+                    b'\\u003c\\u0026\\u003e\\u2028\\u2029\\"\\\\/\\n"')
+        self.assertEqual(canonical_go_json(value), expected + b"\n")
+        self.assertEqual(canonical_go_json(value, newline=False), expected)
+
+    def test_task_encoding_keeps_field_order_and_go_escaping(self):
+        task = {
+            "brief_length": 1, "brief_sha256": "c" * 64, "budget_nanos": 1,
+            "requested_config": {"permission": "read-only", "model": "雪<&>\u2028\u2029"},
+            "canonical_cwd": "/workspace", "mode": "read-only", "provider": "pi:json",
+            "task_id": "b" * 32, "root_id": "a" * 32, "schema_version": 1,
+        }
+        expected = (
+            b'{"schema_version":1,"root_id":"' + b"a" * 32 +
+            b'","task_id":"' + b"b" * 32 +
+            b'","provider":"pi:json","mode":"read-only","canonical_cwd":"/workspace",' +
+            b'"requested_config":{"model":"' + '雪'.encode() +
+            b'\\u003c\\u0026\\u003e\\u2028\\u2029","permission":"read-only"},' +
+            b'"budget_nanos":1,"brief_sha256":"' + b"c" * 64 + b'","brief_length":1}\n')
+        self.assertEqual(_canonical_task_bytes(task), expected)
+        for value, cause in ((float("nan"), ValueError), (object(), TypeError),
+                             ("\ud800", UnicodeEncodeError)):
+            with self.subTest(value_type=type(value).__name__):
+                task["requested_config"]["model"] = value
+                with self.assertRaisesRegex(
+                        AcceptanceFailure, "inspection task cannot be canonically encoded") as raised:
+                    _canonical_task_bytes(task)
+                self.assertIsInstance(raised.exception.__cause__, cause)
 
 
 class FoundationPolicyTests(unittest.TestCase):
@@ -31,8 +65,9 @@ class FoundationPolicyTests(unittest.TestCase):
 
     def validate_termination(self, record, wait):
         return _validate_lifetime_termination(
-            "ordinary task", [], False, self.created, self.registration,
-            self.root, self.task, record, wait)
+            evidence="ordinary task", launches=[], recovered=False, registration_created=self.created,
+            registration_digest=self.registration,
+            root=self.root, task=self.task, termination=record, wait=wait)
 
     def test_previous_boot_closure_does_not_invent_a_native_wait(self):
         with patch.object(Path, "open", side_effect=AssertionError("unexpected I/O")):
@@ -58,12 +93,14 @@ class FoundationPolicyTests(unittest.TestCase):
         with patch.object(Path, "open", side_effect=AssertionError("unexpected I/O")):
             with self.assertRaisesRegex(AcceptanceFailure, "successful inspection proof is incomplete"):
                 _validate_inspection_verdict(
-                    False, {"mode": "guardian"}, completion, self.deadline,
-                    False, lifetime, False, None, True, result, False, self.task)
+                    allow_failure=False, authority={"mode": "guardian"}, completion=completion, deadline=self.deadline,
+                    historical_aborted=False, managed_lifetime=lifetime, managed_worker_succeeded=False,
+                    observation=None, ordinary_matches=True, result=result, standalone=False, task=self.task)
             lifetime["worker_wait"] = {"result": "success"}
             _validate_inspection_verdict(
-                False, {"mode": "guardian"}, completion, self.deadline,
-                False, lifetime, True, None, True, result, False, self.task)
+                allow_failure=False, authority={"mode": "guardian"}, completion=completion, deadline=self.deadline,
+                historical_aborted=False, managed_lifetime=lifetime, managed_worker_succeeded=True, observation=None,
+                ordinary_matches=True, result=result, standalone=False, task=self.task)
 
 
 if __name__ == "__main__":

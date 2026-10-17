@@ -39,37 +39,38 @@ from pathlib import Path
 
 
 def validate_inspection_evidence(
-        state: Path, root: str, root_created_at: tuple[datetime, int] | None,
+        *, state: Path, root: str, root_created_at: tuple[datetime, int] | None,
         runner: Path, pueue: Path, pueue_config: Path | None,
         inspection_bindings: dict[str, dict[str, object]], task: str,
         directory: Path, allow_failure: bool,
         expected_binding_required: bool = True) -> dict[str, object]:
     request = _read_inspection_request(
-        directory, expected_binding_required, inspection_bindings, pueue,
-        pueue_config, root, root_created_at, runner, state, task)
+        directory=directory, expected_binding_required=expected_binding_required, inspection_bindings=inspection_bindings,
+        pueue=pueue,
+        pueue_config=pueue_config, root=root, root_created_at=root_created_at, runner=runner, state=state, task=task)
     request_digest = digest(request.request_path)
     authority = _inspection_exit_authority(
-        directory, root, request.operation_id, request.binding, request_digest,
-        request.created, request.request["deadline"], request.deadline)
+        directory=directory, root=root, task=request.operation_id, binding=request.binding, request_digest=request_digest,
+        request_created=request.created, request_deadline=request.request["deadline"], deadline=request.deadline)
     managed_lifetime = authority["managed_lifetime"]
     require(isinstance(managed_lifetime, dict) or managed_lifetime is None,
             f"inspection exit authority is invalid for {task}")
     historical_unlaunched = (
         request.historical_aborted and authority["mode"] == "guardian-unlaunched")
     completion = _read_inspection_completion(
-        authority, request.created, request.deadline, directory,
-        historical_unlaunched, managed_lifetime, request.ordinary_matches,
-        request_digest, task)
+        authority=authority, created=request.created, deadline=request.deadline, directory=directory,
+        historical_unlaunched=historical_unlaunched, managed_lifetime=managed_lifetime, ordinary_matches=request.ordinary_matches,
+        request_digest=request_digest, task=task)
     _validate_inspection_completion(
-        completion.completion, directory / "completion.json", request.created,
-        request.deadline, completion.observation, completion.receipt_id,
-        request_digest, completion.result, directory / "result.json",
-        completion.start_created, task)
+        completion=completion.completion, completion_path=directory / "completion.json", created=request.created,
+        deadline=request.deadline, observation=completion.observation, receipt_id=completion.receipt_id,
+        request_digest=request_digest, result=completion.result, result_path=directory / "result.json",
+        start_created=completion.start_created, task=task)
     _validate_inspection_verdict(
-        allow_failure, authority, completion.completion, request.deadline,
-        request.historical_aborted, managed_lifetime,
-        completion.managed_worker_succeeded, completion.observation,
-        request.ordinary_matches, completion.result, request.standalone, task)
+        allow_failure=allow_failure, authority=authority, completion=completion.completion, deadline=request.deadline,
+        historical_aborted=request.historical_aborted, managed_lifetime=managed_lifetime,
+        managed_worker_succeeded=completion.managed_worker_succeeded, observation=completion.observation,
+        ordinary_matches=request.ordinary_matches, result=completion.result, standalone=request.standalone, task=task)
     return {
         "task_id": task, "operation_id": request.operation_id,
         "identity_id": request.operation_id, "root_id": root,
@@ -167,7 +168,7 @@ def _validate_inspection_sources(
 
 
 def _validate_inspection_completion(
-        completion: dict[str, object] | None,
+        *, completion: dict[str, object] | None,
         completion_path: Path,
         created: tuple[datetime, int],
         deadline: tuple[datetime, int],
@@ -223,7 +224,7 @@ def _validate_inspection_completion(
 
 
 def _read_inspection_completion(
-        authority: dict[str, object],
+        *, authority: dict[str, object],
         created: tuple[datetime, int],
         deadline: tuple[datetime, int],
         directory: Path,
@@ -283,7 +284,7 @@ def _read_inspection_completion(
 
 
 def _read_inspection_request(
-        directory: Path,
+        *, directory: Path,
         expected_binding_required: bool,
         inspection_bindings: dict[str, dict[str, object]],
         pueue: Path,

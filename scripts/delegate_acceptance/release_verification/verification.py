@@ -212,8 +212,14 @@ def _prepare_native_release(
     _adopt_archived_directories(archived, receipt, owner, runner, assets, extracted)
     build = _verify_archived_binaries(archived, receipt, extracted, package_version)
     return _ArchiveEvidence(
-        aggregate_path, extracted, info, release_identity, artifact, observation,
-        build, archive_receipt_hash,
+        aggregate_path=aggregate_path,
+        extracted=extracted,
+        platform=info,
+        release_identity=release_identity,
+        artifact=artifact,
+        observation=observation,
+        build=build,
+        receipt_sha256=archive_receipt_hash,
     )
 
 

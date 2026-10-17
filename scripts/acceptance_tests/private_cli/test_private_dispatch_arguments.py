@@ -141,8 +141,10 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             with self.subTest(requested=supplied):
                 receipt, upgrade = self.run_current_scenario(200, supplied)
                 self.assertEqual(upgrade.call_count, 1)
-                self.assertEqual(upgrade.call_args.args[11:13], (200, chosen))
-                self.assertTrue(upgrade.call_args.args[13].name.endswith(".json.responses"))
+                self.assertEqual(upgrade.call_args.args, ())
+                self.assertEqual((upgrade.call_args.kwargs["parallel_tasks"],
+                                  upgrade.call_args.kwargs["dispatch_workers"]), (200, chosen))
+                self.assertTrue(upgrade.call_args.kwargs["response_directory"].name.endswith(".json.responses"))
                 self.assertEqual(receipt["dispatch_workers"], chosen)
                 self.assertEqual(receipt["concurrent_running_tasks"], 200)
                 self.assertEqual(receipt["concurrent_status_bytes"], 1024 * 1024 + 1)
@@ -582,7 +584,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
                                              side_effect=tracked_owner))
             stack.enter_context(patch.object(
                 scenario_entry_impl, "run_external_inspection_handoff_acceptance",
-                side_effect=run_handoff,
+                side_effect=run_handoff, autospec=True,
             ))
             stack.enter_context(patch.object(
                 finalization_impl, "remove_private_acceptance_root", side_effect=remove_root,
@@ -740,6 +742,7 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
             }))
             observed_upgrade = stack.enter_context(patch.object(
                 capacity_entry_impl, "verify_current_installation_upgrade", side_effect=upgrade,
+                autospec=True,
             ))
             stack.enter_context(redirect_stdout(io.StringIO()))
             error = None
@@ -756,19 +759,16 @@ class PrivateDispatchArgumentsTests(unittest.TestCase):
 
 
 def _external_handoff_callback(failure, failure_case):
-    def run_handoff(*args, **kwargs):
-        case_label = kwargs["case_label"]
-        case_config = args[7]
-        case_task_ids = args[13]
-        case_config.parent.mkdir(parents=True, exist_ok=True)
-        case_config.write_text("fixture private config\n")
-        case_task_ids.extend([case_label + "-task-a", case_label + "-task-b"])
+    def run_handoff(*, private_config, attempted_task_ids, case_label, handoff_action, **_kwargs):
+        private_config.parent.mkdir(parents=True, exist_ok=True)
+        private_config.write_text("fixture private config\n")
+        attempted_task_ids.extend([case_label + "-task-a", case_label + "-task-b"])
         if failure is not None and (failure_case is None or case_label == failure_case):
             raise failure
         return {
             "scenario": private_cli.EXTERNAL_INSPECTION_HANDOFF_SCENARIO,
             "case": case_label,
-            "handoff_action": kwargs["handoff_action"],
+            "handoff_action": handoff_action,
             "cleanup": {
                 "fixture_waiter_entries": "pending",
                 "lifetime_closure": "canonical-managed-validator",
@@ -820,15 +820,16 @@ def _current_scenario_callbacks(base, cleanup_failure, old_libexec, pending_old_
 
 
 def _capacity_upgrade_callback(base, pending_old_layout, self, total, upgrade_failure):
-    def upgrade(*args, **kwargs):
-        self.assertIsInstance(args[4], private_cli.LockedReleaseGate)
-        self.assertEqual(args[4].path, base / "blocker-gate")
-        self.assertGreaterEqual(args[4].descriptor, 0, "gate opened before concurrency proof")
-        self.assertEqual(args[5], base / "provider-waiters")
-        self.assertEqual(kwargs["client_call_log"], base / "old-client-starts-calls")
-        requested_workers = args[12]
-        old_layout_entries = tuple(args[8])
-        args[14].update({
+    def upgrade(*, release_gate, waiter_directory, client_call_log, dispatch_workers,
+                old_layout_owned, evidence, run_receipt, **_kwargs):
+        self.assertIsInstance(release_gate, private_cli.LockedReleaseGate)
+        self.assertEqual(release_gate.path, base / "blocker-gate")
+        self.assertGreaterEqual(release_gate.descriptor, 0, "gate opened before concurrency proof")
+        self.assertEqual(waiter_directory, base / "provider-waiters")
+        self.assertEqual(client_call_log, base / "old-client-starts-calls")
+        requested_workers = dispatch_workers
+        old_layout_entries = tuple(old_layout_owned)
+        evidence.update({
             "capacity_proof": {
                 "requested_task_count": total,
                 "observed_running_task_count": total,
@@ -859,7 +860,7 @@ def _capacity_upgrade_callback(base, pending_old_layout, self, total, upgrade_fa
         })
         if upgrade_failure:
             pending_old_layout.extend(old_layout_entries)
-            tracker = kwargs["run_receipt"]
+            tracker = run_receipt
             tracker.phase("capacity_observation")
             tracker.update_counts(
                 dispatch_completed_count=73,
@@ -872,6 +873,6 @@ def _capacity_upgrade_callback(base, pending_old_layout, self, total, upgrade_fa
             )
             raise RuntimeError("SECRET prompt credential unrestricted log")
         private_cli.rollback_owned_directories(old_layout_entries)
-        args[4].release()
+        release_gate.release()
         return ["upgraded", "restarted"], 1024 * 1024 + 1
     return upgrade

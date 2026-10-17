@@ -1,4 +1,5 @@
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { resolveFrom } from "./paths.mjs";
 
 const ROUTING_EVENTS = ["SessionStart", "SubagentStart"];
 
@@ -17,11 +18,11 @@ function hookCommand(target, event) {
 export function routingPath(name, { scope, cwd, home, claudeConfigDir, codexHome }) {
   if (name === "claude") {
     return scope === "global"
-      ? join(resolve(claudeConfigDir || join(home, ".claude")), "settings.json")
+      ? join(resolveFrom(cwd, claudeConfigDir || join(home, ".claude")), "settings.json")
       : join(cwd, ".claude", "settings.local.json");
   }
   if (name === "codex") {
-    return join(scope === "global" ? resolve(codexHome || join(home, ".codex")) : join(cwd, ".codex"), "hooks.json");
+    return join(scope === "global" ? resolveFrom(cwd, codexHome || join(home, ".codex")) : join(cwd, ".codex"), "hooks.json");
   }
   return null;
 }

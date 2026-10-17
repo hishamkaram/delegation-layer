@@ -45,6 +45,13 @@ type Function struct {
 	Length int    `json:"length"`
 }
 
+// Call counts statically known positional values; dynamic starred arity is unknown.
+type Call struct {
+	Name                string `json:"name"`
+	Line                int    `json:"line"`
+	PositionalArguments int    `json:"positional_arguments"`
+}
+
 // Source contains observations only; collectors cannot grant policy exceptions.
 type Source struct {
 	Path      string       `json:"path"`
@@ -54,6 +61,7 @@ type Source struct {
 	Lines     int          `json:"lines"`
 	Imports   []Dependency `json:"imports"`
 	Functions []Function   `json:"functions"`
+	Calls     []Call       `json:"calls"`
 	Effects   []Effect     `json:"effects"`
 }
 

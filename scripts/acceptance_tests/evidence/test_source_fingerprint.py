@@ -19,6 +19,34 @@ class SourceFingerprintTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(value, encoding="utf-8")
 
+    def test_parser_seed_names_the_defining_pure_module(self):
+        self.assertEqual(source.parse_source_facts.__module__, "scripts.maintainability.python_ast")
+        self.assertEqual(source.PARSER_SOURCE,
+                         source.parse_source_facts.__module__.replace(".", "/") + ".py")
+
+    def test_parser_definition_and_transitive_dependency_changes_are_bound(self):
+        parser = "scripts/maintainability/python_ast.py"
+        helper = "scripts/maintainability/parser_helpers.py"
+        values = "scripts/maintainability/parser_values.py"
+        parser_source = "from .parser_helpers import fields\nraise RuntimeError('never execute')\n"
+        self.write("scripts/entry.py", "import json\n")
+        self.write(parser, parser_source)
+        self.write(helper, "from .parser_values import fields\n")
+        self.write(values, "fields = ('imports',)\n")
+        original = source.fingerprint_sources(self.root, ("scripts/entry.py",))
+        self.assertEqual({row["path"] for row in original["files"]}, {
+            "scripts/entry.py", parser, helper, values,
+        })
+        self.write(parser, parser_source + "# changed parser bytes\n")
+        parser_changed = source.fingerprint_sources(self.root, ("scripts/entry.py",))
+        self.assertNotEqual(original["sha256"], parser_changed["sha256"])
+        self.write(values, "fields = ('imports', 'functions')\n")
+        dependency_changed = source.fingerprint_sources(self.root, ("scripts/entry.py",))
+        self.assertNotEqual(parser_changed["sha256"], dependency_changed["sha256"])
+        self.write(values, "def incomplete(\n")
+        with self.assertRaisesRegex(source.VerificationError, "source_file_invalid"):
+            source.fingerprint_sources(self.root, ("scripts/entry.py",))
+
     def test_transitive_imports_parent_initializers_and_exact_bytes_are_bound(self):
         self.write("scripts/entry.py", "from scripts.fixture import middle\n")
         self.write("scripts/fixture/__init__.py", "raise RuntimeError('never execute')\n")

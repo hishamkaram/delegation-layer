@@ -311,7 +311,7 @@ func PreparePublishedPrivateWithLock(ctx context.Context, stateRoot string, opti
 	if err != nil || !found {
 		return nil, found, err
 	}
-	if err = ensurePrivateSupervisorMigrationComplete(stateRoot, published); err != nil {
+	if err = ensurePrivateSupervisorMigrationComplete(stateRoot, published, ErrPrivateSupervisorTransitionIncomplete); err != nil {
 		return nil, true, err
 	}
 	options, err = optionsForPublishedPrivateBinding(published, options)

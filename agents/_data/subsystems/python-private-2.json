@@ -210,7 +210,7 @@
   {
     "name": "py:delegate_acceptance.private_cli.control_fixture",
     "owner": "py:delegate_acceptance.private_cli",
-    "layer": "tool",
+    "layer": "runtime",
     "imports": [
       "py:json",
       "py:os",
@@ -303,7 +303,6 @@
       "py:delegate_acceptance.private_cli.pair_evidence",
       "py:delegate_acceptance.private_cli.queue_policy",
       "py:delegate_acceptance.private_cli.receipt",
-      "py:delegate_acceptance.private_cli.stop",
       "py:delegate_acceptance.private_cli.stop_policy",
       "py:delegate_acceptance.private_cli.supervisor",
       "py:delegate_acceptance.processes.observation",
@@ -322,7 +321,7 @@
     "imports": [
       "py:delegate_acceptance.directories.operations",
       "py:delegate_acceptance.directories.policy",
-      "py:delegate_acceptance.private_cli.stop",
+      "py:delegate_acceptance.private_cli.leases",
       "py:delegate_acceptance.private_cli.supervisor"
     ]
   },

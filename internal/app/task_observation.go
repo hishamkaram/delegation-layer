@@ -2,6 +2,8 @@ package app
 
 import (
 	"log"
+	"sync"
+	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -27,9 +29,7 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 	defer func() { fillManagedTaskWorkspace(store, td, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	observed, err := tasklifecycle.Status(store, td, observationSupervisorOptions(deps.SupervisorOptions, deps.InitialSupervisorExecutable), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
-	if observed.MaintenanceError != nil {
-		log.Printf("delegation-layer: task supervisor maintenance deferred: %v", observed.MaintenanceError)
-	}
+	reportTaskMaintenanceDeferral(observed.MaintenanceError)
 	applyTaskObservation(&response, observed.Observation, root)
 	if observed.ControlObservation {
 		return statusObservationResult(response, err)
@@ -58,11 +58,7 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	defer func() { fillManagedTaskWorkspace(store, td, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	observed, err := tasklifecycle.Collect(root, td, tasklifecycle.CollectionOptions{
-		Watch: a.Watch, ObserveSupervisor: deps.observeSupervisor,
-		Supervisor: observationSupervisorOptions(deps.supervisorOptions, deps.initialSupervisorExecutable),
-		Catalog:    deps.providerCatalog(), Registry: deps.registry,
-	})
+	observed, err := tasklifecycle.Collect(root, td, deps.collectionOptions(a.Watch))
 	applyTaskObservation(&response, observed.Observation, root)
 	response.Raw = observed.Raw
 	if observed.Completion != nil {
@@ -75,6 +71,26 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 		return commandResult{response: response, code: 3}
 	}
 	return commandResult{response: response, code: 0}
+}
+
+func reportTaskMaintenanceDeferral(err error) {
+	if err != nil {
+		log.Printf("delegation-layer: task supervisor maintenance deferred: %v", err)
+	}
+}
+
+func (deps storeDependencies) collectionOptions(watch time.Duration) tasklifecycle.CollectionOptions {
+	var reported sync.Once
+	return tasklifecycle.CollectionOptions{
+		Watch: watch, ObserveSupervisor: deps.observeSupervisor,
+		Supervisor: observationSupervisorOptions(deps.supervisorOptions, deps.initialSupervisorExecutable),
+		Catalog:    deps.providerCatalog(), Registry: deps.registry,
+		ReportMaintenanceDeferral: func(err error) {
+			if err != nil {
+				reported.Do(func() { reportTaskMaintenanceDeferral(err) })
+			}
+		},
+	}
 }
 
 func completedCollectionResponse(response Response, completion *tasklifecycle.CollectionCompletion, root string, finalErr error) commandResult {

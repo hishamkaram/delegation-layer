@@ -384,9 +384,10 @@ class NativeTaskOps:
                                      expected_binding_required: bool = True) -> dict[str, object]:
         root = self._known_root_id()
         return validate_inspection_evidence(
-            self.state, root, self.root_created_at, self.runner, self.pueue,
-            self.pueue_config, self.inspection_bindings, task, directory,
-            allow_failure, expected_binding_required)
+            state=self.state, root=root, root_created_at=self.root_created_at, runner=self.runner, pueue=self.pueue,
+            pueue_config=self.pueue_config, inspection_bindings=self.inspection_bindings, task=task,
+            directory=directory,
+            allow_failure=allow_failure, expected_binding_required=expected_binding_required)
 
     def validate_inspection_journals(self, allow_failure: bool = False,
                                      expected_binding_required: bool | None = None) -> dict[str, dict[str, object]]:
@@ -451,8 +452,8 @@ class NativeTaskOps:
                                        allow_failure: bool,
                                        terminal_required: bool = True) -> None:
         return validate_inspection_queue_row(
-            row, journal, allow_failure, self.state_parent, self.pueue_config,
-            self.runner, self.state, terminal_required)
+            row=row, journal=journal, allow_failure=allow_failure, state_parent=self.state_parent, pueue_config=self.pueue_config,
+            runner=self.runner, state_root=self.state, terminal_required=terminal_required)
 
     def _durable_ordinary_admission(
             self, task: str,
@@ -464,11 +465,12 @@ class NativeTaskOps:
             self, status: dict[str, object], allow_failure: bool
             ) -> dict[str, dict[str, object]]:
         return validate_queue_membership(
-            status, allow_failure, self.tasks, self.labels, self.numbers,
-            self.expected_results, self.dispatch_attempts,
-            self.expected_inspection_binding_required, self._inspection_journals,
-            self._durable_ordinary_admission, self._validate_group_snapshot,
-            self.validate_ordinary_queue_row, self._validate_inspection_queue_row)
+            status=status, allow_failure=allow_failure, tasks_by_name=self.tasks, labels_by_name=self.labels,
+            numbers_by_name=self.numbers,
+            expected_results=self.expected_results, dispatch_attempts=self.dispatch_attempts,
+            expected_binding_required=self.expected_inspection_binding_required, inspection_journals=self._inspection_journals,
+            durable_admission=self._durable_ordinary_admission, validate_groups=self._validate_group_snapshot,
+            validate_ordinary_row=self.validate_ordinary_queue_row, validate_inspection_row=self._validate_inspection_queue_row)
 
     def _inspection_snapshot(self) -> dict[str, dict[str, object]]:
         parent = self.state / "inspections"

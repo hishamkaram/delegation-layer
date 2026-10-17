@@ -4,7 +4,7 @@ import hashlib
 
 
 def _validate_capacity_launch_records(
-    intent, launches, owner_digest, registration, registration_bytes, root_id, task_id, worker
+    *, intent, launches, owner_digest, registration, registration_bytes, root_id, task_id, worker
 ):
     records = (intent, registration, worker, *launches)
     if any(

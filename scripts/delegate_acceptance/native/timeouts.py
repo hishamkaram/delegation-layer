@@ -237,7 +237,7 @@ class TimeoutLeaseOwner:
         return True
 
     def record_liveness(
-            self, task_id: str, root_id: str, operations: TimeoutStatusSource,
+            self, *, task_id: str, root_id: str, operations: TimeoutStatusSource,
             output: Path, timeout: float = TIMEOUT_LEASE_SETUP_SECONDS,
             sleep_fn=time.sleep, monotonic_fn=time.monotonic) -> None:
         require(root_id is not None, "timeout source has no root identity")

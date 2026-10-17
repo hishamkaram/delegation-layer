@@ -82,7 +82,7 @@ class InspectionFixture:
         if managed_exit_proof:
             self.managed_inspection_lifetime(directory, request, request_sha, result)
 
-    def inspection_records(self, result: str | None = "eligible",
+    def inspection_records(self, *, result: str | None = "eligible",
                            include_ordinary: bool = True,
                            revision: str = "inspection-v1",
                            legacy_model_discovery: bool = False,

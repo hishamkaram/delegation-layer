@@ -138,8 +138,20 @@ def _start_timeout(context: WorkspaceContext) -> TimeoutPredecessor:
             "timeout capture is bound to a different predecessor")
     snapshot = _immutable_task_snapshot(context, task["task_id"])
     return TimeoutPredecessor(
-        task, status, outcome, collected, closure, specification, lease_observation,
-        lease_cleanup, capture, session, marker, capture_evidence, subject, snapshot,
+        task=task,
+        status=status,
+        outcome=outcome,
+        collected=collected,
+        closure=closure,
+        lease_specification=specification,
+        lease_observation=lease_observation,
+        lease_cleanup=lease_cleanup,
+        capture=capture,
+        session=session,
+        marker=marker,
+        capture_evidence=capture_evidence,
+        subject=subject,
+        snapshot=snapshot,
     )
 
 
@@ -182,8 +194,18 @@ def _continue_timeout(
             and capture_evidence["operation_id"] != task["task_id"],
             "capture operation was attributed to a task lifetime")
     return TimeoutContinuation(
-        task, status, collected, workspace, outcome, capture, closure, binding,
-        session, marker, capture_evidence, subject,
+        task=task,
+        status=status,
+        collected=collected,
+        workspace=workspace,
+        outcome=outcome,
+        capture=capture,
+        closure=closure,
+        binding=binding,
+        session=session,
+        marker=marker,
+        capture_evidence=capture_evidence,
+        subject=subject,
     )
 
 

@@ -26,7 +26,7 @@ from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
 from scripts.delegate_acceptance.private_cli.handoff_journal import read_external_inspection_handoff_journal
 from scripts.delegate_acceptance.private_cli.handoff_supervisor import registered_process_handle
 from scripts.delegate_acceptance.directories.policy import require
-from scripts.delegate_acceptance.private_cli.stop import require_empty_fixture_waiters
+from scripts.delegate_acceptance.private_cli.leases import require_empty_fixture_waiters
 from scripts.delegate_acceptance.private_cli.handoff_policy import require_handoff_task_binding
 from scripts.delegate_acceptance.private_cli.commands import run_json
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
@@ -139,16 +139,16 @@ def _run_handoff_case(case: HandoffCase):
         old_task, external_pid = _start_external_task(case, evidence, resources, supervisor_control, task_commands)
         automatic_response = _trigger_private_handoff(case, evidence, task_commands)
         journal = _observe_handoff_transition(
-            case,
-            evidence,
-            old_task.snapshot_name,
-            old_task.wrapper_calls,
-            external_pid,
-            old_task.label,
-            old_task.row,
-            resources,
-            supervisor_control,
-            task_commands,
+            case=case,
+            evidence=evidence,
+            external_before_name=old_task.snapshot_name,
+            external_calls_before=old_task.wrapper_calls,
+            external_pid=external_pid,
+            old_label=old_task.label,
+            old_row_before=old_task.row,
+            resources=resources,
+            supervisor_control=supervisor_control,
+            task_commands=task_commands,
         )
         private_pair = assert_state_supervisor_pair(case.state, case.client.parent)
         if automatic_response is None:
@@ -165,30 +165,30 @@ def _run_handoff_case(case: HandoffCase):
         )
         case.run_receipt.update_counts(running_task_count=2, live_lease_count=2)
         new_meta_path, new_meta_sha256 = _prove_handoff_owners(
-            case,
-            evidence,
-            external_pid,
-            journal,
-            new_response,
-            new_specs,
-            new_task_id,
-            old_task.metadata_sha256,
-            old_task.response,
-            old_task.specifications,
-            private_pair,
-            resources,
-            task_commands,
+            case=case,
+            evidence=evidence,
+            external_pid=external_pid,
+            journal=journal,
+            new_response=new_response,
+            new_specs=new_specs,
+            new_task_id=new_task_id,
+            old_meta_sha256=old_task.metadata_sha256,
+            old_response=old_task.response,
+            old_specs=old_task.specifications,
+            private_pair=private_pair,
+            resources=resources,
+            task_commands=task_commands,
         )
         _close_handoff_scopes(case, evidence, new_task_id, old_task.task_id, resources)
         _collect_handoff_tasks(
-            case,
-            new_meta_path,
-            new_meta_sha256,
-            new_task_id,
-            old_task.metadata,
-            old_task.metadata_path,
-            old_task.task_id,
-            task_commands,
+            case=case,
+            new_meta_path=new_meta_path,
+            new_meta_sha256=new_meta_sha256,
+            new_task_id=new_task_id,
+            old_meta_bytes=old_task.metadata,
+            old_meta_path=old_task.metadata_path,
+            old_task_id=old_task.task_id,
+            task_commands=task_commands,
         )
         return _complete_handoff_success(case, evidence, old_task, record_evidence, supervisor_control)
     except BaseException as error:
@@ -231,27 +231,27 @@ def _initialize_handoff_case(case, resources):
     record_evidence()
     waiting_brief = Path(case.state).parent / "external-handoff-waiting-brief.md"
     task_commands = HandoffTaskCommands(
-        case.delegate,
-        case.env,
-        case.state,
-        case.workspace,
-        waiting_brief,
-        receipts,
-        case.capture_root,
-        case.run_receipt,
-        case.waiter_directory,
-        case.lease_nonce,
-        external_config,
+        delegate=case.delegate,
+        env=case.env,
+        state=case.state,
+        workspace=case.workspace,
+        waiting_brief=waiting_brief,
+        receipts=receipts,
+        capture_root=case.capture_root,
+        run_receipt=case.run_receipt,
+        waiter_directory=case.waiter_directory,
+        lease_nonce=case.lease_nonce,
+        external_config=external_config,
     )
     supervisor_control = ExternalSupervisorControl(
-        resources.external_processes,
-        case.client,
-        case.env,
-        external_config,
-        external_endpoint,
-        external_pid_path,
-        case.capture_root,
-        evidence,
+        external_processes=resources.external_processes,
+        client=case.client,
+        env=case.env,
+        external_config=external_config,
+        external_endpoint=external_endpoint,
+        external_pid_path=external_pid_path,
+        capture_root=case.capture_root,
+        evidence=evidence,
     )
     waiting_brief.write_text("DELEGATE_PRIVATE_UPGRADE_WAIT\n")
     waiting_brief.chmod(0o600)
@@ -424,7 +424,7 @@ def _trigger_private_handoff(case, evidence, task_commands):
 
 
 def _observe_handoff_transition(
-    case,
+    *, case,
     evidence,
     external_before_name,
     external_calls_before,
@@ -491,7 +491,7 @@ def _observe_handoff_transition(
 
 
 def _prove_handoff_owners(
-    case,
+    *, case,
     evidence,
     external_pid,
     journal,
@@ -550,7 +550,7 @@ def _close_handoff_scopes(case, evidence, new_task_id, old_task_id, resources):
 
 
 def _collect_handoff_tasks(
-    case, new_meta_path, new_meta_sha256, new_task_id, old_meta_bytes, old_meta_path, old_task_id, task_commands
+    *, case, new_meta_path, new_meta_sha256, new_task_id, old_meta_bytes, old_meta_path, old_task_id, task_commands
 ):
     old_collected = run_json(
         case.delegate,
@@ -650,16 +650,16 @@ def _start_external_task(case, evidence, resources, supervisor_control, task_com
     ) = _observe_external_task(case, legacy_request, old_response, old_task_id, supervisor_control, task_commands)
     return (
         ObservedHandoffTask(
-            old_task_id,
-            old_response,
-            old_specs,
-            old_meta_path,
-            old_meta_bytes,
-            old_meta_sha256,
-            old_label,
-            old_row_before,
-            external_before_name,
-            external_calls_before,
+            task_id=old_task_id,
+            response=old_response,
+            specifications=old_specs,
+            metadata_path=old_meta_path,
+            metadata=old_meta_bytes,
+            metadata_sha256=old_meta_sha256,
+            label=old_label,
+            row=old_row_before,
+            snapshot_name=external_before_name,
+            wrapper_calls=external_calls_before,
         ),
         external_pid,
     )

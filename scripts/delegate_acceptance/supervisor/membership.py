@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 
-def validate_queue_membership(status: dict[str, object], allow_failure: bool,
+def validate_queue_membership(*, status: dict[str, object], allow_failure: bool,
         tasks_by_name: dict[str, str], labels_by_name: dict[str, str],
         numbers_by_name: dict[str, int], expected_results: dict[str, str],
         dispatch_attempts: set[str], expected_binding_required: bool,
@@ -28,8 +28,9 @@ def validate_queue_membership(status: dict[str, object], allow_failure: bool,
     journals = inspection_journals(
         allow_failure, expected_binding_required)
     ordinary = _ordinary_queue_admissions(
-        allow_failure, dispatch_attempts, durable_admission, expected_results, journals,
-        labels_by_name, numbers_by_name, tasks_by_name,
+        allow_failure=allow_failure, dispatch_attempts=dispatch_attempts, durable_admission=durable_admission,
+        expected_results=expected_results, journals=journals,
+        labels_by_name=labels_by_name, numbers_by_name=numbers_by_name, tasks_by_name=tasks_by_name,
     )
     ordinary_task_ids = set(ordinary)
     require(ordinary_task_ids <= dispatch_attempts,
@@ -69,7 +70,10 @@ def validate_queue_membership(status: dict[str, object], allow_failure: bool,
     rows = _validate_ordinary_membership(
         allow_failure, allowed_labels, ordinary, required_labels, tasks, validate_ordinary_row,
     )
-    _validate_inspection_membership_rows(allow_failure, guardian_journals, guardian_unlaunched_journals, historical_guardian_journals, historical_guardian_unlaunched_journals, historical_queue_journals, queue_journals, rows, validate_inspection_row)
+    _validate_inspection_membership_rows(allow_failure=allow_failure, guardian_journals=guardian_journals,
+        guardian_unlaunched_journals=guardian_unlaunched_journals, historical_guardian_journals=historical_guardian_journals,
+        historical_guardian_unlaunched_journals=historical_guardian_unlaunched_journals, historical_queue_journals=historical_queue_journals,
+        queue_journals=queue_journals, rows=rows, validate_inspection_row=validate_inspection_row)
     return journals
 
 
@@ -86,7 +90,7 @@ def validate_group_snapshot(groups: object, expected: set[str]):
                 f"private queue group {name} is malformed")
 
 
-def validate_inspection_queue_row(row: dict[str, object], journal: dict[str, object], allow_failure: bool,
+def validate_inspection_queue_row(*, row: dict[str, object], journal: dict[str, object], allow_failure: bool,
         state_parent: Path, pueue_config: Path | None, runner: Path, state_root: Path,
         terminal_required: bool = True):
     task = journal["task_id"]
@@ -137,7 +141,7 @@ def validate_inspection_queue_row(row: dict[str, object], journal: dict[str, obj
 
 
 def _ordinary_queue_admissions(
-        allow_failure: bool,
+        *, allow_failure: bool,
         dispatch_attempts: set[str],
         durable_admission: Callable[..., dict[str, object] | None],
         expected_results: dict[str, str],
@@ -230,7 +234,7 @@ def _validate_ordinary_membership(
 
 
 def _validate_inspection_membership_rows(
-        allow_failure: bool,
+        *, allow_failure: bool,
         guardian_journals: list[dict[str, object]],
         guardian_unlaunched_journals: list[dict[str, object]],
         historical_guardian_journals: list[dict[str, object]],

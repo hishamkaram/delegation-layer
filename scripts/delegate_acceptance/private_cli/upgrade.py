@@ -105,21 +105,22 @@ def run_pending_package_upgrade(
             legacy_socket_identity,
             legacy_cleanup,
         ) = stage_pending_package(
-            attempted_task_ids, base, config, env, package_owner, real_client, real_daemon, state, supervisor_cleanups
+            attempted_task_ids=attempted_task_ids, base=base, config=config, env=env, package_owner=package_owner,
+            real_client=real_client, real_daemon=real_daemon, state=state, supervisor_cleanups=supervisor_cleanups
         )
         new_socket = interrupt_pending_migration(
-            active,
-            capture_root,
-            client,
-            config,
-            delegate,
-            env,
-            legacy_config,
-            original_config,
-            package_owner,
-            pending_libexec,
-            receipts,
-            state,
+            active=active,
+            capture_root=capture_root,
+            client=client,
+            config=config,
+            delegate=delegate,
+            env=env,
+            legacy_config=legacy_config,
+            original_config=original_config,
+            package_owner=package_owner,
+            pending_libexec=pending_libexec,
+            receipts=receipts,
+            state=state,
         )
         install_wrapper(libexec / "pueue", real_client, base / "retarget-client", "retarget-install", "client")
         install_wrapper(libexec / "pueued", real_daemon, base / "retarget-daemon", "retarget-install", "daemon")
@@ -185,51 +186,52 @@ def run_supervisor_upgrade_recovery(
     run_receipt.add_details(supervisor_upgrade_recovery=evidence)
 
     dispatch, collect = _upgrade_task_operations(
-        attempted_task_ids, capture_root, delegate, env, evidence, receipts, run_receipt, state, workspace
+        attempted_task_ids=attempted_task_ids, capture_root=capture_root, delegate=delegate, env=env,
+        evidence=evidence, receipts=receipts, run_receipt=run_receipt, state=state, workspace=workspace
     )
     pair, legacy_binding, historical, historical_directory, history = prepare_upgrade_history(
-        attempted_task_ids,
-        brief,
-        capture_root,
-        client,
-        collect,
-        config,
-        delegate,
-        dispatch,
-        env,
-        old_delegate,
-        old_libexec,
-        receipts,
-        remove_old_package,
-        state,
-        workspace,
+        attempted_task_ids=attempted_task_ids,
+        brief=brief,
+        capture_root=capture_root,
+        client=client,
+        collect=collect,
+        config=config,
+        delegate=delegate,
+        dispatch=dispatch,
+        env=env,
+        old_delegate=old_delegate,
+        old_libexec=old_libexec,
+        receipts=receipts,
+        remove_old_package=remove_old_package,
+        state=state,
+        workspace=workspace,
     )
     finish_upgrade_recovery(
-        attempted_task_ids,
-        brief,
-        capture_root,
-        client,
-        collect,
-        config,
-        delegate,
-        dispatch,
-        env,
-        evidence,
-        gate,
-        historical,
-        historical_directory,
-        history,
-        lease_nonce,
-        legacy_binding,
-        pair,
-        real_client,
-        real_daemon,
-        receipts,
-        run_receipt,
-        state,
-        supervisor_cleanups,
-        upgraded_libexec,
-        waiter_directory,
+        attempted_task_ids=attempted_task_ids,
+        brief=brief,
+        capture_root=capture_root,
+        client=client,
+        collect=collect,
+        config=config,
+        delegate=delegate,
+        dispatch=dispatch,
+        env=env,
+        evidence=evidence,
+        gate=gate,
+        historical=historical,
+        historical_directory=historical_directory,
+        history=history,
+        lease_nonce=lease_nonce,
+        legacy_binding=legacy_binding,
+        pair=pair,
+        real_client=real_client,
+        real_daemon=real_daemon,
+        receipts=receipts,
+        run_receipt=run_receipt,
+        state=state,
+        supervisor_cleanups=supervisor_cleanups,
+        upgraded_libexec=upgraded_libexec,
+        waiter_directory=waiter_directory,
     )
 
 
@@ -262,7 +264,7 @@ def _retarget_pending_successor(pending_libexec, state, supervisor):
 
 
 def _upgrade_task_operations(
-    attempted_task_ids, capture_root, delegate, env, evidence, receipts, run_receipt, state, workspace
+    *, attempted_task_ids, capture_root, delegate, env, evidence, receipts, run_receipt, state, workspace
 ):
     def dispatch(binary, name, task_brief):
         task_id = uuid.uuid4().hex
@@ -331,7 +333,7 @@ def _upgrade_task_operations(
 
 
 def _prove_recovered_capacity(
-    brief, collect, delegate, dispatch, evidence, gate, lease_nonce, run_receipt, state, waiter_directory
+    *, brief, collect, delegate, dispatch, evidence, gate, lease_nonce, run_receipt, state, waiter_directory
 ):
     waiting_brief = brief.with_name("upgrade-waiting.md")
     waiting_brief.write_text("DELEGATE_PRIVATE_UPGRADE_WAIT\n")
@@ -361,7 +363,7 @@ def _prove_recovered_capacity(
 
 
 def stage_pending_package(
-    attempted_task_ids, base, config, env, package_owner, real_client, real_daemon, state, supervisor_cleanups
+    *, attempted_task_ids, base, config, env, package_owner, real_client, real_daemon, state, supervisor_cleanups
 ):
     package = package_owner.create("pending successor package", base / "pending-package", base).directory
     pending_libexec = package_owner.create("pending successor libexec", package / "libexec", package).directory
@@ -394,7 +396,7 @@ def stage_pending_package(
 
 
 def prove_split_provenance(
-    attempted_task_ids,
+    *, attempted_task_ids,
     brief,
     capture_root,
     client,
@@ -428,7 +430,7 @@ def prove_split_provenance(
 
 
 def interrupt_pending_migration(
-    active,
+    *, active,
     capture_root,
     client,
     config,
@@ -483,7 +485,7 @@ def interrupt_pending_migration(
 
 
 def record_historical_package(
-    attempted_task_ids,
+    *, attempted_task_ids,
     brief,
     capture_root,
     client,
@@ -523,7 +525,7 @@ def record_historical_package(
 
 
 def finish_upgrade_recovery(
-    attempted_task_ids,
+    *, attempted_task_ids,
     brief,
     capture_root,
     client,
@@ -550,7 +552,8 @@ def finish_upgrade_recovery(
     waiter_directory,
 ):
     _prove_recovered_capacity(
-        brief, collect, delegate, dispatch, evidence, gate, lease_nonce, run_receipt, state, waiter_directory
+        brief=brief, collect=collect, delegate=delegate, dispatch=dispatch, evidence=evidence, gate=gate,
+        lease_nonce=lease_nonce, run_receipt=run_receipt, state=state, waiter_directory=waiter_directory
     )
     collect(historical, "upgrade-historical-after-removal")
     require(snapshot(historical_directory) == history, "upgrade recovery mutated historical task evidence")
@@ -568,17 +571,17 @@ def finish_upgrade_recovery(
         require(not (state / ".supervisor" / name).exists(), "recovery stranded " + name)
     assert_state_supervisor_pair(state, upgraded_libexec)
     evidence["pending_package_upgrade"] = run_pending_package_upgrade(
-        delegate,
-        client,
-        upgraded_libexec,
-        real_client,
-        real_daemon,
-        state,
-        config,
-        env,
-        receipts,
-        supervisor_cleanups,
-        attempted_task_ids,
+        delegate=delegate,
+        client=client,
+        libexec=upgraded_libexec,
+        real_client=real_client,
+        real_daemon=real_daemon,
+        state=state,
+        config=config,
+        env=env,
+        receipts=receipts,
+        supervisor_cleanups=supervisor_cleanups,
+        attempted_task_ids=attempted_task_ids,
         capture_root=capture_root,
     )
     collect(historical, "upgrade-history-after-retarget")
@@ -610,7 +613,7 @@ def await_pending_predecessor(
 
 
 def prepare_upgrade_history(
-    attempted_task_ids,
+    *, attempted_task_ids,
     brief,
     capture_root,
     client,
@@ -627,33 +630,33 @@ def prepare_upgrade_history(
     workspace,
 ):
     pair = prove_split_provenance(
-        attempted_task_ids,
-        brief,
-        capture_root,
-        client,
-        collect,
-        config,
-        delegate,
-        dispatch,
-        env,
-        old_delegate,
-        old_libexec,
-        state,
+        attempted_task_ids=attempted_task_ids,
+        brief=brief,
+        capture_root=capture_root,
+        client=client,
+        collect=collect,
+        config=config,
+        delegate=delegate,
+        dispatch=dispatch,
+        env=env,
+        old_delegate=old_delegate,
+        old_libexec=old_libexec,
+        state=state,
     )
     legacy_binding, historical, historical_directory, history = record_historical_package(
-        attempted_task_ids,
-        brief,
-        capture_root,
-        client,
-        collect,
-        config,
-        dispatch,
-        env,
-        old_delegate,
-        old_libexec,
-        receipts,
-        remove_old_package,
-        state,
-        workspace,
+        attempted_task_ids=attempted_task_ids,
+        brief=brief,
+        capture_root=capture_root,
+        client=client,
+        collect=collect,
+        config=config,
+        dispatch=dispatch,
+        env=env,
+        old_delegate=old_delegate,
+        old_libexec=old_libexec,
+        receipts=receipts,
+        remove_old_package=remove_old_package,
+        state=state,
+        workspace=workspace,
     )
     return pair, legacy_binding, historical, historical_directory, history

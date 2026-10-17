@@ -16,7 +16,6 @@ import shlex
 import shutil
 import socket
 import stat
-import subprocess
 import sys
 import tempfile
 import threading
@@ -155,7 +154,7 @@ from scripts.delegate_acceptance.private_cli.packaged_defaults import verify_pac
 from scripts.delegate_acceptance.private_cli.capacity_records import capacity_lease_specifications
 from scripts.delegate_acceptance.private_cli.capacity import verify_current_installation_upgrade
 from scripts.delegate_acceptance.private_cli.stop import default_stop_live_lease
-from scripts.delegate_acceptance.private_cli.stop import require_empty_fixture_waiters
+from scripts.delegate_acceptance.private_cli.leases import require_empty_fixture_waiters
 from scripts.delegate_acceptance.private_cli.stop import run_default_stop_acceptance
 from scripts.delegate_acceptance.private_cli.handoff_cleanup import prepare_external_supervisor_directories
 from scripts.delegate_acceptance.private_cli.handoff_cleanup import cleanup_external_handoff_cohorts

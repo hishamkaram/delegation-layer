@@ -138,7 +138,7 @@ def _workspace_operation_native_closure(
         directory, f"workspace operation {operation}"),
         f"workspace operation lifetime owner is still active: {operation}")
     closure = _validate_managed_lifetime(
-        directory, root, operation, "workspace", request_digest,
+        directory=directory, root=root, task=operation, owner_kind="workspace", owner_digest=request_digest,
         expected_deadline=deadline_text, window_deadline=deadline)
     wait = closure.get("worker_wait")
     termination = closure.get("termination")

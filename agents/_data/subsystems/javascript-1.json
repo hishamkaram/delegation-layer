@@ -43,7 +43,8 @@
     "layer": "pure",
     "imports": [
       "js:node:path",
-      "js:scripts/installer/catalog.mjs"
+      "js:scripts/installer/catalog.mjs",
+      "js:scripts/installer/paths.mjs"
     ]
   },
   {
@@ -83,7 +84,8 @@
     "owner": "installer",
     "layer": "pure",
     "imports": [
-      "js:node:path"
+      "js:node:path",
+      "js:scripts/installer/paths.mjs"
     ]
   },
   {
@@ -104,7 +106,8 @@
     "owner": "installer",
     "layer": "pure",
     "imports": [
-      "js:node:path"
+      "js:node:path",
+      "js:scripts/installer/paths.mjs"
     ]
   },
   {
@@ -149,7 +152,10 @@
       "js:node:path",
       "js:node:url",
       "js:scripts/install-cli.mjs",
-      "js:scripts/installer/arguments.mjs"
+      "js:scripts/installer/arguments.mjs",
+      "js:scripts/installer/catalog.mjs",
+      "js:scripts/installer/routing-rules.mjs",
+      "js:scripts/installer/selection.mjs"
     ]
   },
   {
@@ -168,6 +174,14 @@
       "js:scripts/installer/picker-state.mjs",
       "js:scripts/installer/routing-rules.mjs",
       "js:scripts/installer/terminal.mjs"
+    ]
+  },
+  {
+    "name": "js:scripts/installer/paths.mjs",
+    "owner": "installer",
+    "layer": "pure",
+    "imports": [
+      "js:node:path"
     ]
   }
 ]

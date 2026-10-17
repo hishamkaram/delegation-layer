@@ -30,7 +30,7 @@ PUEUE_PARENT = Path("/Users/Shared") if sys.platform == "darwin" else Path.home(
 
 
 def expected_codex_inspection_binding(
-        pueue: Path, config: Path, base: Path, config_digest: str,
+        *, pueue: Path, config: Path, base: Path, config_digest: str,
         runner: Path, workspace: Path, environment: dict[str, str],
         provider: Path, provider_digest: str,
         pueue_version: str) -> dict[str, object]:

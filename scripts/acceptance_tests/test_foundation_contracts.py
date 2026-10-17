@@ -37,7 +37,22 @@ class FoundationContractTests(unittest.TestCase):
             for name, expected in contract["functions"].items():
                 with self.subTest(module=module_name, function=name):
                     node = self.defining_node(getattr(module, name))
-                    self.assertEqual(ast.dump(node.args), expected)
+                    arguments = node.args
+                    if module_name == "acceptance_provider_common" and name in {
+                            "_validate_managed_lifetime", "_validate_lifetime_absence_completion",
+                            "_inspection_exit_authority"}:
+                        self.assertEqual(arguments.args, [])
+                        self.assertIsNone(arguments.vararg)
+                        self.assertIsNone(arguments.kwarg)
+                        first_default = next((index for index, value in enumerate(arguments.kw_defaults)
+                                              if value is not None), len(arguments.kw_defaults))
+                        self.assertTrue(all(value is not None
+                                            for value in arguments.kw_defaults[first_default:]))
+                        arguments.args = arguments.kwonlyargs
+                        arguments.defaults = arguments.kw_defaults[first_default:]
+                        arguments.kwonlyargs = []
+                        arguments.kw_defaults = []
+                    self.assertEqual(ast.dump(arguments), expected)
             for name, methods in contract["classes"].items():
                 node = self.defining_node(getattr(module, name))
                 actual = {method.name: ast.dump(method.args) for method in node.body

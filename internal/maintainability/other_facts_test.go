@@ -12,7 +12,7 @@ import (
 func collectorRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, name := range []string{"python_facts.py", "javascript-facts.mjs"} {
+	for _, name := range []string{"python_ast.py", "python_facts.py", "javascript-facts.mjs"} {
 		data, err := os.ReadFile(filepath.Join("..", "..", "scripts", "maintainability", name))
 		if err != nil {
 			t.Fatal(err)

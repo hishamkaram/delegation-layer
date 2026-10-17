@@ -46,7 +46,9 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
             lifecycle = []
             user_request_id = "u" * 32
 
-            gate, run_json, live_lease, closure, shutdown, shutdown_private = _stop_scenario_callbacks(calls, dispatches, gate_path, lease_cleanup_calls, lifecycle, root, self, status_reads, user_request_id)
+            gate, run_json, live_lease, closure, shutdown, shutdown_private = _stop_scenario_callbacks(calls=calls,
+                dispatches=dispatches, gate_path=gate_path, lease_cleanup_calls=lease_cleanup_calls,
+                lifecycle=lifecycle, root=root, self=self, status_reads=status_reads, user_request_id=user_request_id)
             with patch.object(private_cli.LockedReleaseGate, "acquire", return_value=gate), \
                     patch.object(stop_impl, "run_json", side_effect=run_json), \
                     patch.object(admission_impl, "run_json", side_effect=run_json), \
@@ -55,15 +57,19 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
                     patch.object(stop_impl, "await_managed_lifetime_closure", side_effect=closure), \
                     patch.object(stop_impl, "shutdown_private_supervisor", side_effect=shutdown_private):
                 evidence = private_cli.run_default_stop_acceptance(
-                    provider, provider, state, workspace, brief, gate_path, waiters,
-                    root / "pueue.yml", {}, responses, provider, "e" * 32,
-                    receipt, attempted, capture_root=self.capture_root,
+                    delegate=provider, client=provider, state=state, workspace=workspace, brief=brief,
+                    gate=gate_path, waiter_directory=waiters,
+                    config=root / "pueue.yml", env={}, response_directory=responses, provider_fixture=provider,
+                    lease_nonce="e" * 32,
+                    run_receipt=receipt, attempted_task_ids=attempted, capture_root=self.capture_root,
                 )
 
-            _assert_stop_expectations(attempted, calls, dispatches, evidence, lease_cleanup_calls, lifecycle, receipt, self, shutdown)
+            _assert_stop_expectations(attempted=attempted, calls=calls, dispatches=dispatches, evidence=evidence,
+                lease_cleanup_calls=lease_cleanup_calls, lifecycle=lifecycle, receipt=receipt, self=self,
+                shutdown=shutdown)
 
 
-def _stop_scenario_callbacks(calls, dispatches, gate_path, lease_cleanup_calls, lifecycle, root, self, status_reads, user_request_id):
+def _stop_scenario_callbacks(*, calls, dispatches, gate_path, lease_cleanup_calls, lifecycle, root, self, status_reads, user_request_id):
     class Gate:
         def __init__(self, path):
             self.path = path
@@ -171,7 +177,7 @@ def _stop_command_callback(calls, dispatches, lifecycle, self, status_reads, use
     return run_json
 
 
-def _assert_stop_expectations(attempted, calls, dispatches, evidence, lease_cleanup_calls, lifecycle, receipt, self, shutdown):
+def _assert_stop_expectations(*, attempted, calls, dispatches, evidence, lease_cleanup_calls, lifecycle, receipt, self, shutdown):
     self.assertEqual([command[2] for command in calls], [
         "dispatch", "cancel", "status", "status", "dispatch", "status", "status",
     ])

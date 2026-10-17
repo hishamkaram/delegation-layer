@@ -89,6 +89,7 @@
       "go:slices",
       "go:strconv",
       "go:strings",
+      "go:sync",
       "go:syscall",
       "go:time",
       "go:unicode/utf8"
@@ -133,6 +134,7 @@
       "go:internal/workspaces/testsupport",
       "go:io",
       "go:io/fs",
+      "go:log",
       "go:maps",
       "go:net",
       "go:os",
@@ -340,7 +342,10 @@
     "owner": "go:internal/maintainability",
     "layer": "test",
     "imports": [
+      "go:bytes",
+      "go:encoding/json",
       "go:errors",
+      "go:fmt",
       "go:internal/maintainability/policy",
       "go:os",
       "go:os/exec",

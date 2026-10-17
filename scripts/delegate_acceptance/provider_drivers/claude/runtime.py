@@ -109,7 +109,7 @@ def _native_environment(environment: dict[str, str]) -> list[str]:
     values = [key + "=" + environment[key] for key in keys if key in environment]
     return sorted(values)
 def expected_claude_inspection_binding(
-        pueue: Path, config: Path, base: Path, config_digest: str,
+        *, pueue: Path, config: Path, base: Path, config_digest: str,
         workspace: Path, executable: Path,
         runner: Path, environment: dict[str, str],
         pueue_version: str) -> dict[str, object]:

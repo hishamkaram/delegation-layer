@@ -25,7 +25,7 @@ class ToolEvidenceTests(unittest.TestCase):
     def test_tool_argument_and_provenance(self):
         workspace = Path('/workspace')
         nonce_file = workspace / 'nonce.txt'
-        baseline = [json.loads(line) for line in fresh_stream(nonce_file, workspace).splitlines()]
+        baseline = [json.loads(line) for line in fresh_stream(nonce_file=nonce_file, workspace=workspace).splitlines()]
         for mutation in ('nonce_aux', 'result_first', 'assistant_result', 'user_use', 'duplicate_use'):
             values = json.loads(json.dumps(baseline))
             if mutation.endswith('_aux'):

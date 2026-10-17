@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from scripts.delegate_acceptance.evidence.digests import sha
+from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.limits import MAX_CONTROL_BYTES
 from scripts.delegate_acceptance.evidence.validation import (
     AcceptanceFailure,
@@ -106,16 +106,9 @@ def _canonical_task_bytes(value: dict[str, object]) -> bytes:
         canonical["workspace"] = _canonical_workspace_binding(
             workspace, "inspection task workspace")
     try:
-        encoded = json.dumps(canonical, ensure_ascii=False, separators=(",", ":"),
-                             allow_nan=False).encode("utf-8")
-    except (TypeError, UnicodeEncodeError, ValueError) as error:
-        raise AcceptanceFailure("inspection task cannot be canonically encoded") from error
-    # encoding/json escapes HTML-sensitive bytes and the two line-separator
-    # runes even when it otherwise emits UTF-8 rather than \u escapes.
-    encoded = (encoded.replace(b"&", b"\\u0026").replace(b"<", b"\\u003c")
-               .replace(b">", b"\\u003e").replace("\u2028".encode(), b"\\u2028")
-               .replace("\u2029".encode(), b"\\u2029"))
-    return encoded + b"\n"
+        return canonical_go_json(canonical)
+    except AcceptanceFailure as error:
+        raise AcceptanceFailure("inspection task cannot be canonically encoded") from error.__cause__
 
 
 def _validate_task_record(value: object, root: str, task: str, label: str) -> str:

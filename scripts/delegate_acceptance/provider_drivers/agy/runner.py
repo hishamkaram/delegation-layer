@@ -165,13 +165,16 @@ class NativeRun:
         version = self.processes.entries[-1].output().decode().strip()
         require(version, "agy returned an empty version")
         self.provider_version = version
-        self.processes.run("pueue-version", pueue_command(self.pueue, self.pueue_config, "--version"), REPO_ROOT, timeout=15)
-        self.processes.run("pueued-version", [str(self.pueued), "-c", str(self.pueue_config), "--version"], REPO_ROOT, timeout=15)
+        self.processes.run("pueue-version", pueue_command(self.pueue, self.pueue_config, "--version"), REPO_ROOT,
+            timeout=15)
+        self.processes.run("pueued-version", [str(self.pueued), "-c", str(self.pueue_config), "--version"], REPO_ROOT,
+            timeout=15)
         pueue_version = self.processes.entries[-2].output()
         pueued_version = self.processes.entries[-1].output()
         self.pueue_version = observed_pueue_version(pueue_version, "pueue")
         self.pueued_version = observed_pueue_version(pueued_version, "pueued")
-        self.processes.run("isolation-probe", [str(self.probe), "isolate", str(self.pueue_config), str(self.pueue_base)], REPO_ROOT, timeout=30)
+        self.processes.run("isolation-probe", [str(self.probe), "isolate", str(self.pueue_config), str(self.pueue_base)], REPO_ROOT,
+            timeout=30)
         write_json(self.output / "binding.json", {
             "agy": str(self.agy), "agy_version": self.provider_version, "agy_sha256": self.provider_sha256,
             "pueue": str(self.pueue), "pueue_sha256": digest(self.pueue),
@@ -284,8 +287,8 @@ class NativeRun:
         validate_task_request(name, task, request, self.root_id)
         submit = self.read_record(task, "submit.json")
         supervisor = validate_submit_record(
-            name, task, submit, self.root_id, self.labels[task],
-            self.pueue_config, self.pueue_version, self.pueue)
+            name=name, task=task, submit=submit, root_id=self.root_id, label=self.labels[task],
+            pueue_config=self.pueue_config, pueue_version=self.pueue_version, pueue=self.pueue)
         start = self.read_record(task, "provider.start")
         started = self.read_record(task, "provider.started.json")
         validate_start_records(name, task, start, started, self.root_id)
@@ -300,8 +303,9 @@ class NativeRun:
         validate_policy_sources(name, policy, self.environment, profile_revision)
         provider_exit = self.read_record(task, "provider.exit")
         validate_provider_exit(
-            name, task, meta, started, provider_exit, pending_runtime, self.agy,
-            self.root_id, predicate, expected_verdict)
+            name=name, task=task, meta=meta, started=started, provider_exit=provider_exit, pending_runtime=pending_runtime,
+            agy=self.agy,
+            root_id=self.root_id, predicate=predicate, expected_verdict=expected_verdict)
         outcome = self.read_record(task, "outcome.json")
         payload_bytes = validate_outcome(
             name, task, expected_verdict, directory, outcome, provider_exit)
@@ -665,8 +669,9 @@ class NativeRun:
 
     def success_receipt(self) -> dict[str, object]:
         return success_receipt(
-            self.prepared, self.daemon_done, self.final_queue, self.task_numbers,
-            self.labels, self.task_results, self.nonprovider_tasks, self.pueue_base)
+            prepared=self.prepared, daemon_done=self.daemon_done, final_queue=self.final_queue, task_numbers=self.task_numbers,
+            labels=self.labels, task_results=self.task_results, nonprovider_tasks=self.nonprovider_tasks,
+            pueue_base=self.pueue_base)
 
     def run(self) -> dict[str, object]:
         self.setup()

@@ -195,7 +195,8 @@ def record_timeout_liveness(
         sleep_fn=time.sleep, monotonic_fn=time.monotonic) -> None:
     acceptance = owner
     acceptance.timeout_state.record_liveness(
-        task_id, acceptance.root_id, acceptance.ops, acceptance.output, timeout, sleep_fn, monotonic_fn)
+        task_id=task_id, root_id=acceptance.root_id, operations=acceptance.ops, output=acceptance.output,
+        timeout=timeout, sleep_fn=sleep_fn, monotonic_fn=monotonic_fn)
 
 def _timeout_liveness_closed(owner) -> bool:
     acceptance = owner

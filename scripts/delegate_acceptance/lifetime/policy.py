@@ -15,7 +15,7 @@ from scripts.delegate_acceptance.lifetime.identity import _lifetime_token
 
 
 def _validate_lifetime_intent(
-        created_floor: tuple[datetime, int] | None,
+        *, created_floor: tuple[datetime, int] | None,
         evidence: str,
         expected_deadline: str | None,
         intent: dict[str, object],
@@ -56,7 +56,7 @@ def _validate_lifetime_intent(
 
 
 def _validate_lifetime_registration(
-        assurance: str,
+        *, assurance: str,
         evidence: str,
         intent: dict[str, object],
         intent_created: tuple[datetime, int],
@@ -93,7 +93,7 @@ def _validate_lifetime_registration(
 
 
 def _validate_lifetime_wait(
-        assurance: str,
+        *, assurance: str,
         evidence: str,
         recovered: bool,
         registration_digest: str,
@@ -139,7 +139,7 @@ def _validate_lifetime_wait(
 
 
 def _validate_lifetime_termination(
-        evidence: str,
+        *, evidence: str,
         launches: list[dict[str, object]],
         recovered: bool,
         registration_created: tuple[datetime, int],

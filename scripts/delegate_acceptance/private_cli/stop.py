@@ -6,6 +6,7 @@ from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_STOP_T
 from scripts.delegate_acceptance.private_cli.configuration import DEFAULT_STOP_TASK_COUNT
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
+from scripts.delegate_acceptance.private_cli.leases import require_empty_fixture_waiters
 from pathlib import Path
 from scripts.delegate_acceptance.private_cli.admission import await_created_task_ended
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
@@ -56,14 +57,6 @@ def default_stop_live_lease(client, config, env, state, response, waiter_directo
         time.sleep(min(0.05, remaining))
 
 
-def require_empty_fixture_waiters(waiter_directory):
-    entries = tuple(Path(waiter_directory).iterdir())
-    if entries:
-        raise RuntimeError(
-            "fixture provider lease entries remained after canonical lifetime closure: " + str(len(entries))
-        )
-
-
 def run_default_stop_acceptance(
     delegate,
     client,
@@ -94,38 +87,39 @@ def run_default_stop_acceptance(
     run_receipt.add_details(default_stop=acceptance_evidence)
 
     dispatch_fixture, close_task = _default_stop_task_operations(
-        capture_root, delegate, env, receipts, run_receipt, state, waiting_brief, workspace
+        capture_root=capture_root, delegate=delegate, env=env, receipts=receipts, run_receipt=run_receipt,
+        state=state, waiting_brief=waiting_brief, workspace=workspace
     )
     try:
         _prove_default_user_stop(
-            attempted_task_ids,
-            capture_root,
-            client,
-            close_task,
-            config,
-            delegate,
-            dispatch_fixture,
-            env,
-            lease_nonce,
-            receipts,
-            run_receipt,
-            state,
-            task_evidence,
-            waiter_directory,
+            attempted_task_ids=attempted_task_ids,
+            capture_root=capture_root,
+            client=client,
+            close_task=close_task,
+            config=config,
+            delegate=delegate,
+            dispatch_fixture=dispatch_fixture,
+            env=env,
+            lease_nonce=lease_nonce,
+            receipts=receipts,
+            run_receipt=run_receipt,
+            state=state,
+            task_evidence=task_evidence,
+            waiter_directory=waiter_directory,
         )
         _prove_default_budget_stop(
-            attempted_task_ids,
-            capture_root,
-            client,
-            close_task,
-            config,
-            dispatch_fixture,
-            env,
-            lease_nonce,
-            run_receipt,
-            state,
-            task_evidence,
-            waiter_directory,
+            attempted_task_ids=attempted_task_ids,
+            capture_root=capture_root,
+            client=client,
+            close_task=close_task,
+            config=config,
+            dispatch_fixture=dispatch_fixture,
+            env=env,
+            lease_nonce=lease_nonce,
+            run_receipt=run_receipt,
+            state=state,
+            task_evidence=task_evidence,
+            waiter_directory=waiter_directory,
         )
         require_empty_fixture_waiters(waiter_directory)
         acceptance_evidence["cleanup"]["fixture_waiter_entries"] = 0
@@ -145,7 +139,7 @@ def run_default_stop_acceptance(
             release_gate.release()
 
 
-def _default_stop_task_operations(capture_root, delegate, env, receipts, run_receipt, state, waiting_brief, workspace):
+def _default_stop_task_operations(*, capture_root, delegate, env, receipts, run_receipt, state, waiting_brief, workspace):
     def dispatch_fixture(task_id, budget, receipt_name):
         response = run_json(
             delegate,
@@ -213,7 +207,7 @@ def _default_stop_task_operations(capture_root, delegate, env, receipts, run_rec
 
 
 def _prove_default_user_stop(
-    attempted_task_ids,
+    *, attempted_task_ids,
     capture_root,
     client,
     close_task,
@@ -288,7 +282,7 @@ def _prove_default_user_stop(
 
 
 def _prove_default_budget_stop(
-    attempted_task_ids,
+    *, attempted_task_ids,
     capture_root,
     client,
     close_task,

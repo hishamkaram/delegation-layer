@@ -45,6 +45,7 @@ func mergeFacts(language string, paths []string, facts, sources []policy.Source)
 			sources[index].Module = fact.Module
 			sources[index].Imports = fact.Imports
 			sources[index].Functions = fact.Functions
+			sources[index].Calls = fact.Calls
 			sources[index].Effects = fact.Effects
 			delete(byPath, fact.Path)
 		}

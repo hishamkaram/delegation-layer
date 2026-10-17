@@ -286,12 +286,12 @@ class AcceptanceOwnershipExceptionTests(unittest.TestCase):
         self.assertEqual(verifier.SHARED_COMMON, scripts / "acceptance_supervisor_common.py")
         self.assertEqual(
             verifier.DIRECT_FIXTURE_SUBPROCESS_FILES,
-            frozenset({scripts / "acceptance_private_cli.py",
-                       scripts / "delegate_acceptance" / "private_cli" / "capture.py"}))
+            frozenset({scripts / "delegate_acceptance" / "private_cli" / "capture.py"}))
 
     def test_only_exact_fixture_path_can_call_direct_popen(self):
         scripts = Path(verifier.__file__).resolve().parent
         paths = (
+            scripts / "delegate_acceptance" / "private_cli" / "capture.py",
             scripts / "acceptance_private_cli.py",
             scripts / "acceptance_private_cli_copy.py",
             scripts / "delegate_acceptance" / "acceptance_private_cli.py",
@@ -301,7 +301,7 @@ class AcceptanceOwnershipExceptionTests(unittest.TestCase):
             violations = verifier.find_violations(paths)
         self.assertEqual(
             {(item.path, item.kind) for item in violations},
-            {(paths[1], "direct-process-owner"), (paths[2], "direct-process-owner")})
+            {(path, "direct-process-owner") for path in paths[1:]})
 
     def test_fixture_exception_does_not_allow_directory_or_process_ownership(self):
         scripts = Path(verifier.__file__).resolve().parent
@@ -311,7 +311,7 @@ class AcceptanceOwnershipExceptionTests(unittest.TestCase):
             "subprocess.run(['rm', '-rf', root])\n"
             "class Processes:\n    pass\n")
         with patch.object(Path, "read_text", return_value=source):
-            violations = verifier.find_violations((scripts / "acceptance_private_cli.py",))
+            violations = verifier.find_violations((scripts / "delegate_acceptance" / "private_cli" / "capture.py",))
         self.assertEqual(
             {item.kind for item in violations},
             {"recursive-removal", "subprocess-removal", "duplicate-process-owner"})

@@ -228,20 +228,13 @@
     ]
   },
   {
-    "name": "py:test_acceptance_native",
-    "owner": "py:test_acceptance_native",
-    "layer": "test",
-    "imports": [
-      "py:acceptance_tests.native.support"
-    ]
-  },
-  {
     "name": "py:test_acceptance_non_git",
     "owner": "py:test_acceptance_non_git",
     "layer": "test",
     "imports": [
       "py:acceptance_native",
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.native.support",
       "py:delegate_acceptance.native.acceptance",
       "py:json",
       "py:native_acceptance_evidence",
@@ -250,7 +243,6 @@
       "py:subprocess",
       "py:sys",
       "py:tempfile",
-      "py:test_acceptance_native",
       "py:unittest",
       "py:unittest.mock"
     ]
@@ -571,6 +563,29 @@
       "py:tempfile",
       "py:unittest",
       "py:verify_skills"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.test_relocation_contract",
+    "owner": "py:acceptance_tests",
+    "layer": "test",
+    "imports": [
+      "py:collections",
+      "py:json",
+      "py:pathlib",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:test_acceptance_module_identity",
+    "owner": "py:acceptance_supervisor_common",
+    "layer": "test",
+    "imports": [
+      "py:pathlib",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:unittest"
     ]
   }
 ]

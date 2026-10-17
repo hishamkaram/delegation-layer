@@ -30,7 +30,7 @@ class FailureFinalizer(Protocol):
 
 
 def success_receipt(
-        prepared: Prepared, daemon_done: bool, final_queue: dict[str, object] | None,
+        *, prepared: Prepared, daemon_done: bool, final_queue: dict[str, object] | None,
         task_numbers: dict[str, int], labels: dict[str, str],
         task_results: dict[str, dict[str, object]],
         nonprovider_tasks: dict[str, dict[str, object]], pueue_base: Path | None) -> dict[str, object]:

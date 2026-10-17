@@ -105,8 +105,10 @@ def finalize_acceptance_artifacts(
         return False
 
     failures, raw_removed = _finalize_owned_entries(
-        entries, entry_identities, raw_process_captures_token, receipt,
-        remove_failed_process_captures, retained_entry_ids, success, timeout,
+        entries=entries, entry_identities=entry_identities, raw_process_captures_token=raw_process_captures_token,
+        receipt=receipt,
+        remove_failed_process_captures=remove_failed_process_captures, retained_entry_ids=retained_entry_ids,
+        success=success, timeout=timeout,
     )
     if raw_process_captures_token is not None and raw_removed:
         receipt["raw_process_captures"] = "removed"
@@ -162,7 +164,7 @@ def _finalization_authorities(
 
 
 def _finalize_owned_entries(
-        entries: tuple[OwnedDirectory, ...],
+        *, entries: tuple[OwnedDirectory, ...],
         entry_identities: dict[int, dict[str, object]],
         raw_process_captures_token: OwnedDirectory | None,
         receipt: dict[str, object],

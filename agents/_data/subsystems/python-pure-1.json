@@ -496,10 +496,10 @@
     "imports": [
       "py:__future__",
       "py:delegate_acceptance.evidence.digests",
+      "py:delegate_acceptance.evidence.encoding",
       "py:delegate_acceptance.evidence.limits",
       "py:delegate_acceptance.evidence.validation",
-      "py:delegate_acceptance.paths.policy",
-      "py:json"
+      "py:delegate_acceptance.paths.policy"
     ]
   },
   {

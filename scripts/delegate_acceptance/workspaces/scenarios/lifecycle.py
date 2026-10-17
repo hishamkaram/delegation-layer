@@ -51,7 +51,14 @@ def _run_first_success(context: WorkspaceContext) -> SuccessfulTaskEvidence:
     require(isinstance(subject, dict) and subject.get("id") == task["task_id"],
             "first task capture is bound to a different subject")
     return SuccessfulTaskEvidence(
-        task, status, workspace, capture, outcome, closure, session, capture_evidence,
+        task=task,
+        status=status,
+        workspace=workspace,
+        capture=capture,
+        outcome=outcome,
+        closure=closure,
+        session=session,
+        capture_evidence=capture_evidence,
     )
 
 

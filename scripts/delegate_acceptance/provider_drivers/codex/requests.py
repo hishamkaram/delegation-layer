@@ -34,7 +34,7 @@ def write_resume_brief(path: Path, nonce: bytes) -> Path:
     return path
 
 
-def dispatch_arguments(delegate: Path, state: Path, pueue_config: Path, runner: Path,
+def dispatch_arguments(*, delegate: Path, state: Path, pueue_config: Path, runner: Path,
                        task: str, brief: Path, workspace: Path, provider: str,
                        mode: str, predecessor: str | None = None) -> list[object]:
     """Build one canonical Codex dispatch argv and check prompt transport."""

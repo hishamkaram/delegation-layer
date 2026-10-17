@@ -23,7 +23,7 @@ class ExternalSupervisorControl:
 
     def __init__(
         self,
-        external_processes,
+        *, external_processes,
         client,
         env,
         external_config,

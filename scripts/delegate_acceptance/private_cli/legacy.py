@@ -32,7 +32,7 @@ from scripts.delegate_acceptance.private_cli.wrappers import wrapper_call_record
 
 
 def run_legacy_scenario(
-    inspection_runner_check,
+    *, inspection_runner_check,
     legacy_mode,
     lifetime,
     queued_runner_check,
@@ -52,15 +52,15 @@ def run_legacy_scenario(
         fixture, inspection_label, inspection_task_id, legacy_mode, lifetime, old_runner_path, state_runner_path
     )
     collect_legacy_workers(
-        fixture,
-        initial,
-        legacy_mode,
-        lifetime,
-        old_runner_path,
-        queued_label,
-        queued_task_id,
-        response_directory,
-        state_runner_path,
+        fixture=fixture,
+        initial=initial,
+        legacy_mode=legacy_mode,
+        lifetime=lifetime,
+        old_runner_path=old_runner_path,
+        queued_label=queued_label,
+        queued_task_id=queued_task_id,
+        response_directory=response_directory,
+        state_runner_path=state_runner_path,
     )
     complete_legacy_package_removal(fixture, initial, lifetime, response_directory)
     upgraded_task_id = dispatch_upgraded_task(fixture, initial, lifetime, response_directory, state_runner_path)
@@ -330,7 +330,7 @@ def validate_legacy_inspection(
 
 
 def collect_legacy_workers(
-    fixture,
+    *, fixture,
     initial,
     legacy_mode,
     lifetime,

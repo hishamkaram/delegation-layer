@@ -87,9 +87,7 @@ func validateModules(modules []policy.Module) error {
 		if module.Name == "" || module.Owner == "" || seen[module.Name] {
 			return fmt.Errorf("missing or duplicate subsystem identity: %s", module.Name)
 		}
-		switch module.Layer {
-		case "pure", "runtime", "application", "test", "tool":
-		default:
+		if !policy.KnownLayer(module.Layer) {
 			return fmt.Errorf("unknown layer for %s", module.Name)
 		}
 		seen[module.Name] = true

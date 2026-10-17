@@ -167,8 +167,9 @@ def _scan_managed_inspection_lifetime_closure(
             _validate_unsubmitted_inspection_records(directory, task)
             continue
         authority = _inspection_exit_authority(
-            directory, root, task, binding, digest(request_path), created,
-            request_deadline, deadline)
+            directory=directory, root=root, task=task, binding=binding, request_digest=digest(request_path),
+            request_created=created,
+            request_deadline=request_deadline, deadline=deadline)
         if authority["mode"] == "queue":
             # Historical and custom inspections retain their queue-owned
             # observation contract until a durable managed lifetime marker exists.

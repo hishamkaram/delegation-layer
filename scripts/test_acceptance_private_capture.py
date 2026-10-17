@@ -122,7 +122,7 @@ class PrivateCaptureTests(unittest.TestCase):
             return process
 
         timeout = 0.25
-        with patch.object(private_cli.subprocess, "Popen", side_effect=start_after_output):
+        with patch.object(capture.subprocess, "Popen", side_effect=start_after_output):
             with self.assertRaises(subprocess.TimeoutExpired) as raised:
                 private_cli.run_json(
                     sys.executable, self.environment, args, timeout=timeout,
@@ -210,7 +210,7 @@ class PrivateCaptureTests(unittest.TestCase):
                 self.returncode = -9
 
         process = FailingPollProcess()
-        with patch.object(private_cli.subprocess, "Popen", return_value=process):
+        with patch.object(capture.subprocess, "Popen", return_value=process):
             with self.assertRaisesRegex(OSError, "wait failed"):
                 private_cli.run_captured_command(
                     ["private-control"], self.environment, timeout=3,
@@ -246,7 +246,7 @@ class PrivateCaptureTests(unittest.TestCase):
         with patch.object(
                 capture, "_open_capture_writer",
                 side_effect=[CloseFailingWriter(), CloseFailingWriter()],
-        ), patch.object(private_cli.subprocess, "Popen", return_value=process):
+        ), patch.object(capture.subprocess, "Popen", return_value=process):
             with self.assertRaisesRegex(OSError, "capture writer close failed"):
                 private_cli.run_captured_command(
                     ["private-control"], self.environment, timeout=3,
@@ -285,7 +285,7 @@ class PrivateCaptureTests(unittest.TestCase):
 
         args = ["status", "--json"]
         process = TimedOutProcess([sys.executable, *args])
-        with patch.object(private_cli.subprocess, "Popen", return_value=process), \
+        with patch.object(capture.subprocess, "Popen", return_value=process), \
                 patch.object(
                     capture, "_read_capture",
                     side_effect=OSError("capture read failed"),
@@ -326,7 +326,7 @@ class PrivateCaptureTests(unittest.TestCase):
                 pass
 
         process = UnreapedProcess()
-        with patch.object(private_cli.subprocess, "Popen", return_value=process):
+        with patch.object(capture.subprocess, "Popen", return_value=process):
             with self.assertRaisesRegex(
                     RuntimeError, "cleanup failed.*retained capture files",
             ) as raised:
@@ -346,7 +346,7 @@ class PrivateCaptureTests(unittest.TestCase):
         original.rename(moved)
         original.mkdir(mode=0o700)
         try:
-            with patch.object(private_cli.subprocess, "Popen") as spawn:
+            with patch.object(capture.subprocess, "Popen") as spawn:
                 with self.assertRaisesRegex(RuntimeError, "owned directory was replaced"):
                     private_cli.run_captured_command(
                         ["private-control"], self.environment, timeout=3,

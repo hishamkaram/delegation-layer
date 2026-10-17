@@ -72,6 +72,26 @@ Dependencies point inward. Interfaces belong to their consumers. Plain values
 and pure rules can share a cohesive package in separate files; effectful
 implementations must not leak into a reusable pure contract.
 
+The registry gives every module one role and the gate checks its observed
+project imports against this direction, as well as the exact import allowlist:
+
+| Role | Allowed project dependency roles |
+| --- | --- |
+| `pure` | `pure` |
+| `runtime` | `pure`, `runtime` |
+| `application` | `pure`, `runtime`, `application` |
+| `tool` | `pure`, `runtime`, `application`, `tool` |
+| `test` | all five roles |
+
+An application composes runtime owners. Contributor tools may invoke that
+application; the application cannot depend on contributor tools or test
+fixtures. Acceptance-only Go binaries and their composition helpers have the
+`test` role. Acceptance command entrypoints have the `tool` role. A finite
+control adapter remains `runtime` when it only executes supplied control
+operations; an executable entry does not make it an orchestration owner.
+Classify the actual responsibility from source before changing a role. Do not
+relabel a real inversion to satisfy the table.
+
 Runtime implementations under a subsystem's `internal/` directory are sealed.
 Other subsystems use the runtime facade or the canonical pure contract, as
 registered for that consumer. Compatibility aliases refer to the same type and
@@ -96,16 +116,28 @@ budgets; their suffix is not a waiver from checking.
 The hard physical file limits are 800 lines for production code and scripts,
 1,000 for tests and handwritten fixtures, and 1,800 for documentation, including
 the Archify architecture and sequence authoring JSON under `diagrams/`. Other
-JSON remains subject to the code budget unless it is explicitly generated. Go's
-pinned `funlen` limit is 80, including tests; Python's AST declaration span is
-80. JavaScript has syntax, static dependency, file-size, packaging, and behavior
-checks; no regex function parser claims to measure its semantics. Generated
+JSON remains subject to the code budget unless it is explicitly generated. Every
+Go declaration is measured from parsed source, including build-excluded files,
+using the pinned `funlen` measurement and limit of 80, including tests. A test
+oracle verifies measurement parity with the pinned linter; the production audit
+does not depend on which files the host can build. Python's AST declaration
+span is 80. The Python call-site rule rejects eight or more positional
+arguments, including elements in literal starred tuples and lists. Name the
+arguments at their actual call site, including record construction; preserved
+declaration signatures do not need a waiver. Dynamic starred values are not
+resolved by this bounded static check. Keep newly extracted large helpers
+keyword-only. Use an immutable record only for an existing cohesive value,
+never as a holder for unrelated caller state.
+JavaScript has syntax, static dependency, finite lexical effect, file-size,
+packaging, and behavior checks; its collector does not prove semantic purity or
+measure function semantics with a regex parser. Generated
 outputs require an explicit generator entry and remain inventoried separately.
 
 Pure Go packages have exact import allowlists. They reject effectful imports,
 dot imports, `unsafe`, `go:linkname`, and explicit clock/effect references.
-References through import aliases are checked conservatively, including local
-shadowing; rename a shadowing identifier instead of weakening the check. Static
+Go import references use parser-bound local declarations to distinguish local
+shadows. Python and JavaScript alias observations remain conservative; their
+bounded collectors do not resolve every dynamic binding. Static
 checks prove their bounded rules, not semantic purity or lifecycle correctness.
 Those remain independent review and composed-test obligations.
 
@@ -164,15 +196,21 @@ authorized primitive; they must not decide which Delegate records are safe to
 reap or which successor a continuation should use. Reviewers must reject a
 second predicate that answers the same lifecycle question, even when it is
 located in a command-specific helper or test-only path.
-Acceptance harnesses use `acceptance_supervisor_common.Process` and `Processes`
+Acceptance harnesses use `scripts.delegate_acceptance.processes.operations.Process`
+and `Processes`
 for child ownership, waiting, and process receipts. Provider-specific stdin or
 bounded stdout behavior is supplied through their narrow options; a provider
 harness must not define another process class or registry. The ownership
 verifier enforces this boundary.
 
 Python acceptance implementations use the canonical `scripts.delegate_acceptance`
-namespace. Only executable entrypoints bootstrap the repository path; compatibility
-imports must resolve to the same class objects. After moving code, patch the name
+namespace. Executable entrypoints and exactly two supported flat import entrypoints,
+`acceptance_supervisor_common.py` and `acceptance_provider_common.py`, bootstrap
+the repository path from `__file__`. These import-only bridges own transport,
+not behavior: no class copies, module aliasing, business rules, or extra bootstrap
+wrapper. Flat-first and package-first imports outside the repository must share
+the defining canonical objects and keep repeated path setup idempotent.
+After moving code, patch the name
 looked up by its actual consumer, following Python's
 [mock namespace guidance](https://docs.python.org/3/library/unittest.mock.html#where-to-patch).
 Do not restore facade-global forwarding, dynamic loaders, or `__module__` rewrites

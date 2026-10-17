@@ -72,22 +72,23 @@ def verify_packaged_default_path(
         base, managed_state_roots, owner, provider_bin, run_receipt, sources, supervisor_cleanups
     )
     task_id, commands, pair, primary_metrics = _prove_packaged_bootstrap(
-        brief,
-        capture_root,
-        cleanup,
-        config,
-        default_state,
-        env,
-        package,
-        primary_client,
-        primary_config,
-        primary_env,
-        response_directory,
-        run_receipt,
-        workspace,
+        brief=brief,
+        capture_root=capture_root,
+        cleanup=cleanup,
+        config=config,
+        default_state=default_state,
+        env=env,
+        package=package,
+        primary_client=primary_client,
+        primary_config=primary_config,
+        primary_env=primary_env,
+        response_directory=response_directory,
+        run_receipt=run_receipt,
+        workspace=workspace,
     )
     observe_packaged_task(
-        capture_root, commands, default_state, env, package, response_directory, run_receipt, sources, task_id
+        capture_root=capture_root, commands=commands, default_state=default_state, env=env, package=package,
+        response_directory=response_directory, run_receipt=run_receipt, sources=sources, task_id=task_id
     )
     if run_receipt is not None:
         run_receipt.increment("collected_task_count")
@@ -110,7 +111,7 @@ def verify_packaged_default_path(
 
 
 def _prove_packaged_bootstrap(
-    brief,
+    *, brief,
     capture_root,
     cleanup,
     config,
@@ -225,7 +226,7 @@ def prepare_packaged_default(base, managed_state_roots, owner, provider_bin, run
 
 
 def observe_packaged_task(
-    capture_root, commands, default_state, env, package, response_directory, run_receipt, sources, task_id
+    *, capture_root, commands, default_state, env, package, response_directory, run_receipt, sources, task_id
 ):
     if run_receipt is not None:
         run_receipt.phase("packaged_default_observation")

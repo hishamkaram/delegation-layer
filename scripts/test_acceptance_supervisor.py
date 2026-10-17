@@ -114,7 +114,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
                     patch.object(Case, "_create_layout",
                                  side_effect=OSError("injected layout failure")):
                 with self.assertRaisesRegex(OSError, "layout failure"):
-                    Case(SimpleNamespace(), "constructor")
+                    Case(suite=SimpleNamespace(), case_id="constructor")
             self.assertFalse(base.exists())
 
     def test_hermetic_case_constructor_rolls_back_when_base_resolve_fails(self):
@@ -136,7 +136,7 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
             with patch.object(hermetic_case.tempfile, "mkdtemp", side_effect=allocate), \
                     patch.object(hermetic_case.Path, "resolve", new=fail_base_resolve):
                 with self.assertRaisesRegex(OSError, "base resolve failure"):
-                    Case(SimpleNamespace(), "resolve")
+                    Case(suite=SimpleNamespace(), case_id="resolve")
             self.assertFalse(base.exists())
 
     def test_failed_process_construction_rolls_back_its_owned_capture(self):
