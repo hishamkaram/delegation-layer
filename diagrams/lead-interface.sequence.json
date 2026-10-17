@@ -51,7 +51,7 @@
     "output": "diagrams/lead-interface.html",
     "repository": {
       "url": "git@github.com:hishamkaram/delegation-layer.git",
-      "revision": "fceaad1542cf228de7779ea611f601388a2c3915",
+      "revision": "98b22640e61b575267929aa79fff5cb610ff2e8d",
       "link_mode": "local-only"
     },
     "animation": "none"
@@ -91,8 +91,8 @@
       "sources": [
         {
           "path": "internal/app/runtime.go",
-          "line": 159,
-          "end_line": 233,
+          "line": 157,
+          "end_line": 231,
           "label": "CLI routing and presentation"
         },
         {
