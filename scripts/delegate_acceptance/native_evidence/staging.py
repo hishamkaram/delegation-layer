@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from collections.abc import Callable
 from ..directories.journal import acquire_exclusive_file_lock
 import json
 from ..directories.journal import release_exclusive_file_lock
@@ -16,8 +17,8 @@ from .contract import (
     MAX_RECEIPT_BYTES,
     RETENTION_CLEANUP_ROOT_NAME,
     SCHEMA_VERSION,
+    canonical_json,
     _digest_bytes,
-    expected_cases,
 )
 from .filesystem import (
     _bounded_children,
@@ -26,9 +27,9 @@ from .filesystem import (
     _inside,
     _read_json,
     _reject_path_components,
-    _write_atomic,
     _write_bytes_atomic,
 )
+from .stage_publication import StagePlan, publish_stage
 from .validation import (
     validate_aggregate_receipt,
 )
@@ -41,7 +42,9 @@ def stage_evidence(
         archive_receipt: Path | None = None,
         native_receipt: Path | None = None,
         expected_tag: str | None = None,
-        expected_source_revision: str | None = None) -> dict[str, object]:
+        expected_source_revision: str | None = None,
+        directory_identity: dict[str, object] | None = None,
+        expected_source_digests: dict[str, str] | None = None) -> dict[str, object]:
     """Stage evidence while retaining the source aggregate's ownership lease."""
     source_root = aggregate_path.absolute().parent
     lock_fd = acquire_exclusive_file_lock(
@@ -55,6 +58,8 @@ def stage_evidence(
             native_receipt=native_receipt,
             expected_tag=expected_tag,
             expected_source_revision=expected_source_revision,
+            directory_identity=directory_identity,
+            expected_source_digests=expected_source_digests,
         )
     finally:
         release_exclusive_file_lock(lock_fd)
@@ -62,7 +67,9 @@ def stage_evidence(
 
 def _stage_cases(
         aggregate_path: Path, output: Path, aggregate: dict[str, object],
-        files: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        files: list[dict[str, str]],
+        put: Callable[[Path, bytes, int], None] = _write_bytes_atomic,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     case_output = output / "case-receipts"
     cleanup_output = output / "cleanup-journals"
     case_receipts: list[dict[str, str]] = []
@@ -79,7 +86,7 @@ def _stage_cases(
         if digest != case.get("receipt_sha256"):
             raise EvidenceError("stage_case_digest_mismatch")
         name = f"{case['case_id']}.json"
-        _write_bytes_atomic(case_output / name, data)
+        put(case_output / name, data, MAX_RECEIPT_BYTES)
         case_entry = {"path": f"case-receipts/{name}", "sha256": digest}
         case_receipts.append(case_entry)
         files.append(case_entry)
@@ -100,8 +107,7 @@ def _stage_cases(
             if journal_digest != deletion["journal_sha256"]:
                 raise EvidenceError("stage_cleanup_journal_digest_mismatch")
             journal_name = f"{case['case_id']}.json"
-            cleanup_output.mkdir(mode=0o700, exist_ok=True)
-            _write_bytes_atomic(cleanup_output / journal_name, journal_data)
+            put(cleanup_output / journal_name, journal_data, MAX_RECEIPT_BYTES)
             journal_entry = {
                 "case_id": str(case["case_id"]),
                 "path": f"cleanup-journals/{journal_name}",
@@ -116,7 +122,8 @@ def _stage_cases(
 
 def _stage_retention(
         aggregate_path: Path, output: Path, aggregate: dict[str, object],
-        files: list[dict[str, str]]) -> dict[str, object]:
+        files: list[dict[str, str]],
+        put: Callable[[Path, bytes, int], None] = _write_bytes_atomic) -> dict[str, object]:
     retention = aggregate.get("retention")
     if (not isinstance(retention, dict) or not isinstance(retention.get("plan_path"), str)
             or not isinstance(retention.get("plan_sha256"), str)):
@@ -127,7 +134,7 @@ def _stage_retention(
     if retention_plan_digest != retention["plan_sha256"]:
         raise EvidenceError("stage_retention_plan_digest_mismatch")
     retention_plan_path = "retention/plan.json"
-    _write_bytes_atomic(output / retention_plan_path, retention_plan_data)
+    put(output / retention_plan_path, retention_plan_data, MAX_RECEIPT_BYTES)
     files.append({"path": retention_plan_path, "sha256": retention_plan_digest})
     retention_plan = json.loads(retention_plan_data)
     retention_journals: list[dict[str, str]] = []
@@ -148,7 +155,7 @@ def _stage_retention(
         if journal_digest != victim["journal_sha256"]:
             raise EvidenceError("stage_retention_journal_digest_mismatch")
         journal_path = f"retention/victim-{index:02d}.json"
-        _write_bytes_atomic(output / journal_path, journal_data)
+        put(output / journal_path, journal_data, MAX_RECEIPT_BYTES)
         journal_entry = {
             "path": journal_path,
             "sha256": journal_digest,
@@ -164,15 +171,16 @@ def _stage_retention(
 
 def _stage_release_receipts(
         output: Path, archive_receipt: Path | None, native_receipt: Path | None,
-        files: list[dict[str, str]]) -> list[dict[str, str]]:
+        files: list[dict[str, str]],
+        put: Callable[[Path, bytes, int], None] = _write_bytes_atomic) -> list[dict[str, str]]:
     release_cleanup_journals: list[dict[str, str]] = []
     for source, name in ((archive_receipt, "archive-receipt.json"),
                          (native_receipt, "native-acceptance-receipt.json")):
         if source is None:
             continue
         source = source.absolute()
-        data = _bounded_file_bytes(source, MAX_RECEIPT_BYTES)
-        _write_bytes_atomic(output / name, data)
+        data = _bounded_file_bytes(source, MAX_AGGREGATE_BYTES)
+        put(output / name, data, MAX_AGGREGATE_BYTES)
         files.append({"path": name, "sha256": _digest_bytes(data)})
         try:
             release_receipt = json.loads(data)
@@ -197,11 +205,9 @@ def _stage_release_receipts(
             journal_digest = _digest_bytes(journal_data)
             if journal_digest != expected_digest:
                 raise EvidenceError("stage_release_cleanup_journal_digest_mismatch")
-            release_cleanup_output = output / "release-cleanup"
-            release_cleanup_output.mkdir(mode=0o700, exist_ok=True)
             journal_name = name.removesuffix(".json") + "-cleanup.json"
             journal_path = f"release-cleanup/{journal_name}"
-            _write_bytes_atomic(output / journal_path, journal_data)
+            put(output / journal_path, journal_data, MAX_RECEIPT_BYTES)
             journal_entry = {
                 "receipt": name,
                 "path": journal_path,
@@ -233,7 +239,8 @@ def _verify_staged_manifest(output: Path, files: list[dict[str, str]]) -> None:
             or manifest_value.get("files") != files):
         raise EvidenceError("stage_manifest_invalid")
     for item in files:
-        limit = MAX_AGGREGATE_BYTES if item["path"] == AGGREGATE_RECEIPT_NAME else MAX_RECEIPT_BYTES
+        aggregate_names = {AGGREGATE_RECEIPT_NAME, "archive-receipt.json", "native-acceptance-receipt.json"}
+        limit = MAX_AGGREGATE_BYTES if item["path"] in aggregate_names else MAX_RECEIPT_BYTES
         if _digest_file(output / item["path"], limit) != item["sha256"]:
             raise EvidenceError("stage_manifest_digest_mismatch")
 
@@ -245,7 +252,9 @@ def _stage_evidence_locked(
         archive_receipt: Path | None = None,
         native_receipt: Path | None = None,
         expected_tag: str | None = None,
-        expected_source_revision: str | None = None) -> dict[str, object]:
+        expected_source_revision: str | None = None,
+        directory_identity: dict[str, object] | None = None,
+        expected_source_digests: dict[str, str] | None = None) -> dict[str, object]:
     aggregate_path = aggregate_path.absolute()
     output = output.absolute()
     _reject_path_components(aggregate_path)
@@ -260,31 +269,33 @@ def _stage_evidence_locked(
         expected_tag=expected_tag,
         expected_source_revision=expected_source_revision,
     )
-    if output.exists() or output.is_symlink():
-        if output.is_symlink() or not output.is_dir():
-            raise EvidenceError("stage_output_invalid")
-        try:
-            if _bounded_children(output):
-                raise EvidenceError("stage_output_not_empty")
-        except EvidenceError:
-            raise
-        except OSError as error:
-            raise EvidenceError("stage_output_unreadable") from error
-    else:
-        output.mkdir(mode=0o700, parents=True)
-    case_output = output / "case-receipts"
-    case_output.mkdir(mode=0o700)
-    retention_output = output / "retention"
-    retention_output.mkdir(mode=0o700)
-    _write_bytes_atomic(output / AGGREGATE_RECEIPT_NAME, _bounded_file_bytes(
+    plan = StagePlan(output)
+    manifest, files = _build_stage_plan(aggregate_path, aggregate, aggregate_digest,
+                                       archive_receipt, native_receipt, plan)
+    _check_source_digests(plan, expected_source_digests)
+    publish_stage(plan, directory_identity)
+    _verify_staged_manifest(output, files)
+    return manifest
+
+
+def _build_stage_plan(
+        aggregate_path: Path, aggregate: dict[str, object], aggregate_digest: str,
+        archive_receipt: Path | None, native_receipt: Path | None,
+        plan: StagePlan) -> tuple[dict[str, object], list[dict[str, str]]]:
+    output = plan.output
+    plan.put(output / AGGREGATE_RECEIPT_NAME, _bounded_file_bytes(
         aggregate_path, MAX_AGGREGATE_BYTES,
     ), MAX_AGGREGATE_BYTES)
     files: list[dict[str, str]] = [{"path": AGGREGATE_RECEIPT_NAME, "sha256": aggregate_digest}]
-    case_receipts, cleanup_journals = _stage_cases(aggregate_path, output, aggregate, files)
-    retention = _stage_retention(aggregate_path, output, aggregate, files)
+    case_receipts, cleanup_journals = _stage_cases(aggregate_path, output, aggregate, files, plan.put)
+    retention = _stage_retention(aggregate_path, output, aggregate, files, plan.put)
     release_cleanup_journals = _stage_release_receipts(
-        output, archive_receipt, native_receipt, files,
+        output, archive_receipt, native_receipt, files, plan.put,
     )
+    planned_files = [{"path": item.name, "sha256": _digest_bytes(item.data)}
+                     for item in plan.files()]
+    if files != planned_files:
+        raise EvidenceError("stage_manifest_plan_mismatch")
     manifest: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "kind": "native-acceptance-sanitized-evidence",
@@ -295,9 +306,19 @@ def _stage_evidence_locked(
         "retention": retention,
         "release_cleanup_journals": release_cleanup_journals,
         "file_count": len(files),
-        "files": files,
+        "files": planned_files,
         "credentials_in_receipt": False,
     }
-    _write_atomic(output / "manifest.json", manifest)
-    _verify_staged_manifest(output, files)
-    return manifest
+    plan.put(output / "manifest.json", canonical_json(manifest), MAX_RECEIPT_BYTES)
+    return manifest, files
+
+
+def _check_source_digests(plan: StagePlan, expected: dict[str, str] | None) -> None:
+    if expected is None:
+        return
+    names = {AGGREGATE_RECEIPT_NAME, "archive-receipt.json", "native-acceptance-receipt.json"}
+    if set(expected) != names:
+        raise EvidenceError("stage_source_digest_set_invalid")
+    observed = {item.name: _digest_bytes(item.data) for item in plan.files() if item.name in names}
+    if observed != expected:
+        raise EvidenceError("stage_source_digest_changed")

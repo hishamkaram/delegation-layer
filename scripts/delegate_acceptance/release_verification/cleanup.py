@@ -13,7 +13,7 @@ from ..directories.journal import cleanup_journal_digest
 from ..directories.journal import prepare_directory_cleanup
 from ..directories.journal import read_directory_cleanup
 from ..directories.journal import resume_directory_cleanup
-from .contract import (MAX_RECEIPT, VerificationError, _release_cleanup_authorization, _release_cleanup_transaction, set_failure)
+from .contract import (MAX_RELEASE_RECEIPT_BYTES, VerificationError, _release_cleanup_authorization, _release_cleanup_transaction, set_failure)
 from .filesystem import _bounded_file_bytes
 
 
@@ -92,7 +92,7 @@ def _replay_prepared_cleanup(
     if path.is_symlink():
         raise VerificationError("release_existing_receipt_invalid", "receipt-replay")
     try:
-        raw = _bounded_file_bytes(path, MAX_RECEIPT, "release_cleanup_journal_invalid")
+        raw = _bounded_file_bytes(path, MAX_RELEASE_RECEIPT_BYTES, "release_cleanup_journal_invalid")
         receipt = json.loads(raw)
     except (VerificationError, UnicodeError, json.JSONDecodeError, RecursionError) as error:
         raise VerificationError("release_existing_receipt_invalid", "receipt-replay") from error
@@ -175,7 +175,7 @@ def _finish_removed_gate(
         digest = cleanup_journal_digest(journal)
         if record.get("state") != "complete" or record.get("target") != target:
             raise RuntimeError("release cleanup did not reach its committed state")
-    except (OSError, RuntimeError, ValueError) as caught:
+    except (OSError, RuntimeError, ValueError):
         receipt["cleanup"]["status"] = "incomplete"
         receipt["cleanup"]["errors"].append("release_cleanup_failed")
         set_failure(receipt, "release_cleanup_failed", "cleanup")

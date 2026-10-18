@@ -12,7 +12,8 @@ import tempfile
 from ..evidence.bounded_files import BoundedReadError
 from ..directories.journal import acquire_exclusive_file_lock
 from ..evidence.bounded_files import read_bounded_regular_file
-from .contract import (MAX_RECEIPT, MAX_TREE_ENTRIES, VerificationError)
+from .contract import MAX_RECEIPT as MAX_RECEIPT
+from .contract import (MAX_RELEASE_RECEIPT_BYTES, MAX_TREE_ENTRIES, VerificationError)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -74,9 +75,9 @@ def _bounded_children(path: Path, limit: int = MAX_TREE_ENTRIES) -> list[Path]:
     return children
 
 
-def write_receipt(path: Path, receipt: dict) -> None:
+def write_receipt(path: Path, receipt: dict, *, max_bytes: int = MAX_RELEASE_RECEIPT_BYTES) -> None:
     data = (json.dumps(receipt, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode()
-    if len(data) > MAX_RECEIPT:
+    if len(data) > max_bytes:
         raise VerificationError("receipt_too_large", "write-receipt")
     _reject_parent_components(path, "unsafe_receipt_path")
     _reject_symlink_components(path, "unsafe_receipt_path")
@@ -105,9 +106,9 @@ def _acquire_receipt_lock(path: Path) -> int:
     return acquire_exclusive_file_lock(path.with_name("." + path.name + ".lock"))
 
 
-def read_receipt(path: Path) -> tuple[dict, str]:
+def read_receipt(path: Path, *, max_bytes: int = MAX_RELEASE_RECEIPT_BYTES) -> tuple[dict, str]:
     try:
-        data = _bounded_file_bytes(path, MAX_RECEIPT, "archive_receipt_invalid")
+        data = _bounded_file_bytes(path, max_bytes, "archive_receipt_invalid")
         value = json.loads(data)
     except VerificationError as error:
         code = "archive_receipt_missing_or_invalid" if not path.exists() else "archive_receipt_invalid"

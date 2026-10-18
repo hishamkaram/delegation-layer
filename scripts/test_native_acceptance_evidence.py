@@ -20,7 +20,9 @@ from scripts import acceptance_supervisor_common as common
 from scripts import native_acceptance_evidence as evidence
 from scripts.delegate_acceptance.directories import journal as cleanup_journal
 from scripts.delegate_acceptance.native_evidence import cases as case_operations
+from scripts.delegate_acceptance.native_evidence import contract as evidence_contract
 from scripts.delegate_acceptance.native_evidence import retention as retention_operations
+from scripts.delegate_acceptance.native_evidence import validation as evidence_validation
 
 
 class NativeAcceptanceEvidenceTests(unittest.TestCase):
@@ -618,6 +620,34 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
         compact = root / evidence.COMPACT_RECEIPT_ROOT_NAME / f"{evidence.EXPECTED_CASES[0].case_id}.json"
         self.assertNotIn("provider secret", compact.read_text(encoding="utf-8"))
         self.assertEqual(value["unresolved_case_count"], 1)
+        case = dict(value["cases"][0])
+        proof = evidence_contract._validate_case_proof_identity(case, json.loads(compact.read_bytes()))
+        sessions = evidence_contract._validate_case_sessions(proof)
+        binaries = evidence_contract._validate_case_binaries(case, proof)
+        evidence_contract._validate_case_completion(case, proof, sessions, binaries)
+        case["evidence_status"] = "RESOLVED"
+        with self.assertRaisesRegex(evidence.EvidenceError, "aggregate_failure_proof_scope_invalid"):
+            evidence_contract._validate_case_completion(case, proof, sessions, binaries)
+
+    def test_unresolved_retention_rejects_contradictory_terminal_facts(self):
+        root = self.root / "native-retention-facts"
+        self.build(root=root, status="PASS", failed_index=0)
+        compact = root / evidence.COMPACT_RECEIPT_ROOT_NAME / f"{evidence.EXPECTED_CASES[0].case_id}.json"
+        original = compact.read_bytes()
+        evidence_validation._validate_case_cleanup(root, json.loads(original))
+        changes = (("terminal_state", "unknown"), ("terminal_state", "published-before-cleanup"),
+                   ("terminal_state", "published-after-cleanup"), ("raw_deleted", True),
+                   ("journal_path", ""), ("journal_sha256", ""), ("authorization_sha256", ""))
+        for field, value in changes:
+            with self.subTest(field=field, value=value):
+                changed = json.loads(original)
+                target = changed if field == "terminal_state" else changed[
+                    "cleanup" if field == "raw_deleted" else "raw_deletion"]
+                target[field] = value
+                with self.assertRaisesRegex(evidence.EvidenceError,
+                                            "aggregate_case_cleanup_identity_invalid"):
+                    evidence_validation._validate_case_cleanup(root, changed)
+        self.assertEqual(compact.read_bytes(), original)
 
     def test_blocked_cleanup_retention_preserves_raw_evidence(self):
         root = self.root / "native-aggregate-blocked-raw"

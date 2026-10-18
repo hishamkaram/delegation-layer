@@ -66,7 +66,7 @@ func TestLinuxProcessScopeReapsAdoptedZombie(t *testing.T) {
 	if err = cmd.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	waitForZombie(t, childPID)
+	waitForLinuxWaitableZombie(t, childPID)
 	empty, err := scope.Empty([]LaunchRef{rootRef})
 	if err != nil {
 		t.Fatal(err)
@@ -411,6 +411,67 @@ func waitForZombie(t *testing.T, pid int) {
 			t.Fatal("child did not become a zombie before Wait")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitForLinuxWaitableZombie(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var info unix.Siginfo
+		if err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOHANG|unix.WNOWAIT, nil); err != nil {
+			t.Fatalf("observe waitable adopted child %d: %v", pid, err)
+		}
+		if info.Signo == int32(unix.SIGCHLD) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("adopted child did not become waitable before scope reaping")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestLinuxProcessStatThreadGroupLiveness(t *testing.T) {
+	tests := []struct {
+		name    string
+		state   string
+		threads string
+		zombie  bool
+		invalid bool
+	}{
+		{name: "released zombie", state: "Z", threads: "0", zombie: true},
+		{name: "waitable zombie", state: "Z", threads: "1", zombie: true},
+		{name: "live surviving thread", state: "Z", threads: "2"},
+		{name: "live leader", state: "S", threads: "1"},
+		{name: "negative count", state: "Z", threads: "-1", invalid: true},
+		{name: "noncanonical count", state: "Z", threads: "02", invalid: true},
+		{name: "invalid count", state: "S", threads: "bad", invalid: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fields := make([]string, 20)
+			for i := range fields {
+				fields[i] = "0"
+			}
+			fields[0], fields[1], fields[2], fields[3] = test.state, "41", "42", "43"
+			fields[17], fields[19] = test.threads, "12345"
+			data := []byte("44 (worker) " + strings.Join(fields, " "))
+			record, err := parseLinuxProcessScopeStat(data)
+			if (err != nil) != test.invalid {
+				t.Fatalf("parse error = %v, want invalid %t", err, test.invalid)
+			}
+			if test.invalid {
+				return
+			}
+			if record.zombie != test.zombie || record.snapshot.zombie != test.zombie {
+				t.Fatalf("group zombie verdict = %#v, want %t", record, test.zombie)
+			}
+			present, token, err := parseLinuxProcessStat(data)
+			if err != nil || present == test.zombie || (present && token != "linux:12345") {
+				t.Fatalf("identity present=%t token=%q err=%v", present, token, err)
+			}
+		})
 	}
 }
 

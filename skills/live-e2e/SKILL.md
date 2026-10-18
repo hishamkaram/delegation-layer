@@ -116,6 +116,13 @@ and observational replay. Do not require outside-workspace denial from a mode
 that delegates its access policy to the provider. Keep historical denial
 fixtures as tests of their original contracts.
 
+For release acceptance, use the local maintainer entrypoint in
+[release promotion](../../docs/contributing.md#release-promotion). Keep provider
+credentials on the authenticated host; submit only the versioned public proof
+for hosted validation. Submission recovery never reruns paid native cases.
+Record maintainer-attested native execution and hosted proof validation as
+separate claims, and retain any visibility or GitHub-access prerequisite block.
+
 ## Deliverables
 
 - the contract's [handoff evidence

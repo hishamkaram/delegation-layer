@@ -544,7 +544,8 @@ def _validate_bounded_command_bounds(timeout: float, max_output: int) -> float:
 
 def run_bounded_command(
         argv: list[str], environment: dict[str, str], *, max_output: int,
-        capture: bool = False, timeout: float = 30) -> BoundedCommandResult:
+        capture: bool = False, timeout: float = 30,
+        cwd: Path | None = None) -> BoundedCommandResult:
     """Own one finite direct control child through capture, failure cleanup and Wait.
 
     This operation alone may terminate its direct release-control child. The
@@ -555,7 +556,7 @@ def run_bounded_command(
     timeout = _validate_bounded_command_bounds(timeout, max_output)
     try:
         process = subprocess.Popen(
-            argv, env=environment, stdin=subprocess.DEVNULL,
+            argv, env=environment, cwd=cwd, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

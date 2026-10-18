@@ -21,6 +21,7 @@ if __package__ in {None, ""}:
 from scripts import verify_release_archive as verifier
 from scripts import native_acceptance_evidence as evidence
 from scripts.delegate_acceptance.release_verification import filesystem as receipt_files
+from scripts.delegate_acceptance.release_verification.contract import MAX_RELEASE_RECEIPT_BYTES
 from scripts.delegate_acceptance.directories import journal as cleanup_module
 
 
@@ -882,11 +883,12 @@ esac
                          {case.case_id for case in evidence.EXPECTED_CASES})
         self.assertNotIn("case_results", receipt["acceptance"])
         self.assertEqual(verifier.MAX_RECEIPT, 32 * 1024)
-        self.assertLessEqual(receipt_path.stat().st_size, verifier.MAX_RECEIPT)
-        with self.assertRaisesRegex(verifier.VerificationError, "receipt_too_large"):
-            receipt_files.write_receipt(self.root / "oversized.json",
-                                        {"padding": "x" * verifier.MAX_RECEIPT})
-        self.assertFalse((self.root / "oversized.json").exists())
+        self.assertLessEqual(receipt_path.stat().st_size, MAX_RELEASE_RECEIPT_BYTES)
+        for bound in (MAX_RELEASE_RECEIPT_BYTES, verifier.MAX_RECEIPT):
+            path = self.root / f"oversized-{bound}.json"
+            with self.assertRaisesRegex(verifier.VerificationError, "receipt_too_large"):
+                receipt_files.write_receipt(path, {"padding": "x" * bound}, max_bytes=bound)
+            self.assertFalse(path.exists())
 
     def test_prepared_legacy_duplicate_case_proof_replays_without_rewriting_it(self):
         # Synthetic legacy receipt: exercise the actual cleanup store and replay,

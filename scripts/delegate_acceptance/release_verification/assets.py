@@ -84,12 +84,23 @@ def resolve_release_identity(repo: str, tag: str, receipt: dict, env: dict[str, 
     return {"repository": repo, "tag": tag, "ref": ref, "commit_sha": object_sha}
 
 
-def gh_environment() -> dict[str, str]:
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise VerificationError("github_auth_unavailable", "github-auth")
+GITHUB_AUTH_MODES = ("environment", "local-config")
+
+
+def gh_environment(*, auth_mode: str = "environment") -> dict[str, str]:
+    """Return the gh child environment; local-config never reads or forwards a token."""
     env = os.environ.copy()
-    env.update({"GH_TOKEN": token, "GH_PROMPT_DISABLED": "1"})
+    if auth_mode == "environment":
+        token = env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")
+        if not token:
+            raise VerificationError("github_auth_unavailable", "github-auth")
+        env.update({"GH_TOKEN": token, "GH_PROMPT_DISABLED": "1"})
+        return env
+    if auth_mode != "local-config":
+        raise VerificationError("github_auth_mode_invalid", "github-auth")
+    for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+        env.pop(name, None)
+    env["GH_PROMPT_DISABLED"] = "1"
     return env
 
 
@@ -189,7 +200,8 @@ def inspect_binaries(directory: Path, receipt: dict) -> dict[str, Path]:
 
 
 def exercise_default_path(paths: dict[str, Path], directory: Path, receipt: dict,
-                          package_version: str, info: dict[str, str], home: Path) -> None:
+                          package_version: str, info: dict[str, str], home: Path, *,
+                          cwd: Path | None = None) -> None:
     config = home / ".config"
     config.mkdir()
     if info["os"] == "Darwin":
@@ -202,26 +214,28 @@ def exercise_default_path(paths: dict[str, Path], directory: Path, receipt: dict
         if found is None or Path(found).resolve() != paths[name]:
             raise VerificationError("binary_path_mismatch", f"resolve-{name}")
 
-    actual = binary_version(command(receipt, "delegate-version", ["delegate", "version"], env, capture=True), "delegate")
+    actual = binary_version(command(receipt, "delegate-version", ["delegate", "version"], env,
+                                    capture=True, cwd=cwd), "delegate")
     receipt["delegate_build_identity"] = {"version": actual}
     if actual != package_version:
         raise VerificationError("delegate_version_mismatch", "verify-delegate-version")
     for name in ("pueue", "pueued"):
         receipt["binaries"][name]["version"] = binary_version(
-            command(receipt, f"{name}-version", [name, "--version"], env, capture=True), name
+            command(receipt, f"{name}-version", [name, "--version"], env, capture=True, cwd=cwd), name
         )
     for label, argv in (
         ("delegate-providers", ["delegate", "providers", "--json"]),
         ("delegate-capabilities", ["delegate", "capabilities", "--provider", "pi:json", "--json"]),
     ):
-        command(receipt, label, argv, env)
+        command(receipt, label, argv, env, cwd=cwd)
 
     base = home / "Library" / "Application Support" if info["os"] == "Darwin" else config
     state = base / "delegation-layer"
     before = "present" if state.exists() else "absent"
     argv = ["delegate", "supervisor", "status", "--json"]
     try:
-        status = json.loads(command(receipt, "delegate-default-supervisor-status", argv, env, capture=True))
+        status = json.loads(command(receipt, "delegate-default-supervisor-status", argv, env,
+                                    capture=True, cwd=cwd))
         observed = status["supervisor_control"]["state"]
     except (UnicodeError, json.JSONDecodeError, KeyError, TypeError):
         raise VerificationError("default_path_observation_invalid", "observe-default-state") from None

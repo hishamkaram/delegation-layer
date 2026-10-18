@@ -22,6 +22,18 @@ _DIRECTORY_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os
 _DIRECTORY_OPEN_FLAGS |= getattr(os, "O_NOFOLLOW", 0)
 
 
+DIRECTORY_CREATION_PREFIX = ".delegate-create-"
+_DIRECTORY_CREATION_NONCE_BYTES = 16
+
+
+def is_creation_temporary_name(name: str) -> bool:
+    if not name.startswith(DIRECTORY_CREATION_PREFIX):
+        return False
+    nonce = name[len(DIRECTORY_CREATION_PREFIX):]
+    return len(nonce) == _DIRECTORY_CREATION_NONCE_BYTES * 2 and all(
+        char in "0123456789abcdef" for char in nonce)
+
+
 def _require_fd_cleanup_support():
     required = (os.open, os.stat, os.unlink, os.rmdir, os.rename, os.mkdir)
     if not all(operation in os.supports_dir_fd for operation in required):
@@ -173,7 +185,7 @@ def _create_one_directory(label, directory, parent, mode):
     parent = Path(parent)
     name = _directory_name(directory, parent)
     parent_fd, parent_identity = _open_parent_directory(parent)
-    staging_name = ".delegate-create-" + secrets.token_hex(16)
+    staging_name = DIRECTORY_CREATION_PREFIX + secrets.token_hex(_DIRECTORY_CREATION_NONCE_BYTES)
     staging_fd = -1
     staging_identity = None
     published = False
@@ -214,6 +226,29 @@ def _create_one_directory(label, directory, parent, mode):
                 pass
         _close_parent_descriptor(parent_fd)
         raise
+
+
+def discard_creation_temporary(parent: OwnedDirectory, name: str) -> None:
+    """Remove only an empty creator temporary under the caller's owned namespace."""
+    require(is_creation_temporary_name(name), "directory creation temporary name is invalid")
+    parent.assert_live()
+    descriptor = os.dup(parent.directory_fd)
+    temporary = None
+    try:
+        temporary = _capture_created_directory(
+            "directory creation temporary", parent.directory / name, parent.directory,
+            descriptor, parent.identity,
+        )
+        descriptor = -1
+        parent.assert_live()
+        temporary.assert_live()
+        # rmdir refuses populated directories atomically; this never recurses.
+        os.rmdir(name, dir_fd=parent.directory_fd)
+        os.fsync(parent.directory_fd)
+    finally:
+        if temporary is not None:
+            temporary.consume()
+        _close_parent_descriptor(descriptor)
 
 
 def _validate_entry_parent(token):

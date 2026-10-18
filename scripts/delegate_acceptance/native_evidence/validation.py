@@ -6,6 +6,7 @@ from pathlib import Path
 from ..directories.journal import cleanup_journal_digest
 from ..directories.journal import read_directory_cleanup
 from .contract import _validate_aggregate_result, _validate_aggregate_evidence, _validate_case_fields, _validate_case_proof_identity, _validate_case_sessions, _validate_case_binaries, _validate_case_completion, AGGREGATE_KIND, CASE_ROOT_NAME, COMPACT_RECEIPT_ROOT_NAME, EXPECTED_CASES, EvidenceError, HEX_DIGEST, MAX_AGGREGATE_BYTES, MAX_RECEIPT_BYTES, MAX_RETENTION_COUNT, RETENTION_CLEANUP_ROOT_NAME, SCHEMA_VERSION, _case_cleanup_authorization, _digest_bytes, _empty_summary, _validate_summary
+from .contract import _case_cleanup_journal_present, _validate_case_retention
 from .filesystem import (
     _digest_file,
     _identity_matches,
@@ -41,9 +42,16 @@ def _validate_case_receipt(root: Path, case: dict[str, object]) -> None:
 
 def _validate_case_cleanup(root: Path, value: dict[str, object]) -> None:
     identity = value.get("creation_identity")
+    cleanup, deletion = value.get("cleanup"), value.get("raw_deletion")
+    if not isinstance(cleanup, dict) or not isinstance(deletion, dict):
+        raise EvidenceError("aggregate_case_cleanup_identity_invalid")
+    try:
+        _validate_case_retention(value.get("evidence_status"), value.get("terminal_state"),
+                                 cleanup.get("raw_deleted"), _case_cleanup_journal_present(deletion))
+    except EvidenceError as error:
+        raise EvidenceError("aggregate_case_cleanup_identity_invalid") from error
     if value.get("evidence_status") == "RESOLVED":
-        cleanup = value.get("cleanup")
-        raw_after = cleanup.get("raw_after") if isinstance(cleanup, dict) else None
+        raw_after = cleanup.get("raw_after")
         _validate_summary(raw_after)
         if (not isinstance(identity, dict)
                 or not isinstance(identity.get("path"), str)
@@ -51,13 +59,9 @@ def _validate_case_cleanup(root: Path, value: dict[str, object]) -> None:
                 or identity.get("parent") != str((root / CASE_ROOT_NAME).absolute())
                 or any(type(identity.get(key)) is not int for key in
                        ("device", "inode", "parent_device", "parent_inode"))
-                or raw_after != _empty_summary()
-                or value.get("cleanup", {}).get("raw_deleted") is not True
-                or value.get("terminal_state") != "published-after-cleanup"):
+                or raw_after != _empty_summary()):
             raise EvidenceError("aggregate_case_cleanup_identity_invalid")
-        deletion = value.get("raw_deletion")
-        if (not isinstance(deletion, dict)
-                or deletion.get("authority") != "DirectoryCleanup"
+        if (deletion.get("authority") != "DirectoryCleanup"
                 or deletion.get("authorization_sha256") != _case_cleanup_authorization(value)
                 or not isinstance(deletion.get("journal_path"), str)
                 or not isinstance(deletion.get("journal_sha256"), str)

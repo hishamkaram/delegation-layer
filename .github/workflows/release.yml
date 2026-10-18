@@ -10,6 +10,10 @@ on:
         description: 'Draft release tag to promote, for example v1.2.3'
         required: true
         type: string
+      native_validation_run_id:
+        description: 'Exact successful hosted native-proof validation run ID'
+        required: true
+        type: string
       publish_homebrew:
         description: 'Update the Homebrew tap after release promotion'
         required: true
@@ -21,6 +25,11 @@ permissions:
   contents: write
   attestations: write
   id-token: write
+
+concurrency:
+  group: release-promotion
+  queue: max
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -74,7 +83,7 @@ jobs:
             exit 1
           fi
           release_commit="$(git rev-list -n 1 "${GITHUB_SHA}")"
-          git fetch "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+          git -c 'credential.helper=!gh auth git-credential' fetch "https://github.com/${GITHUB_REPOSITORY}.git" \
             "main:refs/remotes/origin/main" --no-tags
           if ! git merge-base --is-ancestor "${release_commit}" origin/main; then
             echo 'Release tags must reference a commit reachable from origin/main.' >&2
@@ -157,9 +166,6 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    concurrency:
-      group: release-promotion
-      cancel-in-progress: false
     steps:
       - name: Checkout draft tag
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -167,6 +173,31 @@ jobs:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Checkout trusted promotion harness
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          path: .local/release-harness
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Validate exact proof and public installation prerequisites
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          NATIVE_VALIDATION_RUN_ID: ${{ inputs.native_validation_run_id }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/native-promotion"
+          python3 .local/release-harness/scripts/validate_native_release.py promotion \
+            --tag "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+            --source-revision "${GITHUB_SHA}" \
+            --native-validation-run-id "${NATIVE_VALIDATION_RUN_ID}" \
+            --work-dir "${RUNNER_TEMP}/native-promotion"
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -236,7 +267,7 @@ jobs:
             fi
           fi
           release_commit="$(git rev-list -n 1 "${TAG}^{commit}")"
-          git fetch "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+          git -c 'credential.helper=!gh auth git-credential' fetch "https://github.com/${GITHUB_REPOSITORY}.git" \
             "main:refs/remotes/origin/main" \
             "${WORKFLOW_SHA}:refs/remotes/origin/workflow" --no-tags
           if ! git merge-base --is-ancestor "${release_commit}" origin/main; then
@@ -253,20 +284,6 @@ jobs:
           if [[ "${push_status}" != "completed" || "${push_conclusion}" != "success" || "${push_head_sha}" != "${release_commit}" ]]; then
             echo "Tag-triggered release and archive smoke checks are not complete and successful for ${TAG}." >&2
             exit 1
-          fi
-          main_sha="$(git rev-parse refs/remotes/origin/main)"
-          native_title="Native acceptance ${TAG}"
-          native_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-native-acceptance.yml/runs?event=workflow_dispatch&per_page=100" \
-            --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success" and .head_branch == "main") | [.id, .head_sha, .display_title] | @tsv' | \
-            awk -F '\t' -v commit="${main_sha}" -v title="${native_title}" '$2 == commit && $3 == title { print $1; exit }')"
-          if [[ -z "${native_run}" ]]; then
-            echo "No successful authenticated native acceptance run exists for ${TAG} from current protected main. Run release-native-acceptance.yml from main with the exact tag input before promotion." >&2
-            exit 1
-          fi
-          if [[ "${PUBLISH_HOMEBREW}" == "true" ]]; then
-            publisher="${RUNNER_TEMP}/publish-homebrew-formula.sh"
-            git show refs/remotes/origin/workflow:scripts/publish-homebrew-formula.sh >"${publisher}"
-            chmod 0700 "${publisher}"
           fi
           if [[ "${draft}" != "true" ]]; then
             if [[ "${latest_tag}" != "${TAG}" ]]; then
@@ -320,11 +337,52 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: gh release edit "${TAG}" --draft=false --latest
 
-      - name: Publish Homebrew formula
-        if: ${{ inputs.publish_homebrew }}
+
+  published-npm:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    needs: promote
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    permissions:
+      contents: read
+      attestations: read
+    uses: ./.github/workflows/release-consumer.yml
+    with:
+      os: ${{ matrix.os }}
+      channel: npm
+      tag: ${{ inputs.tag }}
+
+  publish-homebrew:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_homebrew && github.ref == 'refs/heads/main' }}
+    needs: published-npm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Checkout trusted tap publisher
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Publish exact verified formula
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           TAG: ${{ inputs.tag }}
-        run: |
-          "${RUNNER_TEMP}/publish-homebrew-formula.sh" "${TAG}"
+        run: ./scripts/publish-homebrew-formula.sh "${TAG}"
+
+  published-homebrew:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_homebrew && github.ref == 'refs/heads/main' }}
+    needs: publish-homebrew
+    permissions:
+      contents: read
+      attestations: read
+    uses: ./.github/workflows/release-consumer.yml
+    with:
+      os: macos-15
+      channel: homebrew
+      tag: ${{ inputs.tag }}

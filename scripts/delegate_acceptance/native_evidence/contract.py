@@ -579,8 +579,29 @@ def _validate_case_completion(
         raise EvidenceError("aggregate_case_session_continuity_invalid")
     if case["status"] == "BLOCKED" and proof.get("state") != "blocked-before-runtime":
         raise EvidenceError("aggregate_blocked_proof_scope_invalid")
-    if case["status"] == "FAIL" and proof.get("state") != "unresolved":
+    if case["status"] == "FAIL" and (proof.get("state") != "unresolved"
+                                     or case["evidence_status"] != "UNRESOLVED"):
         raise EvidenceError("aggregate_failure_proof_scope_invalid")
+
+
+def _validate_case_retention(evidence_status: object, terminal_state: object,
+                             raw_deleted: object, journal_present: bool) -> None:
+    """Validate terminal cleanup facts; prepared receipts remain replay-owned."""
+    if evidence_status == "RESOLVED":
+        expected_state, expected_deleted, expected_journal = "published-after-cleanup", True, True
+    elif evidence_status == "UNRESOLVED":
+        expected_state, expected_deleted, expected_journal = "published-unresolved", False, False
+    else:
+        raise EvidenceError("aggregate_case_retention_invalid")
+    if (terminal_state != expected_state or raw_deleted is not expected_deleted
+            or journal_present is not expected_journal):
+        raise EvidenceError("aggregate_case_retention_invalid")
+
+
+def _case_cleanup_journal_present(deletion: dict[str, object]) -> bool:
+    return any(deletion.get(key) is not None for key in (
+        "journal_path", "journal_sha256", "authorization_sha256",
+    ))
 
 
 @dataclass(frozen=True)
