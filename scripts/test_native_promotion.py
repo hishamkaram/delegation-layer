@@ -97,8 +97,8 @@ class PromotionGitHub(FakeGitHub):
                     "visibility": "private" if self.private else "public"}
         if endpoint == f"repos/{REPO}/branches/main":
             return {"protected": True, "commit": {"sha": HEAD}}
-        if endpoint == f"repos/{REPO}/releases/tags/{TAG}":
-            return {"id": 51, "tag_name": TAG, "prerelease": False}
+        if endpoint == f"repos/{REPO}/releases?per_page=30&page=1":
+            return [{"id": 51, "tag_name": TAG, "prerelease": False}]
         if "/releases/51/assets?" in endpoint:
             return self.assets
         if endpoint == f"repos/{REPO}/collaborators/maintainer/permission":

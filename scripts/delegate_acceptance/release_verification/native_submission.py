@@ -43,7 +43,7 @@ def authenticate_submission(
     if TAG_RE.fullmatch(tag) is None or re.fullmatch(r"[0-9a-f]{64}", proof_sha256) is None:
         raise VerificationError("native_submission_identity_invalid", "submission-identity")
     repository_id = repository_identity(client, repo, harness_revision)
-    release = object_value(client.json(f"repos/{repo}/releases/tags/{tag}"), "release-identity")
+    release = client.release(repo, tag)
     release_id = positive_id(release.get("id"), "release-identity")
     if release.get("tag_name") != tag or release.get("prerelease") is not False:
         raise VerificationError("native_release_identity_invalid", "submission-identity")

@@ -109,8 +109,8 @@ class FakeGitHub(GitHubClient):
             return {"id": self.actor_id, "login": "maintainer", "type": "User"}
         if endpoint.endswith("/branches/main"):
             return {"protected": True, "commit": {"sha": self.branch_revision}}
-        if endpoint.endswith(f"/releases/tags/{TAG}"):
-            return {"id": 51, "tag_name": TAG, "draft": self.release_draft, "prerelease": False}
+        if endpoint == f"repos/{REPO}/releases?per_page=30&page=1":
+            return [{"id": 51, "tag_name": TAG, "draft": self.release_draft, "prerelease": False}]
         if "/assets?" in endpoint:
             page = int(endpoint.rsplit("page=", 1)[1])
             return self.asset_pages.get(page, self.assets if page == 1 else [])
