@@ -31,6 +31,7 @@
       "py:subprocess",
       "py:sys",
       "py:tempfile",
+      "py:test_acceptance_model_forwarding",
       "py:unittest"
     ]
   },
@@ -480,7 +481,9 @@
       "py:acceptance_supervisor_common",
       "py:delegate_acceptance.directories.journal",
       "py:delegate_acceptance.native_evidence.cases",
+      "py:delegate_acceptance.native_evidence.contract",
       "py:delegate_acceptance.native_evidence.retention",
+      "py:delegate_acceptance.native_evidence.validation",
       "py:hashlib",
       "py:json",
       "py:native_acceptance_evidence",
@@ -542,6 +545,7 @@
     "imports": [
       "py:argparse",
       "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.release_verification.contract",
       "py:delegate_acceptance.release_verification.filesystem",
       "py:hashlib",
       "py:io",

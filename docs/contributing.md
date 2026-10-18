@@ -312,68 +312,98 @@ account availability; keep authenticated acceptance receipts separate.
 
 ## Release promotion
 
-The tag workflow creates and verifies a draft release. Before promotion, run
-`release-native-acceptance.yml` from protected `main`, passing the exact draft
-tag as its input, on a project-owned runner labeled `delegation-native`. That
-runner must already have the provider CLIs and their native authentication. The
-`opencode_model` input selects an available OpenCode control model explicitly.
-A passing control covers that model; it does not clear failures for other models.
-The runner must support `actions/setup-python` v6: Actions runner 2.327.1 or
-newer, an OS supported by its Python distributions, and a writable tool cache.
-On macOS, that cache must be `/Users/runner/hostedtoolcache`; on Linux, use a
-supported Ubuntu release. See the [self-hosted setup requirements](https://github.com/actions/setup-python/blob/ece7cb06caefa5fff74198d8649806c4678c61a1/docs/advanced-usage.md#using-setup-python-with-a-self-hosted-runner).
-The workflow logs `python3 --version` before archive verification. Prove these
-prerequisites on the actual `delegation-native` runner before release promotion.
-The workflow uses the current protected-main acceptance harness and the shared
-`scripts/verify_release_archive.py` verifier. The verifier checks the requested
-draft archive's checksum and attestation, exercises the released CLI through
-PATH and its isolated default state path, and records the absolute binary paths,
-digests, build identity, native platform, commands, and exit codes. The live
-provider gate then uses that same extracted binary directory; its final receipt
-links the archive receipt digest, the aggregate case matrix, and every compact
-case-receipt digest. The matrix is defined by `expected_cases()` in
-`scripts/native_acceptance_evidence.py` and covers provider, permission, and
-scenario cases, including non-Git Codex execution in both modes; each case has an explicit output directory under the aggregate root. Each
-compact receipt binds the final status and gate, provider, permission and mode,
-requested model and effort, scenario, task and session identity fields, binary
-identities, lifecycle proof, and the source receipt digest. Successful and
-authentication/prerequisite-blocked cases retain only their sanitized case
-receipts after identity-pinned cleanup; the compact receipt is fsynced before
-raw deletion and records the creation-time directory and parent identities.
-Failed or unresolved cases retain their private task state and workspace for
-diagnosis under the shared contract's
-[native failure-retention rule](../agents/_data/maintainability-contract.md#live-acceptance-proof).
-Public artifacts contain only sanitized receipts. Resolved aggregate roots are
-pruned to the configured small retention count, with comparable before/after
-root, file, and byte totals recorded in the aggregate receipt.
-The verifier checks the attestation against `refs/tags/<tag>` and the tag's
-resolved release commit, while receipts record the release revision separately
-from the harness revision.
+The tag workflow builds a draft release and exercises its attested archives on
+hosted Linux and macOS. Authenticated acceptance runs locally on a maintainer's
+existing host, using its existing provider logins. Do not register that host as
+a GitHub Actions runner or copy provider credentials into CI.
 
-The workflow stages the aggregate receipt, every compact case receipt, the
-archive and final native receipts, and a digest manifest in the non-hidden
-`native-acceptance-evidence` directory before `upload-artifact`. The upload uses
-`if-no-files-found: error`; a missing case receipt or manifest is therefore a
-release evidence failure.
-Archive smoke remains unauthenticated and emits one sanitized receipt for each
-native Linux/macOS archive. The live gate requires at least one authenticated
-provider pass and fails on behavior or evidence failures; blocked cases remain
-scoped to that case's authentication or prerequisite result.
-Promotion checks the successful run's tag input and current protected-main
-commit, so a source checkout or a locally built CLI cannot satisfy the release
-gate.
+From the current protected-main checkout, with Python 3.12 and an authenticated
+`gh` CLI, run:
 
-Promotion is a separate manual workflow dispatch from protected `main` so npm,
-GitHub Releases, and the Homebrew tap are published only after the archive
-smoke checks and exact-artifact native acceptance pass. Keep `publish_homebrew`
-enabled for normal releases and configure the `HOMEBREW_TAP_TOKEN` repository
-secret with write access to `hishamkaram/homebrew-tap`. The promotion script
-revalidates every platform archive, checksum, and GitHub attestation before it
-updates the tap idempotently; the formula remains pinned to the exact promoted
-tag for reproducible Homebrew installs. If a tap update fails after the
-release becomes public, rerun the same promotion for the current latest release
-after fixing the token or transient failure; the npm and Homebrew steps are
-idempotent.
+```sh
+python3 scripts/release_native.py run --tag v1.2.3 \
+  --opencode-model provider/model --ccr-model configured-alias
+```
+
+The model arguments are exact configured values, not suggested model names.
+Omit `--ccr-model` when no alias is available: those cases are explicitly
+prerequisite-blocked. A supplied alias must pass unchanged; a passing control
+never erases another submitted failure. Provider authentication and prerequisite
+blocks remain neutral. Promotion requires at least one authenticated pass and
+no behavior or unresolved-evidence failures across the canonical case matrix.
+
+The command checks prerequisites before paid work, records a durable invocation
+outside the checkout, and uses the verified release binaries for the complete
+native matrix. `--no-submit` permits local candidate-harness testing; its proof
+does not authorize promotion. Keep the checkout unchanged until the command
+finishes: changing its captured source closure invalidates the proof. To recover submission or observation after an
+interruption, use the printed receipt path:
+
+```sh
+python3 scripts/release_native.py resume --receipt /absolute/path/to/receipt.json
+```
+
+Resume never reruns provider cases. An interrupted native phase remains
+incomplete; it is not an authentication block. Failed or unresolved native
+work retains its private evidence. Cleanup uses the existing identity-pinned
+journal only after resource lifetimes and consumers have closed.
+Projection resumes from the saved source digests and stage-directory identity.
+It reconciles identical staged bytes and interrupted file publication before
+sealing the public ZIP; it does not rerun providers or rewrite source receipts.
+
+Only the versioned public proof ZIP is submitted. It contains bounded case,
+option, session, lifetime, cleanup and artifact facts, with fresh digests and
+original receipt digests as provenance. It excludes host paths, raw command
+arguments, environment values and provider output. Private source receipts are
+not rewritten or uploaded. CI validates the uploader's numeric identity and
+permissions, asset ID and bytes, tag/release revision, current protected-main
+harness, source fingerprint, archive attestation and all four binary hashes.
+This is **maintainer-attested native execution validated by CI**; hosted CI
+does not execute the authenticated provider cases. It cannot detect local runs
+that the maintainer never submits, or preserve runs deleted by an authorized
+maintainer or GitHub's retention policy. Repository write access and available
+GitHub history remain trust boundaries.
+
+`release-native-acceptance.yml` runs only on hosted infrastructure. Its attempt
+report is published even when setup or validation fails. Promotion takes an
+explicit `native_validation_run_id`, verifies that exact report, re-downloads
+the asset by ID, and checks its SHA256 again. The shared policy examines all
+relevant runs and attempts for the tag/current-main pair. An admitted failure
+blocks promotion; a passing rerun cannot hide it. Reported rejection before
+admission is correctable. Missing reports block unless later resolved for the
+same proof. History queries fail closed if their bounded pagination cannot
+establish completeness; the GitHub run-query bound is 1,000.
+Model inputs are bound before admission; a mistyped workflow input is rejected.
+An inconsistent model inside an otherwise admitted case remains a failure.
+Attempt reports request 90-day retention, the public-repository maximum; the
+repository and organization retention settings must allow it
+([GitHub retention limits](https://docs.github.com/en/organizations/managing-organization-settings/configuring-the-retention-period-for-github-actions-artifacts-and-logs-in-your-organization)). Complete promotion
+while all scoped runs and reports remain available. Expired or missing reports
+for listed runs retain their uncertainty and can block promotion; a fresh
+control is not evidence of an expired attempt's result.
+
+Dispatch the `Release` workflow from protected `main` with the exact tag and
+validation run ID. Public anonymous installation is a prerequisite: promotion
+refuses a private repository before npm publication and never changes its
+visibility automatically. The sequence is npm publication or matching-integrity
+verification, public GitHub release, then fresh anonymous npm CLI/skill installs
+on Linux and macOS. Checks compare the installed binaries with the extracted
+attested archive and the entire installed skill with the tag commit. The
+unversioned path is also checked when npm and GitHub latest both name the target.
+
+Keep `publish_homebrew` enabled for normal releases and configure
+`HOMEBREW_TAP_TOKEN` with write access to `hishamkaram/homebrew-tap`. Only after
+both npm consumers pass does CI publish the formula and prove a fresh macOS
+Brew install, including its `libexec` supervisor binaries. Disabling
+`publish_homebrew` skips only the tap and Brew checks. The workflow concurrency
+lock covers the complete promotion across all tags, including npm/GitHub latest
+and the shared Homebrew formula. It queues up to 100 pending runs in the order
+they enter GitHub's concurrency queue; arrivals beyond that limit are canceled.
+This uses GitHub's documented [`queue: max` setting](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency#example-queueing-multiple-pending-runs).
+A consumer failure after publication leaves
+a red workflow and partial publication; retry the same exact release after the
+cause is fixed. Matching existing publications are verified rather than
+replaced, and no provider work is rerun.
 
 ## Documentation changes
 

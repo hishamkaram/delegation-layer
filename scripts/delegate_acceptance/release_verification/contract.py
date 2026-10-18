@@ -9,7 +9,12 @@ import hashlib
 import json
 import re
 
+from ..native_evidence.contract import MAX_AGGREGATE_BYTES
 
+
+# Control reports remain scalar-sized. Release summaries use the canonical
+# aggregate budget because they bind the complete finite native case matrix.
+MAX_RELEASE_RECEIPT_BYTES = MAX_AGGREGATE_BYTES
 MAX_RECEIPT = 32 * 1024
 
 
@@ -45,6 +50,10 @@ SOURCE_FILES = {
     "native-acceptance": (
         ".github/workflows/release.yml",
         ".github/workflows/release-native-acceptance.yml",
+        ".github/workflows/release-consumer.yml",
+        "scripts/release_native.py",
+        "scripts/validate_native_release.py",
+        "scripts/acceptance_native.sh",
         "scripts/acceptance_native_all.sh",
         "scripts/acceptance_native.py",
         "scripts/acceptance_provider_common.py",

@@ -101,6 +101,16 @@ test-evidence-tools:
 	python3 -m unittest discover -s scripts -p 'test_handoff_evidence.py' -v
 	python3 -m unittest discover -s scripts -p 'test_native_acceptance_evidence.py' -v
 	python3 -m unittest discover -s scripts -p 'test_verify_release_archive.py' -v
+	python3 -m unittest discover -s scripts -p 'test_public_native_*.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_release*.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_*history.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_submission.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_hosted_validation.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_promotion.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_projection_recovery.py' -v
+	python3 -m unittest discover -s scripts -p 'test_stage_publication.py' -v
+	python3 -m unittest discover -s scripts -p 'test_release_*.py' -v
+	python3 -m unittest discover -s scripts -p 'test_published_install*.py' -v
 
 build: tool-versions
 	@mkdir -p bin dist/delegate-darwin-amd64 dist/delegate-darwin-arm64 dist/delegate-linux-amd64 dist/delegate-linux-arm64

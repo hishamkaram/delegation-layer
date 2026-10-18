@@ -2,8 +2,9 @@ name: CCR integration
 
 on:
   push:
-    branches: ['**']
+    branches: ['main']
   pull_request:
+    branches: ['**']
   workflow_dispatch:
 
 permissions:

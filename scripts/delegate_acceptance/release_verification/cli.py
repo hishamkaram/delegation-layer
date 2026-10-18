@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import argparse
+from .assets import GITHUB_AUTH_MODES
+from .published import run_published
+from .published_contract import CHANNELS
 from .verification import (finalize_native, verify)
 
 
@@ -17,6 +20,12 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser.add_argument("--tag", required=True)
     verify_parser.add_argument("--repo", required=True)
     verify_parser.add_argument("--source-revision", required=True)
+    verify_parser.add_argument("--github-auth", choices=GITHUB_AUTH_MODES, default="environment")
+    published_parser = commands.add_parser("published")
+    published_parser.add_argument("--channel", choices=CHANNELS, required=True)
+    for flag in ("tag", "repo", "source-revision", "archive-receipt", "extract-dir", "receipt"):
+        published_parser.add_argument(f"--{flag}", required=True)
+    published_parser.add_argument("--github-auth", choices=GITHUB_AUTH_MODES, default="environment")
     final_parser = commands.add_parser("finalize-native")
     final_parser.add_argument("--archive-receipt", required=True)
     final_parser.add_argument("--aggregate-receipt", required=True)
@@ -29,4 +38,6 @@ def main(argv: list[str] | None = None) -> int:
     final_parser.add_argument("--repo")
     final_parser.add_argument("--source-revision", required=True)
     args = parser.parse_args(argv)
+    if args.command == "published":
+        return run_published(args)
     return verify(args) if args.command == "verify" else finalize_native(args)

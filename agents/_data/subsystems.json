@@ -24,7 +24,9 @@
     "agents/_data/subsystems/python-pure-1.json",
     "agents/_data/subsystems/python-subsystems-2.json",
     "agents/_data/subsystems/python-tests-2.json",
-    "agents/_data/subsystems/python-tests-3.json"
+    "agents/_data/subsystems/python-tests-3.json",
+    "agents/_data/subsystems/python-native-release-2.json",
+    "agents/_data/subsystems/python-tests-4.json"
   ],
   "migration": "agents/_data/maintainability-migration.jsonl",
   "generated": [

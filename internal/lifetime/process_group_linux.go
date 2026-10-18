@@ -106,7 +106,7 @@ func parseLinuxProcessScopeStat(data []byte) (linuxProcessScopeStat, error) {
 	}
 	fields := strings.Fields(text[closing+2:])
 	// The suffix starts at proc(5)'s field 3 (state). PPID, process group,
-	// session, and starttime are indexes 1, 2, 3, and 19 in this suffix.
+	// session, thread count, and starttime are indexes 1, 2, 3, 17, and 19.
 	if len(fields) <= 19 || len(fields[0]) != 1 {
 		return linuxProcessScopeStat{}, errors.New("linux process stat is incomplete")
 	}
@@ -118,6 +118,13 @@ func parseLinuxProcessScopeStat(data []byte) (linuxProcessScopeStat, error) {
 	if err != nil || strconv.FormatUint(start, 10) != fields[19] {
 		return linuxProcessScopeStat{}, errors.New("linux process start token is invalid")
 	}
+	threads, err := parseLinuxProcessStatInteger(fields[17], "thread count")
+	if err != nil || threads < 0 {
+		return linuxProcessScopeStat{}, errors.New("linux process thread count is invalid")
+	}
+	// State describes the leader only. A zombie leader can still have live
+	// threads; discovery, identity, signaling, and reaping share this verdict.
+	zombie := fields[0] == "Z" && threads <= 1
 	return linuxProcessScopeStat{
 		snapshot: processScopeSnapshot{
 			pid:        pid,
@@ -125,9 +132,9 @@ func parseLinuxProcessScopeStat(data []byte) (linuxProcessScopeStat, error) {
 			pgid:       pgid,
 			sessionID:  sessionID,
 			startToken: "linux:" + fields[19],
-			zombie:     fields[0] == "Z",
+			zombie:     zombie,
 		},
-		zombie: fields[0] == "Z",
+		zombie: zombie,
 	}, nil
 }
 

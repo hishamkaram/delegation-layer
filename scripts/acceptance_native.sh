@@ -6,7 +6,12 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 provider=${1:?usage: acceptance_native.sh PROVIDER [options]}
 shift
 
-if [ "$provider" = opencode:run ] && [ -n "${OPENCODE_LIVE_MODEL:-}" ]; then
+model=
+case "$provider" in
+    opencode:run) model=${OPENCODE_LIVE_MODEL:-} ;;
+    ccr:print) model=${CCR_LIVE_MODEL:-} ;;
+esac
+if [ -n "$model" ]; then
     model_supplied=false
     for option in "$@"; do
         case "$option" in
@@ -14,7 +19,7 @@ if [ "$provider" = opencode:run ] && [ -n "${OPENCODE_LIVE_MODEL:-}" ]; then
         esac
     done
     if [ "$model_supplied" = false ]; then
-        set -- --model "$OPENCODE_LIVE_MODEL" "$@"
+        set -- --model "$model" "$@"
     fi
 fi
 

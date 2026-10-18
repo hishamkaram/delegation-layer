@@ -15,6 +15,21 @@ from scripts.delegate_acceptance.directories.policy import require
 from pathlib import Path
 
 
+STAGING_SUFFIX = ".staging"
+
+
+def staging_prefix(path: Path) -> str:
+    return "." + Path(path).name + "."
+
+
+def is_staging_file_for(path: Path, name: str) -> bool:
+    prefix = staging_prefix(path)
+    if not name.startswith(prefix) or not name.endswith(STAGING_SUFFIX):
+        return False
+    # The directory owner reserves the prefix/suffix; tempfile owns the nonce.
+    return len(name) > len(prefix) + len(STAGING_SUFFIX)
+
+
 def digest(path):
     value = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -24,10 +39,15 @@ def digest(path):
 
 
 def write_json(path, value, replace=False):
-    path = Path(path)
     data = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
+    write_bytes(path, data, replace=replace)
+
+
+def write_bytes(path: Path, data: bytes, *, replace: bool = False) -> None:
+    """Publish complete bytes through the same durable, create-once owner as JSON."""
+    path = Path(path)
     descriptor, stage_name = tempfile.mkstemp(
-        prefix="." + path.name + ".", suffix=".staging", dir=path.parent,
+        prefix=staging_prefix(path), suffix=STAGING_SUFFIX, dir=path.parent,
     )
     stage = Path(stage_name)
     parent = -1

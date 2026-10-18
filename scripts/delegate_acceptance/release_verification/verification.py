@@ -40,6 +40,7 @@ def _verify_locked(args: argparse.Namespace, receipt_path: Path) -> int:
     filesystem.write_receipt(receipt_path, receipt)
     owner = DirectoryOwner()
     locations = {}
+    auth_mode = getattr(args, "github_auth", "environment")
 
     def action():
         runner, assets, extracted = release_paths(args, receipt_path)
@@ -51,7 +52,7 @@ def _verify_locked(args: argparse.Namespace, receipt_path: Path) -> int:
         info = platform_identity()
         receipt["platform"] = info
         receipt["source_harness"] = source_fingerprint(args.mode)
-        release_identity = resolve_release_identity(args.repo, args.tag, receipt, gh_environment())
+        release_identity = resolve_release_identity(args.repo, args.tag, receipt, gh_environment(auth_mode=auth_mode))
         receipt["release_identity"] = release_identity
         receipt["release_revision"] = release_identity["commit_sha"]
         receipt["harness_revision"] = args.source_revision
@@ -67,7 +68,7 @@ def _verify_locked(args: argparse.Namespace, receipt_path: Path) -> int:
             command(receipt, "github-release-download", [
                 "gh", "release", "download", args.tag, "--repo", args.repo,
                 "--pattern", name, "--pattern", "checksums.txt", "--dir", str(assets),
-            ], gh_environment(), timeout=120)
+            ], gh_environment(auth_mode=auth_mode), timeout=120)
         receipt["stage"] = "verify-checksum"
         archive = verify_checksum(assets, name, receipt)
         command(receipt, "github-attestation-verify", [
@@ -75,7 +76,7 @@ def _verify_locked(args: argparse.Namespace, receipt_path: Path) -> int:
             "--signer-workflow", f"{args.repo}/.github/workflows/release.yml",
             "--source-ref", release_identity["ref"],
             "--source-digest", release_identity["commit_sha"],
-        ], gh_environment(), timeout=60)
+        ], gh_environment(auth_mode=auth_mode), timeout=60)
         receipt["artifact"]["attestation"] = "verified"
         receipt["stage"] = "extract-archive"
         extract_archive(archive, extracted, owner, receipt)

@@ -268,6 +268,34 @@ contract. Preserve the original consumer's classifications when adding a typed
 cause; do not broaden a shared sentinel to satisfy a new helper's test. Pair
 the helper cases with the actual public command and independent joined faults.
 
+### Local release acceptance and hosted proof validation
+
+The native-release coordinator owns invocation stages and their create-once
+effect intents under the repository/tag lock. It composes the existing process,
+directory and evidence owners; it does not acquire a second launch, wait or
+cleanup policy. Private source receipts remain immutable. A public projection
+has its own bytes and digests, with original receipt digests as provenance.
+Hosted validation attests to that submitted evidence, not execution on CI.
+
+| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
+|---|---|---|---|---|---|---|
+| NR1: checked request, invocation identity and preflight intent | Native-release coordinator / repository-tag lock | Read Python, GitHub, tag, protected-main and source facts before paid work | Bound preflight result | Missing access blocks before archive or native launch | BLOCKED without paid work | PreflightTests.test_github_404_stops_before_archive_or_paid_work |
+| NR1N: native launch intent with exact input and child-capture identity | Native-release coordinator / repository-tag lock; canonical process owner | Run once, then read back natural completion and aggregate lifetime facts | Native result bound to exact completion and aggregate SHA | Interrupted or ambiguous ownership is INCOMPLETE; resume never launches paid work | Known failed work can be reported; unknown lifetime stays retained | ExecutionTests.test_interrupt_after_native_intent_is_incomplete_and_resume_never_launches, ExecutionTests.test_canonical_failed_aggregate_retains_raw_after_lifetime_closure |
+| NR1P: pre-paid stage creation identity and completed aggregate/archive/native source hashes | Canonical evidence stager / source lease and pinned destination lease | Reconcile expected file bytes through the existing atomic publisher, then commit the manifest | File and directory barriers precede create-once manifest publication | Identical bytes replay unchanged; owned partial staging files are recovered; conflicts, replacement and changed sources remain incomplete | Resume may finish projection without relaunching paid work | StagePublicationTests.test_canonical_staging_reenters_owned_partial_output, StagePublicationTests.test_real_crash_recovers_partial_temporary_file_and_link_publication, StagePublicationTests.test_manifest_publication_interruption_reconciles_committed_bytes |
+| NR2: public proof SHA, unique release asset name and upload intent | Native-release coordinator / repository-tag lock | Reconcile while pending, then persist intent before uploading once | Asset ID, size and SHA committed to invocation | Initial read failure stays pending; after intent, lost response only observes | No duplicate upload or overwrite | SubmissionTests.test_lost_upload_response_reconciles_exact_asset_once, SubmissionTests.test_crash_after_upload_intent_never_retries_missing_upload, CliRecoveryTests.test_initial_upload_read_failure_remains_pending_and_resume_uploads_once |
+| NR3: exact asset facts, inputs and workflow-dispatch intent | Native-release coordinator / repository-tag lock | Reconcile while pending, then persist intent before dispatching once | Bound workflow run ID committed to invocation | Initial read failure stays pending; lost mutation response never authorizes blind redispatch | Watch the original validation | SubmissionTests.test_lost_dispatch_response_uses_exact_run_and_original_models, SubmissionTests.test_crash_after_dispatch_intent_only_observes, CliRecoveryTests.test_initial_dispatch_read_failure_remains_pending_and_resume_posts_once |
+| NR4: authenticated sender/uploader, exact asset SHA, release/main/source/archive bindings | Hosted validation application / exact workflow attempt | Apply canonical portable case predicates and complete scoped history | Trusted attempt report, including admission and native verdict | Malformed or missing evidence cannot pass; a report before admission can record a correctable rejection | Admitted native failure blocks; retained failure states and case counts survive projection | HostedNativeValidationTests.test_case_schema_failure_after_admission_is_blocking_failure, NativeValidationHistoryTests.test_admitted_failure_survives_passing_control_and_rerun, PublicNativeProofTests.test_real_failed_stage_preserves_verdict_and_retained_sources |
+| NR5: complete native closure, consumed evidence and exact owned cleanup target | Native-release coordinator / repository-tag lock | Authorize existing directory journal and reconcile its result | Canonical cleanup journal and matching invocation result | Replacement or unresolved lifetime retains private state; replay uses the same identity | Cleanup never discards unresolved work | CleanupTests.test_replaced_target_before_cleanup_is_retained, CleanupTests.test_cleanup_replays_durable_canonical_journal_without_touching_replacement |
+
+The promotion gate and local observer use the same history classifier. A later
+passing control cannot erase an admitted failure for the same tag and current
+protected-main source. A missing report requires later resolution of that same
+proof; incomplete pagination fails closed. A native-result pass and a workflow
+history failure remain distinct facts. Submission recovery never relaunches
+provider work. Public installation uses isolated consumer environments without
+publication credentials and must not use authenticated downloads to conceal a
+private-repository failure.
+
 ### Inspection claim replay
 
 | Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |

@@ -9,6 +9,7 @@ import unittest
 
 import native_acceptance_evidence as native_evidence
 from scripts import acceptance_native as entry
+from scripts import test_acceptance_model_forwarding as model_forwarding
 from scripts.acceptance_tests.native.support import (
     AGGREGATE_WRAPPER_TEST_TIMEOUT,
     fake_native_python_script,
@@ -75,9 +76,11 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         self.assertIn('--scenario "$case_scenario"', wrapper)
         self.assertIn('if [ "$case_provider" = opencode:run ] && [ -n "${OPENCODE_LIVE_MODEL:-}" ]; then', wrapper)
         self.assertIn('set -- "$@" --model "$OPENCODE_LIVE_MODEL"', wrapper)
-        individual = (repository_root() / "scripts/acceptance_native.sh").read_text()
-        self.assertIn('if [ "$provider" = opencode:run ] && [ -n "${OPENCODE_LIVE_MODEL:-}" ]; then', individual)
-        self.assertIn('set -- --model "$OPENCODE_LIVE_MODEL" "$@"', individual)
+        forwarding = model_forwarding.AcceptanceModelForwardingTests()
+        for provider, key in (("opencode:run", "OPENCODE_LIVE_MODEL"),
+                              ("ccr:print", "CCR_LIVE_MODEL")):
+            argv = forwarding.invoke(provider, key)
+            self.assertEqual(argv[-2:], ["--model", "gateway/exact-alias"])
         self.assertNotIn('timeout-process.json', wrapper)
         self.assertIn("2) # User-authorized authentication/prerequisite blocks remain neutral.", wrapper)
         self.assertIn("passed=%s blocked=%s failed=%s", wrapper)

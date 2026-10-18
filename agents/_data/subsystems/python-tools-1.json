@@ -173,5 +173,28 @@
     "imports": [
       "py:ast"
     ]
+  },
+  {
+    "name": "py:validate_native_release",
+    "owner": "py:validate_native_release",
+    "layer": "tool",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.native_hosted",
+      "py:pathlib",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:release_native",
+    "owner": "py:release_native",
+    "layer": "tool",
+    "imports": [
+      "py:delegate_acceptance.native_release.cli",
+      "py:pathlib",
+      "py:sys"
+    ]
   }
 ]
