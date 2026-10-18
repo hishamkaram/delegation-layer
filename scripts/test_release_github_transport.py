@@ -12,6 +12,26 @@ from scripts.delegate_acceptance.release_verification.github import GitHubClient
 
 
 class GitHubTransportTests(unittest.TestCase):
+    def test_binary_downloads_use_the_endpoint_media_type_and_preserve_bytes(self):
+        client = GitHubClient({"commands": []}, {})
+        payload = b"PK\x03\x04\xff\x00\n"
+        for artifact in (False, True):
+            with self.subTest(artifact=artifact):
+                with patch("scripts.delegate_acceptance.release_verification.github.run_bounded_command",
+                           return_value=BoundedCommandResult(0, payload)) as run:
+                    if artifact:
+                        actual = client.artifact_archive("owner/repo", 17, limit=1024)
+                    else:
+                        actual = client.bytes("repos/owner/repo/releases/assets/17", limit=1024)
+                self.assertEqual(actual, payload)
+                argv = run.call_args.args[0]
+                accept = ("application/vnd.github+json" if artifact else "application/octet-stream")
+                self.assertIn(f"Accept: {accept}", argv)
+                endpoint = ("repos/owner/repo/actions/artifacts/17/zip" if artifact
+                            else "repos/owner/repo/releases/assets/17")
+                self.assertEqual(argv[-1], endpoint)
+                self.assertEqual(run.call_args.kwargs["max_output"], 1024)
+
     def test_json_request_is_bounded_and_records_only_safe_transport_facts(self):
         receipt = {"commands": []}
         env = {"GH_TOKEN": "private-canary"}

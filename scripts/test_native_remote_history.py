@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import unittest
-from unittest.mock import create_autospec
+from unittest.mock import call, create_autospec
 import zipfile
 
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
@@ -55,8 +55,13 @@ class NativeRemoteHistoryTests(unittest.TestCase):
                     "run_started_at": f"2026-10-17T12:00:0{attempt}Z"}
 
         client.json.side_effect = response
-        client.bytes.side_effect = [report_archive(2, 1, "fail"), report_archive(2, 2, "pass")]
+        client.artifact_archive.side_effect = [report_archive(2, 1, "fail"), report_archive(2, 2, "pass")]
         reports = history_reports(client, "owner/repo", SCOPE)
+        self.assertEqual(client.artifact_archive.call_args_list, [
+            call("owner/repo", 11, limit=64 << 10),
+            call("owner/repo", 12, limit=64 << 10),
+        ])
+        client.bytes.assert_not_called()
         result = classify_native_history(
             tuple(item.observation for item in reports), complete=True, selected_run_id=2,
         )

@@ -64,6 +64,12 @@ class GitHubClient:
         return self._request(endpoint, method="GET", accept="application/octet-stream",
                              fields=None, limit=limit)
 
+    def artifact_archive(self, repo: str, artifact_id: int, *, limit: int) -> bytes:
+        # Actions archive redirects require the GitHub API media type, unlike release assets.
+        return self._request(f"repos/{repo}/actions/artifacts/{artifact_id}/zip",
+                             method="GET", accept="application/vnd.github+json",
+                             fields=None, limit=limit)
+
     def release(self, repo: str, tag: str) -> dict[str, object]:
         """Find one exact release, including drafts visible to this caller.
 
