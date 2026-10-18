@@ -60,7 +60,7 @@ def preflight(invocation: Invocation, client: GitHubClient) -> dict[str, object]
     main = revision_value(commit.get("sha"))
     if repository.get("full_name") != request.repo or branch.get("protected") is not True:
         raise ReleaseError("current_protected_main_required")
-    release = object_value(client.json(f"repos/{request.repo}/releases/tags/{request.tag}"))
+    release = client.release(request.repo, request.tag)
     if (release.get("tag_name") != request.tag or type(release.get("draft")) is not bool
             or not release["draft"] and not request.no_submit
             or release.get("prerelease") is not False):
@@ -95,7 +95,7 @@ def recheck_submission(invocation: Invocation, client: GitHubClient,
                        facts: dict[str, object]) -> None:
     repo, tag = invocation.request.repo, invocation.request.tag
     branch = object_value(client.json(f"repos/{repo}/branches/main"))
-    release = object_value(client.json(f"repos/{repo}/releases/tags/{tag}"))
+    release = client.release(repo, tag)
     identity = object_value(resolve_release_identity(repo, tag, {"commands": []}, client.environment))
     actor = object_value(client.json("user"))
     if (facts.get("candidate_harness") is not False or branch.get("protected") is not True

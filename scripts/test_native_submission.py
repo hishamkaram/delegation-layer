@@ -27,8 +27,8 @@ class NativeSubmissionTests(unittest.TestCase):
             return self.repository
         if endpoint.endswith("branches/main"):
             return self.branch
-        if "/releases/tags/" in endpoint:
-            return {"id": 8, "tag_name": "v1.2.3", "prerelease": False}
+        if endpoint == "repos/owner/repo/releases?per_page=30&page=1":
+            return [{"id": 8, "tag_name": "v1.2.3", "prerelease": False}]
         if "/assets?" in endpoint:
             return [self.asset]
         return self.permission

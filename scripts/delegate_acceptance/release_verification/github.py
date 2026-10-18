@@ -10,6 +10,9 @@ from .contract import MAX_OUTPUT, VerificationError
 
 
 API_VERSION = "2026-03-10"
+RELEASE_PAGE_SIZE = 30
+MAX_RELEASE_PAGES = 100
+MAX_RELEASE_PAGE_BYTES = 1 << 20
 
 
 class GitHubClient:
@@ -60,6 +63,31 @@ class GitHubClient:
     def bytes(self, endpoint: str, *, limit: int) -> bytes:
         return self._request(endpoint, method="GET", accept="application/octet-stream",
                              fields=None, limit=limit)
+
+    def release(self, repo: str, tag: str) -> dict[str, object]:
+        """Find one exact release, including drafts visible to this caller.
+
+        GitHub's release-by-tag endpoint returns published releases only.
+        Complete the bounded listing before accepting an unambiguous match.
+        """
+        found: dict[str, object] | None = None
+        for page in range(1, MAX_RELEASE_PAGES + 1):
+            rows = self.json(f"repos/{repo}/releases?per_page={RELEASE_PAGE_SIZE}&page={page}",
+                             limit=MAX_RELEASE_PAGE_BYTES)
+            if not isinstance(rows, list) or len(rows) > RELEASE_PAGE_SIZE:
+                raise VerificationError("github_releases_invalid", "github-release")
+            for value in rows:
+                row = object_value(value, "github-release")
+                if row.get("tag_name") == tag:
+                    positive_id(row.get("id"), "github-release")
+                    if found is not None:
+                        raise VerificationError("github_release_ambiguous", "github-release")
+                    found = row
+            if len(rows) < RELEASE_PAGE_SIZE:
+                if found is None:
+                    raise VerificationError("github_release_not_found", "github-release")
+                return found
+        raise VerificationError("github_releases_pagination_incomplete", "github-release")
 
 
 def object_value(value: object, stage: str) -> dict[str, object]:
