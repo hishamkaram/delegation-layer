@@ -49,8 +49,13 @@
     "owner": "py:test_release_workflow_contracts",
     "layer": "test",
     "imports": [
+      "py:delegate_acceptance.processes.operations",
+      "py:os",
       "py:pathlib",
       "py:re",
+      "py:sys",
+      "py:test_published_install",
+      "py:textwrap",
       "py:unittest"
     ]
   },
