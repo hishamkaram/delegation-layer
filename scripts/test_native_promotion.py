@@ -119,11 +119,13 @@ class PromotionGitHub(FakeGitHub):
             return {"artifacts": self.artifact_rows.get(run_id, [])}
         raise AssertionError(f"unexpected GitHub request: {method} {endpoint}")
 
+    def artifact_archive(self, repo: str, artifact_id: int, *, limit: int) -> bytes:
+        if repo != REPO:
+            raise AssertionError(f"unexpected GitHub repository: {repo}")
+        self.history_reads += 1
+        return self.artifact_bytes[artifact_id]
+
     def bytes(self, endpoint: str, *, limit: int) -> bytes:
-        if "/actions/artifacts/" in endpoint:
-            artifact_id = int(endpoint.split("/actions/artifacts/", 1)[1].split("/", 1)[0])
-            self.history_reads += 1
-            return self.artifact_bytes[artifact_id]
         if endpoint.endswith(f"/releases/assets/{PROOF_ASSET_ID}"):
             self.asset_reads += 1
             return self.proof_bytes

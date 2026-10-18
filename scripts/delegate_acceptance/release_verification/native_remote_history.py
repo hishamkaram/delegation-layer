@@ -62,8 +62,8 @@ def _read_report(client: GitHubClient, repo: str, run_id: int,
     if len(found) != 1 or found[0].get("expired") is not False:
         return None
     artifact_id = positive_id(found[0].get("id"), "native-report-artifact")
-    return _report_bytes(client.bytes(
-        f"repos/{repo}/actions/artifacts/{artifact_id}/zip", limit=MAX_REPORT_ARCHIVE,
+    return _report_bytes(client.artifact_archive(
+        repo, artifact_id, limit=MAX_REPORT_ARCHIVE,
     ))
 
 
