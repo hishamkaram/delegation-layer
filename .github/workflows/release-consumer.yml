@@ -37,7 +37,7 @@ jobs:
                      'verdict': 'fail', 'stage': 'prepare-consumer',
                      'publication': 'partial',
                      'failure': {'code': 'published_verification_incomplete'}}
-          Path(os.environ['RUNNER_TEMP'], 'published-install-receipt.json').write_text(json.dumps(receipt))
+          Path(os.environ['RUNNER_TEMP'], 'published-install-setup-failure.json').write_text(json.dumps(receipt))
           PY
       - name: Checkout trusted consumer verifier
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -81,11 +81,24 @@ jobs:
             --archive-receipt "${RUNNER_TEMP}/consumer-archive-receipt.json" \
             --extract-dir "${RUNNER_TEMP}/delegation-layer-release/extracted" \
             --receipt "${RUNNER_TEMP}/published-install-receipt.json"
+      - name: Select consumer report without replacing verifier state
+        id: consumer-report
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          receipt = root / 'published-install-receipt.json'
+          report = receipt if receipt.is_file() else root / 'published-install-setup-failure.json'
+          with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+              output.write(f'path={report}\n')
+          PY
       - name: Retain consumer result, including partial publication failures
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: published-install-${{ inputs.channel }}-${{ inputs.os }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/published-install-receipt.json
+          path: ${{ steps.consumer-report.outputs.path }}
           if-no-files-found: error
           retention-days: 30

@@ -7,13 +7,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Draft release tag to promote, for example v1.2.3'
+        description: 'Release tag to promote or verify, for example v1.2.3'
         required: true
         type: string
       native_validation_run_id:
-        description: 'Exact successful hosted native-proof validation run ID'
-        required: true
+        description: 'Exact successful hosted native-proof validation run ID; required for promotion'
+        required: false
         type: string
+      resume_published:
+        description: 'Verify an already published release and finish Homebrew; do not republish npm or GitHub'
+        required: true
+        default: false
+        type: boolean
       publish_homebrew:
         description: 'Update the Homebrew tap after release promotion'
         required: true
@@ -167,7 +172,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Checkout draft tag
+      - name: Checkout release tag
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ inputs.tag }}
@@ -187,11 +192,16 @@ jobs:
           python-version: '3.12'
 
       - name: Validate exact proof and public installation prerequisites
+        if: ${{ !inputs.resume_published }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           NATIVE_VALIDATION_RUN_ID: ${{ inputs.native_validation_run_id }}
         run: |
+          if [[ ! "${NATIVE_VALIDATION_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'native_validation_run_id is required for promotion.' >&2
+            exit 1
+          fi
           mkdir -p "${RUNNER_TEMP}/native-promotion"
           python3 .local/release-harness/scripts/validate_native_release.py promotion \
             --tag "${TAG}" --repo "${GITHUB_REPOSITORY}" \
@@ -199,15 +209,35 @@ jobs:
             --native-validation-run-id "${NATIVE_VALIDATION_RUN_ID}" \
             --work-dir "${RUNNER_TEMP}/native-promotion"
 
+      - name: Validate already published release
+        if: ${{ inputs.resume_published }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "$(gh api "repos/${GITHUB_REPOSITORY}" --jq .private)" != "false" ]]; then
+            echo 'Consumer recovery requires a public repository.' >&2
+            exit 1
+          fi
+          ready="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+            --jq '.draft == false and .prerelease == false')"
+          if [[ "${ready}" != "true" ]]; then
+            echo 'Consumer recovery requires an already published stable release.' >&2
+            exit 1
+          fi
+          if [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)" != "${TAG}" ]]; then
+            echo 'Consumer recovery requires the latest stable release to prevent a tap downgrade.' >&2
+            exit 1
+          fi
+
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.x'
 
-      - name: Validate release and npm credentials
+      - name: Validate release prerequisites
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           PUBLISH_HOMEBREW: ${{ inputs.publish_homebrew }}
           TAG: ${{ inputs.tag }}
@@ -225,10 +255,6 @@ jobs:
           package_version="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")"
           if [[ "v${package_version}" != "${TAG}" ]]; then
             echo "Tag ${TAG} must match package.json version ${package_version}." >&2
-            exit 1
-          fi
-          if [[ -z "${NPM_TOKEN}" ]]; then
-            echo 'NPM_TOKEN is required to promote the public npm package.' >&2
             exit 1
           fi
           if [[ "${PUBLISH_HOMEBREW}" == "true" && -z "${HOMEBREW_TAP_TOKEN}" ]]; then
@@ -296,10 +322,20 @@ jobs:
             echo "Release ${TAG} is missing checksums.txt." >&2
             exit 1
           fi
+      - name: Configure npm credentials
+        if: ${{ !inputs.resume_published }}
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ -z "${NPM_TOKEN}" ]]; then
+            echo 'NPM_TOKEN is required to promote the public npm package.' >&2
+            exit 1
+          fi
           printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "${RUNNER_TEMP}/npmrc"
           chmod 0600 "${RUNNER_TEMP}/npmrc"
 
       - name: Publish or verify npm package
+        if: ${{ !inputs.resume_published }}
         env:
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/npmrc
           TAG: ${{ inputs.tag }}
@@ -332,6 +368,7 @@ jobs:
           exit 1
 
       - name: Publish GitHub Release
+        if: ${{ !inputs.resume_published }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}

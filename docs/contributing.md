@@ -391,6 +391,13 @@ on Linux and macOS. Checks compare the installed binaries with the extracted
 attested archive and the entire installed skill with the tag commit. The
 unversioned path is also checked when npm and GitHub latest both name the target.
 
+If npm and GitHub publication succeeded but installation verification or the tap
+update failed, dispatch `Release` again from `main` with the latest stable tag and
+`resume_published: true`. This verifies the existing public release and resumes
+the consumer checks and optional Homebrew publication. It does not republish npm
+or GitHub, require a native validation run ID, or run provider acceptance.
+Normal promotion still requires the exact successful native validation run ID.
+
 Keep `publish_homebrew` enabled for normal releases and configure
 `HOMEBREW_TAP_TOKEN` with write access to `hishamkaram/homebrew-tap`. Only after
 both npm consumers pass does CI publish the formula and prove a fresh macOS
