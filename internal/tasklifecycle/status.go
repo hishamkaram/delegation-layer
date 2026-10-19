@@ -40,21 +40,30 @@ func Status(store *taskdir.Store, td *taskdir.TaskDir, options SupervisorOptions
 	}
 	result.ControlObservation = true
 	prepared, err := supervisorcore.ObserveTaskSupervisor(context.Background(), store, submission.Supervisor, meta, options.Options, options.InitialExecutable, runner, options.OpenStore)
-	if err != nil {
+	if err != nil && !IsPureSupervisorUncertaintyError(err) {
 		return result, err
-	}
-	client := prepared.Client
-	if client != nil {
-		defer func() { supervisorcore.CloseMaintenance(client, resultErr) }()
 	}
 	var observation pueue.Observation
 	var reconcileErr error
-	if client != nil {
+	switch client := prepared.Client; {
+	case err != nil:
+		// Pure preparation uncertainty completed no queue observation, so it
+		// reports only its unfinished command. The local durable records still
+		// own any interruption or timeout offer derived below.
+		reconcileErr = err
+		result.Pending = uncertaintyPending(err)
+	case client != nil:
+		defer func() { supervisorcore.CloseMaintenance(client, resultErr) }()
 		observation, reconcileErr = reconcileStatusAttempt(context.Background(), store.Root, td, req, meta, spec, metaHash, prepared, &result.Observation)
-	} else {
+	default:
 		observation, reconcileErr = ReconcileStatus(context.Background(), store.Root, td, req, meta, spec, metaHash, options, &result.Observation)
 	}
 	reconcileErr = errors.Join(reconcileErr, UpdateStatusStops(context.Background(), td, &result.Observation, observation))
+	if reconcileErr != nil && !IsPureSupervisorUncertaintyError(reconcileErr) {
+		// A concrete fault is the authoritative result; the optional
+		// continuation offer must not advertise guidance beside it.
+		return result, reconcileErr
+	}
 	if records, recordsErr := ReadTimeoutRecords(td); recordsErr == nil {
 		offer, offerErr := ObserveTimeoutContinuationWithRecords(store.Root, td, req, meta, records, catalog)
 		if offer != nil {

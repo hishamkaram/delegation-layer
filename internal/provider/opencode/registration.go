@@ -28,9 +28,10 @@ func Description() commonprovider.Description {
 // immutable output contract.
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
-		Description:     Description(),
-		Prepare:         PrepareCandidate,
-		PrepareExisting: PrepareExistingCandidate,
+		Description:      Description(),
+		Prepare:          PrepareCandidate,
+		PrepareExisting:  PrepareExistingCandidate,
+		PrepareSuccessor: PrepareSuccessorCandidate,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(ModeReadOnly),
 			NewInterpreter(ModeWorkspaceWrite),

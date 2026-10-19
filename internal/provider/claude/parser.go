@@ -45,6 +45,10 @@ type eventState struct {
 	resultSeen bool
 	result     resultState
 
+	// attribution is nil for every single-result policy and owns follow-up
+	// cycle state for the attributed current policy.
+	attribution *completionAttribution
+
 	semanticErr error
 }
 

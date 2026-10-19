@@ -112,7 +112,13 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
    output as an answer.
 7. If a task is timed out and its JSON says `continuation.resumable: true`, use
    `continue --task TASK_ID`, optionally with a new `--brief`. Do not create a
-   fresh unrelated dispatch to replace a resumable task.
+   fresh unrelated dispatch to replace a resumable task. The one other automatic
+   route is an `interrupted` task from `status` or `collect`, and only when
+   `failure.code` is `"task_interrupted"`, `failure.next_action` is
+   `"continue_task"`, and `continuation.resumable` is `true`; see
+   [interrupted turn](references/continuation.md#interrupted-turn). A
+   cancellation, `stop_and_report`, or failed admission always takes precedence
+   over `resumable: true`.
 8. Treat `blocked` authentication as unresolved. Do not call it compatible,
    successful, or failed provider behavior, and do not invent login commands.
 9. Never put credentials, tokens, or unrestricted provider output in a brief,
@@ -321,8 +327,8 @@ delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" status TASK_ID --json
 delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" collect TASK_ID --watch 5s --json
 ```
 
-Check `status` first: if it is `timed_out`, follow step 6 even when publication
-is pending and no outcome is present. If `interaction.pending_requests` is
+Check `status` first: if it is `timed_out` or `interrupted`, follow step 6 even
+when publication is pending or unknown and no outcome is present. If `interaction.pending_requests` is
 nonempty and the interaction is not closed, answer the questions using
 [active-task interaction](references/interaction.md) before collecting again.
 Otherwise, if `collect` exits with code `3` because publication is still
@@ -336,12 +342,15 @@ is committed. A rejected outcome is terminal evidence and must be reported as
 rejected. Payload and raw output are returned as validated descriptors; do not
 copy unrestricted provider output into the control response.
 
-### 6. Continue a timed out turn
+### 6. Continue a timed out or interrupted turn
 
-When `status` or `collect` reports `timed_out`, read
-[continuation and timeout recovery](references/continuation.md). If
-`continuation.resumable` is true, use `continue --task TASK_ID` with the original
-state root and a finite budget, then observe the returned successor ID. Do not
+When `status` or `collect` reports `timed_out` or `interrupted`, read
+[continuation and timeout recovery](references/continuation.md). Unless a
+cancellation or `stop_and_report` applies, a `timed_out` task with
+`continuation.resumable: true` may use `continue --task TASK_ID`. An
+`interrupted` task may use it only under all three conditions in rule 7;
+otherwise report it. When continuing, use the original state root and a finite
+budget, then observe the returned successor ID. Do not
 wait indefinitely for pending publication or restart the task as an unrelated
 dispatch. If continuation is unavailable, report its reason. Apply the same
 `failure` and `task_record` decisions as for dispatch; never repeat an uncertain
@@ -365,8 +374,8 @@ recruit more agents unless that is explicitly part of the task.
   model/effort options or another public command.
 - Read [result handling](references/result-handling.md) when interpreting
   admission, publication, authentication, errors, or exit codes.
-- Read [continuation](references/continuation.md) for timeout recovery or an
-  exact-session follow-up.
+- Read [continuation](references/continuation.md) for timeout or interruption
+  recovery or an exact-session follow-up.
 - Read [managed workspaces](references/workspaces.md) for optional Git
   worktrees, capture, review scope, release, and forgetting.
 - Use [read-only example](examples/read-only-task.md),

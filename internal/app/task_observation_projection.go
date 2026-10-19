@@ -33,13 +33,24 @@ func applyContinuationOffer(response *Response, root string, offer *tasklifecycl
 	if response == nil || offer == nil {
 		return
 	}
-	response.Status = "timed_out"
+	response.Status = string(offer.Cause)
 	response.Continuation = &ContinuationResponse{
 		Resumable: offer.Resumable, Mode: offer.Mode,
-		PredecessorID: offer.PredecessorID, Reason: offer.Reason,
+		PredecessorID: offer.PredecessorID, SessionSource: string(offer.SessionSource), Reason: offer.Reason,
 	}
 	if offer.Resumable {
 		response.Continuation.ContinueCommand = continuationCommand(root, offer.PredecessorID, offer.CommandRunner, offer.Supervisor)
+	}
+	switch {
+	case offer.Cause == tasklifecycle.ContinuationInterrupted:
+		failure := DispatchFailureResponse{Code: "task_interrupted", Stage: response.Command, NextAction: "stop_and_report"}
+		if offer.Resumable {
+			failure.NextAction = "continue_task"
+		}
+		response.Failure = &failure
+	case offer.Cancelled && response.Outcome == nil:
+		// A committed or rejected outcome stays the authoritative result.
+		response.Failure = &DispatchFailureResponse{Code: "task_cancelled", Stage: response.Command, NextAction: "stop_and_report"}
 	}
 }
 

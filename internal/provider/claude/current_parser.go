@@ -99,68 +99,16 @@ func claudeCurrentOptionalDecimal(fields map[string]providerjson.Value, name str
 	return &text, nil
 }
 
-func claudeCurrentEventType(value providerjson.Value) (string, error) {
-	fields, err := value.Object("type")
-	if err != nil {
-		return "", err
-	}
-	typeName, err := claudeCurrentRequiredText(fields, "type", 256)
-	if err != nil {
-		return "", errors.New("event type is not a nonempty string")
-	}
-	return typeName, nil
-}
-
-type claudeCurrentEvent struct {
-	typeName string
-	fields   map[string]providerjson.Value
-	value    providerjson.Value
-}
-
-func claudeCurrentEventFields(value providerjson.Value, typeName string) (map[string]providerjson.Value, error) {
-	names := []string{"session_id"}
-	switch typeName {
-	case "system":
-		names = append(names, "subtype", "claude_code_version", "permissionMode", "cwd", "apiKeySource", "tools", "mcp_servers", "model", "state", "task_type", "task_id", "patch")
-	case "result":
-		names = append(names, "subtype", "is_error", "result", "stop_reason", "errors", "permission_denials")
-	case "assistant", "user":
-		names = append(names, "message")
-	case "control_response":
-		names = append(names, "response")
-	case "control_request":
-		names = append(names, "request_id", "request")
-	case "control_cancel_request":
-		names = append(names, "request_id")
-	}
-	return value.Object(names...)
-}
-
-func decodeClaudeCurrentEvent(value providerjson.Value) (claudeCurrentEvent, error) {
-	if err := value.ValidateUniqueKeys(); err != nil {
-		return claudeCurrentEvent{}, err
-	}
-	typeName, err := claudeCurrentEventType(value)
-	if err != nil {
-		return claudeCurrentEvent{}, err
-	}
-	fields, err := claudeCurrentEventFields(value, typeName)
-	if err != nil {
-		return claudeCurrentEvent{}, err
-	}
-	return claudeCurrentEvent{typeName: typeName, fields: fields, value: value}, nil
-}
-
 func parseStdout(reader io.Reader) (eventState, error) {
-	return parseCurrentClaudeStdoutForMode(reader, Mode)
+	return parseCurrentClaudeStdoutForMode(reader, Mode, scopedAttributedCompletion)
 }
 
-func parseStdoutForMode(reader io.Reader, mode string) (eventState, error) {
-	return parseCurrentClaudeStdoutForMode(reader, mode)
+func parseStdoutForMode(reader io.Reader, mode string, policy completionPolicy) (eventState, error) {
+	return parseCurrentClaudeStdoutForMode(reader, mode, policy)
 }
 
-func parseCurrentClaudeStdoutForMode(reader io.Reader, mode string) (eventState, error) {
-	state := eventState{mode: mode, current: true}
+func parseCurrentClaudeStdoutForMode(reader io.Reader, mode string, policy completionPolicy) (eventState, error) {
+	state := eventState{mode: mode, current: true, attribution: newCompletionAttribution(policy)}
 	if mode != Mode && mode != WorkspaceWriteMode {
 		state.semanticErr = fmt.Errorf("unsupported Claude permission mode %q", mode)
 		return state, nil
@@ -181,6 +129,7 @@ func parseCurrentClaudeStdoutForMode(reader io.Reader, mode string) (eventState,
 	if readErr != nil {
 		return state, fmt.Errorf("reading Claude stdout: %w", readErr)
 	}
+	state.attribution.finish(&state)
 	return state, nil
 }
 
@@ -190,7 +139,7 @@ func processClaudeCurrentRecord(state *eventState, value providerjson.Value) err
 		state.markSemantic(err.Error())
 		return state.semanticErr
 	}
-	applyClaudeCurrentEvent(state, event)
+	applyClaudeCompletionEvent(state, event)
 	return state.semanticErr
 }
 
@@ -370,13 +319,17 @@ func applyClaudeCurrentMessageEvent(state *eventState, fields map[string]provide
 		state.markSemantic(eventType + " event precedes system/init")
 		return
 	}
-	message, ok := fields["message"]
-	if !ok || claudeCurrentValueIsNull(message) {
-		return
-	}
-	if err := validateClaudeCurrentMessage(message, eventType); err != nil {
+	if err := validateClaudeCurrentMessageEvent(fields, eventType); err != nil {
 		state.markSemantic(err.Error())
 	}
+}
+
+func validateClaudeCurrentMessageEvent(fields map[string]providerjson.Value, eventType string) error {
+	message, ok := fields["message"]
+	if !ok || claudeCurrentValueIsNull(message) {
+		return nil
+	}
+	return validateClaudeCurrentMessage(message, eventType)
 }
 
 func validateClaudeCurrentMessage(value providerjson.Value, eventType string) error {

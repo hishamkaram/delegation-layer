@@ -31,14 +31,14 @@ func HasTerminatedBudgetStop(records []taskdir.StopRecord) bool {
 	return false
 }
 
-func timeoutContinuationReason(mode commonprovider.ContinuationMode, session *task.ProviderRefRecord, runnerReleased bool, runner string, launchStateRecorded bool) string {
+func continuationReason(mode commonprovider.ContinuationMode, sessionAvailable, runnerReleased bool, runner string, launchStateRecorded bool) string {
 	switch mode {
 	case commonprovider.ContinuationUnsupported:
 		return "provider does not advertise continuation"
 	case commonprovider.ContinuationCheckpoint:
 		return "checkpoint continuation is not implemented"
 	case commonprovider.ContinuationNative:
-		if session == nil {
+		if !sessionAvailable {
 			return "provider session identity is unavailable"
 		}
 		if !launchStateRecorded {

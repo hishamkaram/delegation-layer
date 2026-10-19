@@ -23,8 +23,12 @@ const (
 	legacyNativeWorkspaceWritePredicateVersion     = "native-permissions-v1"
 	previousNativeProbePredicateVersion            = "native-permissions-v2"
 	previousNativeProbeWorkspaceWriteVersion       = "native-permissions-v3"
-	predicateVersion                               = "native-permissions-v3"
-	workspaceWritePredicateVersion                 = "native-permissions-v4"
+	// The pre-attribution revisions bind the relaxed probe and the
+	// single-result completion policy. Fresh tasks use the attributed policy.
+	preAttributionPredicateVersion               = "native-permissions-v3"
+	preAttributionWorkspaceWritePredicateVersion = "native-permissions-v4"
+	predicateVersion                             = "native-permissions-v4"
+	workspaceWritePredicateVersion               = "native-permissions-v5"
 
 	// The legacy reference keeps already-sealed read-only evidence collectible
 	// after release-version gates were removed. It is never used for admission.
@@ -85,7 +89,7 @@ func previousNativeProbeContractForMode(mode string) string {
 	return ""
 }
 
-func correctedNativeContractForMode(mode string) string {
+func preAttributionNativeContractForMode(mode string) string {
 	contract := previousNativeProbeContractForMode(mode)
 	if contract == "" {
 		return ""
@@ -98,9 +102,63 @@ func correctedNativeContractForMode(mode string) string {
 	return strings.Replace(contract, `,"success":`, `,"runtime_probe":{"required_flags":["--print"]},"success":`, 1)
 }
 
+// unscopedCompletionAttributionContract is the policy text of the retained
+// read-only (native-permissions-v4) and workspace-write (native-permissions-v5)
+// revisions sealed before message scope existed: it opens a follow-up cycle for
+// every assistant or user event after a result, whatever its
+// parent_tool_use_id. Its bytes are frozen with those revisions' digests.
+const unscopedCompletionAttributionContract = `"completion_attribution":"the first result answers the caller turn: its origin is absent or kind=human, and its result_index, when present, is 0; later results in the same invocation are accepted only as provider-native background notifications: every result then carries result_index, indexes are consecutive without gap or duplicate, and each later result has origin kind=task-notification without subkind; another or unknown origin, any subkind, a missing or mixed counter, a second result without counters, or a later failed, refused, interrupted, or truncated result rejects; for every result, terminal_reason when present must be completed, documented max_turns, api_error, aborted_streaming, and aborted_tools reasons reject as failures, and any other value is malformed; queued_turn_count when present must be 0 and a positive count rejects as queued human input; an explicit null result_index, origin, terminal_reason, or queued_turn_count is malformed; an empty or missing follow-up answer settles only as a coalesced batch acknowledgement with num_turns=0, which stays pending until a later non-empty attributed result, and any other empty follow-up or a pending acknowledgement at EOF rejects; a follow-up cycle may repeat system/init only before its messages and only with the same session, version, cwd, permission mode, apiKeySource, model, tools, and MCP server count; assistant or user events after a result open a follow-up cycle that must end with an attributed result before EOF; only the principal result is selected as the answer, follow-up answers are never selected, and principal failure, refusal, empty answer, or identity conflict rejects regardless of later follow-ups; main-agent usage, num_turns, and duration come from the principal result, while cumulative whole-tree total_cost_usd comes from the last attributed result and is never summed"`
+
+// scopedCompletionAttributionContract is the current policy text: leading
+// acknowledgements may precede the caller's result, root messages open
+// follow-up cycles, nested agent messages are validated and excluded, and an
+// invalid message scope is malformed.
+const scopedCompletionAttributionContract = `"completion_attribution":"the first result that is not a leading acknowledgement answers the caller turn: its origin is absent or kind=human, and its result_index, when present, is 0, or, after leading acknowledgements, is the next consecutive index and is then required; a leading acknowledgement precedes the caller's result and is a result with origin kind=task-notification without subkind, subtype success, is_error false, an empty string result, num_turns explicitly 0, and result_index starting at 0 and consecutive, accepted after the initial system/init and before any root assistant or user message since that init or the previous acknowledgement, with one identical repeated system/init permitted once after an acknowledgement and before root messages; an acknowledgement is never the answer, never contributes usage or a cost baseline, and never closes an interactive input; a failed, refused, aborted, or queued acknowledgement always rejects and reports its canonical refusal even when the caller's result succeeds or never arrives, unless a higher-priority malformed or incomplete fault takes precedence, which still rejects; a stream of only acknowledgements is incomplete, and a nonempty, missing, mistyped, or wrongly counted acknowledgement, a duplicate or unmatched repeated init, or a changed identity is malformed; later results in the same invocation are accepted only as provider-native background notifications: every result then carries result_index, indexes are consecutive without gap or duplicate, and each later result has origin kind=task-notification without subkind; another or unknown origin, any subkind, a missing or mixed counter, a second result without counters, or a later failed, refused, interrupted, or truncated result rejects; for every result, terminal_reason when present must be completed, documented max_turns, api_error, aborted_streaming, and aborted_tools reasons reject as failures, and any other value is malformed; queued_turn_count when present must be 0 and a positive count rejects as queued human input; an explicit null result_index, origin, terminal_reason, or queued_turn_count is malformed; an empty or missing follow-up answer settles only as a coalesced batch acknowledgement with num_turns=0, which stays pending until a later non-empty attributed result, and any other empty follow-up or a pending acknowledgement at EOF rejects; a follow-up cycle may repeat system/init only before its root messages and only with the same session, version, cwd, permission mode, apiKeySource, model, tools, and MCP server count; root assistant or user events after a result, those whose parent_tool_use_id is absent or null, open a follow-up cycle that must end with an attributed result before EOF; nested agent messages, those whose parent_tool_use_id is a nonblank string of at most 1024 bytes without NUL or invalid UTF-8, stay structurally validated and session-bound but never open, advance, or settle a cycle or batch, are never selected as an answer, and never affect accounting; any other parent_tool_use_id value, including an empty, blank, oversized, mistyped, or case-aliased field, is malformed before or after the principal result; only the principal result is selected as the answer, follow-up answers are never selected, and principal failure, refusal, empty answer, or identity conflict rejects regardless of later follow-ups; main-agent usage, num_turns, and duration come from the principal result, while cumulative whole-tree total_cost_usd comes from the last attributed result and is never summed"`
+
+// attributedNativeContractWithPolicy derives an attributed revision from the
+// frozen pre-attribution bytes and the given completion policy text.
+func attributedNativeContractWithPolicy(mode, policy string) string {
+	contract := preAttributionNativeContractForMode(mode)
+	if contract == "" {
+		return ""
+	}
+	if mode == Mode {
+		contract = strings.Replace(contract, `"version":"native-permissions-v3"`, `"version":"native-permissions-v4"`, 1)
+		contract = strings.Replace(contract, "exactly one result object is required after init;", "one caller-attributed principal result is required after init;", 1)
+		contract = strings.Replace(contract, "substantive assistant/user continuation after result, conflicting results, and identity conflicts reject", "unattributed assistant/user continuation after result, unattributed or conflicting results, and identity conflicts reject", 1)
+		contract = strings.Replace(contract, "valid init, one successful result, and a non-whitespace result string", "valid init, one successful principal result with a non-whitespace result string, and settled attributed follow-ups", 1)
+	} else {
+		contract = strings.Replace(contract, `"version":"native-permissions-v4"`, `"version":"native-permissions-v5"`, 1)
+		contract = strings.Replace(contract, "valid write-mode init, one successful non-whitespace result", "valid write-mode init, one successful non-whitespace principal result, and settled attributed follow-ups", 1)
+	}
+	return strings.Replace(contract, `,"success":`, `,`+policy+`,"success":`, 1)
+}
+
+// attributedNativeContractForMode is the current scoped contract. A later
+// system/init is governed by completion_attribution, so the read-only init
+// clause states only the initial one.
+func attributedNativeContractForMode(mode string) string {
+	contract := attributedNativeContractWithPolicy(mode, scopedCompletionAttributionContract)
+	if mode == Mode {
+		contract = strings.Replace(contract, "exactly one system/init object is required;", "one initial system/init object is required, and any later system/init is governed only by completion_attribution;", 1)
+	}
+	return contract
+}
+
+// unscopedNativeContract returns the exact contract bytes of the retained
+// unscoped revision for mode: the attributed bytes sealed before message scope
+// existed, with the original completion text and without the scoped read-only
+// init clause. Read-only is native-permissions-v4 (digest
+// f7c1053edce279071b9caa46f727cf196d5998fc05d07afdf9c5378acd9eb25c) and
+// workspace-write is native-permissions-v5 (digest
+// 333a689a864dfb03ecd4a6eace97bcf6964fea96768ddbbb86a92d98c4a7a76b).
+func unscopedNativeContract(mode string) string {
+	return attributedNativeContractWithPolicy(mode, unscopedCompletionAttributionContract)
+}
+
 // Contract returns the current native canonical bytes whose digest identifies
 // the interpreter.
-func Contract() string { return correctedNativeContractForMode(Mode) }
+func Contract() string { return attributedNativeContractForMode(Mode) }
 
 // ContractDigest returns the lowercase SHA-256 digest bound into Reference.
 func ContractDigest() string { return task.ComputeSHA256([]byte(Contract())) }
@@ -111,7 +169,7 @@ func Reference() task.PredicateRef {
 }
 
 // WorkspaceWriteContract returns the current native workspace-write contract.
-func WorkspaceWriteContract() string { return correctedNativeContractForMode(WorkspaceWriteMode) }
+func WorkspaceWriteContract() string { return attributedNativeContractForMode(WorkspaceWriteMode) }
 
 // WorkspaceWriteReference returns a predicate reference bound to the native
 // bypassPermissions profile. Keeping a distinct reference prevents a read-only
@@ -122,11 +180,18 @@ func WorkspaceWriteReference() task.PredicateRef {
 
 // ContractForMode returns the immutable output contract for mode.
 func ContractForMode(mode string) string {
-	return correctedNativeContractForMode(mode)
+	return attributedNativeContractForMode(mode)
+}
+
+// PreAttributionNativeContractForMode returns the frozen relaxed-probe native
+// contract bound to the single-result completion policy. Adapters whose
+// retained predicates embed it use these exact bytes for reconstruction.
+func PreAttributionNativeContractForMode(mode string) string {
+	return preAttributionNativeContractForMode(mode)
 }
 
 // PreviousNativeContractForMode returns the exact native contract exposed by
-// ContractForMode before the current predicate revision. Adapters with a
+// ContractForMode before the relaxed runtime-probe revision. Adapters with a
 // retained predicate that embeds Claude's contract use these frozen bytes for
 // reconstruction.
 func PreviousNativeContractForMode(mode string) string {
@@ -159,6 +224,42 @@ func ReferenceForMode(mode string) task.PredicateRef {
 		version = workspaceWritePredicateVersion
 	}
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+func preAttributionReferenceForMode(mode string) task.PredicateRef {
+	contract := preAttributionNativeContractForMode(mode)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	version := preAttributionPredicateVersion
+	if mode == WorkspaceWriteMode {
+		version = preAttributionWorkspaceWritePredicateVersion
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+// unscopedReference identifies the retained unscoped attributed revision of
+// mode. It shares its version string with the current reference of the same
+// mode and differs by digest. Both modes were admitted under the unscoped
+// policy; the references are replay-only and never a fresh default, recovery
+// source, or recovery target. An unsupported mode has no revision.
+func unscopedReference(mode string) task.PredicateRef {
+	contract := unscopedNativeContract(mode)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	version := predicateVersion
+	if mode == WorkspaceWriteMode {
+		version = workspaceWritePredicateVersion
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+// isUnscopedReference reports whether reference is the retained unscoped
+// revision for a request mode. The explicit mode guard is required because the
+// zero reference equals the zero reference an unsupported mode yields.
+func isUnscopedReference(mode string, reference task.PredicateRef) bool {
+	return (mode == Mode || mode == WorkspaceWriteMode) && reference.Equal(unscopedReference(mode))
 }
 
 func previousNativeProbeReferenceForMode(mode string) task.PredicateRef {

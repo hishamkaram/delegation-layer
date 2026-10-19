@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -67,11 +68,19 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 	if err != nil {
 		return failed(response, err, 1)
 	}
+	if observed.Interrupted() {
+		return failed(response, errTaskInterrupted, 1)
+	}
 	if observed.Waiting {
 		return commandResult{response: response, code: 3}
 	}
 	return commandResult{response: response, code: 0}
 }
+
+// errTaskInterrupted is collect's operational failure for a turn whose native
+// lifetime closed without a seal or outcome. Status reports the same
+// observation successfully because observing it is not a failure.
+var errTaskInterrupted = errors.New("task was interrupted before it published an outcome")
 
 func reportTaskMaintenanceDeferral(err error) {
 	if err != nil {

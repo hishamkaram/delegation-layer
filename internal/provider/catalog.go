@@ -432,17 +432,48 @@ func validateRequestOptions(request task.TaskRecord, description Description) er
 // Candidate validates capabilities and obtains static preparation inputs. Its
 // finalizer retains artifact and effective-profile checks after inspection.
 func (c Catalog) Candidate(request task.TaskRecord) (ProfileCandidate, error) {
-	return c.candidate(request, nil)
+	return c.candidate(request, func(registration Registration) (ProfileCandidate, error) {
+		return registration.Prepare(request)
+	})
 }
 
 // ExistingCandidate reconstructs a profile for an already admitted task. A
 // provider may use this boundary to retain a historical preparation contract;
-// new admission remains on Candidate.
+// new admission remains on Candidate or SuccessorCandidate.
 func (c Catalog) ExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (ProfileCandidate, error) {
-	return c.candidate(request, &meta)
+	return c.candidate(request, func(registration Registration) (ProfileCandidate, error) {
+		return prepareRecorded(registration, request, meta)
+	})
 }
 
-func (c Catalog) candidate(request task.TaskRecord, existing *task.MetaRecord) (ProfileCandidate, error) {
+// SuccessorCandidate prepares a new exact-session continuation task from its
+// predecessor's immutable record. A provider may use PrepareSuccessor to select
+// the current compatible output interpreter for the new task; without that
+// hook the predecessor's recorded contract is reconstructed as by
+// ExistingCandidate. The predecessor record is never modified.
+func (c Catalog) SuccessorCandidate(request task.TaskRecord, predecessorMeta task.MetaRecord) (ProfileCandidate, error) {
+	return c.candidate(request, func(registration Registration) (ProfileCandidate, error) {
+		if registration.PrepareSuccessor != nil {
+			return registration.PrepareSuccessor(request, predecessorMeta)
+		}
+		return prepareRecorded(registration, request, predecessorMeta)
+	})
+}
+
+// prepareRecorded reconstructs the recorded preparation contract: the
+// provider's PrepareExisting hook, or its current Prepare when it has none.
+func prepareRecorded(registration Registration, request task.TaskRecord, meta task.MetaRecord) (ProfileCandidate, error) {
+	if registration.PrepareExisting != nil {
+		return registration.PrepareExisting(request, meta)
+	}
+	return registration.Prepare(request)
+}
+
+// candidatePreparer selects the provider preparation operation for one
+// registration. Every operation shares the validation and binding below.
+type candidatePreparer func(Registration) (ProfileCandidate, error)
+
+func (c Catalog) candidate(request task.TaskRecord, prepare candidatePreparer) (ProfileCandidate, error) {
 	if err := c.ValidateRequest(request); err != nil {
 		return ProfileCandidate{}, err
 	}
@@ -450,12 +481,7 @@ func (c Catalog) candidate(request task.TaskRecord, existing *task.MetaRecord) (
 	if err != nil {
 		return ProfileCandidate{}, err
 	}
-	var candidate ProfileCandidate
-	if existing != nil && registration.PrepareExisting != nil {
-		candidate, err = registration.PrepareExisting(request, *existing)
-	} else {
-		candidate, err = registration.Prepare(request)
-	}
+	candidate, err := prepare(registration)
 	if err != nil {
 		return ProfileCandidate{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, err)
 	}

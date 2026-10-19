@@ -117,7 +117,7 @@ func sameClaudeInit(left, right initState) bool {
 }
 
 func (p *claudeInteraction) isFinished() bool {
-	return p.resultSeen && len(p.agents) == 0 && len(p.pending) == 0 && (p.sessionState == "" || p.sessionState == "idle")
+	return p.resultSeen && p.state.attribution.settled() && len(p.agents) == 0 && len(p.pending) == 0 && (p.sessionState == "" || p.sessionState == "idle")
 }
 
 func (p *claudeInteraction) readyEvent() (task.InteractionEvent, error) {

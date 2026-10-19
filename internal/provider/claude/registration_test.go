@@ -17,7 +17,7 @@ func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 		t.Fatalf("runtime flag requirements are missing: %+v", description)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || len(registration.Interpreters) != 17 {
+	if registration.Prepare == nil || len(registration.Interpreters) != 25 {
 		t.Fatalf("registration did not expose preparation and interpreter: %+v", registration)
 	}
 	checks := []struct {
@@ -33,6 +33,14 @@ func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 		{8, registration.Interpreters[8].Reference().Equal(LegacyReference())},
 		{13, registration.Interpreters[13].Reference().Equal(previousNativeProbeReferenceForMode(Mode))},
 		{14, registration.Interpreters[14].Reference().Equal(previousNativeProbeReferenceForMode(WorkspaceWriteMode))},
+		{17, registration.Interpreters[17].Reference().Equal(preAttributionReferenceForMode(Mode))},
+		{18, registration.Interpreters[18].Reference().Equal(preAttributionReferenceForMode(WorkspaceWriteMode))},
+		{19, registration.Interpreters[19].Reference().Equal(preAttributionInteractionReference(Mode))},
+		{20, registration.Interpreters[20].Reference().Equal(preAttributionInteractionReference(WorkspaceWriteMode))},
+		{21, registration.Interpreters[21].Reference().Equal(unscopedReference(WorkspaceWriteMode))},
+		{22, registration.Interpreters[22].Reference().Equal(unscopedInteractionReference(Mode))},
+		{23, registration.Interpreters[23].Reference().Equal(unscopedInteractionReference(WorkspaceWriteMode))},
+		{24, registration.Interpreters[24].Reference().Equal(unscopedReference(Mode))},
 	}
 	for _, check := range checks {
 		if !check.matches {
@@ -67,7 +75,12 @@ func TestRetainedClaudeRevisionsAreReplayOnlyWithOneRecoveryTarget(t *testing.T)
 			target task.PredicateRef
 		}{
 			{name: "native", source: historicalNativeReferenceForMode(mode), target: ReferenceForMode(mode)},
+			{name: "previous probe", source: previousNativeProbeReferenceForMode(mode), target: ReferenceForMode(mode)},
+			{name: "pre-attribution", source: preAttributionReferenceForMode(mode), target: ReferenceForMode(mode)},
 			{name: "interactive", source: historicalInteractionReference(mode), target: interactionReference(mode)},
+			{name: "interactive previous probe", source: previousInteractionReference(mode), target: interactionReference(mode)},
+			{name: "interactive pre-attribution", source: preAttributionInteractionReference(mode), target: interactionReference(mode)},
+			{name: "interactive unscoped", source: unscopedInteractionReference(mode), target: interactionReference(mode)},
 		}
 		for _, test := range tests {
 			t.Run(mode+"/"+test.name, func(t *testing.T) {

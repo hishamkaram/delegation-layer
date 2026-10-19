@@ -6,6 +6,7 @@ func continuationCommandResult(observed tasklifecycle.ContinuationResult) comman
 	if observed.Dispatch != nil {
 		result := dispatchCommandResult(*observed.Dispatch)
 		result = decorateContinuationResult(result, observed.Root, observed.PredecessorID, observed.Mode, observed.Runner, observed.Supervisor)
+		result.response.Continuation.SessionSource = string(observed.SessionSource)
 		applyEnvironmentRestoreError(&result, observed.EnvironmentRestoreError)
 		return result
 	}

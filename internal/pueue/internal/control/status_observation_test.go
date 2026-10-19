@@ -6,19 +6,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
+	"golang.org/x/sys/unix"
 )
 
 type privateTaskObservationResult struct {
 	observation Observation
 	err         error
 }
+
+func (r privateTaskObservationResult) pendingCommand() *Pending { return r.observation.Pending }
 
 func TestReconcileStatusSharesOnePrivateSnapshotAcrossOverlappingClients(t *testing.T) {
 	fixture := newPrivateSupervisorTestFixture(t)
@@ -184,7 +189,42 @@ func TestPrivateTaskObservationReadinessIsProvisionedByLifecycleOwner(t *testing
 	}
 }
 
+// The first caller is canceled at the exact start of its native status
+// command, so its observation timeout stays an ordinary setup bound. The
+// pre-start variant holds the observation lock first: waiting before the
+// command starts must not cancel anything.
 func TestReconcileStatusRetainsObservationOwnerUntilPendingCommandCompletes(t *testing.T) {
+	for _, preStartLock := range []bool{false, true} {
+		name := "command start"
+		if preStartLock {
+			name = "pre-start lock wait"
+		}
+		t.Run(name, func(t *testing.T) { runPendingPrivateTaskObservationCase(t, preStartLock) })
+	}
+}
+
+// pendingStatusScenario is one bound private supervisor whose fake status
+// command blocks until the test releases it. scope owns both callers, their
+// contexts and the release marker.
+type pendingStatusScenario struct {
+	bound       *Client
+	stateRoot   string
+	controlPath string
+	startedPath string
+	releasePath string
+	environment []string
+	identity    Identity
+	scope       *testCallScope
+}
+
+// privateStatusStart records the first caller's shared-observation entry and
+// the exact start of its native status snapshot command.
+type privateStatusStart struct {
+	entered chan struct{}
+	started atomic.Bool
+}
+
+func runPendingPrivateTaskObservationCase(t *testing.T, preStartLock bool) {
 	fixture := newPrivateSupervisorTestFixture(t)
 	bound := bindPrivateForTest(t, fixture.stateRoot, fixture.clientPath, fixture.daemonPath)
 	t.Cleanup(func() {
@@ -195,50 +235,120 @@ func TestReconcileStatusRetainsObservationOwnerUntilPendingCommandCompletes(t *t
 	identity := privateTaskObservationTestIdentities(1)[0]
 	writePrivateTaskObservationTestStatus(t, fixture.stateRoot, []Identity{identity})
 	base := filepath.Join(fixture.stateRoot, privateSupervisorDirectory)
-	controlPath := filepath.Join(base, "task-observation-pending-controls")
-	startedPath := filepath.Join(base, "task-observation-pending-started")
-	releasePath := filepath.Join(base, "task-observation-pending-release")
-	environment := append(os.Environ(),
-		"PRIVATE_CONTROL_MARKER="+controlPath,
-		"PRIVATE_STATUS_STARTED="+startedPath,
-		"PRIVATE_STATUS_RELEASE="+releasePath,
-	)
-
-	firstOptions := bound.options
-	firstOptions.Environment = environment
-	firstOptions.ObservationTimeout = 20 * time.Millisecond
-	first := newPrivateTaskObservationClient(t, bound, firstOptions)
-	firstPending := pendingPrivateTaskObservation(t, first, identity)
-	waitForPrivateFixtureMarker(t, startedPath)
-
-	secondEntered := make(chan struct{}, 1)
-	secondOptions := bound.options
-	secondOptions.Environment = environment
-	secondOptions.ObservationTimeout = 5 * time.Second
-	secondOptions.taskObservationEntryObserver = func() { secondEntered <- struct{}{} }
-	second := newPrivateTaskObservationClient(t, bound, secondOptions)
-	secondResult := make(chan error, 1)
-	go func() {
-		secondResult <- reconcilePrivateTaskObservationForTest(second, identity)
-	}()
-	waitForPrivateTaskObservationEntries(t, secondEntered, 1)
-	select {
-	case resultErr := <-secondResult:
-		t.Fatalf("second caller passed an in-flight observation owner: %v", resultErr)
-	case <-time.After(50 * time.Millisecond):
+	scenario := pendingStatusScenario{
+		bound: bound, stateRoot: fixture.stateRoot, identity: identity,
+		controlPath: filepath.Join(base, "task-observation-pending-controls"),
+		startedPath: filepath.Join(base, "task-observation-pending-started"),
+		releasePath: filepath.Join(base, "task-observation-pending-release"),
+		scope:       newTestCallScope(t, bound.options),
 	}
-	if got := privateTaskObservationStatusCount(t, controlPath); got != 1 {
+	scenario.scope.onRelease(func() { releasePrivateStatusOnCleanup(t, scenario.releasePath) })
+	scenario.environment = append(os.Environ(),
+		"PRIVATE_CONTROL_MARKER="+scenario.controlPath,
+		"PRIVATE_STATUS_STARTED="+scenario.startedPath,
+		"PRIVATE_STATUS_RELEASE="+scenario.releasePath,
+	)
+	firstContext, cancelFirst := scenario.scope.cancelableContext()
+	firstOptions := bound.options
+	firstOptions.Environment = scenario.environment
+	firstStart := cancelAtStatusStart(&firstOptions, cancelFirst)
+	first := newPrivateTaskObservationClient(t, bound, firstOptions)
+	held := holdPrivateTaskObservationLock(t, base, preStartLock)
+	firstCall := scenario.start(first, firstContext)
+	if held != nil {
+		awaitEntry(scenario.scope, firstStart.entered, firstCall, "first caller did not enter the shared observation")
+		if firstStart.started.Load() {
+			t.Fatal("first status command started while the observation lock was still held")
+		}
+		if err := closeBootstrapLock(held); err != nil {
+			t.Fatal(err)
+		}
+	}
+	firstPending := pendingPrivateTaskObservation(t, scenario.scope, firstCall, firstStart)
+	waitForPrivateFixtureMarker(t, scenario.startedPath)
+	scenario.assertSecondCallerWaits(t, firstPending)
+}
+
+// cancelAtStatusStart installs observers that only record facts: the caller's
+// entry, and the started event of its status snapshot command, which cancels
+// the caller's context.
+func cancelAtStatusStart(options *Options, cancel context.CancelFunc) *privateStatusStart {
+	start := &privateStatusStart{entered: make(chan struct{}, 1)}
+	options.taskObservationEntryObserver = func() {
+		select {
+		case start.entered <- struct{}{}:
+		default:
+		}
+	}
+	options.Observer = func(event CommandEvent) {
+		if event.Stage == "started" && slices.Contains(event.Argv, "status") && slices.Contains(event.Argv, "--json") {
+			start.started.Store(true)
+			cancel()
+		}
+	}
+	return start
+}
+
+func (s pendingStatusScenario) start(client *Client, ctx context.Context) *testCall[privateTaskObservationResult] {
+	return startTestCall(s.scope, func() privateTaskObservationResult {
+		observation, err := client.ReconcileStatus(ctx, s.identity)
+		return privateTaskObservationResult{observation: observation, err: err}
+	})
+}
+
+// holdPrivateTaskObservationLock takes the published observation lock before
+// the first caller starts, when requested.
+func holdPrivateTaskObservationLock(t *testing.T, base string, hold bool) *bootstrapLock {
+	t.Helper()
+	if !hold {
+		return nil
+	}
+	lock, err := acquireExistingSupervisorLock(t.Context(), filepath.Join(base, privateTaskObservationLockName), unix.LOCK_EX|unix.LOCK_NB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := closeBootstrapLock(lock); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	return lock
+}
+
+// assertSecondCallerWaits requires a later caller to enter, start no status
+// command and find the observation lock still owned by the first caller's
+// pending command; after release both observations complete naturally.
+func (s pendingStatusScenario) assertSecondCallerWaits(t *testing.T, firstPending *Pending) {
+	t.Helper()
+	secondEntered := make(chan struct{}, 1)
+	secondOptions := s.bound.options
+	secondOptions.Environment = s.environment
+	secondOptions.taskObservationEntryObserver = func() { secondEntered <- struct{}{} }
+	second := newPrivateTaskObservationClient(t, s.bound, secondOptions)
+	secondCall := s.start(second, s.scope.context())
+	awaitEntry(s.scope, secondEntered, secondCall, "second caller did not enter the shared observation")
+	if got := privateTaskObservationStatusCount(t, s.controlPath); got != 1 {
 		t.Fatalf("second snapshot started while the first command was in flight: got %d status commands", got)
 	}
-
-	releasePrivateStatus(t, releasePath)
-	if !awaitPendingNaturally(firstPending, 10*time.Second) {
+	// A nonblocking exclusive acquisition skips its callback when the lock is
+	// busy; running it would prove the first caller lost its lease.
+	acquired := false
+	probeErr := withPublishedPrivateLock(t.Context(), s.stateRoot, privateTaskObservationLockName, unix.LOCK_EX|unix.LOCK_NB, func() error {
+		acquired = true
+		return nil
+	})
+	if probeErr != nil || acquired {
+		t.Fatalf("pending first observation did not retain the observation lock: acquired=%t err=%v", acquired, probeErr)
+	}
+	releasePrivateStatus(t, s.releasePath)
+	if !awaitPendingNaturally(firstPending, time.Until(s.scope.cutoff)) {
 		t.Fatal("first status command did not complete after release")
 	}
-	if err := awaitPrivateTaskObservationResult(t, secondResult); err != nil {
-		t.Fatalf("second status observation failed after owner completion: %v", err)
+	result := awaitCall(s.scope, secondCall, "second status observation")
+	if result.err != nil || !result.observation.Matched || result.observation.State != StateRunning {
+		t.Fatalf("second status observation failed after owner completion: observation=%+v err=%v", result.observation, result.err)
 	}
-	if got := privateTaskObservationStatusCount(t, controlPath); got != 2 {
+	if got := privateTaskObservationStatusCount(t, s.controlPath); got != 2 {
 		t.Fatalf("post-pending observation started %d status commands, want 2", got)
 	}
 }
@@ -252,32 +362,16 @@ func newPrivateTaskObservationClient(t *testing.T, bound *Client, options Option
 	return client
 }
 
-func pendingPrivateTaskObservation(t *testing.T, client *Client, identity Identity) *Pending {
+// pendingPrivateTaskObservation awaits the first caller, which its own
+// context canceled at the exact status command start, and requires the
+// in-flight command it still owns.
+func pendingPrivateTaskObservation(t *testing.T, scope *testCallScope, call *testCall[privateTaskObservationResult], start *privateStatusStart) *Pending {
 	t.Helper()
-	observation, err := client.ReconcileStatus(context.Background(), identity)
-	if !errors.Is(err, ErrInFlight) || observation.Pending == nil {
-		t.Fatalf("short observation did not retain its command owner: observation=%+v err=%v", observation, err)
+	result := awaitCall(scope, call, "first status observation")
+	if !start.started.Load() || !errors.Is(result.err, ErrInFlight) || result.observation.Pending == nil {
+		t.Fatalf("canceled observation did not retain its started command owner: started=%t observation=%+v err=%v", start.started.Load(), result.observation, result.err)
 	}
-	return observation.Pending
-}
-
-func reconcilePrivateTaskObservationForTest(client *Client, identity Identity) error {
-	observation, err := client.ReconcileStatus(context.Background(), identity)
-	if err == nil && (!observation.Matched || observation.State != StateRunning) {
-		return ErrUnknown
-	}
-	return err
-}
-
-func awaitPrivateTaskObservationResult(t *testing.T, results <-chan error) error {
-	t.Helper()
-	select {
-	case err := <-results:
-		return err
-	case <-time.After(10 * time.Second):
-		t.Fatal("second status observation did not finish")
-		return nil
-	}
+	return result.observation.Pending
 }
 
 func privateTaskObservationTestIdentities(count int) []Identity {

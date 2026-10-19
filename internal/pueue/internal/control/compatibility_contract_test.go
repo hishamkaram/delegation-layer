@@ -148,18 +148,11 @@ func assertPrivateBootstrapAndTransitionLocks(t *testing.T, ctx context.Context,
 func assertPrivateQueueIdentityMutationContract(t *testing.T, ctx context.Context, client *Client, base string) {
 	t.Helper()
 	err := client.withPrivateQueueIdentityMutation(ctx, func(mutationContext context.Context) error {
-		for _, name := range []string{
-			privateQueueWriterIntentLockName,
-			privateQueueIdentityGateLockName,
-			privateQueueIdentityLockName,
-		} {
-			path := filepath.Join(base, name)
-			assertPrivateMode(t, path, 0o600)
-			assertPrivateLockHeld(t, mutationContext, path)
+		for _, name := range privateQueueIdentityMutationLockNames {
+			assertPrivateMode(t, filepath.Join(base, name), 0o600)
 		}
-		intent, readErr := os.ReadFile(filepath.Join(base, privateQueueWriterIntentLockName))
-		if readErr != nil || string(intent) != privateQueueWriterWaitingState {
-			t.Fatalf("writer intent must be committed before mutation callback: state=%q err=%v", intent, readErr)
+		if heldErr := privateQueueIdentityMutationHeld(mutationContext, base); heldErr != nil {
+			t.Fatalf("queue identity mutation contract at its callback boundary: %v", heldErr)
 		}
 		return nil
 	})
@@ -236,17 +229,100 @@ func assertPrivateMode(t *testing.T, path string, want os.FileMode) {
 	}
 }
 
+// privateQueueIdentityMutationLockNames is the exclusive writer's lock order:
+// writer intent, then the short reader gate, then queue identity.
+var privateQueueIdentityMutationLockNames = []string{
+	privateQueueWriterIntentLockName,
+	privateQueueIdentityGateLockName,
+	privateQueueIdentityLockName,
+}
+
+// privateQueueIdentityMutationHeld reports, without failing the test, whether
+// every exclusive mutation lock is held exclusively and the writer intent is
+// committed. Process-owner callbacks may call it; only the test goroutine
+// asserts.
+func privateQueueIdentityMutationHeld(ctx context.Context, base string) error {
+	for _, name := range privateQueueIdentityMutationLockNames {
+		if err := requirePrivateLockState(ctx, filepath.Join(base, name), privateLockExclusive); err != nil {
+			return err
+		}
+	}
+	intent, err := os.ReadFile(filepath.Join(base, privateQueueWriterIntentLockName))
+	if err != nil {
+		return fmt.Errorf("read writer intent: %w", err)
+	}
+	if string(intent) != privateQueueWriterWaitingState {
+		return fmt.Errorf("writer intent was not committed: state=%q", intent)
+	}
+	return nil
+}
+
+// privateLockState is the mode in which other open locks hold a private lock
+// file, as nonblocking probes observe it.
+type privateLockState string
+
+const (
+	privateLockFree      privateLockState = "free"
+	privateLockShared    privateLockState = "shared"
+	privateLockExclusive privateLockState = "exclusive"
+)
+
+// privateLockProbe attempts a nonblocking acquisition in mode how. Busy is
+// not an error; an acquired probe is released at once.
+func privateLockProbe(ctx context.Context, path string, how int) (bool, error) {
+	lock, err := acquireExistingSupervisorLock(ctx, path, how|unix.LOCK_NB)
+	if errors.Is(err, errSupervisorLockBusy) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, closeBootstrapLock(lock)
+}
+
+// privateLockStateOf classifies path: an exclusive probe succeeds only when
+// it is free, and a shared probe then succeeds only when it is held shared.
+// Callers probe while the holder keeps its mode.
+func privateLockStateOf(ctx context.Context, path string) (privateLockState, error) {
+	free, err := privateLockProbe(ctx, path, unix.LOCK_EX)
+	if err != nil || free {
+		return privateLockFree, err
+	}
+	shared, err := privateLockProbe(ctx, path, unix.LOCK_SH)
+	if err != nil {
+		return privateLockFree, err
+	}
+	if shared {
+		return privateLockShared, nil
+	}
+	return privateLockExclusive, nil
+}
+
+func requirePrivateLockState(ctx context.Context, path string, want privateLockState) error {
+	got, err := privateLockStateOf(ctx, path)
+	if err != nil {
+		return fmt.Errorf("probe lock %s: %w", filepath.Base(path), err)
+	}
+	if got != want {
+		return fmt.Errorf("lock %s was %s, want %s", filepath.Base(path), got, want)
+	}
+	return nil
+}
+
+// privateLockHeld reports contention only: another open lock holds path in
+// either mode.
+func privateLockHeld(ctx context.Context, path string) (bool, error) {
+	free, err := privateLockProbe(ctx, path, unix.LOCK_EX)
+	return !free && err == nil, err
+}
+
 func assertPrivateLockHeld(t *testing.T, ctx context.Context, path string) {
 	t.Helper()
-	lock, err := acquireExistingSupervisorLock(ctx, path, unix.LOCK_EX|unix.LOCK_NB)
-	if errors.Is(err, errSupervisorLockBusy) {
-		return
-	}
+	held, err := privateLockHeld(ctx, path)
 	if err != nil {
 		t.Fatalf("probe lock %s: %v", path, err)
 	}
-	if closeErr := closeBootstrapLock(lock); closeErr != nil {
-		t.Errorf("close unexpected acquired lock %s: %v", path, closeErr)
+	if !held {
+		t.Fatalf("lock %s was not held at its callback boundary", path)
 	}
-	t.Fatalf("lock %s was not held at its callback boundary", path)
 }

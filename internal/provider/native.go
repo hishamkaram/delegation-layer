@@ -9,6 +9,13 @@ import (
 // NativeProfileRevision identifies profiles that leave configuration to the provider.
 const NativeProfileRevision = "native-permissions-v1"
 
+// HasNativeProfile reports whether meta records a provider-owned native
+// profile. Records without a policy, and records of any other profile
+// revision, keep their historical preparation path.
+func HasNativeProfile(meta task.MetaRecord) bool {
+	return meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == NativeProfileRevision
+}
+
 // NativeEffectiveConfig records the requested native permission mode and runtime
 // identity. It makes no claim to inventory or independently enforce user policy.
 func NativeEffectiveConfig(request task.TaskRecord, roots []string, runtimeSHA256, approval string) (task.EffectiveConfig, error) {

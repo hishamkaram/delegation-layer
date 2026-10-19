@@ -20,8 +20,20 @@ type credentialInterpreter struct {
 	stream predicate.Interpreter
 }
 
-func newCredentialInterpreter(reference, recoverySource task.PredicateRef) (predicate.Interpreter, error) {
-	stream, err := claude.NewStreamInterpreterWithRecovery(reference, recoverySource)
+// newCredentialInterpreter binds a current CCR reference to Claude's
+// attributed completion policy and its direct offline recovery sources.
+func newCredentialInterpreter(reference task.PredicateRef, recoverySources ...task.PredicateRef) (predicate.Interpreter, error) {
+	return wrapCredentialInterpreter(claude.NewAttributedStreamInterpreterWithRecovery(reference, recoverySources...))
+}
+
+// newPreAttributionCredentialInterpreter replays credential-aware CCR
+// references sealed under Claude's single-result completion policy. It is
+// replay-only; the attributed current references own their recovery.
+func newPreAttributionCredentialInterpreter(reference task.PredicateRef) (predicate.Interpreter, error) {
+	return wrapCredentialInterpreter(claude.NewStreamInterpreter(reference))
+}
+
+func wrapCredentialInterpreter(stream predicate.Interpreter, err error) (predicate.Interpreter, error) {
 	if err != nil {
 		return nil, err
 	}

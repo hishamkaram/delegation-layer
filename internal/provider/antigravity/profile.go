@@ -68,8 +68,7 @@ func withPredicate(candidate commonprovider.ProfileCandidate, reference task.Pre
 }
 
 func prepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
-	if !native {
+	if !commonprovider.HasNativeProfile(meta) {
 		return prepareCandidate(request, false, false)
 	}
 	approval := meta.EffectiveConfig.Approval

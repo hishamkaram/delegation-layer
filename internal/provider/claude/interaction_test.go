@@ -132,6 +132,8 @@ func TestClaudeInteractionCannotEraseEarlierProviderFailure(t *testing.T) {
 	}
 }
 
+// TestClaudeInteractionSealedResultRequiresSettledSuccessfulRoot keeps the
+// frozen interactive-v3 latest-result replay.
 func TestClaudeInteractionSealedResultRequiresSettledSuccessfulRoot(t *testing.T) {
 	id, err := FreshSessionID(claudeTestRootID, claudeTestTaskID)
 	if err != nil {
@@ -156,7 +158,7 @@ func TestClaudeInteractionSealedResultRequiresSettledSuccessfulRoot(t *testing.T
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stdout := []byte(strings.Join(append([]string{initLine(id)}, test.events...), "\n") + "\n")
-			interpreter := interactionInterpreter{mode: Mode}
+			interpreter := newPreAttributionInteractionInterpreter(Mode)
 			input := predicate.Input{Seal: claudeTestSealForPredicate(stdout, interpreter.Reference())}
 			var out bytes.Buffer
 			result, evaluateErr := interpreter.Evaluate(input, &claudeTestEvidence{stdout: stdout}, &out)
@@ -180,7 +182,7 @@ func TestCurrentClaudeInteractionStreamsLargeRecordAndWarnsOnUsage(t *testing.T)
 	result = strings.Replace(result, `"input_tokens":12`, `"input_tokens":-1`, 1)
 	stdout := []byte(strings.Join([]string{initLine(claudeTestUUID), result, `{"type":"system","subtype":"session_state_changed","state":"idle"}`}, "\n"))
 	var answer bytes.Buffer
-	interpreter := interactionInterpreter{mode: Mode}
+	interpreter := newInteractionInterpreter(Mode)
 	input := predicate.Input{Seal: claudeTestSealForPredicate(stdout, interpreter.Reference()), ExpectedSession: task.SessionExpectation{Required: true, ID: claudeTestUUID}}
 	interpretation, err := interpreter.Evaluate(input, &claudeTestEvidence{stdout: stdout}, &answer)
 	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "interactive answer" {

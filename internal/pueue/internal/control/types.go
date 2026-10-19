@@ -72,6 +72,10 @@ type Options struct {
 	// taskObservationEntryObserver is a deterministic test seam for proving
 	// that independent callers overlap one private task-status snapshot.
 	taskObservationEntryObserver func()
+	// queueWriterWaitObserver is a deterministic test seam for proving that a
+	// queue identity reader reached its wait on an active writer intent. It
+	// only reports that decision and must not block.
+	queueWriterWaitObserver func()
 }
 
 // PrivateQueueCleanupPlan separates removal authority from a bounded retry

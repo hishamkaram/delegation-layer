@@ -252,13 +252,100 @@ the exact recorded provider session.
 `--model` and `--effort` pass through to Claude's native flags; an omitted or
 `default` effort leaves the provider default untouched.
 
+Claude can finish background work after the caller's turn and answer each
+completion with a synthetic follow-up turn in the same invocation. The
+published answer is the first result, which must answer the caller's turn: its
+`origin` is absent or `human`. Later results are accepted only when every
+result carries consecutive `result_index` values and each later result has
+`origin.kind` `task-notification` without a `subkind`. Follow-up answers are
+never published. A failed caller result stays rejected. A failed follow-up, a
+changed repeated `system/init`, another origin such as a scheduled trigger or
+peer message, a missing or duplicate counter, or an unfinished follow-up at EOF
+also rejects. On every result, `terminal_reason`, when present, must be
+`completed`, and `queued_turn_count`, when present, must be `0`; older CLI
+releases that omit these fields remain accepted. An empty follow-up is accepted
+only as a coalesced batch acknowledgement with `num_turns` `0`, and a later
+non-empty follow-up must answer that batch before EOF. Main-agent usage comes
+from the caller's result; the cumulative cost comes from the last accepted
+result and is never summed.
+
+A resumed session can also answer old background completions before it
+reaches the caller's turn, with leading acknowledgements: results with
+`origin.kind` `task-notification` and no `subkind`, `subtype` `success`, an
+empty string `result`, `num_turns` explicitly `0`, and `result_index` values
+that start at `0` and are consecutive. They are accepted after the initial
+`system/init` and before any root assistant or user message since that init or
+the previous acknowledgement, and one identical repeated `system/init` is
+permitted once after each, before root messages. When acknowledgements precede
+the caller's result, that result must carry the next consecutive
+`result_index`. An acknowledgement is never the answer, adds no usage or cost,
+and never closes an interactive input. A failed, refused, aborted, or queued
+acknowledgement always rejects. It reports its own refusal even if the
+caller's result succeeds or never arrives, unless a higher-priority malformed or
+incomplete fault takes precedence, such as malformed evidence or an interactive
+stream that is unfinished at EOF; the task is rejected either way. A stream with
+only acknowledgements is incomplete,
+and a nonempty, missing, mistyped, or wrongly counted acknowledgement, or an
+unmatched repeated `system/init`, is malformed. Frozen revisions, including
+the retained unscoped `native-permissions-v4` (read-only),
+`native-permissions-v5` (workspace-write), and `interactive-v4`, keep
+rejecting this prefix.
+
+Only root messages take part in the follow-up cycles. A complete assistant or user
+message whose `parent_tool_use_id` is absent or `null` is a root message, and
+after a result it opens a follow-up cycle that its attributed result must close.
+A message with a nonblank string `parent_tool_use_id` (at most 1024 bytes, no
+NUL, valid UTF-8) belongs to a nested agent. It stays structurally validated
+and bound to the session, but it never opens, advances, or settles a cycle or a
+batch, is never an answer, and does not affect accounting. Any other value
+(empty, blank, oversized, not a string, or a case-aliased key) is malformed, before
+or after the caller's result. The id itself is opaque and is not tracked.
+
+Tasks sealed under earlier predicate revisions keep their recorded
+interpretation. The retained exceptions are the read-only
+`native-permissions-v4` digest `f7c1053edce279071b9caa46f727cf196d5998fc05d07afdf9c5378acd9eb25c`
+and the workspace-write `native-permissions-v5` digest
+`333a689a864dfb03ecd4a6eace97bcf6964fea96768ddbbb86a92d98c4a7a76b`. Both were
+admitted before message scope existed and treat every message after the
+caller's result as a root message. Each is replay-only, is never a fresh
+default, and is not a recheck source. The current `native-permissions-v4`
+(read-only) and `native-permissions-v5` (workspace-write) references keep their
+version strings and are identified by their new digests. An offline recheck
+reassesses each eligible earlier revision directly under the current revision
+without changing the original outcome.
+
+A new continuation task is distinct from reconstruction of its predecessor.
+The predecessor's task record, metadata, and launch plan are never modified and
+keep rebuilding under their recorded predicate, including either retained
+digest above. In an ordinary noninteractive continuation, only the new
+successor task selects the current predicate of the same mode and launch shape,
+and only when the predecessor is a native print record sealed under the
+pre-attribution revision (read-only `native-permissions-v3`, workspace-write
+`native-permissions-v4`) or under the retained unscoped digest of its mode.
+Other records passed through this successor hook retain their recorded
+predicate. Interactive continuation instead builds the current interactive
+profile while preserving the exact recorded session and the predecessor
+environment. Reconstruction of an existing task always retains its recorded
+predicate.
+
 With `--interactive`, Claude uses its native stream-json control protocol,
 `--permission-prompts host`, the SDK's `--permission-prompt-tool stdio` transport,
 and invocation-local `CLAUDE_CODE_SDK_READS_SESSION_STATE=1`. The adapter answers
 only root `AskUserQuestion` requests. Other permission requests are denied rather
 than treated as clarification. This does not change the selected native permission
 mode. There is no active-turn steering for Claude. Native background-agent
-completion is observed before closing the input channel. Public help checks do
+completion is observed before closing the input channel, and the input stays
+open while a follow-up turn or batch acknowledgement awaits its answer. The
+published interactive answer follows the same caller-result and message-scope
+rules; a nested agent's `tool_result` never resolves a root question. Input
+closure is sticky, but the stream completes only when the session is idle again
+with no unsettled agent, question, cycle, or batch. Follow-up turns that arrive
+after input closure remain evidence. `interactive-v5` is the current revision;
+`interactive-v4` is retained for replay under its unscoped attribution (every
+message after a result opens a follow-up cycle) and its original end-of-stream
+rule (input closure plus the principal result, with no idle re-check of the
+session), and `interactive-v1` through `interactive-v4` recheck under
+`interactive-v5`. Public help checks do
 not prove the SDK control protocol; its initialization and structured events are
 validated during the task.
 
@@ -348,6 +435,11 @@ route-preserving continuation therefore rejects a model override that would
 change the recorded route.
 
 CCR's foreground exit and sealed Claude stream must both indicate success.
+Fresh CCR tasks use the same Claude follow-up attribution rules as
+`claude:print`; earlier CCR predicate revisions keep their recorded
+single-result interpretation. An offline recheck of a route-preserving
+revision uses the current route-preserving revision; modeled and older
+revisions use the current modeled revision.
 CCR reserves exit status `77` for unavailable configured provider credentials.
 With an empty sealed stdout stream and no capture error, Delegate reports
 `authentication-unavailable`; it does not infer an HTTP status or repair the

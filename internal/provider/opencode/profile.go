@@ -23,7 +23,7 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 // already admitted task. New native tasks use the native profile; historical
 // tasks retain the isolated policy inspection and launch flags they recorded.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
+	native := commonprovider.HasNativeProfile(meta)
 	return prepareCandidate(request, native, &meta, meta.RuntimePreflightSHA256 != "" && native)
 }
 
@@ -78,8 +78,10 @@ func prepareCandidate(request task.TaskRecord, native bool, meta *task.MetaRecor
 
 func candidateEnvironment(native bool, meta *task.MetaRecord) (profileEnvironment, error) {
 	values := os.Environ()
-	if !native && meta != nil && len(meta.Environment) > 0 {
-		values = meta.Environment
+	if meta != nil {
+		if recorded, ok := commonprovider.RecordedEnvironment(*meta); ok {
+			values = recorded
+		}
 	}
 	environment, err := prepareProfileEnvironment(values, native)
 	if err != nil {
@@ -97,8 +99,10 @@ func candidateLaunchEnvironment(request task.TaskRecord, environment profileEnvi
 	if native {
 		return slices.Clone(environment.Values), nil
 	}
-	if meta != nil && len(meta.Environment) > 0 {
-		return slices.Clone(meta.Environment), nil
+	if meta != nil {
+		if recorded, ok := commonprovider.RecordedEnvironment(*meta); ok {
+			return recorded, nil
+		}
 	}
 	launchEnvironment, err := environmentForMode(slices.Clone(environment.Values), request.Mode, request.CanonicalCwd)
 	if err != nil {

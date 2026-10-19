@@ -135,24 +135,43 @@ func (td *TaskDir) RecordSupervisorReceiptContext(ctx context.Context, r task.Su
 // ReadProviderIdentity validates the optional side record without requiring a
 // current workspace or external supervisor. Terminal readback does not call it.
 func (td *TaskDir) ReadProviderIdentity() (*task.ProviderRefRecord, error) {
+	identity, _, err := td.ReadProviderIdentityPresence()
+	return identity, err
+}
+
+// ReadProviderIdentityPresence applies ReadProviderIdentity's validation and
+// also reports absent=true only when the prepared set is valid and
+// provider.ref.json itself does not exist. A malformed, unreadable, replaced,
+// or mismatched record, or a missing prepared dependency, is never absent.
+func (td *TaskDir) ReadProviderIdentityPresence() (identity *task.ProviderRefRecord, absent bool, err error) {
 	_, req, _, spec, meta, err := td.loadAndValidatePreparedSet()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	path := filepath.Join(td.Dir, "provider.ref.json")
 	var r task.ProviderRefRecord
-	if err = td.store.readRecord(filepath.Join(td.Dir, "provider.ref.json"), &r); err != nil {
-		return nil, err
+	if err = td.store.readRecord(path, &r); err != nil {
+		if !task.RecordAbsent(err) {
+			return nil, false, err
+		}
+		// The not-exist error may come from anywhere in the read chain. Only an
+		// exact entry check in the task directory classifies the record absent.
+		present, statErr := td.store.entryExists(path)
+		if statErr != nil {
+			return nil, false, errors.Join(err, statErr)
+		}
+		return nil, !present, err
 	}
 	if err = task.ValidateProviderRefRecord(&r); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if r.RootID != td.store.RootID || r.TaskID != td.TaskID || r.SpecSHA256 != spec || r.MetaSHA256 != meta || r.Provider != req.Provider {
-		return nil, task.ErrIdentityMismatch
+		return nil, false, task.ErrIdentityMismatch
 	}
 	if req.PriorSession != nil && r.ConversationID != req.PriorSession.ConversationID {
-		return nil, task.ErrIdentityMismatch
+		return nil, false, task.ErrIdentityMismatch
 	}
-	return &r, nil
+	return &r, false, nil
 }
 
 // RecordProviderIdentity may run while raw streams remain open. It requires the

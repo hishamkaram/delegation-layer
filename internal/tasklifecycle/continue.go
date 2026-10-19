@@ -37,10 +37,11 @@ func Continue(request DispatchRequest, options ContinuationOptions) (result Cont
 		return continuationFailure(result, ContinueValidation, "validate-continuation", task.ErrEvidenceFault)
 	}
 	options.Dispatch.Creation.Admission.Profiles = options.Dispatch.ContinuationProfiles(*meta)
-	prior, err := loadContinuationPrior(root, predecessor.TaskID, options.Dispatch)
+	prior, source, err := loadContinuationPrior(root, predecessor.TaskID, options.Dispatch)
 	if err != nil {
 		return continuationFailure(result, ContinueSession, "load-continuation-session", err)
 	}
+	result.SessionSource = source
 	successorID, err := randomid.NewTaskID()
 	if err != nil {
 		return continuationFailure(result, ContinueGenerateID, "generate-task-id", err)

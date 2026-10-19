@@ -173,10 +173,10 @@ func (td *TaskDir) terminalProof(digest string) (resultErr error) {
 		if winner.EvidenceSHA256 == digest || winner.Payload.SHA256 == digest {
 			return td.acknowledgeRecord("outcome.json")
 		}
-		// A timeout release is a valid handoff proof even when the provider
-		// publishes its terminal outcome after the release. Keep the recorded
-		// handoff valid while outcome.json remains the terminal authority.
-		if td.matchesTimeoutProof(digest) {
+		// A handoff release is a valid proof even when the provider publishes
+		// its terminal outcome after the release. Keep the recorded handoff
+		// valid while outcome.json remains the terminal authority.
+		if td.matchesHandoffProof(digest) {
 			return td.acknowledgeRecord("outcome.json")
 		}
 		return task.ErrEvidenceFault
@@ -191,7 +191,7 @@ func (td *TaskDir) terminalProof(digest string) (resultErr error) {
 	if exists {
 		return task.ErrEvidenceFault
 	}
-	if td.matchesTimeoutProof(digest) {
+	if td.matchesHandoffProof(digest) {
 		return nil
 	}
 	seal, err := td.readSeal(meta.Predicate, spec, metaHash)
@@ -202,21 +202,6 @@ func (td *TaskDir) terminalProof(digest string) (resultErr error) {
 		return td.acknowledgeRecord("provider.exit")
 	}
 	return task.ErrSessionBusy
-}
-
-func (td *TaskDir) matchesTimeoutProof(digest string) bool {
-	timeoutDigest, err := td.timeoutEvidenceDigest()
-	if err != nil {
-		// Timeout evidence is an optional handoff proof. An ordinary release
-		// must retain its established terminal-proof behavior when an optional
-		// stop side record is incomplete or malformed; the explicit timeout
-		// release path remains strict through timeoutEvidenceDigest directly.
-		return false
-	}
-	if timeoutDigest != digest {
-		return false
-	}
-	return true
 }
 
 // ReleaseSessionAfterTimeout transfers a continuation claim after a budget
@@ -230,24 +215,6 @@ func (td *TaskDir) ReleaseSessionAfterTimeout(provider, conversation string) err
 		return err
 	}
 	return td.ReleaseSession(provider, conversation, digest)
-}
-
-func (td *TaskDir) timeoutEvidenceDigest() (string, error) {
-	records, err := td.ReadStopRecords()
-	if err != nil {
-		return "", err
-	}
-	for _, record := range records {
-		if record.Request == nil || record.Request.Cause != "budget" || record.Observation == nil || !record.Observation.Terminated {
-			continue
-		}
-		data, err := task.MarshalCanonical(record.Observation)
-		if err != nil {
-			return "", err
-		}
-		return task.ComputeSHA256(data), nil
-	}
-	return "", os.ErrNotExist
 }
 
 func (td *TaskDir) ReleaseSession(provider, conversation, digest string) error {
@@ -289,12 +256,13 @@ func (td *TaskDir) reconcileSessionRelease(dir string, existing *task.SessionRel
 	if existing.PredecessorEvidenceSHA256 == digest {
 		return td.store.barrierDir(dir)
 	}
-	if !td.matchesTimeoutProof(existing.PredecessorEvidenceSHA256) {
+	if !td.matchesHandoffProof(existing.PredecessorEvidenceSHA256) {
 		return task.ErrEvidenceFault
 	}
-	// A timeout handoff can be recorded before the provider publishes
-	// its terminal outcome. Accept the later authoritative digest as
-	// the same completed release after validating it independently.
+	// A handoff can be recorded before the provider publishes its
+	// terminal outcome, or before another compatible witness appears.
+	// Accept the later digest as the same completed release after
+	// validating it independently.
 	if err := td.terminalProof(digest); err != nil {
 		return err
 	}

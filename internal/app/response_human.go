@@ -53,6 +53,9 @@ func writeHumanContinuation(output *strings.Builder, continuation *ContinuationR
 	if continuation.PredecessorID != "" {
 		fmt.Fprintf(output, " predecessor_task_id=%s", continuation.PredecessorID)
 	}
+	if continuation.SessionSource != "" {
+		fmt.Fprintf(output, " session_source=%s", continuation.SessionSource)
+	}
 	if continuation.ContinueCommand != "" {
 		fmt.Fprintf(output, " command=%s", continuation.ContinueCommand)
 	}

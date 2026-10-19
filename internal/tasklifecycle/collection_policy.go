@@ -3,7 +3,6 @@ package tasklifecycle
 import (
 	"errors"
 
-	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -27,9 +26,12 @@ func observedPending(observation pueue.Observation) PendingKind {
 	return PendingSupervisor
 }
 
-func continuationIsFinal(continuation *ContinuationOffer) bool {
-	if continuation == nil {
-		return false
+// uncertaintyPending describes a pure supervisor uncertainty that observed no
+// queue row. Only a retained in-flight command is pending; ErrUnknown alone
+// proves no unfinished command.
+func uncertaintyPending(err error) PendingKind {
+	if errors.Is(err, pueue.ErrInFlight) {
+		return PendingSupervisor
 	}
-	return continuation.Resumable || continuation.Mode == string(commonprovider.ContinuationUnsupported) || continuation.Mode == string(commonprovider.ContinuationCheckpoint)
+	return ""
 }

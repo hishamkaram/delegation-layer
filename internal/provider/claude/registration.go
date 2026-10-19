@@ -25,9 +25,10 @@ func Description() commonprovider.Description {
 // describes the stream contract; it does not qualify a particular CLI build.
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
-		Description:     Description(),
-		Prepare:         PrepareCandidate,
-		PrepareExisting: PrepareExistingCandidate,
+		Description:      Description(),
+		Prepare:          PrepareCandidate,
+		PrepareExisting:  PrepareExistingCandidate,
+		PrepareSuccessor: PrepareSuccessorCandidate,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(Mode), NewInterpreter(WorkspaceWriteMode),
 			newHistoricalNativeInterpreter(Mode),
@@ -36,14 +37,22 @@ func Registration() commonprovider.Registration {
 			newLegacyNativeWorkspaceWriteInterpreter(),
 			newLegacyPortableInterpreter(Mode), newLegacyPortableInterpreter(WorkspaceWriteMode),
 			newLegacyInterpreter(),
-			interactionInterpreter{mode: Mode},
-			interactionInterpreter{mode: WorkspaceWriteMode},
+			newInteractionInterpreter(Mode),
+			newInteractionInterpreter(WorkspaceWriteMode),
 			interactionInterpreter{mode: Mode, historical: true},
 			interactionInterpreter{mode: WorkspaceWriteMode, historical: true},
 			newPreviousNativeProbeInterpreter(Mode),
 			newPreviousNativeProbeInterpreter(WorkspaceWriteMode),
 			newPreviousInteractionInterpreter(Mode),
 			newPreviousInteractionInterpreter(WorkspaceWriteMode),
+			newPreAttributionInterpreter(Mode),
+			newPreAttributionInterpreter(WorkspaceWriteMode),
+			newPreAttributionInteractionInterpreter(Mode),
+			newPreAttributionInteractionInterpreter(WorkspaceWriteMode),
+			newUnscopedInterpreter(WorkspaceWriteMode),
+			newUnscopedInteractionInterpreter(Mode),
+			newUnscopedInteractionInterpreter(WorkspaceWriteMode),
+			newUnscopedInterpreter(Mode),
 		},
 	}
 }
