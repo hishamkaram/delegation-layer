@@ -16,28 +16,57 @@ import (
 // worker owns the provider CLI capability probe before the finalizer receives
 // its nonsecret runtime facts.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, true, task.PredicateRef{}, Provider, false, true)
+	return prepareCandidate(request, candidateInputs{native: true, providerID: Provider, allowStaticAdmit: true, environment: os.Environ()})
 }
 
 // PrepareReviewCandidate prepares the read-only native Codex review operation.
 func PrepareReviewCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, true, task.PredicateRef{}, ReviewProvider, true, true)
+	return prepareCandidate(request, candidateInputs{native: true, providerID: ReviewProvider, review: true, allowStaticAdmit: true, environment: os.Environ()})
 }
 
 // PrepareExistingCandidate retains the launch and policy contract recorded by
 // an already admitted task. New native tasks use the native profile; older
 // records continue through the legacy isolated preparation path.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	native := meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision
-	return prepareCandidate(request, native, meta.Predicate, Provider, false, meta.RuntimePreflightSHA256 != "" && native)
+	native := commonprovider.HasNativeProfile(meta)
+	return prepareCandidate(request, candidateInputs{
+		native: native, storedPredicate: meta.Predicate, providerID: Provider,
+		allowStaticAdmit: meta.RuntimePreflightSHA256 != "" && native, environment: existingEnvironment(meta),
+	})
 }
 
 // PrepareExistingReviewCandidate reconstructs a previously admitted review.
 func PrepareExistingReviewCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, true, meta.Predicate, ReviewProvider, true, meta.RuntimePreflightSHA256 != "")
+	return prepareCandidate(request, candidateInputs{
+		native: true, storedPredicate: meta.Predicate, providerID: ReviewProvider, review: true,
+		allowStaticAdmit: meta.RuntimePreflightSHA256 != "", environment: existingEnvironment(meta),
+	})
 }
 
-func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task.PredicateRef, providerID string, review, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
+// candidateInputs names everything prepareCandidate needs besides the request.
+// environment is the explicit launch environment: ambient for a new task, the
+// saved one for an existing task, so reconstruction never depends on which
+// process environment the calling command happens to run under.
+type candidateInputs struct {
+	native           bool
+	storedPredicate  task.PredicateRef
+	providerID       string
+	review           bool
+	allowStaticAdmit bool
+	environment      []string
+}
+
+// existingEnvironment reads the saved launch environment. Only a legacy record
+// that never persisted one falls back to the ambient environment.
+func existingEnvironment(meta task.MetaRecord) []string {
+	if values, recorded := commonprovider.RecordedEnvironment(meta); recorded {
+		return values
+	}
+	return os.Environ()
+}
+
+func prepareCandidate(request task.TaskRecord, inputs candidateInputs) (commonprovider.ProfileCandidate, error) {
+	native, storedPredicate, providerID, review := inputs.native, inputs.storedPredicate, inputs.providerID, inputs.review
 	if request.RequestedConfig.Interactive && !storedPredicate.Equal(task.PredicateRef{}) &&
 		!storedPredicate.Equal(interactionReference(request.Mode)) &&
 		!storedPredicate.Equal(historicalInteractionReference(request.Mode)) {
@@ -56,7 +85,7 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	environment, err := prepareProfileEnvironment(os.Environ(), native)
+	environment, err := prepareProfileEnvironment(inputs.environment, native)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -73,7 +102,7 @@ func prepareCandidate(request task.TaskRecord, native bool, storedPredicate task
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
 	}
-	capability, err := staticCapability(definition, native, allowStaticAdmit)
+	capability, err := staticCapability(definition, native, inputs.allowStaticAdmit)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}

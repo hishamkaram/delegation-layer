@@ -127,6 +127,7 @@ func TestContinuationFailureStagesMapToActionableCodes(t *testing.T) {
 	}{
 		{stage: "resolve-state-root", code: "state_root_unavailable"},
 		{stage: "load-predecessor", code: "continuation_unavailable"},
+		{stage: "load-continuation-session", code: "continuation_unavailable"},
 		{stage: "resolve-continuation-provider", code: "provider_unavailable"},
 		{stage: "check-continuation-capability", code: "unsupported_continuation"},
 		{stage: "validate-continuation", code: "continuation_unavailable"},

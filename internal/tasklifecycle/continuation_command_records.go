@@ -31,6 +31,7 @@ type ContinuationResult struct {
 	Root, RootID, PredecessorID string
 	Workspace                   *workspaces.Description
 	Mode                        commonprovider.ContinuationMode
+	SessionSource               ContinuationSessionSource
 	Runner                      string
 	Supervisor                  *task.SupervisorRef
 	Dispatch                    *DispatchResult

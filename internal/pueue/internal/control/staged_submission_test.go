@@ -203,8 +203,14 @@ func installFailFirstEnqueueObserver(t *testing.T, fake *fakeSupervisor) *failFi
 	return observer
 }
 
+// effectiveEnqueueCommand reports whether argv schedules a staged row rather
+// than probing the enqueue help surface. Callers choose the event stage.
+func effectiveEnqueueCommand(argv []string) bool {
+	return slices.Contains(argv, "enqueue") && !slices.Contains(argv, "--help")
+}
+
 func (o *failFirstEnqueueObserver) observe(event CommandEvent) {
-	if !slices.Contains(event.Argv, "enqueue") || slices.Contains(event.Argv, "--help") {
+	if !effectiveEnqueueCommand(event.Argv) {
 		return
 	}
 	switch event.Stage {
@@ -244,7 +250,7 @@ func installEnqueueStatusTransition(fake *fakeSupervisor, status []byte) *enqueu
 }
 
 func (t *enqueueStatusTransition) observe(event CommandEvent) {
-	if event.Stage != "entry" || !slices.Contains(event.Argv, "enqueue") || slices.Contains(event.Argv, "--help") {
+	if event.Stage != "entry" || !effectiveEnqueueCommand(event.Argv) {
 		return
 	}
 	t.entries.Add(1)
@@ -252,15 +258,6 @@ func (t *enqueueStatusTransition) observe(event CommandEvent) {
 		t.writeErr = os.WriteFile(t.fake.statusPath, t.status, 0o600)
 		close(t.entered)
 	})
-}
-
-func (t *enqueueStatusTransition) wait(testingT *testing.T) {
-	testingT.Helper()
-	select {
-	case <-t.entered:
-	case <-time.After(2 * time.Second):
-		testingT.Fatal("first recovery did not reach enqueue")
-	}
 }
 
 func ordinaryQueuedStatus(t *testing.T, identity Identity, id int64) []byte {
@@ -297,32 +294,34 @@ func inspectionQueuedStatusWithLaunch(t *testing.T, identity InspectionIdentity,
 	})
 }
 
-func startOrdinaryRecovery(client *Client, identity Identity, id int64) <-chan ordinaryRecoveryResult {
-	done := make(chan ordinaryRecoveryResult, 1)
-	go func() {
-		observation, recoveryErr := client.RecoverStaged(context.Background(), identity, id, func(candidate Observation) error {
+func (r ordinaryRecoveryResult) pendingCommand() *Pending { return r.observation.Pending }
+
+func (r inspectionRecoveryResult) pendingCommand() *Pending { return r.observation.Pending }
+
+func startOrdinaryRecovery(scope *testCallScope, client *Client, identity Identity, id int64) *testCall[ordinaryRecoveryResult] {
+	ctx := scope.context()
+	return startTestCall(scope, func() ordinaryRecoveryResult {
+		observation, recoveryErr := client.RecoverStaged(ctx, identity, id, func(candidate Observation) error {
 			if candidate.State != StateStashed {
 				return errors.New("first recovery did not commit Stashed state")
 			}
 			return nil
 		})
-		done <- ordinaryRecoveryResult{observation: observation, err: recoveryErr}
-	}()
-	return done
+		return ordinaryRecoveryResult{observation: observation, err: recoveryErr}
+	})
 }
 
-func startInspectionRecovery(client *Client, identity InspectionIdentity, id int64) <-chan inspectionRecoveryResult {
-	done := make(chan inspectionRecoveryResult, 1)
-	go func() {
-		observation, recoveryErr := client.RecoverInspectionStaged(context.Background(), identity, id, func(candidate InspectionObservation) error {
+func startInspectionRecovery(scope *testCallScope, client *Client, identity InspectionIdentity, id int64) *testCall[inspectionRecoveryResult] {
+	ctx := scope.context()
+	return startTestCall(scope, func() inspectionRecoveryResult {
+		observation, recoveryErr := client.RecoverInspectionStaged(ctx, identity, id, func(candidate InspectionObservation) error {
 			if candidate.Job.State != StateStashed {
 				return errors.New("first inspection recovery did not commit Stashed state")
 			}
 			return nil
 		})
-		done <- inspectionRecoveryResult{observation: observation, err: recoveryErr}
-	}()
-	return done
+		return inspectionRecoveryResult{observation: observation, err: recoveryErr}
+	})
 }
 
 func runOrdinaryStagedRecoveryCase(t *testing.T, testCase ordinaryStagedRecoveryCase) {

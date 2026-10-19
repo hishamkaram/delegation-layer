@@ -110,8 +110,21 @@ policy contract; only a fresh provider runtime identity may be refreshed before
 launch. Fresh dispatches use the current provider mapping. An ordinary
 exact-session continuation reconstructs the predecessor's recorded preparation
 contract, including its historical mapping, environment, policy, and predicate,
-then adds the successor turn and exact recorded session. OpenCode, Pi, and CCR
-all use this path. Interactive continuation is the deliberate exception:
+then adds the successor turn and exact recorded session. The continuation is a
+new task, so its candidate comes from the catalog's successor operation, which
+is distinct from reconstruction of an already admitted task: an immutable
+existing task is rebuilt exactly, while a provider's optional successor hook may
+select the current compatible output interpreter through its own exact
+compatibility rule. Without that hook the successor uses the recorded
+contract. Launch, session, permission, configuration, and probe contracts stay
+preserved. Four adapters declare that successor hook: Claude, CCR, OpenCode,
+and Antigravity. Each moves only an exact eligible earlier output predicate of
+the same mode and launch shape to the current one, and a record of any other
+revision or profile keeps its recorded predicate. Codex and Pi declare none and
+use the recorded contract through the fallback. The predecessor's task record,
+metadata, and launch plan always stay immutable and keep rebuilding under their
+recorded predicate; only the new successor task carries the current one.
+Interactive continuation is the deliberate exception:
 Codex and Claude build the current interactive profile while preserving the
 recorded session identity and restoring the predecessor environment needed to
 find that session. No continuation modifies predecessor evidence.
@@ -549,9 +562,23 @@ continuation is a separate task that points to one exact predecessor. The
 provider conversation reservation remains held until the predecessor has a
 validated terminal outcome or a durable Pueue-ended budget-stop observation
 backed by a guardian lifetime-termination record with independently proven
-empty scope, then the layer releases ownership for the successor. This evidence
-permits session handoff only; it does not publish task completion.
+empty scope, or canonical closed lifetime evidence with a free runner lease
+for a turn with unknown publication and no seal or outcome, then the layer
+releases ownership for the successor. A sealed turn is collected first. This evidence permits
+session handoff only; it does not publish task completion.
 This makes retries and recovery explicit rather than implicit replays.
+
+Closure has one owner, `task.ResolveLifetimeClosure`; any canonical closed kind
+qualifies, and a queue end or timestamp never does. The existing session journal
+owns release and the task outcome stays separate. Release records are immutable,
+so the proof stays valid when compatible absence, budget, or outcome records
+arrive later. Handoff generates no budget stop, `Wait`, seal, outcome, or
+session identity. Without a fresh `provider.ref`, a validated immutable
+requested prior session may stand in only when that record is genuinely absent;
+it is a requested input, not proof that the interrupted provider persisted
+messages. After a host restart, `status` and `collect` report such a closed,
+unsealed task as `interrupted` (`task_interrupted`, publication `unknown`, no
+outcome). Cancellation and stops take precedence over automatic continuation.
 
 The public `continue` command is a thin path over that existing continuation
 boundary. It reuses the validated predecessor brief unless a follow-up brief is
@@ -599,8 +626,9 @@ evidence failures remain failures.
 For JSON dispatch and continuation failures, `failure.stage` identifies the
 delegate lifecycle stage and `task_record` says whether the successor task
 record exists. Stable `failure.code` values distinguish invalid requests,
-unsupported options, continuation failures, provider and supervisor preparation
-failures, task identity conflicts, task-submission preparation failures, and
+unsupported options, continuation failures (including `load-continuation-session`,
+which maps to the continuation error family rather than a generic dispatch
+failure), provider and supervisor preparation failures, task identity conflicts, task-submission preparation failures, and
 uncertain submission after the supervisor add boundary. Failures saving
 submission evidence after admission are reported as task-operation failures.
 With a caller-supplied task ID, a point-in-time missing-record check remains

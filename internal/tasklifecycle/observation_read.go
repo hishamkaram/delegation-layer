@@ -3,7 +3,6 @@ package tasklifecycle
 import (
 	"context"
 	"errors"
-	"os"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
@@ -49,17 +48,6 @@ func WaitForCollection(deadline time.Time) bool {
 	}()
 	<-timer.C
 	return time.Now().Before(deadline)
-}
-
-func readProviderSession(td *taskdir.TaskDir) (*task.ProviderRefRecord, error) {
-	if td == nil {
-		return nil, errors.New("nil task directory")
-	}
-	session, err := td.ReadProviderIdentity()
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	return session, err
 }
 
 func reapSupervisorObservation(ctx context.Context, err error) error {

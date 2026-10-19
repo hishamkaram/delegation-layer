@@ -24,7 +24,13 @@ the same as a successful provider result.
    evidence for an existing task.
 3. If `status` is `timed_out`, follow the continuation procedure before treating
    pending publication as a reason to wait. `continuation.resumable: true`
-   permits a linked successor even when no outcome has been published.
+   permits a linked successor even when no outcome has been published. An
+   `interrupted` task (`failure.code: "task_interrupted"`) follows the table in
+   [interrupted turn](continuation.md#interrupted-turn): continue only when
+   `failure.next_action` is `continue_task` and `continuation.resumable` is
+   `true`, otherwise report it. A `timed_out` task whose `failure.code` is
+   `task_cancelled` is `stop_and_report`: report it and stop, even though
+   `collect` exits `3`; that exit is not success.
 4. If `publication` is committed and `outcome.verdict` is committed, return
    the result and its payload/evidence descriptors.
 5. If `outcome.verdict` is rejected and `failure.next_action` is `recheck`,

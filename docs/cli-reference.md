@@ -178,8 +178,10 @@ Every task ID is single-use for the requested turn. Repeating a dispatch with
 the same ID requires the same immutable request and cannot grant another
 provider launch. A continuation is a separate task that names an exact
 predecessor and reserves the provider conversation until the predecessor has a
-validated terminal outcome or a durable Pueue-ended observation backed by a
-lifetime-termination record with independently proven empty scope.
+validated terminal outcome, a durable Pueue-ended budget stop with
+independently proven empty scope, or canonical closed lifetime evidence with a
+free runner lease for a turn with no seal or outcome (see
+[Preflight and continuation](#preflight-and-continuation)).
 
 ## Managed Git workspaces
 
@@ -268,10 +270,27 @@ admission path. `--brief FILE` replaces the predecessor brief with a new
 follow-up instruction. `--budget`, `--model`, and `--effort` can override the
 corresponding requested values when the provider advertises them. The command
 refuses a missing, still-running, mismatched, or unsupported predecessor. A
-committed outcome or durable Pueue-ended budget stop backed by application-owned
-empty-scope termination proof makes the
-predecessor eligible for handoff; the budget stop does not establish task
-completion.
+validated outcome, a durable Pueue-ended budget stop backed by
+application-owned empty-scope termination proof, or canonical closed lifetime
+evidence of any closure kind with a free runner lease makes the predecessor
+eligible for handoff. Closure qualifies only while publication is unknown, with
+no seal or outcome; a sealed predecessor fails at `resolve-predecessor` with
+`continuation_unavailable` until `collect` publishes its outcome. A queue-row
+end or timestamp alone never qualifies. Handoff
+does not establish task completion, and no outcome, `Wait`, or session identity
+is generated for the predecessor.
+
+`continue` takes the predecessor's observed provider session from
+`provider.ref`. Only when `provider.ref` is genuinely absent, for any eligible
+predecessor and not only an interrupted one, does it use that turn's validated
+immutable requested `PriorSession` as the input reference. The response reports
+the source in `continuation.session_source`: `observed` means `provider.ref`
+supplied the identity, and `recorded_input` means the predecessor's requested
+`PriorSession` supplied it. Neither value is evidence that the provider
+persisted messages or resumed successfully. A missing
+task reference, an unreadable, malformed, or mismatched record, or missing
+required metadata refuses; there is no ancestor search and the original task is
+not rerun.
 
 Fresh dispatches compile the current provider mapping. Ordinary exact-session
 continuations reconstruct the predecessor's recorded preparation contract;
@@ -291,6 +310,41 @@ When a budget stop has durable termination evidence, `status` and `collect`
 include `status: "timed_out"` and a `continuation` object. `resumable: true`
 means the exact session can be continued; `mode` is `native`, `checkpoint`, or
 `unsupported`. A timeout never authorizes relaunching the original task.
+
+After a host restart, a task can be interrupted: its stored publication state
+is still unknown, with no provider exit or outcome, its canonical lifetime
+closure is proven, and its runner lease is released. A terminated budget stop
+is checked first and reports `timed_out` instead. Once real outcomes and
+concrete errors are checked, `status` reports `status: "interrupted"` with
+`publication: "unknown"` and no `outcome`, and `collect` exits `1` with
+`failure.code: "task_interrupted"`. Closure is not provider success and no
+answer is accepted. Any other publication evidence is not an interruption. An
+interruption may carry `pending.kind: "supervisor-command"`: that independent
+observation means only that a supervisor command has not finished, and it
+changes neither the interruption, its guidance, nor its exits. A response with
+`pending.kind: "publication"` is still pending publication, even when its
+outer `publication` field is `unknown`, and carries no interrupted resume
+offer. When the task is uncancelled and safely eligible,
+`failure.next_action` is `continue_task` and `continuation.resumable` is
+`true`, naming `continue --task PREDECESSOR` with the original root and a finite
+budget. Otherwise the action is `stop_and_report` with a reason. Normal pending
+exit `3`, `timed_out`, interaction, lifetime finalization, and committed or
+rejected outcomes keep their precedence.
+
+A validated durable user stop suppresses automatic continuation guidance:
+`continuation.resumable` is `false`, `continuation.reason` says the user
+cancelled the task, and no `continue_command` is returned. An interrupted
+cancelled task keeps `status: "interrupted"` and `failure.code:
+"task_interrupted"` with `failure.next_action: "stop_and_report"`. When a
+durable terminated budget stop and a user stop both exist and no terminal
+outcome does, `status` stays `timed_out` and `failure` is `code:
+"task_cancelled"`, `next_action: "stop_and_report"`. Exits do not change:
+`status` exits `0`, and `collect` exits `3` while publication is pending. That
+exit is a finite watch, not success. A committed or rejected outcome remains
+the authority; cancellation metadata never replaces it with `task_cancelled`.
+`stop_and_report` ends the attempt: do not continue automatically or start a
+provider fallback. A later `continue` the user explicitly requests is a
+separate action that re-proves handoff.
 
 ## Providers and runtime compatibility
 
@@ -518,9 +572,10 @@ Do not treat a raw stdout file as a substitute answer.
 
 With `--json`, task-command responses contain `schema_version: 1`, the command
 name, task identity when applicable, and separate `admission`, `liveness`, and
-`publication` fields. A `status` value is present for timeout or blocked
-states; `parent_task_id` identifies a continuation successor and
-`continuation` carries resumability metadata. The `providers` response is a
+`publication` fields. A `status` value is present for timeout, interruption, or
+blocked states (`timed_out`, `interrupted`, `blocked`); `parent_task_id`
+identifies a continuation successor and `continuation` carries resumability
+metadata. The `providers` response is a
 separate catalog schema.
 An `outcome` is present only after its publication and evidence have been
 validated; its verdict may be committed or rejected. Bounded `diagnostics`

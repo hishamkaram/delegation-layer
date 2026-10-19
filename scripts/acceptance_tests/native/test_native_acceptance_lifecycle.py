@@ -114,6 +114,80 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.daemon.process.returncode = 0
             operation.daemon.poll()
 
+    def test_failure_cleanup_shuts_down_daemon_adopted_before_transfer_failure(self):
+        with tempfile.TemporaryDirectory(prefix="native-owner-transfer-unit-") as directory:
+            root = Path(directory)
+            launched = []
+
+            class FakePopen:
+                """Finite pueue fixture: status is empty, shutdown ends the daemon."""
+
+                def __init__(self, argv, **kwargs):
+                    self.argv = list(argv)
+                    self.pid = 704 + len(launched)
+                    self.returncode = None if self.argv[1:] == ["-c", str(config)] else 0
+                    if self.argv[-2:] == ["status", "--json"]:
+                        kwargs["stdout"].write(b'{"tasks": {}, "groups": {}}\n')
+                        kwargs["stdout"].flush()
+                    if self.argv[-1:] == ["shutdown"]:
+                        launched[0].returncode = 0
+                    launched.append(self)
+
+                def poll(self):
+                    return self.returncode
+
+                def wait(self):
+                    return self.returncode
+
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.daemon = None
+            operation.closed = False
+            operation.root_id = None
+            operation.tasks = {}
+            operation.numeric_ids = {}
+            operation.scenario = "read-only"
+            # Invocation receipts digest argv[0]; the fake never executes it.
+            operation.delegate = operation.runner = Path("/bin/sh")
+            operation.pueue = operation.pueued = Path("/bin/sh")
+            operation.base = root / "base"
+            operation.state = operation.base / "state"
+            operation.state.mkdir(parents=True)
+            operation.models_state = operation.base / "models-state"
+            operation.models_state.mkdir()
+            operation.output = root / "evidence"
+            operation.output.mkdir()
+            config = operation.config = operation.base / "pueue.yml"
+            operation.processes = gate.Processes(root / "processes", {"PATH": "/usr/bin"})
+            track_directory_pins(self, (operation.processes.capture_root,))
+            operation.ops = gate.NativeAcceptanceTaskOps(operation)
+            # A regressed cleanup reports expiry promptly instead of retaining.
+            operation.ops.watch_seconds = 2
+            with patch.object(processes_impl.subprocess, "Popen", FakePopen):
+                with patch.object(processes_impl.DirectoryOwner, "transfer_child_to",
+                                  side_effect=OSError("injected transfer failure")), \
+                        self.assertRaisesRegex(OSError, "transfer failure"):
+                    operation.processes.start(
+                        "pueued", [operation.pueued, "-c", operation.config], operation.base,
+                        on_spawned=operation._adopt_daemon)
+                self.assertEqual(len(operation.processes.entries), 1)
+                daemon = operation.processes.entries[0]
+                self.assertIs(operation.daemon, daemon)
+                self.assertIsNone(daemon.poll())
+
+                self.assertTrue(operation.safe_shutdown())
+
+            self.assertTrue(operation.closed)
+            self.assertIs(operation.ops.daemon, daemon)
+            self.assertTrue(operation.ops.closed)
+            self.assertEqual([process.argv[1:] for process in launched], [
+                ["-c", str(config)],
+                ["-c", str(config), "status", "--json"],
+                ["-c", str(config), "shutdown"],
+            ])
+            self.assertTrue(daemon.result["natural_wait"])
+            self.assertEqual(daemon.result["exit_code"], 0)
+            self.assertEqual(operation.processes.pending(), [])
+
     def test_cleanup_stays_open_until_every_owned_process_exits_naturally(self):
         with tempfile.TemporaryDirectory(prefix="native-natural-exit-unit-") as directory:
             root = Path(directory)

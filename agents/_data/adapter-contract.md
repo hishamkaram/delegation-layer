@@ -124,7 +124,9 @@ can execute it; dispatch remains the admission boundary.
   - Nonzero exit code with a success-shaped body is treated as a conflicting completion and rejected.
 - **Continuation**:
   - Continuation tasks reference layer-recorded session handles from a predecessor with either a validated terminal outcome or a durable Pueue-ended observation backed by an application-owned lifetime-termination record with independently proven empty scope.
-  - Budget-stop evidence authorizes session handoff only; `outcome.json` remains the sole task-completion authority.
+  - Canonical closed lifetime evidence of any kind with a free runner lease also authorizes handoff when publication is unknown, with no seal or outcome; sealed evidence must be collected first. A queue end or timestamp alone never authorizes handoff.
+  - Budget-stop and closure evidence authorize session handoff only; `outcome.json` remains the sole task-completion authority.
+  - Only a genuinely absent optional `provider.ref` permits the validated immutable requested prior session as the input reference. It is not evidence the interrupted provider resumed or persisted messages; a malformed, unreadable, or mismatched record refuses.
   - Active sessions are protected by durable session claims under `.session.lock`.
   - Continuation invokes the provider using explicit session resumption flags (e.g. `--conversation <id>`, `resume <uuid> -`, `--resume <uuid>`).
   - Provider continuation validation receives the immutable predecessor plan as

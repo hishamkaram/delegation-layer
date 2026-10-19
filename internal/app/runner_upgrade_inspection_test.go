@@ -198,7 +198,7 @@ func TestTimeoutContinuationDoesNotPinManagedRunner(t *testing.T) {
 	runner := meta.RunnerExecutable
 	response := newResponse("status")
 	records := []taskdir.StopRecord{{Request: &task.StopRequestRecord{Cause: "budget"}, Observation: &task.StopObservedRecord{Terminated: true}}}
-	applyContinuationOffer(&response, root, tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: strings.Repeat("d", 32), Provider: "pi:json"}, records, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, runner, commandRunner, nil, true, true))
+	applyContinuationOffer(&response, root, tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: strings.Repeat("d", 32), Provider: "pi:json"}, records, NativeCatalog(), tasklifecycle.ContinuationSessionObserved, runner, commandRunner, nil, true, true))
 	if response.Continuation == nil || !response.Continuation.Resumable || strings.Contains(response.Continuation.ContinueCommand, "--runner") {
 		t.Fatalf("managed continuation command = %+v", response.Continuation)
 	}
@@ -251,7 +251,7 @@ func requireLegacyRunnerTimeoutContinuation(t *testing.T, root string, req *task
 	commandRunner := tasklifecycle.TimeoutContinuationCommandRunner(meta, ownership)
 	response := newResponse("status")
 	stopRecords := []taskdir.StopRecord{{Request: &task.StopRequestRecord{Cause: "budget"}, Observation: &task.StopObservedRecord{Terminated: true}}}
-	applyContinuationOffer(&response, root, tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: req.TaskID, Provider: "pi:json"}, stopRecords, NativeCatalog(), &task.ProviderRefRecord{Provider: "pi:json", ConversationID: "session"}, runner, commandRunner, nil, true, true))
+	applyContinuationOffer(&response, root, tasklifecycle.TimeoutContinuation(&task.TaskRecord{TaskID: req.TaskID, Provider: "pi:json"}, stopRecords, NativeCatalog(), tasklifecycle.ContinuationSessionObserved, runner, commandRunner, nil, true, true))
 	if response.Continuation == nil || !response.Continuation.Resumable || strings.Contains(response.Continuation.ContinueCommand, "--runner") {
 		t.Fatalf("migrated legacy timeout continuation = %+v", response.Continuation)
 	}

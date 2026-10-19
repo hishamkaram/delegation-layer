@@ -14,12 +14,14 @@ import (
 const Provider = "ccr:print"
 
 const (
-	currentPredicateVersion              = "ccr-foreground-v4"
-	modeledPredicateVersion              = "ccr-foreground-v4-modeled"
-	preCredentialPredicateVersion        = "ccr-foreground-v3"
-	preCredentialModeledPredicateVersion = "ccr-foreground-v3-modeled"
-	previousPredicateVersion             = "ccr-foreground-v2"
-	historicalPredicateVersion           = "ccr-foreground-v1"
+	currentPredicateVersion               = "ccr-foreground-v5"
+	modeledPredicateVersion               = "ccr-foreground-v5-modeled"
+	preAttributionPredicateVersion        = "ccr-foreground-v4"
+	preAttributionModeledPredicateVersion = "ccr-foreground-v4-modeled"
+	preCredentialPredicateVersion         = "ccr-foreground-v3"
+	preCredentialModeledPredicateVersion  = "ccr-foreground-v3-modeled"
+	previousPredicateVersion              = "ccr-foreground-v2"
+	historicalPredicateVersion            = "ccr-foreground-v1"
 )
 
 type preparationRevision uint8
@@ -41,7 +43,7 @@ type preparationContract struct {
 	inspection inspectionRevision
 }
 
-// Reference binds fresh CCR foreground completion to the corrected native
+// Reference binds fresh CCR foreground completion to the attributed native
 // Claude stream contract, including CCR's own exit status and adapter/session
 // identity.
 func Reference(mode string) task.PredicateRef {
@@ -64,12 +66,27 @@ func modeledReference(mode string) task.PredicateRef {
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: modeledPredicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
 }
 
+// preAttributionReference identifies credential-aware CCR tasks sealed under
+// Claude's single-result completion policy. Its bytes embed that frozen
+// contract so the recorded digest and replay remain unchanged.
+func preAttributionReference(mode string, preservesRoute bool) task.PredicateRef {
+	version := preAttributionModeledPredicateVersion
+	if preservesRoute {
+		version = preAttributionPredicateVersion
+	}
+	contract := ccrContract(version, claude.PreAttributionNativeContractForMode(mode), preservesRoute)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
 func preCredentialReference(mode string, preservesRoute bool) task.PredicateRef {
 	version := preCredentialModeledPredicateVersion
 	if preservesRoute {
 		version = preCredentialPredicateVersion
 	}
-	contract := ccrContract(version, claude.ContractForMode(mode), preservesRoute)
+	contract := ccrContract(version, claude.PreAttributionNativeContractForMode(mode), preservesRoute)
 	if contract == "" {
 		return task.PredicateRef{}
 	}
@@ -105,7 +122,8 @@ func ccrContract(version, claudeContract string, preservesRoute bool) string {
 	if preservesRoute {
 		contract += "; exact continuations retain the recorded CCR route"
 	}
-	if version == currentPredicateVersion || version == modeledPredicateVersion {
+	if version == currentPredicateVersion || version == modeledPredicateVersion ||
+		version == preAttributionPredicateVersion || version == preAttributionModeledPredicateVersion {
 		contract += "; native credential resolution failure exits 77 and becomes authentication-unavailable without a session"
 	}
 	return contract + "\n" + claudeContract
@@ -127,9 +145,9 @@ func preparationForReference(reference task.PredicateRef, mode string) (preparat
 		return preparationContract{}, err
 	}
 	switch {
-	case reference.Equal(Reference(mode)), reference.Equal(preCredentialReference(mode, true)):
+	case reference.Equal(Reference(mode)), reference.Equal(preAttributionReference(mode, true)), reference.Equal(preCredentialReference(mode, true)):
 		return preparationContract{launch: resumeRoutePreparation, inspection: routeInspection}, nil
-	case reference.Equal(modeledReference(mode)), reference.Equal(preCredentialReference(mode, false)):
+	case reference.Equal(modeledReference(mode)), reference.Equal(preAttributionReference(mode, false)), reference.Equal(preCredentialReference(mode, false)):
 		return preparationContract{launch: legacyPreparation, inspection: routeInspection}, nil
 	case reference.Equal(previousReference(mode)), reference.Equal(HistoricalReference(mode)):
 		return preparationContract{launch: legacyPreparation, inspection: legacyInspection}, nil
@@ -138,49 +156,47 @@ func preparationForReference(reference task.PredicateRef, mode string) (preparat
 	}
 }
 
+// Registration makes each current attributed reference the single direct
+// offline recovery target for the sealed sources sharing its launch shape:
+// route-preserving v4 and v3 recover as v5; modeled v4/v3 and the legacy v2/v1
+// launches recover as v5-modeled. Every earlier reference is replay-only.
 func Registration() commonprovider.Registration {
-	interpreters := make([]predicate.Interpreter, 0, 12)
-	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		interpreter, err := newCredentialInterpreter(Reference(mode), modeledReference(mode))
-		if err != nil {
-			panic(err)
-		} // Immutable compiled contract.
-		interpreters = append(interpreters, interpreter)
+	builders := []func(mode string) (predicate.Interpreter, error){
+		func(mode string) (predicate.Interpreter, error) {
+			return newCredentialInterpreter(Reference(mode), preAttributionReference(mode, true), preCredentialReference(mode, true))
+		},
+		func(mode string) (predicate.Interpreter, error) {
+			return newCredentialInterpreter(modeledReference(mode), preAttributionReference(mode, false), preCredentialReference(mode, false),
+				previousReference(mode), HistoricalReference(mode))
+		},
+		func(mode string) (predicate.Interpreter, error) {
+			return newPreAttributionCredentialInterpreter(preAttributionReference(mode, true))
+		},
+		func(mode string) (predicate.Interpreter, error) {
+			return newPreAttributionCredentialInterpreter(preAttributionReference(mode, false))
+		},
+		func(mode string) (predicate.Interpreter, error) {
+			return claude.NewStreamInterpreter(preCredentialReference(mode, true))
+		},
+		func(mode string) (predicate.Interpreter, error) {
+			return claude.NewStreamInterpreter(preCredentialReference(mode, false))
+		},
+		func(mode string) (predicate.Interpreter, error) {
+			return claude.NewStreamInterpreter(previousReference(mode))
+		},
+		func(mode string) (predicate.Interpreter, error) {
+			return claude.NewHistoricalStreamInterpreter(HistoricalReference(mode))
+		},
 	}
-	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		interpreter, err := newCredentialInterpreter(modeledReference(mode), preCredentialReference(mode, true))
-		if err != nil {
-			panic(err)
-		} // Immutable compiled contract.
-		interpreters = append(interpreters, interpreter)
-	}
-	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		interpreter, err := claude.NewStreamInterpreterWithRecovery(preCredentialReference(mode, true), preCredentialReference(mode, false))
-		if err != nil {
-			panic(err)
-		} // Immutable compiled contract.
-		interpreters = append(interpreters, interpreter)
-	}
-	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		interpreter, err := claude.NewStreamInterpreterWithRecovery(preCredentialReference(mode, false), previousReference(mode))
-		if err != nil {
-			panic(err)
-		} // Immutable compiled contract.
-		interpreters = append(interpreters, interpreter)
-	}
-	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		interpreter, err := claude.NewStreamInterpreterWithRecovery(previousReference(mode), HistoricalReference(mode))
-		if err != nil {
-			panic(err)
-		} // Immutable compiled contract.
-		interpreters = append(interpreters, interpreter)
-	}
-	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		interpreter, err := claude.NewHistoricalStreamInterpreter(HistoricalReference(mode))
-		if err != nil {
-			panic(err)
-		} // Immutable compiled contract.
-		interpreters = append(interpreters, interpreter)
+	interpreters := make([]predicate.Interpreter, 0, 2*len(builders))
+	for _, build := range builders {
+		for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
+			interpreter, err := build(mode)
+			if err != nil {
+				panic(err)
+			} // Immutable compiled contract.
+			interpreters = append(interpreters, interpreter)
+		}
 	}
 	return commonprovider.Registration{
 		Description: commonprovider.Description{
@@ -192,7 +208,7 @@ func Registration() commonprovider.Registration {
 			ReadOnly:         commonprovider.ReadOnlyCapability{Supported: true, Mechanism: commonprovider.ReadOnlyNativePlan, Containment: commonprovider.ReadOnlyProviderOwned},
 			Runtime:          RuntimeRequirements(),
 		},
-		Prepare: PrepareCandidate, PrepareExisting: PrepareExistingCandidate,
+		Prepare: PrepareCandidate, PrepareExisting: PrepareExistingCandidate, PrepareSuccessor: PrepareSuccessorCandidate,
 		ValidateContinuation: validateContinuation,
 		Models:               ModelDiscovery, Interpreters: interpreters,
 	}

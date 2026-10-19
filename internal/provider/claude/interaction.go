@@ -52,15 +52,18 @@ type claudeInteraction struct {
 }
 
 func newClaudeInteraction(request task.TaskRecord, expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
-	return newClaudeInteractionWithCapture(request, expected, record, true)
+	return newClaudeInteractionWithCapture(request, expected, record, true, singleResultCompletion)
 }
 
-func newClaudeInteractionWithCapture(request task.TaskRecord, expected task.SessionExpectation, record func(task.SessionIdentity) error, recordCapture bool) (execution.InteractionProtocol, error) {
+// newClaudeInteractionWithCapture binds the live protocol to the completion
+// policy of the admitted interactive predicate revision.
+func newClaudeInteractionWithCapture(request task.TaskRecord, expected task.SessionExpectation, record func(task.SessionIdentity) error, recordCapture bool, completion completionPolicy) (execution.InteractionProtocol, error) {
 	id, err := expectedSessionID(request.RootID, request.TaskID, expected)
 	if err != nil {
 		return nil, err
 	}
-	return &claudeInteraction{turnID: request.TaskID, expected: id, record: record, state: eventState{mode: request.Mode, current: recordCapture}, pending: map[string]claudePendingQuestion{}, agents: map[string]bool{}, recordCapture: recordCapture}, nil
+	state := eventState{mode: request.Mode, current: recordCapture, attribution: newCompletionAttribution(completion)}
+	return &claudeInteraction{turnID: request.TaskID, expected: id, record: record, state: state, pending: map[string]claudePendingQuestion{}, agents: map[string]bool{}, recordCapture: recordCapture}, nil
 }
 
 func (p *claudeInteraction) UseRecordCapture() bool { return p.recordCapture }
@@ -314,6 +317,9 @@ func (p *claudeInteraction) observeCurrentEvent(event claudeCurrentEvent) (execu
 }
 
 func (p *claudeInteraction) applyCurrentObservedEvent(event claudeCurrentEvent) error {
+	if p.state.attribution != nil {
+		return p.applyAttributedObservedEvent(event)
+	}
 	if p.finished && (event.typeName == "result" || event.typeName == "assistant" || event.typeName == "user") {
 		return task.ErrInteractionClosed
 	}
@@ -327,6 +333,19 @@ func (p *claudeInteraction) applyCurrentObservedEvent(event claudeCurrentEvent) 
 		p.state.resultSeen = false
 	}
 	applyClaudeCurrentEvent(&p.state, event)
+	return p.state.semanticErr
+}
+
+// applyAttributedObservedEvent delegates completion semantics to the canonical
+// reducer; provider-native follow-ups after input closure remain evidence for
+// the reducer instead of a closed-channel fault.
+func (p *claudeInteraction) applyAttributedObservedEvent(event claudeCurrentEvent) error {
+	// The unscoped revision keeps its edge rule for repeated init before the
+	// principal result; the scoped policy decides it at the canonical router.
+	if event.typeName == "system" && !p.state.resultSeen && !p.state.attribution.scoped {
+		return p.applyCurrentSystemEvent(event)
+	}
+	applyClaudeCompletionEvent(&p.state, event)
 	return p.state.semanticErr
 }
 
@@ -359,14 +378,18 @@ func (p *claudeInteraction) finishCurrentObservedEvent(event claudeCurrentEvent,
 		}
 		update.Events = append(update.Events, ready)
 	}
-	if event.typeName == "user" {
+	// Only a root tool_result can answer a root question; a nested agent's
+	// tool_use_id is its own and may collide with the root's.
+	if event.typeName == "user" && !p.state.attribution.excludesNestedMessage(event) {
 		events, err := p.resolveCurrentToolResults(event.fields)
 		if err != nil {
 			return update, err
 		}
 		update.Events = append(update.Events, events...)
 	}
-	if event.typeName == "result" {
+	// A leading acknowledgement is a result record but not the principal; only
+	// an accepted principal makes the interaction's result state current.
+	if event.typeName == "result" && p.state.resultSeen {
 		p.recordResult()
 	}
 	if event.typeName == "system" {
@@ -603,8 +626,16 @@ func (p *claudeInteraction) Encode(message task.InteractionMessage) ([]byte, err
 	return claudeControlReply(pending.nativeID, map[string]any{"behavior": "allow", "updatedInput": pending.input})
 }
 
+// Complete reports end-of-stream success. Input closure (finished) is sticky.
+// The frozen revisions accept it as the end-of-stream rule; the scoped
+// revision may reopen after closure for provider-native follow-ups, so it also
+// requires the current settlement: an idle session with no unsettled tracked
+// agent, question, cycle, or batch.
 func (p *claudeInteraction) Complete() error {
 	if !p.finished || !p.resultSeen || p.failed || p.state.semanticErr != nil {
+		return task.ErrEvidenceFault
+	}
+	if p.state.attribution.requiresIdleEndOfStream() && !p.isFinished() {
 		return task.ErrEvidenceFault
 	}
 	return nil

@@ -415,6 +415,24 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.test_process_ownership",
+    "owner": "py:delegate_acceptance",
+    "layer": "test",
+    "imports": [
+      "py:contextlib",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.processes.operations",
+      "py:os",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:time",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.workspaces",
     "owner": "py:delegate_acceptance.workspaces",
     "layer": "test",

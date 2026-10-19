@@ -80,14 +80,15 @@ func TestRecoverStagedRejectsAlreadyQueuedDuringRace(t *testing.T) {
 	_, _, identity, _ := prepareStagedOrdinarySubmission(t, fake)
 	writeStagedOrdinaryStatus(t, fake, identity, 7, StateStashed, "", "default")
 	transition := installEnqueueStatusTransition(fake, ordinaryQueuedStatus(t, identity, 7))
-	firstDone := startOrdinaryRecovery(fake.client, identity, 7)
-	transition.wait(t)
+	scope := newTestCallScope(t, fake.client.options)
+	firstCall := startOrdinaryRecovery(scope, fake.client, identity, 7)
+	awaitEntry(scope, transition.entered, firstCall, "first recovery did not reach enqueue")
 	secondCallback := false
 	second, secondErr := fake.client.RecoverStaged(context.Background(), identity, 7, func(Observation) error {
 		secondCallback = true
 		return nil
 	})
-	first := <-firstDone
+	first := awaitCall(scope, firstCall, "first recovery")
 	if transition.writeErr != nil || first.err != nil || !first.observation.Matched || first.observation.State != StateStashed || !errors.Is(secondErr, ErrUnknown) {
 		t.Fatalf("concurrent recovery did not complete cleanly: first=%+v second=%+v secondErr=%v observer=%v", first.observation, second, secondErr, transition.writeErr)
 	}
@@ -105,14 +106,15 @@ func TestRecoverInspectionStagedRejectsAlreadyQueuedDuringRace(t *testing.T) {
 	identity := InspectionIdentity{RootID: fixture.store.RootID, TaskID: fixture.taskDir.TaskID}
 	writeStagedInspectionStatus(t, fake, identity, 9, StateStashed, "", identity.Group())
 	transition := installEnqueueStatusTransition(fake, inspectionQueuedStatus(t, identity, 9))
-	firstDone := startInspectionRecovery(fake.client, identity, 9)
-	transition.wait(t)
+	scope := newTestCallScope(t, fake.client.options)
+	firstCall := startInspectionRecovery(scope, fake.client, identity, 9)
+	awaitEntry(scope, transition.entered, firstCall, "first inspection recovery did not reach enqueue")
 	secondCallback := false
 	second, secondErr := fake.client.RecoverInspectionStaged(context.Background(), identity, 9, func(InspectionObservation) error {
 		secondCallback = true
 		return nil
 	})
-	first := <-firstDone
+	first := awaitCall(scope, firstCall, "first inspection recovery")
 	if transition.writeErr != nil || first.err != nil || !first.observation.Matched || first.observation.Job.State != StateStashed || !errors.Is(secondErr, ErrUnknown) {
 		t.Fatalf("concurrent inspection recovery did not complete cleanly: first=%+v second=%+v secondErr=%v observer=%v", first.observation, second, secondErr, transition.writeErr)
 	}
@@ -176,21 +178,17 @@ func TestSubmitInspectionStagedHoldsQueueIdentityThroughCommitAndEnqueue(t *test
 		},
 		queueGroup: "default",
 	}
-	commitEntered := make(chan struct{})
-	releaseCommit := make(chan struct{})
-	submissionDone := make(chan error, 1)
-	go func() {
-		_, err := fake.client.SubmitConcurrentInspectionStaged(t.Context(), permit, identity, launch, func(candidate InspectionObservation) error {
+	transition := newStagedTransition(t, fake.client, store.Root, stagedSharedIdentity)
+	call := transition.start(func(ctx context.Context) stagedTransitionResult {
+		observation, err := fake.client.SubmitConcurrentInspectionStaged(ctx, permit, identity, launch, func(candidate InspectionObservation) error {
 			if !candidate.Matched || candidate.Job.State != StateStashed || candidate.Job.ID != 9 {
-				return errors.New("submission commit received the wrong staged row")
+				return fmt.Errorf("submission commit received the wrong staged row: %+v", candidate)
 			}
-			close(commitEntered)
-			<-releaseCommit
-			return nil
+			return transition.commit()
 		})
-		submissionDone <- err
-	}()
-	assertStagedTransitionBlocksQueueIdentityMutation(t, fake.client, commitEntered, releaseCommit, submissionDone)
+		return inspectionTransitionResult(observation, err)
+	})
+	assertStagedTransitionHoldsQueueIdentity(t, transition, fake.client, call)
 	if got := len(stagedInvocations(t, fake, "add")); got != 1 || len(stagedInvocations(t, fake, "enqueue")) != 1 {
 		t.Fatalf("staged submission changed command cardinality: adds=%d enqueues=%d", got, len(stagedInvocations(t, fake, "enqueue")))
 	}
@@ -291,106 +289,78 @@ func TestRecoverInspectionStagedRegistersBeforeCommit(t *testing.T) {
 }
 
 func TestRecoverStagedHoldsQueueIdentityThroughCommitAndEnqueue(t *testing.T) {
-	fake, _ := newPrivateInspectionSupervisor(t, "ok")
+	fake, store := newPrivateInspectionSupervisor(t, "ok")
 	_, _, identity, _ := prepareStagedOrdinarySubmission(t, fake)
 	writeStagedOrdinaryStatus(t, fake, identity, 7, StateStashed, "", "default")
-	commitEntered := make(chan struct{})
-	releaseCommit := make(chan struct{})
-	recoveryDone := make(chan error, 1)
-	go func() {
-		_, err := fake.client.RecoverStaged(t.Context(), identity, 7, func(Observation) error {
-			close(commitEntered)
-			<-releaseCommit
-			return nil
+	transition := newStagedTransition(t, fake.client, store.Root, stagedExclusiveMutation)
+	call := transition.start(func(ctx context.Context) stagedTransitionResult {
+		observation, err := fake.client.RecoverStaged(ctx, identity, 7, func(candidate Observation) error {
+			if !candidate.Matched || candidate.State != StateStashed || candidate.NumericTaskID != 7 {
+				return fmt.Errorf("recovery commit received the wrong staged row: %+v", candidate)
+			}
+			return transition.commit()
 		})
-		recoveryDone <- err
-	}()
-	assertStagedTransitionBlocksQueueIdentityMutation(t, fake.client, commitEntered, releaseCommit, recoveryDone)
+		return stagedTransitionResult{err: err, pending: observation.Pending, observation: fmt.Sprintf("%+v", observation)}
+	})
+	assertStagedTransitionHoldsQueueIdentity(t, transition, fake.client, call)
 }
 
 func TestRecoverInspectionStagedHoldsQueueIdentityThroughRegistrationCommitAndEnqueue(t *testing.T) {
 	fake, store := newPrivateInspectionSupervisor(t, "ok")
 	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
 	writeStagedInspectionStatus(t, fake, identity, 9, StateStashed, "", "default")
-	commitEntered := make(chan struct{})
-	releaseCommit := make(chan struct{})
-	recoveryDone := make(chan error, 1)
-	go func() {
-		_, err := fake.client.RecoverInspectionStaged(t.Context(), identity, 9, func(candidate InspectionObservation) error {
-			if !candidate.TerminalEventRegistered {
-				return errors.New("terminal callback was not registered before commit")
-			}
-			close(commitEntered)
-			<-releaseCommit
-			return nil
-		})
-		recoveryDone <- err
-	}()
-	assertStagedTransitionBlocksQueueIdentityMutation(t, fake.client, commitEntered, releaseCommit, recoveryDone)
+	transition := newStagedTransition(t, fake.client, store.Root, stagedExclusiveMutation)
+	call := transition.start(recoverInspectionTransition(fake.client, identity, 9, transition))
+	assertStagedTransitionHoldsQueueIdentity(t, transition, fake.client, call)
 }
 
-func TestPrivateQueueWriterIntentBlocksNewReaders(t *testing.T) {
+// Canceling the run while the commit callback is held must stop the staged
+// transition before its effective enqueue, even though the callback itself
+// then returns nil; the released queue identity admits a later writer.
+func TestRecoverInspectionStagedCanceledAtCommitDoesNotEnqueue(t *testing.T) {
 	fake, store := newPrivateInspectionSupervisor(t, "ok")
-	initialEntered := make(chan struct{})
-	releaseInitial := make(chan struct{})
-	releaseInitialOnce := sync.OnceFunc(func() { close(releaseInitial) })
-	t.Cleanup(releaseInitialOnce)
-	initialDone := make(chan error, 1)
-	go func() {
-		initialDone <- fake.client.withPrivateQueueIdentityLease(t.Context(), func(context.Context) error {
-			close(initialEntered)
-			<-releaseInitial
-			return nil
-		})
-	}()
-	waitForStagedCommit(t, initialEntered, "initial queue identity reader did not enter")
+	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
+	writeStagedInspectionStatus(t, fake, identity, 9, StateStashed, "", "default")
+	transition := newStagedTransition(t, fake.client, store.Root, stagedExclusiveMutation)
+	call := transition.start(recoverInspectionTransition(fake.client, identity, 9, transition))
+	awaitEntry(transition.scope, transition.entered, call, "staged recovery did not reach its commit callback")
+	transition.cancelRun()
+	transition.releaseCommit()
+	result := awaitCall(transition.scope, call, "canceled staged recovery")
+	if !errors.Is(result.err, context.Canceled) || result.pending != nil {
+		t.Fatalf("canceled staged recovery did not stop before enqueue: err=%v pending=%t observation=%s", result.err, result.pending != nil, result.observation)
+	}
+	awaitLockCall(transition.scope, transition.startWriter(fake.client), "later queue identity writer")
+	facts := transition.snapshot()
+	assertStagedTransitionFacts(t, transition.mode, facts, 0)
+	if !facts.writerEntered {
+		t.Fatal("later queue identity writer did not enter after the canceled recovery")
+	}
+	if got := len(stagedInvocations(t, fake, "enqueue")); got != 0 {
+		t.Fatalf("canceled staged recovery issued %d enqueue commands", got)
+	}
+}
 
-	writerEntered := make(chan struct{})
-	releaseWriter := make(chan struct{})
-	releaseWriterOnce := sync.OnceFunc(func() { close(releaseWriter) })
-	t.Cleanup(releaseWriterOnce)
-	writerDone := make(chan error, 1)
-	go func() {
-		writerDone <- fake.client.withPrivateQueueIdentityMutation(t.Context(), func(context.Context) error {
-			close(writerEntered)
-			<-releaseWriter
-			return nil
+// The staged owner reports a transition that refuses before its commit with
+// its exact result, here the already-queued exact-row refusal.
+func TestStagedTransitionReportsRefusalBeforeCommit(t *testing.T) {
+	fake, store := newPrivateInspectionSupervisor(t, "ok")
+	identity := InspectionIdentity{RootID: store.RootID, TaskID: strings.Repeat("b", 32), QueueGroup: "default"}
+	writeStagedInspectionStatus(t, fake, identity, 9, StateQueued, "", "default")
+	transition := newStagedTransition(t, fake.client, store.Root, stagedExclusiveMutation)
+	var refused InspectionObservation
+	call := transition.start(func(ctx context.Context) stagedTransitionResult {
+		observation, err := fake.client.RecoverInspectionStaged(ctx, identity, 9, func(InspectionObservation) error {
+			return transition.commit()
 		})
-	}()
-	waitForPrivateQueueWriterIntent(t, store.Root)
-
-	const readerCount = 32
-	readerEntered := make(chan struct{}, readerCount)
-	readerDone := make(chan error, readerCount)
-	for range readerCount {
-		go func() {
-			readerDone <- fake.client.withPrivateQueueIdentityLease(t.Context(), func(context.Context) error {
-				readerEntered <- struct{}{}
-				return nil
-			})
-		}()
+		refused = observation
+		return inspectionTransitionResult(observation, err)
+	})
+	if err := waitForEntry(transition.scope, transition.entered, call); !errors.Is(err, errCallCompletedBeforeEntry) {
+		t.Fatalf("staged owner did not report the refusal before commit: %v", err)
 	}
-	assertNoQueueIdentityReader(t, readerEntered, "new reader overtook a waiting writer")
-	releaseInitialOnce()
-	waitForStagedCommit(t, writerEntered, "writer did not enter after the existing reader drained")
-	assertNoQueueIdentityReader(t, readerEntered, "new reader crossed an active writer")
-	releaseWriterOnce()
-	if err := <-writerDone; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-initialDone; err != nil {
-		t.Fatal(err)
-	}
-	for range readerCount {
-		select {
-		case <-readerEntered:
-		case <-time.After(2 * time.Second):
-			t.Fatal("reader did not enter after writer completion")
-		}
-		if err := <-readerDone; err != nil {
-			t.Fatal(err)
-		}
-	}
+	facts := transition.snapshot()
+	assertRejectedInspectionQueuedRecovery(t, refused, call.result.err, facts.commits, facts.enqueueEntries)
 }
 
 func TestPrivateQueueWriterIntentRepairsAbandonedState(t *testing.T) {
@@ -416,28 +386,27 @@ func TestPrivateQueueWriterIntentRepairsAbandonedState(t *testing.T) {
 	}
 }
 
-func waitForPrivateQueueWriterIntent(t *testing.T, stateRoot string) {
+// waitForPrivateQueueWriterIntent polls the durable intent a writer publishes
+// before it waits for the gate. Callers use it only while the writer cannot
+// complete, so a writer that returns first is a failure.
+func waitForPrivateQueueWriterIntent(t *testing.T, stateRoot string, writerDone <-chan struct{}, cutoff time.Time) {
 	t.Helper()
 	path := filepath.Join(stateRoot, privateSupervisorDirectory, privateQueueWriterIntentLockName)
-	deadline := time.Now().Add(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		data, err := os.ReadFile(path)
 		if err == nil && string(data) == privateQueueWriterWaitingState {
 			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("writer intent was not published: state=%q err=%v", data, err)
+		if !time.Now().Before(cutoff) {
+			t.Fatalf("writer intent was not published before the operation cutoff: state=%q err=%v", data, err)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func assertNoQueueIdentityReader(t *testing.T, entered <-chan struct{}, message string) {
-	t.Helper()
-	select {
-	case <-entered:
-		t.Fatal(message)
-	case <-time.After(100 * time.Millisecond):
+		select {
+		case <-writerDone:
+			t.Fatalf("writer returned before publishing its intent: state=%q err=%v", data, err)
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -455,61 +424,45 @@ func TestSubmitConcurrentInspectionStagedSerializesRecoveryAfterCommit(t *testin
 		},
 		queueGroup: "default",
 	}
-	originalCommitEntered, releaseOriginalCommit, originalDone, originalCommitted := startBlockedConcurrentInspectionSubmission(t, fake, permit, identity, launch)
-	waitForStagedCommit(t, originalCommitEntered, "original submission did not reach its durable commit barrier")
+	staged := newStagedTransition(t, fake.client, store.Root, stagedSharedIdentity)
+	var original inspectionRecoveryResult
+	var originalCommitted InspectionObservation
+	originalCall := staged.start(func(ctx context.Context) stagedTransitionResult {
+		observation, err := fake.client.SubmitConcurrentInspectionStaged(ctx, permit, identity, launch, func(candidate InspectionObservation) error {
+			originalCommitted = candidate
+			return staged.commit()
+		})
+		original = inspectionRecoveryResult{observation: observation, err: err}
+		return inspectionTransitionResult(observation, err)
+	})
+	awaitEntry(staged.scope, staged.entered, originalCall, "original submission did not reach its durable commit barrier")
 	var recoveryCommitted atomic.Bool
-	recoveryDone := startInspectionRecoveryWithCommitFlag(fake.client, identity, 9, &recoveryCommitted)
-	assertInspectionRecoveryBlocked(t, recoveryDone)
+	recoveryCall := startInspectionRecoveryWithCommitFlag(staged.scope, fake.client, identity, 9, &recoveryCommitted)
+	waitForPrivateQueueWriterIntent(t, store.Root, recoveryCall.done, staged.scope.cutoff)
+	select {
+	case <-recoveryCall.done:
+		t.Fatalf("recovery crossed the original submission's queue identity lease: %+v", recoveryCall.result)
+	default:
+	}
 	if got := transition.entries.Load(); got != 0 {
 		t.Fatalf("enqueue crossed the durable commit barrier: %d", got)
 	}
-	close(releaseOriginalCommit)
-	transition.wait(t)
-	recovery := <-recoveryDone
-	original := <-originalDone
-	assertSerializedInspectionSubmission(t, fake, transition, recovery, recoveryCommitted.Load(), original, *originalCommitted)
+	staged.releaseCommit()
+	awaitCall(staged.scope, originalCall, "original submission")
+	recovery := awaitCall(staged.scope, recoveryCall, "serialized recovery")
+	assertStagedTransitionFacts(t, staged.mode, staged.snapshot(), 1)
+	assertSerializedInspectionSubmission(t, fake, transition, recovery, recoveryCommitted.Load(), original, originalCommitted)
 }
 
-func startBlockedConcurrentInspectionSubmission(t *testing.T, fake *fakeSupervisor, permit InspectionSubmissionPermit, identity InspectionIdentity, launch Launch) (<-chan struct{}, chan<- struct{}, <-chan inspectionRecoveryResult, *InspectionObservation) {
-	t.Helper()
-	commitEntered := make(chan struct{})
-	releaseCommit := make(chan struct{})
-	done := make(chan inspectionRecoveryResult, 1)
-	committed := &InspectionObservation{}
-	go func() {
-		observation, submitErr := fake.client.SubmitConcurrentInspectionStaged(t.Context(), permit, identity, launch, func(candidate InspectionObservation) error {
-			*committed = candidate
-			if enqueueCount := len(stagedInvocations(t, fake, "enqueue")); enqueueCount != 0 {
-				return fmt.Errorf("original enqueue ran before its durable commit returned: %d", enqueueCount)
-			}
-			close(commitEntered)
-			<-releaseCommit
-			return nil
-		})
-		done <- inspectionRecoveryResult{observation: observation, err: submitErr}
-	}()
-	return commitEntered, releaseCommit, done, committed
-}
-
-func startInspectionRecoveryWithCommitFlag(client *Client, identity InspectionIdentity, id int64, committed *atomic.Bool) <-chan inspectionRecoveryResult {
-	done := make(chan inspectionRecoveryResult, 1)
-	go func() {
-		observation, err := client.RecoverInspectionStaged(context.Background(), identity, id, func(InspectionObservation) error {
+func startInspectionRecoveryWithCommitFlag(scope *testCallScope, client *Client, identity InspectionIdentity, id int64, committed *atomic.Bool) *testCall[inspectionRecoveryResult] {
+	ctx := scope.context()
+	return startTestCall(scope, func() inspectionRecoveryResult {
+		observation, err := client.RecoverInspectionStaged(ctx, identity, id, func(InspectionObservation) error {
 			committed.Store(true)
 			return nil
 		})
-		done <- inspectionRecoveryResult{observation: observation, err: err}
-	}()
-	return done
-}
-
-func assertInspectionRecoveryBlocked(t *testing.T, done <-chan inspectionRecoveryResult) {
-	t.Helper()
-	select {
-	case recovery := <-done:
-		t.Fatalf("recovery crossed the original submission's queue identity lease: observation=%+v err=%v", recovery.observation, recovery.err)
-	case <-time.After(100 * time.Millisecond):
-	}
+		return inspectionRecoveryResult{observation: observation, err: err}
+	})
 }
 
 func assertSerializedInspectionSubmission(t *testing.T, fake *fakeSupervisor, transition *enqueueStatusTransition, recovery inspectionRecoveryResult, recoveryCommitted bool, original inspectionRecoveryResult, originalCommitted InspectionObservation) {
@@ -545,49 +498,6 @@ func assertSingleInspectionEnqueue(t *testing.T, fake *fakeSupervisor, transitio
 	}
 }
 
-func waitForStagedCommit(t *testing.T, entered <-chan struct{}, message string) {
-	t.Helper()
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal(message)
-	}
-}
-
-func assertStagedTransitionBlocksQueueIdentityMutation(t *testing.T, client *Client, commitEntered <-chan struct{}, releaseCommit chan<- struct{}, recoveryDone <-chan error) {
-	t.Helper()
-	select {
-	case <-commitEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("staged recovery did not reach its commit callback")
-	}
-	mutationEntered := make(chan struct{})
-	mutationDone := make(chan error, 1)
-	go func() {
-		mutationDone <- client.withPrivateQueueIdentityMutation(t.Context(), func(context.Context) error {
-			close(mutationEntered)
-			return nil
-		})
-	}()
-	select {
-	case <-mutationEntered:
-		t.Fatal("queue identity mutation crossed an unfinished staged recovery")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(releaseCommit)
-	if err := <-recoveryDone; err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-mutationEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("queue identity mutation did not enter after staged recovery")
-	}
-	if err := <-mutationDone; err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestStagedInspectionRegistrationCapabilityErrorUsesPollingFallback(t *testing.T) {
 	fake, _ := newPrivateInspectionSupervisor(t, "ok")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -614,4 +524,216 @@ func TestRecoverInspectionStagedRequiresExactStashedRow(t *testing.T) {
 			runInspectionStagedRecoveryCase(t, testCase)
 		})
 	}
+}
+
+// stagedQueueLockMode names the queue identity locks a staged transition must
+// hold from its commit callback through its effective enqueue.
+type stagedQueueLockMode string
+
+const (
+	// stagedSharedIdentity is concurrent submission: it holds only the shared
+	// queue identity lease. Writer intent and the gate are not its locks, so a
+	// waiting writer may hold them.
+	stagedSharedIdentity stagedQueueLockMode = "shared queue identity lease"
+	// stagedExclusiveMutation is recovery: writer intent, gate and identity
+	// are held exclusively and the intent is committed.
+	stagedExclusiveMutation stagedQueueLockMode = "exclusive queue identity mutation"
+)
+
+func (m stagedQueueLockMode) held(ctx context.Context, base string) error {
+	switch m {
+	case stagedSharedIdentity:
+		return requirePrivateLockState(ctx, filepath.Join(base, privateQueueIdentityLockName), privateLockShared)
+	case stagedExclusiveMutation:
+		return privateQueueIdentityMutationHeld(ctx, base)
+	default:
+		return fmt.Errorf("unknown staged queue lock mode %q", m)
+	}
+}
+
+// stagedTransition owns one staged submission or recovery under test: its
+// scope, its cancelable run context, the release-once commit barrier, and the
+// facts its commit callback, command observer and competing writer record
+// under mu. Callbacks only record facts; the test goroutine asserts them.
+// Scope cleanup cancels the run before it releases the commit, then joins the
+// transition and the writer and settles any returned pending command.
+type stagedTransition struct {
+	scope         *testCallScope
+	base          string
+	mode          stagedQueueLockMode
+	run           context.Context
+	cancelRun     context.CancelFunc
+	probe         context.Context
+	entered       chan struct{}
+	enterOnce     sync.Once
+	released      <-chan struct{}
+	releaseCommit func()
+
+	mu    sync.Mutex
+	facts stagedTransitionFacts
+}
+
+// stagedTransitionFacts is the synchronized record of one transition. Lock
+// errors are nil when every probe found the mode's locks held.
+type stagedTransitionFacts struct {
+	commits                  int
+	enqueuesAtCommit         int
+	commitLocks              error
+	enqueueEntries           int
+	enqueueCompletions       int
+	enqueueLocks             error
+	writerEntered            bool
+	completionsAtWriterEntry int
+}
+
+type stagedTransitionResult struct {
+	err         error
+	pending     *Pending
+	observation string
+}
+
+func (r stagedTransitionResult) pendingCommand() *Pending { return r.pending }
+
+func inspectionTransitionResult(observation InspectionObservation, err error) stagedTransitionResult {
+	return stagedTransitionResult{err: err, pending: observation.Pending, observation: fmt.Sprintf("%+v", observation)}
+}
+
+// newStagedTransition must follow the fixture so its cleanup runs first. It
+// wraps the client's existing observer, which still sees every event.
+func newStagedTransition(t *testing.T, client *Client, stateRoot string, mode stagedQueueLockMode) *stagedTransition {
+	t.Helper()
+	scope := newTestCallScope(t, client.options)
+	transition := &stagedTransition{
+		scope:   scope,
+		base:    filepath.Join(stateRoot, privateSupervisorDirectory),
+		mode:    mode,
+		probe:   scope.context(),
+		entered: make(chan struct{}),
+	}
+	transition.run, transition.cancelRun = scope.cancelableContext()
+	transition.released, transition.releaseCommit = scope.barrier()
+	next := client.options.Observer
+	client.options.Observer = func(event CommandEvent) {
+		transition.observe(event)
+		if next != nil {
+			next(event)
+		}
+	}
+	return transition
+}
+
+func (s *stagedTransition) start(run func(context.Context) stagedTransitionResult) *testCall[stagedTransitionResult] {
+	return startTestCall(s.scope, func() stagedTransitionResult { return run(s.run) })
+}
+
+// commit is the application commit. It records lock evidence at its
+// boundary, announces entry and waits for release. It returns nil, so only
+// the run context decides whether the enqueue follows.
+func (s *stagedTransition) commit() error {
+	locks := s.mode.held(s.probe, s.base)
+	s.mu.Lock()
+	s.facts.commits++
+	s.facts.enqueuesAtCommit = s.facts.enqueueEntries
+	s.facts.commitLocks = errors.Join(s.facts.commitLocks, locks)
+	s.mu.Unlock()
+	s.enterOnce.Do(func() { close(s.entered) })
+	<-s.released
+	return nil
+}
+
+// observe probes the mode's locks at every stage of an effective enqueue.
+// The completed event precedes pending completion and lease release.
+func (s *stagedTransition) observe(event CommandEvent) {
+	if !effectiveEnqueueCommand(event.Argv) {
+		return
+	}
+	locks := s.mode.held(s.probe, s.base)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch event.Stage {
+	case "entry":
+		s.facts.enqueueEntries++
+	case "completed":
+		s.facts.enqueueCompletions++
+	}
+	if locks != nil {
+		s.facts.enqueueLocks = errors.Join(s.facts.enqueueLocks, fmt.Errorf("enqueue %s: %w", event.Stage, locks))
+	}
+}
+
+// startWriter starts an exclusive queue identity writer on a context the
+// test never cancels. Its entry records how many enqueues had completed.
+func (s *stagedTransition) startWriter(client *Client) *testCall[lockCallResult] {
+	return startQueueIdentityMutation(s.scope, client, func(context.Context) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.facts.writerEntered = true
+		s.facts.completionsAtWriterEntry = s.facts.enqueueCompletions
+		return nil
+	})
+}
+
+func (s *stagedTransition) snapshot() stagedTransitionFacts {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.facts
+}
+
+// recoverInspectionTransition recovers row id through transition's commit
+// after requiring the exact Stashed row with its terminal event registered.
+func recoverInspectionTransition(client *Client, identity InspectionIdentity, id int64, transition *stagedTransition) func(context.Context) stagedTransitionResult {
+	return func(ctx context.Context) stagedTransitionResult {
+		observation, err := client.RecoverInspectionStaged(ctx, identity, id, func(candidate InspectionObservation) error {
+			if !candidate.Matched || candidate.Job.State != StateStashed || candidate.Job.ID != id || !candidate.TerminalEventRegistered {
+				return fmt.Errorf("recovery commit received an unregistered or wrong staged row: %+v", candidate)
+			}
+			return transition.commit()
+		})
+		return inspectionTransitionResult(observation, err)
+	}
+}
+
+// assertStagedTransitionHoldsQueueIdentity starts a competing exclusive
+// writer at the commit barrier and releases the commit. The writer's entry
+// after the single enqueue completed is the release proof.
+func assertStagedTransitionHoldsQueueIdentity(t *testing.T, transition *stagedTransition, client *Client, call *testCall[stagedTransitionResult]) {
+	t.Helper()
+	awaitEntry(transition.scope, transition.entered, call, "staged transition did not reach its commit callback")
+	writer := transition.startWriter(client)
+	transition.releaseCommit()
+	if result := awaitCall(transition.scope, call, "staged transition"); result.err != nil {
+		t.Fatalf("staged transition failed: err=%v observation=%s", result.err, result.observation)
+	}
+	awaitLockCall(transition.scope, writer, "queue identity writer")
+	facts := transition.snapshot()
+	assertStagedTransitionFacts(t, transition.mode, facts, 1)
+	if !facts.writerEntered || facts.completionsAtWriterEntry != 1 {
+		t.Fatalf("queue identity writer entered before the staged enqueue completed: entered=%t completions=%d", facts.writerEntered, facts.completionsAtWriterEntry)
+	}
+}
+
+func assertStagedTransitionFacts(t *testing.T, mode stagedQueueLockMode, facts stagedTransitionFacts, enqueues int) {
+	t.Helper()
+	if facts.commits != 1 || facts.enqueuesAtCommit != 0 || facts.commitLocks != nil {
+		t.Fatalf("%s was not held at one commit before enqueue: commits=%d enqueues_at_commit=%d err=%v", mode, facts.commits, facts.enqueuesAtCommit, facts.commitLocks)
+	}
+	if facts.enqueueEntries != enqueues || facts.enqueueCompletions != enqueues || facts.enqueueLocks != nil {
+		t.Fatalf("%s did not cover %d effective enqueues: entries=%d completions=%d err=%v", mode, enqueues, facts.enqueueEntries, facts.enqueueCompletions, facts.enqueueLocks)
+	}
+}
+
+// startQueueIdentityLease and startQueueIdentityMutation run one private
+// queue identity reader or writer callback as a scope call.
+func startQueueIdentityLease(scope *testCallScope, client *Client, callback func(context.Context) error) *testCall[lockCallResult] {
+	ctx := scope.context()
+	return startTestCall(scope, func() lockCallResult {
+		return lockCallResult{err: client.withPrivateQueueIdentityLease(ctx, callback)}
+	})
+}
+
+func startQueueIdentityMutation(scope *testCallScope, client *Client, callback func(context.Context) error) *testCall[lockCallResult] {
+	ctx := scope.context()
+	return startTestCall(scope, func() lockCallResult {
+		return lockCallResult{err: client.withPrivateQueueIdentityMutation(ctx, callback)}
+	})
 }

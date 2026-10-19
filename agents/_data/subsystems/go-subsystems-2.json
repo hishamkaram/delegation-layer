@@ -729,6 +729,7 @@
       "go:internal/workspaces/testsupport",
       "go:strings",
       "go:testing",
+      "go:testing/synctest",
       "go:time"
     ]
   },

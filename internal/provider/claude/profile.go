@@ -57,8 +57,9 @@ func existingNativePreparationOptions(request task.TaskRecord, meta task.MetaRec
 }
 
 func nativePermissionForReference(mode string, reference task.PredicateRef) string {
-	if reference.Equal(ReferenceForMode(mode)) || reference.Equal(previousNativeProbeReferenceForMode(mode)) ||
-		reference.Equal(historicalNativeReferenceForMode(mode)) || reference.Equal(interactionReference(mode)) ||
+	if reference.Equal(ReferenceForMode(mode)) || reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) ||
+		reference.Equal(previousNativeProbeReferenceForMode(mode)) || reference.Equal(historicalNativeReferenceForMode(mode)) ||
+		reference.Equal(interactionReference(mode)) || reference.Equal(unscopedInteractionReference(mode)) || reference.Equal(preAttributionInteractionReference(mode)) ||
 		reference.Equal(previousInteractionReference(mode)) || reference.Equal(historicalInteractionReference(mode)) {
 		return nativeDefaultPermission(mode)
 	}
@@ -78,20 +79,27 @@ func normalizeNativePreparationOptions(request task.TaskRecord, options nativePr
 	expected := ReferenceForMode(request.Mode)
 	historical := historicalNativeReferenceForMode(request.Mode)
 	previousProbe := previousNativeProbeReferenceForMode(request.Mode)
+	preAttribution := preAttributionReferenceForMode(request.Mode)
+	unscoped := unscopedReference(request.Mode)
 	if options.permissionMode == nativeHistoricalPermission(request.Mode) {
 		expected = legacyNativeReferenceForMode(request.Mode)
 		historical = expected
 		previousProbe = task.PredicateRef{}
+		preAttribution = task.PredicateRef{}
+		unscoped = task.PredicateRef{}
 	}
 	if request.RequestedConfig.Interactive {
 		expected = interactionReference(request.Mode)
 		historical = historicalInteractionReference(request.Mode)
 		previousProbe = previousInteractionReference(request.Mode)
+		preAttribution = preAttributionInteractionReference(request.Mode)
+		unscoped = unscopedInteractionReference(request.Mode)
 	}
 	if options.predicateReference.Equal(task.PredicateRef{}) {
 		options.predicateReference = expected
 	} else if !options.predicateReference.Equal(expected) && !options.predicateReference.Equal(historical) &&
-		!options.predicateReference.Equal(previousProbe) {
+		!options.predicateReference.Equal(previousProbe) && !options.predicateReference.Equal(preAttribution) &&
+		!options.predicateReference.Equal(unscoped) {
 		return nativePreparationOptions{}, fmt.Errorf("%w: stored Claude native predicate does not match permission mode", ErrUnsupportedProfile)
 	}
 	return options, nil
@@ -166,7 +174,7 @@ func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnviron
 // an already admitted task. Native tasks use the current provider-owned plan;
 // older portable and OAuth records retain their historical branches.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	if meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision {
+	if commonprovider.HasNativeProfile(meta) {
 		return prepareExistingNativeCandidate(request, meta)
 	}
 	if !hasLegacyNativePolicy(meta) {
@@ -364,7 +372,7 @@ func buildNativePreparedProfile(request task.TaskRecord, arguments []string, inp
 	if request.RequestedConfig.Interactive {
 		prepared.Identity = nil
 		prepared.Interaction = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
-			return newClaudeInteractionWithCapture(request, expected, record, !options.predicateReference.Equal(historicalInteractionReference(request.Mode)))
+			return newClaudeInteractionWithCapture(request, expected, record, !options.predicateReference.Equal(historicalInteractionReference(request.Mode)), interactionCompletionPolicy(request.Mode, options.predicateReference))
 		}
 	}
 	if err = prepared.ValidateAdmission(request); err != nil {
@@ -526,4 +534,17 @@ func nativePolicyProofSource(definitionDigest string, facts nativePolicyFacts, h
 	return task.PolicySourceDigest{
 		Path: nativeCredentialHelper, Kind: "native-oauth-policy-proof", Present: true, SHA256: task.ComputeSHA256(proof),
 	}, nil
+}
+
+// interactionCompletionPolicy selects the live completion reducer from the
+// admitted interactive predicate; frozen revisions keep their recorded policy.
+func interactionCompletionPolicy(mode string, reference task.PredicateRef) completionPolicy {
+	switch {
+	case reference.Equal(interactionReference(mode)):
+		return scopedAttributedCompletion
+	case reference.Equal(unscopedInteractionReference(mode)):
+		return unscopedAttributedCompletion
+	default:
+		return singleResultCompletion
+	}
 }

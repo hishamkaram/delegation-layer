@@ -374,10 +374,24 @@ durable, but it cannot prove that an unrecorded launch is absent and therefore
 does not publish terminal evidence. This is recovery evidence loss, not a
 provider failure.
 
+## A task was interrupted
+
+After a host restart, `status` can report `interrupted` with
+`publication: "unknown"` and no outcome, and `collect` exits `1` with
+`failure.code: "task_interrupted"`. The lifetime is canonically closed, but no
+provider result exists; closure is not success. If `failure.next_action` is
+`continue_task` and `continuation.resumable` is `true`, run
+`continue --task PREDECESSOR` with the same root and a finite budget. Otherwise
+(including any user stop) report the reason. Do not redispatch the brief, run
+Pueue or process commands, or read raw output as an answer. The
+[continuation reference](cli-reference.md#preflight-and-continuation) states
+the handoff proofs and session rules.
+
 ## A continuation is busy
 
 The predecessor still owns its conversation reservation, or its runner has not
-released it after a validated terminal outcome or durable budget-stop termination.
+released it after a validated terminal outcome, durable budget-stop termination,
+or canonical closed lifetime evidence for a turn with no seal or outcome.
 Observe the exact predecessor with `status` or `collect`. Normal terminal
 outcomes, committed or rejected, do not need a `continuation` projection: the
 provider must support continuation, a session must have been recorded, and the

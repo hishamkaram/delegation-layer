@@ -91,6 +91,7 @@ type ContinuationResponse struct {
 	Resumable       bool   `json:"resumable"`
 	Mode            string `json:"mode"`
 	PredecessorID   string `json:"predecessor_task_id,omitempty"`
+	SessionSource   string `json:"session_source,omitempty"`
 	ContinueCommand string `json:"continue_command,omitempty"`
 	Reason          string `json:"reason,omitempty"`
 }

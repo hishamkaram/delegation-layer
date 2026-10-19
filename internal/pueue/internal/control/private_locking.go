@@ -188,7 +188,7 @@ func (c *Client) withPrivateQueueIdentityLease(ctx context.Context, callback fun
 	}
 	base := filepath.Join(stateRoot, privateSupervisorDirectory)
 	for {
-		if err = waitForPrivateQueueWriter(ctx, base); err != nil {
+		if err = waitForPrivateQueueWriter(ctx, base, c.options.queueWriterWaitObserver); err != nil {
 			return err
 		}
 		var identity *bootstrapLock
@@ -250,12 +250,15 @@ func (c *Client) withPrivateQueueIdentityMutation(ctx context.Context, callback 
 // waitForPrivateQueueWriter blocks new shared identity leases after a writer
 // has published intent. Readers that crossed before publication are finite and
 // drain through the gate; later readers cannot continuously overtake the
-// waiting writer.
-func waitForPrivateQueueWriter(ctx context.Context, base string) error {
+// waiting writer. A non-nil observeWait reports each wait on active intent.
+func waitForPrivateQueueWriter(ctx context.Context, base string, observeWait func()) error {
 	for {
 		active, err := privateQueueWriterIntentActive(ctx, base)
 		if err != nil || !active {
 			return err
+		}
+		if observeWait != nil {
+			observeWait()
 		}
 		timer := time.NewTimer(privateQueueSettlementPoll)
 		select {

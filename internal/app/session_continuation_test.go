@@ -221,31 +221,69 @@ func TestPredecessorTerminatedReleasesTerminalContinuation(t *testing.T) {
 	}
 }
 
-func TestResolvePredecessorPreservesTerminalContinuationBeforeMissingIdentityError(t *testing.T) {
-	store, td, req := newAppTestTaskWithPrior(t, true, testPriorSession())
+// A terminal predecessor without provider.ref.json continues from its own
+// validated requested session, bound to the immediate predecessor.
+func TestResolvePredecessorUsesRecordedInputWhenTerminalIdentityIsAbsent(t *testing.T) {
+	store, td, req, successor := newTerminalPredecessorWithoutIdentity(t)
 	defer closeAppTestTask(t, store, td)
+	defer closeAppTestSuccessor(t, successor)
+	prior, err := resolveTerminalPredecessor(t, store, req)
+	want := task.PriorSession{Provider: req.Provider, ConversationID: req.PriorSession.ConversationID, PredecessorTaskID: req.TaskID}
+	if err != nil || prior == nil || *prior != want {
+		t.Fatalf("recorded-input predecessor = %+v err=%v, want %+v", prior, err, want)
+	}
+	if err = successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
+		t.Fatalf("successor could not claim the released recorded-input session: %v", err)
+	}
+}
+
+// A present but invalid identity is never replaced by recorded input, and the
+// refusal precedes any release of the terminal predecessor's session claim.
+func TestResolvePredecessorPreservesTerminalContinuationBeforeInvalidIdentityError(t *testing.T) {
+	store, td, req, successor := newTerminalPredecessorWithoutIdentity(t)
+	defer closeAppTestTask(t, store, td)
+	defer closeAppTestSuccessor(t, successor)
+	if err := os.WriteFile(filepath.Join(td.Dir, "provider.ref.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if prior, err := resolveTerminalPredecessor(t, store, req); err == nil || prior != nil {
+		t.Fatalf("malformed predecessor identity resolved prior=%+v err=%v", prior, err)
+	}
+	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); !errors.Is(err, task.ErrSessionBusy) {
+		t.Fatalf("invalid predecessor identity released the continuation session: %v", err)
+	}
+}
+
+func newTerminalPredecessorWithoutIdentity(t *testing.T) (*taskdir.Store, *taskdir.TaskDir, *task.TaskRecord, *taskdir.TaskDir) {
+	t.Helper()
+	store, td, req := newAppTestTaskWithPrior(t, true, testPriorSession())
 	successor, _ := newAppTaskInStore(t, store, strings.Repeat("9", 32), false, testPriorSession())
-	defer func() {
-		if closeErr := successor.Close(); closeErr != nil {
-			t.Error(closeErr)
-		}
-	}()
 	if _, cleanupErr, collectErr := td.Collect(task.FixturePredicateRef()); cleanupErr != nil || collectErr != nil {
 		t.Fatalf("preparing terminal predecessor cleanup=%v collect=%v", cleanupErr, collectErr)
 	}
 	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Lstat(filepath.Join(td.Dir, "provider.ref.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("terminal predecessor fixture recorded a provider identity: %v", err)
+	}
+	return store, td, req, successor
+}
+
+func resolveTerminalPredecessor(t *testing.T, store *taskdir.Store, req *task.TaskRecord) (*task.PriorSession, error) {
+	t.Helper()
 	request, err := admission.BuildRequest(store.RootID, strings.Repeat("8", 32), req.Provider, req.CanonicalCwd, req.RequestedConfig, []byte("continue"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	deps := fixtureContinuationDependencies(t, nil, "").normalized()
-	if _, err := tasklifecycle.ResolvePredecessor(store, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions), ApplyEnvironment: applySavedEnvironment}, request, req.TaskID); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("missing predecessor identity error = %v, want not-exist", err)
-	}
-	if err := successor.ClaimSession(req.Provider, req.PriorSession.ConversationID); !errors.Is(err, task.ErrSessionBusy) {
-		t.Fatalf("missing predecessor identity released the continuation session: %v", err)
+	return tasklifecycle.ResolvePredecessor(store, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions), ApplyEnvironment: applySavedEnvironment}, request, req.TaskID)
+}
+
+func closeAppTestSuccessor(t *testing.T, successor *taskdir.TaskDir) {
+	t.Helper()
+	if err := successor.Close(); err != nil {
+		t.Error(err)
 	}
 }
 

@@ -153,13 +153,23 @@ func (o *identityObserver) observeCurrentRecord(event claudeCurrentEvent) error 
 	if !present || subtype != "init" {
 		return nil
 	}
-	if o.seen {
-		return errors.New("multiple Claude system/init events")
-	}
 	sessionID, err := claudeCurrentRequiredString(event.fields, "session_id", 128)
 	if err != nil || !validSessionID(sessionID) {
 		return errors.New("claude system/init session_id is not a UUID")
 	}
+	// Native background notification cycles repeat init for the session that
+	// was already bound to the expected ID above, so observing it is
+	// idempotent. This observer only binds identity: attributed predicate
+	// revisions compare every repeated init, and frozen single-result
+	// revisions reject any repeated init.
+	if !o.seen {
+		o.observeInit(sessionID)
+	}
+	return o.callbackErr
+}
+
+// observeInit records the first validated init exactly once.
+func (o *identityObserver) observeInit(sessionID string) {
 	o.seen = true
 	o.sessionID = sessionID
 	if sessionID == o.expected && o.callbackErr == nil {
@@ -168,7 +178,6 @@ func (o *identityObserver) observeCurrentRecord(event claudeCurrentEvent) error 
 			o.callbackErr = fmt.Errorf("recording Claude session identity: %w", o.callbackErr)
 		}
 	}
-	return o.callbackErr
 }
 
 // Complete flushes a final unterminated line and freezes observation. The
@@ -218,14 +227,7 @@ func (o *identityObserver) processLine(line []byte) error {
 	if !validSessionID(sessionID) {
 		return errors.New("claude system/init session_id is not a UUID")
 	}
-	o.seen = true
-	o.sessionID = sessionID
-	if sessionID == o.expected && o.callbackErr == nil {
-		o.callbackErr = o.record(task.SessionIdentity{Provider: o.providerID, ConversationID: sessionID})
-		if o.callbackErr != nil {
-			o.callbackErr = fmt.Errorf("recording Claude session identity: %w", o.callbackErr)
-		}
-	}
+	o.observeInit(sessionID)
 	return nil
 }
 

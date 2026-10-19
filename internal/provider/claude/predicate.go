@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
@@ -22,12 +23,21 @@ const (
 
 type interpreter struct {
 	streamReference         *task.PredicateRef
-	recoverySource          *task.PredicateRef
+	recoverySources         []task.PredicateRef
 	mode                    string
 	legacy                  bool
 	legacyPortable          bool
 	nativeHistorical        bool
 	historicalNativeCurrent bool
+	// preAttribution identifies the claude:print current-wire revision sealed
+	// before completion attribution; it replays only the single-result policy.
+	preAttribution bool
+	// unscoped identifies the retained claude:print revision of mode sealed
+	// under the unscoped attribution policy; it is replay-only.
+	unscoped bool
+	// completion is selected by the caller only for caller-owned stream
+	// references; claude:print revisions derive it from their identity.
+	completion completionPolicy
 }
 
 // NewInterpreter returns the immutable Claude print stream-json interpreter.
@@ -38,6 +48,14 @@ func NewInterpreter(modes ...string) predicate.Interpreter {
 		mode = modes[0]
 	}
 	return interpreter{mode: mode}
+}
+
+func newPreAttributionInterpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, preAttribution: true}
+}
+
+func newUnscopedInterpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, unscoped: true}
 }
 
 func newLegacyInterpreter() predicate.Interpreter {
@@ -81,6 +99,12 @@ func (v interpreter) Reference() task.PredicateRef {
 	if v.historicalNativeCurrent {
 		return historicalNativeReferenceForMode(v.mode)
 	}
+	if v.preAttribution {
+		return preAttributionReferenceForMode(v.mode)
+	}
+	if v.unscoped {
+		return unscopedReference(v.mode)
+	}
 	if v.legacy {
 		return LegacyReference()
 	}
@@ -104,7 +128,7 @@ func (v interpreter) evaluateAgainst(input predicate.Input, raw predicate.Eviden
 	if err := validateEvaluationInput(v, input, raw, out, reference); err != nil {
 		return task.Interpretation{}, err
 	}
-	state, err := readEvidence(raw, v.mode, v.legacy || v.legacyPortable, v.nativeHistorical, v.historicalNativeCurrent)
+	state, err := readEvidence(raw, v)
 	if err != nil {
 		return task.Interpretation{}, err
 	}
@@ -160,19 +184,21 @@ func (v interpreter) Target() task.PredicateRef { return v.Reference() }
 
 // CanRecover permits only same-wire native revisions for the same permission
 // mode. Legacy permission and portable revisions have different policy
-// contracts and must remain replay-only.
+// contracts and must remain replay-only. The current claude:print interpreter
+// is the single recovery target for every earlier same-wire native revision.
 func (v interpreter) CanRecover(source task.PredicateRef) bool {
-	if v.legacy || v.legacyPortable || v.nativeHistorical || v.historicalNativeCurrent {
+	if v.legacy || v.legacyPortable || v.nativeHistorical || v.historicalNativeCurrent || v.preAttribution || v.unscoped {
 		return false
 	}
-	if v.recoverySource != nil {
-		return source.Equal(*v.recoverySource)
+	if len(v.recoverySources) > 0 {
+		return slices.ContainsFunc(v.recoverySources, source.Equal)
 	}
 	if v.streamReference != nil {
 		return false
 	}
 	return source.Equal(historicalNativeReferenceForMode(v.mode)) ||
-		source.Equal(previousNativeProbeReferenceForMode(v.mode))
+		source.Equal(previousNativeProbeReferenceForMode(v.mode)) ||
+		source.Equal(preAttributionReferenceForMode(v.mode))
 }
 
 // Recover re-evaluates the original sealed evidence with the current
@@ -185,18 +211,34 @@ func (v interpreter) Recover(input predicate.Input, raw predicate.Evidence, out 
 	return v.evaluateAgainst(input, raw, out, input.Seal.Predicate)
 }
 
-func readEvidence(raw predicate.Evidence, mode string, strict, nativeHistorical, historicalNativeCurrent bool) (eventState, error) {
+// completionPolicy returns the reducer bound to this predicate identity. The
+// current claude:print revision is the only scoped non-stream revision; the
+// retained unscoped revisions keep their unscoped attribution.
+func (v interpreter) completionPolicy() completionPolicy {
+	if v.streamReference != nil {
+		return v.completion
+	}
+	if v.legacy || v.legacyPortable || v.nativeHistorical || v.historicalNativeCurrent || v.preAttribution {
+		return singleResultCompletion
+	}
+	if v.unscoped {
+		return unscopedAttributedCompletion
+	}
+	return scopedAttributedCompletion
+}
+
+func readEvidence(raw predicate.Evidence, v interpreter) (eventState, error) {
 	var stdout eventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {
 		var err error
-		if nativeHistorical {
-			stdout, err = parseHistoricalNativeStdoutForMode(reader, mode)
-		} else if historicalNativeCurrent {
-			stdout, err = parseHistoricalCurrentStdoutForMode(reader, mode)
-		} else if strict {
-			stdout, err = parseLegacyStdoutForMode(reader, mode)
+		if v.nativeHistorical {
+			stdout, err = parseHistoricalNativeStdoutForMode(reader, v.mode)
+		} else if v.historicalNativeCurrent {
+			stdout, err = parseHistoricalCurrentStdoutForMode(reader, v.mode)
+		} else if v.legacy || v.legacyPortable {
+			stdout, err = parseLegacyStdoutForMode(reader, v.mode)
 		} else {
-			stdout, err = parseStdoutForMode(reader, mode)
+			stdout, err = parseStdoutForMode(reader, v.mode, v.completionPolicy())
 		}
 		return err
 	})
@@ -222,9 +264,17 @@ func refusalForProvider(input predicate.Input, state eventState, providerID stri
 		return refusalIdentity
 	}
 	if !state.resultSeen {
+		// A failed leading acknowledgement keeps its canonical class instead of
+		// hiding behind the missing caller result.
+		if refusal := state.attribution.completionRefusal(); refusal != "" {
+			return refusal
+		}
 		return refusalIncomplete
 	}
-	return resultRefusal(state.result)
+	if refusal := resultRefusal(state.result); refusal != "" {
+		return refusal
+	}
+	return state.attribution.completionRefusal()
 }
 
 func resultRefusal(result resultState) string {

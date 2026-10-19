@@ -40,20 +40,20 @@ func LoadContinuationInput(root string, a DispatchRequest, options DispatchOptio
 	return req, meta, brief, nil
 }
 
-func loadContinuationPrior(root, id string, options DispatchOptions) (prior *task.PriorSession, resultErr error) {
+func loadContinuationPrior(root, id string, options DispatchOptions) (prior *task.PriorSession, source ContinuationSessionSource, resultErr error) {
 	store, err := options.openStore(root, false)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	td, err := store.OpenTask(id)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { resultErr = errors.Join(resultErr, td.Close()) }()
 	predecessor, _, err := td.PreparedRecords()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return ContinuationPrior(td, predecessor)
+	return resolveContinuationSession(td, predecessor)
 }

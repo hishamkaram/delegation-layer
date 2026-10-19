@@ -330,6 +330,30 @@ was interrupted.
 |---|---|---|---|---|---|---|
 | TM-R1: full-recovery wake, exact current queue snapshot, durable task or inspection evidence; candidate may be absent | Maintenance election owner; queue-identity lease for preparation and fresh mutation revalidation | Present all rows to the canonical evidence authorizer; remove only its revalidated exact terminal IDs | Successful removal, idempotent ticket/event retirement and completed wake generation | An unfinished publication command retains ownership through natural completion; full recovery does not depend on its missing hint | Proven rows reclaimed; active, ambiguous or unproven rows preserved; task and inspection outcomes unchanged | TestTerminalObservationPendingCannotLoseInspectionCleanupCandidate, TestPrivateTerminalEventJobsFiltersEventOnlyByNumericID, TestDelayedTerminalEventAfterNumericIDReuseCannotAuthorizeNewInspection |
 
+### Continuation session handoff
+
+The `taskdir` session journal owns claims and create-once
+`<task>.release.json` records under `.session.lock`. `tasklifecycle` owns
+handoff policy: `PredecessorTerminated` and `ResolvePredecessor` for
+admission, and the continuation observer for `status` and `collect`. The single
+closure-interruption eligibility rule is `closureInterruption`.
+`outcome.json` remains the sole completion authority. Production publication
+uses the `taskdir` predicate path (`collectOwned`, then `evaluateAndPublish`),
+which requires a valid seal. The runner reaches it through `TaskDir.Finalize`
+after sealing; collection (`tasklifecycle.Collect`) and runner sealed recovery
+reach it through `TaskDir.Collect`. A queue-row end or a timestamp is never
+handoff proof.
+
+| Durable facts | Owner / lease | Permitted action | Commit point | Failure / recovery | Consumer verdict | Named test |
+|---|---|---|---|---|---|---|
+| CH1: validated committed or rejected `outcome.json`; predecessor session claim | `tasklifecycle` terminal release (`ReleaseContinuationSession`) / released `.run.lock`, then `.session.lock` | Release the claim with the outcome `EvidenceSHA256` | Create-once release record | A failed release write keeps the winner; a later runner, collect or continue pass retries the same release | Successor claims the session; continue resolves the prior session | TestPredecessorTerminatedReleasesTerminalContinuation, TestCollectReleasesRecoveredContinuation, TestContinuationReleaseFailurePreservesWinnerAndRetries, TestCommittedOutcomeWinsOverClosedLifetime |
+| CH2: no outcome; terminated budget-stop observation, with or without a closed lifetime | `releaseHandedOffPredecessor` budget branch, checked before closure / released `.run.lock` | `ReleaseSessionAfterTimeout` with the first budget observation digest | Create-once release record | Held runner lease returns `task.ErrSessionBusy`; retry after the runner releases | Successor claims the session; the budget digest wins over a closure witness | TestBudgetStopHandoffPrecedesClosedLifetime, TestResolvePredecessorReleasesBudgetHandoffBeforePrivateRecovery |
+| CH3: no budget stop; `Inspect` reports publication unknown with no seal or outcome; canonical closed lifetime from `guardian.ReadClosureProof` | `closureInterruption` for admission and observation; each caller keeps its runner-lease check on `.run.lock` | Admission: `ReleaseSessionAfterLifetimeClosure` with the preferred closure witness. Observation: an `interrupted` offer | Create-once release record; observation writes nothing | Held lease: admission returns `task.ErrSessionBusy` at `resolve-predecessor`, observation offers nothing. Open lifetime or pending proof stays refused | Successor claims the session; `status` reports `interrupted` (exit 0) and `collect` reports `task_interrupted` (exit 1) | TestRebootInterruptionReleasesWithClosureWitness, TestPredecessorTerminatedReleasesRebootClosedContinuation, TestResolvePredecessorAcceptsRebootClosedContinuation, TestStatusAndCollectReportRebootInterruption, TestStatusOffersInterruptionOnlyWithoutPublication, TestHeldRunnerLeaseBlocksRebootInterruption, TestPredecessorTerminatedRefusesRebootWithoutClosedLifetime |
+| CH4: valid seal; no outcome; closed lifetime; released runner lease | `closureInterruption` refuses handoff; the `taskdir` publication path through `TaskDir.Collect` (`tasklifecycle.Collect`) / shared maintenance lock and exclusive `.run.lock` | No handoff. Collect evaluates the seal and publishes `outcome.json` | `outcome.json`; collect then releases as CH1 | Before collect, continue fails with exit 1, `resolve-predecessor`, `continuation_unavailable`, and the existing outcome-unavailable error; no successor, no release, records unchanged. Continue after collect follows CH1 | `status` gives no interrupted offer; after collect, `ResolvePredecessor` returns the prior session and the release digest equals the outcome evidence digest | TestContinueCollectsSealedRebootPredecessorFirst, TestPredecessorResolutionRefusesSealedRebootPredecessor, TestStatusOffersInterruptionOnlyWithoutPublication |
+| CH4P: defensive orphan-payload fault state: `result.txt` without `provider.exit` or `outcome.json`, so `Inspect` reports pending; closed lifetime; released runner lease | `closureInterruption` refuses handoff; the publication path requires a valid seal | None. Collect cannot publish without a seal (`task.ErrNoSeal`) | None | Continue fails with exit 1, `not_created`, `resolve-predecessor`, `continuation_unavailable`, `stop_and_report`, and the existing outcome-unavailable error. `PredecessorTerminated` and `ResolvePredecessor` refuse with that error | No interrupted offer; no successor, no release, session claim kept, records unchanged | TestOrphanPayloadRebootPredecessorIsNeverHandedOff |
+| CH5: malformed `provider.exit`, `outcome.json`, or lifetime termination record, on a sealed or unsealed predecessor | Each record's canonical reader: `Inspect`, the closure read, and reconciliation's guardian recovery | None | None | The concrete fault surfaces: a malformed seal or closure returns `task.ErrEvidenceFault` and a malformed outcome `task.ErrInvariantFault`. A sealed predecessor with a malformed closure skips the eligibility read but still returns `task.ErrEvidenceFault` from reconciliation | `status` exits 1 without an interrupted offer; continue refuses without a task record; no release; records unchanged | TestMalformedRebootEvidenceIsReportedNotHandedOff |
+| CH6: stored release whose digest is a closure witness; a later outcome, budget observation, or matching absence | `taskdir` session journal (`matchesHandoffProof`) / `.session.lock` | Keep the stored release; later release writers reconcile without rewriting it. `ReleaseSessionAfterLifetimeClosure` proves closure only | Original release bytes | A corrupt closure revokes only a closure-proven release; malformed lifetime records cannot revoke an outcome or budget release | The successor's claim stays valid | TestLifetimeClosureReleaseSurvivesLateOutcome, TestLifetimeClosureReleaseSurvivesLaterBudgetObservation, TestLegacyPreviousBootReleaseSurvivesLaterMatchingAbsence, TestCorruptClosureRevokesOnlyAClosureRelease, TestMalformedLifetimeCannotRevokeOutcomeOrBudgetRelease |
+
 ### Managed workspace transitions
 
 The application workspace coordinator owns workspace state and exclusive usage.
@@ -417,7 +441,8 @@ by `TestWorkspaceClosedVerificationCaptureSurvivesObserverCancellationDuringRepl
 and the `TestWorkspaceControlTransactionNestedCalls` cases.
 W1, W3, W4 and W7 are
 covered by `TestWorkspaceSchedulingSurvivesObserverCancellationAfterAdd`,
-`TestWorkspaceSchedulingReplayRetainsOriginalDeadlineAndControlCutoff`,
+`TestWorkspaceSchedulingReplayRetainsOriginalDeadlineAfterObserverCancellation`,
+`TestWorkspaceControlTransactionCutoffIsFixedAcrossElapsedTime`,
 `TestWorkspaceExplicitForgetRecoversExpiredUncreatedFirstHelper`,
 `TestWorkspaceVerificationRecoversObligationAfterReservationCrash`, and
 `TestWorkspaceVerificationRecoveryRejectsAnotherResourceOrReservation`.

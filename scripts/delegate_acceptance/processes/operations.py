@@ -24,6 +24,14 @@ from typing import Callable, NoReturn
 
 
 class Process:
+    """One started child whose capture and finalization progress it owns.
+
+    ``on_started`` is the registry that receives the handle immediately after a
+    successful Start, before any fallible setup.  A direct construction without
+    it names no registry: a post-Start setup failure still retains the capture
+    directory and output streams, but the raised error is the only report.
+    """
+
     def __init__(self, directory, argv, cwd, environment, capture_root,
                  on_started=None, *,
                  stdin=None, stdout_capture: OutputCapture | None = None,
@@ -47,9 +55,13 @@ class Process:
         self._stdin_offset = 0
         self._stdin_error = None
         self._stdin_closed = False
+        # Finalization progress survives a failed poll so a retry resumes it.
+        self._ended_ns = None
+        self._sanitized_stdout = None
+        self._stdout_committed = 0
         ownership = DirectoryOwner()
-        started = False
         try:
+            _require_capture_parent(capture_root=capture_root, directory=self.directory)
             ownership.create("process capture", self.directory, self.directory.parent)
             _record_process_invocation(cwd=cwd, environment_keys_only=environment_keys_only, process=self, stdin=stdin)
             self.stdout = self.stdout_path.open("xb")
@@ -64,20 +76,20 @@ class Process:
                 shell=False,
                 close_fds=True,
             )
-            started = True
-            if self._stdin_data is not None:
-                os.set_blocking(self.process.stdin.fileno(), False)
+        except BaseException as error:
+            _rollback_unstarted_process(ownership=ownership, process=self, error=error)
+            _raise_process_failure(error, self._failure_type)
+        try:
             if on_started is not None:
                 on_started(self)
-            ownership.transfer_child_to(capture_root)
+            if self._stdin_data is not None:
+                os.set_blocking(self.process.stdin.fileno(), False)
             if self._stdout_capture is not None:
                 self._stdout_capture.writer.close()
+            ownership.transfer_child_to(capture_root)
         except BaseException as error:
-            _cleanup_failed_process_start(ownership=ownership, process=self, started=started)
-            if (isinstance(error, RuntimeError) and self._failure_type is not RuntimeError and
-                    not isinstance(error, self._failure_type)):
-                raise self._failure_type(str(error)) from error
-            raise
+            _retain_started_process(ownership=ownership, process=self, error=error)
+            _raise_process_failure(error, self._failure_type)
 
     @property
     def pid(self):
@@ -154,26 +166,14 @@ class Process:
             return None
         if self._stdout_capture is not None and not self._stdout_capture.eof:
             return None
+        # Popen caches the exact Wait, so a retried finalization observes the
+        # same exit; each step below resumes from its recorded progress.
         code = self.process.wait()
-        if self._stdout_capture is not None:
-            self.stdout.write(self._stdout_capture.sanitized(code))
-            self._stdout_capture.close()
-        self.stdout.close()
-        self.stderr.close()
-        self.result = {
-            "pid": self.pid, "exit_code": code, "natural_wait": code >= 0,
-            "ended_ns": time.time_ns(),
-            "stdout_sha256": digest(self.stdout_path),
-            "stderr_sha256": digest(self.stderr_path),
-            "stdout_bytes": self.stdout_path.stat().st_size,
-            "stderr_bytes": self.stderr_path.stat().st_size,
-            "stdin_bytes_sent": self._stdin_offset,
-            "stdin_complete": self._stdin_data is None or self._stdin_offset == len(self._stdin_data),
-            "stdin_error": self._stdin_error,
-        }
-        if self._stdout_capture is not None:
-            self.result["stdout_redaction"] = "pueue-status-envs"
-            self.result["capture_error"] = self._stdout_capture.error
+        if self._ended_ns is None:
+            self._ended_ns = time.time_ns()
+        _commit_sanitized_stdout(self, code)
+        _close_finished_streams(self)
+        self.result = _observed_result(self, code)
         write_json(self.directory / "completed.json", self.result)
         return self.result
 
@@ -271,17 +271,20 @@ class Processes:
         directory = self.directory / ("%03d-%s" % (len(self.entries) + 1, name))
         capture = self.stdout_capture_factory([str(arg) for arg in argv]) \
             if self.stdout_capture_factory is not None else None
+
+        def register_started(process):
+            # Process calls this immediately after Start, before any fallible
+            # setup or receipt write.  ``entries`` is the shared owner; the
+            # callback gives a higher-level owner the same exact handle.
+            self.entries.append(process)
+            if on_spawned is not None:
+                on_spawned(process)
         process = Process(directory, argv, cwd, self.environment, self.capture_root,
                           stdin=stdin, stdout_capture=capture,
                           environment_keys_only=self.environment_keys_only,
                           return_result=self.return_result,
                           failure_type=self.failure_type,
-                          on_started=self.entries.append)
-        # Transfer the actual handle to the lifecycle owner before any
-        # fallible post-Start receipt write.  ``entries`` is the shared owner;
-        # the callback gives a higher-level owner the same guarantee.
-        if on_spawned is not None:
-            on_spawned(process)
+                          on_started=register_started)
         write_json(directory / "started.json", {
             "pid": process.pid, "started_ns": time.time_ns()})
         return process
@@ -362,37 +365,146 @@ def _record_process_invocation(
     write_json(process.directory / "invocation.json", invocation)
 
 
-def _cleanup_failed_process_start(
+def _require_capture_parent(*, capture_root: OwnedDirectory, directory: Path) -> None:
+    """Validate the transfer destination before any capture side effect."""
+    require(isinstance(capture_root, OwnedDirectory),
+            "process capture root identity token is invalid")
+    require(directory.parent == capture_root.directory,
+            "process capture is not a direct child of its capture root: " + str(directory))
+    capture_root.assert_live()
+
+
+def _raise_process_failure(error: BaseException, failure_type) -> NoReturn:
+    if (isinstance(error, RuntimeError) and failure_type is not RuntimeError and
+            not isinstance(error, failure_type)):
+        raise failure_type(str(error)) from error
+    raise error
+
+
+def _note_cleanup_failures(error: BaseException, failures: list[tuple[str, BaseException]]) -> None:
+    for label, failure in failures:
+        error.add_note("%s failed: %s: %s" % (label, type(failure).__name__, failure))
+
+
+def _rollback_unstarted_process(
         *, ownership: DirectoryOwner,
         process: Process,
-        started: bool,
+        error: BaseException,
 ) -> None:
-    if process.process is not None and getattr(process.process, "stdin", None) is not None:
+    """Before Start nothing escaped: close every handle and remove the capture.
+
+    A failed rollback leaves the path uncertain, so the same owner releases its
+    remaining authority: the directory is retained and its pins are closed.
+    """
+    failures = []
+    resources = (("stdout capture close", process._stdout_capture),
+                 ("stdout close", process.stdout), ("stderr close", process.stderr))
+    for label, resource in resources:
+        if resource is None:
+            continue
         try:
-            process.process.stdin.close()
-        except (BrokenPipeError, OSError, ValueError):
-            pass
-    if process._stdout_capture is not None:
-        try:
-            process._stdout_capture.writer.close()
-        except (OSError, ValueError):
-            pass
-        if process.process is None:
-            process._stdout_capture.close()
-    if process.stdout is not None:
-        process.stdout.close()
-    if process.stderr is not None:
-        process.stderr.close()
-    if not started:
-        try:
-            ownership.rollback()
-        except (OSError, RuntimeError):
-            pass
-    else:
+            resource.close()
+        except (OSError, ValueError) as close_error:
+            failures.append((label, close_error))
+    try:
+        ownership.rollback()
+    except (OSError, RuntimeError) as rollback_error:
+        failures.append(("capture directory rollback", rollback_error))
         try:
             ownership.release()
-        except (OSError, RuntimeError):
-            pass
+        except (OSError, RuntimeError) as release_error:
+            failures.append(("capture directory release", release_error))
+    _note_cleanup_failures(error, failures)
+
+
+def _retain_started_process(
+        *, ownership: DirectoryOwner,
+        process: Process,
+        error: BaseException,
+) -> None:
+    """After Start the child keeps its streams and capture for natural poll/Wait.
+
+    Only the parent's child stdin and duplicate capture writer close, so the
+    child sees EOF and the capture reader can reach EOF.
+    """
+    failures = []
+    if (process._stdin_data is not None and process._stdin_error is None and
+            process._stdin_offset < len(process._stdin_data)):
+        process._stdin_error = "stdin closed after post-start setup failure"
+    process._close_stdin()
+    capture = process._stdout_capture
+    if capture is not None and not capture.writer.closed:
+        try:
+            capture.writer.close()
+        except (OSError, ValueError) as close_error:
+            failures.append(("stdout capture writer close", close_error))
+    try:
+        ownership.release()
+    except (OSError, RuntimeError) as release_error:
+        failures.append(("capture directory release", release_error))
+    _note_cleanup_failures(error, failures)
+
+
+def _commit_sanitized_stdout(process: Process, code: int) -> None:
+    """Write sanitized capture once; unbuffered writes make progress the checkpoint."""
+    capture = process._stdout_capture
+    if capture is None:
+        return
+    if process._sanitized_stdout is None:
+        process._sanitized_stdout = capture.sanitized(code)
+    data = memoryview(process._sanitized_stdout)
+    if process._stdout_committed == len(data):
+        return
+    if process.stdout.closed:
+        raise process._failure_type(
+            "stdout closed before sanitized capture was committed: " + str(process.directory))
+    descriptor = process.stdout.fileno()
+    while process._stdout_committed < len(data):
+        written = os.write(descriptor, data[process._stdout_committed:])
+        if written <= 0:
+            raise OSError("sanitized stdout write made no progress")
+        process._stdout_committed += written
+
+
+def _close_finished_streams(process: Process) -> None:
+    """Close each remaining stream; a retry closes only what is still open."""
+    failures = []
+    if process._stdout_capture is not None:
+        try:
+            # Capture close is idempotent for its writer and reader.
+            process._stdout_capture.close()
+        except (OSError, ValueError) as close_error:
+            failures.append(("stdout capture close", close_error))
+    for label, stream in (("stdout close", process.stdout), ("stderr close", process.stderr)):
+        if stream.closed:
+            continue
+        try:
+            stream.close()
+        except (OSError, ValueError) as close_error:
+            failures.append((label, close_error))
+    if failures:
+        first = failures[0][1]
+        _note_cleanup_failures(first, failures[1:])
+        raise first
+
+
+def _observed_result(process: Process, code: int) -> dict[str, object]:
+    result = {
+        "pid": process.pid, "exit_code": code, "natural_wait": code >= 0,
+        "ended_ns": process._ended_ns,
+        "stdout_sha256": digest(process.stdout_path),
+        "stderr_sha256": digest(process.stderr_path),
+        "stdout_bytes": process.stdout_path.stat().st_size,
+        "stderr_bytes": process.stderr_path.stat().st_size,
+        "stdin_bytes_sent": process._stdin_offset,
+        "stdin_complete": (process._stdin_data is None or
+                           process._stdin_offset == len(process._stdin_data)),
+        "stdin_error": process._stdin_error,
+    }
+    if process._stdout_capture is not None:
+        result["stdout_redaction"] = "pueue-status-envs"
+        result["capture_error"] = process._stdout_capture.error
+    return result
 
 
 def _kill_wait_bounded_command(process: subprocess.Popen[bytes]) -> None:

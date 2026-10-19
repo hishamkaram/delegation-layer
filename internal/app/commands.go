@@ -11,10 +11,13 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-// continuationDependencies keeps the recorded provider preparation contract
-// attached to every candidate compiled for this successor. The production
-// catalog owns the historical interpretation; injected profile hooks retain
-// their test and acceptance behavior.
+// continuationDependencies attaches the predecessor's recorded provider
+// preparation contract to every candidate compiled for this successor. The
+// production catalog owns the interpretation: a normal turn is a new task
+// admitted through Catalog.SuccessorCandidate, while an interactive turn builds
+// the current profile. Immutable reconstruction of an existing task stays on
+// Catalog.ExistingCandidate. Injected profile hooks retain their test and
+// acceptance behavior.
 func continuationDependencies(deps Dependencies, predecessorMeta task.MetaRecord) Dependencies {
 	normalized := deps.normalized()
 	if !normalized.useCatalogExisting {
@@ -24,7 +27,7 @@ func continuationDependencies(deps Dependencies, predecessorMeta task.MetaRecord
 		if request.RequestedConfig.Interactive && request.PriorSession != nil {
 			return normalized.Catalog.Candidate(request)
 		}
-		return normalized.Catalog.ExistingCandidate(request, predecessorMeta)
+		return normalized.Catalog.SuccessorCandidate(request, predecessorMeta)
 	}
 	return normalized
 }

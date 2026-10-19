@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -21,9 +22,9 @@ func PredecessorTerminated(root string, td *taskdir.TaskDir, req *task.TaskRecor
 		}
 		return releaseTerminalPredecessor(td, req, inspection)
 	}
-	if timedOut, timeoutErr := releaseTimedOutPredecessor(td, req); timeoutErr != nil {
-		return timeoutErr
-	} else if timedOut {
+	if handedOff, handoffErr := releaseHandedOffPredecessor(td, req); handoffErr != nil {
+		return handoffErr
+	} else if handedOff {
 		return nil
 	}
 	inspection, err = reconcilePredecessor(root, td, req, options)
@@ -33,9 +34,9 @@ func PredecessorTerminated(root string, td *taskdir.TaskDir, req *task.TaskRecor
 	if supervisorcore.TaskTerminal(inspection) && inspection.Outcome != nil {
 		return releaseTerminalPredecessor(td, req, inspection)
 	}
-	if timedOut, timeoutErr := releaseTimedOutPredecessor(td, req); timeoutErr != nil {
-		return timeoutErr
-	} else if timedOut {
+	if handedOff, handoffErr := releaseHandedOffPredecessor(td, req); handoffErr != nil {
+		return handoffErr
+	} else if handedOff {
 		return nil
 	}
 	return errPredecessorOutcomeUnavailable
@@ -67,13 +68,21 @@ func reconcilePredecessor(root string, td *taskdir.TaskDir, req *task.TaskRecord
 	return td.Inspect()
 }
 
-func releaseTimedOutPredecessor(td *taskdir.TaskDir, req *task.TaskRecord) (bool, error) {
+// releaseHandedOffPredecessor releases a predecessor whose provider turn ended
+// without an authoritative outcome. Only a terminated budget stop or a
+// closure-proven interruption is handoff proof, and the runner lease must be
+// released. A first-turn predecessor owns no session claim to release.
+func releaseHandedOffPredecessor(td *taskdir.TaskDir, req *task.TaskRecord) (bool, error) {
 	records, err := td.ReadStopRecords()
 	if err != nil {
 		return false, err
 	}
-	if !HasTerminatedBudgetStop(records) {
-		return false, nil
+	budget := HasTerminatedBudgetStop(records)
+	if !budget {
+		interrupted, interruptionErr := closureInterruption(td)
+		if interruptionErr != nil || !interrupted {
+			return false, interruptionErr
+		}
 	}
 	if err = requireRunnerLeaseRelease(td); err != nil {
 		return false, err
@@ -81,7 +90,31 @@ func releaseTimedOutPredecessor(td *taskdir.TaskDir, req *task.TaskRecord) (bool
 	if req.PriorSession == nil {
 		return true, nil
 	}
-	return true, td.ReleaseSessionAfterTimeout(req.Provider, req.PriorSession.ConversationID)
+	if budget {
+		return true, td.ReleaseSessionAfterTimeout(req.Provider, req.PriorSession.ConversationID)
+	}
+	return true, td.ReleaseSessionAfterLifetimeClosure(req.Provider, req.PriorSession.ConversationID)
+}
+
+// closureInterruption is the single eligibility rule for a closure-proven
+// interruption: publication is unknown with no seal or outcome, and the
+// canonical native lifetime closed. Publication evidence is read first so
+// sealed work is collected rather than handed off. Queue state, elapsed
+// deadlines, and stop-readiness shortcuts are never closure proof. Callers
+// keep their own runner-lease checks.
+func closureInterruption(td *taskdir.TaskDir) (bool, error) {
+	inspection, err := td.Inspect()
+	if err != nil {
+		return false, err
+	}
+	if inspection.Publication != task.PublicationUnknown || inspection.SealExists || inspection.OutcomeExists {
+		return false, nil
+	}
+	_, err = guardian.ReadClosureProof(context.Background(), td)
+	if errors.Is(err, guardian.ErrProofPending) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func requireRunnerLeaseRelease(td *taskdir.TaskDir) error {

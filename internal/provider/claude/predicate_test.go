@@ -51,15 +51,16 @@ func TestRelaxedRuntimeProbeGetsNewPredicateRevisions(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.mode, func(t *testing.T) {
 			previous := previousNativeProbeReferenceForMode(testCase.mode)
-			current := ReferenceForMode(testCase.mode)
+			relaxed := preAttributionReferenceForMode(testCase.mode)
 			if previous.Version != testCase.previousVersion || previous.SHA256 != testCase.previousSHA256 {
 				t.Fatalf("previous predicate changed: %+v", previous)
 			}
-			if current.Version != testCase.currentVersion || current.Equal(previous) {
-				t.Fatalf("relaxed probe was not versioned: previous=%+v current=%+v", previous, current)
+			if relaxed.Version != testCase.currentVersion || relaxed.Equal(previous) {
+				t.Fatalf("relaxed probe was not versioned: previous=%+v current=%+v", previous, relaxed)
 			}
-			if !strings.Contains(ContractForMode(testCase.mode), `"runtime_probe":{"required_flags":["--print"]}`) {
-				t.Fatalf("current predicate does not bind its runtime probe: %s", ContractForMode(testCase.mode))
+			const probe = `"runtime_probe":{"required_flags":["--print"]}`
+			if !strings.Contains(PreAttributionNativeContractForMode(testCase.mode), probe) || !strings.Contains(ContractForMode(testCase.mode), probe) {
+				t.Fatalf("relaxed predicates do not bind their runtime probe: %s", ContractForMode(testCase.mode))
 			}
 		})
 	}
@@ -67,15 +68,16 @@ func TestRelaxedRuntimeProbeGetsNewPredicateRevisions(t *testing.T) {
 	for _, testCase := range []struct {
 		mode           string
 		previousSHA256 string
+		relaxedSHA256  string
 	}{
-		{Mode, "acb9e1cbfbb87d8f53ae29ab76bee5932336a8a9bbe1a2ba46308dd5d2e078de"},
-		{WorkspaceWriteMode, "1fb4b8fc9543c937c91c7fa5035799204e263627dbc5689114e42e9021750e48"},
+		{Mode, "acb9e1cbfbb87d8f53ae29ab76bee5932336a8a9bbe1a2ba46308dd5d2e078de", "2273431acf65d449764663408ba8a68767171dc66d018bf04caa473d9c19b21e"},
+		{WorkspaceWriteMode, "1fb4b8fc9543c937c91c7fa5035799204e263627dbc5689114e42e9021750e48", "0f9e15300bdf3491fcb40930864dc150e161ea2d476946ca75dc100f5c623c32"},
 	} {
 		t.Run("interactive/"+testCase.mode, func(t *testing.T) {
 			previous := previousInteractionReference(testCase.mode)
-			current := interactionReference(testCase.mode)
-			if previous.Version != "interactive-v2" || previous.SHA256 != testCase.previousSHA256 || current.Version != "interactive-v3" || current.Equal(previous) {
-				t.Fatalf("interactive runtime probe was not versioned: previous=%+v current=%+v", previous, current)
+			relaxed := preAttributionInteractionReference(testCase.mode)
+			if previous.Version != "interactive-v2" || previous.SHA256 != testCase.previousSHA256 || relaxed.Version != "interactive-v3" || relaxed.SHA256 != testCase.relaxedSHA256 || relaxed.Equal(previous) {
+				t.Fatalf("interactive runtime probe was not versioned: previous=%+v current=%+v", previous, relaxed)
 			}
 		})
 	}

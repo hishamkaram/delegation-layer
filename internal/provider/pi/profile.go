@@ -26,7 +26,7 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 // records continue through the legacy isolated preparation path.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
 	profile := legacyProfile
-	if meta.EffectiveConfig.Policy != nil && meta.EffectiveConfig.Policy.ProfileRevision == commonprovider.NativeProfileRevision {
+	if commonprovider.HasNativeProfile(meta) {
 		profile = nativeCurrentProfile
 		if historicalNativePredicate(meta.Predicate) {
 			profile = nativeHistoricalProfile

@@ -126,15 +126,13 @@ func TestRunContinuationPreservesCCRHistoricalModelSelection(t *testing.T) {
 	}
 }
 
+// ccrPreviousContinuationReference selects the registered sealed v2 profile by
+// its exact revision; recovery claims belong to the current targets.
 func ccrPreviousContinuationReference(t *testing.T) task.PredicateRef {
 	t.Helper()
-	historical := ccr.HistoricalReference(config.ModeReadOnly)
 	for _, interpreter := range ccr.Registration().Interpreters {
-		recovery, ok := interpreter.(interface {
-			CanRecover(task.PredicateRef) bool
-		})
-		if ok && recovery.CanRecover(historical) {
-			return interpreter.Reference()
+		if reference := interpreter.Reference(); reference.Mode == config.ModeReadOnly && reference.Version == "ccr-foreground-v2" {
+			return reference
 		}
 	}
 	t.Fatal("CCR previous continuation predicate is not registered")
@@ -353,14 +351,19 @@ func newCCRContinuationSuccessorPredecessor(t *testing.T, fixture continuationSu
 func ccrContinuationCatalog(t *testing.T, captured *commonprovider.ProfileCandidate) commonprovider.Catalog {
 	t.Helper()
 	registration := ccr.Registration()
-	prepareExisting := registration.PrepareExisting
-	registration.PrepareExisting = func(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-		candidate, err := prepareExisting(request, meta)
-		if err == nil {
-			*captured = candidate
+	capture := func(prepare commonprovider.PrepareExistingCandidate) commonprovider.PrepareExistingCandidate {
+		return func(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+			candidate, err := prepare(request, meta)
+			if err == nil {
+				*captured = candidate
+			}
+			return candidate, err
 		}
-		return candidate, err
 	}
+	// A normal continuation prepares through the successor hook; reconstruction
+	// of an admitted task prepares through the existing hook.
+	registration.PrepareExisting = capture(registration.PrepareExisting)
+	registration.PrepareSuccessor = capture(registration.PrepareSuccessor)
 	catalog, err := commonprovider.NewCatalog(registration)
 	if err != nil {
 		t.Fatal(err)
