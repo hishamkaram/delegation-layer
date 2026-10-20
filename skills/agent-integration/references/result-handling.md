@@ -91,6 +91,18 @@ The provider outcome is immutable and the workspace `CaptureReceipt` is a
 separate immutable fact; a failed or unavailable capture must not be reported
 as a provider failure when native closure is already proven.
 
+In task `status` or `collect`, a workspace with `state: "undetermined"`,
+`evidence_state: "unknown"`, and `next_action: "watch_workspace"` means that
+observer's bounded view expired before it read the workspace. It is an
+unobserved view only. It does not imply corruption, change the task fields, or
+revoke an eligible continuation, and it does not turn a committed task into a
+failure. Follow the task fields above: return a committed result, handle a
+rejection using its reported guidance, and keep observing only while the task
+fields are pending. When useful, watch the same workspace with the same root.
+Do not dispatch again, retry the provider, fall back to another integration,
+or repair the environment because of it. A workspace view with `stop_and_report` remains a
+concrete failure to report.
+
 Before a task record exists, a pending workspace provision returns
 `task_record: "not_created"` with
 `failure.code: "workspace_provision_pending"` and
