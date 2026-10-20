@@ -31,13 +31,13 @@ func fillManagedTaskWorkspace(store *taskdir.Store, td *taskdir.TaskDir, result 
 	defer cancel()
 	resource, err := workspace.LoadResource(ctx, store, request.Workspace.ID)
 	if err != nil {
-		result.response.Workspace.ReasonCode = workspaceObservationReason("load", err)
+		projectWorkspaceObservationFailure(ctx, "load", err, result.response.Workspace)
 		return
 	}
 	description, describeErr := workspaces.DescribeTask(ctx, resource, *request)
 	closeErr := resource.Close()
 	if err = errors.Join(describeErr, closeErr); err != nil {
-		result.response.Workspace.ReasonCode = workspaceObservationReason("describe", err)
+		projectWorkspaceObservationFailure(ctx, "describe", err, result.response.Workspace)
 		return
 	}
 	result.response.Workspace = &description
@@ -45,6 +45,16 @@ func fillManagedTaskWorkspace(store *taskdir.Store, td *taskdir.TaskDir, result 
 	if continuation != nil && continuation.Resumable && description.State != "retained" {
 		continuation.Resumable, continuation.ContinueCommand = false, ""
 		continuation.Reason = "managed workspace is " + description.State
+	}
+}
+
+// A failed load or description is unreadable unless it is only this
+// observer's expired view. That view observed nothing about the workspace, so
+// it stays undetermined and leaves every task fact and continuation unchanged.
+func projectWorkspaceObservationFailure(ctx context.Context, stage string, err error, view *WorkspaceResponse) {
+	view.ReasonCode = workspaceObservationReason(stage, err)
+	if expiredWorkspaceView(ctx, err) {
+		view.State, view.NextAction = "undetermined", "watch_workspace"
 	}
 }
 

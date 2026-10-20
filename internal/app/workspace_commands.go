@@ -97,7 +97,7 @@ func finishWorkspaceCommandResponse(ctx context.Context, response Response, acti
 		return failed(response, errors.Join(actionErr, descriptionErr), 1)
 	}
 	if descriptionErr != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) && workspaceViewRetryable(descriptionErr) {
+		if expiredWorkspaceView(ctx, descriptionErr) {
 			response.Workspace = &WorkspaceResponse{ID: response.Workspace.ID, Isolation: "git-worktree", State: "undetermined", EvidenceState: "unknown"}
 			return pendingWorkspaceCommandResponse(response)
 		}
@@ -112,6 +112,13 @@ func finishWorkspaceCommandResponse(ctx context.Context, response Response, acti
 func pendingWorkspaceCommandResponse(response Response) commandResult {
 	response.Workspace.NextAction = "watch_workspace"
 	return commandResult{response: response, code: 3}
+}
+
+// expiredWorkspaceView reports whether err is only the observer's own expired
+// view: ctx reached its deadline and every cause is retryable. A live or
+// cancelled context, or a concrete fault joined with a deadline, is not.
+func expiredWorkspaceView(ctx context.Context, err error) bool {
+	return errors.Is(ctx.Err(), context.DeadlineExceeded) && workspaceViewRetryable(err)
 }
 
 // Only this observer's expired view is retryable. An identity or storage fault

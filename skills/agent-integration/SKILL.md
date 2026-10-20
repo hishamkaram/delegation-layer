@@ -352,7 +352,9 @@ cancellation or `stop_and_report` applies, a `timed_out` task with
 otherwise report it. When continuing, use the original state root and a finite
 budget, then observe the returned successor ID. Do not
 wait indefinitely for pending publication or restart the task as an unrelated
-dispatch. If continuation is unavailable, report its reason. Apply the same
+dispatch. If continuation is unavailable, report its reason, except the busy
+managed-workspace case in [continuation and timeout
+recovery](references/continuation.md). Apply the same
 `failure` and `task_record` decisions as for dispatch; never repeat an uncertain
 successor creation.
 

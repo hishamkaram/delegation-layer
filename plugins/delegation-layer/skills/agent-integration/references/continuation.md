@@ -53,6 +53,42 @@ Then retry the exact `continue --task PREDECESSOR_ID` after it becomes retained.
 Keep the original predecessor, brief, and budget; do not replace continuation
 with a fresh dispatch. A created successor is only observed.
 
+**Busy managed workspace after a timeout.** This is the only case where an
+unavailable continuation may be waited for instead of reported. It applies
+only when a `timed_out` task reports all of `continuation.resumable: false`,
+`continuation.reason` exactly `"managed workspace is busy"`,
+`workspace.state: "busy"`, and `workspace.next_action: "watch_workspace"`.
+Another reservation may still hold the workspace; do not infer which use. Wait
+only when further work needs to continue this task, and return a committed
+result normally. Do not wait when a cancellation (`failure.code:
+"task_cancelled"`), a concrete fault, or `stop_and_report` applies to the task
+or the workspace. If a successor from this predecessor was already created,
+observe that successor instead; if its creation is uncertain, follow the
+`task_record` stop rule in [result handling](result-handling.md).
+
+1. Watch the workspace with the same root and a finite duration, using
+   `workspace.id` from the task response; never guess an ID or path:
+
+   ```sh
+   delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" workspace status \
+     WORKSPACE_ID --watch 30s --json
+   ```
+
+   Repeat the watch only while it reports `state: "busy"`.
+2. When it reports `state: "retained"`, run a fresh `status` for the same
+   predecessor task ID.
+3. Only if that status now reports `continuation.resumable: true` and the task
+   rules above still permit it, run the exact `continue --task PREDECESSOR_ID`
+   once. Otherwise report its reason and stop.
+
+Never run `continue` while `resumable` is `false`. Report any other reason,
+workspace state, or fault under the existing guidance; do not reactivate a
+`released` or `forgotten` workspace. An `undetermined` workspace view is
+unobserved and follows [managed workspace results](result-handling.md#managed-workspace-results);
+it is neither a terminal failure nor permission to continue. Do not dispatch,
+fall back to another provider, repair the environment, or mutate the workspace
+to free it. Availability is not guaranteed; do not wait indefinitely.
+
 `mode` describes the provider contract:
 
 - `native` uses the provider’s exact persisted conversation/session ID;
