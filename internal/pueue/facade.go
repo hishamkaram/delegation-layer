@@ -127,6 +127,7 @@ const (
 	PublishedPairNotPublished  = control.PublishedPairNotPublished
 	PublishedPairIncomplete    = control.PublishedPairIncomplete
 	PublishedPairMemberMissing = control.PublishedPairMemberMissing
+	PublishedPairConfigChanged = control.PublishedPairConfigChanged
 
 	PublishedPairReconciled        = control.PublishedPairReconciled
 	PublishedPairTransitionPending = control.PublishedPairTransitionPending

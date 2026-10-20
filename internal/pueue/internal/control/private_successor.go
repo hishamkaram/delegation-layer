@@ -46,6 +46,12 @@ func ResolvePrivateSupervisorSuccessor(ctx context.Context, stateRoot string, sa
 // with callers already holding the supervisor lock. The caller must retain a
 // shared or exclusive supervisor lease for the entire observation.
 func ResolvePrivateSupervisorSuccessorWithLock(ctx context.Context, stateRoot string, saved task.SupervisorRef) (task.SupervisorRef, bool, error) {
+	return resolvePrivateSupervisorSuccessorWithLock(ctx, stateRoot, saved, privateGenerationGeneral)
+}
+
+// resolvePrivateSupervisorSuccessorWithLock is the one successor decision;
+// purpose selects only the alias match of the same-generation phase.
+func resolvePrivateSupervisorSuccessorWithLock(ctx context.Context, stateRoot string, saved task.SupervisorRef, purpose privateGenerationPurpose) (task.SupervisorRef, bool, error) {
 	if ctx == nil {
 		return task.SupervisorRef{}, false, context.Canceled
 	}
@@ -67,7 +73,7 @@ func ResolvePrivateSupervisorSuccessorWithLock(ctx context.Context, stateRoot st
 	}
 	current := facts.published
 	if task.SameSupervisorIdentity(saved, current) {
-		phase, phaseErr := facts.phase(current)
+		phase, phaseErr := facts.phaseFor(current, purpose)
 		if phaseErr != nil {
 			return task.SupervisorRef{}, false, phaseErr
 		}
@@ -93,7 +99,7 @@ func ResolvePrivateSupervisorSuccessorWithLock(ctx context.Context, stateRoot st
 // A task-status cache is only a row observation. Revalidate the canonical
 // generation inside its SH lease before either reusing or publishing rows.
 func (c *Client) verifyPrivateTaskObservationWithLock(ctx context.Context, stateRoot string) error {
-	current, found, err := ResolvePrivateSupervisorSuccessorWithLock(ctx, stateRoot, c.binding)
+	current, found, err := resolvePrivateSupervisorSuccessorWithLock(ctx, stateRoot, c.binding, privateGenerationTaskRead)
 	if err != nil {
 		return err
 	}

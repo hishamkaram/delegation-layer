@@ -11,6 +11,7 @@ from typing import TypedDict
 
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner, OwnedDirectory
 from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
+from scripts.delegate_acceptance.private_cli.supervisor import PredecessorShutdownTarget
 
 
 class SupervisorCleanup(TypedDict):
@@ -19,6 +20,15 @@ class SupervisorCleanup(TypedDict):
     env: dict[str, str]
     state: Path
     task_ids: list[str]
+
+
+class PredecessorCleanup(TypedDict):
+    """A pre-retarget generation; it replaces the mutable primary cleanup for its root."""
+
+    client: Path
+    env: dict[str, str]
+    task_ids: list[str]
+    predecessor: PredecessorShutdownTarget
 
 
 @dataclass
@@ -36,7 +46,7 @@ class FixtureLifetime:
     old_install: Path | None = None
     old_libexec: Path | None = None
     upgraded_libexec: Path | None = None
-    supervisor_cleanups: list[SupervisorCleanup] = field(default_factory=list)
+    supervisor_cleanups: list[SupervisorCleanup | PredecessorCleanup] = field(default_factory=list)
     managed_state_roots: list[tuple[Path, list[str]]] = field(default_factory=list)
     handoff_cleanup_bindings: list[SupervisorCleanup] = field(default_factory=list)
     attempted_task_ids: list[str] = field(default_factory=list)

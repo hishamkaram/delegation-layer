@@ -18,8 +18,7 @@ import (
 func ReconcilePublishedSupervisorWithLock(ctx context.Context, store *taskdir.Store, options pueue.Options, explicitMigration bool) error {
 	// A healthy published pair does not depend on staged or retained inventory.
 	// Its availability is decided before any relocation candidate.
-	availability, err := pueue.ObservePublishedPrivatePairWithLock(ctx, store.Root, options)
-	if err != nil || availability == pueue.PublishedPairReady || availability == pueue.PublishedPairNotPublished {
+	if settled, err := publishedPairAvailabilitySettles(ctx, store, options, explicitMigration); settled {
 		return err
 	}
 	published, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
@@ -49,6 +48,26 @@ func ReconcilePublishedSupervisorWithLock(ctx context.Context, store *taskdir.St
 		// Explicit migration owns a live predecessor.
 	}
 	return nil
+}
+
+// publishedPairAvailabilitySettles applies control's availability fact and
+// reports whether it settles the call. Any observation fault settles with its
+// error; only a member-missing or incomplete generation continues.
+func publishedPairAvailabilitySettles(ctx context.Context, store *taskdir.Store, options pueue.Options, explicitMigration bool) (bool, error) {
+	availability, err := pueue.ObservePublishedPrivatePairWithLock(ctx, store.Root, options)
+	switch {
+	case err != nil:
+		return true, err
+	case availability == pueue.PublishedPairReady || availability == pueue.PublishedPairNotPublished:
+		return true, nil
+	case availability == pueue.PublishedPairConfigChanged && explicitMigration:
+		// Both executables proved their published provenance, so path-only
+		// repair has nothing to do. Explicit migration owns the config change.
+		return true, nil
+	case availability == pueue.PublishedPairConfigChanged:
+		return true, availability.ProjectedError()
+	}
+	return false, nil
 }
 
 func resolveReconciliationPair(root string, published task.SupervisorRef, explicitMigration bool) (string, string, bool, error) {

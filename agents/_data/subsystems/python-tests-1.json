@@ -502,6 +502,31 @@
     ]
   },
   {
+    "name": "py:test_acceptance_private_predecessor_shutdown",
+    "owner": "py:test_acceptance_private_predecessor_shutdown",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_private_cli",
+      "py:acceptance_provider_common",
+      "py:delegate_acceptance.private_cli.finalization",
+      "py:delegate_acceptance.private_cli.fixture_lifetime",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.private_cli.upgrade",
+      "py:delegate_acceptance.processes.observation",
+      "py:json",
+      "py:pathlib",
+      "py:shutil",
+      "py:socket",
+      "py:subprocess",
+      "py:sys",
+      "py:tempfile",
+      "py:test_acceptance_private_shutdown",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:test_acceptance_skill_routing",
     "owner": "py:test_acceptance_skill_routing",
     "layer": "test",

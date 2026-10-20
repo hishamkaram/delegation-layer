@@ -1,5 +1,7 @@
 """Single owners of fixture gate locks and live FIFO lease descriptors."""
 
+from contextlib import ExitStack
+from contextlib import contextmanager
 from pathlib import Path
 from scripts.delegate_acceptance.directories.operations import _close_parent_descriptor
 from scripts.delegate_acceptance.directories.operations import _open_parent_directory
@@ -7,6 +9,7 @@ from scripts.delegate_acceptance.directories.operations import remove_exact_owne
 from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.private_cli.configuration import LEASE_HANDSHAKE_TIMEOUT_SECONDS
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
+from scripts.delegate_acceptance.processes.observation import wait_until
 import errno
 import fcntl
 import os
@@ -46,6 +49,26 @@ class LockedReleaseGate:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
         finally:
             os.close(descriptor)
+
+
+@contextmanager
+def private_fixture_transition(state):
+    """Serialize historical fixture seeds with the production transition owner."""
+    supervisor = state / ".supervisor"
+    with ExitStack() as owners:
+        for name in ("transition.lock", "bootstrap.lock"):
+            descriptor = os.open(supervisor / name, os.O_RDWR | os.O_NOFOLLOW)
+            owners.callback(os.close, descriptor)
+
+            def acquire():
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return True
+                except BlockingIOError:
+                    return False
+
+            wait_until(acquire, timeout=30, description="historical seed lifecycle lock")
+        yield supervisor
 
 
 def require_empty_fixture_waiters(waiter_directory):

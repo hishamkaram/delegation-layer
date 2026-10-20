@@ -3,23 +3,20 @@
 from scripts.delegate_acceptance.private_cli.configuration import COLLECT_TIMEOUT_SECONDS
 from scripts.delegate_acceptance.private_cli.configuration import COLLECT_WATCH
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from contextlib import ExitStack
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
 from scripts.delegate_acceptance.private_cli.leases import LockedReleaseGate
+from scripts.delegate_acceptance.private_cli.leases import private_fixture_transition
 from scripts.delegate_acceptance.private_cli.pair_evidence import assert_state_supervisor_pair
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.private_cli.capacity_records import capacity_lease_specifications
-from contextlib import contextmanager
-import fcntl
 import hashlib
 from scripts.delegate_acceptance.private_cli.installation import install_fixture
 from scripts.delegate_acceptance.private_cli.wrappers import install_wrapper
 import json
 import os
-from scripts.delegate_acceptance.private_cli.supervisor import private_daemon_process_gone
-from scripts.delegate_acceptance.private_cli.supervisor import private_shutdown_endpoint_closed
-from scripts.delegate_acceptance.private_cli.supervisor import private_shutdown_evidence
+from scripts.delegate_acceptance.private_cli.supervisor import predecessor_closed
+from scripts.delegate_acceptance.private_cli.supervisor import capture_predecessor_shutdown_target
 from scripts.delegate_acceptance.private_cli.capacity_ownership import prove_lifetime_owner_cohort
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_command
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
@@ -27,32 +24,13 @@ from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
 from scripts.delegate_acceptance.evidence.files import read_json
 from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.private_cli.commands import run_json
+from scripts.delegate_acceptance.private_cli.finalization import release_pending_predecessor
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
 from scripts.delegate_acceptance.tasks.publication import snapshot
 import time
 import uuid
 from scripts.delegate_acceptance.processes.observation import wait_until
 from scripts.delegate_acceptance.evidence.files import write_json
-
-
-@contextmanager
-def private_fixture_transition(state):
-    """Serialize historical fixture seeds with the production transition owner."""
-    supervisor = state / ".supervisor"
-    with ExitStack() as owners:
-        for name in ("transition.lock", "bootstrap.lock"):
-            descriptor = os.open(supervisor / name, os.O_RDWR | os.O_NOFOLLOW)
-            owners.callback(os.close, descriptor)
-
-            def acquire():
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    return True
-                except BlockingIOError:
-                    return False
-
-            wait_until(acquire, timeout=30, description="historical seed lifecycle lock")
-        yield supervisor
 
 
 def seed_historical_private_paths(state, libexec, *, split):
@@ -95,16 +73,7 @@ def run_pending_package_upgrade(
     base = capture_root.directory
     package_owner = DirectoryOwner()
     try:
-        (
-            pending_libexec,
-            active,
-            legacy_config,
-            original_config,
-            legacy_pid,
-            legacy_endpoint,
-            legacy_socket_identity,
-            legacy_cleanup,
-        ) = stage_pending_package(
+        pending_libexec, active, legacy_config, original_config, legacy_cleanup = stage_pending_package(
             attempted_task_ids=attempted_task_ids, base=base, config=config, env=env, package_owner=package_owner,
             real_client=real_client, real_daemon=real_daemon, state=state, supervisor_cleanups=supervisor_cleanups
         )
@@ -136,15 +105,14 @@ def run_pending_package_upgrade(
             migrated.get("supervisor_control", {}).get("state") == "migrated",
             "native migration did not retarget its removed pre-shutdown successor",
         )
-        await_pending_predecessor(
-            capture_root, legacy_cleanup, legacy_endpoint, legacy_pid, legacy_socket_identity, supervisor_cleanups
-        )
+        await_pending_predecessor(capture_root, legacy_cleanup["predecessor"])
         pair = assert_state_supervisor_pair(state, libexec)
         published = read_json(state / ".supervisor" / "supervisor.identity.json")["binding"]
         require(
             published["daemon_executable"] == str(pair / "pueued") and published["endpoint"] == "unix:" + new_socket,
             "native retarget did not publish the actual ready generation",
         )
+        release_pending_predecessor(legacy_cleanup, supervisor_cleanups)
         return {
             "historical_state": "seeded-legacy-target-before-shutdown",
             "active_work_refused": True,
@@ -371,28 +339,19 @@ def stage_pending_package(
     install_fixture(real_daemon, pending_libexec / "pueued")
     active = read_json(state / ".supervisor" / "supervisor.identity.json")["binding"]
     legacy_config = base / "upgrade-legacy-control.yml"
-    original_config = config.read_text()
-    legacy_config.write_text(original_config)
-    legacy_config.chmod(0o600)
-    legacy_pid, legacy_endpoint, legacy_socket_identity = private_shutdown_evidence(config)
-    legacy_cleanup = {
-        "client": real_client,
-        "config": legacy_config,
-        "env": env,
-        "state": state,
-        "task_ids": attempted_task_ids,
-    }
-    supervisor_cleanups.append(legacy_cleanup)
-    return (
-        pending_libexec,
-        active,
-        legacy_config,
-        original_config,
-        legacy_pid,
-        legacy_endpoint,
-        legacy_socket_identity,
-        legacy_cleanup,
-    )
+    with private_fixture_transition(state):
+        predecessor = capture_predecessor_shutdown_target(config, state, legacy_config)
+        # Register before any fallible step, including lease exit, so the finalizer owns the handle.
+        legacy_cleanup = {
+            "client": real_client,
+            "env": env,
+            "task_ids": attempted_task_ids,
+            "predecessor": predecessor,
+        }
+        supervisor_cleanups.append(legacy_cleanup)
+    # The capture proved these exact bytes are the canonical UTF-8 config.
+    original_config = predecessor.backup_content.decode("utf-8")
+    return pending_libexec, active, legacy_config, original_config, legacy_cleanup
 
 
 def prove_split_provenance(
@@ -598,18 +557,13 @@ def finish_upgrade_recovery(
     )
 
 
-def await_pending_predecessor(
-    capture_root, legacy_cleanup, legacy_endpoint, legacy_pid, legacy_socket_identity, supervisor_cleanups
-):
+def await_pending_predecessor(capture_root, predecessor):
     stop_deadline = time.monotonic() + 30
-
-    def legacy_stopped():
-        return private_daemon_process_gone(
-            legacy_pid, stop_deadline, capture_root=capture_root
-        ) and private_shutdown_endpoint_closed(legacy_endpoint, legacy_socket_identity, stop_deadline)
-
-    wait_until(legacy_stopped, timeout=30, description="retargeted predecessor process and endpoint closure")
-    supervisor_cleanups.remove(legacy_cleanup)
+    wait_until(
+        lambda: predecessor_closed(predecessor, stop_deadline, capture_root=capture_root),
+        timeout=30,
+        description="retargeted predecessor process and endpoint closure",
+    )
 
 
 def prepare_upgrade_history(

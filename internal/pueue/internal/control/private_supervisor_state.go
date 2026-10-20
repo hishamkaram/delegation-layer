@@ -99,14 +99,6 @@ func privateSupervisorMigrationComplete(stateRoot string, binding task.Superviso
 	return facts.complete(binding, allowRecoveryAlias)
 }
 
-type privateGenerationPhase uint8
-
-const (
-	privateGenerationUnavailable privateGenerationPhase = iota
-	privateGenerationObservable
-	privateGenerationComplete
-)
-
 // The migration owner writes these records under the EX bootstrap lock.
 // Readers retain the SH generation lease for the entire decision and probe.
 // Alias validity is separate: generic retirement deliberately ignores it only
@@ -121,7 +113,7 @@ type privateGenerationFacts struct {
 	migration           privateMigrationRecord
 	migrationPresent    bool
 	migrationErr        error
-	alias               privateRecoveryBindingRecord
+	alias               privateRecoveryAlias
 	aliasPresent        bool
 	aliasErr            error
 	aliasPublishing     bool
@@ -138,7 +130,7 @@ func loadPrivateGenerationFacts(stateRoot string) (privateGenerationFacts, error
 	base := filepath.Join(stateRoot, privateSupervisorDirectory)
 	facts.published, facts.publishedFound, facts.publishedErr = loadPrivateSupervisorBinding(stateRoot)
 	facts.migration, facts.migrationPresent, facts.migrationErr = loadPrivateMigrationRecord(base)
-	facts.alias, facts.aliasPresent, facts.aliasErr = readPrivateRecoveryBinding(stateRoot)
+	facts.alias, facts.aliasPresent, facts.aliasErr = readValidatedPrivateRecoveryAlias(stateRoot)
 	facts.aliasPublishing, facts.aliasPublicationErr = privateRecoveryObservationConflict(stateRoot, facts.aliasPresent)
 	bootstrapPending, bootstrapErr := PrivateBootstrapPending(stateRoot)
 	_, publishing, publicationErr := readPrivateIdentityPublication(stateRoot)
@@ -163,57 +155,6 @@ func privateRecoveryObservationConflict(stateRoot string, aliasPresent bool) (bo
 		}
 	}
 	return false, nil
-}
-
-func (facts privateGenerationFacts) publishedReady(binding task.SupervisorRef) (bool, error) {
-	if !facts.settled || facts.transitionErr != nil {
-		return false, facts.transitionErr
-	}
-	if facts.identityErr != nil || !facts.identityFound {
-		return false, facts.identityErr
-	}
-	if !privateDaemonIdentityMatchesBinding(facts.identity, binding) {
-		return false, nil
-	}
-	return facts.publishedFound && task.SameSupervisorIdentity(facts.published, binding), facts.publishedErr
-}
-
-func (facts privateGenerationFacts) complete(binding task.SupervisorRef, allowRecoveryAlias bool) (bool, error) {
-	if facts.migrationErr != nil || facts.migrationPresent {
-		return false, facts.migrationErr
-	}
-	if !allowRecoveryAlias && (facts.aliasErr != nil || facts.aliasPresent) {
-		return false, facts.aliasErr
-	}
-	return facts.publishedReady(binding)
-}
-
-func (facts privateGenerationFacts) phase(binding task.SupervisorRef) (privateGenerationPhase, error) {
-	if facts.migrationErr != nil {
-		return privateGenerationUnavailable, facts.migrationErr
-	}
-	ready, err := facts.publishedReady(binding)
-	if err != nil || !ready || !privateFullGenerationMatches(facts.published, binding) {
-		return privateGenerationUnavailable, err
-	}
-	if facts.migrationPresent && (!privateMigrationMayRetarget(facts.migration) || !privateDaemonIdentityMatchesBinding(facts.migration.Legacy, binding)) {
-		return privateGenerationUnavailable, nil
-	}
-	aliasMatches, aliasErr := facts.observableAliasMatches(binding)
-	if aliasErr != nil || !aliasMatches {
-		return privateGenerationUnavailable, aliasErr
-	}
-	if facts.migrationPresent || facts.aliasPresent {
-		return privateGenerationObservable, nil
-	}
-	return privateGenerationComplete, nil
-}
-
-func (facts privateGenerationFacts) observableAliasMatches(binding task.SupervisorRef) (bool, error) {
-	if facts.aliasErr != nil || facts.aliasPublicationErr != nil || facts.aliasPublishing {
-		return false, errors.Join(facts.aliasErr, facts.aliasPublicationErr)
-	}
-	return !facts.aliasPresent || (task.SameSupervisorIdentity(facts.alias.Supervisor, binding) && facts.alias.ConfigSHA256 == binding.ConfigDigest), nil
 }
 
 // RefreshPrivateSupervisorBinding updates only daemon launch provenance from
@@ -366,13 +307,9 @@ func readPublishedPrivateHead(stateRoot string) (publishedPrivateHead, error) {
 // preparePublishedPrivatePair opens and verifies the exact present published
 // pair. A verification failure is pairErr; a close fault after it is err.
 func preparePublishedPrivatePair(ctx context.Context, published task.SupervisorRef, options Options) (client *Client, pairErr, resultErr error) {
-	options, err := optionsForPublishedPrivateBinding(published, options)
+	client, err := openPublishedPrivatePair(published, options)
 	if err != nil {
-		return nil, nil, privatePublishedRecoveryError(err)
-	}
-	client, err = NewClient(published, options)
-	if err != nil {
-		return nil, nil, privatePublishedRecoveryError(err)
+		return nil, nil, err
 	}
 	if err = verifyPublishedPrivatePair(ctx, client, published); err != nil {
 		if closeErr := client.CloseAfterPending(err); closeErr != nil {
@@ -381,6 +318,18 @@ func preparePublishedPrivatePair(ctx context.Context, published task.SupervisorR
 		return nil, err, nil
 	}
 	return client, nil, nil
+}
+
+func openPublishedPrivatePair(published task.SupervisorRef, options Options) (*Client, error) {
+	options, err := optionsForPublishedPrivateBinding(published, options)
+	if err != nil {
+		return nil, privatePublishedRecoveryError(err)
+	}
+	client, err := NewClient(published, options)
+	if err != nil {
+		return nil, privatePublishedRecoveryError(err)
+	}
+	return client, nil
 }
 
 // PublishedPairAvailability is the clean availability fact of the completed
@@ -400,7 +349,36 @@ const (
 	// PublishedPairMemberMissing is a complete generation with a recorded
 	// executable that no longer exists.
 	PublishedPairMemberMissing
+	// PublishedPairConfigChanged is a complete, present generation whose
+	// canonical config parsed and resolved with the pinned resolver, and whose
+	// client and daemon both proved their exact published provenance, but
+	// whose config-derived identity changed. Only explicit migration may own
+	// it; every other caller refuses with its ProjectedError.
+	PublishedPairConfigChanged
 )
+
+// ProjectedError is the strict refusal a fact carries for callers that do
+// not own it: config drift projects to the exact error that strict published
+// verification returns for it. Every other fact projects to nil.
+func (availability PublishedPairAvailability) ProjectedError() error {
+	if availability == PublishedPairConfigChanged {
+		return privatePublishedRecoveryError(ErrBinding)
+	}
+	return nil
+}
+
+// settlePublishedPairAvailability applies the release of the observation's
+// client. A close fault discards the fact; its projected refusal stays in the
+// error beside the fault.
+func settlePublishedPairAvailability(availability PublishedPairAvailability, closeErr error) (PublishedPairAvailability, error) {
+	if closeErr == nil {
+		return availability, nil
+	}
+	if projected := availability.ProjectedError(); projected != nil {
+		return 0, errors.Join(projected, closeErr)
+	}
+	return 0, closeErr
+}
 
 // ObservePublishedPrivatePairWithLock observes the completed published pair
 // while the caller holds WithBootstrapLock. Completeness is decided before
@@ -408,7 +386,7 @@ const (
 // relocated pair, belongs to reconciliation even when the published pair is
 // present. Only a complete, present pair is opened and verified, then closed.
 // Every read, verification, pending, context, or close fault returns the zero
-// fact with its error.
+// fact with its error; config drift is a fact only when nothing faulted.
 func ObservePublishedPrivatePairWithLock(ctx context.Context, stateRoot string, options Options) (PublishedPairAvailability, error) {
 	head, err := readPublishedPrivateHead(stateRoot)
 	if err != nil {
@@ -427,15 +405,47 @@ func ObservePublishedPrivatePairWithLock(ctx context.Context, stateRoot string, 
 	if missing {
 		return PublishedPairMemberMissing, nil
 	}
-	client, pairErr, err := preparePublishedPrivatePair(ctx, head.published, options)
+	client, err := openPublishedPrivatePair(head.published, options)
 	if err != nil {
 		return 0, err
 	}
+	availability, pairErr := observePublishedPrivatePair(ctx, client, head.published)
 	if pairErr != nil {
+		if closeErr := client.CloseAfterPending(pairErr); closeErr != nil {
+			return 0, errors.Join(privatePublishedRecoveryError(pairErr), closeErr)
+		}
 		return 0, privatePublishedRecoveryError(pairErr)
 	}
-	if err = client.Close(); err != nil {
+	return settlePublishedPairAvailability(availability, client.Close())
+}
+
+// observePublishedPrivatePair is the availability form of
+// verifyPublishedPrivatePair. Config-only drift does not stop verification:
+// the daemon's real bytes are still checked against the published target, and
+// the drift is a fact only after both executable proofs and the context
+// checks succeed. Any other difference is ErrBinding.
+func observePublishedPrivatePair(ctx context.Context, client *Client, published task.SupervisorRef) (PublishedPairAvailability, error) {
+	if err := ctx.Err(); err != nil {
 		return 0, err
+	}
+	comparison, err := client.compareBinding()
+	if err != nil {
+		return 0, err
+	}
+	if comparison == bindingChanged {
+		return 0, ErrBinding
+	}
+	if err = attachPrivateDaemon(client, published.DaemonExecutable); err != nil {
+		return 0, err
+	}
+	if err = ctx.Err(); err != nil {
+		return 0, err
+	}
+	if daemon := client.Binding(); daemon.DaemonExecutable != published.DaemonExecutable || daemon.DaemonSHA256 != published.DaemonSHA256 {
+		return 0, ErrBinding
+	}
+	if comparison == bindingConfigChanged {
+		return PublishedPairConfigChanged, nil
 	}
 	return PublishedPairReady, nil
 }
