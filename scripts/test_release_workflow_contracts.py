@@ -36,8 +36,11 @@ STATUS_OVERRIDE = re.compile(r"\b(?:always|failure|cancelled)\(\)|!\s*success\(\
 
 
 def conditions(text: str, indent: int) -> list[str]:
-    """Return each `if:` at one key indent, with its more-indented block-scalar lines."""
-    return re.findall(rf"(?m)^ {{{indent}}}if:(.*(?:\n {{{indent + 1},}}\S.*)*)", text)
+    """Return each `if:` at one key indent, with its more-indented block-scalar lines.
+
+    Whitespace-only lines stay inside the block while a more-indented line follows.
+    """
+    return re.findall(rf"(?m)^ {{{indent}}}if:(.*(?:\n(?:[ \t]*\n)*[ ]{{{indent + 1},}}\S.*)*)", text)
 
 
 def job_steps(body: str) -> dict[str, str]:
@@ -138,7 +141,8 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         diagnostic = ("      - name: Retain promotion diagnostics\n        if: always()\n"
                       "        continue-on-error: true\n        uses: actions/upload-artifact@v4\n")
         folded_diagnostic = diagnostic.replace("if: always()", "if: >-\n          always()")
-        for permitted in (diagnostic, folded_diagnostic):
+        blank_diagnostic = diagnostic.replace("if: always()", "if: >-\n\n          always()")
+        for permitted in (diagnostic, folded_diagnostic, blank_diagnostic):
             with self.subTest(permitted=permitted):
                 self.assertEqual(publication_gate_violations(source.replace(writer, permitted + writer)), [])
         writer_condition = writer + "        if: ${{ !inputs.resume_published }}"
@@ -150,11 +154,18 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                 source.replace(writer_condition,
                                writer + "        if: ${{ !cancelled() && !inputs.resume_published }}"),
                 source.replace(writer_condition, writer + "        if: >-\n          always()"),
-                source.replace(writer_condition, writer + "        if: |\n          ${{ always() }}")],
+                source.replace(writer_condition, writer + "        if: |\n          ${{ always() }}"),
+                source.replace(writer_condition, writer + "        if: >-\n\n          always()"),
+                source.replace(writer_condition,
+                               writer + "        if: >-\n          ${{ !inputs.resume_published ||\n  \n"
+                                        "          always() }}")],
             "publish-homebrew: job status override": [
                 source.replace(homebrew_needs, homebrew_needs + "    if: always()\n"),
                 source.replace(homebrew_needs, homebrew_needs + "    if: >-\n      always()\n"),
-                source.replace(homebrew_needs, homebrew_needs + "    if: |\n      !success()\n")],
+                source.replace(homebrew_needs, homebrew_needs + "    if: |\n      !success()\n"),
+                source.replace(homebrew_needs, homebrew_needs + "    if: |\n\n      always()\n"),
+                source.replace(homebrew_needs, homebrew_needs + "    if: >-\n      github.ref != ''\n\n"
+                                                                "      || always()\n")],
             "publish-homebrew: needs is not exactly published-npm": [
                 source.replace(homebrew_needs, "    needs: promote\n")],
             "promote: publication write precedes validation": [
