@@ -14,6 +14,11 @@ on:
         description: 'Exact successful hosted native-proof validation run ID; required for promotion'
         required: false
         type: string
+      accepted_native_failure:
+        description: 'Owner-accepted known native failure for one exact release; leave empty for strict native promotion'
+        required: false
+        default: ''
+        type: string
       resume_published:
         description: 'Verify an already published release and finish Homebrew; do not republish npm or GitHub'
         required: true
@@ -197,10 +202,201 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           NATIVE_VALIDATION_RUN_ID: ${{ inputs.native_validation_run_id }}
+          ACCEPTED_NATIVE_FAILURE: ${{ inputs.accepted_native_failure }}
         run: |
           if [[ ! "${NATIVE_VALIDATION_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
             echo 'native_validation_run_id is required for promotion.' >&2
             exit 1
+          fi
+          if [[ -n "${ACCEPTED_NATIVE_FAILURE}" ]]; then
+            if [[ "${ACCEPTED_NATIVE_FAILURE}" != 'v0.1.32-macos-opencode-timeout-evidence' ]]; then
+              echo 'accepted_native_failure is not a recognized owner-accepted exception.' >&2
+              exit 1
+            fi
+            # One-off owner authorization: strict native acceptance did not pass for
+            # v0.1.32. Accept only the exact retained history and proof bytes below.
+            HARNESS_ROOT="${PWD}/.local/release-harness" python3 -I - <<'PY'
+          import hashlib, os, re, sys
+          from dataclasses import replace
+          from pathlib import Path
+          sys.path.insert(0, os.environ['HARNESS_ROOT'])
+          from scripts.delegate_acceptance.native_evidence.public_contract import (
+              MAX_PUBLIC_ZIP_BYTES, PublicProofError,
+          )
+          from scripts.delegate_acceptance.native_evidence.public_validation import (
+              inspect_public_proof, validate_public_identity,
+          )
+          from scripts.delegate_acceptance.release_verification.assets import (
+              gh_environment, resolve_release_identity,
+          )
+          from scripts.delegate_acceptance.release_verification.contract import VerificationError
+          from scripts.delegate_acceptance.release_verification.github import GitHubClient, object_value
+          from scripts.delegate_acceptance.release_verification.native_archive import archive_expectation
+          from scripts.delegate_acceptance.release_verification.native_history import classify_native_history
+          from scripts.delegate_acceptance.release_verification.native_remote_history import history_reports
+          from scripts.delegate_acceptance.release_verification.native_reports import ReportScope
+          from scripts.delegate_acceptance.release_verification.native_submission import (
+              SubmissionIdentity, repository_identity, require_public_repository,
+          )
+
+          REPO, REPOSITORY_ID, TAG = 'hishamkaram/delegation-layer', 1368219645, 'v0.1.32'
+          RUNTIME_REVISION = 'a6e8e103c688412e1ef8cb3db59624bd54fe7603'
+          # Source-harness fingerprint of RUNTIME_REVISION that produced both proofs. This
+          # workflow change alters the promotion harness fingerprint, so bind history to it.
+          PROOF_SOURCE_HARNESS_SHA256 = '94b6d3b0139367adcb53a53a8b3207af7eb27cffbc1ed3c0a15835d169b4c228'
+          SENDER_ID, MACOS_RUN, LINUX_RUN = 24391550, 39402274329, 39403240260
+          SHARED = {'kind': 'native-proof-validation', 'repository_id': REPOSITORY_ID, 'tag': TAG,
+                    'harness_revision': RUNTIME_REVISION, 'release_revision': RUNTIME_REVISION,
+                    'run_attempt': 1, 'sender_id': SENDER_ID, 'admission': 'admitted',
+                    'opencode_model': 'opencode/big-pickle', 'ccr_model': 'litellm-glm-5-2'}
+          PROOFS = {
+              MACOS_RUN: {'platform': 'Darwin', 'report': {
+                  'proof_asset_id': 658890558, 'invocation_id': '1ea656aaecb78a5355ff3d8222c31e26',
+                  'proof_sha256': '0d0ccbaed8076949616fb4b6e2116d1e6e777abb94d49ea669b6ad9596e5931a',
+                  'verdict': 'fail', 'native_verdict': None, 'native_status': 'BLOCKED',
+                  'stage': 'validate-native-facts', 'history': None,
+                  'failure': {'code': 'native_acceptance_not_passing', 'stage': 'validate-native-facts'},
+              }},
+              LINUX_RUN: {'platform': 'Linux', 'report': {
+                  'proof_asset_id': 658909723, 'invocation_id': '3638cd62f371dc38eae345dee9bb7247',
+                  'proof_sha256': 'efa6375dd6f89a9313e481a2246a19325ddd1e00251ed617fd54dcf04b711950',
+                  'verdict': 'pass', 'native_verdict': 'pass', 'native_status': 'PASS',
+                  'stage': 'validate-history',
+                  'history': {'allowed': False, 'reason': 'native_history_blocked', 'observed_attempts': 2},
+                  'failure': {'code': 'native_history_blocked', 'stage': 'validate-history'},
+              }},
+          }
+
+
+          def require(condition, code):
+              if not condition:
+                  raise VerificationError(code, 'accepted-native-failure')
+
+
+          def verify_history(client):
+              rows = history_reports(client, REPO, ReportScope(REPOSITORY_ID, TAG, RUNTIME_REVISION))
+              require(sorted(row.observation.run_id for row in rows) == sorted(PROOFS),
+                      'accepted_native_failure_history_mismatch')
+              for row in rows:
+                  run_id = row.observation.run_id
+                  expected = {**SHARED, **PROOFS[run_id]['report'], 'run_id': run_id}
+                  report = row.report or {}
+                  require(row.observation.attempt == 1 and row.observation.admission == 'admitted'
+                          and row.observation.verdict == expected['verdict']
+                          and (row.status, row.conclusion) == ('completed', 'failure')
+                          and all(report.get(key) == value for key, value in expected.items()),
+                          'accepted_native_failure_report_mismatch')
+              decision = classify_native_history(tuple(row.observation for row in rows),
+                                                 complete=True, selected_run_id=LINUX_RUN)
+              require(not decision.allowed and decision.reason == 'native_history_blocked'
+                      and decision.blocking_attempts == ((MACOS_RUN, 1),),
+                      'accepted_native_failure_policy_mismatch')
+
+
+          def verify_proof_bytes(client):
+              assets = client.release(REPO, TAG).get('assets')
+              require(isinstance(assets, list), 'accepted_native_failure_assets_invalid')
+              proofs = {}
+              for run_id, proof in PROOFS.items():
+                  expected = proof['report']
+                  matches = [object_value(asset, 'accepted-native-failure') for asset in assets
+                             if isinstance(asset, dict) and asset.get('id') == expected['proof_asset_id']]
+                  require(len(matches) == 1, 'accepted_native_failure_asset_not_in_release')
+                  uploader = object_value(matches[0].get('uploader'), 'accepted-native-failure')
+                  name = matches[0].get('name')
+                  pattern = rf"native-proof-{proof['platform']}-(amd64|arm64)-{expected['invocation_id']}\.zip"
+                  require(uploader.get('id') == SENDER_ID and isinstance(name, str)
+                          and re.fullmatch(pattern, name) is not None,
+                          'accepted_native_failure_asset_mismatch')
+                  data = client.bytes(f"repos/{REPO}/releases/assets/{expected['proof_asset_id']}",
+                                      limit=MAX_PUBLIC_ZIP_BYTES)
+                  require(hashlib.sha256(data).hexdigest() == expected['proof_sha256'],
+                          'accepted_native_failure_proof_digest_mismatch')
+                  proofs[run_id] = (name, data)
+              return proofs
+
+
+          def verify_archive_binding(client, proofs):
+              base = Path(os.environ['RUNNER_TEMP']) / 'accepted-native-failure'
+              base.mkdir(mode=0o700)
+              for run_id, (name, data) in proofs.items():
+                  proof, report = PROOFS[run_id], PROOFS[run_id]['report']
+                  platform = object_value(inspect_public_proof(data)['platform'], 'accepted-native-failure')
+                  arch = platform.get('arch')
+                  require(platform.get('os') == proof['platform'] and isinstance(arch, str)
+                          and name.endswith(f"-{arch}-{report['invocation_id']}.zip"),
+                          'accepted_native_failure_platform_mismatch')
+                  identity = SubmissionIdentity(
+                      repository=REPO, repository_id=REPOSITORY_ID, release_revision=RUNTIME_REVISION,
+                      harness_revision=RUNTIME_REVISION, sender_id=SENDER_ID,
+                      asset_id=report['proof_asset_id'], proof_sha256=report['proof_sha256'], asset_name=name,
+                  )
+                  root = base / proof['platform']
+                  root.mkdir(mode=0o700)
+                  expectation = archive_expectation(
+                      client, identity, tag=TAG, platform_os=proof['platform'], platform_arch=arch,
+                      root=root, opencode_model=SHARED['opencode_model'], ccr_model=SHARED['ccr_model'],
+                  )
+                  # Current archive, checksum, attestation and binary hashes come from the helper;
+                  # only the source fingerprint is the historical proof harness, never this workflow's.
+                  validate_public_identity(data, replace(
+                      expectation, source_harness_sha256=PROOF_SOURCE_HARNESS_SHA256))
+
+
+          def summary(proofs):
+              lines = [
+                  f'## Owner-accepted native acceptance failure for {TAG}', '',
+                  f'Strict native acceptance did not pass for runtime `{RUNTIME_REVISION}`. '
+                  'The repository owner accepted this known risk for this release only; '
+                  'this promotion is not a native acceptance pass.', '',
+                  f"- Promotion harness: `{os.environ['GITHUB_SHA']}` (current protected main); "
+                  f'proof harness: `{RUNTIME_REVISION}` (source fingerprint `{PROOF_SOURCE_HARNESS_SHA256}`).',
+                  '- Both proofs were revalidated against the current release archive, checksums.txt, '
+                  'release attestation and binary hashes for their platform.',
+              ]
+              for run_id, proof in PROOFS.items():
+                  report, name = proof['report'], proofs[run_id][0]
+                  lines.append(
+                      f"- {proof['platform']}: [validation run {run_id}]"
+                      f'(https://github.com/{REPO}/actions/runs/{run_id}) verdict `{report["verdict"]}`, '
+                      f"native status `{report['native_status']}`, failure `{report['failure']['code']}` "
+                      f"at `{report['failure']['stage']}`; proof [{name}]"
+                      f'(https://github.com/{REPO}/releases/download/{TAG}/{name}) '
+                      f"asset `{report['proof_asset_id']}`, SHA-256 `{report['proof_sha256']}`.")
+              lines.extend([
+                  '- Known macOS failure: in `case-17-opencode-run-workspace-write-timeout-resume` the '
+                  'expected timeout occurred, then the parent FIFO had extra or malformed evidence before '
+                  'continuation was invoked. Lifecycle is unresolved and the evidence is retained.',
+                  '- Two Pi cases on macOS were BLOCKED because Pi was not discoverable; this neutral '
+                  'prerequisite is allowed and does not replace the known failure above.',
+              ])
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+                  output.write('\n'.join(lines) + '\n')
+
+
+          try:
+              require(os.environ['GITHUB_REPOSITORY'] == REPO and os.environ['TAG'] == TAG,
+                      'accepted_native_failure_scope_mismatch')
+              require(os.environ['NATIVE_VALIDATION_RUN_ID'] == str(LINUX_RUN),
+                      'accepted_native_failure_selected_run_mismatch')
+              client = GitHubClient({'commands': []}, gh_environment())
+              require(repository_identity(client, REPO, os.environ['GITHUB_SHA']) == REPOSITORY_ID,
+                      'accepted_native_failure_repository_mismatch')
+              require_public_repository(client, REPO)
+              release = resolve_release_identity(REPO, TAG, client.receipt, client.environment)
+              require(release['commit_sha'] == RUNTIME_REVISION, 'accepted_native_failure_revision_mismatch')
+              verify_history(client)
+              proofs = verify_proof_bytes(client)
+              verify_archive_binding(client, proofs)
+              summary(proofs)
+          except VerificationError as error:
+              print(f'Accepted native failure validation failed: {error.code} ({error.stage})', file=sys.stderr)
+              raise SystemExit(1)
+          except PublicProofError as error:
+              print(f'Accepted native failure validation failed: {error} (proof-identity)', file=sys.stderr)
+              raise SystemExit(1)
+          PY
+            exit 0
           fi
           mkdir -p "${RUNNER_TEMP}/native-promotion"
           python3 .local/release-harness/scripts/validate_native_release.py promotion \
@@ -214,7 +410,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
+          ACCEPTED_NATIVE_FAILURE: ${{ inputs.accepted_native_failure }}
         run: |
+          if [[ -n "${ACCEPTED_NATIVE_FAILURE}" ]]; then
+            echo 'accepted_native_failure applies only to promotion, not resume_published.' >&2
+            exit 1
+          fi
           if [[ "$(gh api "repos/${GITHUB_REPOSITORY}" --jq .private)" != "false" ]]; then
             echo 'Consumer recovery requires a public repository.' >&2
             exit 1
