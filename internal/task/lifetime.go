@@ -31,8 +31,9 @@ const (
 	LifetimeWorkerWaitNotStarted LifetimeWorkerWaitResult = "not-started"
 
 	// MaxLifetimeLaunches bounds the create-once launch namespace shared by
-	// guardians and both durable record stores.
-	MaxLifetimeLaunches uint64 = 64
+	// guardians and both durable record stores. MaxLifetimeLaunchBytes bounds
+	// the same set's canonical bytes independently.
+	MaxLifetimeLaunches uint64 = 4096
 )
 
 // RecordAbsent reports only a direct, non-contextual record absence.

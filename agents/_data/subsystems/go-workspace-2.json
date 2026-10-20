@@ -37,6 +37,7 @@
       "go:errors",
       "go:fmt",
       "go:internal/config",
+      "go:internal/task",
       "go:internal/taskdir",
       "go:internal/workspace/contract",
       "go:io",

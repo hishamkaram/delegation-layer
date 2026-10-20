@@ -77,6 +77,7 @@ class PrivateGuardianEvidenceTests(unittest.TestCase):
             launch = {
                 **common, "registration_sha256": registration_digest, "sequence": sequence,
                 "pid": 101 + sequence, "process_start": "provider-start-%d" % sequence,
+                "started_at": "2026-09-15T00:00:05Z",
             }
             (self.lifetime / ("%020d.launch.json" % sequence)).write_text(
                 json.dumps(launch) + "\n"
@@ -132,3 +133,68 @@ class PrivateGuardianEvidenceTests(unittest.TestCase):
         self.assertEqual(len(specifications), 1)
         self.assertNotEqual(specifications[0]["path"], stale_marker)
         self.assertFalse(specifications[0]["path"].exists())
+
+    def capacity_specifications(self):
+        return private_cli.capacity_lease_specifications(
+            self.state, [self.response], self.waiters, self.lease_nonce,
+        )
+
+    def test_capacity_accepts_launch_65_under_the_shared_count(self):
+        self.write_active_records(launch_count=65)
+        specifications = self.capacity_specifications()
+        self.assertEqual([specification["pid"] for specification in specifications], [166])
+
+    def test_capacity_refuses_launch_4097_before_record_reads(self):
+        self.write_active_records()
+        for sequence in range(2, 4098):
+            (self.lifetime / ("%020d.launch.json" % sequence)).touch()
+        with patch(
+            "scripts.delegate_acceptance.private_cli.capacity_records._read_control_record",
+            side_effect=AssertionError("launch record was read"),
+        ) as read:
+            with self.assertRaisesRegex(RuntimeError, "invalid lifetime launch set"):
+                self.capacity_specifications()
+        read.assert_not_called()
+
+    def test_capacity_refuses_gapped_or_malformed_launch_names(self):
+        self.write_active_records(launch_count=2)
+        refused = self.lifetime / "00000000000000000002.launch.json"
+        for name in ("1.launch.json", "00000000000000000000.launch.json",
+                     "00000000000000004097.launch.json", "00000000000000000003.launch.json"):
+            with self.subTest(name=name):
+                refused = refused.rename(self.lifetime / name)
+                with patch(
+                    "scripts.delegate_acceptance.private_cli.capacity_records._read_control_record",
+                    side_effect=AssertionError("launch record was read"),
+                ) as read:
+                    with self.assertRaisesRegex(RuntimeError, "invalid lifetime launch set"):
+                        self.capacity_specifications()
+                read.assert_not_called()
+
+    def test_capacity_enforces_the_shared_canonical_byte_budget(self):
+        self.write_active_records(launch_count=2)
+        launches = [
+            json.loads((self.lifetime / ("%020d.launch.json" % sequence)).read_text())
+            for sequence in (1, 2)
+        ]
+        exact = sum(len(private_cli.canonical_go_json(launch)) for launch in launches)
+        target = "scripts.delegate_acceptance.private_cli.capacity_records.MAX_LIFETIME_LAUNCH_BYTES"
+        with patch(target, exact):
+            self.assertEqual(len(self.capacity_specifications()), 1)
+        with patch(target, exact - 1):
+            with self.assertRaisesRegex(RuntimeError, "invalid lifetime launch set"):
+                self.capacity_specifications()
+
+    def test_capacity_refuses_a_launch_whose_escaping_exceeds_the_record_bound(self):
+        self.write_active_records()
+        path = self.lifetime / "00000000000000000001.launch.json"
+        launch = json.loads(path.read_text())
+        for process_start, refused in (("<" * 180000, True), ("x" * 180000, False)):
+            with self.subTest(refused=refused):
+                launch["process_start"] = process_start
+                path.write_text(json.dumps(launch, separators=(",", ":")))
+                if refused:
+                    with self.assertRaisesRegex(RuntimeError, "invalid lifetime launch set"):
+                        self.capacity_specifications()
+                else:
+                    self.assertEqual(len(self.capacity_specifications()), 1)

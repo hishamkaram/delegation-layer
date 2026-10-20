@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.evidence.records import (
@@ -23,13 +24,17 @@ from scripts.delegate_acceptance.lifetime.absence_policy import (
     _validate_lifetime_absence_completion,
 )
 from scripts.delegate_acceptance.lifetime.identity import (
+    MAX_LIFETIME_LAUNCH_BYTES,
     MAX_LIFETIME_LAUNCHES,
-    _lifetime_launch_sequence,
+    _lifetime_launch_sequences,
     _lifetime_record_name,
     _lifetime_token,
     ordinary_lifetime_owner_digest,
 )
 from scripts.delegate_acceptance.lifetime.policy import (
+    LIFETIME_LAUNCH_FIELDS,
+    LIFETIME_LAUNCH_OPTIONAL_FIELDS,
+    _account_lifetime_launch,
     _validate_lifetime_intent,
     _validate_lifetime_registration,
     _validate_lifetime_termination,
@@ -120,13 +125,15 @@ def _validate_intent_only_lifetime_absence(
         directory / _lifetime_record_name(
             owner_kind, "termination",
         ), f"lifetime termination for {task}")
+    contradiction = f"unregistered lifetime has contradictory native records for {task}"
     try:
-        entries = tuple(directory.iterdir())
+        with os.scandir(directory) as entries:
+            launches = _lifetime_launch_sequences(
+                owner_kind, (entry.name for entry in entries),
+                limit=MAX_LIFETIME_LAUNCHES, label=contradiction)
     except OSError as error:
         raise AcceptanceFailure(f"cannot inspect unregistered lifetime for {task}") from error
-    require(worker is None and termination is None and not any(
-        _lifetime_launch_sequence(owner_kind, entry.name) is not None for entry in entries),
-        f"unregistered lifetime has contradictory native records for {task}")
+    require(worker is None and termination is None and not launches, contradiction)
     if owner_kind in {"inspection", "workspace"}:
         require(not (directory / "start.json").exists() and not (directory / "start.json").is_symlink(
 
@@ -212,24 +219,22 @@ def _read_lifetime_launches(
         window_deadline: tuple[datetime, int] | None,
 ) -> list[dict[str, object]]:
     launches: list[dict[str, object]] = []
+    launch_bytes = 0
     try:
-        sequences = sorted(sequence for entry in directory.iterdir()
-                           if (sequence := _lifetime_launch_sequence(
-                               owner_kind, entry.name)) is not None)
+        with os.scandir(directory) as entries:
+            sequences = _lifetime_launch_sequences(
+                owner_kind, (entry.name for entry in entries),
+                limit=MAX_LIFETIME_LAUNCHES,
+                label=f"{evidence} lifetime launch sequence is invalid for {task}")
     except OSError as error:
         raise AcceptanceFailure(
             f"cannot inspect {evidence} lifetime launches for {task}") from error
-    require(len(sequences) <= MAX_LIFETIME_LAUNCHES and
-            sequences == list(range(1, len(sequences) + 1)),
-            f"{evidence} lifetime launch sequence is invalid for {task}")
     for sequence in sequences:
         launch = _read_control_record(
             directory / _lifetime_record_name(owner_kind, "launch", sequence),
             f"{evidence} lifetime launch {sequence} for {task}")
-        _exact_keys(launch, {
-            "schema_version", "root_id", "task_id", "registration_sha256", "sequence",
-            "pid", "process_start", "started_at",
-        }, {"pgid"}, label=f"{evidence} lifetime launch {sequence} for {task}")
+        _exact_keys(launch, LIFETIME_LAUNCH_FIELDS, LIFETIME_LAUNCH_OPTIONAL_FIELDS,
+                    label=f"{evidence} lifetime launch {sequence} for {task}")
         pid = launch.get("pid")
         pgid = launch.get("pgid", 0)
         require(type(launch.get("schema_version")) is int and launch["schema_version"] == 1 and
@@ -244,5 +249,8 @@ def _read_lifetime_launches(
         require(recovered or (_timestamp_at_or_after(launched_at, registration_created) and
                 (window_deadline is None or _timestamp_before(launched_at, window_deadline))),
                 f"{evidence} lifetime launch time is invalid for {task}")
+        launch_bytes = _account_lifetime_launch(
+            launch_bytes, launch, limit=MAX_LIFETIME_LAUNCH_BYTES,
+            label=f"{evidence} lifetime launch {sequence} for {task}")
         launches.append(launch)
     return launches

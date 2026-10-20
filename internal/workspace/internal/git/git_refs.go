@@ -17,10 +17,6 @@ const gitOwnedRefFormat = "%(refname)%00%(objectname)%00%(objecttype)%00%(symref
 
 var errRefAbsent = errors.New("owned Git ref is absent")
 
-type gitExitCoder interface {
-	ExitCode() int
-}
-
 // PinBase creates an immutable Delegate-owned ref pointing at the committed
 // source base. The caller must persist its candidate before invoking this
 // create-only operation. A matching ref from an ambiguous prior create is
@@ -99,8 +95,9 @@ func (g Git) DeleteRef(ctx context.Context, source contract.Source, ref, expecte
 }
 
 // DeleteRefs deletes the listed Delegate-owned refs in one native transaction.
-// The caller's durable forget intent is authoritative for refs absent from the
-// inventory; refs that are present must still match their expected OIDs.
+// Listed refs must still match their expected OIDs. The caller's durable
+// forget intent covers an inventory-missing ref only after native Git proves
+// that name absent, because the inventory omits dangling symbolic refs.
 func (g Git) DeleteRefs(ctx context.Context, source contract.Source, prefix string, refs []contract.ForgetRef) error {
 	if ctx == nil {
 		return errors.Join(contract.ErrInvalidGitContext, errors.New("nil ref deletion context"))
@@ -122,9 +119,15 @@ func (g Git) DeleteRefs(ctx context.Context, source contract.Source, prefix stri
 	if err != nil {
 		return err
 	}
-	deletions, err := matchingRefDeletions(ordered, inventory, source.ObjectFormat)
-	if err != nil || len(deletions) == 0 {
+	deletions, missing, err := matchingRefDeletions(ordered, inventory, source.ObjectFormat)
+	if err != nil {
 		return err
+	}
+	if err = g.verifyRefsAbsent(ctx, source.CommonDir, missing); err != nil {
+		return err
+	}
+	if len(deletions) == 0 {
+		return nil
 	}
 	transaction := deleteRefsTransaction(deletions)
 	_, stderr, err := g.runOutput(ctx, source.CommonDir, []string{"update-ref", "--stdin", "-z", "--no-deref"}, nil, bytes.NewReader(transaction))
@@ -154,37 +157,41 @@ func orderedRefDeletions(refs []contract.ForgetRef, prefix, objectFormat string)
 	return ordered, nil
 }
 
-func matchingRefDeletions(ordered []contract.ForgetRef, inventory map[string]listedGitRef, objectFormat string) ([]contract.ForgetRef, error) {
+// matchingRefDeletions returns the listed refs to delete and the expected
+// names the inventory did not list, in order. A missing name is not yet absent.
+func matchingRefDeletions(ordered []contract.ForgetRef, inventory map[string]listedGitRef, objectFormat string) ([]contract.ForgetRef, []string, error) {
 	deletions := make([]contract.ForgetRef, 0, len(ordered))
+	var missing []string
 	for _, reference := range ordered {
 		listed, present := inventory[reference.Ref]
 		if !present {
+			missing = append(missing, reference.Ref)
 			continue
 		}
 		if listed.symref != "" {
-			return nil, errors.Join(
+			return nil, nil, errors.Join(
 				contract.ErrRefUnreadable,
 				fmt.Errorf("expected Git ref %q is symbolic and points to %q", reference.Ref, listed.symref),
 			)
 		}
 		if listed.objectType == "" {
-			return nil, fmt.Errorf("%w: expected Git ref %q has no object type", contract.ErrRefUnreadable, reference.Ref)
+			return nil, nil, fmt.Errorf("%w: expected Git ref %q has no object type", contract.ErrRefUnreadable, reference.Ref)
 		}
 		if err := contract.ValidateOID(listed.objectName, objectFormat); err != nil {
-			return nil, errors.Join(
+			return nil, nil, errors.Join(
 				contract.ErrRefUnreadable,
 				fmt.Errorf("expected Git ref %q has invalid object name: %w", reference.Ref, err),
 			)
 		}
 		if !strings.EqualFold(listed.objectName, reference.ExpectedOID) {
-			return nil, errors.Join(
+			return nil, nil, errors.Join(
 				contract.ErrRefConflict,
 				fmt.Errorf("expected Git ref %q points at %s, want %s", reference.Ref, listed.objectName, reference.ExpectedOID),
 			)
 		}
 		deletions = append(deletions, reference)
 	}
-	return deletions, nil
+	return deletions, missing, nil
 }
 
 type listedGitRef struct {
@@ -280,9 +287,25 @@ func verifyRef(ctx context.Context, g Git, directory, ref, expected, objectForma
 	return nil
 }
 
+// pinCreateOnly observes the exact owned ref before its create-only CAS, so a
+// symbolic ref, live or dangling, is refused rather than replaced. Cooperating
+// Delegate writers and unique operation refs provide exclusion; the
+// observation does not guard against a racing foreign Git writer.
 func (g Git) pinCreateOnly(ctx context.Context, directory, ref, objectID, objectFormat, objectType, operation string) error {
 	if err := g.verifyObject(ctx, directory, objectID, objectFormat, objectType); err != nil {
 		return fmt.Errorf("%s object: %w", operation, err)
+	}
+	existing, observeErr := g.lookupRef(ctx, directory, ref, objectFormat)
+	switch {
+	case observeErr == nil && strings.EqualFold(existing, objectID):
+		return nil
+	case observeErr == nil:
+		return errors.Join(
+			contract.ErrRefConflict,
+			fmt.Errorf("%s: existing Git ref points at %s, want %s", operation, existing, objectID),
+		)
+	case !errors.Is(observeErr, errRefAbsent):
+		return fmt.Errorf("%s: %w", operation, observeErr)
 	}
 	zero := zeroOID(objectFormat)
 	if err := g.run(ctx, directory, []string{"update-ref", "--no-deref", ref, objectID, zero}, nil, nil, nil, nil); err != nil {
@@ -305,7 +328,17 @@ func (g Git) pinCreateOnly(ctx context.Context, directory, ref, objectID, object
 	return verifyRef(ctx, g, directory, ref, objectID, objectFormat)
 }
 
+// lookupRef is the canonical exact owned-ref observation. A symbolic ref is
+// unreadable whatever its target; only a non-symbolic name is then classified
+// as direct or absent by the warning-checked inventory.
 func (g Git) lookupRef(ctx context.Context, directory, ref, objectFormat string) (string, error) {
+	observation, err := g.observeSymbolicRef(ctx, directory, ref)
+	if err != nil {
+		return "", errors.Join(contract.ErrRefUnreadable, fmt.Errorf("observe Git ref %q: %w", ref, err))
+	}
+	if observation.symbolic {
+		return "", fmt.Errorf("%w: Git ref %q is symbolic and points to %q", contract.ErrRefUnreadable, ref, observation.target)
+	}
 	inventory, err := g.listOwnedRefs(ctx, directory, ref)
 	if err != nil {
 		return "", err

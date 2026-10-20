@@ -6,13 +6,8 @@ import errno
 import fcntl
 import os
 import stat
-from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
 from scripts.delegate_acceptance.evidence.records import _read_canonical_control_record
-from scripts.delegate_acceptance.evidence.timestamps import (
-    _canonical_timestamp,
-    _timestamp_at_or_after,
-)
-from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _exact_keys, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.lifetime.identity import (
     _WORKSPACE_LIFETIME_RECORDS,
     _lifetime_launch_sequence,

@@ -15,7 +15,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task/randomid"
 )
 
-func must(t *testing.T, err error) {
+func must(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +30,7 @@ func testStore(t *testing.T) *Store {
 	return s
 }
 
-func preparedInput(t *testing.T, s *Store) (*task.TaskRecord, *task.MetaRecord, []byte) {
+func preparedInput(t testing.TB, s *Store) (*task.TaskRecord, *task.MetaRecord, []byte) {
 	t.Helper()
 	id, err := randomid.NewTaskID()
 	must(t, err)

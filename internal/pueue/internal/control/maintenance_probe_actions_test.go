@@ -693,9 +693,7 @@ func testPrivateMaintenanceProbe(t *testing.T, acquire func(context.Context, str
 	supervisorLeaseTestBlocked(t, fixture.stateRoot, WithBootstrapLock)
 	lease.finish(t)
 
-	cleanupContext, cancelCleanup := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancelCleanup()
-	client.MaintainPrivateQueue(cleanupContext)
+	startPrivateMaintenancePass(t, client, func() {}).requireCompleted(t)
 	if authorizations != 1 || commands.Load() != 3 {
 		t.Fatalf("available maintenance did not observe, authorize, and remove once: authorizations=%d commands=%d", authorizations, commands.Load())
 	}

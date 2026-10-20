@@ -206,6 +206,28 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.inspection.test_lifetime_capacity",
+    "owner": "py:delegate_acceptance.lifetime",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:ast",
+      "py:delegate_acceptance.evidence.limits",
+      "py:delegate_acceptance.evidence.timestamps",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.lifetime.evidence",
+      "py:delegate_acceptance.lifetime.identity",
+      "py:delegate_acceptance.lifetime.policy",
+      "py:delegate_acceptance.private_cli.capacity_records",
+      "py:json",
+      "py:pathlib",
+      "py:re",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.inspection.test_runner_placement",
     "owner": "py:delegate_acceptance.tasks",
     "layer": "test",

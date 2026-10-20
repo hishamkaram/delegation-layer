@@ -300,8 +300,8 @@ func (l *ControlLifetime) RecordLifetimeLaunchContext(ctx context.Context, facts
 	if err := l.validateLifetimeOperation(true); err != nil {
 		return nil, err
 	}
-	if facts.Sequence == 0 || facts.Sequence > task.MaxLifetimeLaunches {
-		return nil, fmt.Errorf("%w: lifetime launch sequence is outside 1..%d", task.ErrEvidenceFault, task.MaxLifetimeLaunches)
+	if err := task.ValidateLifetimeLaunchSequence(facts.Sequence); err != nil {
+		return nil, err
 	}
 	err := withControlLifetimeTransactionContext(ctx, l.control, func(tx *ControlTransaction) error {
 		var transactionErr error
@@ -319,10 +319,11 @@ func recordControlLifetimeLaunchTx(tx *ControlTransaction, l *ControlLifetime, f
 	if readErr != nil {
 		return nil, readErr
 	}
-	launches, launchesErr := readControlLifetimeLaunchesTx(tx, l, registrationDigest)
+	set, launchesErr := readControlLifetimeLaunchSetTx(tx, l, registrationDigest)
 	if launchesErr != nil {
 		return nil, launchesErr
 	}
+	launches := set.records
 	if _, terminationErr := readControlLifetimeTerminationTx(tx, l, registrationDigest, launches); terminationErr == nil {
 		return nil, task.ErrTerminalTask
 	} else if !task.RecordAbsent(terminationErr) {
@@ -344,8 +345,8 @@ func recordControlLifetimeLaunchTx(tx *ControlTransaction, l *ControlLifetime, f
 		return nil, task.ErrIdentityMismatch
 	}
 
-	candidate := controlLifetimeLaunchRecord(l, facts, registrationDigest, timestamp())
-	if err := validateControlLifetimeLaunch(l, candidate, registrationDigest); err != nil {
+	candidate, err := newControlLifetimeLaunchCandidate(l, facts, registrationDigest, &set)
+	if err != nil {
 		return nil, err
 	}
 	created, putErr := tx.Put(controlLifetimeLaunchName(facts.Sequence), candidate)
@@ -369,8 +370,9 @@ func recordControlLifetimeLaunchTx(tx *ControlTransaction, l *ControlLifetime, f
 	return &winner, nil
 }
 
-// ReadLifetimeLaunches probes the bounded canonical sequence namespace and
-// rejects gaps, malformed winners, conflicting identities, and overflow.
+// ReadLifetimeLaunches reads the launch records named by the directory
+// inventory and rejects malformed names, gaps, malformed winners, conflicting
+// identities, and overflow.
 func (l *ControlLifetime) ReadLifetimeLaunches() ([]task.LifetimeLaunchRecord, error) {
 	return l.ReadLifetimeLaunchesContext(context.Background())
 }
@@ -422,7 +424,7 @@ func recordControlLifetimeTerminationTx(tx *ControlTransaction, l *ControlLifeti
 	if launchesErr != nil {
 		return nil, launchesErr
 	}
-	launchSetDigest, digestErr := lifetimeLaunchSetDigest(launches)
+	launchSetDigest, digestErr := task.LifetimeLaunchSetDigest(launches)
 	if digestErr != nil {
 		return nil, digestErr
 	}
@@ -623,7 +625,7 @@ func validateControlLifetimeTermination(l *ControlLifetime, record task.Lifetime
 	if record.RootID != l.rootID || record.TaskID != l.operationID || record.RegistrationSHA256 != registrationDigest || record.LaunchCount != uint64(len(launches)) {
 		return task.ErrIdentityMismatch
 	}
-	digest, err := lifetimeLaunchSetDigest(launches)
+	digest, err := task.LifetimeLaunchSetDigest(launches)
 	if err != nil {
 		return err
 	}
@@ -666,39 +668,45 @@ func readControlLifetimeIntentTx(tx *ControlTransaction, l *ControlLifetime) (*t
 }
 
 func readControlLifetimeLaunchesTx(tx *ControlTransaction, l *ControlLifetime, registrationDigest string) ([]task.LifetimeLaunchRecord, error) {
-	launches := make([]task.LifetimeLaunchRecord, 0, task.MaxLifetimeLaunches)
-	missing := false
-	for sequence := uint64(1); sequence <= task.MaxLifetimeLaunches+1; sequence++ {
+	set, err := readControlLifetimeLaunchSetTx(tx, l, registrationDigest)
+	if err != nil {
+		return nil, err
+	}
+	return set.records, nil
+}
+
+// readControlLifetimeLaunchSetTx reads the complete contiguous launch set named
+// by the directory inventory. Each record's canonical bytes are verified
+// before it is counted against the shared capacity and appended.
+func readControlLifetimeLaunchSetTx(tx *ControlTransaction, l *ControlLifetime, registrationDigest string) (lifetimeLaunchSet, error) {
+	sequences, err := tx.lifetimeLaunchSequences()
+	if err != nil {
+		return lifetimeLaunchSet{}, err
+	}
+	if err = requireContiguousLifetimeLaunches(sequences); err != nil {
+		return lifetimeLaunchSet{}, err
+	}
+	set := lifetimeLaunchSet{records: make([]task.LifetimeLaunchRecord, 0, len(sequences))}
+	for _, sequence := range sequences {
 		name := controlLifetimeLaunchName(sequence)
 		var record task.LifetimeLaunchRecord
-		err := tx.Read(name, &record)
-		if errors.Is(err, os.ErrNotExist) {
-			if sequence <= task.MaxLifetimeLaunches {
-				missing = true
-			}
-			continue
+		if err = tx.Read(name, &record); err != nil {
+			return lifetimeLaunchSet{}, inventoriedLifetimeLaunchReadError(name, err)
 		}
-		if err != nil {
-			return nil, controlLifetimeReadError(name, err)
-		}
-		if sequence > task.MaxLifetimeLaunches {
-			return nil, fmt.Errorf("%w: more than %d lifetime launches", task.ErrEvidenceFault, task.MaxLifetimeLaunches)
-		}
-		if missing {
-			return nil, task.ErrIdentityMismatch
-		}
-		if err := validateControlLifetimeLaunch(l, record, registrationDigest); err != nil {
-			return nil, err
+		if err = validateControlLifetimeLaunch(l, record, registrationDigest); err != nil {
+			return lifetimeLaunchSet{}, err
 		}
 		if record.Sequence != sequence {
-			return nil, task.ErrIdentityMismatch
+			return lifetimeLaunchSet{}, task.ErrIdentityMismatch
 		}
-		if err := tx.Verify(name, record); err != nil {
-			return nil, err
+		if err = tx.Verify(name, record); err != nil {
+			return lifetimeLaunchSet{}, err
 		}
-		launches = append(launches, record)
+		if err = set.add(&record); err != nil {
+			return lifetimeLaunchSet{}, err
+		}
 	}
-	return launches, nil
+	return set, nil
 }
 
 func readControlLifetimeTerminationTx(tx *ControlTransaction, l *ControlLifetime, registrationDigest string, launches []task.LifetimeLaunchRecord) (*task.LifetimeTerminationRecord, error) {
@@ -713,6 +721,19 @@ func readControlLifetimeTerminationTx(tx *ControlTransaction, l *ControlLifetime
 		return nil, err
 	}
 	return &record, nil
+}
+
+// newControlLifetimeLaunchCandidate validates a new launch and adds it once to
+// the capacity of the set it extends, before it is published.
+func newControlLifetimeLaunchCandidate(l *ControlLifetime, facts LifetimeLaunchFacts, registrationDigest string, set *lifetimeLaunchSet) (task.LifetimeLaunchRecord, error) {
+	candidate := controlLifetimeLaunchRecord(l, facts, registrationDigest, timestamp())
+	if err := validateControlLifetimeLaunch(l, candidate, registrationDigest); err != nil {
+		return task.LifetimeLaunchRecord{}, err
+	}
+	if err := set.capacity.Add(&candidate); err != nil {
+		return task.LifetimeLaunchRecord{}, err
+	}
+	return candidate, nil
 }
 
 func controlLifetimeLaunchRecord(l *ControlLifetime, facts LifetimeLaunchFacts, registrationDigest, startedAt string) task.LifetimeLaunchRecord {

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.evidence.encoding import canonical_go_json
+from scripts.delegate_acceptance.evidence.limits import MAX_CONTROL_BYTES
 from scripts.delegate_acceptance.evidence.timestamps import (
     _canonical_timestamp,
     _timestamp_at_or_after,
@@ -153,22 +154,9 @@ def _validate_lifetime_termination(
         "schema_version", "root_id", "task_id", "registration_sha256", "launch_count",
         "launch_set_sha256", "cause", "scope_empty", "observed_at",
     }, label=f"{evidence} lifetime termination for {task}")
-    canonical_launches = []
-    for launch in launches:
-        canonical_launch = {
-            "schema_version": launch["schema_version"],
-            "root_id": launch["root_id"],
-            "task_id": launch["task_id"],
-            "registration_sha256": launch["registration_sha256"],
-            "sequence": launch["sequence"],
-            "pid": launch["pid"],
-            "process_start": launch["process_start"],
-        }
-        if launch.get("pgid", 0) != 0:
-            canonical_launch["pgid"] = launch["pgid"]
-        canonical_launch["started_at"] = launch["started_at"]
-        canonical_launches.append(canonical_launch)
-    launch_set_digest = sha(canonical_go_json(canonical_launches))
+    launch_set_digest = sha(canonical_go_json(
+        [_canonical_lifetime_launch(launch, label=f"{evidence} lifetime launch for {task}")
+         for launch in launches]))
     require(type(termination.get("schema_version")) is int and
             termination["schema_version"] == 1 and
             termination.get("root_id") == root and termination.get("task_id") == task and
@@ -186,6 +174,44 @@ def _validate_lifetime_termination(
             f"{evidence} lifetime termination time is invalid for {task}")
     require(wait is not None or termination.get("cause") == "previous-boot",
             f"{evidence} lifetime worker Wait is missing for {task}")
+
+
+LIFETIME_LAUNCH_FIELDS = frozenset({
+    "schema_version", "root_id", "task_id", "registration_sha256", "sequence",
+    "pid", "process_start", "started_at",
+})
+LIFETIME_LAUNCH_OPTIONAL_FIELDS = frozenset({"pgid"})
+
+
+def _canonical_lifetime_launch(launch: dict[str, object], *, label: str) -> dict[str, object]:
+    """Project one launch onto task.LifetimeLaunchRecord's Go field order."""
+    _exact_keys(launch, LIFETIME_LAUNCH_FIELDS, LIFETIME_LAUNCH_OPTIONAL_FIELDS, label=label)
+    canonical = {
+        "schema_version": launch["schema_version"],
+        "root_id": launch["root_id"],
+        "task_id": launch["task_id"],
+        "registration_sha256": launch["registration_sha256"],
+        "sequence": launch["sequence"],
+        "pid": launch["pid"],
+        "process_start": launch["process_start"],
+    }
+    if launch.get("pgid", 0) != 0:
+        canonical["pgid"] = launch["pgid"]
+    canonical["started_at"] = launch["started_at"]
+    return canonical
+
+
+def _account_lifetime_launch(used: int, launch: dict[str, object], *,
+                             limit: int, label: str) -> int:
+    """Add one launch's canonical Go record bytes like task.LifetimeLaunchCapacity.Add.
+
+    The record must fit the control record bound and the set must stay within
+    limit; a refused launch leaves the caller's total unchanged.
+    """
+    size = len(canonical_go_json(_canonical_lifetime_launch(launch, label=label)))
+    require(size <= MAX_CONTROL_BYTES, f"{label} exceeds the control record bound")
+    require(used + size <= limit, f"{label} exceeds the lifetime launch byte budget")
+    return used + size
 
 
 def _canonical_unlaunched_bytes(
