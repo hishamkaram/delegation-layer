@@ -47,10 +47,13 @@ func TestManagedTurnBaselineFailureRefusesProviderLaunch(t *testing.T) {
 
 // W3a is exercised through runProvider, rather than by calling the baseline
 // writer: removing its production preflight wiring must refuse this Start.
+// The journal precedes the pin and a later capture re-pins, so the pin is
+// proved at Start from the shim's observation inside the task's own launch.
 func TestManagedTurnBaselinePrecedesProviderStart(t *testing.T) {
 	fixture := newNativeBaselineTask(t)
 	writeLineageFile(t, filepath.Join(fixture.registration.CheckoutPath, "lead.txt"), "Lead before launch\n")
 	scratch := fixture.baselineTemp(t, fixture.lineage.root)
+	shim := installBaselineGitShim(t, fixture.lineage.root, fixture.baselineRef())
 	owner := fixture.guardian(t, time.Minute)
 	var baseline workspace.TurnBaseline
 	deps := fixture.dependencies()
@@ -64,10 +67,8 @@ func TestManagedTurnBaselinePrecedesProviderStart(t *testing.T) {
 		if baseline.Subject != fixture.turn.subject || baseline.ObservedHEAD != fixture.registration.BaseOID {
 			return fmt.Errorf("baseline has another task or HEAD: %+v", baseline)
 		}
-		pinned := fixture.lineage.gitIn(t, fixture.lineage.main, "rev-parse", baseline.Ref)
-		lead := fixture.lineage.gitIn(t, fixture.lineage.main, "show", baseline.TreeOID+":lead.txt")
-		if pinned != baseline.TreeOID || lead != "Lead before launch" {
-			return fmt.Errorf("baseline is not pinned with the Lead edit: ref=%s lead=%q", pinned, lead)
+		if err = shim.pinned(baseline, "Lead before launch\n"); err != nil {
+			return err
 		}
 		return command.Start()
 	}
@@ -78,6 +79,7 @@ func TestManagedTurnBaselinePrecedesProviderStart(t *testing.T) {
 	if err := owner.finish(t); err != nil {
 		t.Fatalf("native guardian completion: %v", err)
 	}
+	assertBaselineWorkerExited(t, fixture.td)
 	assertBaselineScratchEmpty(t, scratch)
 	capture := fixture.lineage.captureTurn(t, fixture.resource, fixture.turn)
 	assertTurn(t, capture.Turn, workspace.TurnChanged, workspace.TurnUnchanged, workspace.TurnUnchanged)

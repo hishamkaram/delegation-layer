@@ -3,10 +3,13 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,10 +35,23 @@ func (r nativeWorkspaceGitRunner) Run(ctx context.Context, command *exec.Cmd) er
 	return r.launch(command)
 }
 
+// errLiveFixtureOwner refuses an independent lineage launch while a live
+// guardian owns the test process. Each native scope binds the calling process,
+// so a query scope would overlap that owner. Record live observations inside
+// the guardian's own launches, or query after the guardian joins.
+var errLiveFixtureOwner = errors.New("native fixture query refused while a live guardian owns the test process")
+
+// nativeFixtureOwner is the lineage's live-owner flag. The baseline guardian
+// fixture is its only writer: it sets the flag before guardian startup and
+// clears it only after the guardian joins. Every lineage launch reads it.
+type nativeFixtureOwner struct{ live atomic.Bool }
+
 // nativeLineage is one invocation-owned repository, state root and shared
 // workspace container. Every path lives below the test's temporary root.
+// Copies share one owner flag through the pointer.
 type nativeLineage struct {
 	scope     worktreeGateTestScope
+	owner     *nativeFixtureOwner
 	git       workspace.Git
 	root      string
 	main      string
@@ -56,8 +72,8 @@ func newNativeLineageFormat(t *testing.T, objectFormat string) nativeLineage {
 	t.Cleanup(cancel)
 	scope.ctx = ctx
 	root := supervisorfixture.CanonicalTempDir(t)
-	launch := func(command *exec.Cmd) error { return scope.Run(command, execution.CommandHooks{}) }
-	lineage := nativeLineage{scope: scope, git: workspace.Git{Runner: nativeWorkspaceGitRunner{launch: launch}}, root: root, main: filepath.Join(root, "main")}
+	lineage := nativeLineage{scope: scope, owner: &nativeFixtureOwner{}, root: root, main: filepath.Join(root, "main")}
+	lineage.git = workspace.Git{Runner: nativeWorkspaceGitRunner{launch: lineage.launch}}
 	if err := os.Mkdir(lineage.main, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -92,21 +108,68 @@ func writeLineageFile(t *testing.T, path, content string) {
 	}
 }
 
+// launch is the lineage's one native launch boundary. Each command gets its
+// own production launch-wrapper scope unless a live guardian owns the process.
+func (l nativeLineage) launch(command *exec.Cmd) error {
+	if l.owner.live.Load() {
+		return fmt.Errorf("%w: %v", errLiveFixtureOwner, command.Args)
+	}
+	return l.scope.Run(command, execution.CommandHooks{})
+}
+
 func (l nativeLineage) gitIn(t *testing.T, directory string, args ...string) string {
 	t.Helper()
 	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
 	var output, diagnostic bytes.Buffer
 	command.Stdout, command.Stderr = &output, &diagnostic
-	if err := l.scope.Run(command, execution.CommandHooks{}); err != nil {
+	if err := l.launch(command); err != nil {
 		t.Fatalf("native Git %v: %v: %s", args, err, diagnostic.String())
 	}
 	return strings.TrimSuffix(output.String(), "\n")
 }
 
-// gitSucceeds reports whether an owned native Git query exits zero.
-func (l nativeLineage) gitSucceeds(directory string, args ...string) bool {
-	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
-	return l.scope.Run(command, execution.CommandHooks{}) == nil
+// gitSucceeds reports whether an owned native Git query exits zero. Only an
+// ordinary Git exit status is a false result; every other fault fails the test.
+func (l nativeLineage) gitSucceeds(t *testing.T, directory string, args ...string) bool {
+	t.Helper()
+	succeeded, err := l.gitExitsZero(directory, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return succeeded
+}
+
+// gitExitsZero returns false only for an ordinary Git exit status. An owner
+// refusal or a native scope, Start, Wait, cancellation or cleanup fault is
+// returned as an error.
+func (l nativeLineage) gitExitsZero(directory string, args ...string) (bool, error) {
+	err := l.launch(exec.Command("git", append([]string{"-C", directory}, args...)...))
+	if err == nil {
+		return true, nil
+	}
+	if ordinaryGitExit(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+// ordinaryGitExit reports whether err is only a normal process exit status.
+// Every join on its single wrapper chain must hold one error; a join with
+// another fault, a signal or any other leaf is an operational fault.
+func ordinaryGitExit(err error) bool {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || !exit.Exited() {
+		return false
+	}
+	var joined interface{ Unwrap() []error }
+	for errors.As(err, &joined) {
+		causes := joined.Unwrap()
+		if len(causes) != 1 {
+			return false
+		}
+		err = causes[0]
+	}
+	return true
 }
 
 func (l nativeLineage) gitInput(t *testing.T, directory, input string, args ...string) {
@@ -114,7 +177,7 @@ func (l nativeLineage) gitInput(t *testing.T, directory, input string, args ...s
 	command := exec.Command("git", append([]string{"-C", directory}, args...)...)
 	var diagnostic bytes.Buffer
 	command.Stdin, command.Stderr = strings.NewReader(input), &diagnostic
-	if err := l.scope.Run(command, execution.CommandHooks{}); err != nil {
+	if err := l.launch(command); err != nil {
 		t.Fatalf("native Git %v: %v: %s", args, err, diagnostic.String())
 	}
 }

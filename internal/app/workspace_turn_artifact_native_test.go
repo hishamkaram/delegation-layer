@@ -185,11 +185,11 @@ func TestNativeTurnCaptureSurvivesPrunedBaselineHEAD(t *testing.T) {
 	lineage.gitIn(t, checkout, "-c", "user.name=Delegate fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--amend", "-m", "worker rewrote the checkpoint")
 	lineage.gitIn(t, lineage.main, "reflog", "expire", "--expire=now", "--all")
 	lineage.gitIn(t, lineage.main, "prune", "--expire=now")
-	if lineage.gitSucceeds(lineage.main, "cat-file", "-e", checkpoint+"^{commit}") {
+	if lineage.gitSucceeds(t, lineage.main, "cat-file", "-e", checkpoint+"^{commit}") {
 		t.Fatal("fixture did not prune the baseline HEAD commit")
 	}
 	for _, object := range []string{baseline.Ref + "^{tree}", registration.BaseOID + "^{commit}"} {
-		if !lineage.gitSucceeds(lineage.main, "cat-file", "-e", object) {
+		if !lineage.gitSucceeds(t, lineage.main, "cat-file", "-e", object) {
 			t.Fatalf("fixture lost %s", object)
 		}
 	}

@@ -882,6 +882,16 @@ Use existing budget, command, and native-scope owners for fixture cleanup and
 retain errors. Keep a primitive fixture's serialization distinct from claims
 about production guardian recovery or progress through a stalled native Start.
 
+A native fixture has one process owner at a time. While a live guardian or
+other scope owner is bound to the test process, the fixture must not start an
+independent scope bound to that same process; a cooperative backend would
+claim it as the owner's. Record live observations inside the owned launch
+under test, and run every other query before the owner starts or after it
+joins. The fixture's launch boundary refuses such a query explicitly. Backend
+coverage names the backend actually selected, never only the OS label, and a
+fixture asserts the project contract rather than version-dependent upstream
+tool output.
+
 The research basis is the official [Go `os/exec` contract](https://pkg.go.dev/os/exec),
 which assigns one `Wait` and documents process-only default cancellation;
 [Pueue's platform statement](https://github.com/Nukesor/pueue#features), which

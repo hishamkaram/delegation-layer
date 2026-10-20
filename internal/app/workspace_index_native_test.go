@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hishamkaram/delegation-layer/internal/execution"
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -229,7 +228,7 @@ func assertFrozenIndexImage(t *testing.T, objectFormat string, split bool) {
 			mutated = true
 			probe.git(t, "update-index", "--add", "--cacheinfo", "100644,"+blob+",late.txt")
 		}
-		return probe.lineage.scope.Run(command, execution.CommandHooks{})
+		return probe.lineage.launch(command)
 	}
 	git := workspace.Git{Runner: nativeWorkspaceGitRunner{launch: launch}}
 	candidate, err := git.BuildCapture(probe.lineage.scope.ctx, probe.checkout, supervisorfixture.CanonicalTempDir(t))
@@ -261,17 +260,35 @@ func TestNativeIndexObservationTreatsMissingIndexAsEmpty(t *testing.T) {
 	}
 }
 
-// A replace ref on the empty tree would change the visible-entry listing; the
-// index identity ignores replace refs.
+// A replace ref on the empty tree may change Git's own visible-entry listing,
+// and how a replaced empty tree reads varies by Git version. The project
+// contract is that capture ignores replacements: it succeeds and keeps the
+// index identity, HEAD and real index bytes.
 func TestNativeIndexIdentityIgnoresEmptyTreeReplacement(t *testing.T) {
 	probe := newNativeIndexProbe(t)
 	before := probe.capture(t)
-	emptyTree := probe.git(t, "hash-object", "-t", "tree", "--stdin")
-	probe.git(t, "replace", "-f", emptyTree, "HEAD^{tree}")
-	if replaced := probe.git(t, "diff-index", "--cached", "--raw", "-z", "--no-abbrev", emptyTree); replaced != "" {
-		t.Fatalf("fixture premise changed: the replace ref did not hide index entries: %q", replaced)
+	assertReplaceRefsEnabled(t, probe)
+	emptyTree := probe.git(t, "hash-object", "-w", "-t", "tree", "--stdin")
+	headTree := probe.git(t, "rev-parse", "HEAD^{tree}")
+	probe.git(t, "replace", "-f", emptyTree, headTree)
+	if raw := probe.git(t, "--no-replace-objects", "for-each-ref", "--format=%(objectname)", "refs/replace/"+emptyTree); raw != headTree {
+		t.Fatalf("fixture replace ref = %q, want the HEAD tree %s", raw, headTree)
 	}
-	if after := probe.capture(t); after.IndexSHA256 != before.IndexSHA256 {
-		t.Fatalf("empty-tree replacement changed the index identity: %s -> %s", before.IndexSHA256, after.IndexSHA256)
+	if after := probe.capture(t); after.IndexSHA256 != before.IndexSHA256 || after.ObservedHEAD != before.ObservedHEAD {
+		t.Fatalf("empty-tree replacement changed the capture: digest %s -> %s, HEAD %s -> %s", before.IndexSHA256, after.IndexSHA256, before.ObservedHEAD, after.ObservedHEAD)
+	}
+}
+
+// Replacement must be active for the fixture to test anything. The check
+// reads only the named variables and Git's boolean setting, never objects.
+func assertReplaceRefsEnabled(t *testing.T, probe nativeIndexProbe) {
+	t.Helper()
+	for _, name := range []string{"GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE"} {
+		if _, present := os.LookupEnv(name); present {
+			t.Fatalf("fixture environment sets %s; replace refs must use Git's default", name)
+		}
+	}
+	if enabled := probe.git(t, "config", "--type=bool", "--default=true", "--get", "core.useReplaceRefs"); enabled != "true" {
+		t.Fatalf("core.useReplaceRefs = %q, want replace refs enabled", enabled)
 	}
 }

@@ -274,6 +274,7 @@ func (w *baselineCommandWitness) Configure(command *exec.Cmd) error {
 type baselineGuardian struct {
 	child       *openedLifetimeChild
 	witness     *baselineCommandWitness
+	owner       *nativeFixtureOwner
 	workerInput *os.File
 	done        chan struct{}
 	err         error // published by closing done
@@ -281,7 +282,8 @@ type baselineGuardian struct {
 
 // Compose the production state loader, guardian and worker client. The finite
 // cat worker stands in for the app caller; guardian owns its one Start/Wait.
-// The lineage fixture continues to own setup/query Git commands separately.
+// The guardian binds this test process, so it is the only process owner until
+// it joins: lineage queries are refused for that whole window.
 func (f *nativeBaselineTask) guardian(t *testing.T, budget time.Duration) *baselineGuardian {
 	t.Helper()
 	state, err := loadLifetimeGuardianRunState(f.lineage.store, runnerArguments{TaskID: f.td.TaskID})
@@ -295,6 +297,7 @@ func (f *nativeBaselineTask) guardian(t *testing.T, budget time.Duration) *basel
 	worker := exec.Command("/bin/cat")
 	worker.Stdin = input
 	ready := make(chan struct{})
+	f.lineage.owner.live.Store(true)
 	owner, err := guardian.New(guardian.Options{
 		RootID: f.lineage.store.RootID, TaskID: f.td.TaskID, OwnerKind: state.ownerKind, Deadline: deadline,
 		Records: state.records, AcquireOwner: state.acquireOwner, ReconcileOwned: state.reconcileOwned,
@@ -308,9 +311,10 @@ func (f *nativeBaselineTask) guardian(t *testing.T, budget time.Duration) *basel
 		},
 	})
 	if err != nil {
+		f.lineage.owner.live.Store(false)
 		t.Fatal(err)
 	}
-	fixture := &baselineGuardian{workerInput: writer, done: make(chan struct{})}
+	fixture := &baselineGuardian{owner: f.lineage.owner, workerInput: writer, done: make(chan struct{})}
 	ctx, cancel := context.WithTimeout(f.lineage.scope.ctx, time.Minute)
 	go func() { fixture.err = owner.Run(ctx); close(fixture.done) }()
 	t.Cleanup(func() {
@@ -324,6 +328,7 @@ func (f *nativeBaselineTask) guardian(t *testing.T, budget time.Duration) *basel
 		guardianfixture.CloseConnection(t, parent)
 		cancel()
 		<-fixture.done
+		fixture.owner.live.Store(false)
 	})
 	select {
 	case <-ready:
@@ -367,10 +372,21 @@ func (g *baselineGuardian) finish(t *testing.T) error {
 	closeNativeWorktreeTestFile(t, g.workerInput.Close())
 	select {
 	case <-g.done:
+		g.owner.live.Store(false)
 		return g.err
 	case <-time.After(15 * time.Second):
 		t.Fatal("native guardian did not finalize and join its worker")
 		return nil
+	}
+}
+
+// A nondeadline guardian joins its finite cat worker's ordinary exit; no
+// fixture process claimed the worker's process owner.
+func assertBaselineWorkerExited(t *testing.T, td *taskdir.TaskDir) {
+	t.Helper()
+	wait, err := td.ReadLifetimeWorkerWait()
+	if err != nil || wait.Result != task.LifetimeWorkerWaitSuccess || wait.ExitCode == nil || *wait.ExitCode != 0 {
+		t.Fatalf("native guardian did not join an ordinary worker exit: %+v, %v", wait, err)
 	}
 }
 
@@ -388,20 +404,30 @@ func (f *nativeBaselineTask) assertNeverLaunched(t *testing.T, owner *baselineGu
 	if err != nil || inspection.StartedExists || f.starts.Load() != 0 {
 		t.Fatalf("refused launch has a provider start: inspection=%+v starts=%d err=%v", inspection, f.starts.Load(), err)
 	}
-	f.assertNoBaseline(t)
+	f.assertNoBaselineJournal(t)
 	replay := f.run(owner.child, f.dependencies())
 	if !errors.Is(replay.err, task.ErrAlreadyStarted) || replay.code == 0 || f.starts.Load() != 0 {
 		t.Fatalf("baseline refusal replay: starts=%d code=%d err=%v", f.starts.Load(), replay.code, replay.err)
 	}
 }
 
-func (f *nativeBaselineTask) assertNoBaseline(t *testing.T) {
+func (f *nativeBaselineTask) baselineRef() string {
+	return workspacescore.ManagedBaselineRef(f.lineage.store.RootID, f.resource.Request().WorkspaceID, f.turn.reservation.Sequence)
+}
+
+func (f *nativeBaselineTask) assertNoBaselineJournal(t *testing.T) {
 	t.Helper()
 	if _, err := f.resource.TurnBaseline(f.lineage.scope.ctx, f.turn.reservation.Sequence); !workspace.OperationAbsent(err) {
 		t.Fatalf("refused launch published a baseline: %v", err)
 	}
-	ref := workspacescore.ManagedBaselineRef(f.lineage.store.RootID, f.resource.Request().WorkspaceID, f.turn.reservation.Sequence)
-	if got := f.lineage.gitIn(t, f.lineage.main, "for-each-ref", "--format=%(refname)", ref); got != "" {
+}
+
+// The ref query is an independent native launch, so it runs only after the
+// guardian joins. The fixture guardian captures nothing after the runner
+// returns, so the deferred absence still describes the refused launch.
+func (f *nativeBaselineTask) assertNoBaselineRef(t *testing.T) {
+	t.Helper()
+	if got := f.lineage.gitIn(t, f.lineage.main, "for-each-ref", "--format=%(refname)", f.baselineRef()); got != "" {
 		t.Fatalf("refused launch pinned a baseline: %s", got)
 	}
 }
@@ -426,6 +452,7 @@ func TestManagedTurnBaselineExpiredRunnerRefusesProvider(t *testing.T) {
 	if err := owner.finish(t); err != nil {
 		t.Fatalf("expired runner guardian finalization: %v", err)
 	}
+	fixture.assertNoBaselineRef(t)
 	assertBaselineStop(t, fixture, expired.deadline)
 	assertBaselineStopAcknowledged(t, fixture.td)
 }
@@ -437,12 +464,6 @@ func TestManagedTurnBaselineScratchInsideCheckoutRefusesProvider(t *testing.T) {
 	result := fixture.run(owner.child, fixture.dependencies())
 	fixture.assertRefused(t, owner, result)
 	assertBaselineScratchEmpty(t, scratch)
-	// The runner persists the preflight diagnostic in its seal; the writer's
-	// typed cause must also survive cleanup, rather than become os.Remove's error.
-	if err := recordManagedTurnBaseline(fixture.lineage.scope.ctx, fixture.lineage.store, fixture.turn.request, fixture.lineage.git); !errors.Is(err, workspace.ErrInvalidGitContext) {
-		t.Fatalf("overlapping scratch lost its typed cause: %v", err)
-	}
-	assertBaselineScratchEmpty(t, scratch)
 	diagnostic, err := os.ReadFile(filepath.Join(fixture.td.Dir, "raw", "stderr"))
 	if err != nil || !strings.Contains(string(diagnostic), workspace.ErrInvalidGitContext.Error()) {
 		t.Fatalf("runner lost the explicit scratch refusal: %q, %v", diagnostic, err)
@@ -450,6 +471,15 @@ func TestManagedTurnBaselineScratchInsideCheckoutRefusesProvider(t *testing.T) {
 	if err = owner.finish(t); err != nil {
 		t.Fatalf("scratch refusal guardian completion: %v", err)
 	}
+	assertBaselineWorkerExited(t, fixture.td)
+	fixture.assertNoBaselineRef(t)
+	// The runner persists the preflight diagnostic in its seal; the writer's
+	// typed cause must also survive cleanup, rather than become os.Remove's error.
+	// Its lineage Git is an independent launch, so it runs after the guardian.
+	if err = recordManagedTurnBaseline(fixture.lineage.scope.ctx, fixture.lineage.store, fixture.turn.request, fixture.lineage.git); !errors.Is(err, workspace.ErrInvalidGitContext) {
+		t.Fatalf("overlapping scratch lost its typed cause: %v", err)
+	}
+	assertBaselineScratchEmpty(t, scratch)
 }
 
 func assertBaselineStop(t *testing.T, fixture *nativeBaselineTask, deadline time.Time) {
@@ -480,7 +510,8 @@ func assertBaselineStopAcknowledged(t *testing.T, td *taskdir.TaskDir) {
 func TestManagedTurnBaselineDeadlineDuringGitStopsAndJoins(t *testing.T) {
 	fixture := newNativeBaselineTask(t)
 	scratch := fixture.baselineTemp(t, fixture.lineage.root)
-	ready, hold := installBaselineGitBarrier(t, fixture.lineage.root)
+	shim := installBaselineGitShim(t, fixture.lineage.root, fixture.baselineRef())
+	ready, hold := installBaselineGitBarrier(t, shim)
 	owner := fixture.guardian(t, 10*time.Second)
 	before := make(chan baselineScratchInventory, 1)
 	deps := fixture.dependencies()
@@ -506,7 +537,10 @@ func TestManagedTurnBaselineDeadlineDuringGitStopsAndJoins(t *testing.T) {
 		joined = true
 		t.Fatalf("runner ended before baseline Git acknowledged entry: code=%d err=%v", early.code, early.err)
 	}
-	fixture.assertNoBaseline(t)
+	fixture.assertNoBaselineJournal(t)
+	if err := shim.heldRefAbsent(); err != nil {
+		t.Fatal(err)
+	}
 	invocationScratch := assertBaselineInvocationScratch(t, scratch, before)
 	var result commandResult
 	select {
@@ -518,6 +552,7 @@ func TestManagedTurnBaselineDeadlineDuringGitStopsAndJoins(t *testing.T) {
 	assertBaselineDeadlineDisposition(t, result)
 	fixture.assertNeverLaunched(t, owner)
 	t.Logf("deadline guardian joined: %v", owner.finish(t))
+	fixture.assertNoBaselineRef(t)
 	assertBaselineStop(t, fixture, owner.child.deadline)
 	if reply, replyErr := fixture.td.ReadStopReply("budget"); task.RecordAbsent(replyErr) {
 		t.Log("stop reply absent; native budget termination is independently durable")
@@ -541,46 +576,6 @@ func assertBaselineDeadlineDisposition(t *testing.T, result commandResult) {
 		t.Fatalf("deadline control failure returned success: %v", result.err)
 	}
 	t.Logf("deadline runner result: code=%d publication=%s err=%v", result.code, result.response.Publication, result.err)
-}
-
-func installBaselineGitBarrier(t *testing.T, root string) (*os.File, *os.File) {
-	t.Helper()
-	realGit, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	shim := filepath.Join(root, "git-shim")
-	if err = os.Mkdir(shim, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	ready := baselineFIFO(t, filepath.Join(shim, "ready"))
-	hold := baselineFIFO(t, filepath.Join(shim, "hold"))
-	script := "#!/bin/sh\n" +
-		"if [ \"$1\" = -C ] && [ \"$3\" = add ] && [ \"$4\" = --sparse ] && [ \"$5\" = -A ]; then\n" +
-		"  printf ready > \"$DELEGATE_BASELINE_READY_FIFO\"\n" +
-		"  IFS= read -r token < \"$DELEGATE_BASELINE_HOLD_FIFO\"\n" +
-		"  exit 91\nfi\nexec \"$DELEGATE_BASELINE_REAL_GIT\" \"$@\"\n"
-	if err = os.WriteFile(filepath.Join(shim, "git"), []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("DELEGATE_BASELINE_READY_FIFO", ready.Name())
-	t.Setenv("DELEGATE_BASELINE_HOLD_FIFO", hold.Name())
-	t.Setenv("DELEGATE_BASELINE_REAL_GIT", realGit)
-	t.Setenv("PATH", shim+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return ready, hold
-}
-
-func baselineFIFO(t *testing.T, path string) *os.File {
-	t.Helper()
-	if err := syscall.Mkfifo(path, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { closeNativeWorktreeTestFile(t, file.Close()) })
-	return file
 }
 
 func awaitBaselineGitEntry(t *testing.T, ready *os.File, done <-chan commandResult) (commandResult, bool) {
