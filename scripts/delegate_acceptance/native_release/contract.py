@@ -9,16 +9,28 @@ import re
 
 CANONICAL_REPOSITORY = "hishamkaram/delegation-layer"
 WORKFLOW = "release-native-acceptance.yml"
+# Observed runs report the bare path; GitHub's run reference documents the
+# main-qualified form: https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run
+WORKFLOW_RUN_PATHS = (f".github/workflows/{WORKFLOW}", f".github/workflows/{WORKFLOW}@main")
 STAGES = ("preflight", "download", "archive", "native", "finalize", "project",
           "upload", "dispatch", "watch", "cleanup")
 MAX_RECEIPT = 1 << 20
 
 
 class ReleaseError(Exception):
-    def __init__(self, code: str, *, incomplete: bool = False):
+    def __init__(self, code: str, *, incomplete: bool = False,
+                 mismatched: tuple[str, ...] = ()):
         super().__init__(code)
         self.code = code
         self.incomplete = incomplete
+        # Fixed field names chosen by the validator, never observed values.
+        self.mismatched = mismatched
+
+    @property
+    def diagnostic(self) -> str:
+        if not self.mismatched:
+            return self.code
+        return f"{self.code}:mismatch={','.join(self.mismatched)}"
 
 
 def object_value(value: object) -> dict[str, object]:

@@ -12,7 +12,7 @@ if __package__ in {None, ""}:
 
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.native_hosted import (
-    validate_promotion, validate_submission,
+    GITHUB_AUTH_MODES, validate_promotion, validate_submission,
 )
 
 
@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     promote.add_argument("--source-revision", required=True)
     promote.add_argument("--native-validation-run-id", type=int, required=True)
     promote.add_argument("--work-dir", required=True)
+    promote.add_argument("--github-auth", choices=GITHUB_AUTH_MODES, default="environment")
     args = parser.parse_args(argv)
     try:
         return validate_submission(args) if args.command == "validate" else validate_promotion(args)

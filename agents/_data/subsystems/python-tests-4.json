@@ -15,6 +15,7 @@
       "py:test_native_release_support",
       "py:unittest",
       "py:unittest.mock",
+      "py:validate_native_release",
       "py:zipfile"
     ]
   },
@@ -54,6 +55,7 @@
       "py:pathlib",
       "py:re",
       "py:sys",
+      "py:tempfile",
       "py:test_published_install",
       "py:textwrap",
       "py:unittest"

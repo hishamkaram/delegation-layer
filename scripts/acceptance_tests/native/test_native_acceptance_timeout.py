@@ -16,7 +16,10 @@ from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
 )
-from scripts.delegate_acceptance.native.timeouts import TimeoutLeaseOwner
+from scripts.delegate_acceptance.native.timeouts import (
+    TIMEOUT_SOURCE_TOOL_TIMEOUT_MS,
+    TimeoutLeaseOwner,
+)
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):
@@ -271,6 +274,30 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     os.close(extra_writer)
                 operation._cleanup_timeout_leases()
 
+    def test_timeout_liveness_accepts_a_fragmented_marker_and_rejects_a_repeat(self):
+        with tempfile.TemporaryDirectory(prefix="native-timeout-lease-repeat-") as directory:
+            operation = self._timeout_lease_operation(Path(directory))
+            parent = operation.timeout_state.leases["parent"]
+            writer = self._timeout_writer(parent)
+            try:
+                split = len(parent.expected) // 2
+                os.write(writer, parent.expected[:split])
+                self.assertFalse(operation._timeout_liveness_ready())
+                self.assertFalse(parent.ready)
+                os.write(writer, parent.expected[split:])
+                self.assertFalse(operation._timeout_liveness_ready())
+                self.assertTrue(parent.ready)
+                # A retried shell call reopens the same lease and repeats its marker.
+                os.close(writer)
+                writer = self._timeout_writer(parent)
+                os.write(writer, parent.expected)
+                with self.assertRaisesRegex(gate.AcceptanceFailure, "extra or malformed"):
+                    operation._timeout_liveness_ready()
+                self.assertFalse((operation.output / "timeout-liveness.json").exists())
+            finally:
+                os.close(writer)
+                operation._cleanup_timeout_leases()
+
     def test_timeout_liveness_isolated_between_concurrent_acceptance_runs(self):
         with tempfile.TemporaryDirectory(prefix="native-timeout-lease-isolation-") as directory:
             root = Path(directory)
@@ -320,6 +347,20 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                                     text=True, check=False)
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
             operation._cleanup_timeout_leases()
+
+    def test_timeout_brief_requires_one_foreground_call_that_outlives_the_budget(self):
+        with tempfile.TemporaryDirectory(prefix="native-timeout-brief-call-") as directory:
+            operation = self._timeout_lease_operation(Path(directory))
+            brief = operation.timeout_brief("timeout-source").read_text()
+            operation._cleanup_timeout_leases()
+        self.assertEqual(brief.count("`"), 2)
+        self.assertIn("Make exactly one native shell tool call, in the foreground", brief)
+        self.assertIn(f"set it to {TIMEOUT_SOURCE_TOOL_TIMEOUT_MS} milliseconds", brief)
+        self.assertGreater(TIMEOUT_SOURCE_TOOL_TIMEOUT_MS * 1_000_000,
+                           gate.TIMEOUT_RESUME_SOURCE_BUDGET_NANOS)
+        self.assertIn("Do not run the command in the background", brief)
+        self.assertIn("do not run the command again or retry it", brief)
+        self.assertIn("do not reply before the supervisor budget ends the turn", brief)
 
     def test_timeout_leases_are_inside_the_native_workspace_write_boundary(self):
         for provider in ("codex:exec", "opencode:run"):
@@ -533,3 +574,146 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         self.assertGreater(calls[0][1], calls[1][1])
         self.assertLessEqual(calls[0][1], 1.0)
         self.assertLessEqual(calls[1][1], 1.0 - calls[1][0])
+
+    def test_runner_polling_clamps_slow_calls_and_pauses_to_the_deadline(self):
+        root, task = "a" * 32, "b" * 32
+        clock, calls, sleeps = [0.0], [], []
+        running = {"label": f"delegate:{root}:{task}", "status": {"Running": {}}}
+
+        def slow_client(_name, _operation, timeout):
+            calls.append((clock[0], timeout))
+            clock[0] += 3.0
+            return SimpleNamespace(json=lambda: {"tasks": {"7": running}})
+
+        def sleep(delay):
+            sleeps.append(delay)
+            clock[0] += delay
+
+        with self.assertRaisesRegex(RuntimeError, "not observed within acceptance deadline"):
+            provider_common.wait_runner_terminal(
+                slow_client, root, task, "Success", timeout=10.0,
+                sleep_fn=sleep, monotonic_fn=lambda: clock[0], poll_seconds=5)
+        # The second call overruns the deadline; no pause or later call follows it.
+        self.assertEqual(calls, [(0.0, 10.0), (8.0, 2.0)])
+        self.assertEqual(sleeps, [5])
+        self.assertEqual(clock[0], 11.0)
+        clock[0], calls[:], sleeps[:] = 0.0, [], []
+        with self.assertRaisesRegex(RuntimeError, "not observed within acceptance deadline"):
+            provider_common.wait_runner_terminal(
+                slow_client, root, task, "Success", timeout=12.0,
+                sleep_fn=sleep, monotonic_fn=lambda: clock[0], poll_seconds=5)
+        self.assertEqual(calls, [(0.0, 12.0), (8.0, 4.0)])
+        self.assertEqual(sleeps, [5, 1.0])
+        self.assertEqual(clock[0], 12.0)
+
+    def test_runner_polling_keeps_the_positional_contract_and_refuses_bad_intervals(self):
+        root, task = "a" * 32, "b" * 32
+        clock, calls, sleeps = [0.0], [], []
+        running = {"label": f"delegate:{root}:{task}", "status": {"Running": {}}}
+
+        def client(_name, _operation, timeout):
+            calls.append(timeout)
+            return SimpleNamespace(json=lambda: {"tasks": {"7": running}})
+
+        def sleep(delay):
+            sleeps.append(delay)
+            clock[0] += delay
+
+        # The legacy seven-positional invocation; an eighth positional is refused.
+        legacy_arguments = (client, root, task, "Success", 0.25, sleep, lambda: clock[0])
+        invalid_positional_arguments = legacy_arguments + (5,)
+        with self.assertRaisesRegex(RuntimeError, "not observed"):
+            provider_common.wait_runner_terminal(*legacy_arguments)
+        # The legacy 0.1s cadence holds; the last pause is clamped to the deadline.
+        self.assertEqual((len(calls), sleeps[:2]), (3, [0.1, 0.1]))
+        self.assertAlmostEqual(sleeps[2], 0.05)
+        self.assertAlmostEqual(clock[0], 0.25)
+        with self.assertRaises(TypeError):
+            provider_common.wait_runner_terminal(*invalid_positional_arguments)
+        for interval in (0, -1, float("inf"), float("nan"), True):
+            with self.subTest(interval=interval), \
+                    self.assertRaisesRegex(gate.AcceptanceFailure, "poll interval"):
+                provider_common.wait_runner_terminal(
+                    client, root, task, "Success", timeout=1.0, poll_seconds=interval)
+        self.assertEqual(len(calls), 3)
+
+    def test_task_ledgers_forward_their_poll_interval_to_the_canonical_observer(self):
+        observed = []
+
+        def observer(*_args, poll_seconds, **_options):
+            observed.append(poll_seconds)
+            raise RuntimeError("observer reached")
+
+        legacy = provider_common.NativeTaskOps(
+            object(), Path("/delegate"), Path("/runner"), Path("/pueue"),
+            Path("/base"), Path("/state"), Path("/evidence"))
+        explicit = provider_common.NativeTaskOps(
+            object(), Path("/delegate"), Path("/runner"), Path("/pueue"),
+            Path("/base"), Path("/state"), Path("/evidence"), runner_poll_seconds=5)
+        native = gate.NativeAcceptanceTaskOps(SimpleNamespace(
+            processes=object(), delegate=Path("/delegate"), runner=Path("/runner"),
+            pueue=Path("/pueue"), base=Path("/base"), state=Path("/state"),
+            output=Path("/evidence")))
+        with patch("scripts.delegate_acceptance.tasks.operations.wait_runner_terminal", observer):
+            for ops in (legacy, explicit, native):
+                ops.root_id = "a" * 32
+                with self.assertRaisesRegex(RuntimeError, "observer reached"):
+                    ops.wait_task("fresh", "b" * 32)
+        self.assertEqual(observed, [0.1, 5, 5])
+
+    def test_runner_polling_returns_only_the_exact_observed_terminal_row(self):
+        root, task = "a" * 32, "b" * 32
+        clock = [0.0]
+        killed = {"label": f"delegate:{root}:{task}", "status": {"Done": {"result": "Killed"}}}
+        done = {"label": f"delegate:{root}:{task}", "status": {"Done": {"result": "Success"}}}
+        responses = iter(({**killed, "status": {"Queued": {}}}, done, killed))
+
+        def client(_name, _operation, timeout):
+            self.assertGreater(timeout, 0)
+            row = next(responses)
+            return SimpleNamespace(json=lambda: {"tasks": {"7": row}})
+
+        def sleep(delay):
+            clock[0] += delay
+
+        observed = provider_common.wait_runner_terminal(
+            client, root, task, "Success", timeout=10.0,
+            sleep_fn=sleep, monotonic_fn=lambda: clock[0], poll_seconds=5)
+        self.assertIs(observed, done)
+        self.assertEqual(clock[0], 5.0)
+        with self.assertRaisesRegex(gate.AcceptanceFailure, "supervisor result 'Killed'"):
+            provider_common.wait_runner_terminal(
+                client, root, task, "Success", timeout=10.0,
+                sleep_fn=sleep, monotonic_fn=lambda: clock[0], poll_seconds=5)
+
+    def test_native_runner_wait_bounds_retained_status_captures(self):
+        with tempfile.TemporaryDirectory(prefix="native-runner-poll-") as directory:
+            root = Path(directory)
+            label = "delegate:" + "a" * 32 + ":" + "b" * 32
+            gate.write_json(root / "status.json",
+                            {"tasks": {"7": {"label": label, "status": {"Running": {}}}}})
+            pueue = root / "pueue"
+            pueue.write_text(f"#!/bin/sh\nexec cat '{root / 'status.json'}'\n")
+            pueue.chmod(0o700)
+            owner = SimpleNamespace(
+                processes=gate.Processes(root / "processes", {"PATH": "/usr/bin:/bin"}),
+                delegate=pueue, runner=pueue, pueue=pueue, base=root, state=root / "state",
+                output=root / "evidence")
+            ops = gate.NativeAcceptanceTaskOps(owner)
+            ops.bind_supervisor(root / "pueue.yml")
+            ops.root_id = "a" * 32
+            clock, sleeps = [0.0], []
+            virtual = SimpleNamespace(monotonic=lambda: clock[0],
+                                      sleep=lambda delay: (sleeps.append(delay),
+                                                           clock.__setitem__(0, clock[0] + delay)))
+            with patch("scripts.delegate_acceptance.tasks.operations.time", virtual), \
+                    self.assertRaisesRegex(RuntimeError, "not observed"):
+                ops.wait_task("fresh", "b" * 32)
+            captures = sorted(owner.processes.directory.iterdir())
+
+        expected_calls = int(ops.watch_seconds / ops.runner_poll_seconds)
+        self.assertEqual((ops.watch_seconds, ops.runner_poll_seconds), (330, 5))
+        self.assertEqual(sleeps, [5] * expected_calls)
+        self.assertEqual([path.name for path in captures],
+                         [f"{index:03d}-runner-status" for index in range(1, expected_calls + 1)])
+        self.assertEqual(len(owner.processes.entries), expected_calls)

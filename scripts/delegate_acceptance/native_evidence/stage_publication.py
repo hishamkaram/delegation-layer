@@ -14,7 +14,7 @@ from ..directories.operations import (
     DirectoryOwner, OwnedDirectory, discard_creation_temporary, is_creation_temporary_name,
 )
 from ..evidence.files import is_staging_file_for, write_bytes
-from .contract import EvidenceError, MAX_RECEIPT_BYTES, MAX_WALK_ENTRIES
+from .contract import EvidenceError, MAX_RECEIPT_BYTES, PUBLIC_STAGING_MAX_ENTRIES
 from .filesystem import _bounded_file_bytes, _reject_path_components
 
 
@@ -42,7 +42,7 @@ class StagePlan:
     def put(self, path: Path, data: bytes, limit: int = MAX_RECEIPT_BYTES) -> None:
         name = path.relative_to(self.output).as_posix()
         if (name in self._files or ".." in Path(name).parts or Path(name).is_absolute()
-                or len(data) > limit or len(self._files) >= MAX_WALK_ENTRIES):
+                or len(data) > limit or len(self._files) >= PUBLIC_STAGING_MAX_ENTRIES):
             raise EvidenceError("stage_plan_invalid")
         self._files[name] = StageFile(name, data, limit)
 
@@ -93,7 +93,7 @@ def _inventory(root: OwnedDirectory, files: tuple[StageFile, ...]) -> tuple[set[
         with os.scandir(path) as entries:
             for entry in entries:
                 visited += 1
-                if visited > MAX_WALK_ENTRIES:
+                if visited > PUBLIC_STAGING_MAX_ENTRIES:
                     raise EvidenceError("stage_inventory_too_large")
                 name = str(Path(relative) / entry.name)
                 metadata = entry.stat(follow_symlinks=False)

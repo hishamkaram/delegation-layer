@@ -85,7 +85,9 @@ def _execute(receipt: Receipt, *, recovery: bool) -> None:
         status = "INCOMPLETE" if incomplete or submission_intended or (
             native_claimed and receipt.stage("project").state != "complete"
         ) else "BLOCKED"
-        code = error.code if isinstance(error, (ReleaseError, VerificationError)) else "release_evidence_or_io_invalid"
+        code = (error.diagnostic if isinstance(error, ReleaseError)
+                else error.code if isinstance(error, VerificationError)
+                else "release_evidence_or_io_invalid")
         reason = (f"submission_intent_unresolved_resume_required:{code}"
                   if submission_intended else code)
         receipt.report(status, reason)

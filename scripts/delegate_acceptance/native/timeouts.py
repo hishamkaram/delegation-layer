@@ -26,6 +26,10 @@ TIMEOUT_LEASE_MAX_BYTES = 512
 TIMEOUT_LEASE_SETUP_SECONDS = 330
 TIMEOUT_LEASE_STATUS_INTERVAL_SECONDS = 5
 TIMEOUT_LEASE_OBSERVATION_SECONDS = 30
+# One native shell call must outlive the 3m timeout-source budget so the
+# supervisor, not the tool, ends the turn. OpenCode's default 2m tool timeout
+# ended the first call early and the worker then submitted it a second time.
+TIMEOUT_SOURCE_TOOL_TIMEOUT_MS = 300_000
 
 
 class TimeoutStatusSource(Protocol):
@@ -317,10 +321,13 @@ class TimeoutLeaseOwner:
                 f"printf '%s\\n' {shlex.quote(self.marker)} > "
                 f"{shlex.quote(self.marker_file.name)}; wait")
             text = (
-                "This is a timeout-recovery integration test. Use the native shell tool to run exactly this "
-                f"command: `{command}`. The long sleep is intentional: do not stop it, do not reply before "
-                "the supervisor budget ends the turn, and do not modify any other file, configuration, or "
-                "path outside the current workspace.\n"
+                "This is a timeout-recovery integration test. Make exactly one native shell tool call, in "
+                f"the foreground, to run exactly this command: `{command}`. If the shell tool accepts a "
+                f"timeout, set it to {TIMEOUT_SOURCE_TOOL_TIMEOUT_MS} milliseconds. Do not run the command "
+                "in the background. If that tool call ends or times out early, do not run the command again "
+                "or retry it. The long sleep is intentional: do not stop it, do not reply before the "
+                "supervisor budget ends the turn, and do not modify any other file, configuration, or path "
+                "outside the current workspace.\n"
             )
         write_bytes(path, text.encode())
         return path

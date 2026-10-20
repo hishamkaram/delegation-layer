@@ -82,6 +82,125 @@ class WorkspaceEvidenceTests(unittest.TestCase):
         self.assertEqual((operation / "request.json").read_bytes(), request_bytes)
 
     @staticmethod
+    def add_artifact(operation: Path, name: str = "skip") -> Path:
+        """Add one capture scratch file the Go owner creates and removes while active."""
+        artifact = operation / "artifacts" / name
+        artifact.parent.mkdir(mode=0o700, exist_ok=True)
+        artifact.write_bytes(b"scratch")
+        artifact.chmod(0o600)
+        return artifact
+
+    @staticmethod
+    def vanish_before_lstat(target: Path) -> mock._patch:
+        """Remove the target once after enumeration, then perform the real lstat."""
+        real_lstat = Path.lstat
+        removed = []
+
+        def lstat(path: Path, *args: object, **kwargs: object) -> object:
+            if path == target and not removed:
+                removed.append(path)
+                target.unlink()
+            return real_lstat(path, *args, **kwargs)
+        return mock.patch.object(Path, "lstat", autospec=True, side_effect=lstat)
+
+    @staticmethod
+    def refuse_iterdir(target: Path) -> mock._patch:
+        """Deny enumerating the exact target directory, as an unreadable mode does."""
+        real_iterdir = Path.iterdir
+
+        def iterdir(path: Path) -> object:
+            if path == target:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_iterdir(path)
+        return mock.patch.object(Path, "iterdir", autospec=True, side_effect=iterdir)
+
+    def test_scratch_removed_after_enumeration_is_retried_while_owner_is_active(self) -> None:
+        operation = self.write_native_records()
+        artifact = self.add_artifact(operation)
+        scratch = "operation artifact " + OPERATION + "/artifacts/skip"
+        with self.vanish_before_lstat(artifact), \
+                self.assertRaisesRegex(common.AcceptanceFailure, scratch) as raised:
+            common.validate_managed_lifetime_closure(self.state)
+        self.assertIsInstance(raised.exception.__cause__, FileNotFoundError)
+
+        artifact = self.add_artifact(operation)
+        wait_path = operation / "lifetime-worker-wait.json"
+        wait_bytes = wait_path.read_bytes()
+        wait_path.unlink()
+        request_bytes = (operation / "request.json").read_bytes()
+        context = mock.Mock(spec=workspaces.WorkspaceContext)
+        context.state = self.state
+        lock = operation / ".lifetime-owner.lock"
+        lock.touch(mode=0o600)
+        with lock.open("r+b") as held:
+            fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+
+            def finish_capture(_delay: float) -> None:
+                self.assertTrue((operation / "artifacts").is_dir())
+                wait_path.write_bytes(wait_bytes)
+                wait_path.chmod(0o600)
+                fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+
+            with self.vanish_before_lstat(artifact), \
+                    mock.patch.object(workspaces.private_cli.time, "sleep", side_effect=finish_capture) as wait:
+                proof = workspaces._prove_lifetimes_closed(context, [])
+        wait.assert_called_once()
+        self.assertEqual(proof["workspace"][OPERATION]["managed_lifetime"]["worker_wait"]["result"], "success")
+        self.assertEqual((operation / "request.json").read_bytes(), request_bytes)
+
+    def test_unreadable_artifacts_fail_closed_instead_of_scanning_empty(self) -> None:
+        operation = self.write_native_records()
+        artifacts = self.add_artifact(operation).parent
+        with self.refuse_iterdir(artifacts), \
+                self.assertRaisesRegex(common.AcceptanceFailure, "artifacts for " + OPERATION) as raised:
+            common.validate_managed_lifetime_closure(self.state)
+        self.assertIsInstance(raised.exception.__cause__, PermissionError)
+
+        artifacts.chmod(0o000)
+        try:
+            try:
+                tuple(artifacts.iterdir())
+            except PermissionError:
+                pass
+            else:
+                self.skipTest("this user can enumerate a mode-0 directory")
+            with self.assertRaisesRegex(common.AcceptanceFailure, "artifacts for " + OPERATION) as raised:
+                common.validate_managed_lifetime_closure(self.state)
+            self.assertIsInstance(raised.exception.__cause__, PermissionError)
+        finally:
+            artifacts.chmod(0o700)
+        self.assertTrue((artifacts / "skip").is_file())
+
+    def assert_closure_refused_at_deadline(self, message: str) -> None:
+        operation = self.state / "workspace-operations" / OPERATION
+        request_bytes = (operation / "request.json").read_bytes()
+        context = mock.Mock(spec=workspaces.WorkspaceContext)
+        context.state = self.state
+        with (
+            mock.patch.object(workspaces.private_cli.time, "monotonic",
+                              side_effect=[0, workspaces.WAIT_SECONDS]),
+            mock.patch.object(workspaces.private_cli.time, "sleep") as wait,
+            self.assertRaisesRegex(RuntimeError, "closure remained incomplete.*" + message),
+        ):
+            workspaces._prove_lifetimes_closed(context, [])
+        wait.assert_not_called()
+        self.assertEqual((operation / "request.json").read_bytes(), request_bytes)
+
+    def test_persistent_artifact_faults_are_refused_at_the_finite_deadline(self) -> None:
+        operation = self.write_native_records()
+        artifact = self.add_artifact(operation)
+        with self.subTest("persistent permission"), self.refuse_iterdir(artifact.parent):
+            self.assert_closure_refused_at_deadline("cannot inspect workspace operation artifacts")
+        with self.subTest("nonregular artifact"):
+            (artifact.parent / "delegate-overlay").mkdir(mode=0o700)
+            self.assert_closure_refused_at_deadline("artifact is not a regular file")
+            (artifact.parent / "delegate-overlay").rmdir()
+        with self.subTest("missing worker wait"):
+            (operation / "lifetime-worker-wait.json").unlink()
+            self.assert_closure_refused_at_deadline("workspace operation lifetime worker Wait is missing")
+        self.assertTrue(artifact.is_file())
+
+    @staticmethod
     def supervisor() -> dict[str, object]:
         return {
             "client_executable": "/private/bin/pueue",

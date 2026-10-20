@@ -51,10 +51,21 @@ MAX_RECEIPT_BYTES = 32 * 1024
 MAX_MATRIX_BYTES = 64 * 1024
 
 
-MAX_WALK_ENTRIES = 4096
+# The private raw-evidence inventory must count a full native case: a Mac
+# timeout case retained 6,919 entries and 3,183,628 bytes. An exceeded budget
+# is reported as incomplete and retains the raw evidence.
+PRIVATE_INVENTORY_MAX_ENTRIES = 65536
 
 
-MAX_WALK_BYTES = 16 * 1024 * 1024
+PRIVATE_INVENTORY_MAX_BYTES = 128 * 1024 * 1024
+
+
+# Public staging plans and their staged-tree scans keep their original cap.
+PUBLIC_STAGING_MAX_ENTRIES = 4096
+
+
+# One directory listing, as opposed to a recursive inventory.
+MAX_DIRECTORY_CHILDREN = 4096
 
 
 DEFAULT_RETENTION_COUNT = 3

@@ -386,6 +386,37 @@ while all scoped runs and reports remain available. Expired or missing reports
 for listed runs retain their uncertainty and can block promotion; a fresh
 control is not evidence of an expired attempt's result.
 
+Before dispatching promotion, a maintainer can run the same native gate locally
+with their existing `gh` login. Use a clean checkout of the exact current
+protected-`main` commit and a new, empty absolute work directory:
+
+```sh
+mkdir /absolute/path/to/new-empty-dir
+python3 scripts/validate_native_release.py promotion --tag v1.2.3 \
+  --repo hishamkaram/delegation-layer --source-revision CURRENT_MAIN_SHA \
+  --native-validation-run-id RUN_ID --work-dir /absolute/path/to/new-empty-dir \
+  --github-auth local-config
+```
+
+`--github-auth local-config` removes `GH_TOKEN`, `GITHUB_TOKEN` and the
+enterprise token variables from the `gh` environment and lets `gh` use its own
+stored login. The command never reads or forwards a stored token. The default,
+`environment`, keeps the token-only authentication used by the hosted `Release`
+workflow. The command reads repository, history, release and attestation data
+from GitHub, and writes the downloaded release assets and extracted binaries
+under the work directory. It changes nothing on GitHub. A `--source-revision`
+other than the current protected-`main` commit fails the protected-main check,
+and changes to the fingerprinted harness source fail the source-fingerprint
+check. Other local changes are not necessarily detected, so use a clean
+checkout.
+
+This covers only the native validation, history and provenance gate. It does
+not check npm, Homebrew tap or other publication prerequisites. A passing result
+is advisory, not a cached authorization: promotion rechecks protected `main`,
+the complete validation history and every gate. Keep `main` and the checkout
+unchanged from native submission through promotion; a new `main` commit no
+longer matches the proof's harness revision.
+
 Dispatch the `Release` workflow from protected `main` with the exact tag and
 validation run ID. Public anonymous installation is a prerequisite: promotion
 refuses a private repository before npm publication and never changes its

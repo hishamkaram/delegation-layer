@@ -60,13 +60,20 @@ def _workspace_operation_entries(directory: Path, operation: str) -> set[str]:
         if name == "artifacts":
             require(stat.S_ISDIR(metadata.st_mode),
                     f"workspace operation artifacts are not a directory: {operation}")
+            # Artifacts are flat regular files. iterdir reports an unreadable
+            # directory, unlike rglob, which silently scans it as empty.
             try:
-                artifacts = tuple(entry.rglob("*"))
+                artifacts = tuple(entry.iterdir())
             except OSError as error:
                 raise AcceptanceFailure(
                     f"cannot inspect workspace operation artifacts for {operation}") from error
             for artifact in artifacts:
-                artifact_metadata = artifact.lstat()
+                try:
+                    artifact_metadata = artifact.lstat()
+                except OSError as error:
+                    raise AcceptanceFailure(
+                        "cannot inspect workspace operation artifact "
+                        f"{operation}/artifacts/{artifact.name}") from error
                 require(not stat.S_ISLNK(artifact_metadata.st_mode) and
                         stat.S_ISREG(artifact_metadata.st_mode),
                         f"workspace operation artifact is not a regular file: {operation}")

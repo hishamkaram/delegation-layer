@@ -34,7 +34,10 @@ from scripts.delegate_acceptance.supervisor.membership import (
     validate_inspection_queue_row,
     validate_queue_membership,
 )
-from scripts.delegate_acceptance.supervisor.observation import wait_runner_terminal
+from scripts.delegate_acceptance.supervisor.observation import (
+    RUNNER_POLL_SECONDS,
+    wait_runner_terminal,
+)
 from scripts.delegate_acceptance.supervisor.runner_layout import (
     BUNDLE_RUNNER,
     RUNNER_PLACEMENTS,
@@ -73,7 +76,8 @@ class NativeTaskOps:
                  watch_seconds: float = 150,
                  expected_inspection_binding_required: bool = True,
                  managed_runner: bool = False, *,
-                 runner_placement: RunnerPlacement = BUNDLE_RUNNER) -> None:
+                 runner_placement: RunnerPlacement = BUNDLE_RUNNER,
+                 runner_poll_seconds: float = RUNNER_POLL_SECONDS) -> None:
         self.processes = processes
         self.delegate = Path(delegate)
         self.runner = Path(runner)
@@ -82,6 +86,7 @@ class NativeTaskOps:
         self.state = Path(state)
         self.output = Path(output)
         self.watch_seconds = watch_seconds
+        self.runner_poll_seconds = runner_poll_seconds
         require(type(expected_inspection_binding_required) is bool,
                 "expected inspection binding mode is invalid")
         require(type(managed_runner) is bool, "managed runner mode is invalid")
@@ -327,7 +332,8 @@ class NativeTaskOps:
             expected_result = self.expected_results.get(name, "Success")
         row = wait_runner_terminal(self.client, self.root_id, task, expected_result,
                                    timeout=self.watch_seconds,
-                                   sleep_fn=time.sleep, monotonic_fn=time.monotonic)
+                                   sleep_fn=time.sleep, monotonic_fn=time.monotonic,
+                                   poll_seconds=self.runner_poll_seconds)
         require(isinstance(row, dict), "runner completion row is malformed")
         require(name in self.numbers, f"runner task {task} has no recorded numeric identity")
         self.validate_ordinary_queue_row(

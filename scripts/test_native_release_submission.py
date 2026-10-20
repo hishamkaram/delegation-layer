@@ -5,9 +5,12 @@ from __future__ import annotations
 from unittest.mock import patch
 import unittest
 
-from scripts.delegate_acceptance.native_release.contract import ReleaseError
+from scripts.delegate_acceptance.native_release import watching
+from scripts.delegate_acceptance.native_release.contract import ReleaseError, WORKFLOW
 from scripts.delegate_acceptance.native_release.receipt import Receipt
-from scripts.delegate_acceptance.native_release.submission import dispatch, reconcile_asset, upload
+from scripts.delegate_acceptance.native_release.submission import (
+    dispatch, reconcile_asset, upload, validate_run,
+)
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.test_native_release_support import (
     HEAD, PAYLOAD, PROOF_HASH, RELEASE, REPO, TAG, ReleaseFixture,
@@ -122,6 +125,50 @@ class SubmissionTests(ReleaseFixture):
             with self.assertRaisesRegex(ReleaseError, "native_validation_run_unbound"):
                 dispatch(Receipt.load(self.receipt.path), self.client)
         self.assertEqual(self.client.posts, 0)
+
+
+    def test_main_qualified_run_path_reconciles_and_watches_one_dispatch(self) -> None:
+        self.seed_upload()
+        self.client.run_path = f".github/workflows/{WORKFLOW}@main"
+        self.client.lose_dispatch_response = True
+        with patch("scripts.delegate_acceptance.native_release.preflight.resolve_release_identity",
+                   return_value={"commit_sha": RELEASE}):
+            dispatch(self.receipt, self.client)
+            dispatch(Receipt.load(self.receipt.path), self.client)
+        self.assertEqual((self.client.posts, self.receipt.stage("dispatch").result["run_id"]), (1, 81))
+        with self.assertRaisesRegex(ReleaseError, "native_validation_watch_expired"):
+            watching.watch(self.receipt, self.client, timeout=0)
+        self.assertEqual(self.client.posts, 1)
+
+    def test_run_binding_mismatch_reports_only_fixed_field_names(self) -> None:
+        self.seed_upload()
+        bare = f".github/workflows/{WORKFLOW}"
+        title = self.client.run()["display_title"]
+        self.assertEqual(validate_run(self.receipt, self.client.run(), expected_id=81,
+                                      expected_title=title)["path"], bare)
+        cases = (
+            ("id", {}, 82), ("display_title", {"display_title": "secret-title"}, 81),
+            ("head_branch", {"head_branch": "secret-branch"}, 81),
+            ("head_sha", {"head_sha": "f" * len(HEAD)}, 81), ("event", {"event": "push"}, 81),
+            ("path", {"path": ".github/workflows/release.yml@main"}, 81),
+            ("path", {"path": f"{bare}@refs/heads/main"}, 81),
+            ("path", {"path": f"{bare}@secret-ref"}, 81),
+            ("path", {"path": f"secret/{bare}"}, 81), ("path", {"path": [bare]}, 81),
+            ("html_url", {"html_url": "https://github.com/secret/fork/actions/runs/81"}, 81),
+        )
+        for field, change, expected_id in cases:
+            with self.subTest(field=field, change=change):
+                with self.assertRaises(ReleaseError) as raised:
+                    validate_run(self.receipt, {**self.client.run(), **change},
+                                 expected_id=expected_id, expected_title=title)
+                self.assertEqual((raised.exception.code, raised.exception.incomplete,
+                                  raised.exception.mismatched), ("native_validation_run_unbound", True, (field,)))
+                self.assertEqual(raised.exception.diagnostic,
+                                 f"native_validation_run_unbound:mismatch={field}")
+        with self.assertRaises(ReleaseError) as raised:
+            validate_run(self.receipt, {**self.client.run(), "event": "push", "path": "secret"},
+                         expected_id=81, expected_title=title)
+        self.assertEqual(raised.exception.mismatched, ("event", "path"))
 
 
 if __name__ == "__main__":

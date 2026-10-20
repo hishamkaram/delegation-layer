@@ -290,6 +290,24 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.native_evidence.test_private_inventory",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "test",
+    "imports": [
+      "py:delegate_acceptance.directories.journal",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.stage_publication",
+      "py:native_acceptance_evidence",
+      "py:os",
+      "py:pathlib",
+      "py:tempfile",
+      "py:test_native_acceptance_evidence",
+      "py:unittest"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.native_evidence.test_source_contract",
     "owner": "py:delegate_acceptance.native_evidence",
     "layer": "test",
