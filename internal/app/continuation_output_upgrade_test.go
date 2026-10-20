@@ -47,6 +47,8 @@ type outputUpgradeCase struct {
 	// authFailure selects the successor evidence whose only revision-dependent
 	// result is the classification of agy's authentication envelope.
 	authFailure bool
+	// revision is the OpenCode run dialect the predecessor record carries.
+	revision string
 }
 
 func (c outputUpgradeCase) executable() string {
@@ -65,8 +67,6 @@ func (c outputUpgradeCase) executable() string {
 // resumeFlag is the provider's exact-session launch argument.
 func (c outputUpgradeCase) resumeFlag() string {
 	switch c.provider {
-	case openCodeProvider:
-		return "--session"
 	case antigravity.Provider:
 		return "--conversation"
 	default:
@@ -104,9 +104,13 @@ func (c outputUpgradeCase) requestedConfig() task.TaskConfig {
 
 // predecessorProfile admits the predecessor through the production catalog's
 // stored-predicate preparation, so its launch contract is the one a real task
-// recorded under source.
+// recorded under source. OpenCode's fresh admission is ACP, so its sources are
+// reconstructed from a coherent historical run record instead.
 func (c outputUpgradeCase) predecessorProfile(t *testing.T, f *outputUpgradeFixture) PreparedProfile {
 	t.Helper()
+	if c.provider == openCodeProvider {
+		return openCodeHistoricalRunProfile(t, f.deps.Catalog, f.request, c.revision, c.source)
+	}
 	fresh, err := f.deps.Catalog.Candidate(f.request)
 	if err != nil {
 		t.Fatalf("current candidate: %v", err)
@@ -169,8 +173,10 @@ func (c outputUpgradeCase) resultLine(session, text, attribution string) string 
 
 // successorStream is evidence that only the current output predicate accepts:
 // the principal answer followed by a nested-agent message and a task
-// notification cycle (Claude, CCR), an empty repeated step start (OpenCode), or
-// invalid optional usage metadata (agy).
+// notification cycle whose root message carries an unknown content block
+// (Claude, CCR), an empty repeated step start (OpenCode), or invalid optional
+// usage metadata (agy). The frozen scoped Claude and CCR sources accept the
+// cycle without the block, so the block is what only their target accepts.
 func (c outputUpgradeCase) successorStream(session string) string {
 	switch c.provider {
 	case openCodeProvider:
@@ -181,7 +187,7 @@ func (c outputUpgradeCase) successorStream(session string) string {
 		}
 		return fmt.Sprintf(`{"response":%q,"conversation_id":%q,"usage":{"input_tokens":"unavailable"},"status":"SUCCESS"}`, outputUpgradeAnswer, session) + "\n"
 	default:
-		return providerRecheckStdout(providerRecheckSource{reference: c.target}, session)
+		return providerRecheckStdout(providerRecheckSource{reference: c.target, opaqueContent: true}, session)
 	}
 }
 
@@ -194,6 +200,8 @@ func outputUpgradeCases(t *testing.T) []outputUpgradeCase {
 		{name: "claude read-only retained native-permissions-v4", provider: claude.Provider, mode: config.ModeReadOnly, source: exactReference(t, claude.Registration(), config.ModeReadOnly, "native-permissions-v4", "f7c1053edce279071b9caa46f727cf196d5998fc05d07afdf9c5378acd9eb25c"), target: readTarget},
 		{name: "claude write native-permissions-v4", provider: claude.Provider, mode: config.ModeWorkspaceWrite, source: exactReference(t, claude.Registration(), config.ModeWorkspaceWrite, "native-permissions-v4", "dc2c8fb5cef5a1acc568e890705c28add52596398f731b0142284ef176d2e58a"), target: writeTarget},
 		{name: "claude write retained native-permissions-v5", provider: claude.Provider, mode: config.ModeWorkspaceWrite, source: exactReference(t, claude.Registration(), config.ModeWorkspaceWrite, "native-permissions-v5", "333a689a864dfb03ecd4a6eace97bcf6964fea96768ddbbb86a92d98c4a7a76b"), target: writeTarget},
+		{name: "claude read-only scoped native-permissions-v4", provider: claude.Provider, mode: config.ModeReadOnly, source: exactReference(t, claude.Registration(), config.ModeReadOnly, "native-permissions-v4", "b3c26a3eae4e39d6a68f55e191b7ac2aa7f05476103ee2d111de0fd873880f0d"), target: readTarget},
+		{name: "claude write scoped native-permissions-v5", provider: claude.Provider, mode: config.ModeWorkspaceWrite, source: exactReference(t, claude.Registration(), config.ModeWorkspaceWrite, "native-permissions-v5", "27bf2e76be4185559ecaa8cfbd404d81744281298b6a29b6bf99ab4e1f4b1b29"), target: writeTarget},
 	}
 	cases = append(cases, ccrOutputUpgradeCases(t)...)
 	cases = append(cases, openCodeOutputUpgradeCases(t)...)
@@ -201,8 +209,9 @@ func outputUpgradeCases(t *testing.T) []outputUpgradeCase {
 }
 
 // openCodeOutputUpgradeCases pins the native OpenCode revisions 2, 3, and 4 and
-// their current revision 5 for both modes. Revision 1 is a different plan and
-// probe contract and is never a source.
+// their current revision 5 for both modes, recorded under the opencode-native-v2
+// run dialect. Revision 1 is a different plan and probe contract and is never a
+// source.
 func openCodeOutputUpgradeCases(t *testing.T) []outputUpgradeCase {
 	t.Helper()
 	registration := catalogRegistration(t, openCodeProvider)
@@ -223,7 +232,7 @@ func openCodeOutputUpgradeCases(t *testing.T) []outputUpgradeCase {
 		target := exactReference(t, registration, mode, "5", sum.v5)
 		for _, source := range []struct{ version, digest string }{{"2", sum.v2}, {"3", sum.v3}, {"4", sum.v4}} {
 			cases = append(cases, outputUpgradeCase{
-				name: "opencode " + mode + " v" + source.version, provider: openCodeProvider, mode: mode,
+				name: "opencode " + mode + " v" + source.version, provider: openCodeProvider, mode: mode, revision: openCodeNativeV2Revision,
 				source: exactReference(t, registration, mode, source.version, source.digest), target: target,
 			})
 		}
@@ -257,27 +266,46 @@ func agyOutputUpgradeCases(t *testing.T) []outputUpgradeCase {
 	return cases
 }
 
-// ccrOutputUpgradeCases pins the four exact CCR v4 sources: route-preserving
-// and modeled, each read-only and write, with their current v5 targets.
+// ccrOutputUpgradeCases pins the exact CCR v4 and frozen scoped v5 sources:
+// route-preserving and modeled, each read-only and write, with their current
+// advisory v6 targets. The v5 revisions were the targets before the advisory
+// wire projection; they are now frozen sources of the same launch shape.
 func ccrOutputUpgradeCases(t *testing.T) []outputUpgradeCase {
 	t.Helper()
 	registration := ccr.Registration()
+	type revision struct{ version, digest string }
 	type spec struct {
-		mode, sourceVersion, sourceDigest, targetVersion, targetDigest string
-		route                                                          bool
+		mode    string
+		route   bool
+		sources []revision
+		target  revision
 	}
 	var cases []outputUpgradeCase
 	for _, s := range []spec{
-		{config.ModeReadOnly, "ccr-foreground-v4", "5c13f0e77406ce86e146532d163c5f6da74264743b1bdb6ed1ffc0f70a79f502", "ccr-foreground-v5", "54250742f26a4f9e4fe1378d9dad1b85f5e3793d5f4ebdcf7b1ed6e3d96c3a44", true},
-		{config.ModeWorkspaceWrite, "ccr-foreground-v4", "4816a7344a169112b9b969b1339f9b418498cbc6955816d83a046fed419d89c0", "ccr-foreground-v5", "468b9b0e25cd7d9936ef2293197ba6b72f16ac2aa9546eac70f837b7f5fdcb59", true},
-		{config.ModeReadOnly, "ccr-foreground-v4-modeled", "6051bed3c949dbf49eab6ced92226a5922f662b2c1c7053b72fbec3982fbdeb3", "ccr-foreground-v5-modeled", "7483b129ea91cc745e5a45573df3669a7297b98b8bf43d2c1f28a3edae874f3c", false},
-		{config.ModeWorkspaceWrite, "ccr-foreground-v4-modeled", "e6d76ecf0ae8bf014713301c1ddc395481158cb7edb71d7a53e207cac79964e3", "ccr-foreground-v5-modeled", "e8413e812488699abb7b6c1695665927dfd39d820cb54ebe380b7cb8cdf4da61", false},
+		{config.ModeReadOnly, true, []revision{
+			{"ccr-foreground-v4", "5c13f0e77406ce86e146532d163c5f6da74264743b1bdb6ed1ffc0f70a79f502"},
+			{"ccr-foreground-v5", "54250742f26a4f9e4fe1378d9dad1b85f5e3793d5f4ebdcf7b1ed6e3d96c3a44"},
+		}, revision{"ccr-foreground-v6", "7076f23f03b4560307f3543c47aa7afe25f6e7f716df9db84f2b66820eb27cdf"}},
+		{config.ModeWorkspaceWrite, true, []revision{
+			{"ccr-foreground-v4", "4816a7344a169112b9b969b1339f9b418498cbc6955816d83a046fed419d89c0"},
+			{"ccr-foreground-v5", "468b9b0e25cd7d9936ef2293197ba6b72f16ac2aa9546eac70f837b7f5fdcb59"},
+		}, revision{"ccr-foreground-v6", "fb854fcff38fd76896c85710067517612a1cda601957818fe602b861f36615fd"}},
+		{config.ModeReadOnly, false, []revision{
+			{"ccr-foreground-v4-modeled", "6051bed3c949dbf49eab6ced92226a5922f662b2c1c7053b72fbec3982fbdeb3"},
+			{"ccr-foreground-v5-modeled", "7483b129ea91cc745e5a45573df3669a7297b98b8bf43d2c1f28a3edae874f3c"},
+		}, revision{"ccr-foreground-v6-modeled", "fcc68c97680afa51aabe05f85319c27352bb267d5063cc560bcc970e2995dcaa"}},
+		{config.ModeWorkspaceWrite, false, []revision{
+			{"ccr-foreground-v4-modeled", "e6d76ecf0ae8bf014713301c1ddc395481158cb7edb71d7a53e207cac79964e3"},
+			{"ccr-foreground-v5-modeled", "e8413e812488699abb7b6c1695665927dfd39d820cb54ebe380b7cb8cdf4da61"},
+		}, revision{"ccr-foreground-v6-modeled", "b66e115dbcaa16aa8d46fdaf6fd64b4489c287b7bc380b65c6d4f7bfd004692e"}},
 	} {
-		cases = append(cases, outputUpgradeCase{
-			name: "ccr " + s.mode + " " + s.sourceVersion, provider: ccr.Provider, mode: s.mode, route: s.route,
-			source: exactReference(t, registration, s.mode, s.sourceVersion, s.sourceDigest),
-			target: exactReference(t, registration, s.mode, s.targetVersion, s.targetDigest),
-		})
+		target := exactReference(t, registration, s.mode, s.target.version, s.target.digest)
+		for _, source := range s.sources {
+			cases = append(cases, outputUpgradeCase{
+				name: "ccr " + s.mode + " " + source.version, provider: ccr.Provider, mode: s.mode, route: s.route,
+				source: exactReference(t, registration, s.mode, source.version, source.digest), target: target,
+			})
+		}
 	}
 	return cases
 }
@@ -324,8 +352,17 @@ func outputUpgradeEntryPoints() []outputUpgradeEntryPoint {
 	}
 }
 
+// sameWireOutputUpgradeCases keeps the cases whose public continuation keeps
+// the predecessor's launch dialect. The OpenCode rows are historical run
+// records: reconstruction, recheck and the frozen-predecessor tests use them,
+// while their public continuation migrates to ACP and is owned by
+// opencode_acp_continuation_test.go.
+func sameWireOutputUpgradeCases(cases []outputUpgradeCase) []outputUpgradeCase {
+	return slices.DeleteFunc(cases, func(testCase outputUpgradeCase) bool { return testCase.provider == openCodeProvider })
+}
+
 func TestContinuationSuccessorsReceiveCurrentOutputPredicate(t *testing.T) {
-	for _, testCase := range outputUpgradeCases(t) {
+	for _, testCase := range sameWireOutputUpgradeCases(outputUpgradeCases(t)) {
 		for _, entry := range outputUpgradeEntryPoints() {
 			t.Run(testCase.name+"/"+entry.name, func(t *testing.T) {
 				runOutputUpgradeScenario(t, testCase, entry)
@@ -339,7 +376,7 @@ func TestContinuationSuccessorsReceiveCurrentOutputPredicate(t *testing.T) {
 // It passes today and proves the scenario's success path is satisfiable, so the
 // source cases above fail only because the successor keeps the old predicate.
 func TestContinuationOfCurrentPredicateKeepsPublishingPrincipalOnly(t *testing.T) {
-	for _, testCase := range outputUpgradeControlCases(t) {
+	for _, testCase := range sameWireOutputUpgradeCases(outputUpgradeControlCases(t)) {
 		for _, entry := range outputUpgradeEntryPoints() {
 			t.Run(testCase.name+"/"+entry.name, func(t *testing.T) {
 				runOutputUpgradeScenario(t, testCase, entry)

@@ -32,10 +32,13 @@ func Registration() commonprovider.Registration {
 		Description:          Description(),
 		Prepare:              PrepareCandidate,
 		PrepareExisting:      PrepareExistingCandidate,
+		PrepareSuccessor:     PrepareSuccessorCandidate,
 		ValidateContinuation: validateContinuation,
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(ModeReadOnly),
 			NewInterpreter(ModeWorkspaceWrite),
+			newPriorCurrentInterpreter(ModeReadOnly),
+			newPriorCurrentInterpreter(ModeWorkspaceWrite),
 			newHistoricalV7Interpreter(ModeWorkspaceWrite),
 			newHistoricalV5Interpreter(ModeReadOnly),
 			newHistoricalV5Interpreter(ModeWorkspaceWrite),

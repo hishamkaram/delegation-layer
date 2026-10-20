@@ -14,6 +14,7 @@ var ErrProofPending = errors.New("lifetime closure proof is pending")
 type ClosureProof struct {
 	closureKind       task.LifetimeClosureKind
 	terminationSHA256 string
+	terminationCause  string
 	workerWaitSHA256  string
 	unlaunchedSHA256  string
 }
@@ -21,6 +22,10 @@ type ClosureProof struct {
 func (p ClosureProof) Kind() task.LifetimeClosureKind { return p.closureKind }
 
 func (p ClosureProof) TerminationSHA256() string { return p.terminationSHA256 }
+
+// TerminationCause is the validated termination record's cause, or empty when
+// the closure has no termination record.
+func (p ClosureProof) TerminationCause() string { return p.terminationCause }
 
 func (p ClosureProof) WorkerWaitSHA256() string { return p.workerWaitSHA256 }
 

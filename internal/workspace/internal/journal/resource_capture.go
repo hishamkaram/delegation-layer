@@ -65,7 +65,7 @@ func (r *Resource) RecordCaptureReceipt(ctx context.Context, receipt contract.Ca
 				}
 				return err
 			}
-			if candidate != *receipt.Candidate {
+			if !candidate.Equal(*receipt.Candidate) {
 				return task.ErrIdentityMismatch
 			}
 			if err := candidateMatchesSourceTx(tx, candidate); err != nil {
@@ -242,7 +242,7 @@ func readCaptureReceiptTx(tx *taskdir.ControlTransaction, workspaceID, operation
 			}
 			return contract.CaptureReceipt{}, err
 		}
-		if candidate != *receipt.Candidate {
+		if !candidate.Equal(*receipt.Candidate) {
 			return contract.CaptureReceipt{}, errors.Join(task.ErrEvidenceFault, task.ErrIdentityMismatch)
 		}
 		if err = candidateMatchesSourceTx(tx, candidate); err != nil {
@@ -281,6 +281,19 @@ func validateCaptureCandidateRecord(candidate contract.CaptureCandidate, workspa
 			return err
 		}
 	}
+	if candidate.IndexSHA256 != "" {
+		if err := task.ValidateSHA256(candidate.IndexSHA256); err != nil {
+			return err
+		}
+	}
+	if candidate.Turn != nil {
+		if candidate.Subject.Kind != contract.SubjectTask {
+			return task.ErrIdentityMismatch
+		}
+		if err := contract.ValidateTurnObservation(*candidate.Turn, candidate.ObjectFormat); err != nil {
+			return err
+		}
+	}
 	return contract.ValidateOwnedRef(candidate.SnapshotRef)
 }
 
@@ -315,6 +328,9 @@ func validateCaptureReceiptRecord(receipt contract.CaptureReceipt, workspaceID s
 		if artifact.Truncated {
 			return task.ErrIdentityMismatch
 		}
+	}
+	if receipt.Candidate != nil {
+		return contract.ValidateTurnArtifacts(*receipt.Candidate, receipt.Artifacts)
 	}
 	return nil
 }

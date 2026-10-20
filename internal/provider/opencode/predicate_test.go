@@ -14,15 +14,15 @@ import (
 
 func TestReferenceBindsModeSpecificContracts(t *testing.T) {
 	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
-		ref := ReferenceForMode(mode)
-		if ref.Adapter != Provider || ref.Mode != mode || ref.Version != predicateVersion || ref.SHA256 != task.ComputeSHA256([]byte(ContractForMode(mode))) {
+		ref := runReferenceForMode(mode)
+		if ref.Adapter != Provider || ref.Mode != mode || ref.Version != runPredicateVersion || ref.SHA256 != task.ComputeSHA256([]byte(correctedContractForMode(mode))) {
 			t.Fatalf("mode=%s ref=%+v", mode, ref)
 		}
-		if !strings.HasSuffix(ContractForMode(mode), "\n") {
+		if !strings.HasSuffix(correctedContractForMode(mode), "\n") {
 			t.Fatalf("mode=%s contract has no trailing newline", mode)
 		}
 	}
-	if ReferenceForMode("unknown") != (task.PredicateRef{}) {
+	if runReferenceForMode("unknown") != (task.PredicateRef{}) {
 		t.Fatal("unsupported mode returned a predicate reference")
 	}
 }
@@ -35,7 +35,7 @@ func TestOpenCodeSuccessParsesTextIdentityAndUsage(t *testing.T) {
 		stepFinish(testSession, "stop", `{"total":12,"input":4,"output":3,"reasoning":1,"cache":{"read":2,"write":1}}`, "0.004"),
 	)
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeWorkspaceWrite).Evaluate(
+	interp, err := newRunInterpreter(ModeWorkspaceWrite).Evaluate(
 		predicate.Input{Seal: validSeal(stdout, ModeWorkspaceWrite)},
 		&testEvidence{stdout: stdout, stderr: []byte("diagnostic")}, &answer,
 	)
@@ -72,7 +72,7 @@ func TestOpenCodeSuccessParsesTextIdentityAndUsage(t *testing.T) {
 func TestCurrentOpenCodeInterpreterWarnsOnUnreliableUsage(t *testing.T) {
 	stdout := jsonl(stepStart(testSession), textEvent(testSession, "answer"), stepFinish(testSession, "stop", `{"total":-1}`, "0.004"))
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer)
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer)
 	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "answer" {
 		t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
 	}
@@ -92,7 +92,7 @@ func TestCurrentOpenCodeDiagnosticDoesNotExposeProviderText(t *testing.T) {
 		fmt.Sprintf(`{"type":"error","sessionID":%q,"error":{"name":%q}}`, testSession, secret),
 		stepFinish(testSession, "stop", `{}`, "0"),
 	)
-	result, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, io.Discard)
+	result, err := newRunInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, io.Discard)
 	if err != nil || result.Verdict != task.VerdictRejected || len(result.Diagnostics) == 0 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -108,7 +108,7 @@ func TestCurrentInterpreterSkipsLargeOpaqueToolOutputAndDuplicateMetadata(t *tes
 	tool := fmt.Sprintf(`{"type":"tool_use","sessionID":%q,"part":{"type":"tool","tool":"read","state":{"status":"completed","output":%q,"metadata":{"same":1,"same":2}}},"metadata":{"same":1,"same":2}}`, testSession, opaque)
 	stdout := jsonl(stepStart(testSession), tool, textEvent(testSession, "small answer"), stepFinish(testSession, "stop", `{}`, "0"))
 	var answer bytes.Buffer
-	interpretation, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer)
+	interpretation, err := newRunInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer)
 	if err != nil || interpretation.Verdict != task.VerdictCommitted || answer.String() != "small answer" {
 		t.Fatalf("interpretation=%+v answer=%q err=%v", interpretation, answer.String(), err)
 	}
@@ -118,7 +118,7 @@ func TestCurrentInterpreterStreamsThirtyTwoMiBOpenCodeAnswer(t *testing.T) {
 	answerText := strings.Repeat("a", (32<<20)+1)
 	stdout := jsonl(stepStart(testSession), textEvent(testSession, answerText), stepFinish(testSession, "stop", `{}`, "0"))
 	var sink opencodeCountingWriter
-	interpretation, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &sink)
+	interpretation, err := newRunInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &sink)
 	if err != nil || interpretation.Verdict != task.VerdictCommitted || sink.count != len(answerText) || sink.max > 64<<10 {
 		t.Fatalf("interpretation=%+v count=%d max=%d err=%v", interpretation, sink.count, sink.max, err)
 	}
@@ -133,7 +133,7 @@ func TestCurrentInterpreterStreamsFragmentedOpenCodeAnswer(t *testing.T) {
 	}
 	lines = append(lines, stepFinish(testSession, "stop", `{}`, "0"))
 	var answer bytes.Buffer
-	interpretation, err := NewInterpreter(ModeReadOnly).Evaluate(
+	interpretation, err := newRunInterpreter(ModeReadOnly).Evaluate(
 		predicate.Input{Seal: validSeal(jsonl(lines...), ModeReadOnly)},
 		&testEvidence{stdout: jsonl(lines...)}, &answer,
 	)
@@ -144,7 +144,7 @@ func TestCurrentInterpreterStreamsFragmentedOpenCodeAnswer(t *testing.T) {
 
 func TestCurrentInterpreterRecoversHistoricalWireWithoutChangingSeal(t *testing.T) {
 	stdout := jsonl(stepStart(testSession), textEvent(testSession, "recovered"), stepFinish(testSession, "stop", `{}`, "0"))
-	current := NewInterpreter(ModeReadOnly)
+	current := newRunInterpreter(ModeReadOnly)
 	recoverable, ok := current.(interface {
 		Target() task.PredicateRef
 		CanRecover(task.PredicateRef) bool
@@ -184,7 +184,7 @@ func TestCurrentInterpreterAllowsLaterStepsAfterIntermediateStop(t *testing.T) {
 		stepFinish(testSession, "stop", `{}`, "0"),
 	)
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(
 		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
 	)
 	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "final answer" {
@@ -210,7 +210,7 @@ func TestCurrentInterpreterAllowsEmptyRepeatedStepStart(t *testing.T) {
 		stepFinish(testSession, "stop", `{}`, "0"),
 	)
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(
 		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
 	)
 	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "final answer" {
@@ -236,7 +236,7 @@ func TestCurrentInterpreterRejectsRepeatedStepStartAfterContent(t *testing.T) {
 		stepFinish(testSession, "stop", `{}`, "0"),
 	)
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(
 		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
 	)
 	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalMalformed || answer.Len() != 0 {
@@ -253,7 +253,7 @@ func TestCurrentInterpreterRequiresTheLatestStepToStop(t *testing.T) {
 		textEvent(testSession, "unfinished"),
 	)
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(
 		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
 	)
 	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalIncomplete || answer.Len() != 0 {
@@ -272,7 +272,7 @@ func TestOpenCodeAllowsToolStepsButUsesOnlyText(t *testing.T) {
 		stepFinish(testSession, "stop", `{}`, "0"),
 	)
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(
 		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
 	)
 	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "final" {
@@ -299,7 +299,7 @@ func TestOpenCodeAllowsRecoverableToolErrors(t *testing.T) {
 		stepFinish(testSession, "stop", `{}`, "0"),
 	)
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(
 		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
 	)
 	if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "retried successfully" {
@@ -317,7 +317,7 @@ func TestOpenCodeRequiresNonWhitespaceTerminalText(t *testing.T) {
 		stepFinish(testSession, "stop", `{}`, "0"),
 	)
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(
 		predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &answer,
 	)
 	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalEmpty || answer.Len() != 0 {
@@ -340,7 +340,7 @@ func TestOpenCodeRejectsMalformedMissingTerminalAndConflictingIdentity(t *testin
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			var answer bytes.Buffer
-			interp, err := NewInterpreter(ModeReadOnly).Evaluate(
+			interp, err := newRunInterpreter(ModeReadOnly).Evaluate(
 				predicate.Input{Seal: validSeal(testCase.stdout, ModeReadOnly)}, &testEvidence{stdout: testCase.stdout}, &answer,
 			)
 			if err != nil || interp.Verdict != task.VerdictRejected || answer.Len() != 0 || interp.Refusal != refusalMalformed && interp.Refusal != refusalIncomplete {
@@ -359,7 +359,7 @@ func TestOpenCodeRejectsProviderAndIdentityFailures(t *testing.T) {
 		{Seal: validSeal(stdout, ModeReadOnly), RecordedSession: &task.SessionIdentity{Provider: "other:provider", ConversationID: testSession}},
 	} {
 		var answer bytes.Buffer
-		interp, err := NewInterpreter(ModeReadOnly).Evaluate(input, &testEvidence{stdout: stdout}, &answer)
+		interp, err := newRunInterpreter(ModeReadOnly).Evaluate(input, &testEvidence{stdout: stdout}, &answer)
 		if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalIdentity || answer.Len() != 0 {
 			t.Fatalf("identity interpretation=%+v err=%v", interp, err)
 		}
@@ -367,14 +367,14 @@ func TestOpenCodeRejectsProviderAndIdentityFailures(t *testing.T) {
 
 	failure := jsonl(stepStart(testSession), `{"type":"error","sessionID":"`+testSession+`","error":{"name":"APIError"}}`)
 	var answer bytes.Buffer
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(failure, ModeReadOnly)}, &testEvidence{stdout: failure}, &answer)
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(failure, ModeReadOnly)}, &testEvidence{stdout: failure}, &answer)
 	if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != refusalProviderFailed {
 		t.Fatalf("provider failure interpretation=%+v err=%v", interp, err)
 	}
 
 	nonzero := validSeal(stdout, ModeReadOnly)
 	nonzero.ExitCode = 7
-	interp, err = NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: nonzero}, &testEvidence{stdout: stdout}, &answer)
+	interp, err = newRunInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: nonzero}, &testEvidence{stdout: stdout}, &answer)
 	if err != nil || interp.Verdict != task.VerdictRejected || !strings.HasPrefix(interp.Refusal, refusalProviderFailed) {
 		t.Fatalf("nonzero interpretation=%+v err=%v", interp, err)
 	}
@@ -383,13 +383,13 @@ func TestOpenCodeRejectsProviderAndIdentityFailures(t *testing.T) {
 func TestOpenCodeAnswerWriterFailuresRemainOperational(t *testing.T) {
 	stdout := jsonl(stepStart(testSession), textEvent(testSession, strings.Repeat("a", answerChunkBytes+10)), stepFinish(testSession, "stop", `{}`, "0"))
 	writeErr := errors.New("answer write failed")
-	interp, err := NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &failingWriter{err: writeErr})
+	interp, err := newRunInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdout: stdout}, &failingWriter{err: writeErr})
 	if !errors.Is(err, writeErr) || interp.Verdict != "" {
 		t.Fatalf("interpretation=%+v err=%v", interp, err)
 	}
 
 	readErr := errors.New("stdout read failed")
-	interp, err = NewInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdoutReader: &errorReader{data: stdout, err: readErr}}, &bytes.Buffer{})
+	interp, err = newRunInterpreter(ModeReadOnly).Evaluate(predicate.Input{Seal: validSeal(stdout, ModeReadOnly)}, &testEvidence{stdoutReader: &errorReader{data: stdout, err: readErr}}, &bytes.Buffer{})
 	if !errors.Is(err, readErr) || interp.Verdict != "" {
 		t.Fatalf("interpretation=%+v err=%v", interp, err)
 	}
@@ -445,7 +445,7 @@ func validSeal(stdout []byte, mode string) task.ProviderExitRecord {
 		MetaSHA256:      strings.Repeat("d", 64),
 		InvocationState: task.InvocationStarted,
 		ExitCode:        0,
-		Predicate:       ReferenceForMode(mode),
+		Predicate:       runReferenceForMode(mode),
 		RawManifest:     manifest,
 		ManifestSHA256:  task.ComputeSHA256(data),
 		ClosedAt:        "2026-09-16T00:00:00Z",

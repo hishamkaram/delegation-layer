@@ -155,7 +155,7 @@ func ProbePrivateEndpointWithGate(ctx context.Context, clientExecutable, daemonE
 // supervisor while the caller holds WithBootstrapLock for stateRoot. It proves
 // the current binding and endpoint through Pueue's bounded group response, so
 // a repair limited to ordinary scheduling does not deserialize unrelated task
-// rows. A missing, changed, or incomplete generation returns ready=false; the
+// rows. A missing, changed, incomplete, or refused generation returns ready=false; the
 // caller must use the full lifecycle path before it can start or migrate one.
 func ProbePrivateGroupsWithBootstrapLock(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options) (client *Client, groups map[string]Group, ready bool, resultErr error) {
 	probeContext, cancel, options, err := privateProbeOptions(ctx, options)
@@ -163,9 +163,11 @@ func ProbePrivateGroupsWithBootstrapLock(ctx context.Context, clientExecutable, 
 		return nil, nil, false, err
 	}
 	defer cancel()
-	var snapshot QueueSnapshot
-	client, snapshot, ready, resultErr = probePrivateReady(probeContext, clientExecutable, daemonExecutable, stateRoot, options, privateProbeGroups, privateGenerationComplete)
-	if resultErr != nil || !ready {
+	client, snapshot, observation, resultErr := probePrivateReady(probeContext, clientExecutable, daemonExecutable, stateRoot, options, privateProbeGroups, privateGenerationComplete)
+	// An absent or refused endpoint is not ready here. The elected caller's
+	// published or bootstrap branch re-observes it before its canonical
+	// closure; this observation never closes or starts it.
+	if resultErr != nil || !observation.ready() {
 		if client != nil {
 			closeErr := client.CloseAfterPending(resultErr)
 			if resultErr != nil {
@@ -180,65 +182,80 @@ func ProbePrivateGroupsWithBootstrapLock(ctx context.Context, clientExecutable, 
 	return client, snapshot.Groups, true, nil
 }
 
-func probePrivateWithGate(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options, scope privateProbeScope, required privateGenerationPhase, gate func(context.Context, *Client, QueueSnapshot) (bool, error)) (client *Client, ready bool, resultErr error) {
+// probePrivateWithGate is the observer projection of observePrivateWithGate:
+// a refusal becomes its typed ErrBinding error and releases the client, while
+// an absent endpoint stays (client, false, nil) as before.
+func probePrivateWithGate(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options, scope privateProbeScope, required privateGenerationPhase, gate func(context.Context, *Client, QueueSnapshot) (bool, error)) (*Client, bool, error) {
+	client, ready, observation, err := observePrivateWithGate(ctx, clientExecutable, daemonExecutable, stateRoot, options, scope, required, gate)
+	if refusal := observation.projectedError(); refusal != nil {
+		return nil, false, errors.Join(refusal, client.CloseAfterPending(refusal))
+	}
+	return client, ready, err
+}
+
+// observePrivateWithGate observes the published generation under the shared
+// lease. It returns the endpoint observation beside any operational error; a
+// lease, gate, or close failure keeps the observed refusal as a cause and
+// returns no client or observation.
+func observePrivateWithGate(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options, scope privateProbeScope, required privateGenerationPhase, gate func(context.Context, *Client, QueueSnapshot) (bool, error)) (client *Client, ready bool, observation PrivateEndpointObservation, resultErr error) {
 	probeContext, cancel, options, err := privateProbeOptions(ctx, options)
 	if err != nil {
-		return nil, false, err
+		return nil, false, PrivateEndpointObservation{}, err
 	}
 	defer cancel()
 	leasePresent, err := privateBootstrapLockPresent(stateRoot)
 	if err != nil {
-		return nil, false, err
+		return nil, false, PrivateEndpointObservation{}, err
 	}
 	if !leasePresent {
 		// A fresh or incomplete root has no published generation to observe.
 		// Leave it untouched; the admission owner will enter the exclusive
 		// bootstrap path and provision the lifecycle boundary if needed.
-		return nil, false, nil
+		return nil, false, PrivateEndpointObservation{}, nil
 	}
 	resultErr = WithSupervisorLeaseContext(probeContext, stateRoot, func(lockedContext context.Context) error {
 		var probeErr error
 		var snapshot QueueSnapshot
-		client, snapshot, ready, probeErr = probePrivateReady(lockedContext, clientExecutable, daemonExecutable, stateRoot, options, scope, required)
-		if probeErr != nil || !ready || gate == nil {
+		client, snapshot, observation, probeErr = probePrivateReady(lockedContext, clientExecutable, daemonExecutable, stateRoot, options, scope, required)
+		if probeErr != nil || !observation.ready() || gate == nil {
+			ready = observation.ready()
 			return probeErr
 		}
 		ready, probeErr = gate(lockedContext, client, snapshot)
 		return probeErr
 	})
-	if resultErr != nil && client != nil {
-		resultErr = errors.Join(resultErr, client.CloseAfterPending(resultErr))
-		client = nil
+	if resultErr != nil {
+		return nil, false, PrivateEndpointObservation{}, failPrivateTransitionClient(client, observation, resultErr)
 	}
-	return client, ready, resultErr
+	return client, ready, observation, nil
 }
 
-func probePrivateReady(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options, scope privateProbeScope, required privateGenerationPhase) (*Client, QueueSnapshot, bool, error) {
+func probePrivateReady(ctx context.Context, clientExecutable, daemonExecutable, stateRoot string, options Options, scope privateProbeScope, required privateGenerationPhase) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
 	published, found, err := completePrivateProbeBinding(stateRoot, required)
 	if err != nil || !found {
-		return nil, QueueSnapshot{}, false, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
 	resolution, configResolution, err := privateProbeResolutions(published, options)
 	if err != nil {
-		return nil, QueueSnapshot{}, false, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
 	configPath := PrivateConfigPath(stateRoot)
 	resolved, err := readPrivateConfig(configPath, filepath.Dir(configPath), configResolution)
 	if err != nil {
-		return nil, QueueSnapshot{}, false, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
 	directoriesReady, err := privateProbeDirectoriesReady(resolved)
 	if err != nil || !directoriesReady {
-		return nil, QueueSnapshot{}, false, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
-	client, snapshot, ready, err := probePublishedPrivateClient(ctx, published, clientExecutable, daemonExecutable, configPath, resolution, options, scope)
+	client, snapshot, observation, err := probePublishedPrivateClient(ctx, published, clientExecutable, daemonExecutable, configPath, resolution, options, scope)
 	if err != nil || client == nil {
-		return client, QueueSnapshot{}, false, err
+		return client, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
-	if err = verifyPrivateSupervisorBinding(stateRoot, client.Binding(), ready); err != nil {
-		return nil, QueueSnapshot{}, false, errors.Join(err, client.CloseAfterPending(err))
+	if err = verifyPrivateSupervisorBinding(stateRoot, client.Binding(), observation.ready()); err != nil {
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, failPrivateTransitionClient(client, observation, err)
 	}
-	return client, snapshot, ready, nil
+	return client, snapshot, observation, nil
 }
 
 func completePrivateProbeBinding(stateRoot string, required privateGenerationPhase) (task.SupervisorRef, bool, error) {
@@ -298,10 +315,10 @@ func privateProbeDirectoriesReady(resolved ResolvedConfig) (bool, error) {
 // Reopening that same pair checks the bytes and endpoint again without a
 // redundant version subprocess. A different supplied pair remains successor
 // inventory; this probe always reopens the exact published pair.
-func probePublishedPrivateClient(ctx context.Context, published task.SupervisorRef, clientExecutable, daemonExecutable, configPath string, resolution ResolutionContext, options Options, scope privateProbeScope) (*Client, QueueSnapshot, bool, error) {
+func probePublishedPrivateClient(ctx context.Context, published task.SupervisorRef, clientExecutable, daemonExecutable, configPath string, resolution ResolutionContext, options Options, scope privateProbeScope) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
 	options, resolution, pairChanged, resolutionChanged, err := publishedPrivateProbeOptions(published, clientExecutable, daemonExecutable, resolution, options)
 	if err != nil {
-		return nil, QueueSnapshot{}, false, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
 	if !pairChanged && resolutionChanged {
 		return probeChangedResolutionPrivateClient(ctx, clientExecutable, daemonExecutable, configPath, options, scope)
@@ -328,54 +345,59 @@ func publishedPrivateProbeOptions(published task.SupervisorRef, clientExecutable
 	return options, resolution, pairChanged, resolutionChanged, nil
 }
 
-func probeChangedResolutionPrivateClient(ctx context.Context, clientExecutable, daemonExecutable, configPath string, options Options, scope privateProbeScope) (*Client, QueueSnapshot, bool, error) {
-	client, ready, err := bindPrivateClientWithCleanup(ctx, clientExecutable, daemonExecutable, configPath, options, false)
-	if err != nil || !ready || client == nil {
-		return client, QueueSnapshot{}, ready, err
+func probeChangedResolutionPrivateClient(ctx context.Context, clientExecutable, daemonExecutable, configPath string, options Options, scope privateProbeScope) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
+	client, observation, err := bindPrivateTransitionClient(ctx, clientExecutable, daemonExecutable, configPath, options, false)
+	if err != nil || !observation.ready() {
+		return client, QueueSnapshot{}, observation, err
 	}
 	snapshot, err := client.Snapshot(ctx)
 	if err != nil {
-		return client, QueueSnapshot{}, false, err
+		return client, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
 	if scope == privateProbeGroups {
-		return client, QueueSnapshot{Groups: snapshot.Groups}, true, nil
+		return client, QueueSnapshot{Groups: snapshot.Groups}, observation, nil
 	}
 	if scope == privateProbeSnapshot {
-		return client, snapshot, true, nil
+		return client, snapshot, observation, nil
 	}
-	return nil, QueueSnapshot{}, false, errors.Join(ErrConfiguration, client.CloseAfterPending(nil))
+	return nil, QueueSnapshot{}, PrivateEndpointObservation{}, errors.Join(ErrConfiguration, client.CloseAfterPending(nil))
 }
 
-func probeExactPublishedPrivateClient(ctx context.Context, published task.SupervisorRef, resolution ResolutionContext, options Options, scope privateProbeScope) (*Client, QueueSnapshot, bool, error) {
+func probeExactPublishedPrivateClient(ctx context.Context, published task.SupervisorRef, resolution ResolutionContext, options Options, scope privateProbeScope) (*Client, QueueSnapshot, PrivateEndpointObservation, error) {
 	options.Resolution = &resolution
 	client, err := NewClient(published, options)
 	if err != nil {
-		return nil, QueueSnapshot{}, false, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
 	if err = client.verify(ctx); err != nil {
 		if errors.Is(err, ErrBinding) {
-			return nil, QueueSnapshot{}, false, nil
+			return nil, QueueSnapshot{}, PrivateEndpointObservation{}, nil
 		}
-		return nil, QueueSnapshot{}, false, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
 	if err = attachPrivateDaemon(client, published.DaemonExecutable); err != nil {
-		return nil, QueueSnapshot{}, false, err
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, err
 	}
 	if client.binding.DaemonSHA256 != published.DaemonSHA256 {
-		return nil, QueueSnapshot{}, false, nil
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, nil
 	}
 	switch scope {
 	case privateProbeEndpoint:
+		// The socket-only probe proves readiness alone; it never supplies an
+		// absent or refused fact without a completed command.
 		ready, readyErr := privateClientReadyEndpoint(ctx, client)
-		return client, QueueSnapshot{}, ready, readyErr
+		if readyErr != nil || !ready {
+			return client, QueueSnapshot{}, PrivateEndpointObservation{}, readyErr
+		}
+		return client, QueueSnapshot{}, PrivateEndpointObservation{state: PrivateEndpointReady}, nil
 	case privateProbeGroups:
-		groups, ready, groupErr := privateClientReadyGroups(ctx, client)
-		return client, QueueSnapshot{Groups: groups}, ready, groupErr
+		groups, observation, groupErr := privateClientObserveGroups(ctx, client)
+		return client, QueueSnapshot{Groups: groups}, observation, groupErr
 	case privateProbeSnapshot:
-		snapshot, ready, readyErr := privateClientReadySnapshotWithCleanup(ctx, client, false)
-		return client, snapshot, ready, readyErr
+		snapshot, observation, readyErr := privateClientObserveSnapshot(ctx, client, false)
+		return client, snapshot, observation, readyErr
 	default:
-		return nil, QueueSnapshot{}, false, errors.Join(ErrConfiguration, client.CloseAfterPending(nil))
+		return nil, QueueSnapshot{}, PrivateEndpointObservation{}, errors.Join(ErrConfiguration, client.CloseAfterPending(nil))
 	}
 }
 
@@ -388,19 +410,22 @@ func preparePrivateClient(ctx context.Context, stateRoot string, options Options
 		return nil, err
 	}
 	var client *Client
+	var observation PrivateEndpointObservation
 	if migrationOnly {
 		client, err = Bind(ctx, clientPath, configPath, options)
 		if err == nil {
 			err = attachPrivateDaemon(client, daemonPath)
 		}
 	} else {
-		client, _, err = bindPrivateClientWithCleanup(ctx, clientPath, daemonPath, configPath, options, cleanupSuccessful)
+		// A refused endpoint does not preblock a prepared candidate. Its later
+		// StartPrivate applies binding checks, then the canonical closure.
+		client, observation, err = bindPrivateTransitionClient(ctx, clientPath, daemonPath, configPath, options, cleanupSuccessful)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if err = verifyExpectedPrivateBinding(ctx, clientPath, daemonPath, configPath, options, nil); err != nil {
-		return nil, err
+		return nil, failPrivateTransitionClient(client, observation, err)
 	}
 	return client, nil
 }

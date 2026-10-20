@@ -362,6 +362,7 @@
       "py:delegate_acceptance.workspaces.scenarios.context",
       "py:delegate_acceptance.workspaces.scenarios.evidence",
       "py:delegate_acceptance.workspaces.scenarios.lifecycle",
+      "py:delegate_acceptance.workspaces.scenarios.lineage",
       "py:delegate_acceptance.workspaces.scenarios.model",
       "py:delegate_acceptance.workspaces.scenarios.operations",
       "py:delegate_acceptance.workspaces.scenarios.policy",

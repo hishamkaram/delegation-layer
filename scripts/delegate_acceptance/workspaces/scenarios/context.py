@@ -9,38 +9,108 @@ import threading
 import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
 import scripts.delegate_acceptance.private_cli.supervisor as private_cli_supervisor
 import scripts.delegate_acceptance.private_cli.root_cleanup as private_cli_root_cleanup
-from scripts.delegate_acceptance.directories.operations import DirectoryOwner, OwnedDirectory
+from scripts.delegate_acceptance.directories.operations import (
+    DirectoryOwner, OwnedDirectory, release_owned_directories,
+)
 from scripts.delegate_acceptance.processes.operations import Processes
 from scripts.delegate_acceptance.directories.policy import require
 from .model import TASK_ID_RE
 from .policy import cleanup_decision
 
 
+class RetainedDirectories:
+    """Hold one explicit handoff of a DirectoryOwner inventory until idempotent terminal release.
+
+    The tuple stays here through every remover call, guard and authorization so no token is
+    unreachable; terminal release consumes only still-live pins and never deletes a directory.
+    """
+
+    def __init__(self, owner: DirectoryOwner):
+        self._owner = owner
+        self._entries: tuple[OwnedDirectory, ...] | None = None
+
+    def take(self) -> tuple[OwnedDirectory, ...]:
+        """Transfer the inventory on first use; later calls return the same tuple."""
+        if self._entries is None:
+            self._entries = self._owner.transfer()
+        return self._entries
+
+    def release(self) -> None:
+        live = tuple(entry for entry in self.take() if not entry.consumed)
+        try:
+            release_owned_directories(live)
+        finally:
+            self._entries = tuple(entry for entry in self.take() if not entry.consumed)
+
+
 class AcceptanceSetupFailure(RuntimeError):
     """Carry partial exact-directory ownership to finalization."""
 
-    def __init__(self, cause: BaseException, owner: DirectoryOwner, root_token: OwnedDirectory):
+    def __init__(
+        self, cause: BaseException, owner: DirectoryOwner, root_token: OwnedDirectory,
+        processes: Processes | None = None,
+    ):
         super().__init__(str(cause))
         self.cause = cause
         self.owner = owner
         self.root_token = root_token
+        self.processes = processes
+        self.directories = RetainedDirectories(owner)
+
+    def retained_directories(self) -> tuple[OwnedDirectory, ...]:
+        return self.directories.take()
+
+    def release_retained(self) -> None:
+        """Relinquish the finished setup's directory pins; never deletes or ends a child."""
+        self.directories.release()
 
     def cleanup(self) -> dict[str, object]:
-        entries = self.owner.transfer()
+        """Remove the exact root only after the one process registry shows no pending child."""
+        entries = self.retained_directories()
         paths = [str(entry.directory) for entry in entries]
+        refusal = self._process_refusal(paths)
+        if refusal is not None:
+            return refusal
         try:
             private_cli_root_cleanup.remove_private_acceptance_root(self.root_token, entries)
         except (OSError, RuntimeError) as error:
+            # Removal may have started: paths are the creation inventory, presence is unverified.
             return {
                 "authorized": False,
                 "decision": "setup-cleanup-failed-evidence-retained",
                 "error": str(error),
                 "retained_owned_directories": paths,
+                "retained_owned_directories_status": "unverified",
             }
         return {
             "authorized": True,
             "decision": "setup-failure-exact-root-removed",
             "removed_owned_directories": paths,
+        }
+
+    def _process_refusal(self, paths: list[str]) -> dict[str, object] | None:
+        if self.processes is None:
+            return None
+        try:
+            pending = self.processes.pending()
+        except (OSError, RuntimeError) as error:
+            return {
+                "authorized": False,
+                "decision": "setup-process-closure-unproven",
+                "error": str(error),
+                "retained_owned_directories": paths,
+            }
+        if not pending:
+            return None
+        _allowed, decision = cleanup_decision(
+            "failed", lifetime_closed=True, daemon_closed=True, task_count=0,
+            pending_process_count=len(pending),
+        )
+        return {
+            "authorized": False,
+            "decision": decision,
+            "pending_processes": pending,
+            "retained_owned_directories": paths,
         }
 
 
@@ -81,7 +151,17 @@ class WorkspaceContext:
     command_count: int = 0
     command_lock: threading.Lock = field(default_factory=threading.Lock)
     cleanup_done: bool = False
-    retained_entries: tuple[OwnedDirectory, ...] = ()
+    directories: RetainedDirectories = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.directories = RetainedDirectories(self.owner)
+
+    def retained_directories(self) -> tuple[OwnedDirectory, ...]:
+        return self.directories.take()
+
+    def release_retained(self) -> None:
+        """Relinquish the finished run's directory pins; never deletes or ends a child."""
+        self.directories.release()
 
     def command_receipt(self, task_id: str | None, label: str) -> Path:
         safe_task = task_id if task_id and TASK_ID_RE.fullmatch(task_id) else "control"
@@ -174,12 +254,11 @@ class WorkspaceContext:
         if daemon_error:
             result["daemon_error"] = daemon_error
         if not can_cleanup:
-            entries = self.owner.transfer()
-            self.retained_entries = entries
+            entries = self.retained_directories()
             result["retained_owned_directories"] = [str(entry.directory) for entry in entries]
             return result
         try:
-            entries = self.owner.transfer()
+            entries = self.retained_directories()
             private_cli_root_cleanup.remove_private_acceptance_root(
                 self.root_token,
                 entries,

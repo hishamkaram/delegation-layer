@@ -85,7 +85,8 @@ A host restart can end a provider turn before it publishes anything. Delegate
 reports an interruption only when the task's stored publication state is still
 unknown, with no provider exit or outcome, its canonical lifetime closure is
 proven, and its runner lease is released. A terminated budget stop is checked
-first and reports `timed_out` instead. Closure proves only that the provider
+first and reports `timed_out` instead, as does a closure whose recorded
+termination cause is the budget. Closure proves only that the provider
 scope is gone; it is not provider success, and no answer or output from that
 turn is accepted. Do not check these facts yourself or infer eligibility from
 missing files: obey the returned `status`, `failure`, `continuation`, and

@@ -25,6 +25,13 @@ var gitRedirectionVariables = map[string]struct{}{
 	"GIT_WORK_TREE":                    {},
 }
 
+// Every owned command is noninteractive and skips optional index locks, such
+// as a status refresh write-back. Required writer locks are unaffected.
+var gitReservedEnvironment = map[string]string{
+	"GIT_OPTIONAL_LOCKS":  "0",
+	"GIT_TERMINAL_PROMPT": "0",
+}
+
 var errGitRunnerRequired = errors.New("git command runner is required")
 
 // ValidateGitEnvironment rejects inherited Git redirections before a caller
@@ -98,11 +105,14 @@ func gitEnvironment(overrides map[string]string) ([]string, error) {
 		if _, blocked := gitRedirectionVariables[key]; blocked && key != "GIT_INDEX_FILE" {
 			return nil, fmt.Errorf("%w: unsupported Git environment override %s", contract.ErrInvalidGitContext, key)
 		}
+		if _, reserved := gitReservedEnvironment[key]; reserved {
+			return nil, fmt.Errorf("%w: reserved Git environment override %s", contract.ErrInvalidGitContext, key)
+		}
 		overrideKeys = append(overrideKeys, key)
 	}
 	sort.Strings(overrideKeys)
 
-	environment := make([]string, 0, len(os.Environ())+len(overrides))
+	environment := make([]string, 0, len(os.Environ())+len(overrides)+len(gitReservedEnvironment))
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		if _, blocked := gitRedirectionVariables[key]; blocked {
@@ -111,10 +121,16 @@ func gitEnvironment(overrides map[string]string) ([]string, error) {
 		if _, replaced := overrides[key]; replaced {
 			continue
 		}
+		if _, reserved := gitReservedEnvironment[key]; reserved {
+			continue
+		}
 		environment = append(environment, entry)
 	}
 	for _, key := range overrideKeys {
 		environment = append(environment, key+"="+overrides[key])
+	}
+	for _, key := range []string{"GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT"} {
+		environment = append(environment, key+"="+gitReservedEnvironment[key])
 	}
 	return environment, nil
 }

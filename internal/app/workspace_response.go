@@ -34,7 +34,7 @@ func fillManagedTaskWorkspace(store *taskdir.Store, td *taskdir.TaskDir, result 
 		result.response.Workspace.ReasonCode = workspaceObservationReason("load", err)
 		return
 	}
-	description, describeErr := workspaces.Describe(ctx, resource)
+	description, describeErr := workspaces.DescribeTask(ctx, resource, *request)
 	closeErr := resource.Close()
 	if err = errors.Join(describeErr, closeErr); err != nil {
 		result.response.Workspace.ReasonCode = workspaceObservationReason("describe", err)

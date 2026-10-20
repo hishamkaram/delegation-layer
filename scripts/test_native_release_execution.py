@@ -306,6 +306,28 @@ class ExecutionTests(ReleaseFixture):
             with self.assertRaisesRegex(ReleaseError, "native_ownership_unproven"):
                 execution.observe_native(self.receipt)
 
+    def test_pass_requires_the_checked_complete_lifecycle_not_daemon_shutdown(self) -> None:
+        self.complete("preflight", self.preflight_facts())
+        compact = self.root / "pass-case.json"
+        aggregate = {"exit_code": 0, "status": "PASS",
+                     "cases": [{"status": "PASS", "receipt_path": str(compact)}]}
+        with patch.object(execution, "observe_child", return_value={"exit_code": 0}), \
+                patch.object(execution, "validate_aggregate_receipt", return_value=(aggregate, "d" * 64)):
+            for state in ("unresolved", None):
+                with self.subTest(state=state):
+                    write_json(compact, {"cleanup": {"observation": {"status": "verified"}},
+                                         "source_proof": {"lifecycle_proof": {
+                                             "state": state, "supervisor_shutdown_observed": True}}},
+                               replace=True)
+                    with self.assertRaisesRegex(ReleaseError, "native_ownership_unproven"):
+                        execution.observe_native(self.receipt)
+            write_json(compact, {"cleanup": {"observation": {"status": "verified"}},
+                                 "source_proof": {"lifecycle_proof": {
+                                     "state": "complete", "supervisor_shutdown_observed": True}}},
+                       replace=True)
+            result = execution.observe_native(self.receipt)
+        self.assertEqual((result["status"], result["lifetime_closed"]), ("PASS", True))
+
     def test_canonical_failed_aggregate_retains_raw_after_lifetime_closure(self) -> None:
         self.complete("preflight", self.preflight_facts())
         root = self.receipt.invocation.aggregate.parent

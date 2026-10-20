@@ -11,6 +11,7 @@ from scripts.delegate_acceptance.processes import operations as process_owner
 from scripts.delegate_acceptance.private_cli import contention_controls as controls
 from scripts.delegate_acceptance.private_cli.contention_locks import probe_generation_lease
 from scripts.delegate_acceptance.private_cli.contention_policy import require_content_identity
+from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
 
@@ -115,6 +116,7 @@ class ModernBinaryControlTests(unittest.TestCase):
             self.fixture.state,
             self.fixture.controls.directory,
             managed_runner=True,
+            runner_placement=STATE_INSTALLED_RUNNER,
         )
         task_ops.root_id = self.fixture.root_id
         evidence = controls.prove_exclusive_handoff(

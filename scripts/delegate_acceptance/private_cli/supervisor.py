@@ -1,10 +1,13 @@
 """Private CLI supervisor boundary."""
 
+from dataclasses import dataclass
+from io import BufferedRandom
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.lifetime.closure import validate_managed_lifetime_closure
 from scripts.delegate_acceptance.private_cli.capture import run_captured_text_command
 from scripts.delegate_acceptance.private_cli.environment import phase_environment
+from scripts.delegate_acceptance.private_cli.leases import private_fixture_transition
 from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
 import errno
 import json
@@ -134,7 +137,10 @@ def private_shutdown_evidence(config):
         raise RuntimeError("private supervisor socket escapes its owned directory") from error
     if endpoint == config.parent or endpoint.parent.resolve(strict=True) != endpoint.parent:
         raise RuntimeError("private supervisor socket parent is unsafe")
-    pid_path = runtime / "pueue.pid"
+    return private_supervisor_pid(runtime / "pueue.pid"), endpoint, private_socket_identity(endpoint)
+
+
+def private_supervisor_pid(pid_path):
     with os.fdopen(os.open(pid_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
@@ -149,10 +155,98 @@ def private_shutdown_evidence(config):
         or int(value) == os.getpid()
     ):
         raise RuntimeError("invalid private supervisor PID")
+    return int(value)
+
+
+def private_socket_identity(endpoint):
     info = endpoint.lstat()
     if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
         raise RuntimeError("unsafe private supervisor socket")
-    return int(value), endpoint, (info.st_dev, info.st_ino)
+    return info.st_dev, info.st_ino
+
+
+@dataclass(frozen=True)
+class PredecessorShutdownTarget:
+    """Shutdown authority captured for one generation before its config is retargeted.
+
+    The ledger entry that carries this target owns backup_handle; the finalizer or
+    the verified successor release closes it. The handle pins the exact backup
+    file object, so a replaced path cannot inherit the captured authority.
+    """
+
+    config: Path
+    state: Path
+    backup: Path
+    backup_handle: BufferedRandom
+    backup_content: bytes
+    pid: int
+    endpoint: Path
+    socket_identity: tuple[int, int]
+
+
+def capture_predecessor_shutdown_target(config, state, backup):
+    """Bind the canonical generation and an exclusive owned config backup.
+
+    The caller holds private_fixture_transition, so the canonical config cannot
+    change between the ordinary evidence gate and the backup copy.
+    """
+    config = Path(config)
+    state = Path(state)
+    if config != state / ".supervisor" / "pueue.yml":
+        raise RuntimeError("predecessor shutdown config is not its state root's canonical config")
+    content = config.read_bytes()
+    pid, endpoint, socket_identity = private_shutdown_evidence(config)
+    if config.read_bytes() != content:
+        raise RuntimeError("canonical supervisor config changed during predecessor capture")
+    descriptor = os.open(backup, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    handle = os.fdopen(descriptor, "r+b")
+    try:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+        target = PredecessorShutdownTarget(
+            config=config,
+            state=state,
+            backup=Path(backup),
+            backup_handle=handle,
+            backup_content=content,
+            pid=pid,
+            endpoint=endpoint,
+            socket_identity=socket_identity,
+        )
+        require_predecessor_backup(target)
+    except BaseException:
+        handle.close()
+        raise
+    return target
+
+
+def require_predecessor_backup(target):
+    """Require the backup path to still name the pinned, unchanged owned file."""
+    pinned = os.fstat(target.backup_handle.fileno())
+    current = target.backup.lstat()
+    if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino):
+        raise RuntimeError("predecessor shutdown backup was replaced")
+    if pinned.st_uid != os.getuid() or pinned.st_nlink != 1 or stat.S_IMODE(pinned.st_mode) & 0o077:
+        raise RuntimeError("predecessor shutdown backup ownership changed")
+    content = os.pread(target.backup_handle.fileno(), pinned.st_size + 1, 0)
+    if content != target.backup_content:
+        raise RuntimeError("predecessor shutdown backup bytes changed")
+
+
+def predecessor_shutdown_evidence(target):
+    """Revalidate the captured generation; any successor progress is ambiguous.
+
+    The caller has already validated the pinned backup under the same lease.
+    """
+    runtime = target.config.parent / "run"
+    if runtime.resolve(strict=True) != runtime or target.endpoint.parent.resolve(strict=True) != target.endpoint.parent:
+        raise RuntimeError("unsafe private supervisor runtime directory")
+    if private_supervisor_pid(runtime / "pueue.pid") != target.pid:
+        raise RuntimeError("private supervisor generation changed after predecessor capture")
+    if private_socket_identity(target.endpoint) != target.socket_identity:
+        raise RuntimeError("predecessor supervisor socket was replaced")
+    return target.pid, target.endpoint, target.socket_identity
 
 
 def private_shutdown_endpoint_closed(endpoint, identity, deadline):
@@ -204,7 +298,51 @@ def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_
     """Authorize lifetime closure, then observe PID and endpoint disappearance."""
     authorize_managed_lifetime_closure(state, task_ids)
     deadline = time.monotonic() + timeout
-    pid, endpoint, socket_identity = private_shutdown_evidence(config)
+    shutdown_observed_supervisor(
+        client, config, env, private_shutdown_evidence(config), deadline, capture_root=capture_root
+    )
+
+
+PREDECESSOR_SHUT_DOWN = "shut_down"
+PREDECESSOR_ALREADY_CLOSED = "already_closed"
+
+
+def predecessor_closed(target, deadline, *, capture_root):
+    """Observe that the captured PID exited and the captured endpoint closed; send nothing."""
+    return private_daemon_process_gone(
+        target.pid, deadline, capture_root=capture_root
+    ) and private_shutdown_endpoint_closed(target.endpoint, target.socket_identity, deadline)
+
+
+def shutdown_predecessor_supervisor(client, target, env, timeout=30, *, task_ids=(), capture_root):
+    """Shut down a captured pre-retarget generation through its pinned backup config.
+
+    The production transition lease is held from closure authorization through
+    the final backup check, so cooperating lifecycle writers cannot change the
+    captured root's config, PID file, or socket while the command runs.
+
+    Returns PREDECESSOR_ALREADY_CLOSED only when the captured generation was
+    proven closed before this cleanup sent anything; otherwise
+    PREDECESSOR_SHUT_DOWN after this cleanup's own verified shutdown.
+    """
+    with private_fixture_transition(target.state):
+        authorize_managed_lifetime_closure(target.state, task_ids)
+        deadline = time.monotonic() + timeout
+        require_predecessor_backup(target)
+        # A migration may already have stopped this generation before it failed.
+        if predecessor_closed(target, deadline, capture_root=capture_root):
+            return PREDECESSOR_ALREADY_CLOSED
+        shutdown_observed_supervisor(
+            client, target.backup, env, predecessor_shutdown_evidence(target), deadline, capture_root=capture_root
+        )
+        # The command reads the backup by path. This detects a replaced backup;
+        # it cannot prove that no transient substitution happened during the command.
+        require_predecessor_backup(target)
+    return PREDECESSOR_SHUT_DOWN
+
+
+def shutdown_observed_supervisor(client, config, env, evidence, deadline, *, capture_root):
+    pid, endpoint, socket_identity = evidence
     if private_daemon_process_gone(pid, deadline, capture_root=capture_root):
         raise RuntimeError("private supervisor PID disappeared before shutdown")
     pueue_command(

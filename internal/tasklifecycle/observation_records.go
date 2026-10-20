@@ -52,7 +52,8 @@ type SupervisorObservation struct {
 type ContinuationCause string
 
 const (
-	// ContinuationTimedOut is a terminated budget stop.
+	// ContinuationTimedOut is a terminated budget stop, or a canonical closed
+	// lifetime whose validated termination cause is the budget.
 	ContinuationTimedOut ContinuationCause = "timed_out"
 	// ContinuationInterrupted is a canonical closed native lifetime with no
 	// seal or outcome, for example after a machine reboot. It proves that the

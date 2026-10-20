@@ -15,7 +15,11 @@ hermetic acceptance suites provide their own supervisor fixtures. The private
 inspection-journal handoff is covered by `make acceptance-supervisor-handoff`
 on Linux and native macOS CI. It uses fixture providers and real supervisors
 to check automatic and explicit handoff while existing external work continues;
-it does not use provider credentials or claim live model acceptance. The private
+it does not use provider credentials or claim live model acceptance.
+`make acceptance-workspaces` runs the managed workspace lifecycle and lineage
+scenarios through the current `delegate` build, a real private supervisor, and
+the finite private fixture provider; CI runs it on Linux and native macOS. It
+is fixture-only and does not launch a real provider. The private
 CLI capacity proof establishes 200 counted tasks Running while live provider
 leases, durable native-scope registrations, and contended lifetime-owner locks
 overlap. Its four concurrent dispatch callers are a recorded load-generator

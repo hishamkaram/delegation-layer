@@ -26,15 +26,31 @@ var (
 
 // Source is the validated committed source context used by a managed
 // checkout. Dirty is an observation only; no dirty source bytes enter a
-// checkout or capture.
+// checkout or capture. Root and GitDir are immutable provenance needed only
+// to provision; afterwards the shared CommonDir is the stable repository
+// identity. CommonDirDevice and CommonDirInode pin that directory when
+// recorded; sources recorded before this pin omit both.
 type Source struct {
-	Root         string
-	CommonDir    string
-	GitDir       string
-	RelativeCwd  string
-	BaseOID      string
-	ObjectFormat string
-	Dirty        bool
+	Root            string
+	CommonDir       string
+	GitDir          string
+	RelativeCwd     string
+	BaseOID         string
+	ObjectFormat    string
+	Dirty           bool
+	CommonDirDevice uint64 `json:"CommonDirDevice,omitempty"`
+	CommonDirInode  uint64 `json:"CommonDirInode,omitempty"`
+}
+
+// CommonDirIdentity returns the recorded common-directory identity, if any.
+func (s Source) CommonDirIdentity() (DirectoryIdentity, bool) {
+	return DirectoryIdentity{Device: s.CommonDirDevice, Inode: s.CommonDirInode}, s.CommonDirInode != 0
+}
+
+// WithCommonDirIdentity returns a copy that pins the common directory.
+func (s Source) WithCommonDirIdentity(identity DirectoryIdentity) Source {
+	s.CommonDirDevice, s.CommonDirInode = identity.Device, identity.Inode
+	return s
 }
 
 // Checkout identifies one Git-linked managed worktree and its admin
@@ -64,8 +80,18 @@ type CaptureArtifact struct {
 func (a CaptureArtifact) Omitted() bool { return a.OmittedReason != "" }
 
 // CaptureExport contains the optional patch and NUL-delimited name-status
-// artifacts produced from one validated candidate.
+// artifacts produced from one validated candidate. Patch and NameStatus are
+// cumulative from the workspace base. Turn is set only for an observed turn
+// and applies the same export policy from that turn's prelaunch baseline tree
+// to the same final tree.
 type CaptureExport struct {
+	Patch      CaptureArtifact
+	NameStatus CaptureArtifact
+	Turn       *CaptureDiff
+}
+
+// CaptureDiff is one exported patch and name-status pair.
+type CaptureDiff struct {
 	Patch      CaptureArtifact
 	NameStatus CaptureArtifact
 }

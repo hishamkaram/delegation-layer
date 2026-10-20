@@ -5,15 +5,70 @@ import shlex
 import stat
 import tempfile
 import unittest
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from unittest.mock import patch
 
 import acceptance_provider_common as provider_common
 from scripts import acceptance_native as entry
+from scripts.acceptance_tests.inspection.fixtures import (
+    ROOT as INSPECTION_ROOT,
+    TASK as INSPECTION_TASK,
+    InspectionFixture,
+)
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
     acceptance_collection as collection_impl,
 )
+from scripts.delegate_acceptance.supervisor.runner_layout import (
+    BUNDLE_RUNNER,
+    STATE_INSTALLED_RUNNER,
+    RunnerPlacement,
+    managed_state_runner,
+)
+
+
+OLD_TASK = "a" * 32
+NEW_TASK = "c" * 32
+UNBOUND_TASK = "d" * 32
+
+
+class PreallocatedRunnerOps(provider_common.NativeTaskOps):
+    """Consumer selection that binds each preallocated task to one runner."""
+
+    def __init__(self, bindings: dict[str, Path], *, runner: Path, base: Path,
+                 state_parent: Path, state: Path, managed_runner: bool = False,
+                 runner_placement: RunnerPlacement = BUNDLE_RUNNER) -> None:
+        super().__init__(SimpleNamespace(), base / "delegate", runner, base / "pueue",
+                         state_parent, state, base / "output", managed_runner=managed_runner,
+                         runner_placement=runner_placement)
+        self.bindings = MappingProxyType(dict(bindings))
+
+    def _expected_runner(self, task: str) -> Path:
+        runner = self.bindings.get(task)
+        if runner is None:
+            raise gate.AcceptanceFailure(f"task {task} has no bound expected runner")
+        return runner
+
+
+def runner_fixtures(root: Path) -> dict[str, Path]:
+    runners = {}
+    for name in ("old", "new", "third"):
+        runner = root / f"delegate-run-{name}"
+        runner.write_bytes(f"{name} runner fixture\n".encode())
+        runner.chmod(0o700)
+        runners[name] = runner
+    return runners
+
+
+def ordinary_row(runner: Path, state: Path, task: str, supervised: bool = False) -> dict[str, object]:
+    argv = [str(runner)]
+    if supervised:
+        argv.extend(["--guardian", "--supervised"])
+    command = shlex.join([*argv, "--root", str(state), task])
+    return {
+        "id": 7, "label": "delegate:" + "b" * 32 + ":" + task, "group": "default",
+        "path": str(state), "original_command": command, "command": command,
+    }
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):
@@ -158,8 +213,10 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.workspace = Path("/workspace")
         operation.provider = "antigravity:print"
         operation.mode = "read-only"
+        operation.ops = SimpleNamespace(managed_runner=True)
         operation.args = SimpleNamespace(model="gemini-3-pro", effort="high")
         argv = operation.dispatch_argv("a" * 32, Path("/brief"))
+        self.assertNotIn("--runner", argv)
         self.assertEqual(argv[argv.index("--budget") + 1], gate.TASK_BUDGET)
         self.assertEqual(argv[argv.index("--pueue-config") + 1], operation.config)
         self.assertEqual(argv[argv.index("--model") + 1], "gemini-3-pro")
@@ -184,24 +241,66 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         ])
         self.assertEqual(args.scenario, "timeout-resume")
 
-    def test_timeout_resume_uses_managed_runner_commands(self):
+    def _command_operation(self, provider: str, mode: str, scenario: str,
+                           root: Path) -> gate.NativeAcceptance:
         operation = object.__new__(gate.NativeAcceptance)
-        operation.delegate = Path("/delegate")
-        operation.state = Path("/state")
-        operation.config = Path("/pueue.yml")
-        operation.runner = Path("/runner")
-        operation.workspace = Path("/workspace")
-        operation.provider = "codex:exec"
-        operation.mode = "workspace-write"
-        operation.scenario = "timeout-resume"
+        operation.delegate = root / "delegate"
+        operation.state = root / "state"
+        operation.models_state = root / "models-state"
+        operation.base = root
+        operation.output = root / "output"
+        operation.processes = SimpleNamespace()
+        operation.pueue = root / "pueue"
+        operation.config = root / "pueue.yml"
+        operation.runner = root / "runner"
+        operation.workspace = root / "workspace"
+        operation.provider = provider
+        operation.mode = mode
+        operation.scenario = scenario
         operation.args = SimpleNamespace(model=None, effort=None)
+        return operation
 
-        prefix = operation.task_command_prefix()
-        dispatch = operation.dispatch_argv("a" * 32, Path("/brief"))
+    def test_timeout_resume_uses_managed_runner_commands(self):
+        self._assert_managed_runner_commands((
+            ("codex:exec", "workspace-write", "timeout-resume"),
+            ("opencode:run", "workspace-write", "timeout-resume")))
 
-        self.assertNotIn("--runner", prefix)
-        self.assertEqual(dispatch[:len(prefix)], prefix)
-        self.assertIn("dispatch", dispatch)
+    def test_every_scenario_admits_through_the_managed_runner_by_default(self):
+        self._assert_managed_runner_commands((
+            ("claude:print", "read-only", "read-only"), ("ccr:print", "workspace-write", "write"),
+            ("codex:exec", "read-only", "non-git"), ("codex:exec", "workspace-write", "non-git"),
+            ("claude:print", "read-only", "interactive")))
+
+    def _assert_managed_runner_commands(self, cases: tuple[tuple[str, str, str], ...]) -> None:
+        root = Path("/fixture")
+        for provider, mode, scenario in cases:
+            with self.subTest(provider=provider, scenario=scenario):
+                operation = self._command_operation(provider, mode, scenario, root)
+                operation.ops = gate.NativeAcceptanceTaskOps(operation)
+                self.assertTrue(operation.ops.managed_runner)
+                prefix = operation.task_command_prefix()
+                dispatch = operation.dispatch_argv("a" * 32, Path("/brief"))
+                models = operation.model_discovery_argv()
+                for argv in (prefix, dispatch, models):
+                    self.assertNotIn("--runner", argv)
+                    self.assertNotIn(operation.runner, argv)
+                self.assertEqual(dispatch[:len(prefix)], prefix)
+                self.assertEqual(prefix, [operation.delegate, "--root", operation.state,
+                                          "--pueue-config", operation.config])
+                self.assertEqual(models[:5], [operation.delegate, "--root", operation.models_state,
+                                              "--pueue-config", operation.config])
+                cleanup = gate.ModelDiscoveryCleanupOps(operation)
+                self.assertTrue(cleanup.managed_runner)
+
+    def test_internal_custom_fixture_keeps_its_explicit_runner(self):
+        operation = self._command_operation("codex:exec", "workspace-write", "timeout-resume",
+                                            Path("/fixture"))
+        operation.ops = gate.NativeAcceptanceTaskOps(operation, managed_runner=False)
+        for argv in (operation.task_command_prefix(),
+                     operation.dispatch_argv("a" * 32, Path("/brief")),
+                     operation.model_discovery_argv()):
+            self.assertEqual(argv[argv.index("--runner") + 1], operation.runner)
+        self.assertFalse(gate.ModelDiscoveryCleanupOps(operation).managed_runner)
 
     def test_managed_runner_queue_validation_requires_guardian(self):
         with tempfile.TemporaryDirectory(prefix="native-managed-runner-") as directory:
@@ -211,9 +310,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             task_directory = state / "tasks" / task
             task_directory.mkdir(parents=True)
             source_runner = root / "delegate-run"
-            managed_runner = state / ".supervisor" / "delegate-run-managed"
-            managed_runner.parent.mkdir()
             source_runner.write_bytes(b"managed runner fixture\n")
+            managed_runner = managed_state_runner(state, gate.digest(source_runner))
+            managed_runner.parent.mkdir()
             managed_runner.write_bytes(source_runner.read_bytes())
             source_runner.chmod(0o700)
             managed_runner.chmod(0o700)
@@ -223,7 +322,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             })
             ops = provider_common.NativeTaskOps(
                 SimpleNamespace(), root / "delegate", source_runner, root / "pueue",
-                root, state, root / "output", managed_runner=True)
+                root, state, root / "output", managed_runner=True,
+                runner_placement=STATE_INSTALLED_RUNNER)
             command = shlex.join([
                 str(managed_runner), "--guardian", "--supervised",
                 "--root", str(state), task,
@@ -238,6 +338,24 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             row["command"] = shlex.join([str(managed_runner), "--root", str(state), task])
             with self.assertRaisesRegex(gate.AcceptanceFailure, "exact runner/state/task"):
                 ops.validate_ordinary_queue_row(row, row["label"], task, 7, "default")
+
+            # Go names the state copy by digest; a same-bytes copy elsewhere
+            # is not the runner a managed admission executes.
+            other = state / ".supervisor" / "delegate-run-managed"
+            other.write_bytes(source_runner.read_bytes())
+            other.chmod(0o700)
+            gate.write_json(task_directory / "meta.json", {
+                "runner_executable": str(other), "runner_ownership": "managed",
+            }, replace=True)
+            with self.assertRaisesRegex(gate.AcceptanceFailure,
+                                        "ordinary task managed runner executable changed"):
+                ops._ordinary_runner_executable(task)
+            gate.write_json(task_directory / "meta.json", {
+                "runner_executable": str(managed_runner), "runner_ownership": "managed",
+            }, replace=True)
+            managed_runner.write_bytes(b"replaced runner\n")
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "managed runner executable changed"):
+                ops._ordinary_runner_executable(task)
 
     def test_inspection_queue_accepts_fresh_and_recovered_client_directories(self):
         with tempfile.TemporaryDirectory(prefix="native-inspection-cwd-") as directory:
@@ -295,6 +413,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.provider = "claude:print"
         operation.mode = "read-only"
         operation.scenario = "interactive"
+        operation.ops = SimpleNamespace(managed_runner=True)
         operation.args = SimpleNamespace(model=None, effort=None)
         argv = operation.dispatch_argv("a" * 32, Path("/brief"))
         self.assertIn("--interactive", argv)
@@ -512,3 +631,189 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 operation.collect("fresh-collect", task)
             self.assertNotIsInstance(raised.exception, gate.BlockedFailure)
             self.assertIn("collection evidence is malformed", str(raised.exception))
+
+    def test_timeout_resume_selection_accepts_only_codex_or_opencode_workspace_write(self):
+        refused = (
+            ("opencode:run", "read-only"), ("codex:exec", "read-only"),
+            ("claude:print", "workspace-write"), ("pi:json", "workspace-write"),
+            ("ccr:print", "workspace-write"), ("antigravity:print", "workspace-write"),
+        )
+        for provider, mode in refused:
+            with self.subTest(provider=provider, mode=mode):
+                args = SimpleNamespace(provider=provider, mode=mode, scenario="timeout-resume")
+                with self.assertRaisesRegex(
+                        gate.AcceptanceFailure,
+                        "timeout-resume scenario requires codex:exec or opencode:run workspace-write"):
+                    gate.NativeAcceptance(args)
+        with self.assertRaisesRegex(gate.AcceptanceFailure, "codex:review does not support"):
+            gate.NativeAcceptance(SimpleNamespace(
+                provider="codex:review", mode="workspace-write", scenario="timeout-resume"))
+        args = entry.build_parser().parse_args([
+            "--provider", "opencode:run", "--permission", "workspace-write",
+            "--scenario", "timeout-resume", "--output", "/evidence",
+        ])
+        self.assertEqual((args.provider, args.mode, args.scenario),
+                         ("opencode:run", "workspace-write", "timeout-resume"))
+
+    def test_opencode_timeout_workspace_has_no_codex_git_or_baseline(self):
+        with tempfile.TemporaryDirectory(prefix="native-opencode-timeout-workspace-") as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            operation = object.__new__(gate.NativeAcceptance)
+            operation.provider = "opencode:run"
+            operation.scenario = "timeout-resume"
+            operation.git = None
+            operation.workspace = workspace
+            operation.processes = SimpleNamespace()
+
+            operation._prepare_codex_workspace()
+
+            self.assertEqual(gate.workspace_snapshot(workspace), {})
+
+    def test_expected_runner_defaults_to_the_single_ledger_runner(self):
+        with tempfile.TemporaryDirectory(prefix="native-default-runner-") as directory:
+            root = Path(directory)
+            state = root / "state"
+            runners = runner_fixtures(root)
+            ops = provider_common.NativeTaskOps(
+                SimpleNamespace(), root / "delegate", runners["new"], root / "pueue",
+                root, state, root / "output")
+
+            for task in (OLD_TASK, NEW_TASK, UNBOUND_TASK):
+                self.assertEqual(ops._expected_runner(task), runners["new"])
+            row = ordinary_row(runners["new"], state, OLD_TASK)
+            ops.validate_ordinary_queue_row(row, row["label"], OLD_TASK, 7, "default")
+            row = ordinary_row(runners["old"], state, OLD_TASK)
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "exact runner/state/task"):
+                ops.validate_ordinary_queue_row(row, row["label"], OLD_TASK, 7, "default")
+
+    def test_custom_queue_rows_bind_only_each_preallocated_task_runner(self):
+        with tempfile.TemporaryDirectory(prefix="native-bound-custom-runner-") as directory:
+            root = Path(directory)
+            state = root / "state"
+            runners = runner_fixtures(root)
+            ops = PreallocatedRunnerOps(
+                {OLD_TASK: runners["old"], NEW_TASK: runners["new"]},
+                runner=runners["new"], base=root, state_parent=root, state=state)
+
+            for task, runner in ((OLD_TASK, runners["old"]), (NEW_TASK, runners["new"])):
+                row = ordinary_row(runner, state, task)
+                ops.validate_ordinary_queue_row(row, row["label"], task, 7, "default")
+            for task, runner in ((OLD_TASK, runners["new"]), (NEW_TASK, runners["old"]),
+                                 (OLD_TASK, runners["third"]), (NEW_TASK, runners["third"])):
+                with self.subTest(task=task, runner=runner.name):
+                    row = ordinary_row(runner, state, task)
+                    with self.assertRaisesRegex(gate.AcceptanceFailure, "exact runner/state/task"):
+                        ops.validate_ordinary_queue_row(row, row["label"], task, 7, "default")
+            row = ordinary_row(runners["new"], state, UNBOUND_TASK)
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "no bound expected runner"):
+                ops.validate_ordinary_queue_row(row, row["label"], UNBOUND_TASK, 7, "default")
+            with self.assertRaises(TypeError):
+                ops.bindings[UNBOUND_TASK] = runners["third"]
+
+    def test_managed_runner_binding_compares_each_task_with_its_selected_runner(self):
+        with tempfile.TemporaryDirectory(prefix="native-bound-managed-runner-") as directory:
+            root = Path(directory)
+            state = root / "state"
+            runners = runner_fixtures(root)
+            managed = {}
+            for task, name in ((OLD_TASK, "old"), (NEW_TASK, "new"), (UNBOUND_TASK, "new")):
+                (state / "tasks" / task).mkdir(parents=True)
+                managed[task] = managed_state_runner(state, provider_common.digest(runners[name]))
+                managed[task].parent.mkdir(exist_ok=True)
+                managed[task].write_bytes(runners[name].read_bytes())
+                managed[task].chmod(0o700)
+                gate.write_json(state / "tasks" / task / "meta.json", {
+                    "runner_executable": str(managed[task]), "runner_ownership": "managed",
+                })
+            ops = PreallocatedRunnerOps(
+                {OLD_TASK: runners["old"], NEW_TASK: runners["new"]},
+                runner=runners["new"], base=root, state_parent=root, state=state,
+                managed_runner=True, runner_placement=STATE_INSTALLED_RUNNER)
+
+            for task in (OLD_TASK, NEW_TASK):
+                self.assertEqual(ops._ordinary_runner_executable(task), managed[task])
+                row = ordinary_row(managed[task], state, task, supervised=True)
+                ops.validate_ordinary_queue_row(row, row["label"], task, 7, "default")
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "no bound expected runner"):
+                ops._ordinary_runner_executable(UNBOUND_TASK)
+            swapped = PreallocatedRunnerOps(
+                {OLD_TASK: runners["new"], NEW_TASK: runners["third"]},
+                runner=runners["old"], base=root, state_parent=root, state=state,
+                managed_runner=True, runner_placement=STATE_INSTALLED_RUNNER)
+            for task in (OLD_TASK, NEW_TASK):
+                with self.subTest(task=task):
+                    with self.assertRaisesRegex(gate.AcceptanceFailure, "managed runner executable changed"):
+                        swapped._ordinary_runner_executable(task)
+
+    def test_managed_bundle_binding_keeps_each_task_on_its_selected_bundle_runner(self):
+        with tempfile.TemporaryDirectory(prefix="native-bound-bundle-runner-") as directory:
+            root = Path(directory)
+            state = root / "state"
+            runners = runner_fixtures(root)
+            for task, name in ((OLD_TASK, "old"), (NEW_TASK, "new"), (UNBOUND_TASK, "new")):
+                (state / "tasks" / task).mkdir(parents=True)
+                gate.write_json(state / "tasks" / task / "meta.json", {
+                    "runner_executable": str(runners[name]), "runner_ownership": "managed",
+                })
+            ops = PreallocatedRunnerOps(
+                {OLD_TASK: runners["old"], NEW_TASK: runners["new"]},
+                runner=runners["new"], base=root, state_parent=root, state=state,
+                managed_runner=True, runner_placement=BUNDLE_RUNNER)
+            for task, name in ((OLD_TASK, "old"), (NEW_TASK, "new")):
+                self.assertEqual(ops._ordinary_runner_executable(task), runners[name])
+                row = ordinary_row(runners[name], state, task, supervised=True)
+                ops.validate_ordinary_queue_row(row, row["label"], task, 7, "default")
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "no bound expected runner"):
+                ops._ordinary_runner_executable(UNBOUND_TASK)
+            swapped = PreallocatedRunnerOps(
+                {OLD_TASK: runners["new"], NEW_TASK: runners["third"]},
+                runner=runners["old"], base=root, state_parent=root, state=state,
+                managed_runner=True, runner_placement=BUNDLE_RUNNER)
+            for task in (OLD_TASK, NEW_TASK):
+                with self.subTest(task=task):
+                    with self.assertRaisesRegex(gate.AcceptanceFailure, "managed runner executable changed"):
+                        swapped._ordinary_runner_executable(task)
+
+    def _bound_inspection_fixture(self, bindings: dict[str, str]) -> tuple[InspectionFixture, Path]:
+        fixture = InspectionFixture(self)
+        runners = {"old": fixture.runner, **{
+            name: path for name, path in runner_fixtures(fixture.base).items() if name != "old"}}
+        fixture.ops = PreallocatedRunnerOps(
+            {task: runners[name] for task, name in bindings.items()},
+            runner=runners["new"], base=fixture.base,
+            state_parent=fixture.state_parent, state=fixture.state)
+        fixture.ops.bind_supervisor(fixture.config)
+        fixture.ops.root_id = INSPECTION_ROOT
+        fixture.ops.tasks = {"fresh": INSPECTION_TASK}
+        fixture.ops.labels = {"fresh": f"delegate:{INSPECTION_ROOT}:{INSPECTION_TASK}"}
+        fixture.ops.numbers = {"fresh": 7}
+        fixture.ops.dispatch_attempts = {INSPECTION_TASK}
+        return fixture, fixture.inspection_records()
+
+    def test_inspection_journal_and_queue_row_retain_selected_runner_provenance(self):
+        fixture, directory = self._bound_inspection_fixture({INSPECTION_TASK: "old"})
+        journal = fixture.ops.validate_inspection_journal(INSPECTION_TASK, directory)
+        fixture.ops._validate_inspection_queue_row(
+            fixture.inspection_row(), journal, allow_failure=False)
+        fixture.ops._validate_queue_membership(fixture.status(fixture.inspection_row()), False)
+        self.assertNotEqual(provider_common.digest(fixture.ops.runner),
+                            provider_common.digest(fixture.runner))
+
+        for bindings, message in (({INSPECTION_TASK: "new"}, "worker mismatch"),
+                                  ({INSPECTION_TASK: "third"}, "worker mismatch"),
+                                  ({}, "no bound expected runner")):
+            with self.subTest(bindings=bindings):
+                other, other_directory = self._bound_inspection_fixture(bindings)
+                with self.assertRaisesRegex(gate.AcceptanceFailure, message):
+                    other.ops.validate_inspection_journal(INSPECTION_TASK, other_directory)
+                expected_row_error = "argv mismatch" if bindings else message
+                with self.assertRaisesRegex(gate.AcceptanceFailure, expected_row_error):
+                    other.ops._validate_inspection_queue_row(
+                        other.inspection_row(), journal, allow_failure=False)
+
+    def test_inspection_queue_row_requires_a_journal_task_identity(self):
+        fixture, _directory = self._bound_inspection_fixture({INSPECTION_TASK: "old"})
+        with self.assertRaisesRegex(gate.AcceptanceFailure, "journal has no task identity"):
+            fixture.ops._validate_inspection_queue_row(
+                fixture.inspection_row(), {"task_id": None}, allow_failure=False)

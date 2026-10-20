@@ -16,7 +16,7 @@ func TestDescriptionExposesRuntimeCapabilities(t *testing.T) {
 		t.Fatalf("runtime capability metadata is missing: %+v", description)
 	}
 	registration := Registration()
-	if registration.Prepare == nil || registration.PrepareExisting == nil || len(registration.Interpreters) != 13 {
+	if registration.Prepare == nil || registration.PrepareExisting == nil || len(registration.Interpreters) != 15 {
 		t.Fatalf("registration did not expose preparation and interpreter: %+v", registration)
 	}
 	if !registration.Interpreters[8].Reference().Equal(LegacyReference()) {

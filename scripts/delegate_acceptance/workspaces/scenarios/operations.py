@@ -204,7 +204,13 @@ def _dispatch(
     task_budget: str,
     fresh: bool,
     workspace_id: str | None = None,
+    source: Path | str | None = None,
+    base: str | None = None,
 ) -> dict[str, object]:
+    if not fresh:
+        require(workspace_id is not None, "workspace reuse dispatch lacks ID")
+        require(source is None and base is None,
+                "workspace reuse cannot override the source checkout or base")
     task_id = uuid.uuid4().hex
     with context.command_lock:
         context.attempted_task_ids.append(task_id)
@@ -217,11 +223,11 @@ def _dispatch(
     ]
     if fresh:
         args.extend([
-            "--cwd", str(context.source), "--isolation", "git-worktree",
-            "--base", context.source_baseline["head"],
+            "--cwd", str(context.source if source is None else source),
+            "--isolation", "git-worktree",
+            "--base", context.source_baseline["head"] if base is None else base,
         ])
     else:
-        require(workspace_id is not None, "workspace reuse dispatch lacks ID")
         args.extend(["--workspace", workspace_id])
     code, response = _control(
         context, args, label="dispatch", task_id=task_id, expected=(0, 1, 2, 3),
@@ -315,19 +321,33 @@ def _prove_lifetimes_closed(context: WorkspaceContext, task_ids: list[str]) -> d
     return proof
 
 
-def _wait_capture(context: WorkspaceContext, task: dict[str, object]) -> tuple[dict[str, object], dict[str, object]]:
+def _capture_is_for(capture: dict[str, object], subject_id: str) -> bool:
+    subject = capture.get("subject")
+    return isinstance(subject, dict) and subject.get("id") == subject_id
+
+
+def _wait_capture(
+    context: WorkspaceContext, task: dict[str, object], *, subject_id: str | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Wait for the capture of one exact subject: the task itself unless an ID is selected.
+
+    A previous turn's latest receipt, captured or unavailable, is ignored until the
+    selected subject's own receipt arrives.
+    """
     workspace_id = task["workspace_id"]
+    subject_id = task["task_id"] if subject_id is None else subject_id
     deadline = time.monotonic() + WAIT_SECONDS
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("workspace capture observation expired: " + workspace_id)
+            raise TimeoutError("workspace capture observation expired: " + workspace_id
+                               + " subject " + subject_id)
         response = _wait_workspace(
             context, workspace_id, timeout=min(15, remaining), task_id=task["task_id"],
         )
         workspace = _workspace_from(response)
         capture = workspace.get("capture")
-        if isinstance(capture, dict):
+        if isinstance(capture, dict) and _capture_is_for(capture, subject_id):
             if capture.get("status") == "captured":
                 return response, capture
             if capture.get("status") == "unavailable":

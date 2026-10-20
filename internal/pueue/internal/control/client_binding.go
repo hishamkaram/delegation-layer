@@ -108,15 +108,46 @@ func (c *Client) verify(ctx context.Context) error {
 }
 
 func (c *Client) verifyBinding() error {
-	current, err := c.readBinding()
+	comparison, err := c.compareBinding()
 	if err != nil {
-		return errors.Join(ErrBinding, err)
+		return err
 	}
-	current.ObservedVersion = c.runtimeBinding.ObservedVersion
-	if current != c.runtimeBinding {
+	if comparison != bindingEqual {
 		return ErrBinding
 	}
 	return nil
+}
+
+// bindingComparison is the result of one successful comparison of the
+// canonical config binding with the runtime binding.
+type bindingComparison uint8
+
+const (
+	bindingEqual bindingComparison = iota + 1
+	// bindingConfigChanged differs only in the identity readBinding derives
+	// from the config bytes and their resolution: config digest, endpoint and
+	// resolved config digest. Path, executables, resolution and version match.
+	bindingConfigChanged
+	bindingChanged
+)
+
+// compareBinding reads the canonical binding once. Every read, parse,
+// resolution, symlink or executable fault returns the zero comparison.
+func (c *Client) compareBinding() (bindingComparison, error) {
+	current, err := c.readBinding()
+	if err != nil {
+		return 0, errors.Join(ErrBinding, err)
+	}
+	current.ObservedVersion = c.runtimeBinding.ObservedVersion
+	if current == c.runtimeBinding {
+		return bindingEqual, nil
+	}
+	configOnly := c.runtimeBinding
+	configOnly.ConfigDigest, configOnly.Endpoint, configOnly.ResolvedConfigSHA256 = current.ConfigDigest, current.Endpoint, current.ResolvedConfigSHA256
+	if configOnly == current {
+		return bindingConfigChanged, nil
+	}
+	return bindingChanged, nil
 }
 
 func (c *Client) checkVersion(ctx context.Context) (string, error) {

@@ -83,10 +83,12 @@ requires `--model` to be a configured CCR alias. AGY
 read-only uses native `--sandbox --mode plan` without a bypass; authorized
 workspace-write retains the native accept-edits mode and bypass. Codex maps
 effort to TOML `model_reasoning_effort`, CCR, Claude, and AGY pass native effort
-flags, Pi maps effort to `--thinking`, and OpenCode maps it to `--variant`.
-An omitted or `default` effort is left out of native argv. Unsupported model,
-effort, policy, or timeout combinations are rejected before supervisor
-admission.
+flags, Pi maps effort to `--thinking`, and OpenCode sets its native ACP
+`model` and `effort` options, which OpenCode must acknowledge before the prompt.
+An omitted or `default` effort is left out of native argv and protocol options.
+Unsupported model, effort, policy, or timeout combinations are rejected before
+supervisor admission; an OpenCode option it does not acknowledge rejects the
+task.
 
 If an explicit choice is needed, run:
 
@@ -141,10 +143,18 @@ delegate --root "$HOME/delegation-state" supervisor migrate --json
 
 `failure.reason_code` and `supervisor_control.reason_code` distinguish
 `identity_conflict`, `transition_pending`, `published_pair_unavailable_live`,
-`predecessor_pair_unavailable`, `active_work`, `observation_failed`, and
-`state_unreadable`. These optional fields retain the existing schema version,
-failure codes, and next actions. Wait for active work to finish before retrying
-migration; report conflicting or unreadable state without manual surgery.
+`predecessor_pair_unavailable`, `active_work`, `observation_failed`,
+`state_unreadable`, `endpoint_owner_unknown`, and `endpoint_refused_live`. These
+optional fields retain the existing schema version, failure codes, and next
+actions. Wait for active work to finish before retrying migration; report
+conflicting or unreadable state without manual surgery.
+`endpoint_owner_unknown` means the supervisor endpoint refuses connections and
+its recorded process is unknown; `endpoint_refused_live` means it refuses
+connections while its recorded process is present. Both preserve state.
+Admission reports them with `failure.code: "supervisor_setup_failed"` and
+`failure.next_action: "stop_and_report"`; `supervisor migrate` reports them in
+`supervisor_control` with `next_action: "stop_and_report"`. Report the failure
+and stop.
 
 An older failed migration may leave prepared intent or a recovery alias. Current
 Delegate can still observe the exact published predecessor before shutdown

@@ -103,7 +103,7 @@ func (g Git) readRepositoryIdentity(ctx context.Context, directory string) (repo
 
 func (g Git) sourceIsDirty(ctx context.Context, directory string) (bool, error) {
 	presence := &presenceWriter{}
-	err := g.run(ctx, directory, []string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}, map[string]string{"GIT_OPTIONAL_LOCKS": "0"}, nil, presence, nil)
+	err := g.run(ctx, directory, []string{"status", "--porcelain=v1", "-z", "--untracked-files=all"}, nil, nil, presence, nil)
 	if err != nil {
 		return false, fmt.Errorf("observe source dirtiness: %w", err)
 	}
@@ -152,6 +152,48 @@ func (g Git) validateSourceIdentity(ctx context.Context, source contract.Source)
 	}
 	if root != source.Root || gitDir != source.GitDir || commonDir != source.CommonDir || identity.objectFormat != source.ObjectFormat {
 		return fmt.Errorf("%w: source repository changed", contract.ErrIdentityMismatch)
+	}
+	return nil
+}
+
+// validateRepositoryIdentity checks the shared repository that outlives the
+// source checkout. After provisioning, a removed or transient source worktree
+// is provenance only; the canonical common directory must still be the same
+// repository with the recorded object format. Callers additionally compare
+// the recorded directory identity before trusting this path.
+func (g Git) validateRepositoryIdentity(ctx context.Context, source contract.Source) error {
+	if err := contract.ValidateSourceShape(source); err != nil {
+		return err
+	}
+	commonDir, err := existingDirectory(source.CommonDir)
+	if err != nil {
+		return fmt.Errorf("validate Git common dir: %w", err)
+	}
+	if commonDir != source.CommonDir {
+		return fmt.Errorf("%w: Git common dir is not canonical", contract.ErrIdentityMismatch)
+	}
+	gitDir, err := g.runScalar(ctx, commonDir, []string{"rev-parse", "--git-dir"}, nil)
+	if err != nil {
+		return fmt.Errorf("read repository Git dir: %w", err)
+	}
+	sharedDir, err := g.runScalar(ctx, commonDir, []string{"rev-parse", "--git-common-dir"}, nil)
+	if err != nil {
+		return fmt.Errorf("read repository common dir: %w", err)
+	}
+	objectFormat, err := g.runScalar(ctx, commonDir, []string{"rev-parse", "--show-object-format=storage"}, nil)
+	if err != nil {
+		return fmt.Errorf("read repository object format: %w", err)
+	}
+	resolvedGitDir, err := resolveGitDirectory(gitDir, commonDir)
+	if err != nil {
+		return errors.Join(contract.ErrIdentityMismatch, err)
+	}
+	resolvedCommonDir, err := resolveGitDirectory(sharedDir, commonDir)
+	if err != nil {
+		return errors.Join(contract.ErrIdentityMismatch, err)
+	}
+	if resolvedGitDir != commonDir || resolvedCommonDir != commonDir || objectFormat != source.ObjectFormat {
+		return fmt.Errorf("%w: source common repository changed", contract.ErrIdentityMismatch)
 	}
 	return nil
 }

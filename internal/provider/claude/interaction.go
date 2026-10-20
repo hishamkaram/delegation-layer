@@ -102,7 +102,7 @@ func (p *claudeInteraction) Receive(line []byte) (execution.InteractionUpdate, e
 // the record bytes. It is the current interactive protocol path; Receive
 // remains the historical line/framing compatibility path.
 func (p *claudeInteraction) ReceiveRecord(value providerjson.Value) (execution.InteractionUpdate, error) {
-	event, err := decodeClaudeCurrentEvent(value)
+	event, err := p.state.attribution.decodeEvent(value)
 	if err != nil {
 		return execution.InteractionUpdate{}, err
 	}

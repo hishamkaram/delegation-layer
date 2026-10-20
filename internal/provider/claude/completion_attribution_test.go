@@ -199,13 +199,42 @@ func TestAttributedCompletionRejectsUnattributedOrUnsettledCycles(t *testing.T) 
 		{"follow-up refusal", withTraceLine(traceFirstFollowUp, strings.Replace(attributedResultLine("x", notificationAttribution(1), 1, "0.1"), `"end_turn"`, `"refusal"`, 1)), refusalRefused},
 		{"follow-up session", withTraceLine(traceFirstFollowUp, strings.Replace(attributedResultLine("x", notificationAttribution(1), 1, "0.1"), claudeTestUUID, "123e4567-e89b-12d3-a456-426614174001", 1)), refusalMalformed},
 	}
+	// The advisory revision compares a repeated init on its authority only.
+	advisory := map[string]string{"changed follow-up init": committedPrincipal, "changed follow-up model": committedPrincipal}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			interpretation, answer := evaluateWriteTrace(t, NewWorkspaceWriteInterpreter(), test.mutate(nativeFollowUpTrace()))
-			if interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != test.want || answer != "" {
-				t.Fatalf("interpretation=%+v answer=%q want=%q", interpretation, answer, test.want)
-			}
+			requireRevisionVerdicts(t, func() []string { return test.mutate(nativeFollowUpTrace()) }, test.want, advisory[test.name])
 		})
+	}
+}
+
+// committedPrincipal marks a case that a revision commits with the principal
+// answer.
+const committedPrincipal = "committed-principal"
+
+// requireRevisionVerdicts evaluates a trace under the frozen scoped and the
+// current advisory workspace-write revisions. want is the exact frozen
+// verdict; advisory, when set, is the current revision's different verdict.
+func requireRevisionVerdicts(t *testing.T, lines func() []string, want, advisory string) {
+	t.Helper()
+	if advisory == "" {
+		advisory = want
+	}
+	for _, revision := range []struct {
+		interpreter predicate.Interpreter
+		want        string
+	}{{newScopedInterpreter(WorkspaceWriteMode), want}, {NewWorkspaceWriteInterpreter(), advisory}} {
+		interpretation, answer := evaluateWriteTrace(t, revision.interpreter, lines())
+		version := revision.interpreter.Reference().Version
+		if revision.want == committedPrincipal {
+			if interpretation.Verdict != task.VerdictCommitted || answer != tracePrincipalText {
+				t.Fatalf("%s interpretation=%+v answer=%q", version, interpretation, answer)
+			}
+			continue
+		}
+		if interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != revision.want || answer != "" {
+			t.Fatalf("%s interpretation=%+v answer=%q want=%q", version, interpretation, answer, revision.want)
+		}
 	}
 }
 
@@ -274,12 +303,11 @@ func TestCompletionMetadataRejectsAbortedQueuedAndMalformedResults(t *testing.T)
 		{"principal origin null", withResultMetadata(tracePrincipal, principal, `,"result_index":0`, `,"result_index":0,"origin":null`), refusalMalformed},
 		{"result index null", withResultMetadata(tracePrincipal, principal, `,"result_index":0`, `,"result_index":null`), refusalMalformed},
 	}
+	// The advisory revision reports an undocumented reason as unsupported.
+	advisory := map[string]string{"principal undocumented terminal": refusalUnsupportedCompletion}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			interpretation, answer := evaluateWriteTrace(t, NewWorkspaceWriteInterpreter(), test.mutate(nativeFollowUpTrace()))
-			if interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != test.want || answer != "" {
-				t.Fatalf("interpretation=%+v answer=%q want=%q", interpretation, answer, test.want)
-			}
+			requireRevisionVerdicts(t, func() []string { return test.mutate(nativeFollowUpTrace()) }, test.want, advisory[test.name])
 		})
 	}
 }
@@ -339,8 +367,8 @@ func TestAttributedContractVersionsCompletionPolicy(t *testing.T) {
 			strings.Contains(current, "one successful result,") || strings.Contains(current, "exactly one result object") {
 			t.Fatalf("%s contract does not version completion attribution: %s", mode, current)
 		}
-		if ReferenceForMode(mode).Equal(preAttributionReferenceForMode(mode)) {
-			t.Fatalf("%s attributed reference reused the pre-attribution digest", mode)
+		if ReferenceForMode(mode).Equal(preAttributionReferenceForMode(mode)) || ReferenceForMode(mode).Equal(scopedReference(mode)) {
+			t.Fatalf("%s attributed reference reused a frozen digest", mode)
 		}
 	}
 	for _, test := range []struct {
@@ -354,7 +382,8 @@ func TestAttributedContractVersionsCompletionPolicy(t *testing.T) {
 			t.Fatalf("pre-attribution digest changed: %+v want=%s", test.ref, test.want)
 		}
 	}
-	if ReferenceForMode(Mode).Version != "native-permissions-v4" || ReferenceForMode(WorkspaceWriteMode).Version != "native-permissions-v5" {
+	if ReferenceForMode(Mode).Version != "native-permissions-v5" || ReferenceForMode(WorkspaceWriteMode).Version != "native-permissions-v6" ||
+		scopedReference(Mode).Version != "native-permissions-v4" || scopedReference(WorkspaceWriteMode).Version != "native-permissions-v5" {
 		t.Fatalf("attributed versions=%+v %+v", ReferenceForMode(Mode), ReferenceForMode(WorkspaceWriteMode))
 	}
 }
@@ -420,7 +449,7 @@ func requireFrozenReconstruction(t *testing.T, request task.TaskRecord, currentR
 	}
 	requireRebuiltHistoricalProfile(t, frozenReference, current, rebuilt)
 	if request.RequestedConfig.Interactive {
-		requireLiveCompletionPolicy(t, current, scopedAttributedCompletion)
+		requireLiveCompletionPolicy(t, current, advisoryScopedCompletion)
 		requireLiveCompletionPolicy(t, rebuilt, frozenPolicy)
 	}
 }
@@ -429,6 +458,8 @@ func liveCompletionPolicy(live *claudeInteraction) completionPolicy {
 	switch attribution := live.state.attribution; {
 	case attribution == nil:
 		return singleResultCompletion
+	case attribution.advisory:
+		return advisoryScopedCompletion
 	case attribution.scoped:
 		return scopedAttributedCompletion
 	default:

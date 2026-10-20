@@ -216,11 +216,11 @@ func workspaceProviderUseClosed(ctx context.Context, store *taskdir.Store, subje
 	if err != nil {
 		return err
 	}
-	data, err := task.MarshalCanonical(req)
+	bound, err := TaskSubject(*req)
 	if err != nil {
 		return err
 	}
-	if task.ComputeSHA256(data) != subject.SHA256 {
+	if bound.SHA256 != subject.SHA256 {
 		return task.ErrIdentityMismatch
 	}
 	_, err = ReadLifetimeProof(ctx, td)

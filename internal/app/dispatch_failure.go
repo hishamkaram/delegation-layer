@@ -222,9 +222,13 @@ var dispatchFailureMessages = map[string]string{
 	"workspace_preparation_failed":       "Delegate could not prepare the managed workspace. Stop and report this failure; its saved evidence was retained.",
 }
 
+// genericFailureMessage is the neutral public text for a failure code without a
+// specific message. It names no command, so every command may present it.
+const genericFailureMessage = "Delegate could not complete the operation."
+
 func dispatchFailureMessage(code string) string {
 	if message, ok := dispatchFailureMessages[code]; ok {
 		return message
 	}
-	return "Delegate could not complete dispatch."
+	return genericFailureMessage
 }

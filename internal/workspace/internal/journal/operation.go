@@ -237,10 +237,10 @@ func validateOperationReasonCode(reasonCode string) error {
 }
 
 func (o *Operation) validateResultArtifacts(status string, artifacts []contract.Artifact) error {
-	expected := operationResultArtifactNames(o.request.Kind)
-	allowed := expected
+	required, optional := operationResultArtifactNames(o.request.Kind)
+	allowed := append(slices.Clone(required), optional...)
 	if status == "failed" {
-		allowed = append(slices.Clone(expected), contract.FailureDiagnosticName)
+		allowed = append(allowed, contract.FailureDiagnosticName)
 	}
 	seen := make([]string, 0, len(artifacts))
 	for _, artifact := range artifacts {
@@ -252,7 +252,18 @@ func (o *Operation) validateResultArtifacts(status string, artifacts []contract.
 		}
 		seen = append(seen, artifact.Name)
 	}
-	if status == "succeeded" && len(seen) != len(expected) {
+	if status != "succeeded" {
+		return nil
+	}
+	optionalSeen := 0
+	for _, name := range optional {
+		if slices.Contains(seen, name) {
+			optionalSeen++
+		}
+	}
+	// An optional group is all or nothing; its presence is bound to the
+	// recorded candidate where both are joined in the capture receipt.
+	if len(seen) != len(required)+optionalSeen || (optionalSeen != 0 && optionalSeen != len(optional)) {
 		return task.ErrIdentityMismatch
 	}
 	return nil
@@ -278,14 +289,14 @@ func validateDiagnosticArtifact(artifact contract.Artifact) error {
 	return nil
 }
 
-func operationResultArtifactNames(kind string) []string {
+func operationResultArtifactNames(kind string) (required, optional []string) {
 	switch kind {
 	case contract.OperationCapture:
-		return []string{"diff.patch", "name-status.z"}
+		return contract.CaptureArtifactNames()
 	case contract.OperationVerify:
-		return []string{"stdout", "stderr"}
+		return []string{"stdout", "stderr"}, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 

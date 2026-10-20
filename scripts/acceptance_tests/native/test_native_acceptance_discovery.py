@@ -19,6 +19,7 @@ from scripts.acceptance_tests.native.support import (
 )
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
+    acceptance_lifecycle as lifecycle_impl,
 )
 
 
@@ -31,6 +32,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         operation.runner = Path("/runner")
         operation.provider = "claude:print"
         operation.workspace = Path("/workspace")
+        operation.ops = SimpleNamespace(managed_runner=False)
         argv = operation.model_discovery_argv()
         self.assertEqual(argv[argv.index("--pueue-config") + 1], operation.config)
         self.assertEqual(argv[argv.index("--root") + 1], operation.models_state)
@@ -43,6 +45,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     def test_model_discovery_success_propagates_zero_exit(self):
         with tempfile.TemporaryDirectory(prefix="native-model-run-") as directory:
             operation = object.__new__(gate.NativeAcceptance)
+            operation.success_candidate = None
             operation.output = Path(directory)
             operation.provider = "codex:exec"
             operation.mode = "read-only"
@@ -51,12 +54,16 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.model_discovery_exit_code = None
             operation.model_discovery_summary = {"status": "available"}
             operation.closed = False
+            operation.lifetime_closure = None
             operation.setup = lambda: None
             operation.discover_models = lambda: setattr(operation, "model_discovery_exit_code", 0)
             operation.shutdown = lambda: setattr(operation, "closed", True)
             operation.native_mode_receipt = lambda: None
             self.assertEqual(operation.run(), 0)
             self.assertFalse((Path(directory) / "success.json").exists())
+            with self.assertRaisesRegex(gate.AcceptanceFailure, "candidate was not committed"):
+                operation.publish_success()
+            self.assertTrue(lifecycle_impl.commit_success_candidate(operation))
             operation.publish_success()
             self.assertEqual(gate.read_json(Path(directory) / "success.json")["discovery_exit_code"], 0)
 

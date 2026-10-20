@@ -112,7 +112,31 @@ class Fixture:
         self.thread.join(5)
 
 
+def require_user_cancellation(response, root_id, task_id):
+    """Require Delegate's closed user-cancellation collect envelope for this exact task."""
+    require((response.get("command"), response.get("root_id"), response.get("task_id")) ==
+            ("collect", root_id, task_id), "cancel collect changed task identity")
+    require(response.get("status") == "interrupted" and response.get("publication") == "unknown" and
+            "outcome" not in response, "cancelled task was not reported as an unpublished interruption")
+    require(response.get("failure") == {"code": "task_interrupted", "stage": "collect",
+                                        "next_action": "stop_and_report"},
+            "cancelled task did not report task_interrupted/stop_and_report")
+    continuation = response.get("continuation")
+    require(isinstance(continuation, dict) and continuation.get("resumable") is False and
+            continuation.get("mode") == "native" and continuation.get("predecessor_task_id") == task_id and
+            continuation.get("reason") == "task was cancelled by the user" and
+            "continue_command" not in continuation,
+            "cancelled task offered automatic continuation")
+
+
+# This fixture's own gate; the shared native lifecycle commits and publishes its receipt.
+FIXTURE_GATE = "acceptance-ccr-fixture"
+
+
 class FixtureAcceptance(NativeAcceptance):
+    # Unset until the exercise completes, so a premature success commit is refused, not an AttributeError.
+    success_receipt: dict[str, object] | None = None
+
     def __init__(self, args, fixture_directories=()):
         self.fixture_directories = tuple(fixture_directories)
         try:
@@ -206,7 +230,11 @@ class FixtureAcceptance(NativeAcceptance):
                 time.sleep(0.2)
             else:
                 raise RuntimeError(model + " task did not stop")
-            stopped = self.command(model + "-collect", "collect", task_id, "--json", expected=3).json()
+            # A closed user cancellation is a terminal interruption (exit 1); a budget stop stays pending (exit 3).
+            stopped = self.command(model + "-collect", "collect", task_id, "--json",
+                                   expected=1 if model == "cancel" else 3).json()
+            if model == "cancel":
+                require_user_cancellation(stopped, self.root_id, task_id)
             require(stopped.get("publication") != "committed", "stopped task committed")
             directory = self.state / "tasks" / task_id
             require((directory / "stop").is_dir(), "stopped task lacks durable stop evidence")
@@ -225,10 +253,11 @@ class FixtureAcceptance(NativeAcceptance):
         self.wait_done("missing", rejected)
         response = self.command("missing-collect", "collect", rejected, "--json", expected=4).json()
         require(response.get("publication") == "rejected", "unknown alias did not produce a rejected outcome")
-        return {"status": "passed", "platform": os.uname().sysname,
+        self.success_receipt = {"gate": FIXTURE_GATE, "status": "passed", "platform": os.uname().sysname,
             "tasks": self.tasks, "sessions_isolated": True, "continuation": True, "budget_continuation": True, "continuation_reuses_route": True, "native_write_and_shell": True,
             "replay_observational": True, "invalid_alias_rejected": True,
             "cancel_and_budget_disconnected": True, "real_clis": ["delegate", "ccr", "claude"]}
+        return self.success_receipt
 
 
 def cleanup_fixture(run, success):
@@ -311,6 +340,12 @@ def main():
             cleanup_fixture(run, success_receipt is not None and primary_error is None)
         except BaseException as error:
             cleanup_error = error
+    if primary_error is None and cleanup_error is None:
+        try:
+            # Publish only the confirmed candidate bytes, after every owned cleanup completed.
+            run.publish_success(expected_gate=FIXTURE_GATE)
+        except BaseException as error:
+            primary_error = error
     if primary_error is not None or cleanup_error is not None:
         error = cleanup_error or primary_error
         (output / "success.json").unlink(missing_ok=True)
@@ -327,8 +362,6 @@ def main():
         if cleanup_error is not None:
             raise cleanup_error from primary_error
         raise primary_error
-    require(isinstance(success_receipt, dict), "fixture success receipt is unavailable")
-    write_json(output / "success.json", success_receipt, replace=True)
     print(json.dumps({"status": "passed", "evidence": str(output)}))
     return 0
 

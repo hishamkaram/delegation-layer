@@ -8,6 +8,9 @@ from scripts.delegate_acceptance.private_cli.configuration import EXTERNAL_INSPE
 from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
 from scripts.delegate_acceptance.private_cli.capture import reap_captured_process
 from scripts.delegate_acceptance.private_cli.root_cleanup import remove_private_acceptance_root
+from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_ALREADY_CLOSED
+from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_SHUT_DOWN
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_predecessor_supervisor
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
 
 
@@ -15,8 +18,20 @@ def finalize_fixture(args, failure, lifetime, run_receipt, success):
     cleanup_errors = []
     run_receipt.phase("cleanup")
     current_handoff_binding, primary_closure_ready = release_fixture_workers(args, cleanup_errors, lifetime, success)
-    shutdown_supplemental_supervisors(cleanup_errors, lifetime)
-    shutdown_primary_supervisor(args, cleanup_errors, current_handoff_binding, lifetime, primary_closure_ready, success)
+    # Select captured predecessor roots once: their primary config may name a successor endpoint.
+    predecessor_roots = frozenset(
+        pending["predecessor"].state for pending in lifetime.supervisor_cleanups if "predecessor" in pending
+    )
+    handed_off_roots = shutdown_supplemental_supervisors(cleanup_errors, lifetime)
+    shutdown_primary_supervisor(
+        args,
+        cleanup_errors,
+        current_handoff_binding,
+        lifetime,
+        primary_closure_ready,
+        success,
+        predecessor_roots=predecessor_roots - handed_off_roots,
+    )
     if lifetime.inspection_process is not None:
         _, _, reaped, retry_error = reap_captured_process(lifetime.inspection_process, 5)
         if reaped:
@@ -116,8 +131,14 @@ def release_fixture_workers(args, cleanup_errors, lifetime, success):
 
 
 def shutdown_supplemental_supervisors(cleanup_errors, lifetime):
+    """Return roots whose every captured predecessor was cleanly proven closed before cleanup."""
+    clean_handoffs = {}
     for pending in tuple(lifetime.supervisor_cleanups):
-        if pending["config"].is_file():
+        if "predecessor" in pending:
+            root = pending["predecessor"].state
+            handed_off = shutdown_captured_predecessor(cleanup_errors, lifetime, pending)
+            clean_handoffs[root] = clean_handoffs.get(root, True) and handed_off
+        elif pending["config"].is_file():
             try:
                 shutdown_private_supervisor(
                     pending["client"],
@@ -132,10 +153,52 @@ def shutdown_supplemental_supervisors(cleanup_errors, lifetime):
                 cleanup_errors.append(
                     RuntimeError("packaged default supervisor shutdown remained unverified: " + str(cleanup_error))
                 )
+    return frozenset(root for root, handed_off in clean_handoffs.items() if handed_off)
+
+
+def shutdown_captured_predecessor(cleanup_errors, lifetime, pending):
+    """Return True only for a clean already-closed handoff; any other outcome keeps the primary skip."""
+    target = pending["predecessor"]
+    disposition = None
+    try:
+        disposition = shutdown_predecessor_supervisor(
+            pending["client"],
+            target,
+            pending["env"],
+            task_ids=tuple(pending["task_ids"]),
+            capture_root=lifetime.base_token,
+        )
+        if disposition not in (PREDECESSOR_SHUT_DOWN, PREDECESSOR_ALREADY_CLOSED):
+            raise RuntimeError("unknown captured predecessor shutdown disposition: %r" % (disposition,))
+    except BaseException as cleanup_error:
+        disposition = None
+        cleanup_errors.append(
+            RuntimeError("captured predecessor supervisor shutdown remained unverified: " + str(cleanup_error))
+        )
+    try:
+        if disposition is None:
+            target.backup_handle.close()
+        else:
+            release_pending_predecessor(pending, lifetime.supervisor_cleanups)
+    except BaseException as close_error:
+        disposition = None
+        cleanup_errors.append(RuntimeError("could not close predecessor backup handle: " + str(close_error)))
+    return disposition == PREDECESSOR_ALREADY_CLOSED
+
+
+def release_pending_predecessor(pending, supervisor_cleanups):
+    """Close the captured backup handle, then drop its ledger entry.
+
+    The caller must already have proven the release: predecessor closure plus
+    successor identity after migration, or a valid captured shutdown outcome.
+    The ledger keeps ownership if the close fails.
+    """
+    pending["predecessor"].backup_handle.close()
+    supervisor_cleanups.remove(pending)
 
 
 def shutdown_primary_supervisor(
-    args, cleanup_errors, current_handoff_binding, lifetime, primary_closure_ready, success
+    args, cleanup_errors, current_handoff_binding, lifetime, primary_closure_ready, success, *, predecessor_roots
 ):
     if current_handoff_binding is not None:
         cleanup_client = current_handoff_binding["client"]
@@ -167,6 +230,7 @@ def shutdown_primary_supervisor(
     if (
         (not success or cleanup_errors)
         and primary_closure_ready
+        and cleanup_state not in predecessor_roots
         and cleanup_config is not None
         and cleanup_config.is_file()
     ):

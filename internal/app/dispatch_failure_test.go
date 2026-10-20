@@ -140,7 +140,7 @@ func TestContinuationFailureStagesMapToActionableCodes(t *testing.T) {
 			if failure.Stage != test.stage || failure.Code != test.code || failure.NextAction != "stop_and_report" {
 				t.Fatalf("continuation failure stage was not classified safely: %+v", failure)
 			}
-			if message := dispatchFailureMessage(failure.Code); message == "Delegate could not complete dispatch." {
+			if message := dispatchFailureMessage(failure.Code); message == genericFailureMessage {
 				t.Fatalf("continuation failure code has no safe message: %q", failure.Code)
 			}
 		})
@@ -256,7 +256,7 @@ func TestInspectionSupervisorMigrationFailuresAreActionable(t *testing.T) {
 			if test.code == "supervisor_upgrade_required" && failure.RecoveryCommand == "" {
 				t.Fatal("upgrade failure omitted managed recovery command")
 			}
-			if message := dispatchFailureMessage(failure.Code); message == "Delegate could not complete dispatch." {
+			if message := dispatchFailureMessage(failure.Code); message == genericFailureMessage {
 				t.Fatalf("migration failure code has no actionable message: %q", failure.Code)
 			}
 		})

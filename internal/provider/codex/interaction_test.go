@@ -16,7 +16,7 @@ import (
 func initializedAppServer(t *testing.T) *appServerProtocol {
 	t.Helper()
 	request := task.TaskRecord{Mode: Mode, CanonicalCwd: "/workspace", RequestedConfig: task.TaskConfig{Model: "requested-model", Effort: "max"}}
-	protocol, err := newAppServerProtocol(request, task.SessionExpectation{}, nil)
+	protocol, err := newAppServerProtocol(request, task.SessionExpectation{}, nil, interactionCurrent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,16 +126,18 @@ func TestAppServerSealedResultRequiresRootCompletion(t *testing.T) {
 		{"native transient retry", []string{fmt.Sprintf(`{"method":"error","params":{"threadId":%q,"turnId":"turn-1","willRetry":true,"error":{"message":"retrying"}}}`, testThreadID), complete}, task.VerdictCommitted},
 		{"conflicting completion error", []string{strings.Replace(complete, `"status":"completed"`, `"status":"completed","error":{"message":"failed"}`, 1)}, task.VerdictRejected},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			stdout := []byte(strings.Join(append(append([]string{}, lines...), tc.extra...), "\n") + "\n")
-			seal := validSeal(stdout, nil)
-			seal.Predicate = interactionReference(Mode)
-			var answer bytes.Buffer
-			result, err := (interactionInterpreter{mode: Mode}).Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
-			if err != nil || result.Verdict != tc.want {
-				t.Fatalf("result=%+v err=%v", result, err)
-			}
-		})
+		for _, revision := range recordCaptureRevisions {
+			t.Run(tc.name+"/"+revision.reference(Mode).Version, func(t *testing.T) {
+				stdout := []byte(strings.Join(append(append([]string{}, lines...), tc.extra...), "\n") + "\n")
+				seal := validSeal(stdout, nil)
+				seal.Predicate = revision.reference(Mode)
+				var answer bytes.Buffer
+				result, err := (interactionInterpreter{mode: Mode, revision: revision}).Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+				if err != nil || result.Verdict != tc.want {
+					t.Fatalf("result=%+v err=%v", result, err)
+				}
+			})
+		}
 	}
 }
 
@@ -148,15 +150,19 @@ func TestCurrentAppServerRecordPathStreamsLargeFinalAndIgnoresOpaqueToolData(t *
 	complete := fmt.Sprintf(`{"method":"turn/completed","params":{"threadId":%q,"turn":{"id":"turn-1","status":"completed"}}}`, testThreadID)
 	stdout := []byte(strings.Join(append(append(append([]string{}, appServerSetup()...), tool), final, complete), "\n") + "\n")
 	seal := validSeal(stdout, nil)
-	seal.Predicate = interactionReference(Mode)
+	seal.Predicate = strictInteractionReference(Mode)
 	var answer bytes.Buffer
-	result, err := (interactionInterpreter{mode: Mode}).Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	result, err := (interactionInterpreter{mode: Mode, revision: interactionStrict}).Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
 	if err != nil || result.Verdict != task.VerdictCommitted || answer.Len() != len(largeFinal) || answer.String() != largeFinal {
 		t.Fatalf("large app-server result=%+v answer=%d err=%v", result, answer.Len(), err)
 	}
 }
 
-func TestCurrentAppServerUnknownLifecycleCannotComplete(t *testing.T) {
+// recordCaptureRevisions are the frozen revisions that share the corrected
+// record parser; interactive-v1 keeps its own whole-line path.
+var recordCaptureRevisions = []interactionRevision{interactionStrict, interactionCurrent}
+
+func TestStrictAppServerUnknownLifecycleCannotComplete(t *testing.T) {
 	lines := appServerSetup()
 	lines = append(lines,
 		fmt.Sprintf(`{"method":"turn/future","params":{"threadId":%q,"state":"completed"}}`, testThreadID),
@@ -165,9 +171,9 @@ func TestCurrentAppServerUnknownLifecycleCannotComplete(t *testing.T) {
 	)
 	stdout := []byte(strings.Join(lines, "\n") + "\n")
 	seal := validSeal(stdout, nil)
-	seal.Predicate = interactionReference(Mode)
+	seal.Predicate = strictInteractionReference(Mode)
 	var answer bytes.Buffer
-	result, err := (interactionInterpreter{mode: Mode}).Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
+	result, err := (interactionInterpreter{mode: Mode, revision: interactionStrict}).Evaluate(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)
 	if err != nil || result.Verdict != task.VerdictRejected || answer.Len() != 0 {
 		t.Fatalf("unknown lifecycle result=%+v answer=%q err=%v", result, answer.String(), err)
 	}
@@ -176,7 +182,7 @@ func TestCurrentAppServerUnknownLifecycleCannotComplete(t *testing.T) {
 	}
 }
 
-func TestHistoricalInteractiveV1RemainsReplayableAndCurrentRecoveryIsDeclared(t *testing.T) {
+func TestHistoricalInteractiveV1RemainsReplayableAndStrictRecoveryIsDeclared(t *testing.T) {
 	lines := appServerSetup()
 	lines = append(lines,
 		fmt.Sprintf(`{"method":"item/completed","params":{"threadId":%q,"turnId":"turn-1","item":{"type":"agentMessage","phase":"final_answer","text":"answer"}}}`, testThreadID),
@@ -191,12 +197,12 @@ func TestHistoricalInteractiveV1RemainsReplayableAndCurrentRecoveryIsDeclared(t 
 	if err != nil || result.Verdict != task.VerdictCommitted || answer.String() != "answer" {
 		t.Fatalf("historical interactive result=%+v answer=%q err=%v", result, answer.String(), err)
 	}
-	current, ok := newInteractionInterpreter(Mode).(interface {
+	current, ok := newStrictInteractionInterpreter(Mode).(interface {
 		CanRecover(task.PredicateRef) bool
 		Recover(predicate.Input, predicate.Evidence, io.Writer) (task.Interpretation, error)
 	})
 	if !ok || !current.CanRecover(old.Reference()) {
-		t.Fatal("current interactive interpreter did not declare v1 recovery")
+		t.Fatal("interactive-v2 interpreter did not declare v1 recovery")
 	}
 	answer.Reset()
 	result, err = current.Recover(predicate.Input{Seal: seal}, &testEvidence{stdout: stdout}, &answer)

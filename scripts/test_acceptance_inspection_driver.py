@@ -269,7 +269,7 @@ class InspectionDriverTests(unittest.TestCase):
             "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
             "failure": {"code": "dispatch_failed", "stage": "create-task-record",
                          "next_action": "stop_and_report"},
-            "error": "Delegate could not complete dispatch.",
+            "error": "Delegate could not complete the operation.",
         }
         self.assertEqual(validate_concurrent_response(unknown, 1, task), root)
         with self.assertRaises(AcceptanceFailure):

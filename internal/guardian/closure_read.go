@@ -39,6 +39,7 @@ func ReadClosureProof(ctx context.Context, records ClosureRecords) (ClosureProof
 			return proof, marshalErr
 		}
 		proof.terminationSHA256 = task.ComputeSHA256(data)
+		proof.terminationCause = evidence.Termination.Cause
 	}
 	if evidence.WorkerWait != nil {
 		data, marshalErr := task.MarshalCanonical(evidence.WorkerWait)

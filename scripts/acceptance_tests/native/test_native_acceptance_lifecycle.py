@@ -9,12 +9,14 @@ from unittest.mock import patch
 
 import acceptance_supervisor_common as supervisor_common
 from scripts import acceptance_native as entry
+from scripts.acceptance_tests.native.support import adjacent_runner_bundle
 from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
     acceptance_lifecycle as lifecycle_impl,
 )
 from scripts.delegate_acceptance.processes import operations as processes_impl
+from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):
@@ -229,10 +231,11 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             live_parent.mkdir(parents=True)
             sentinel = live_parent / "preexisting"
             sentinel.write_text("keep")
+            delegate, runner = adjacent_runner_bundle(root)
             args = SimpleNamespace(
                 provider="pi:json", mode="read-only", scenario="read-only",
-                discover_models=False, output=str(output), delegate="/bin/sh",
-                runner="/bin/sh", pueue="/bin/sh", pueued="/bin/sh",
+                discover_models=False, output=str(output), delegate=str(delegate),
+                runner=str(runner), pueue="/bin/sh", pueued="/bin/sh",
                 provider_executable="/bin/sh", model=None, effort=None,
             )
             original_mkdir = gate.Path.mkdir
@@ -284,6 +287,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             base = owner.create("acceptance root", root / "private", root)
             raw = owner.create("raw process captures", output / "processes", output)
             operation = object.__new__(gate.NativeAcceptance)
+            operation.success_candidate = None
             operation.closed = False
             operation.output = output
             operation.base = base.directory
@@ -303,13 +307,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 operation.output, False, (base, raw), False,
                 remove_failed_process_captures=False,
                 raw_process_captures_token=raw,
-                retained_owned_directories=(base,),
+                retained_owned_directories=(base, raw),
             )
 
     def test_cleanup_removes_closed_owned_base_and_preserves_evidence(self):
         with tempfile.TemporaryDirectory(prefix="native-cleanup-unit-") as directory:
             root = Path(directory)
             operation = object.__new__(gate.NativeAcceptance)
+            operation.success_candidate = None
             operation.base_parent = root / "delegation-layer-live"
             operation.base = operation.base_parent / "run"
             operation.state = operation.base / "state"
@@ -326,11 +331,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             (operation.base / "state").mkdir()
             (operation.base / "state" / "record").write_text("disposable")
             operation.closed = True
+            operation.success_receipt = {"gate": "acceptance-native", "status": "passed"}
 
             self.assertTrue(operation.finalize(True))
 
             self.assertFalse(operation.base.exists())
             self.assertFalse(operation.base_parent.exists())
+            self.assertEqual(gate.read_json(operation.output / "success-candidate.json"),
+                             operation.success_receipt)
             receipt = gate.read_json(operation.output / "cleanup.json")
             self.assertEqual(receipt["status"], "removed")
             self.assertTrue(receipt["supervisor_shutdown_observed"])
@@ -339,6 +347,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="native-cleanup-unit-") as directory:
             root = Path(directory)
             operation = object.__new__(gate.NativeAcceptance)
+            operation.success_candidate = None
             operation.base_parent = root / "delegation-layer-live"
             operation.base = operation.base_parent / "run"
             operation.state = operation.base / "state"
@@ -364,6 +373,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
     @staticmethod
     def _failure_operation(root: Path) -> tuple[object, Path, str]:
         operation = object.__new__(gate.NativeAcceptance)
+        operation.success_candidate = None
         operation.base_parent = root / "delegation-layer-live"
         operation.base = operation.base_parent / "run"
         operation.output = root / "evidence"
@@ -426,6 +436,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         return operation, task, task_id
 
     def test_failure_snapshot_retains_state_and_cleans_process_captures(self):
+        # Pinned relocated name: a genuine failure now retains every owned source and raw capture.
         with tempfile.TemporaryDirectory(prefix="native-diagnostic-unit-") as directory:
             operation, _task, task_id = self._failure_operation(Path(directory))
 
@@ -445,12 +456,14 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertTrue(operation.base_parent.exists())
             self.assertTrue(operation.state.exists())
             self.assertTrue(operation.workspace.exists())
-            self.assertFalse(operation.briefs.exists())
-            self.assertFalse(operation.pueue_base.exists())
-            self.assertFalse(operation.models_state.exists())
-            self.assertFalse((operation.output / "processes").exists())
+            self.assertTrue(operation.briefs.exists())
+            self.assertTrue(operation.pueue_base.exists())
+            self.assertTrue(operation.models_state.exists())
+            self.assertTrue((operation.output / "processes").is_dir())
             receipt = gate.read_json(operation.output / "cleanup.json")
-            self.assertEqual(receipt["raw_process_captures"], "removed")
+            self.assertEqual(receipt["raw_process_captures"], "retained")
+            self.assertEqual(sorted(receipt["retained"]),
+                             sorted(owned.label for owned in operation.owned_directories))
 
             self.assertFalse(operation.finalize(False))
             self.assertEqual(snapshot.read_bytes(), data)
@@ -489,7 +502,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertNotIn("UNRESTRICTED_REFUSAL_PAYLOAD", snapshot)
             self.assertNotIn("MUST NOT APPEAR", snapshot)
             self.assertTrue(operation.base.exists())
-            self.assertFalse((operation.output / "processes").exists())
+            self.assertTrue((operation.output / "processes").is_dir())
 
     def test_failure_snapshot_is_bounded_and_marks_truncation(self):
         with tempfile.TemporaryDirectory(prefix="native-diagnostic-bound-unit-") as directory:
@@ -513,7 +526,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             self.assertTrue(value["status"]["partial"])
             self.assertTrue(value["status"]["truncated"])
             self.assertTrue(operation.base.exists())
-            self.assertFalse((operation.output / "processes").exists())
+            self.assertTrue((operation.output / "processes").is_dir())
 
     def test_failure_snapshot_error_retains_state_and_raw_captures(self):
         with tempfile.TemporaryDirectory(prefix="native-diagnostic-failure-unit-") as directory:
@@ -613,6 +626,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 calls = []
 
                 class Run:
+                    model_discovery_exit_code = exit_code
                     model_discovery_summary = {
                         "status": "blocked" if exit_code == 2 else "failed",
                         "reason_code": "authentication_unavailable" if exit_code == 2 else "provider_error",
@@ -687,6 +701,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="native-preexisting-captures-unit-") as directory:
             root = Path(directory)
             operation = object.__new__(gate.NativeAcceptance)
+            operation.success_candidate = None
             operation.base_parent = root / "delegation-layer-live"
             operation.base = operation.base_parent / "run"
             operation.output = root / "evidence"
@@ -702,6 +717,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.owned_directories = (base_token,)
             operation.processes = SimpleNamespace(capture_root=None)
             operation.closed = True
+            operation.success_receipt = {"gate": "acceptance-native", "status": "passed"}
 
             self.assertFalse(operation.finalize(True))
 
@@ -726,7 +742,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.output = root / "output"
             operation.model_discovery_task_id = None
             operation.models_root_id = None
+            operation.ops = SimpleNamespace(managed_runner=True, runner_placement=BUNDLE_RUNNER)
             cleanup = gate.ModelDiscoveryCleanupOps(operation)
+            self.assertEqual((cleanup.managed_runner, cleanup.runner_placement), (True, BUNDLE_RUNNER))
             status = {"tasks": {}, "groups": {}}
             with patch.object(gate.NativeTaskOps, "failure_queue_finished", return_value=True):
                 self.assertTrue(cleanup.failure_queue_finished(status))
@@ -757,6 +775,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
 
             operation.ops = SimpleNamespace(
                 root_id=None, tasks={}, labels={}, numbers={}, dispatch_attempts=set(),
+                managed_runner=True, runner_placement=BUNDLE_RUNNER,
                 bind_supervisor=unexpected_owner, retain_failure_ownership=unexpected_owner,
             )
             with patch.object(gate.ModelDiscoveryCleanupOps, "retain_failure_ownership",

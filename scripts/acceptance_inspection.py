@@ -262,7 +262,7 @@ def validate_concurrent_response(response: dict[str, object], exit_code: int, ta
     task_record = response.get("task_record")
     creation_race = (task_record == "unknown" and code == "dispatch_failed" and
                      stage == "create-task-record" and next_action == "stop_and_report" and
-                     response.get("error") == "Delegate could not complete dispatch.")
+                     response.get("error") == "Delegate could not complete the operation.")
     submission_race = (task_record == "created" and
                        code == "task_submission_preparation_failed" and
                        stage == "prepare-task-submission" and next_action == "check_status" and

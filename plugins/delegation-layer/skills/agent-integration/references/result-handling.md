@@ -57,7 +57,13 @@ from an inspection-worker or supervisor-observation failure.
 For `delegate models`, validate the complete JSON envelope before using any
 fact. Treat `available` and `partial` with exit `0` as observations, preserve
 `blocked` and `unavailable` with exit `2` as unresolved prerequisites, and
-preserve `failed` with exit `1` as a discovery failure. `complete` refers to
+preserve `failed` as a discovery failure. Exit `1` with `failed` is an
+operational failure; exit `2` with `failed` is an invalid or unsupported
+request, not an authentication block. Status and exit are separate
+observations. When the response
+includes the optional `failure` object and `error` message, keep both in the
+report and follow `failure.next_action`; report and stop on
+`stop_and_report`. `complete` refers to
 model enumeration. Keep `efforts: null` distinct from `efforts: []`, and do not
 apply harness-wide effort choices to every model. Discovery is advisory and
 never an admission allowlist; a provider default remains valid and a listed

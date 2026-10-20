@@ -27,7 +27,88 @@ func TestBuildCaptureUsesPrivateIndexAndPreservesExactCandidate(t *testing.T) {
 	if candidate.BaseOID != testBaseOID || candidate.ObservedHEAD != testHeadOID || candidate.TreeOID != testTreeOID {
 		t.Fatalf("candidate = %+v", candidate)
 	}
+	if want := wantIndexIdentity("H "+stageRecord, testVisibleIndex); candidate.IndexSHA256 != want {
+		t.Fatalf("index identity = %s, want framed inventory and visible-entry digests %s", candidate.IndexSHA256, want)
+	}
 	assertPrivateIndexBindings(t, runner.calls, fixture.scratch)
+}
+
+// Both index observations read one frozen copy of the real index, opened once,
+// never the live index or the private index that capture mutates.
+func TestBuildCaptureObservesOneFrozenIndexImage(t *testing.T) {
+	fixture := newCheckoutFixture(t)
+	live := filepath.Join(fixture.checkout.AdminDir, "index")
+	if err := os.WriteFile(live, []byte("opaque index image v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := captureRunner(fixture, "")
+	inner := runner.handler
+	var observed []string
+	runner.handler = func(command *exec.Cmd) error {
+		args := command.Args[3:]
+		if slices.Equal(args, []string{"ls-files", "--stage", "-v", "-z"}) || slices.Equal(args, visibleIndexArgs) {
+			image := indexOverride(command.Env)
+			data, err := os.ReadFile(image)
+			if err != nil || string(data) != "opaque index image v1" {
+				return errors.Join(errors.New("index observation did not read the frozen image"), err)
+			}
+			observed = append(observed, image)
+			// The live index is replaced between observations; the frozen
+			// image must not follow it.
+			if err = os.WriteFile(live, []byte("opaque index image v2"), 0o600); err != nil {
+				return err
+			}
+		}
+		return inner(command)
+	}
+	if _, err := (Git{Runner: runner}).BuildCapture(context.Background(), fixture.checkout, fixture.scratch); err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 2 || observed[0] != observed[1] || filepath.Dir(observed[0]) != fixture.scratch || observed[0] == live {
+		t.Fatalf("index observations read %q, want one frozen image in the capture scratch", observed)
+	}
+	if _, err := os.Stat(observed[0]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("frozen index image was not removed after capture: %v", err)
+	}
+}
+
+func TestBuildCaptureRefusesUnreadableRealIndex(t *testing.T) {
+	fixture := newCheckoutFixture(t)
+	if err := os.Mkdir(filepath.Join(fixture.checkout.AdminDir, "index"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := (Git{Runner: captureRunner(fixture, "")}).BuildCapture(context.Background(), fixture.checkout, fixture.scratch)
+	if err == nil || candidate.IndexSHA256 != "" {
+		t.Fatalf("capture of a non-regular real index = %+v, %v; want an explicit failure", candidate, err)
+	}
+}
+
+func indexOverride(environment []string) string {
+	value := ""
+	for _, entry := range environment {
+		if path, found := strings.CutPrefix(entry, "GIT_INDEX_FILE="); found {
+			value = path
+		}
+	}
+	return value
+}
+
+// A Git that cannot hide intent-to-add entries must fail the capture, never
+// fall back to an inventory that would read an intent change as unchanged.
+func TestBuildCaptureFailsWhenVisibleIndexEntriesAreUnavailable(t *testing.T) {
+	fixture := newCheckoutFixture(t)
+	runner := captureRunner(fixture, "")
+	inner := runner.handler
+	runner.handler = func(command *exec.Cmd) error {
+		if slices.Equal(command.Args[3:], visibleIndexArgs) {
+			return errors.New("error: unknown option `ita-invisible-in-index'")
+		}
+		return inner(command)
+	}
+	candidate, err := (Git{Runner: runner}).BuildCapture(context.Background(), fixture.checkout, fixture.scratch)
+	if err == nil || candidate.IndexSHA256 != "" {
+		t.Fatalf("capture without visible index entries = %+v, %v; want an explicit failure", candidate, err)
+	}
 }
 
 func TestBuildCaptureRunsGitFromCheckoutRootForRelativeSourceCwd(t *testing.T) {
@@ -52,20 +133,38 @@ func TestBuildCaptureRunsGitFromCheckoutRootForRelativeSourceCwd(t *testing.T) {
 	}
 }
 
+const (
+	testEmptyTreeOID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+	testVisibleIndex = ":000000 100644 0000000000000000000000000000000000000000 " + testBlobOID + " A\x00ignored-staged\x00"
+)
+
+var visibleIndexArgs = []string{"--no-replace-objects", "diff-index", "--cached", "--raw", "-z", "--no-abbrev", "--no-renames", "--ita-invisible-in-index", "--end-of-options", testEmptyTreeOID}
+
+// wantIndexIdentity frames the inventory and visible-entry stream digests as
+// the capture's semantic index identity.
+func wantIndexIdentity(inventory, visible string) string {
+	return digest([]byte(digest([]byte(inventory)) + "\n" + digest([]byte(visible)) + "\n"))
+}
+
 func captureRunner(fixture checkoutFixture, stageRecord string) *recordingGitRunner {
 	runner := newRepositoryFixtureRunner(fixture.root, fixture.checkout.Workdir, fixture.checkout.AdminDir, testBaseOID)
 	baseHandler := fixture.command
 	runner.handler = func(command *exec.Cmd) error {
 		args := command.Args[3:]
 		switch {
-		case slices.Equal(args, []string{"ls-files", "--stage", "-z"}):
-			return writeCommandOutput(command, stageRecord)
-		case slices.Equal(args, []string{"ls-files", "-v", "-z"}):
-			return writeCommandOutput(command, "H ordinary.txt\x00")
+		case slices.Equal(args, []string{"ls-files", "--stage", "-v", "-z"}):
+			if stageRecord == "" {
+				return nil
+			}
+			return writeCommandOutput(command, "H "+stageRecord)
 		case slices.Equal(args, []string{"rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"}):
 			return writeCommandOutput(command, testHeadOID+"\n")
 		case slices.Equal(args, []string{"write-tree"}):
 			return writeCommandOutput(command, testTreeOID+"\n")
+		case slices.Equal(args, []string{"hash-object", "-t", "tree", "--stdin"}):
+			return writeCommandOutput(command, testEmptyTreeOID+"\n")
+		case slices.Equal(args, visibleIndexArgs):
+			return writeCommandOutput(command, testVisibleIndex)
 		case slices.Equal(args, []string{"update-index", "-z", "--index-info"}):
 			data, readErr := io.ReadAll(command.Stdin)
 			if readErr != nil {
@@ -78,6 +177,35 @@ func captureRunner(fixture checkoutFixture, stageRecord string) *recordingGitRun
 		return baseHandler(command)
 	}
 	return runner
+}
+
+func TestIndexInventoryDigestsTagsAndRoutesStageZeroAndAbsentSkipped(t *testing.T) {
+	workdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workdir, "present"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entry := func(stage, path string) string { return "100644 " + testBlobOID + " " + stage + "\t" + path + "\x00" }
+	inventory := "h " + entry("0", "assumed") + "S " + entry("0", "absent skipped") + "s " + entry("0", "present") + "M " + entry("1", "conflict") + "m " + entry("3", "conflict")
+	var overlay, skip bytes.Buffer
+	sink := indexInventorySink{overlay: &overlay, skip: &skip, workdir: workdir, objectFormat: "sha1"}
+	got, err := copyIndexInventory(strings.NewReader(inventory), sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != digest([]byte(inventory)) {
+		t.Fatalf("digest %s does not cover every tagged record", got)
+	}
+	if want := entry("0", "assumed") + entry("0", "absent skipped") + entry("0", "present"); overlay.String() != want {
+		t.Fatalf("overlay = %q, want stage-zero entries without tags %q", overlay.String(), want)
+	}
+	if skip.String() != "absent skipped\x00" {
+		t.Fatalf("skipped paths = %q, want only the absent skip-worktree path", skip.String())
+	}
+	for _, malformed := range []string{"X " + entry("0", "unknown tag"), "H " + entry("2", "cached conflict"), "M " + entry("0", "unmerged stage zero"), "H" + entry("0", "untagged")} {
+		if _, err = copyIndexInventory(strings.NewReader(malformed), indexInventorySink{overlay: io.Discard, skip: io.Discard, workdir: workdir, objectFormat: "sha1"}); err == nil {
+			t.Fatalf("malformed inventory %q was accepted", malformed)
+		}
+	}
 }
 
 func assertPrivateIndexBindings(t *testing.T, calls []*exec.Cmd, scratch string) {
@@ -406,6 +534,87 @@ func TestPinCaptureRejectsObjectTypeMismatchBeforePublication(t *testing.T) {
 	}
 }
 
+type pinTurnBaselineCase struct {
+	name        string
+	mutate      func(*TurnBaseline)
+	missing     bool
+	winner      string
+	want        error
+	wantRefusal bool
+}
+
+// A baseline pin needs its recorded tree and the source base, never the
+// baseline HEAD commit, which a rewritten history may have pruned.
+func TestPinTurnBaselineNeedsTreeNotPrunedHEAD(t *testing.T) {
+	tests := []pinTurnBaselineCase{
+		{name: "pruned HEAD"},
+		{name: "matching winner", winner: testTreeOID},
+		{name: "conflicting winner", winner: testBlobOID, want: ErrRefConflict},
+		{name: "missing tree", missing: true, wantRefusal: true},
+		{name: "foreign ref", mutate: func(baseline *TurnBaseline) { baseline.Ref = "refs/heads/baseline" }, wantRefusal: true},
+		{name: "foreign base", mutate: func(baseline *TurnBaseline) { baseline.BaseOID = testHeadOID }, want: ErrIdentityMismatch},
+		{name: "malformed tree", mutate: func(baseline *TurnBaseline) { baseline.TreeOID = "tree" }, wantRefusal: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) { runPinTurnBaselineCase(t, test) })
+	}
+}
+
+func runPinTurnBaselineCase(t *testing.T, test pinTurnBaselineCase) {
+	t.Helper()
+	fixture := newCheckoutFixture(t)
+	runner := newRepositoryFixtureRunner(fixture.root, fixture.checkout.CheckoutPath, fixture.checkout.AdminDir, testBaseOID)
+	published := false
+	runner.handler = pinTurnBaselineHandler(test, &published, runner.handler)
+	baseline := TurnBaseline{BaseOID: testBaseOID, ObservedHEAD: testHeadOID, TreeOID: testTreeOID, ObjectFormat: "sha1", Ref: "refs/delegate/baseline"}
+	if test.mutate != nil {
+		test.mutate(&baseline)
+	}
+	err := (Git{Runner: runner}).PinTurnBaseline(context.Background(), fixture.checkout, baseline)
+	switch {
+	case test.want != nil:
+		if !errors.Is(err, test.want) {
+			t.Fatalf("error = %v, want %v", err, test.want)
+		}
+	case test.wantRefusal:
+		if err == nil || published {
+			t.Fatalf("invalid baseline pin was published: published=%v, %v", published, err)
+		}
+	case err != nil || !published:
+		t.Fatalf("valid baseline pin: published=%v, %v", published, err)
+	}
+}
+
+// pinTurnBaselineHandler models a repository whose baseline HEAD commit is
+// gone; consulting it fails the case.
+func pinTurnBaselineHandler(test pinTurnBaselineCase, published *bool, baseHandler func(*exec.Cmd) error) func(*exec.Cmd) error {
+	return func(command *exec.Cmd) error {
+		args := command.Args[3:]
+		switch {
+		case slices.Contains(args, testHeadOID+"^{commit}"):
+			return errors.New("baseline HEAD commit was consulted")
+		case test.missing && slices.Equal(args, []string{"rev-parse", "--verify", "--end-of-options", testTreeOID + "^{tree}"}):
+			return gitTestExitError(128)
+		case slices.Equal(args, []string{"update-ref", "--no-deref", "refs/delegate/baseline", testTreeOID, strings.Repeat("0", 40)}):
+			*published = true
+			if test.winner != "" {
+				return gitTestExitError(1)
+			}
+			return nil
+		case slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, "refs/delegate/baseline"}):
+			target := test.winner
+			if target == "" && *published {
+				target = testTreeOID
+			}
+			if target == "" {
+				return nil
+			}
+			return writeCommandOutput(command, string(refInventoryRecord("refs/delegate/baseline", target, "tree", "")))
+		}
+		return baseHandler(command)
+	}
+}
+
 type verifyRemovedCase struct {
 	name             string
 	removePath       bool
@@ -531,12 +740,12 @@ func repositoryFixtureIdentity(command *exec.Cmd, args []string, directory, root
 		if directory == checkout {
 			return true, writeCommandOutput(command, admin+"\n")
 		}
-		return true, writeCommandOutput(command, ".git\n")
+		return true, writeCommandOutput(command, gitDirectoryAnswer(directory, root))
 	case slices.Equal(args, []string{"rev-parse", "--git-common-dir"}):
 		if directory == checkout {
 			return true, writeCommandOutput(command, filepath.Join(root, ".git")+"\n")
 		}
-		return true, writeCommandOutput(command, ".git\n")
+		return true, writeCommandOutput(command, gitDirectoryAnswer(directory, root))
 	case slices.Equal(args, []string{"rev-parse", "--show-object-format=storage"}):
 		return true, writeCommandOutput(command, "sha1\n")
 	default:

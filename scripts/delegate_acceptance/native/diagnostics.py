@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from itertools import islice
 from pathlib import Path
 import stat
 
@@ -309,6 +310,13 @@ def _fit_failure_diagnostics(value: dict[str, object]) -> dict[str, object]:
                     task["files_omitted"] = True
             mark_truncated("task.files")
 
+    inspection = value.get("model_discovery_inspection")
+    if len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES and \
+            isinstance(inspection, dict) and "files" in inspection:
+        inspection.pop("files")
+        inspection["files_omitted"] = True
+        mark_truncated("model_discovery_inspection.files")
+
     if len(_diagnostic_json_bytes(value)) > FAILURE_DIAGNOSTICS_BYTES and isinstance(workspace, dict):
         workspace["entries"] = {}
         mark_truncated("workspace.entries.all")
@@ -373,5 +381,50 @@ def _diagnostic_task(state: Path, task_id: str, omitted: list[str]) -> dict[str,
     provider_exit = _diagnostic_provider_exit(decoded.get("provider.exit"))
     if provider_exit is not None:
         result["provider_exit"] = provider_exit
+    result["files"] = files
+    return result
+
+
+def _diagnostic_inspection(state: Path, task_id: str, omitted: list[str]) -> dict[str, object]:
+    """Describe one inspection journal's actual entries as bounded file descriptors.
+
+    The journal is neither validated nor decoded: a failed admission may leave it
+    partial, and only the canonical inspection owner interprets its records.
+    """
+    directory = state / "inspections" / task_id
+    result: dict[str, object] = {"journal_task_id": task_id, "journal": "missing", "files": {}}
+    try:
+        metadata = [path.lstat() for path in (state, state / "inspections", directory)]
+    except FileNotFoundError:
+        return result
+    except OSError as error:
+        result["journal"] = "unreadable"
+        omitted.append(f"model-inspection:{task_id}:{type(error).__name__}")
+        return result
+    if any(stat.S_ISLNK(item.st_mode) or not stat.S_ISDIR(item.st_mode) for item in metadata):
+        result["journal"] = "unsafe"
+        omitted.append(f"model-inspection:{task_id}:unsafe-directory")
+        return result
+    try:
+        names = sorted(entry.name for entry in islice(directory.iterdir(), FAILURE_DIAGNOSTICS_MAX_ENTRIES + 1))
+    except OSError as error:
+        result["journal"] = "unreadable"
+        omitted.append(f"model-inspection:{task_id}:{type(error).__name__}")
+        return result
+    if len(names) > FAILURE_DIAGNOSTICS_MAX_ENTRIES:
+        names = names[:FAILURE_DIAGNOSTICS_MAX_ENTRIES]
+        result["entries_truncated"] = True
+        omitted.append(f"model-inspection:{task_id}:entries-truncated")
+    files: dict[str, dict[str, object]] = {}
+    for name in names:
+        if _diagnostic_relative_path(name) != name:
+            omitted.append(f"model-inspection:{task_id}:unsafe-name")
+            continue
+        descriptor, reason = _diagnostic_regular_file(directory / name)
+        if descriptor is None:
+            omitted.append(f"model-inspection:{task_id}:{name}:{reason}")
+            continue
+        files[name] = descriptor
+    result["journal"] = "present"
     result["files"] = files
     return result

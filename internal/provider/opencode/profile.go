@@ -12,23 +12,36 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// PrepareCandidate performs static preparation for OpenCode's native profile.
-// The provider owns configuration, extensions, authentication, and permission
-// resolution; the core still owns the supervised runtime capability probe.
+// PrepareCandidate performs static preparation for OpenCode's native ACP
+// profile. The provider owns configuration, extensions, authentication, and
+// permission resolution; the core still owns the supervised runtime
+// capability probe and the single stdio transport.
 func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, true, nil, true)
+	return prepareCandidate(request, dialectACP, nil, acpReferenceForMode(request.Mode), true)
 }
 
 // PrepareExistingCandidate selects the preparation contract recorded by an
-// already admitted task. New native tasks use the native profile; historical
-// tasks retain the isolated policy inspection and launch flags they recorded.
+// already admitted task. Its recorded profile revision selects the launch
+// dialect, so historical tasks retain the policy inspection, runtime
+// capability probe, launch flags, and predicate they recorded.
 func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	native := commonprovider.HasNativeProfile(meta)
-	return prepareCandidate(request, native, &meta, meta.RuntimePreflightSHA256 != "" && native)
+	dialect, err := dialectForRecord(meta)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	reference, err := dialect.recordedPredicate(request.Mode, meta.Predicate)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	return prepareCandidate(request, dialect, &meta, reference, meta.RuntimePreflightSHA256 != "" && dialect.native())
 }
 
-func prepareCandidate(request task.TaskRecord, native bool, meta *task.MetaRecord, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
-	arguments, err := runArgumentsForProfile(request, native)
+// prepareCandidate prepares dialect for request. meta, when present, supplies
+// the recorded environment and writable roots; predicateReference is the
+// output contract selected by the caller.
+func prepareCandidate(request task.TaskRecord, dialect launchDialect, meta *task.MetaRecord, predicateReference task.PredicateRef, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
+	native := dialect.native()
+	arguments, err := runArguments(request, dialect)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -44,7 +57,7 @@ func prepareCandidate(request task.TaskRecord, native bool, meta *task.MetaRecor
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	definition, err := candidateInspection(cli, request, launchEnvironment, native)
+	definition, err := candidateInspection(cli, request, launchEnvironment, dialect)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -61,16 +74,15 @@ func prepareCandidate(request task.TaskRecord, native bool, meta *task.MetaRecor
 			return commonprovider.ProfileCandidate{}, err
 		}
 	}
-	predicateReference := candidatePredicateReference(request.Mode, native, meta)
 	candidate := commonprovider.ProfileCandidate{
 		Directory:     request.CanonicalCwd,
 		WritableRoots: slices.Clone(environment.WritableRoots),
 		Inspection:    &definition,
-		Finalize:      candidateFinalizer(request, arguments, launchEnvironment, cli, environment, native, predicateReference),
+		Finalize:      candidateFinalizer(request, arguments, launchEnvironment, cli, environment, dialect, predicateReference),
 	}
 	if capability != "" {
 		candidate.Admit = func() (commonprovider.PreparedProfile, error) {
-			return buildNativePreparedProfile(request, arguments, launchEnvironment, cli, environment, predicateReference, "", cli.SHA256, capability)
+			return buildNativePreparedProfile(request, arguments, launchEnvironment, cli, environment, dialect, predicateReference, "", cli.SHA256, capability)
 		}
 	}
 	return candidate, nil
@@ -111,16 +123,16 @@ func candidateLaunchEnvironment(request task.TaskRecord, environment profileEnvi
 	return launchEnvironment, nil
 }
 
-func candidateInspection(cli commonprovider.CLIInfo, request task.TaskRecord, environment []string, native bool) (commonprovider.InspectionDefinition, error) {
-	requirements := RuntimeRequirements()
-	if !native {
-		requirements = legacyRuntimeRequirements()
+func candidateInspection(cli commonprovider.CLIInfo, request task.TaskRecord, environment []string, dialect launchDialect) (commonprovider.InspectionDefinition, error) {
+	requirements, err := dialect.runtimeRequirements()
+	if err != nil {
+		return commonprovider.InspectionDefinition{}, err
 	}
 	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, environment, requirements)
 	if err != nil {
 		return commonprovider.InspectionDefinition{}, fmt.Errorf("%w: runtime inspection: %w", ErrUnsupportedProfile, err)
 	}
-	if native {
+	if dialect.native() {
 		return definition, nil
 	}
 	return configureInspection(definition, request.Mode, request.CanonicalCwd)
@@ -131,23 +143,10 @@ func validateLegacyPreparation(request task.TaskRecord, environment profileEnvir
 	return err
 }
 
-func candidatePredicateReference(mode string, native bool, meta *task.MetaRecord) task.PredicateRef {
-	if native {
-		if meta != nil && (meta.Predicate.Equal(historicalReferenceForMode(mode)) || meta.Predicate.Equal(historicalCurrentReferenceForMode(mode)) || meta.Predicate.Equal(historicalCurrentV4ReferenceForMode(mode))) {
-			return meta.Predicate
-		}
-		return ReferenceForMode(mode)
-	}
-	if meta != nil && meta.Predicate != (task.PredicateRef{}) {
-		return meta.Predicate
-	}
-	return LegacyReferenceForMode(mode)
-}
-
-func candidateFinalizer(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, native bool, predicateReference task.PredicateRef) func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
-	if native {
+func candidateFinalizer(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, dialect launchDialect, predicateReference task.PredicateRef) func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
+	if dialect.native() {
 		return func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
-			return finalizeCandidate(request, arguments, launchEnvironment, cli, environment, predicateReference, data)
+			return finalizeCandidate(request, arguments, launchEnvironment, cli, environment, dialect, predicateReference, data)
 		}
 	}
 	return func(data json.RawMessage, _ time.Time) (commonprovider.PreparedProfile, error) {
@@ -158,7 +157,7 @@ func candidateFinalizer(request task.TaskRecord, arguments, launchEnvironment []
 // finalizeCandidate accepts only the supervised runtime facts needed by the
 // current native profile. Native OpenCode policy is intentionally not projected
 // into admission facts.
-func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, predicateReference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
+func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, dialect launchDialect, predicateReference task.PredicateRef, data json.RawMessage) (commonprovider.PreparedProfile, error) {
 	facts, decodeErr := commonprovider.DecodeInspectionFacts(data)
 	if decodeErr != nil || facts.Runtime == nil || facts.Native != nil {
 		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: invalid runtime inspection facts", ErrUnsupportedProfile)
@@ -167,15 +166,15 @@ func finalizeCandidate(request task.TaskRecord, arguments, launchEnvironment []s
 	if runtime.Executable != cli.Path || runtime.SHA256 != cli.SHA256 {
 		return commonprovider.PreparedProfile{}, fmt.Errorf("%w: runtime executable changed during inspection", ErrUnsupportedProfile)
 	}
-	return buildNativePreparedProfile(request, arguments, launchEnvironment, cli, environment, predicateReference, runtime.Version, runtime.SHA256, "")
+	return buildNativePreparedProfile(request, arguments, launchEnvironment, cli, environment, dialect, predicateReference, runtime.Version, runtime.SHA256, "")
 }
 
-func buildNativePreparedProfile(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, predicateReference task.PredicateRef, observedVersion, runtimeSHA256, preflightSHA256 string) (commonprovider.PreparedProfile, error) {
-	approval, err := nativeApproval(request.Mode)
+func buildNativePreparedProfile(request task.TaskRecord, arguments, launchEnvironment []string, cli commonprovider.CLIInfo, environment profileEnvironment, dialect launchDialect, predicateReference task.PredicateRef, observedVersion, runtimeSHA256, preflightSHA256 string) (commonprovider.PreparedProfile, error) {
+	approval, err := dialect.approval(request.Mode)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
-	effective, err := commonprovider.NativeEffectiveConfig(request, environment.WritableRoots, runtimeSHA256, approval)
+	effective, err := dialect.nativeEffectiveConfig(request, environment.WritableRoots, runtimeSHA256, approval)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
@@ -188,9 +187,17 @@ func buildNativePreparedProfile(request task.TaskRecord, arguments, launchEnviro
 		RuntimePreflightSHA256: preflightSHA256,
 		Effective:              task.CloneEffectiveConfig(effective),
 		WritableRoots:          slices.Clone(environment.WritableRoots),
-		Identity: func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
+	}
+	if dialect == dialectACP {
+		// The ACP protocol is the sole stdout observer and records the exact
+		// native session itself, so the profile has no identity observer.
+		prepared.Protocol = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.Protocol, error) {
+			return newACPProtocol(request, expected, record)
+		}
+	} else {
+		prepared.Identity = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.IdentityObserver, error) {
 			return NewIdentityObserver(request.TaskID, expected, record)
-		},
+		}
 	}
 	if validateErr := prepared.ValidateAdmission(request); validateErr != nil {
 		return commonprovider.PreparedProfile{}, validateErr
@@ -231,17 +238,6 @@ func finalizeLegacyCandidate(request task.TaskRecord, arguments, launchEnvironme
 		return commonprovider.PreparedProfile{}, validateErr
 	}
 	return prepared, nil
-}
-
-func nativeApproval(mode string) (string, error) {
-	switch mode {
-	case ModeReadOnly:
-		return nativeReadOnlyAgent, nil
-	case ModeWorkspaceWrite:
-		return nativeWorkspaceWriteAgent + ":auto", nil
-	default:
-		return "", fmt.Errorf("%w: unsupported OpenCode native permission mode", ErrUnsupportedProfile)
-	}
 }
 
 func nativePolicyDigest(mode string, native json.RawMessage) (string, error) {

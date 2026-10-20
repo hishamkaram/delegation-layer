@@ -45,6 +45,18 @@ func (c *Client) ShutdownDispatched(ctx context.Context) (dispatched bool, resul
 	return dispatched, nil
 }
 
+// ObservePrivateEndpoint observes the exact private endpoint without cleanup,
+// closure, or start. Absent and refused are reported only for a clean
+// completed command and the exact Unix observation; every other fault is the
+// operational error.
+func (c *Client) ObservePrivateEndpoint(ctx context.Context) (PrivateEndpointObservation, error) {
+	if !isPrivateClient(c) {
+		return PrivateEndpointObservation{}, ErrConfiguration
+	}
+	_, observation, err := privateClientObserveSnapshot(ctx, c, false)
+	return observation, err
+}
+
 // Reachable performs a bounded, read-only readiness probe and reports whether
 // the bound endpoint answered a valid status request. A normal endpoint
 // absence is represented by (false, nil); malformed or changed bindings remain
@@ -68,35 +80,38 @@ func (c *Client) VerifyPrivateMigrationEndpoint(ctx context.Context, stateRoot s
 	// status protocol so a malformed task response cannot be mistaken for a
 	// recoverable private supervisor. Admission reuses a separately established
 	// bounded group proof only for its already-live scheduling path.
-	ready, err := c.availableForBootstrap(ctx)
+	// A refusal is only unavailability here: the existing provenance checks
+	// decide whether a later StartPrivate may enter the canonical closure.
+	observation, err := c.availableForTransition(ctx, true)
 	if err != nil {
 		return err
 	}
-	if ready {
+	if observation.ready() {
 		return nil
 	}
+	refusal := observation.projectedError()
 	_, identityPresent, err := loadPrivateDaemonIdentity(filepath.Join(stateRoot, privateSupervisorDirectory))
 	if err != nil {
-		return err
+		return errors.Join(err, refusal)
 	}
 	if identityPresent {
 		_, bindingPresent, bindingErr := loadPrivateSupervisorBinding(stateRoot)
 		if bindingErr != nil {
-			return bindingErr
+			return errors.Join(bindingErr, refusal)
 		}
 		if bindingPresent {
 			return nil
 		}
-		return fmt.Errorf("%w: private supervisor endpoint is unreachable and its logical predecessor binding is unavailable", ErrPrivateSupervisorMigrationRequired)
+		return errors.Join(fmt.Errorf("%w: private supervisor endpoint is unreachable and its logical predecessor binding is unavailable", ErrPrivateSupervisorMigrationRequired), refusal)
 	}
 	bootstrapPending, bootstrapErr := PrivateBootstrapPending(stateRoot)
 	if bootstrapErr != nil {
-		return bootstrapErr
+		return errors.Join(bootstrapErr, refusal)
 	}
 	if bootstrapPending {
 		return nil
 	}
-	return fmt.Errorf("%w: private supervisor endpoint is unreachable and its predecessor identity is unavailable", ErrPrivateSupervisorMigrationRequired)
+	return errors.Join(fmt.Errorf("%w: private supervisor endpoint is unreachable and its predecessor identity is unavailable", ErrPrivateSupervisorMigrationRequired), refusal)
 }
 
 // WaitUnavailable waits until the exact endpoint no longer answers a valid

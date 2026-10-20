@@ -136,7 +136,10 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 capture_output=True, text=True, check=False,
                 timeout=AGGREGATE_WRAPPER_TEST_TIMEOUT)
             self.assertEqual(mixed.returncode, 1)
-            self.assertIn(f"status=failed passed=2 blocked=9 failed={sum(case.provider == 'codex:exec' for case in native_evidence.EXPECTED_CASES)}", mixed.stdout)
+            mixed_failed = sum(case.provider == "codex:exec" for case in native_evidence.EXPECTED_CASES)
+            mixed_blocked = len(native_evidence.EXPECTED_CASES) - 2 - mixed_failed
+            self.assertEqual((mixed_failed, mixed_blocked), (5, 10))
+            self.assertIn(f"status=failed passed=2 blocked={mixed_blocked} failed={mixed_failed}", mixed.stdout)
 
             fake_python.write_text(fake_native_python_script())
             environment["FAKE_NATIVE_RESULT"] = "timeout"
@@ -147,7 +150,13 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 capture_output=True, text=True, check=False,
                 timeout=AGGREGATE_WRAPPER_TEST_TIMEOUT)
             self.assertEqual(successful_timeout.returncode, 0)
-            self.assertIn(f"status=passed passed=3 blocked={len(native_evidence.EXPECTED_CASES) - 3} failed=0", successful_timeout.stdout)
+            timeout_passes = sum(case.scenario == "timeout-resume" or case.provider == "claude:print"
+                                 for case in native_evidence.EXPECTED_CASES)
+            self.assertEqual(timeout_passes, 4)
+            self.assertIn(
+                f"status=passed passed={timeout_passes} "
+                f"blocked={len(native_evidence.EXPECTED_CASES) - timeout_passes} failed=0",
+                successful_timeout.stdout)
 
     def test_aggregate_uses_each_case_exit_contract_without_a_second_receipt_oracle(self):
         wrapper = repository_root() / "scripts/acceptance_native_all.sh"
@@ -168,7 +177,13 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 timeout=AGGREGATE_WRAPPER_TEST_TIMEOUT)
 
             self.assertEqual(result.returncode, 0)
-            self.assertIn(f"status=passed passed=1 blocked={len(native_evidence.EXPECTED_CASES) - 1} failed=0", result.stdout)
+            timeout_cases = [case for case in native_evidence.EXPECTED_CASES
+                             if case.scenario == "timeout-resume"]
+            self.assertEqual([case.provider for case in timeout_cases], ["codex:exec", "opencode:run"])
+            self.assertIn(
+                f"status=passed passed={len(timeout_cases)} "
+                f"blocked={len(native_evidence.EXPECTED_CASES) - len(timeout_cases)} failed=0",
+                result.stdout)
 
     def test_aggregate_rejects_unexpected_evidence_helper_exit(self):
         wrapper = repository_root() / "scripts/acceptance_native_all.sh"

@@ -9,6 +9,7 @@ from pathlib import Path
 from scripts.delegate_acceptance.evidence.files import read_json, write_json
 from scripts.delegate_acceptance.evidence.validation import _task_identity, require
 from scripts.delegate_acceptance.native.diagnostics import (
+    _diagnostic_inspection,
     _diagnostic_json_bytes,
     _diagnostic_output_diagnostics,
     _diagnostic_text_descriptor,
@@ -93,6 +94,10 @@ def _failure_diagnostics(owner) -> dict[str, object]:
         if type(numeric_id) is int and numeric_id >= 0:
             task["numeric_id"] = numeric_id
         tasks.append(task)
+    model_inspection = _model_discovery_inspection_diagnostic(acceptance, omitted)
+    diagnosed_ids = [task_id for _name, task_id, _state in task_specs]
+    if model_inspection is not None and model_inspection["journal_task_id"] is not None:
+        diagnosed_ids.append(model_inspection["journal_task_id"])
 
     workspace_path = getattr(acceptance, "workspace", None)
     if isinstance(workspace_path, Path):
@@ -118,11 +123,13 @@ def _failure_diagnostics(owner) -> dict[str, object]:
         "mode": getattr(acceptance, "mode", None),
         "scenario": getattr(acceptance, "scenario", None),
         "failure": failure,
-        "task_ids": [task_id for _name, task_id, _state in task_specs],
+        "task_ids": diagnosed_ids,
         "tasks": tasks,
         "workspace": workspace,
         "status": status,
     }
+    if model_inspection is not None:
+        result["model_discovery_inspection"] = model_inspection
     status["partial"] = bool(status["partial"] or status["omitted_count"] or status["truncated"])
     return acceptance._fit_failure_diagnostics(result)
 
@@ -169,15 +176,40 @@ def _failure_diagnostic_task_specs(
             continue
         seen.add(task_id)
         task_specs.append((name, task_id, acceptance.state))
-    model_task = getattr(acceptance, "model_discovery_task_id", None)
-    models_state = getattr(acceptance, "models_state", None)
-    if _task_identity(model_task) and model_task not in seen and isinstance(models_state, Path):
-        task_specs.append(("model-discovery", model_task, models_state))
-        seen.add(model_task)
     if len(task_specs) > FAILURE_DIAGNOSTICS_MAX_TASKS:
         omitted.append("admitted-task-list")
         task_specs = task_specs[:FAILURE_DIAGNOSTICS_MAX_TASKS]
     return task_specs
+
+def _model_inspection_context(response: object) -> dict[str, object] | None:
+    """Return the typed inspection context of a response validated on receipt."""
+    failure = response.get("failure") if isinstance(response, dict) else None
+    inspection = failure.get("inspection") if isinstance(failure, dict) else None
+    if not isinstance(inspection, dict):
+        return None
+    return {key: inspection[key] for key in ("class", "deadline_state", "journal_task_id")
+            if isinstance(inspection.get(key), str) and
+            len(inspection[key]) <= FAILURE_DIAGNOSTICS_TEXT_BYTES and
+            not any(ord(character) < 32 for character in inspection[key])}
+
+def _model_discovery_inspection_diagnostic(
+        owner, omitted: list[str]) -> dict[str, object] | None:
+    """Project the model inspection through its own journal, never as an ordinary task."""
+    acceptance = owner
+    models_state = getattr(acceptance, "models_state", None)
+    context = _model_inspection_context(getattr(acceptance, "model_discovery", None))
+    task_id = getattr(acceptance, "model_discovery_task_id", None)
+    if not _task_identity(task_id):
+        task_id = context.get("journal_task_id") if context is not None else None
+    if not isinstance(models_state, Path) or (context is None and not _task_identity(task_id)):
+        return None
+    if _task_identity(task_id):
+        inspection = _diagnostic_inspection(models_state, task_id, omitted)
+    else:
+        inspection = {"journal_task_id": None, "journal": "unknown", "files": {}}
+    if context is not None:
+        inspection["context"] = context
+    return inspection
 
 def _write_failure_diagnostics(owner) -> bool:
     acceptance = owner

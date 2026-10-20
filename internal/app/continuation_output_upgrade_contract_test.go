@@ -3,6 +3,9 @@ package app
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -10,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/execution"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/provider/ccr"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
@@ -36,16 +40,93 @@ func TestContinuationLeavesPredecessorOutputPredicateFrozen(t *testing.T) {
 				t.Fatalf("predecessor rebuilt under %+v (stored %+v), err=%v, want its source %+v", profile.Plan.Predicate, meta.Predicate, err, testCase.source)
 			}
 			// The shared recheck fixture seals native follow-up evidence under the
-			// source and requires the original rejection to be published.
-			sealedProviderRecheckTask(t, registry, providerRecheckSource{provider: testCase.provider, reference: testCase.source, target: testCase.target})
+			// source and requires the original rejection to be published. A frozen
+			// scoped source accepts the neutral cycle, so its fixture adds the
+			// unknown content block only its advisory target accepts.
+			sealedProviderRecheckTask(t, registry, providerRecheckSource{
+				provider: testCase.provider, opaqueContent: isScopedRecheckSource(testCase.source),
+				reference: testCase.source, target: testCase.target,
+			})
 		})
 	}
+}
+
+// TestOpenCodeHistoricalRunTargetPublishesWhatItsSourcesReject is the
+// historical group's positive control. Each task is admitted from a coherent
+// run record and seals the same repeated-step-start evidence: the run-v5 target
+// publishes the principal answer, and every eligible v2-v4 source rejects it.
+func TestOpenCodeHistoricalRunTargetPublishesWhatItsSourcesReject(t *testing.T) {
+	cases := outputUpgradeCases(t)
+	for _, control := range outputUpgradeControlCases(t) {
+		if control.provider == openCodeProvider {
+			t.Run(control.mode, func(t *testing.T) {
+				requireOpenCodeHistoricalRunControl(t, control, cases)
+			})
+		}
+	}
+}
+
+// requireOpenCodeHistoricalRunControl seals the control's target evidence
+// under the run-v5 target and under each eligible source of the same mode.
+func requireOpenCodeHistoricalRunControl(t *testing.T, control outputUpgradeCase, cases []outputUpgradeCase) {
+	t.Helper()
+	fixture := newOutputUpgradeFixture(t, control)
+	stream := control.successorStream(fixture.session)
+	outcome, answer := sealOpenCodeHistoricalRun(t, fixture, strings.Repeat("b", 32), control.target, stream)
+	if outcome.Verdict != task.VerdictCommitted || answer != outputUpgradeAnswer {
+		t.Fatalf("run target %+v: verdict=%q answer=%q diagnostics=%+v, want the committed principal answer", control.target, outcome.Verdict, answer, outcome.Diagnostics)
+	}
+	sources := 0
+	for index, testCase := range cases {
+		if testCase.provider != openCodeProvider || testCase.mode != control.mode {
+			continue
+		}
+		sources++
+		if outcome, _ = sealOpenCodeHistoricalRun(t, fixture, fmt.Sprintf("%032x", index+1), testCase.source, stream); outcome.Verdict != task.VerdictRejected {
+			t.Errorf("run source %+v published the evidence only its target accepts: verdict=%q", testCase.source, outcome.Verdict)
+		}
+	}
+	if sources != 3 {
+		t.Fatalf("%d eligible run sources for %s, want v2, v3 and v4", sources, control.mode)
+	}
+}
+
+// sealOpenCodeHistoricalRun admits taskID in the fixture's store from a
+// historical run record under reference, seals stdout and returns the
+// collected outcome with any published answer.
+func sealOpenCodeHistoricalRun(t *testing.T, f *outputUpgradeFixture, taskID string, reference task.PredicateRef, stdout string) (*task.OutcomeRecord, string) {
+	t.Helper()
+	store, err := openStore(f.root, f.deps.storeDependencies(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOpenCodeStore(t, store)
+	brief := []byte("historical brief")
+	request, err := admission.BuildRequest(store.RootID, taskID, openCodeProvider, f.workspace, f.testCase.requestedConfig(), brief, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := tasklifecycle.NewMeta(request, openCodeHistoricalRunProfile(t, f.deps.Catalog, request, f.testCase.revision, reference), f.supervisor.Binding(), f.runner, task.RunnerOwnershipManaged, outputUpgradeBuild)
+	td, err := store.CreateTask(taskID, &request, brief, &meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeOpenCodeTask(t, td)
+	outcome := sealOutputUpgradeTask(t, td, openCodeProvider, f.session, reference, stdout)
+	if outcome.Verdict != task.VerdictCommitted {
+		return outcome, ""
+	}
+	answer, err := os.ReadFile(filepath.Join(td.Dir, outcome.Payload.Basename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return outcome, string(answer)
 }
 
 // outputUpgradePreparation is the part of an admitted preparation that must
 // not change when only the output predicate is upgraded.
 type outputUpgradePreparation struct {
-	plan             any
+	plan             execution.Plan
 	effective        []byte
 	writableRoots    []string
 	preflight        string
@@ -102,9 +183,10 @@ func TestEligibleSourcePreparationDiffersOnlyByPredicate(t *testing.T) {
 // successor operation on a predecessor stored under each exact source with the
 // exact preparation of a task stored under the target. The successor must be
 // the same preparation, predicate included; the immutable reconstruction of the
-// source keeps its own predicate.
+// source keeps its own predicate. An OpenCode successor changes launch dialect;
+// opencode_acp_continuation_test.go owns its preparation contract.
 func TestSuccessorOfEligibleSourcePreparesTheCurrentTarget(t *testing.T) {
-	for _, testCase := range outputUpgradeCases(t) {
+	for _, testCase := range sameWireOutputUpgradeCases(outputUpgradeCases(t)) {
 		t.Run(testCase.name, func(t *testing.T) {
 			installOutputUpgradeProvider(t, testCase.executable())
 			request := outputUpgradeSuccessorRequest(t, testCase)
@@ -144,17 +226,34 @@ type outputUpgradeCandidateSource func(commonprovider.Catalog, task.TaskRecord, 
 func outputUpgradeProductionPreparation(t *testing.T, testCase outputUpgradeCase, request task.TaskRecord, reference task.PredicateRef, prepare outputUpgradeCandidateSource) outputUpgradePreparation {
 	t.Helper()
 	catalog := NativeCatalog()
+	candidate, err := prepare(catalog, request, outputUpgradeStoredRecord(t, catalog, testCase, request, reference))
+	if err != nil {
+		t.Fatalf("stored-predicate candidate under %+v: %v", reference, err)
+	}
+	return outputUpgradePreparationOf(t, candidate, outputUpgradeAdmit(t, testCase, candidate))
+}
+
+// outputUpgradeStoredRecord is the record a task admitted under reference
+// persisted. OpenCode references are historical run records; the other
+// providers' fresh admission is the launch contract their sources recorded.
+func outputUpgradeStoredRecord(t *testing.T, catalog commonprovider.Catalog, testCase outputUpgradeCase, request task.TaskRecord, reference task.PredicateRef) task.MetaRecord {
+	t.Helper()
+	if testCase.provider == openCodeProvider {
+		return tasklifecycle.NewMeta(request, openCodeHistoricalRunProfile(t, catalog, request, testCase.revision, reference), task.SupervisorRef{}, "/runner", task.RunnerOwnershipManaged, outputUpgradeBuild)
+	}
 	fresh, err := catalog.Candidate(request)
 	if err != nil {
 		t.Fatalf("current candidate: %v", err)
 	}
 	seed := tasklifecycle.NewMeta(request, outputUpgradeAdmit(t, testCase, fresh), task.SupervisorRef{}, "/runner", task.RunnerOwnershipManaged, outputUpgradeBuild)
 	seed.Predicate = reference
-	candidate, err := prepare(catalog, request, seed)
-	if err != nil {
-		t.Fatalf("stored-predicate candidate under %+v: %v", reference, err)
-	}
-	profile := outputUpgradeAdmit(t, testCase, candidate)
+	return seed
+}
+
+// outputUpgradePreparationOf projects an admitted candidate onto the
+// components an output-only upgrade must leave unchanged.
+func outputUpgradePreparationOf(t *testing.T, candidate commonprovider.ProfileCandidate, profile PreparedProfile) outputUpgradePreparation {
+	t.Helper()
 	_, digest, err := candidate.Inspection.Snapshot()
 	if err != nil {
 		t.Fatal(err)

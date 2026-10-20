@@ -100,6 +100,7 @@ func TestStatusAndCollectKeepPendingWithoutClosedReleasedLifetime(t *testing.T) 
 	}{
 		{name: "open lifetime", setup: rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeOpen}},
 		{name: "held runner lease", setup: rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedPreviousBoot, holdRunnerLease: true}},
+		{name: "held runner lease after budget closure", setup: rebootSetup{prior: testPriorSession(), identity: true, stage: rebootLifetimeClosedBudget, holdRunnerLease: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.setup.launchEnvironment = true
@@ -161,19 +162,29 @@ func TestUnreadableCancellationIsReportedNotHidden(t *testing.T) {
 }
 
 func TestCommittedOutcomeWinsOverClosedLifetime(t *testing.T) {
-	store, td, req := newAppTestTaskWithPrior(t, true, testPriorSession())
-	defer closeAppTestTask(t, store, td)
-	if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
-		t.Fatal(err)
-	}
-	recordRebootLifetime(t, td, rebootLifetimeClosedPreviousBoot)
-	collected := collect(Arguments{Root: store.Root, TaskID: req.TaskID}, storeDependencies{})
-	if collected.code != 0 || collected.response.Publication != task.PublicationCommitted.String() || collected.response.Outcome == nil || collected.response.Status != "" || collected.response.Failure != nil {
-		t.Fatalf("collect with outcome and closed lifetime = code %d %+v", collected.code, collected.response)
-	}
-	observed := status(Arguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{})
-	if observed.code != 0 || observed.response.Publication != task.PublicationCommitted.String() || observed.response.Status != "" || observed.response.Failure != nil {
-		t.Fatalf("status with outcome and closed lifetime = code %d %+v", observed.code, observed.response)
+	for _, tc := range []struct {
+		name  string
+		stage rebootLifetimeStage
+	}{
+		{name: "previous boot", stage: rebootLifetimeClosedPreviousBoot},
+		{name: "budget", stage: rebootLifetimeClosedBudget},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, td, req := newAppTestTaskWithPrior(t, true, testPriorSession())
+			defer closeAppTestTask(t, store, td)
+			if err := td.ClaimSession(req.Provider, req.PriorSession.ConversationID); err != nil {
+				t.Fatal(err)
+			}
+			recordRebootLifetime(t, td, tc.stage)
+			collected := collect(Arguments{Root: store.Root, TaskID: req.TaskID}, storeDependencies{})
+			if collected.code != 0 || collected.response.Publication != task.PublicationCommitted.String() || collected.response.Outcome == nil || collected.response.Status != "" || collected.response.Failure != nil {
+				t.Fatalf("collect with outcome and closed lifetime = code %d %+v", collected.code, collected.response)
+			}
+			observed := status(Arguments{Root: store.Root, TaskID: req.TaskID}, Dependencies{})
+			if observed.code != 0 || observed.response.Publication != task.PublicationCommitted.String() || observed.response.Status != "" || observed.response.Failure != nil {
+				t.Fatalf("status with outcome and closed lifetime = code %d %+v", observed.code, observed.response)
+			}
+		})
 	}
 }
 
@@ -200,6 +211,16 @@ func TestContinueReportsMissingSessionAsContinuationUnavailable(t *testing.T) {
 
 func recordRebootStop(t *testing.T, fixture *rebootFixture, id, cause string) {
 	t.Helper()
+	recordRebootStopRequest(t, fixture, id, cause)
+	if cause == "budget" {
+		recordRebootBudgetObservation(t, fixture, id)
+	}
+}
+
+// recordRebootStopRequest records only the consumed stop request. A budget
+// request carries its deadline but no supervisor reply or observation.
+func recordRebootStopRequest(t *testing.T, fixture *rebootFixture, id, cause string) {
+	t.Helper()
 	deadline := time.Time{}
 	if cause == "budget" {
 		deadline = time.Now().Add(time.Minute)
@@ -214,9 +235,12 @@ func recordRebootStop(t *testing.T, fixture *rebootFixture, id, cause string) {
 	if err = permit.Release(); err != nil {
 		t.Fatalf("release %s stop: %v", cause, err)
 	}
-	if cause != "budget" {
-		return
-	}
+}
+
+// recordRebootBudgetObservation adds the derived terminated-stop annotation a
+// supervisor status pass writes for an existing budget request.
+func recordRebootBudgetObservation(t *testing.T, fixture *rebootFixture, id string) {
+	t.Helper()
 	receipt, err := fixture.td.ReadSupervisorReceipt()
 	if err != nil {
 		t.Fatal(err)

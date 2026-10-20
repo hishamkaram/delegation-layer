@@ -26,6 +26,12 @@ const (
 	// session's empty zero-turn leading acknowledgements may precede the
 	// caller's result without owning it.
 	scopedAttributedCompletion
+	// advisoryScopedCompletion is the current policy: the scoped reducer over
+	// the advisory wire projection of current_wire.go. Only session identity
+	// and the requested native permission are init authority, opaque payloads
+	// are not checked for unique keys, unknown content blocks are opaque, and
+	// an unknown completion reason is an unsupported completion.
+	advisoryScopedCompletion
 )
 
 // completionAttribution is the canonical current completion reducer for one
@@ -48,6 +54,9 @@ type completionAttribution struct {
 	// messages are excluded from cycles, invalid message scopes reject, and
 	// leading acknowledgements may precede the principal result.
 	scoped bool
+	// advisory is fixed by the immutable completion policy and selects the
+	// advisory wire projection, init authority, and unsupported reasons.
+	advisory bool
 	// stage is the pre-principal boundary state of the scoped policy; see
 	// completion_leading.go. The principal result resets it.
 	stage         leadingStage
@@ -58,11 +67,11 @@ type completionAttribution struct {
 	cycleInit     bool
 	cycleMessages bool
 	batchPending  bool
-	// principalRefusal is stated by the principal's typed metadata; refusal
-	// is the first failed follow-up. Neither replaces a principal result
-	// refusal, which the predicate evaluates first.
-	principalRefusal     string
-	refusal              string
+	// principalFault is stated by the principal's typed metadata; fault is
+	// the first failed follow-up or leading acknowledgement. Neither replaces
+	// a principal result refusal, which the predicate evaluates first.
+	principalFault       completionFault
+	fault                completionFault
 	settledCostUSD       *string
 	settledUsagePresent  bool
 	settledUsageReliable bool
@@ -74,6 +83,8 @@ func newCompletionAttribution(policy completionPolicy) *completionAttribution {
 		return &completionAttribution{}
 	case scopedAttributedCompletion:
 		return &completionAttribution{scoped: true}
+	case advisoryScopedCompletion:
+		return &completionAttribution{scoped: true, advisory: true}
 	case singleResultCompletion:
 		return nil
 	}
@@ -152,7 +163,7 @@ func isClaudeInitEvent(event claudeCurrentEvent) bool {
 }
 
 func (a *completionAttribution) acceptPrincipal(state *eventState, value providerjson.Value) {
-	completion, err := decodeClaudeResultCompletion(value)
+	completion, err := decodeClaudeResultCompletion(value, a.advisoryWire())
 	if err != nil {
 		state.markSemantic(err.Error())
 		return
@@ -178,11 +189,11 @@ func (a *completionAttribution) acceptPrincipal(state *eventState, value provide
 		a.nextIndex = 1
 	}
 	a.stage = leadingStart
-	a.principalRefusal = completion.refusal()
+	a.principalFault = completion.fault()
 }
 
 func (a *completionAttribution) acceptFollowUp(state *eventState, event claudeCurrentEvent) {
-	completion, err := decodeClaudeResultCompletion(event.value)
+	completion, err := decodeClaudeResultCompletion(event.value, a.advisoryWire())
 	if err != nil {
 		state.markSemantic(err.Error())
 		return
@@ -201,22 +212,19 @@ func (a *completionAttribution) acceptFollowUp(state *eventState, event claudeCu
 	a.settledCostUSD = result.totalCostUSD
 	a.settledUsagePresent = result.currentUsagePresent
 	a.settledUsageReliable = result.currentUsageReliable
-	refusal := resultRefusal(result)
-	if stated := completion.refusal(); stated != "" && (refusal == "" || refusal == refusalEmpty) {
-		refusal = stated
-	}
-	if refusal == refusalEmpty && completion.zeroTurns {
+	fault := a.statedFault(result, completion)
+	if fault.refusal == refusalEmpty && completion.zeroTurns {
 		// A coalesced batch acknowledges each earlier completion with an
 		// empty zero-turn result; the last result carries the answering turn.
 		a.batchPending = true
 		return
 	}
 	a.cycleOpen, a.cycleInit, a.cycleMessages, a.batchPending = false, false, false, false
-	if refusal == refusalEmpty {
-		refusal = refusalIncomplete
+	if fault.refusal == refusalEmpty {
+		fault = completionFault{refusal: refusalIncomplete}
 	}
-	if refusal != "" {
-		a.recordFollowUpRefusal(refusal)
+	if fault.refusal != "" {
+		a.recordFollowUpFault(fault)
 	}
 }
 
@@ -233,9 +241,9 @@ func followUpSequenceFault(a *completionAttribution, completion claudeResultComp
 	return ""
 }
 
-func (a *completionAttribution) recordFollowUpRefusal(refusal string) {
-	if a.refusal == "" {
-		a.refusal = refusal
+func (a *completionAttribution) recordFollowUpFault(fault completionFault) {
+	if a.fault.refusal == "" {
+		a.fault = fault
 	}
 }
 
@@ -244,22 +252,22 @@ func (a *completionAttribution) acceptFollowUpInit(state *eventState, fields map
 		state.markSemantic("system/init repeats within a follow-up cycle")
 		return
 	}
-	if requireSameClaudeInit(state, fields, "follow-up system/init changed the native identity") {
+	if a.requireSameInit(state, fields, "follow-up system/init changed the native identity") {
 		a.cycleOpen, a.cycleInit = true, true
 	}
 }
 
-// requireSameClaudeInit is the one decode-and-compare step for a repeated
+// requireSameInit is the one decode-and-compare step for a repeated
 // system/init, shared by the leading and follow-up boundaries. Each caller
 // owns its own stage guard and supplies the mismatch fault text; a false
 // result means the state was already marked malformed.
-func requireSameClaudeInit(state *eventState, fields map[string]providerjson.Value, mismatch string) bool {
-	init, err := decodeClaudeCurrentInit(fields, state.mode)
+func (a *completionAttribution) requireSameInit(state *eventState, fields map[string]providerjson.Value, mismatch string) bool {
+	init, err := a.decodeInit(fields, state.mode)
 	if err != nil {
 		state.markSemantic(err.Error())
 		return false
 	}
-	if !sameClaudeInit(init, state.init) {
+	if !a.sameInit(init, state.init) {
 		state.markSemantic(mismatch)
 		return false
 	}
@@ -267,7 +275,7 @@ func requireSameClaudeInit(state *eventState, fields map[string]providerjson.Val
 }
 
 func (a *completionAttribution) acceptFollowUpMessage(state *eventState, event claudeCurrentEvent) {
-	if err := validateClaudeCurrentMessageEvent(event.fields, event.typeName); err != nil {
+	if err := validateClaudeCurrentMessageEvent(event.fields, event.typeName, a.advisoryWire()); err != nil {
 		state.markSemantic(err.Error())
 		return
 	}
@@ -295,7 +303,7 @@ func (a *completionAttribution) finish(state *eventState) {
 		return
 	}
 	if a.batchPending {
-		a.recordFollowUpRefusal(refusalIncomplete)
+		a.recordFollowUpFault(completionFault{refusal: refusalIncomplete})
 	}
 	if a.followUps == 0 {
 		return
@@ -308,11 +316,15 @@ func (a *completionAttribution) finish(state *eventState) {
 // completionRefusal is the reducer's verdict after the principal result's own
 // refusal: first the principal's typed metadata, then any follow-up failure.
 func (a *completionAttribution) completionRefusal() string {
+	return a.completionFault().refusal
+}
+
+func (a *completionAttribution) completionFault() completionFault {
 	if a == nil {
-		return ""
+		return completionFault{}
 	}
-	if a.principalRefusal != "" {
-		return a.principalRefusal
+	if a.principalFault.refusal != "" {
+		return a.principalFault
 	}
-	return a.refusal
+	return a.fault
 }

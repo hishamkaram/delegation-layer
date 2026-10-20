@@ -14,8 +14,10 @@ import (
 const Provider = "ccr:print"
 
 const (
-	currentPredicateVersion               = "ccr-foreground-v5"
-	modeledPredicateVersion               = "ccr-foreground-v5-modeled"
+	currentPredicateVersion               = "ccr-foreground-v6"
+	modeledPredicateVersion               = "ccr-foreground-v6-modeled"
+	scopedPredicateVersion                = "ccr-foreground-v5"
+	scopedModeledPredicateVersion         = "ccr-foreground-v5-modeled"
 	preAttributionPredicateVersion        = "ccr-foreground-v4"
 	preAttributionModeledPredicateVersion = "ccr-foreground-v4-modeled"
 	preCredentialPredicateVersion         = "ccr-foreground-v3"
@@ -43,9 +45,9 @@ type preparationContract struct {
 	inspection inspectionRevision
 }
 
-// Reference binds fresh CCR foreground completion to the attributed native
-// Claude stream contract, including CCR's own exit status and adapter/session
-// identity.
+// Reference binds fresh CCR foreground completion to the current advisory
+// native Claude stream contract, including CCR's own exit status and
+// adapter/session identity.
 func Reference(mode string) task.PredicateRef {
 	contract := ccrContract(currentPredicateVersion, claude.ContractForMode(mode), true)
 	if contract == "" {
@@ -64,6 +66,21 @@ func modeledReference(mode string) task.PredicateRef {
 		return task.PredicateRef{}
 	}
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: modeledPredicateVersion, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
+// scopedReference identifies credential-aware CCR tasks sealed under Claude's
+// scoped attributed policy and strict wire. Its bytes embed that frozen
+// contract so the recorded digest and replay remain unchanged.
+func scopedReference(mode string, preservesRoute bool) task.PredicateRef {
+	version := scopedModeledPredicateVersion
+	if preservesRoute {
+		version = scopedPredicateVersion
+	}
+	contract := ccrContract(version, claude.ScopedNativeContractForMode(mode), preservesRoute)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
 }
 
 // preAttributionReference identifies credential-aware CCR tasks sealed under
@@ -123,6 +140,7 @@ func ccrContract(version, claudeContract string, preservesRoute bool) string {
 		contract += "; exact continuations retain the recorded CCR route"
 	}
 	if version == currentPredicateVersion || version == modeledPredicateVersion ||
+		version == scopedPredicateVersion || version == scopedModeledPredicateVersion ||
 		version == preAttributionPredicateVersion || version == preAttributionModeledPredicateVersion {
 		contract += "; native credential resolution failure exits 77 and becomes authentication-unavailable without a session"
 	}
@@ -145,9 +163,11 @@ func preparationForReference(reference task.PredicateRef, mode string) (preparat
 		return preparationContract{}, err
 	}
 	switch {
-	case reference.Equal(Reference(mode)), reference.Equal(preAttributionReference(mode, true)), reference.Equal(preCredentialReference(mode, true)):
+	case reference.Equal(Reference(mode)), reference.Equal(scopedReference(mode, true)), reference.Equal(preAttributionReference(mode, true)),
+		reference.Equal(preCredentialReference(mode, true)):
 		return preparationContract{launch: resumeRoutePreparation, inspection: routeInspection}, nil
-	case reference.Equal(modeledReference(mode)), reference.Equal(preAttributionReference(mode, false)), reference.Equal(preCredentialReference(mode, false)):
+	case reference.Equal(modeledReference(mode)), reference.Equal(scopedReference(mode, false)), reference.Equal(preAttributionReference(mode, false)),
+		reference.Equal(preCredentialReference(mode, false)):
 		return preparationContract{launch: legacyPreparation, inspection: routeInspection}, nil
 	case reference.Equal(previousReference(mode)), reference.Equal(HistoricalReference(mode)):
 		return preparationContract{launch: legacyPreparation, inspection: legacyInspection}, nil
@@ -156,18 +176,25 @@ func preparationForReference(reference task.PredicateRef, mode string) (preparat
 	}
 }
 
-// Registration makes each current attributed reference the single direct
+// Registration makes each current advisory reference the single direct
 // offline recovery target for the sealed sources sharing its launch shape:
-// route-preserving v4 and v3 recover as v5; modeled v4/v3 and the legacy v2/v1
-// launches recover as v5-modeled. Every earlier reference is replay-only.
+// route-preserving v5, v4, and v3 recover as v6; modeled v5/v4/v3 and the
+// legacy v2/v1 launches recover as v6-modeled. Every earlier reference is
+// replay-only.
 func Registration() commonprovider.Registration {
 	builders := []func(mode string) (predicate.Interpreter, error){
 		func(mode string) (predicate.Interpreter, error) {
-			return newCredentialInterpreter(Reference(mode), preAttributionReference(mode, true), preCredentialReference(mode, true))
+			return newCredentialInterpreter(Reference(mode), scopedReference(mode, true), preAttributionReference(mode, true), preCredentialReference(mode, true))
 		},
 		func(mode string) (predicate.Interpreter, error) {
-			return newCredentialInterpreter(modeledReference(mode), preAttributionReference(mode, false), preCredentialReference(mode, false),
-				previousReference(mode), HistoricalReference(mode))
+			return newCredentialInterpreter(modeledReference(mode), scopedReference(mode, false), preAttributionReference(mode, false),
+				preCredentialReference(mode, false), previousReference(mode), HistoricalReference(mode))
+		},
+		func(mode string) (predicate.Interpreter, error) {
+			return newScopedCredentialInterpreter(scopedReference(mode, true))
+		},
+		func(mode string) (predicate.Interpreter, error) {
+			return newScopedCredentialInterpreter(scopedReference(mode, false))
 		},
 		func(mode string) (predicate.Interpreter, error) {
 			return newPreAttributionCredentialInterpreter(preAttributionReference(mode, true))

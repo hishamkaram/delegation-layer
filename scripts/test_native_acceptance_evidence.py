@@ -18,6 +18,7 @@ if __package__ in {None, ""}:
 
 from scripts import acceptance_supervisor_common as common
 from scripts import native_acceptance_evidence as evidence
+from scripts.acceptance_tests.native.support import lifetime_closure_source, production_acp_source
 from scripts.delegate_acceptance.directories import journal as cleanup_journal
 from scripts.delegate_acceptance.native_evidence import cases as case_operations
 from scripts.delegate_acceptance.native_evidence import contract as evidence_contract
@@ -107,6 +108,10 @@ class NativeAcceptanceEvidenceTests(unittest.TestCase):
             },
             "provider_runtime_identities": provider_runtimes,
             "natural_daemon_shutdown": True,
+            "lifetime_closure": lifetime_closure_source(tasks),
+            **({"production_acp": production_acp_source(
+                tasks, {alias: session for alias in aliases})}
+               if case.provider == "opencode:run" else {}),
         }), encoding="utf-8")
         (case_directory / "binding.json").write_text(json.dumps({
             "provider": case.provider, "mode": case.permission,

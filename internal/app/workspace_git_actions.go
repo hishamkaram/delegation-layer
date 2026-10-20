@@ -54,8 +54,14 @@ func provisionManagedCheckout(ctx context.Context, store *taskdir.Store, resourc
 	if err != nil {
 		return err
 	}
-	if config.PathsOverlap(request.Container, source.Root) || config.PathsOverlap(request.Container, source.CommonDir) || config.PathsOverlap(request.Container, store.Root) {
-		return fmt.Errorf("%w: managed container overlaps the source or state root", workspace.ErrIdentity)
+	if config.PathsOverlap(request.Container, store.Root) {
+		return fmt.Errorf("%w: managed container overlaps the state root", workspace.ErrIdentity)
+	}
+	// The shared container may hold the source checkout of a sibling workspace;
+	// only this workspace's own anchor must stay disjoint from Git and state.
+	protected := []string{source.Root, source.CommonDir, source.GitDir, store.Root}
+	if err = workspacescore.ValidateOwnedPlacement(filepath.Join(request.Container, request.WorkspaceID), protected); err != nil {
+		return fmt.Errorf("managed workspace overlaps the source or state root: %w", err)
 	}
 	anchor, err := prepareManagedAnchor(ctx, store.Root, resource)
 	if err != nil {
@@ -83,10 +89,26 @@ func resolveManagedSource(ctx context.Context, resource *workspace.Resource, git
 		}
 		source, err = git.ResolveSource(ctx, request.SourceCwd, request.BaseRef)
 		if err == nil {
+			source, err = pinCommonDirectory(source)
+		}
+		if err == nil {
 			err = resource.RecordSource(ctx, source)
 		}
 	}
-	return source, err
+	if err != nil {
+		return source, err
+	}
+	return source, workspacescore.VerifyRepositoryIdentity(source)
+}
+
+// The common directory, not the possibly transient source checkout, is the
+// repository identity that later capture, ref and cleanup operations trust.
+func pinCommonDirectory(source workspace.Source) (workspace.Source, error) {
+	identity, err := workspacescore.DirectoryIdentity(source.CommonDir)
+	if err != nil {
+		return source, err
+	}
+	return source.WithCommonDirIdentity(identity), nil
 }
 
 func prepareManagedAnchor(ctx context.Context, root string, resource *workspace.Resource) (string, error) {
@@ -167,6 +189,9 @@ func captureManagedCheckout(ctx context.Context, store *taskdir.Store, resource 
 	if workspace.OperationAbsent(err) {
 		candidate, err = git.BuildCapture(ctx, checkout, scratch)
 		if err == nil {
+			err = observeCaptureTurn(ctx, resource, git, checkout, request, &candidate)
+		}
+		if err == nil {
 			candidate.SchemaVersion, candidate.WorkspaceID, candidate.OperationID = task.SchemaVersion, request.WorkspaceID, request.OperationID
 			candidate.Subject = request.Subject
 			candidate.SnapshotRef = managedCaptureRef(request.RootID, request.WorkspaceID, request.OperationID)
@@ -186,7 +211,11 @@ func captureManagedCheckout(ctx context.Context, store *taskdir.Store, resource 
 	if err != nil {
 		return nil, err
 	}
-	return []workspace.Artifact{captureArtifact("diff.patch", exported.Patch), captureArtifact("name-status.z", exported.NameStatus)}, nil
+	artifacts := []workspace.Artifact{captureArtifact(workspace.CapturePatchName, exported.Patch), captureArtifact(workspace.CaptureNameStatusName, exported.NameStatus)}
+	if exported.Turn != nil {
+		artifacts = append(artifacts, captureArtifact(workspace.TurnPatchName, exported.Turn.Patch), captureArtifact(workspace.TurnNameStatusName, exported.Turn.NameStatus))
+	}
+	return artifacts, nil
 }
 
 func captureArtifact(name string, artifact workspace.CaptureArtifact) workspace.Artifact {
@@ -205,6 +234,9 @@ func removeManagedCheckout(ctx context.Context, resource *workspace.Resource, gi
 		return requireUnprovisionedWorkspace(ctx, resource, true)
 	}
 	if err != nil {
+		return err
+	}
+	if err = workspacescore.VerifyRepositoryIdentity(source); err != nil {
 		return err
 	}
 	anchor, err := resource.Anchor(ctx)

@@ -128,9 +128,13 @@ func TestClosureProofPreservesCanonicalHashesAcrossRecordFamilies(t *testing.T) 
 			if records.fenceReads != 0 || !slices.Equal(records.reads, []string{"wait", "termination", "launches", "worker", "registration", "intent"}) {
 				t.Fatalf("record read order=%v fence reads=%d", records.reads, records.fenceReads)
 			}
+			if proof.TerminationCause() != task.LifetimeTerminationCompleted {
+				t.Fatalf("native closure cause = %q", proof.TerminationCause())
+			}
 			saved := proof
 			records.evidence.Termination.Cause = task.LifetimeTerminationRequested
-			if proof != saved || proof.TerminationSHA256() == closureTestHash(t, *records.evidence.Termination) {
+			if proof != saved || proof.TerminationCause() != task.LifetimeTerminationCompleted ||
+				proof.TerminationSHA256() == closureTestHash(t, *records.evidence.Termination) {
 				t.Fatal("record mutation changed the immutable closure projection")
 			}
 		})
@@ -166,6 +170,29 @@ func TestClosureProofDoesNotInferWaitOrTermination(t *testing.T) {
 	}
 }
 
+func TestClosureProofExposesValidatedTerminationCause(t *testing.T) {
+	for _, cause := range []string{
+		task.LifetimeTerminationBudget, task.LifetimeTerminationRequested,
+		task.LifetimeTerminationRecovery, task.LifetimeTerminationCompleted,
+	} {
+		t.Run(cause, func(t *testing.T) {
+			records := newClosureTestRecords(t, task.LifetimeOwnerTask)
+			records.evidence.Termination.Cause = cause
+			proof, err := ReadClosureProof(t.Context(), records)
+			if err != nil || !proof.Closed() || proof.TerminationCause() != cause ||
+				proof.TerminationSHA256() != closureTestHash(t, *records.evidence.Termination) {
+				t.Fatalf("closure cause = %q proof=%+v err=%v", proof.TerminationCause(), proof, err)
+			}
+		})
+	}
+	records := newClosureTestRecords(t, task.LifetimeOwnerTask)
+	records.evidence.Termination.Cause = "deadline"
+	proof, err := ReadClosureProof(t.Context(), records)
+	if !errors.Is(err, task.ErrInvalidEnum) || proof != (ClosureProof{}) {
+		t.Fatalf("invalid cause proof=%+v err=%v", proof, err)
+	}
+}
+
 func TestClosureProofPreservesRecoveryDisposition(t *testing.T) {
 	records := newClosureTestRecords(t, task.LifetimeOwnerInspection)
 	records.evidence = task.LifetimeEvidence{Intent: records.evidence.Intent}
@@ -177,7 +204,8 @@ func TestClosureProofPreservesRecoveryDisposition(t *testing.T) {
 	records.evidence.WorkerWait = &absence
 	proof, err := ReadClosureProof(t.Context(), records)
 	if err != nil || !proof.Closed() || proof.Kind() != task.LifetimeClosureUnregisteredRecovered ||
-		proof.WorkerWaitSHA256() != closureTestHash(t, absence) || proof.TerminationSHA256() != "" || proof.UnlaunchedSHA256() != "" {
+		proof.WorkerWaitSHA256() != closureTestHash(t, absence) || proof.TerminationSHA256() != "" || proof.TerminationCause() != "" ||
+		proof.UnlaunchedSHA256() != "" {
 		t.Fatalf("unregistered closure = %+v err=%v", proof, err)
 	}
 }

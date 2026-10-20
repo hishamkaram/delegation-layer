@@ -52,9 +52,12 @@ func (p *claudeInteraction) trackCurrentSessionState(fields map[string]providerj
 	return nil
 }
 
+// trackCurrentTaskStarted tracks a native local agent or workflow until it
+// settles. The advisory policy leaves a task without task_type untracked, like
+// any other unknown kind; the frozen policies require the field.
 func (p *claudeInteraction) trackCurrentTaskStarted(fields map[string]providerjson.Value) error {
 	kind, present, err := claudeCurrentOptionalString(fields, "task_type", 128)
-	if err != nil || !present {
+	if err != nil || (!present && !p.state.attribution.advisoryWire()) {
 		return task.ErrEvidenceFault
 	}
 	if kind != "local_agent" && kind != "local_workflow" {
@@ -142,8 +145,16 @@ func (p *claudeInteraction) settleAgent(id string) {
 	}
 }
 
+// recordResult marks the principal result seen. The frozen policies also fault
+// the transport on a native negative result. The advisory policy leaves native
+// negative completion to its single owner, the completion attribution that
+// refusalForProvider reads from the sealed stream, so a settled negative
+// caller turn completes its transport and is rejected with its canonical class.
 func (p *claudeInteraction) recordResult() {
 	p.resultSeen = true
-	refusal := resultRefusal(p.state.result)
+	if p.state.attribution.advisoryWire() {
+		return
+	}
+	refusal := p.state.attribution.resultRefusal(p.state.result)
 	p.failed = p.failed || (refusal != "" && refusal != refusalEmpty)
 }

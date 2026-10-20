@@ -16,6 +16,17 @@ const (
 	SubjectOperation      = contract.SubjectOperation
 	SubjectTask           = contract.SubjectTask
 	FailureDiagnosticName = contract.FailureDiagnosticName
+
+	TurnObserved            = contract.TurnObserved
+	TurnUnavailable         = contract.TurnUnavailable
+	TurnChanged             = contract.TurnChanged
+	TurnUnchanged           = contract.TurnUnchanged
+	TurnBaselineUnavailable = contract.TurnBaselineUnavailable
+
+	CapturePatchName      = contract.CapturePatchName
+	CaptureNameStatusName = contract.CaptureNameStatusName
+	TurnPatchName         = contract.TurnPatchName
+	TurnNameStatusName    = contract.TurnNameStatusName
 )
 
 type (
@@ -24,6 +35,7 @@ type (
 	Artifact           = contract.Artifact
 	CaptureArtifact    = contract.CaptureArtifact
 	CaptureCandidate   = contract.CaptureCandidate
+	CaptureDiff        = contract.CaptureDiff
 	CaptureExport      = contract.CaptureExport
 	CaptureObligation  = contract.CaptureObligation
 	CaptureReceipt     = contract.CaptureReceipt
@@ -46,6 +58,8 @@ type (
 	ResourceRequest    = contract.ResourceRequest
 	Source             = contract.Source
 	Subject            = contract.Subject
+	TurnBaseline       = contract.TurnBaseline
+	TurnObservation    = contract.TurnObservation
 )
 
 var (
@@ -62,3 +76,9 @@ var (
 )
 
 func ValidateArtifact(artifact Artifact) error { return contract.ValidateArtifact(artifact) }
+
+func PathWithin(root, path string) bool { return contract.PathWithin(root, path) }
+
+func ObserveTurn(baseline *TurnBaseline, final CaptureCandidate) *TurnObservation {
+	return contract.ObserveTurn(baseline, final)
+}

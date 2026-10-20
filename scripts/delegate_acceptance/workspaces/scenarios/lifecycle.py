@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from scripts.delegate_acceptance.evidence.files import read_json
 from scripts.delegate_acceptance.directories.policy import require
 from .context import WorkspaceContext
-from .model import SUCCESS_TASK_BUDGET, WAIT_SECONDS
+from .model import FIXTURE_FILE, SUCCESS_TASK_BUDGET, WAIT_SECONDS
 from .operations import (
     _adopt_workspace_container, _await_task, _collect_task, _dispatch,
     _prove_lifetimes_closed, _provider_session, _wait_capture, _workspace_from,
@@ -15,7 +15,7 @@ from .operations import (
 from .policy import classify_task_verdict
 from .workspace_operations import (
     _capture_roundtrip, _forget_workspace, _release_and_forget, _verify_ref, _workspace_exec,
-    verify_capture_receipt,
+    verify_capture_receipt, verify_task_turn,
 )
 
 
@@ -46,10 +46,10 @@ def _run_first_success(context: WorkspaceContext) -> SuccessfulTaskEvidence:
     )
     require(classification["verdict"] == "passed", str(classification))
     session = _provider_session(context, task["task_id"])
-    capture_evidence = _capture_roundtrip(context, capture)
-    subject = capture_evidence["subject"]
-    require(isinstance(subject, dict) and subject.get("id") == task["task_id"],
-            "first task capture is bound to a different subject")
+    capture_evidence = verify_task_turn(
+        context, capture, task_id=task["task_id"], expected_files=frozenset({FIXTURE_FILE}),
+    )
+    _capture_roundtrip(context, capture)
     return SuccessfulTaskEvidence(
         task=task,
         status=status,

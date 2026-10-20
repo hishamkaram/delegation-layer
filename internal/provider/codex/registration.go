@@ -36,6 +36,7 @@ func Registration() commonprovider.Registration {
 			newHistoricalRuntimeInterpreter(Mode), newHistoricalRuntimeInterpreter(WorkspaceWriteMode),
 			newLegacyInterpreter(),
 			newInteractionInterpreter(Mode), newInteractionInterpreter(WorkspaceWriteMode),
+			newStrictInteractionInterpreter(Mode), newStrictInteractionInterpreter(WorkspaceWriteMode),
 			newHistoricalInteractionInterpreter(Mode), newHistoricalInteractionInterpreter(WorkspaceWriteMode),
 		},
 	}

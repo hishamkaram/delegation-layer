@@ -38,24 +38,20 @@ type appServerProtocol struct {
 	requests      map[string]json.RawMessage
 	steering      map[string]bool
 	agentItems    map[string]currentItemState
-	recordCapture bool
+	revision      interactionRevision
 }
 
-func newAppServerProtocol(request task.TaskRecord, expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
-	return newAppServerProtocolWithCapture(request, expected, record, true)
-}
-
-func newAppServerProtocolWithCapture(request task.TaskRecord, expected task.SessionExpectation, record func(task.SessionIdentity) error, recordCapture bool) (execution.InteractionProtocol, error) {
+func newAppServerProtocol(request task.TaskRecord, expected task.SessionExpectation, record func(task.SessionIdentity) error, revision interactionRevision) (execution.InteractionProtocol, error) {
 	if expected.Required && !validThreadID(expected.ID) {
 		return nil, task.ErrIdentityMismatch
 	}
 	if !expected.Required && expected.ID != "" {
 		return nil, task.ErrIdentityMismatch
 	}
-	return &appServerProtocol{request: request, expected: expected, record: record, requests: map[string]json.RawMessage{}, steering: map[string]bool{}, agentItems: make(map[string]currentItemState), recordCapture: recordCapture}, nil
+	return &appServerProtocol{request: request, expected: expected, record: record, requests: map[string]json.RawMessage{}, steering: map[string]bool{}, agentItems: make(map[string]currentItemState), revision: revision}, nil
 }
 
-func (p *appServerProtocol) UseRecordCapture() bool { return p.recordCapture }
+func (p *appServerProtocol) UseRecordCapture() bool { return p.revision.usesRecordCapture() }
 
 func appServerFrame(id, method string, params any) ([]byte, error) {
 	return json.Marshal(struct {

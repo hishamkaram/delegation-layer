@@ -67,8 +67,9 @@ uses exactly `--sandbox --mode plan` without a bypass; its authorized
 workspace-write path retains `--sandbox --mode accept-edits` with the existing
 native bypass. Claude uses permission bypass, Pi read-only uses its native tool
 allowlist with extensions disabled, Pi workspace-write explicitly selects its
-built-in `read`, `bash`, `edit`, and `write` tools, and OpenCode uses its
-automatic build mode. These modes can permit
+built-in `read`, `bash`, `edit`, and `write` tools, and OpenCode selects its
+native `build` mode and answers native permission requests with `allow_once`.
+These modes can permit
 access beyond the selected workspace; configured native restrictions still
 belong to each provider. Previously admitted tasks retain their recorded
 preparation contract.

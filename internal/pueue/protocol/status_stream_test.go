@@ -398,3 +398,96 @@ func TestParseQueueSnapshotStreamBoundsOversizedValueConsumption(t *testing.T) {
 		t.Fatalf("oversized value read %d bytes before rejection", consumed)
 	}
 }
+
+// statusStreamTestEOFFaultReader delivers data and then reports end of stream
+// joined with an independent read fault.
+type statusStreamTestEOFFaultReader struct {
+	data  *strings.Reader
+	fault error
+}
+
+func (r *statusStreamTestEOFFaultReader) Read(p []byte) (int, error) {
+	if r.data.Len() > 0 {
+		return r.data.Read(p)
+	}
+	return 0, errors.Join(io.EOF, r.fault)
+}
+
+func statusStreamTestReaders(data string) map[string]io.Reader {
+	return map[string]io.Reader{
+		"plain":    strings.NewReader(data),
+		"one byte": iotest.OneByteReader(strings.NewReader(data)),
+		"data err": iotest.DataErrReader(strings.NewReader(data)),
+	}
+}
+
+// statusStreamTestLeaves reports whether err's leaves are exactly ErrUnknown
+// and io.EOF, the pair that identifies a stream with no delivered bytes.
+func statusStreamTestLeaves(err error) bool {
+	unknown, eof := 0, 0
+	all := task.AllErrorCauses(err, func(cause error) bool {
+		switch {
+		case errors.Is(cause, ErrUnknown):
+			unknown++
+		case errors.Is(cause, io.EOF):
+			eof++
+		default:
+			return false
+		}
+		return true
+	})
+	return all && unknown == 1 && eof == 1
+}
+
+func TestParseQueueSnapshotStreamDistinguishesEmptyFromTruncatedOutput(t *testing.T) {
+	valid := string(statusTestPayload(t, map[string]any{"7": statusTestJob(7, nil, statusStreamTestRunningState())}, map[string]any{}))
+	truncated := []string{" ", "\n\t", "{", `{"tasks"`, `{"tasks":`, `{"tasks":{"0":`, `{"tasks":{"0":{"id"`, valid[:len(valid)-1]}
+	for name, reader := range statusStreamTestReaders("") {
+		t.Run("empty/"+name, func(t *testing.T) {
+			got, err := ParseQueueSnapshotStream(reader, FixtureVersion)
+			if !statusStreamTestLeaves(err) {
+				t.Fatalf("empty status error = %v, want exactly ErrUnknown and io.EOF", err)
+			}
+			statusStreamTestNoPartialSnapshot(t, got)
+		})
+	}
+	for _, data := range truncated {
+		for name, reader := range statusStreamTestReaders(data) {
+			t.Run(strconv.Quote(data)+"/"+name, func(t *testing.T) {
+				got, err := ParseQueueSnapshotStream(reader, FixtureVersion)
+				if !errors.Is(err, ErrUnknown) || statusStreamTestLeaves(err) {
+					t.Fatalf("truncated status error = %v, want ErrUnknown beyond the empty-output pair", err)
+				}
+				if errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Fatalf("truncated status error = %v kept a bare io.EOF without io.ErrUnexpectedEOF", err)
+				}
+				statusStreamTestNoPartialSnapshot(t, got)
+			})
+		}
+	}
+}
+
+func TestParseQueueSnapshotStreamAcceptsOnlyCleanEndAfterDocument(t *testing.T) {
+	valid := string(statusTestPayload(t, map[string]any{"7": statusTestJob(7, nil, statusStreamTestRunningState())}, map[string]any{}))
+	for _, suffix := range []string{"", "\n", "  "} {
+		for name, reader := range statusStreamTestReaders(valid + suffix) {
+			t.Run(strconv.Quote(suffix)+"/"+name, func(t *testing.T) {
+				got, err := ParseQueueSnapshotStream(reader, FixtureVersion)
+				if err != nil || len(got.Jobs) != 1 {
+					t.Fatalf("valid status = %+v, %v", got, err)
+				}
+			})
+		}
+	}
+	for name, reader := range statusStreamTestReaders(valid + "x") {
+		t.Run("trailing JSON/"+name, func(t *testing.T) {
+			statusStreamTestRejects(t, reader, task.ErrTrailingJSON)
+		})
+	}
+	fault := errors.New("injected status read fault")
+	for _, data := range []string{"", `{"tasks"`, valid} {
+		t.Run("joined reader fault/"+strconv.Quote(data), func(t *testing.T) {
+			statusStreamTestRejects(t, &statusStreamTestEOFFaultReader{data: strings.NewReader(data), fault: fault}, fault)
+		})
+	}
+}

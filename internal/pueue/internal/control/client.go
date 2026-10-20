@@ -385,24 +385,50 @@ func validateIdentity(i Identity) error {
 // Reconcile never adds work. Empty, duplicate, malformed and mismatched rows
 // remain unknown, including when a reachable queue is empty.
 func (c *Client) Reconcile(ctx context.Context, identity Identity) (Observation, error) {
+	selection, err := c.selectLabel(ctx, identity)
+	if err != nil {
+		return selection.observation, err
+	}
+	return selection.observation, selection.err
+}
+
+// labelSelection is the verdict of one parsed exact-label query. rows is the
+// verified number of returned rows carrying the label; err is ErrUnknown
+// unless exactly one row matches the identity.
+type labelSelection struct {
+	observation Observation
+	rows        int
+	err         error
+}
+
+// selectLabel runs the exact-label status query and its canonical selector.
+// The error reports a validation, binding, or query fault, in which case the
+// selection is the unknown observation with any pending command.
+func (c *Client) selectLabel(ctx context.Context, identity Identity) (labelSelection, error) {
 	identity = snapshotIdentity(identity)
-	unknown := Observation{State: StateUnknown, Identity: identity, Binding: c.binding}
+	unknown := labelSelection{observation: Observation{State: StateUnknown, Identity: identity, Binding: c.binding}}
 	if err := validateIdentity(identity); err != nil {
 		return unknown, err
 	}
 	if err := c.verify(ctx); err != nil {
-		unknown.Pending = pendingFrom(err)
+		unknown.observation.Pending = pendingFrom(err)
 		return unknown, err
 	}
 	snapshot, err := c.snapshotAfterVerify(ctx, "label="+identity.Label())
 	if err != nil {
-		unknown.Pending = pendingFrom(err)
+		unknown.observation.Pending = pendingFrom(err)
 		return unknown, err
 	}
-	return matchingObservation(snapshot.Jobs, identity, c.binding)
+	observation, rows, err := matchingLabelRows(snapshot.Jobs, identity, c.binding)
+	return labelSelection{observation: observation, rows: rows, err: err}, nil
 }
 
 func matchingObservation(jobs []Job, identity Identity, binding task.SupervisorRef) (Observation, error) {
+	observation, _, err := matchingLabelRows(jobs, identity, binding)
+	return observation, err
+}
+
+func matchingLabelRows(jobs []Job, identity Identity, binding task.SupervisorRef) (Observation, int, error) {
 	identity = snapshotIdentity(identity)
 	result := Observation{State: StateUnknown, Identity: identity, Binding: binding}
 	matches := 0
@@ -415,10 +441,10 @@ func matchingObservation(jobs []Job, identity Identity, binding task.SupervisorR
 	}
 	if matches != 1 || (identity.NumericTaskID != nil && *identity.NumericTaskID != result.NumericTaskID) {
 		result.State = StateUnknown
-		return result, ErrUnknown
+		return result, matches, ErrUnknown
 	}
 	result.Matched = true
-	return result, nil
+	return result, matches, nil
 }
 
 func snapshotIdentity(identity Identity) Identity {

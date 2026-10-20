@@ -299,17 +299,19 @@ func ReadPrivateRecoveryBinding(stateRoot string) (task.SupervisorRef, bool, err
 }
 
 func privateRecoveryRuntimeMatchesPublished(stateRoot string, runtime, published task.SupervisorRef) (bool, error) {
-	record, found, err := readPrivateRecoveryBinding(stateRoot)
+	alias, found, err := readValidatedPrivateRecoveryAlias(stateRoot)
 	if err != nil || !found {
 		return false, err
 	}
-	if runtime.ConfigPath != record.ConfigPath || runtime.ConfigDigest != record.ConfigSHA256 {
+	record := alias.record
+	if runtime.ConfigPath != record.ConfigPath || runtime.ConfigDigest != record.ConfigSHA256 || runtime.ResolvedConfigSHA256 != alias.effectiveSHA256 {
 		return false, nil
 	}
-	// The validated alias is another path to the same retained config bytes.
-	// Only that path changes in the detached comparison; daemon provenance
-	// remains distinct from the logical endpoint used by compatible clients.
-	runtime.ConfigPath = record.Supervisor.ConfigPath
+	// The runtime reads the validated alias's own bytes, whose effective
+	// config is proven above. The alias may hold a reserialized copy, so only
+	// after that proof do its path and byte digest stand for the saved
+	// original; daemon provenance stays distinct from the logical endpoint.
+	runtime.ConfigPath, runtime.ConfigDigest = record.Supervisor.ConfigPath, record.Supervisor.ConfigDigest
 	return privateBindingsMatch(record.Supervisor, published) && privateBindingsMatch(runtime, published), nil
 }
 
@@ -458,14 +460,36 @@ func publishPrivateRecoveryPublication(stateRoot string, record privateRecoveryB
 }
 
 func readPrivateRecoveryBinding(stateRoot string) (privateRecoveryBindingRecord, bool, error) {
+	alias, found, err := readValidatedPrivateRecoveryAlias(stateRoot)
+	return alias.record, found, err
+}
+
+// privateRecoveryAlias is a validated recovery alias: its durable record and
+// the effective-config digest its own bytes resolve to under the saved
+// binding's resolution. The digest is computed on every read, never persisted.
+type privateRecoveryAlias struct {
+	record          privateRecoveryBindingRecord
+	effectiveSHA256 string
+}
+
+// matches reports whether the alias stands for binding: the same logical
+// saved identity, and alias bytes whose effective config equals the saved
+// effective config. Equivalent reserialized bytes match; any other config
+// change does not.
+func (alias privateRecoveryAlias) matches(binding task.SupervisorRef) bool {
+	return task.SameSupervisorIdentity(alias.record.Supervisor, binding) && alias.effectiveSHA256 == binding.ResolvedConfigSHA256
+}
+
+func readValidatedPrivateRecoveryAlias(stateRoot string) (privateRecoveryAlias, bool, error) {
 	record, found, err := readPrivateRecoveryRecord(stateRoot)
 	if err != nil || !found {
-		return record, found, err
+		return privateRecoveryAlias{record: record}, found, err
 	}
-	if err = validatePrivateRecoveryBinding(stateRoot, record); err != nil {
-		return record, false, err
+	effective, err := validatedPrivateRecoveryEffectiveSHA256(stateRoot, record)
+	if err != nil {
+		return privateRecoveryAlias{record: record}, false, err
 	}
-	return record, true, nil
+	return privateRecoveryAlias{record: record, effectiveSHA256: effective}, true, nil
 }
 
 func readPrivateRecoveryRecord(stateRoot string) (privateRecoveryBindingRecord, bool, error) {
@@ -506,33 +530,44 @@ func validatePrivateRecoveryRecord(stateRoot string, record privateRecoveryBindi
 }
 
 func validatePrivateRecoveryBinding(stateRoot string, record privateRecoveryBindingRecord) error {
+	_, err := validatedPrivateRecoveryEffectiveSHA256(stateRoot, record)
+	return err
+}
+
+// validatedPrivateRecoveryEffectiveSHA256 validates the alias bytes against
+// their record, resolves them with the saved binding's resolution, proves the
+// private paths and saved endpoint, and returns their effective-config digest.
+func validatedPrivateRecoveryEffectiveSHA256(stateRoot string, record privateRecoveryBindingRecord) (string, error) {
 	if err := validatePrivateRecoveryRecord(stateRoot, record); err != nil {
-		return err
+		return "", err
 	}
 	data, err := readRegular(record.ConfigPath, MaxControlBytes)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if task.ComputeSHA256(data) != record.ConfigSHA256 {
-		return fmt.Errorf("%w: legacy recovery config changed", ErrBinding)
+		return "", fmt.Errorf("%w: legacy recovery config changed", ErrBinding)
 	}
 	options, err := optionsForSavedBinding(record.Supervisor, Options{})
 	if err != nil {
-		return err
+		return "", err
 	}
 	resolution, err := privateResolution(options)
 	if err != nil {
-		return err
+		return "", err
 	}
 	config, err := ParseConfig(data)
 	if err != nil {
-		return err
+		return "", err
 	}
 	resolved, err := ResolveConfig(config, resolution)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return validateResolvedPrivateMigrationConfig(resolved, filepath.Dir(record.ConfigPath), record.Supervisor.Endpoint)
+	if err = validateResolvedPrivateMigrationConfig(resolved, filepath.Dir(record.ConfigPath), record.Supervisor.Endpoint); err != nil {
+		return "", err
+	}
+	return resolved.Digest()
 }
 
 func recoverPrivateRecoveryBinding(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, bool, bool, error) {
@@ -576,11 +611,14 @@ func bindPrivateRecoveryClient(ctx context.Context, record privateRecoveryBindin
 		return nil, false, true, errors.Join(err, client.Close())
 	}
 	client.binding = saved
-	ready, err := client.availableForBootstrap(ctx)
+	observation, err := client.availableForTransition(ctx, true)
+	if err == nil {
+		err = client.closeRefusedPrivateEndpoint(ctx, observation)
+	}
 	if err != nil {
 		return nil, false, true, errors.Join(err, client.CloseAfterPending(err))
 	}
-	if ready {
+	if observation.ready() {
 		return client, false, true, nil
 	}
 	if err = startDaemon(client.runtimeBinding.DaemonExecutable, client.runtimeBinding.DaemonSHA256, client.runtimeBinding.ConfigPath, filepath.Dir(client.runtimeBinding.ConfigPath), options); err != nil {

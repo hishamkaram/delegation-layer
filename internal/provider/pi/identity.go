@@ -63,7 +63,7 @@ func (o *identityObserver) ObserveRecord(value providerjson.Value) error {
 	if o.done {
 		return o.completeErr
 	}
-	event, err := decodePiCurrentEvent(value)
+	event, err := decodePiCurrentEvent(value, false)
 	if err != nil {
 		return err
 	}

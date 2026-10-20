@@ -57,10 +57,10 @@ func existingNativePreparationOptions(request task.TaskRecord, meta task.MetaRec
 }
 
 func nativePermissionForReference(mode string, reference task.PredicateRef) string {
-	if reference.Equal(ReferenceForMode(mode)) || reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) ||
+	if reference.Equal(ReferenceForMode(mode)) || reference.Equal(scopedReference(mode)) || reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) ||
 		reference.Equal(previousNativeProbeReferenceForMode(mode)) || reference.Equal(historicalNativeReferenceForMode(mode)) ||
-		reference.Equal(interactionReference(mode)) || reference.Equal(unscopedInteractionReference(mode)) || reference.Equal(preAttributionInteractionReference(mode)) ||
-		reference.Equal(previousInteractionReference(mode)) || reference.Equal(historicalInteractionReference(mode)) {
+		reference.Equal(interactionReference(mode)) || reference.Equal(scopedInteractionReference(mode)) || reference.Equal(unscopedInteractionReference(mode)) ||
+		reference.Equal(preAttributionInteractionReference(mode)) || reference.Equal(previousInteractionReference(mode)) || reference.Equal(historicalInteractionReference(mode)) {
 		return nativeDefaultPermission(mode)
 	}
 	if reference.Equal(legacyNativeReferenceForMode(mode)) {
@@ -76,33 +76,32 @@ func normalizeNativePreparationOptions(request task.TaskRecord, options nativePr
 	if !nativePermissionAllowed(request.Mode, options.permissionMode) {
 		return nativePreparationOptions{}, fmt.Errorf("%w: unsupported stored Claude native permission mode %q", ErrUnsupportedProfile, options.permissionMode)
 	}
-	expected := ReferenceForMode(request.Mode)
-	historical := historicalNativeReferenceForMode(request.Mode)
-	previousProbe := previousNativeProbeReferenceForMode(request.Mode)
-	preAttribution := preAttributionReferenceForMode(request.Mode)
-	unscoped := unscopedReference(request.Mode)
-	if options.permissionMode == nativeHistoricalPermission(request.Mode) {
-		expected = legacyNativeReferenceForMode(request.Mode)
-		historical = expected
-		previousProbe = task.PredicateRef{}
-		preAttribution = task.PredicateRef{}
-		unscoped = task.PredicateRef{}
-	}
-	if request.RequestedConfig.Interactive {
-		expected = interactionReference(request.Mode)
-		historical = historicalInteractionReference(request.Mode)
-		previousProbe = previousInteractionReference(request.Mode)
-		preAttribution = preAttributionInteractionReference(request.Mode)
-		unscoped = unscopedInteractionReference(request.Mode)
-	}
+	expected, retained := nativeReferencesForRequest(request, options.permissionMode)
 	if options.predicateReference.Equal(task.PredicateRef{}) {
 		options.predicateReference = expected
-	} else if !options.predicateReference.Equal(expected) && !options.predicateReference.Equal(historical) &&
-		!options.predicateReference.Equal(previousProbe) && !options.predicateReference.Equal(preAttribution) &&
-		!options.predicateReference.Equal(unscoped) {
+	} else if !options.predicateReference.Equal(expected) && !slices.ContainsFunc(retained, options.predicateReference.Equal) {
 		return nativePreparationOptions{}, fmt.Errorf("%w: stored Claude native predicate does not match permission mode", ErrUnsupportedProfile)
 	}
 	return options, nil
+}
+
+// nativeReferencesForRequest returns the fresh reference for a native request
+// and the retained references a stored task of the same shape may carry.
+func nativeReferencesForRequest(request task.TaskRecord, permissionMode string) (task.PredicateRef, []task.PredicateRef) {
+	mode := request.Mode
+	if request.RequestedConfig.Interactive {
+		return interactionReference(mode), []task.PredicateRef{
+			historicalInteractionReference(mode), previousInteractionReference(mode), preAttributionInteractionReference(mode),
+			unscopedInteractionReference(mode), scopedInteractionReference(mode),
+		}
+	}
+	if permissionMode == nativeHistoricalPermission(mode) {
+		return legacyNativeReferenceForMode(mode), nil
+	}
+	return ReferenceForMode(mode), []task.PredicateRef{
+		historicalNativeReferenceForMode(mode), previousNativeProbeReferenceForMode(mode), preAttributionReferenceForMode(mode),
+		unscopedReference(mode), scopedReference(mode),
+	}
 }
 
 func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnvironment, recordedRoots []string, options nativePreparationOptions, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
@@ -541,6 +540,8 @@ func nativePolicyProofSource(definitionDigest string, facts nativePolicyFacts, h
 func interactionCompletionPolicy(mode string, reference task.PredicateRef) completionPolicy {
 	switch {
 	case reference.Equal(interactionReference(mode)):
+		return advisoryScopedCompletion
+	case reference.Equal(scopedInteractionReference(mode)):
 		return scopedAttributedCompletion
 	case reference.Equal(unscopedInteractionReference(mode)):
 		return unscopedAttributedCompletion

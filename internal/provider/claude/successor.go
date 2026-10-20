@@ -9,7 +9,7 @@ import (
 // from its predecessor's immutable record. It reconstructs the recorded
 // launch, environment, roots, and policy like PrepareExistingCandidate, and
 // changes only the output predicate: a native print predecessor sealed before
-// scoped completion attribution continues under the current predicate for its
+// the advisory wire revision continues under the current predicate for its
 // mode. Every other record, including interactive and portable ones, keeps the
 // recorded predicate. The predecessor record is never modified.
 func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord) (commonprovider.ProfileCandidate, error) {
@@ -20,9 +20,9 @@ func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRec
 }
 
 // isUpgradableOutputReference reports whether reference is an exact print
-// predicate whose interpretation of follow-up completions the current
-// predicate for mode corrects: the pre-attribution revision and the retained
-// unscoped attribution revision of the same mode.
+// predicate whose interpretation the current predicate for mode corrects: the
+// pre-attribution revision, the retained unscoped attribution revision, and
+// the scoped strict-wire revision of the same mode.
 func isUpgradableOutputReference(mode string, reference task.PredicateRef) bool {
-	return reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference)
+	return reference.Equal(preAttributionReferenceForMode(mode)) || isUnscopedReference(mode, reference) || reference.Equal(scopedReference(mode))
 }

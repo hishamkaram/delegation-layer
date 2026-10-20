@@ -60,7 +60,7 @@ func TestSourceIsDirtyDisablesOptionalIndexLocks(t *testing.T) {
 		t.Fatal("source dirtiness was not observed")
 	}
 	if len(runner.calls) != 1 || !slices.Contains(runner.calls[0].Env, "GIT_OPTIONAL_LOCKS=0") {
-		t.Fatalf("status environment does not disable optional locks: %v", runner.calls)
+		t.Fatalf("status environment does not disable optional locks: %d launches", len(runner.calls))
 	}
 }
 
@@ -95,8 +95,8 @@ func TestDeleteRefsUsesOneInventoryAndTransactionalUpdate(t *testing.T) {
 	if err := (Git{Runner: runner}).DeleteRefs(context.Background(), source, prefix, refs); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 6 {
-		t.Fatalf("Git command count = %d, want source validation + inventory + transaction", len(runner.calls))
+	if len(runner.calls) != 5 {
+		t.Fatalf("Git command count = %d, want common-repository validation + inventory + transaction", len(runner.calls))
 	}
 	if len(runner.updateInputs) != 1 {
 		t.Fatalf("update-ref transactions = %d, want 1", len(runner.updateInputs))
@@ -220,9 +220,11 @@ func newDeleteRefsRunner(root, prefix string, inventory []byte, updateErr error)
 		case slices.Equal(args, []string{"rev-parse", "--show-toplevel"}):
 			return writeCommandOutput(command, root+"\n")
 		case slices.Equal(args, []string{"rev-parse", "--git-dir"}), slices.Equal(args, []string{"rev-parse", "--git-common-dir"}):
-			return writeCommandOutput(command, ".git\n")
+			return writeCommandOutput(command, gitDirectoryAnswer(command.Args[2], root))
 		case slices.Equal(args, []string{"rev-parse", "--show-object-format=storage"}):
 			return writeCommandOutput(command, "sha1\n")
+		case command.Args[2] != filepath.Join(root, ".git"):
+			return fmt.Errorf("repository command ran outside the common directory: %v", command.Args)
 		case slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, prefix}):
 			_, err := command.Stdout.Write(runner.inventory)
 			return err
@@ -239,6 +241,15 @@ func newDeleteRefsRunner(root, prefix string, inventory []byte, updateErr error)
 		}
 	}
 	return runner
+}
+
+// gitDirectoryAnswer mirrors native rev-parse: the source checkout reports
+// its relative .git directory and the common directory reports itself.
+func gitDirectoryAnswer(directory, root string) string {
+	if directory == filepath.Join(root, ".git") {
+		return ".\n"
+	}
+	return ".git\n"
 }
 
 func refInventoryRecord(ref, objectName, objectType, symref string) []byte {

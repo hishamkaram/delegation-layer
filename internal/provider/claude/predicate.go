@@ -19,6 +19,9 @@ const (
 	refusalEmpty          = "empty-output"
 	refusalRefused        = "refusal"
 	refusalProviderFailed = "provider-failed"
+	// refusalUnsupportedCompletion is the fixed advisory-policy refusal for an
+	// undocumented completion reason; it never carries the provider value.
+	refusalUnsupportedCompletion = "unsupported-completion"
 )
 
 type interpreter struct {
@@ -35,6 +38,10 @@ type interpreter struct {
 	// unscoped identifies the retained claude:print revision of mode sealed
 	// under the unscoped attribution policy; it is replay-only.
 	unscoped bool
+	// scoped identifies the retained claude:print revision of mode sealed
+	// under the scoped policy and strict wire; it is replay-only and a
+	// recovery source of the current revision.
+	scoped bool
 	// completion is selected by the caller only for caller-owned stream
 	// references; claude:print revisions derive it from their identity.
 	completion completionPolicy
@@ -56,6 +63,10 @@ func newPreAttributionInterpreter(mode string) predicate.Interpreter {
 
 func newUnscopedInterpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, unscoped: true}
+}
+
+func newScopedInterpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, scoped: true}
 }
 
 func newLegacyInterpreter() predicate.Interpreter {
@@ -105,6 +116,9 @@ func (v interpreter) Reference() task.PredicateRef {
 	if v.unscoped {
 		return unscopedReference(v.mode)
 	}
+	if v.scoped {
+		return scopedReference(v.mode)
+	}
 	if v.legacy {
 		return LegacyReference()
 	}
@@ -135,7 +149,7 @@ func (v interpreter) evaluateAgainst(input predicate.Input, raw predicate.Eviden
 	if refusal := refusalForProvider(input, state, v.Reference().Adapter); refusal != "" {
 		result := rejectedWithUsage(refusal, claudeCurrentUsageMetadata(state, task.UsageReliabilityUnreliable))
 		if state.current {
-			result.Diagnostics = append(result.Diagnostics, claudeCurrentDiagnostic(refusal))
+			result.Diagnostics = append(result.Diagnostics, claudeRefusalDiagnostic(refusal, state))
 			result.Diagnostics = append(result.Diagnostics, claudeCurrentUsageWarning(state)...)
 		}
 		return result, nil
@@ -187,7 +201,7 @@ func (v interpreter) Target() task.PredicateRef { return v.Reference() }
 // contracts and must remain replay-only. The current claude:print interpreter
 // is the single recovery target for every earlier same-wire native revision.
 func (v interpreter) CanRecover(source task.PredicateRef) bool {
-	if v.legacy || v.legacyPortable || v.nativeHistorical || v.historicalNativeCurrent || v.preAttribution || v.unscoped {
+	if v.legacy || v.legacyPortable || v.nativeHistorical || v.historicalNativeCurrent || v.preAttribution || v.unscoped || v.scoped {
 		return false
 	}
 	if len(v.recoverySources) > 0 {
@@ -198,7 +212,8 @@ func (v interpreter) CanRecover(source task.PredicateRef) bool {
 	}
 	return source.Equal(historicalNativeReferenceForMode(v.mode)) ||
 		source.Equal(previousNativeProbeReferenceForMode(v.mode)) ||
-		source.Equal(preAttributionReferenceForMode(v.mode))
+		source.Equal(preAttributionReferenceForMode(v.mode)) ||
+		source.Equal(scopedReference(v.mode))
 }
 
 // Recover re-evaluates the original sealed evidence with the current
@@ -212,8 +227,8 @@ func (v interpreter) Recover(input predicate.Input, raw predicate.Evidence, out 
 }
 
 // completionPolicy returns the reducer bound to this predicate identity. The
-// current claude:print revision is the only scoped non-stream revision; the
-// retained unscoped revisions keep their unscoped attribution.
+// current claude:print revision is the only advisory non-stream revision; the
+// retained scoped and unscoped revisions keep their attribution policies.
 func (v interpreter) completionPolicy() completionPolicy {
 	if v.streamReference != nil {
 		return v.completion
@@ -224,7 +239,10 @@ func (v interpreter) completionPolicy() completionPolicy {
 	if v.unscoped {
 		return unscopedAttributedCompletion
 	}
-	return scopedAttributedCompletion
+	if v.scoped {
+		return scopedAttributedCompletion
+	}
+	return advisoryScopedCompletion
 }
 
 func readEvidence(raw predicate.Evidence, v interpreter) (eventState, error) {
@@ -271,13 +289,26 @@ func refusalForProvider(input predicate.Input, state eventState, providerID stri
 		}
 		return refusalIncomplete
 	}
-	if refusal := resultRefusal(state.result); refusal != "" {
+	if refusal := state.attribution.resultRefusal(state.result); refusal != "" {
 		return refusal
 	}
 	return state.attribution.completionRefusal()
 }
 
-func resultRefusal(result resultState) string {
+// unsupportedCompletionField names the logical field of an unsupported
+// completion with the same precedence as refusalForProvider.
+func unsupportedCompletionField(state eventState) string {
+	if state.resultSeen {
+		if fault := state.attribution.resultFault(state.result); fault.refusal != "" {
+			return fault.field
+		}
+	}
+	return state.attribution.completionFault().field
+}
+
+// resultRefusalFor classifies one result; unknownStop is the policy's class
+// for a stop_reason string outside the documented set.
+func resultRefusalFor(result resultState, unknownStop string) string {
 	if result.subtype != resultSuccess || result.isError {
 		if result.diagnostic == "" {
 			return fmt.Sprintf("%s: %s", refusalProviderFailed, result.subtype)
@@ -291,7 +322,7 @@ func resultRefusal(result resultState) string {
 		return refusalProviderFailed + ": success result includes error diagnostics"
 	}
 	if !result.stopReasonNull && result.stopReasonSeen {
-		if refusal := stopReasonRefusal(result.stopReason); refusal != "" {
+		if refusal := stopReasonRefusal(result.stopReason, unknownStop); refusal != "" {
 			return refusal
 		}
 	}
@@ -328,6 +359,16 @@ func claudeCurrentUsageWarning(state eventState) []task.OutputDiagnostic {
 	}}
 }
 
+// claudeRefusalDiagnostic is the sanitized diagnostic of a rejected current
+// stream; an unsupported completion names its logical field, never a value.
+func claudeRefusalDiagnostic(refusal string, state eventState) task.OutputDiagnostic {
+	diagnostic := claudeCurrentDiagnostic(refusal)
+	if refusal == refusalUnsupportedCompletion {
+		diagnostic.Field = unsupportedCompletionField(state)
+	}
+	return diagnostic
+}
+
 func claudeCurrentDiagnostic(refusal string) task.OutputDiagnostic {
 	diagnostic := task.OutputDiagnostic{
 		Code:    "provider_output_rejected",
@@ -349,6 +390,9 @@ func claudeCurrentDiagnostic(refusal string) task.OutputDiagnostic {
 	case refusal == refusalRefused:
 		diagnostic.Code = "provider_refused"
 		diagnostic.Message = "Claude declined or interrupted the requested completion."
+	case refusal == refusalUnsupportedCompletion:
+		diagnostic.Code = "unsupported_completion"
+		diagnostic.Message = "Claude reported a completion reason that the recorded contract does not support."
 	case strings.HasPrefix(refusal, refusalProviderFailed):
 		diagnostic.Code = "provider_failed"
 		diagnostic.Message = "Claude reported a failed or interrupted completion."
@@ -356,7 +400,7 @@ func claudeCurrentDiagnostic(refusal string) task.OutputDiagnostic {
 	return diagnostic
 }
 
-func stopReasonRefusal(stopReason string) string {
+func stopReasonRefusal(stopReason, unknown string) string {
 	switch strings.ToLower(stopReason) {
 	case "end_turn", "stop_sequence":
 		return ""
@@ -367,7 +411,7 @@ func stopReasonRefusal(stopReason string) string {
 	case "interrupted", "cancel", "cancelled", "canceled", "abort", "aborted":
 		return refusalProviderFailed
 	default:
-		return refusalMalformed
+		return unknown
 	}
 }
 

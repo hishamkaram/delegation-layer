@@ -45,7 +45,7 @@ func (a *completionAttribution) applyLeading(state *eventState, event claudeCurr
 // routeLeadingResult claims a result whose origin is a task notification; a
 // result of any other origin is the caller's candidate principal.
 func (a *completionAttribution) routeLeadingResult(state *eventState, event claudeCurrentEvent) bool {
-	completion, err := decodeClaudeResultCompletion(event.value)
+	completion, err := decodeClaudeResultCompletion(event.value, a.advisoryWire())
 	if err != nil || !completion.origin.present || completion.origin.kind != claudeOriginTaskNotification {
 		return false
 	}
@@ -80,11 +80,8 @@ func (a *completionAttribution) recordLeadingAcknowledgement(state *eventState, 
 		state.markSemantic(err.Error())
 		return
 	}
-	refusal := resultRefusal(result)
-	if stated := completion.refusal(); stated != "" && (refusal == "" || refusal == refusalEmpty) {
-		refusal = stated
-	}
-	switch refusal {
+	fault := a.statedFault(result, completion)
+	switch fault.refusal {
 	case "":
 		state.markSemantic("leading acknowledgement carries an answer")
 		return
@@ -94,7 +91,7 @@ func (a *completionAttribution) recordLeadingAcknowledgement(state *eventState, 
 			return
 		}
 	default:
-		a.recordFollowUpRefusal(refusal)
+		a.recordFollowUpFault(fault)
 	}
 	a.indexed = true
 	a.nextIndex++
@@ -115,7 +112,7 @@ func (a *completionAttribution) acceptLeadingInit(state *eventState, event claud
 		state.markSemantic("system/init repeats outside a leading acknowledgement boundary")
 		return
 	}
-	if requireSameClaudeInit(state, event.fields, "leading system/init changed the native identity") {
+	if a.requireSameInit(state, event.fields, "leading system/init changed the native identity") {
 		a.stage = leadingReinitialized
 	}
 }

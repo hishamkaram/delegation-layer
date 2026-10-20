@@ -136,6 +136,12 @@ func ParseQueueSnapshotStream(reader io.Reader, version string) (QueueSnapshot, 
 		}
 	})
 	if err != nil {
+		// The decoder reports a bare io.EOF when a delivered stream ends inside
+		// its first value. Only a stream that delivered no bytes keeps the plain
+		// empty-output pair; any delivered byte makes the end unexpected.
+		if s.reader.position > 0 && errors.Is(err, io.EOF) {
+			err = errors.Join(io.ErrUnexpectedEOF, err)
+		}
 		return QueueSnapshot{}, errors.Join(ErrUnknown, err)
 	}
 	if !tasksFound || !groupsFound {
@@ -143,11 +149,15 @@ func ParseQueueSnapshotStream(reader io.Reader, version string) (QueueSnapshot, 
 	}
 	s.window()
 	var extra json.RawMessage
-	if err = s.decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+	// Only a clean end of stream completes the document. A reader fault joined
+	// with io.EOF is still a fault.
+	if err = s.decoder.Decode(&extra); !task.AllErrorCauses(err, isEOF) {
 		return QueueSnapshot{}, errors.Join(ErrUnknown, task.ErrTrailingJSON, err)
 	}
 	return snapshot, nil
 }
+
+func isEOF(err error) bool { return errors.Is(err, io.EOF) }
 
 func (s *statusStream) readTasks(snapshot *QueueSnapshot) error {
 	return s.object(func(key string) error {

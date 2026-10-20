@@ -4,16 +4,23 @@ from __future__ import annotations
 
 
 from scripts.delegate_acceptance.native.constants import WATCH_SECONDS
+from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
 
 class ModelDiscoveryCleanupOps(NativeTaskOps):
-    """Use the model discovery state root for failure cleanup."""
+    """Use the model discovery state root for failure cleanup.
+
+    Model discovery is admitted with the acceptance's runner expectation, so
+    the cleanup ledger reuses that one owner's managed mode and placement.
+    """
 
     def __init__(self, owner) -> None:
         super().__init__(owner.processes, owner.delegate, owner.runner, owner.pueue,
                          owner.models_state.parent, owner.models_state, owner.output,
-                         expected_inspection_binding_required=False)
+                         expected_inspection_binding_required=False,
+                         managed_runner=owner.ops.managed_runner,
+                         runner_placement=owner.ops.runner_placement)
         self.owner = owner
 
     def failure_queue_finished(self, status: dict[str, object]) -> bool:
@@ -22,14 +29,22 @@ class ModelDiscoveryCleanupOps(NativeTaskOps):
 
 
 class NativeAcceptanceTaskOps(NativeTaskOps):
-    """Keep ordinary task lifecycle validation scoped to the two owned roots."""
+    """Keep ordinary task lifecycle validation scoped to the two owned roots.
 
-    def __init__(self, owner) -> None:
+    This ledger owns the acceptance's runner expectation. Every admission is
+    managed, so Go selects the delegate's adjacent runner and the supplied
+    runner is only its expected fingerprint. The acceptance supplies an
+    external supervisor config, so Go queues that bundle runner itself. Only
+    internal fixtures that exercise custom-runner history pass
+    ``managed_runner=False``.
+    """
+
+    def __init__(self, owner, *, managed_runner: bool = True) -> None:
         super().__init__(owner.processes, owner.delegate, owner.runner, owner.pueue,
                          owner.base, owner.state, owner.output,
                          watch_seconds=WATCH_SECONDS,
                          expected_inspection_binding_required=False,
-                         managed_runner=owner.scenario == "timeout-resume")
+                         managed_runner=managed_runner, runner_placement=BUNDLE_RUNNER)
         self.owner = owner
 
     def _validate_queue_membership(

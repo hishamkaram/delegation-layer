@@ -20,6 +20,7 @@ from .contract import (
     _source_requested_options,
     _task_identifier_values,
 )
+from .production_acp import compact_production_acp, requires_production_acp
 from .filesystem import (
     _bounded_children,
     _read_json,
@@ -227,6 +228,9 @@ def _source_proof(
         and len(session_ids) == 1
     )
     lifecycle = _lifecycle_summary(source, cleanup, cleanup_ok, diagnostics_digest)
+    production_acp = (
+        compact_production_acp(source, task_sessions, tuple(sorted(expected_aliases)))
+        if requires_production_acp(row.definition.provider) else None)
     if row.status == "BLOCKED":
         proof_state = "blocked-before-runtime"
     elif row.status == "FAIL":
@@ -236,7 +240,8 @@ def _source_proof(
           and observed_aliases == expected_aliases and session_continuity
           and binary.get("state") == "complete"
           and lifecycle["state"] == "complete"
-          and requested_options["requested_options_state"] == "recorded"):
+          and requested_options["requested_options_state"] == "recorded"
+          and (production_acp is None or production_acp["state"] == "complete")):
         proof_state = "complete"
     else:
         proof_state = "unresolved"
@@ -261,4 +266,5 @@ def _source_proof(
         },
         "binary_identities": binary,
         "lifecycle_proof": lifecycle,
+        **({} if production_acp is None else {"production_acp": production_acp}),
     }

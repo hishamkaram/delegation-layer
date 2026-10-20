@@ -66,6 +66,10 @@ func supervisorFailureDetail(reason string) string {
 		return "Supervisor observation could not establish a safe recovery action."
 	case "state_unreadable":
 		return "Supervisor state could not be validated; state was preserved."
+	case "endpoint_owner_unknown":
+		return "The supervisor endpoint refuses connections and its recorded process is unknown; state was preserved."
+	case "endpoint_refused_live":
+		return "The supervisor endpoint refuses connections while its recorded process is present; state was preserved."
 	default:
 		return ""
 	}

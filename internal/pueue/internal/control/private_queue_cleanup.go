@@ -19,36 +19,44 @@ func privateClientReadyWithCleanup(ctx context.Context, client *Client, cleanupS
 	return ready, err
 }
 
+// privateClientReadySnapshotWithCleanup projects the endpoint observation onto
+// the existing observer contract: absent is (false, nil) and a refusal is its
+// typed ErrBinding error.
 func privateClientReadySnapshotWithCleanup(ctx context.Context, client *Client, cleanupSuccessful bool) (QueueSnapshot, bool, error) {
+	snapshot, observation, err := privateClientObserveSnapshot(ctx, client, cleanupSuccessful)
+	if err != nil {
+		return QueueSnapshot{}, false, err
+	}
+	return snapshot, observation.ready(), observation.projectedError()
+}
+
+func privateClientObserveSnapshot(ctx context.Context, client *Client, cleanupSuccessful bool) (QueueSnapshot, PrivateEndpointObservation, error) {
 	if client == nil {
-		return QueueSnapshot{}, false, ErrConfiguration
+		return QueueSnapshot{}, PrivateEndpointObservation{}, ErrConfiguration
 	}
 	cleaned := false
 	for {
 		result, err := privateReadyAttempt(ctx, client)
 		if err != nil {
-			if handled, unavailable, endpointErr := privateReadyEndpointFailure(ctx, client, result, err); handled {
-				if endpointErr != nil {
-					return QueueSnapshot{}, false, endpointErr
-				}
-				return QueueSnapshot{}, !unavailable, nil
+			if observation, handled, endpointErr := privateReadyEndpointFailure(ctx, client, result, err); handled {
+				return QueueSnapshot{}, observation, endpointErr
 			}
 			if retry, cleanErr := client.cleanupStatusOverflow(ctx, err, cleanupSuccessful, cleaned); cleanErr != nil {
-				return QueueSnapshot{}, false, errors.Join(err, cleanErr)
+				return QueueSnapshot{}, PrivateEndpointObservation{}, errors.Join(err, cleanErr)
 			} else if retry {
 				cleaned = true
 				continue
 			}
-			return QueueSnapshot{}, false, errors.Join(ErrBinding, err)
+			return QueueSnapshot{}, PrivateEndpointObservation{}, errors.Join(ErrBinding, err)
 		}
 		if err = client.validateReadyResult(result); err != nil {
-			return QueueSnapshot{}, false, errors.Join(ErrBinding, err)
+			return QueueSnapshot{}, PrivateEndpointObservation{}, errors.Join(ErrBinding, err)
 		}
 		snapshot, err := snapshotFromResult(result, client.runtimeBinding.ObservedVersion)
 		if err != nil {
-			return QueueSnapshot{}, false, errors.Join(ErrBinding, err)
+			return QueueSnapshot{}, PrivateEndpointObservation{}, errors.Join(ErrBinding, err)
 		}
-		return snapshot, true, nil
+		return snapshot, PrivateEndpointObservation{state: PrivateEndpointReady}, nil
 	}
 }
 
@@ -60,28 +68,25 @@ func privateReadyAttempt(ctx context.Context, client *Client) (CommandResult, er
 	return result, err
 }
 
-// privateClientReadyGroups verifies the private endpoint through Pueue's
+// privateClientObserveGroups verifies the private endpoint through Pueue's
 // bounded group response. Lifecycle admission needs only daemon liveness and
 // group scheduling facts; it must not deserialize every task row while a large
 // private queue is active.
-func privateClientReadyGroups(ctx context.Context, client *Client) (map[string]Group, bool, error) {
+func privateClientObserveGroups(ctx context.Context, client *Client) (map[string]Group, PrivateEndpointObservation, error) {
 	if client == nil {
-		return nil, false, ErrConfiguration
+		return nil, PrivateEndpointObservation{}, ErrConfiguration
 	}
 	groups, result, err := client.privateGroups(ctx)
 	if err == nil {
-		return groups, true, nil
+		return groups, PrivateEndpointObservation{state: PrivateEndpointReady}, nil
 	}
 	if pendingFrom(err) != nil {
-		return nil, false, err
+		return nil, PrivateEndpointObservation{}, err
 	}
-	if handled, unavailable, endpointErr := privateReadyEndpointFailure(ctx, client, result, err); handled {
-		if endpointErr != nil {
-			return nil, false, endpointErr
-		}
-		return nil, !unavailable, nil
+	if observation, handled, endpointErr := privateReadyEndpointFailure(ctx, client, result, err); handled {
+		return nil, observation, endpointErr
 	}
-	return nil, false, errors.Join(ErrBinding, err)
+	return nil, PrivateEndpointObservation{}, errors.Join(ErrBinding, err)
 }
 
 func (c *Client) privateGroups(ctx context.Context) (map[string]Group, CommandResult, error) {
@@ -96,21 +101,28 @@ func (c *Client) privateGroups(ctx context.Context) (map[string]Group, CommandRe
 	return groups, result, err
 }
 
-func privateReadyEndpointFailure(ctx context.Context, client *Client, result CommandResult, err error) (handled, unavailable bool, resultErr error) {
-	// A nonzero liveness command is only an absent endpoint when the exact Unix
-	// socket also proves absent. A live endpoint with an incompatible response
-	// must never be mistaken for a stopped daemon during migration.
+// privateReadyEndpointFailure is the only producer of absent and refused
+// observations. A nonzero liveness command is absent or refused only when it
+// is a clean ordinary completion and the exact Unix socket proves that state.
+// Any other command, capture, parse, or probe fault stays an operational error
+// even when the socket is absent, and a live endpoint with an incompatible
+// response is never mistaken for a stopped daemon.
+func privateReadyEndpointFailure(ctx context.Context, client *Client, result CommandResult, err error) (observation PrivateEndpointObservation, handled bool, resultErr error) {
 	if !result.Started || result.ExitCode == 0 {
-		return false, false, nil
+		return PrivateEndpointObservation{}, false, nil
 	}
-	unavailable, probeErr := client.endpointUnavailable(ctx)
+	unavailable, refused, probeErr := client.endpointProbe(ctx)
 	if probeErr != nil {
-		return true, false, errors.Join(err, probeErr)
+		return PrivateEndpointObservation{}, true, errors.Join(err, probeErr)
 	}
-	if unavailable {
-		return true, true, nil
+	if (unavailable || refused) && privateRefusalCompletion(result, err) {
+		state := PrivateEndpointRefused
+		if unavailable {
+			state = PrivateEndpointAbsent
+		}
+		return PrivateEndpointObservation{state: state, cause: err}, true, nil
 	}
-	return true, false, errors.Join(ErrBinding, err)
+	return PrivateEndpointObservation{}, true, errors.Join(ErrBinding, err)
 }
 
 // cleanSuccessfulTasks removes only exact terminal rows authorized by the

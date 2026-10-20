@@ -349,12 +349,18 @@ func validatePendingPrivateMigration(pending privateMigrationRecord, legacyBindi
 }
 
 func (c *Client) completePendingPrivateMigration(ctx context.Context, stateRoot, base string, pending privateMigrationRecord) error {
-	ready, err := c.availableForBootstrap(ctx)
+	observation, err := c.availableForTransition(ctx, true)
 	if err != nil {
 		return fmt.Errorf("%w: verify successor before clearing private supervisor recovery: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
-	if !ready {
-		if startErr := c.startPrivate(ctx); startErr != nil {
+	if !observation.ready() {
+		// The caller has validated this journal's recorded successor; only that
+		// exact client may close a refused endpoint and start.
+		startErr := c.closeRefusedPrivateEndpoint(ctx, observation)
+		if startErr == nil {
+			startErr = c.startPrivate(ctx)
+		}
+		if startErr != nil {
 			return fmt.Errorf("%w: restart successor before clearing private supervisor recovery: %w", ErrPrivateSupervisorMigrationRequired, startErr)
 		}
 	}

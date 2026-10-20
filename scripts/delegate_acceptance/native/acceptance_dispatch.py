@@ -22,7 +22,9 @@ def task_command_prefix(owner) -> list[object]:
     argv: list[object] = [
         acceptance.delegate, "--root", acceptance.state, "--pueue-config", acceptance.config,
     ]
-    if getattr(acceptance, "scenario", None) != "timeout-resume":
+    # A managed admission selects the delegate's adjacent runner itself; an
+    # explicit runner would turn its ownership custom.
+    if not acceptance.ops.managed_runner:
         argv.extend(["--runner", acceptance.runner])
     return argv
 

@@ -37,11 +37,33 @@ type claudeResultCompletion struct {
 	index          *int64
 	origin         claudeResultOrigin
 	terminalReason string
-	queuedTurns    *int64
-	zeroTurns      bool
+	// terminalUnsupported marks an undocumented terminal_reason string that
+	// the advisory policy reports as an unsupported completion. The raw value
+	// is never retained.
+	terminalUnsupported bool
+	queuedTurns         *int64
+	zeroTurns           bool
 }
 
-func decodeClaudeResultCompletion(value providerjson.Value) (claudeResultCompletion, error) {
+// completionFault is one completion refusal and, for an unsupported
+// completion, the logical field that stated it. The field never carries a
+// provider value.
+type completionFault struct {
+	refusal string
+	field   string
+}
+
+func newCompletionFault(refusal, field string) completionFault {
+	if refusal != refusalUnsupportedCompletion {
+		return completionFault{refusal: refusal}
+	}
+	return completionFault{refusal: refusal, field: field}
+}
+
+// decodeClaudeResultCompletion reads the typed completion metadata of one
+// result. advisory is the immutable policy's choice for an undocumented
+// terminal_reason: unsupported instead of malformed.
+func decodeClaudeResultCompletion(value providerjson.Value, advisory bool) (claudeResultCompletion, error) {
 	fields, err := value.Object("result_index", "origin", "terminal_reason", "queued_turn_count", "num_turns")
 	if err != nil {
 		return claudeResultCompletion{}, errors.New("result completion metadata is invalid")
@@ -56,7 +78,7 @@ func decodeClaudeResultCompletion(value providerjson.Value) (claudeResultComplet
 	if completion.origin, err = decodeClaudeResultOrigin(fields); err != nil {
 		return claudeResultCompletion{}, err
 	}
-	if completion.terminalReason, err = decodeClaudeTerminalReason(fields); err != nil {
+	if completion.terminalReason, completion.terminalUnsupported, err = decodeClaudeTerminalReason(fields, advisory); err != nil {
 		return claudeResultCompletion{}, err
 	}
 	if turns, turnsErr := claudeStrictOptionalCounter(fields, "num_turns"); turnsErr == nil && turns != nil {
@@ -69,6 +91,9 @@ func decodeClaudeResultCompletion(value providerjson.Value) (claudeResultComplet
 // queued_turn_count is not proof that no follow-up exists; a positive one is
 // queued human input that this single caller turn never submitted.
 func (c claudeResultCompletion) refusal() string {
+	if c.terminalUnsupported {
+		return refusalUnsupportedCompletion
+	}
 	if c.terminalReason != "" && c.terminalReason != claudeTerminalCompleted {
 		return refusalProviderFailed + ": terminal_reason=" + c.terminalReason
 	}
@@ -76,6 +101,39 @@ func (c claudeResultCompletion) refusal() string {
 		return refusalIncomplete
 	}
 	return ""
+}
+
+func (c claudeResultCompletion) fault() completionFault {
+	return newCompletionFault(c.refusal(), "terminal_reason")
+}
+
+// unknownStopRefusal is the immutable policy's class for a stop_reason string
+// outside the documented set.
+func (a *completionAttribution) unknownStopRefusal() string {
+	if a.advisoryWire() {
+		return refusalUnsupportedCompletion
+	}
+	return refusalMalformed
+}
+
+// resultFault is the policy-bound refusal of one decoded result record.
+func (a *completionAttribution) resultFault(result resultState) completionFault {
+	return newCompletionFault(resultRefusalFor(result, a.unknownStopRefusal()), "stop_reason")
+}
+
+func (a *completionAttribution) resultRefusal(result resultState) string {
+	return a.resultFault(result).refusal
+}
+
+// statedFault is the refusal of a non-principal result: its own refusal, or
+// the one stated by its typed metadata when the result itself only lacks a
+// nonblank answer.
+func (a *completionAttribution) statedFault(result resultState, completion claudeResultCompletion) completionFault {
+	fault := a.resultFault(result)
+	if stated := completion.fault(); stated.refusal != "" && (fault.refusal == "" || fault.refusal == refusalEmpty) {
+		return stated
+	}
+	return fault
 }
 
 func claudeStrictOptionalCounter(fields map[string]providerjson.Value, name string) (*int64, error) {
@@ -108,17 +166,23 @@ func decodeClaudeResultOrigin(fields map[string]providerjson.Value) (claudeResul
 	return claudeResultOrigin{present: true, kind: kind, subkindPresent: subkindPresent}, nil
 }
 
-func decodeClaudeTerminalReason(fields map[string]providerjson.Value) (string, error) {
+// decodeClaudeTerminalReason returns a documented reason, or reports an
+// undocumented bounded string as unsupported under the advisory policy. The
+// frozen policies keep it malformed.
+func decodeClaudeTerminalReason(fields map[string]providerjson.Value, advisory bool) (string, bool, error) {
 	value, ok := fields["terminal_reason"]
 	if !ok {
-		return "", nil
+		return "", false, nil
 	}
 	reason, err := value.String(128)
 	if err != nil || claudeCurrentValueIsNull(value) {
-		return "", errors.New("result terminal_reason is not a string")
+		return "", false, errors.New("result terminal_reason is not a string")
 	}
-	if _, failed := claudeFailedTerminalReasons[reason]; reason != claudeTerminalCompleted && !failed {
-		return "", errors.New("result terminal_reason is undocumented")
+	if _, failed := claudeFailedTerminalReasons[reason]; reason == claudeTerminalCompleted || failed {
+		return reason, false, nil
 	}
-	return reason, nil
+	if advisory {
+		return "", true, nil
+	}
+	return "", false, errors.New("result terminal_reason is undocumented")
 }

@@ -52,10 +52,11 @@ func TestSuccessorCandidateSelectsCurrentPredicateOfTheSameLaunchShape(t *testin
 			route  bool
 			target task.PredicateRef
 		}{{true, Reference(mode)}, {false, modeledReference(mode)}} {
-			reference := preAttributionReference(mode, source.route)
-			t.Run(mode+"/"+reference.Version, func(t *testing.T) {
-				requireSuccessorSelectsTarget(t, successorRequest(t, mode), reference, source.target, source.route)
-			})
+			for _, reference := range []task.PredicateRef{preAttributionReference(mode, source.route), scopedReference(mode, source.route)} {
+				t.Run(mode+"/"+reference.Version, func(t *testing.T) {
+					requireSuccessorSelectsTarget(t, successorRequest(t, mode), reference, source.target, source.route)
+				})
+			}
 		}
 	}
 }
@@ -214,7 +215,7 @@ func TestSuccessorTargetsClassifyCredentialFailure(t *testing.T) {
 	for _, mode := range successorModes {
 		for _, route := range []bool{true, false} {
 			target, _ := currentOutputReference(mode, preAttributionReference(mode, route))
-			for _, reference := range []task.PredicateRef{preAttributionReference(mode, route), target} {
+			for _, reference := range []task.PredicateRef{preAttributionReference(mode, route), scopedReference(mode, route), target} {
 				t.Run(mode+"/"+reference.Version, func(t *testing.T) {
 					index := slices.IndexFunc(registered, func(i predicate.Interpreter) bool { return i.Reference().Equal(reference) })
 					if index < 0 {

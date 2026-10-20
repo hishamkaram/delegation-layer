@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from ..evidence.digests import sha as _digest_bytes
+from .lifetime_closure import lifetime_closure_error
+from .production_acp import production_acp_proof_error, requires_production_acp
 import json
 import posixpath
 import re
@@ -120,6 +122,8 @@ def expected_cases() -> tuple[CaseDefinition, ...]:
     definitions.append(_case_definition(index, "codex:review", "read-only", "read-only"))
     definitions.append(_case_definition(index + 1, "codex:exec", "read-only", "non-git"))
     definitions.append(_case_definition(index + 2, "codex:exec", "workspace-write", "non-git"))
+    # Appended so every earlier case identity and order stays unchanged.
+    definitions.append(_case_definition(index + 3, "opencode:run", "workspace-write", "timeout-resume"))
     return tuple(definitions)
 
 
@@ -392,15 +396,30 @@ def _parse_optional_revision(value: str | None) -> str | None:
         raise EvidenceError("source_revision_invalid")
     return value
 
+def _source_closure_error(source: dict[str, object]) -> str | None:
+    """Bind the source receipt's closure proof to its exact admitted tasks."""
+    tasks = source.get("tasks")
+    if not isinstance(tasks, dict):
+        return "lifetime_closure_identity_invalid"
+    return lifetime_closure_error(
+        source.get("lifetime_closure"), task_ids=tasks.values(),
+        budget_task_ids=[tasks["timeout_source"]] if "timeout_source" in tasks else [],
+        model_discovery_required=source.get("model_discovery") is not None)
+
+
 def _lifecycle_summary(
         source: dict[str, object], cleanup: dict[str, object],
         cleanup_ok: bool, diagnostics_digest: str | None) -> dict[str, object]:
     natural_shutdown = source.get("natural_daemon_shutdown")
+    closure_error = _source_closure_error(source)
     lifecycle: dict[str, object] = {
-        "state": "complete" if cleanup_ok and natural_shutdown is True else "unresolved",
+        "state": ("complete" if cleanup_ok and natural_shutdown is True and closure_error is None
+                  else "unresolved"),
         "cleanup_status": cleanup.get("status"),
         "supervisor_shutdown_observed": cleanup.get("supervisor_shutdown_observed"),
         "natural_daemon_shutdown": natural_shutdown if isinstance(natural_shutdown, bool) else None,
+        # Private compact proof only; the public projection keeps its lifecycle keys.
+        "closure": source.get("lifetime_closure") if closure_error is None else None,
     }
     if diagnostics_digest is not None and HEX_DIGEST.fullmatch(diagnostics_digest):
         lifecycle["failure_diagnostics_sha256"] = diagnostics_digest
@@ -451,7 +470,29 @@ def _validate_case_proof_identity(case: dict[str, object], value: dict[str, obje
     if (proof.get("source_receipt_sha256") is not None
             and HEX_DIGEST.fullmatch(str(proof.get("source_receipt_sha256"))) is None):
         raise EvidenceError("aggregate_case_source_digest_invalid")
+    resolved_pass = case["status"] == "PASS" and case["evidence_status"] == "RESOLVED"
+    production_error = production_acp_proof_error(
+        str(case["provider"]), proof, resolved_pass=resolved_pass,
+        expected_aliases=_expected_task_aliases(str(case["provider"]), str(case["scenario"])))
+    if production_error is not None:
+        raise EvidenceError(production_error)
+    if resolved_pass:
+        closure_error = _proof_closure_error(proof)
+        if closure_error is not None:
+            raise EvidenceError("aggregate_case_" + closure_error)
     return proof
+
+
+def _proof_closure_error(proof: dict[str, object]) -> str | None:
+    """Require a resolved PASS's private closure to cover its exact task bindings."""
+    lifecycle, bindings = proof.get("lifecycle_proof"), proof.get("task_session_bindings")
+    if (not isinstance(lifecycle, dict) or not isinstance(bindings, list)
+            or not all(isinstance(binding, dict) for binding in bindings)):
+        return "lifetime_closure_missing"
+    return lifetime_closure_error(
+        lifecycle.get("closure"), task_ids=[binding.get("task_id") for binding in bindings],
+        budget_task_ids=[binding.get("task_id") for binding in bindings
+                         if binding.get("alias") == "timeout_source"])
 
 
 def _validate_case_sessions(proof: dict[str, object]) -> tuple[list[dict[str, str]], list[str], list[str], dict[str, object]]:
@@ -633,6 +674,13 @@ def _source_proof_error(
             if requested_options_state == "missing"
             else "source_requested_options_invalid"
         )
+    production = proof.get("production_acp")
+    if (row.status == "PASS" and requires_production_acp(row.definition.provider)
+            and (not isinstance(production, dict) or production.get("state") != "complete")):
+        state = production.get("state") if isinstance(production, dict) else None
+        evidence_error = evidence_error or (
+            "source_production_acp_missing" if state in {None, "missing"}
+            else "source_production_acp_invalid")
     if row.status == "PASS" and proof.get("state") != "complete":
         evidence_error = evidence_error or "source_proof_incomplete"
     return evidence_error

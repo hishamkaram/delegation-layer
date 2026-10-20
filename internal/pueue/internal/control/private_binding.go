@@ -47,7 +47,7 @@ func bindPrivateLocked(ctx context.Context, clientExecutable, daemonExecutable, 
 	return bindPrivateResolved(ctx, clientPath, daemonPath, stateRoot, resolution, options, expected)
 }
 
-func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot string, resolution ResolutionContext, options Options, expected *task.SupervisorRef) (*Client, error) {
+func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot string, resolution ResolutionContext, options Options, expected *task.SupervisorRef) (_ *Client, resultErr error) {
 	base := filepath.Join(stateRoot, privateSupervisorDirectory)
 	if err := ensurePrivateBase(base); err != nil {
 		return nil, err
@@ -62,23 +62,26 @@ func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot 
 	if err = verifyExpectedPrivateBinding(ctx, clientPath, daemonPath, configPath, options, expected); err != nil {
 		return nil, err
 	}
-	client, ready, err := bindPrivateClient(ctx, clientPath, daemonPath, configPath, options)
+	client, observation, err := bindPrivateTransitionClient(ctx, clientPath, daemonPath, configPath, options, true)
 	if err != nil {
 		return nil, err
 	}
-	if err = matchExpectedPrivateBinding(client, expected); err != nil {
-		return nil, err
-	}
-	if err = restoreExpectedPrivateSupervisorBinding(ctx, stateRoot, expected); err != nil {
-		return nil, err
-	}
-	if err = verifyPrivateSupervisorBinding(stateRoot, client.Binding(), ready); err != nil {
+	defer func() {
+		if resultErr != nil {
+			resultErr = failPrivateTransitionClient(client, observation, resultErr)
+		}
+	}()
+	ready := observation.ready()
+	if err = verifyBoundPrivateSupervisor(ctx, client, stateRoot, expected, ready); err != nil {
 		return nil, err
 	}
 	if ready {
 		return client, nil
 	}
 	if err = verifyExpectedPrivateBinding(ctx, clientPath, daemonPath, configPath, options, expected); err != nil {
+		return nil, err
+	}
+	if err = client.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
 		return nil, err
 	}
 	if err = startDaemon(daemonPath, client.Binding().DaemonSHA256, configPath, base, options); err != nil {
@@ -94,6 +97,18 @@ func bindPrivateResolved(ctx context.Context, clientPath, daemonPath, stateRoot 
 		return nil, err
 	}
 	return client, nil
+}
+
+// verifyBoundPrivateSupervisor applies BindPrivate's existing binding checks
+// before a ready client is returned or a stopped daemon may be started.
+func verifyBoundPrivateSupervisor(ctx context.Context, client *Client, stateRoot string, expected *task.SupervisorRef, ready bool) error {
+	if err := matchExpectedPrivateBinding(client, expected); err != nil {
+		return err
+	}
+	if err := restoreExpectedPrivateSupervisorBinding(ctx, stateRoot, expected); err != nil {
+		return err
+	}
+	return verifyPrivateSupervisorBinding(stateRoot, client.Binding(), ready)
 }
 
 func restoreExpectedPrivateSupervisorBinding(ctx context.Context, stateRoot string, expected *task.SupervisorRef) error {
@@ -356,14 +371,19 @@ func privateFullGenerationMatches(left, right task.SupervisorRef) bool {
 }
 
 func probePrivateCompatiblePair(ctx context.Context, saved, expected task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, bool, error) {
-	client, ready, err := bindPrivateClientWithCleanup(ctx, clientExecutable, daemonExecutable, expected.ConfigPath, options, false)
+	client, observation, err := bindPrivateTransitionClient(ctx, clientExecutable, daemonExecutable, expected.ConfigPath, options, false)
 	if err != nil {
 		return nil, false, err
+	}
+	// A compatible pair never closes or starts a stopped generation, so its
+	// refusal stays the observer error.
+	if refusal := observation.projectedError(); refusal != nil {
+		return nil, false, errors.Join(refusal, client.CloseAfterPending(refusal))
 	}
 	if !privateBindingsMatch(client.Binding(), expected) {
 		return nil, false, errors.Join(ErrBinding, client.Close())
 	}
-	if !ready {
+	if !observation.ready() {
 		return nil, false, client.Close()
 	}
 	// A compatible pair is a runtime client only. The completed generation is

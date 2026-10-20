@@ -23,6 +23,12 @@ func TestOperationResultValidationRejectsMalformedVerdicts(t *testing.T) {
 		{name: "capture has duplicate artifact", mutate: func(result *OperationResult) { result.Artifacts[1].Name = result.Artifacts[0].Name }},
 		{name: "capture artifact is truncated", mutate: func(result *OperationResult) { result.Artifacts[0].Truncated = true }},
 		{name: "successful capture is missing an artifact", mutate: func(result *OperationResult) { result.Artifacts = result.Artifacts[:1] }},
+		{name: "capture has half of the turn pair", mutate: func(result *OperationResult) {
+			result.Artifacts = append(result.Artifacts, Artifact{Name: "turn-diff.patch", Omitted: "limit"})
+		}},
+		{name: "capture has turn files without cumulative files", mutate: func(result *OperationResult) {
+			result.Artifacts = []Artifact{{Name: "turn-diff.patch", Omitted: "limit"}, {Name: "turn-name-status.z", Omitted: "limit"}}
+		}},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -102,6 +108,11 @@ func TestOperationResultValidationAcceptsProducerShapes(t *testing.T) {
 		make func(*Operation) OperationResult
 	}{
 		{name: "capture allows omitted overflow", kind: OperationCapture, make: operationValidationCaptureResultWithOmission},
+		{name: "capture allows the complete turn pair", kind: OperationCapture, make: func(operation *Operation) OperationResult {
+			result := operationValidationCaptureResult(operation)
+			result.Artifacts = append(result.Artifacts, Artifact{Name: "turn-diff.patch", Length: 0, SHA256: testSHA('4')}, Artifact{Name: "turn-name-status.z", Omitted: "limit"})
+			return result
+		}},
 		{name: "verify allows nonzero command and truncation", kind: OperationVerify, make: operationValidationVerifyResult},
 		{name: "lifecycle operation has no artifacts", kind: OperationProvision, make: operationValidationProvisionResult},
 	}

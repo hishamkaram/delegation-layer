@@ -30,13 +30,17 @@ const (
 
 	// predicateVersion identifies the pre-v5 interpreter contract, independent
 	// of the installed Pi CLI release. v5 is the historical native contract;
-	// Fresh read-only tasks use v6 after the startup extension boundary was
-	// added. Fresh workspace-write tasks use v8 after selecting the documented
-	// built-in write tools. Each mode keeps its prior bytes registered for replay.
+	// read-only v6 added the startup extension boundary and workspace-write v8
+	// selected the documented built-in write tools. Fresh tasks in both modes
+	// use v9, which additionally honors Pi's native settlement and retry
+	// outcome fields. Each mode keeps its prior bytes registered for replay.
 	predicateVersion        = "4"
 	currentPredicateVersion = "5"
-	currentReadOnlyVersion  = "6"
-	currentWorkspaceVersion = "8"
+	priorReadOnlyVersion    = "6"
+	priorWorkspaceVersion   = "8"
+	outcomeEvidenceVersion  = "9"
+	currentReadOnlyVersion  = outcomeEvidenceVersion
+	currentWorkspaceVersion = outcomeEvidenceVersion
 	historicalPredicateV3   = "3"
 	historicalPredicateV2   = "2"
 	legacyPredicateVersion  = "1"
@@ -90,7 +94,7 @@ func readOnlyContractV5Historical() string {
 	return contract
 }
 
-func readOnlyContractV6Current() string {
+func readOnlyContractV6Historical() string {
 	contract := strings.Replace(readOnlyContractV5Historical(), `"version":"5"`, `"version":"6"`, 1)
 	return strings.Replace(contract,
 		`read-only maps the native --tools allowlist to read,grep,find,ls; provider configuration, extensions, authentication, and startup behavior remain provider-owned`,
@@ -108,7 +112,7 @@ func workspaceContractV7Current() string {
 	return strings.Replace(workspaceContractV5Historical(), `"version":"5"`, `"version":"7"`, 1)
 }
 
-func workspaceContractV8Current() string {
+func workspaceContractV8Historical() string {
 	contract := strings.Replace(workspaceContractV7Current(), `"version":"7"`, `"version":"8"`, 1)
 	contract = strings.Replace(contract,
 		"workspace-write uses Pi's provider-native configured tools, extensions, authentication, and permission behavior; the adapter omits --tools and does not impose an independent workspace boundary",
@@ -120,6 +124,31 @@ func readOnlyContractV4Current() string {
 	return strings.Replace(readOnlyContractV4, "agent_end in order; auto_retry_start", "agent_end in order; message events may occur between turn_start and turn_end; auto_retry_start", 1)
 }
 
+// outcomeContractV9 derives the native-outcome contract from the immediately
+// prior bytes of the same mode. The v9 evidence policy additionally treats an
+// explicit agent_settled.aborted=true or auto_retry_end.success=false as a
+// provider failure and ignores documented session display events.
+func outcomeContractV9(prior, priorVersion string) string {
+	contract := strings.Replace(prior, `"version":"`+priorVersion+`"`, `"version":"`+outcomeEvidenceVersion+`"`, 1)
+	contract = strings.Replace(contract,
+		"unknown telemetry is tolerated while unknown lifecycle events reject",
+		"auto_retry_end.success=false reports final retry failure; documented session_info_changed and thinking_level_changed display events carry no completion authority and are ignored; unknown telemetry is tolerated while unknown lifecycle events reject", 1)
+	contract = strings.Replace(contract,
+		"agent_settled is optional for older native releases and terminal when present",
+		"agent_settled is optional for older native releases and terminal when present; agent_settled.aborted=true is a failed run", 1)
+	return strings.Replace(contract,
+		"provider error, nonzero exit,",
+		"provider error, agent_settled.aborted=true, auto_retry_end.success=false, non-boolean or duplicate aborted or success values, nonzero exit,", 1)
+}
+
+func readOnlyContractV9Current() string {
+	return outcomeContractV9(readOnlyContractV6Historical(), priorReadOnlyVersion)
+}
+
+func workspaceContractV9Current() string {
+	return outcomeContractV9(workspaceContractV8Historical(), priorWorkspaceVersion)
+}
+
 // Contract returns the immutable evidence policy for mode. An empty or
 // unsupported mode returns an empty string.
 func Contract(mode ...string) string {
@@ -129,9 +158,9 @@ func Contract(mode ...string) string {
 	}
 	switch selected {
 	case ModeReadOnly:
-		return readOnlyContractV6Current()
+		return readOnlyContractV9Current()
 	case ModeWorkspaceWrite:
-		return workspaceContractV8Current()
+		return workspaceContractV9Current()
 	default:
 		return ""
 	}
@@ -198,6 +227,14 @@ func workspaceWriteV7Reference() task.PredicateRef {
 	return referenceForVersion(ModeWorkspaceWrite, "7")
 }
 
+func readOnlyV6Reference() task.PredicateRef {
+	return referenceForVersion(ModeReadOnly, priorReadOnlyVersion)
+}
+
+func workspaceWriteV8Reference() task.PredicateRef {
+	return referenceForVersion(ModeWorkspaceWrite, priorWorkspaceVersion)
+}
+
 func referenceForVersion(mode, version string) task.PredicateRef {
 	contract := contractForVersion(mode, version)
 	if contract == "" {
@@ -217,8 +254,11 @@ func contractForVersion(mode, version string) string {
 		if version == "7" {
 			return workspaceContractV7Current()
 		}
+		if version == priorWorkspaceVersion {
+			return workspaceContractV8Historical()
+		}
 		if version == currentWorkspaceVersion {
-			return workspaceContractV8Current()
+			return workspaceContractV9Current()
 		}
 		return workspaceContractForVersion(version)
 	default:
@@ -238,8 +278,10 @@ func readOnlyContractForVersion(version string) string {
 		return readOnlyContractV4Current()
 	case currentPredicateVersion:
 		return readOnlyContractV5Historical()
+	case priorReadOnlyVersion:
+		return readOnlyContractV6Historical()
 	case currentReadOnlyVersion:
-		return readOnlyContractV6Current()
+		return readOnlyContractV9Current()
 	default:
 		return ""
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -14,39 +15,72 @@ var ErrUnsupportedProfile = errors.New("unsupported-effective-config")
 const (
 	nativeReadOnlyAgent       = "plan"
 	nativeWorkspaceWriteAgent = "build"
+	modelVariantSeparator     = "#"
 )
 
-// runArguments constructs the direct non-interactive OpenCode command. The
-// brief is delivered through the runner-owned stdin, so it is never copied
-// into argv or into a persisted launch record. OpenCode accepts stdin when no
+// runArguments constructs the non-interactive OpenCode command for the
+// admitted dialect. The brief is delivered through the runner-owned stdin, so
+// it is never copied into argv or into a persisted launch record. The ACP
+// dialect launches `opencode acp` alone: the workspace, agent, model, effort
+// and exact session travel in its protocol requests, and Plan.Directory owns
+// the process directory. The run dialects accept the brief on stdin when no
 // positional message is supplied.
-func runArguments(request task.TaskRecord) ([]string, error) {
-	return runArgumentsForProfile(request, true)
-}
-
-func legacyRunArguments(request task.TaskRecord) ([]string, error) {
-	return runArgumentsForProfile(request, false)
-}
-
-func runArgumentsForProfile(request task.TaskRecord, native bool) ([]string, error) {
+func runArguments(request task.TaskRecord, dialect launchDialect) ([]string, error) {
 	if err := validateRequest(request); err != nil {
 		return nil, err
 	}
-	arguments := []string{"run", "--format", "json", "--dir", request.CanonicalCwd}
-	arguments = append(arguments, agentArguments(request.Mode, native)...)
-	arguments = append(arguments, modelArguments(request)...)
+	if dialect == dialectACP {
+		if err := validatePriorSession(request); err != nil {
+			return nil, err
+		}
+		return []string{"acp"}, nil
+	}
+	arguments := []string{"run", "--format", "json"}
+	if dialect == dialectNativeV2 {
+		// A private server keeps native tool execution in the supervised tree.
+		arguments = append(arguments, "--standalone")
+	} else {
+		arguments = append(arguments, "--dir", request.CanonicalCwd)
+	}
+	arguments = append(arguments, agentArguments(request.Mode, dialect.native())...)
+	model, err := modelArguments(request, dialect)
+	if err != nil {
+		return nil, err
+	}
+	arguments = append(arguments, model...)
 	if request.Mode == ModeWorkspaceWrite {
 		// OpenCode's native --auto approves actions not denied by the selected
 		// build agent. It is part of the workspace-write request only.
 		arguments = append(arguments, "--auto")
 	}
+	if err := validatePriorSession(request); err != nil {
+		return nil, err
+	}
 	if prior := request.PriorSession; prior != nil {
-		if prior.Provider != Provider || !validSessionID(prior.ConversationID) || task.ValidateTaskID(prior.PredecessorTaskID) != nil {
-			return nil, fmt.Errorf("%w: invalid exact continuation identity", ErrUnsupportedProfile)
-		}
 		arguments = append(arguments, "--session", prior.ConversationID)
 	}
 	return arguments, nil
+}
+
+// validatePriorSession checks an exact continuation identity, when present.
+func validatePriorSession(request task.TaskRecord) error {
+	prior := request.PriorSession
+	if prior != nil && (prior.Provider != Provider || !validSessionID(prior.ConversationID) || task.ValidateTaskID(prior.PredecessorTaskID) != nil) {
+		return fmt.Errorf("%w: invalid exact continuation identity", ErrUnsupportedProfile)
+	}
+	return nil
+}
+
+// nativeAgent returns the native primary agent selected by a permission mode.
+func nativeAgent(mode string) (string, error) {
+	switch mode {
+	case ModeReadOnly:
+		return nativeReadOnlyAgent, nil
+	case ModeWorkspaceWrite:
+		return nativeWorkspaceWriteAgent, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported OpenCode native permission mode", ErrUnsupportedProfile)
+	}
 }
 
 func agentArguments(mode string, native bool) []string {
@@ -66,16 +100,42 @@ func agentArguments(mode string, native bool) []string {
 	}
 }
 
-func modelArguments(request task.TaskRecord) []string {
+func modelArguments(request task.TaskRecord, dialect launchDialect) ([]string, error) {
+	if dialect == dialectNativeV2 {
+		return variantModelArguments(request.RequestedConfig.Model, request.RequestedConfig.Effort)
+	}
 	var arguments []string
 	if request.RequestedConfig.Model != "" {
 		arguments = append(arguments, "--model", request.RequestedConfig.Model)
 	}
-	if effort := request.RequestedConfig.Effort; effort != "" && effort != "default" {
-		arguments = append(arguments, "--variant", effort)
+	if explicitEffort(request.RequestedConfig.Effort) {
+		arguments = append(arguments, "--variant", request.RequestedConfig.Effort)
 	}
-	return arguments
+	return arguments, nil
 }
+
+// variantModelArguments selects a model variant the only way the current
+// dialect accepts one: as the provider/model#variant value of --model.
+func variantModelArguments(model, effort string) ([]string, error) {
+	if !explicitEffort(effort) {
+		if model == "" {
+			return nil, nil
+		}
+		return []string{"--model", model}, nil
+	}
+	if model == "" {
+		return nil, fmt.Errorf("%w: OpenCode effort %q requires an explicit model; OpenCode selects a variant only as --model provider/model#variant", ErrUnsupportedProfile, effort)
+	}
+	if strings.Contains(model, modelVariantSeparator) {
+		return nil, fmt.Errorf("%w: OpenCode model %q already names a variant; omit effort %q or the model's #variant suffix", ErrUnsupportedProfile, model, effort)
+	}
+	if strings.Contains(effort, modelVariantSeparator) {
+		return nil, fmt.Errorf("%w: OpenCode effort %q must not contain %q", ErrUnsupportedProfile, effort, modelVariantSeparator)
+	}
+	return []string{"--model", model + modelVariantSeparator + effort}, nil
+}
+
+func explicitEffort(effort string) bool { return effort != "" && effort != "default" }
 
 func validateRequest(request task.TaskRecord) error {
 	if err := validateProviderMode(request); err != nil {
@@ -136,7 +196,7 @@ func validateModelOptions(request task.TaskRecord) error {
 	if request.RequestedConfig.Model != "" && !validArgumentText(request.RequestedConfig.Model) {
 		return fmt.Errorf("%w: model contains invalid characters", ErrUnsupportedProfile)
 	}
-	if effort := request.RequestedConfig.Effort; effort != "" && effort != "default" && !validArgumentText(effort) {
+	if effort := request.RequestedConfig.Effort; explicitEffort(effort) && !validArgumentText(effort) {
 		return fmt.Errorf("%w: effort contains invalid characters", ErrUnsupportedProfile)
 	}
 	return nil

@@ -24,13 +24,14 @@ func NewStreamInterpreter(reference task.PredicateRef) (predicate.Interpreter, e
 }
 
 // NewAttributedStreamInterpreterWithRecovery binds a caller-owned stream
-// reference to the scoped attributed completion policy described by
+// reference to the current advisory completion policy described by
 // ContractForMode: the caller's principal result is the answer, root
 // provider-native background notification cycles must be attributed and
-// settled before EOF, and nested agent messages stay outside those cycles. The listed
-// same-wire historical sources are used only by offline recovery; ordinary
-// evaluation still requires the bound reference and recovery never rewrites
-// the sealed input.
+// settled before EOF, nested agent messages stay outside those cycles, only
+// session identity and native permission are init authority, and an unknown
+// completion reason is unsupported. The listed same-wire historical sources
+// are used only by offline recovery; ordinary evaluation still requires the
+// bound reference and recovery never rewrites the sealed input.
 func NewAttributedStreamInterpreterWithRecovery(reference task.PredicateRef, recoverySources ...task.PredicateRef) (predicate.Interpreter, error) {
 	if err := task.ValidatePredicateRef(reference); err != nil {
 		return nil, err
@@ -46,7 +47,20 @@ func NewAttributedStreamInterpreterWithRecovery(reference task.PredicateRef, rec
 			return nil, fmt.Errorf("invalid Claude stream recovery source %s/%s", source.Adapter, source.Version)
 		}
 	}
-	return interpreter{mode: reference.Mode, streamReference: &reference, recoverySources: slices.Clone(recoverySources), completion: scopedAttributedCompletion}, nil
+	return interpreter{mode: reference.Mode, streamReference: &reference, recoverySources: slices.Clone(recoverySources), completion: advisoryScopedCompletion}, nil
+}
+
+// NewScopedStreamInterpreter replays a caller-owned stream reference sealed
+// under the frozen scoped policy and strict wire described by
+// ScopedNativeContractForMode. It is replay-only and never a recovery target.
+func NewScopedStreamInterpreter(reference task.PredicateRef) (predicate.Interpreter, error) {
+	if err := task.ValidatePredicateRef(reference); err != nil {
+		return nil, err
+	}
+	if reference.Mode != Mode && reference.Mode != WorkspaceWriteMode {
+		return nil, fmt.Errorf("unsupported Claude stream permission mode %q", reference.Mode)
+	}
+	return interpreter{mode: reference.Mode, streamReference: &reference, completion: scopedAttributedCompletion}, nil
 }
 
 // NewHistoricalStreamInterpreter replays the pre-issue47 current native

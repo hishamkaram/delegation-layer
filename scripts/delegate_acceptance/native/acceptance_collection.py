@@ -14,6 +14,7 @@ from scripts.delegate_acceptance.native.diagnostics import _rejection_diagnostic
 from scripts.delegate_acceptance.native.errors import BlockedFailure
 from scripts.delegate_acceptance.native.fixtures import marker_answer, verify_interactive_answer, verify_read_only_answer, verify_review_answer, verify_write_fixture
 from scripts.delegate_acceptance.native.acceptance_diagnostics import authentication_unavailable
+from scripts.delegate_acceptance.native.production_acp import OPENCODE_PROVIDER, production_acp_marker
 from scripts.delegate_acceptance.native.workspace import task_digest_snapshot, workspace_snapshot
 from scripts.delegate_acceptance.supervisor.queue_policy import done_result
 from scripts.delegate_acceptance.tasks.publication import verify_collected_outcome
@@ -282,7 +283,7 @@ def _request_binding(owner, task_id: str, require_launch_evidence: bool = False,
 
 def timeout_source_binding(owner, task_id: str) -> Path:
     acceptance = owner
-    directory, record, _meta, _meta_digest, _spec_digest, _brief = acceptance._request_binding(
+    directory, record, meta, meta_digest, spec_digest, _brief = acceptance._request_binding(
         task_id, require_started_evidence=True,
         budget=CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET,
         budget_nanos=TIMEOUT_RESUME_SOURCE_BUDGET_NANOS)
@@ -304,6 +305,10 @@ def timeout_source_binding(owner, task_id: str) -> Path:
             "timed-out source has no resumable provider session")
     require(not (directory / "outcome.json").exists() and not (directory / "result.txt").exists(),
             "timed-out source published terminal artifacts")
+    if acceptance.provider == OPENCODE_PROVIDER:
+        acceptance._production_acp.record(task_id, production_acp_marker(
+            task_id=task_id, directory=directory, record=record, meta=meta,
+            meta_digest=meta_digest, spec_digest=spec_digest, committed=False))
     return directory
 
 def _timeout_workspace_snapshot(owner, resumed: bool) -> dict[str, dict[str, object]]:
@@ -397,6 +402,10 @@ def task_binding(owner, task_id: str, predecessor: str | None = None,
     acceptance._validate_task_outcome(
         task_id=task_id, directory=directory, meta_digest=meta_digest, spec_digest=spec_digest, predicate=predicate,
         record=record, predecessor=predecessor, predecessor_session=predecessor_session, manifest_digest=manifest_digest)
+    if acceptance.provider == OPENCODE_PROVIDER:
+        acceptance._production_acp.record(task_id, production_acp_marker(
+            task_id=task_id, directory=directory, record=record, meta=meta,
+            meta_digest=meta_digest, spec_digest=spec_digest, committed=True))
 
 def _validate_task_selection(owner, task_id: str, record: dict[str, object]) -> None:
     acceptance = owner

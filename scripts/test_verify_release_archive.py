@@ -20,6 +20,7 @@ if __package__ in {None, ""}:
 
 from scripts import verify_release_archive as verifier
 from scripts import native_acceptance_evidence as evidence
+from scripts.acceptance_tests.native.support import lifetime_closure_source, production_acp_source
 from scripts.delegate_acceptance.release_verification import filesystem as receipt_files
 from scripts.delegate_acceptance.release_verification.contract import MAX_RELEASE_RECEIPT_BYTES
 from scripts.delegate_acceptance.directories import journal as cleanup_module
@@ -155,6 +156,10 @@ esac
             },
             "provider_runtime_identities": provider_runtimes,
             "natural_daemon_shutdown": True,
+            "lifetime_closure": lifetime_closure_source(tasks),
+            **({"production_acp": production_acp_source(
+                tasks, {alias: session for alias in aliases})}
+               if case.provider == "opencode:run" else {}),
         }), encoding="utf-8")
         (case_directory / "binding.json").write_text(json.dumps({
             "provider": case.provider, "mode": case.permission,

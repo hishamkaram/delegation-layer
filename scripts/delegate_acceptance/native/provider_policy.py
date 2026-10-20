@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _task_identity, require
 from scripts.delegate_acceptance.native.constants import (
-    MODEL_DISCOVERY_EXIT_CODES, MODEL_DISCOVERY_OPTIONAL_KEYS,
-    MODEL_DISCOVERY_REQUIRED_KEYS,
+    MODEL_DISCOVERY_EXIT_CODES, MODEL_DISCOVERY_FAILURE_OPTIONAL_KEYS,
+    MODEL_DISCOVERY_FAILURE_REQUIRED_KEYS, MODEL_DISCOVERY_FAILURE_STATUSES,
+    MODEL_DISCOVERY_INSPECTION_OPTIONAL_KEYS, MODEL_DISCOVERY_INSPECTION_REQUIRED_KEYS,
+    MODEL_DISCOVERY_OPTIONAL_KEYS, MODEL_DISCOVERY_REQUIRED_KEYS,
     MODEL_INFO_OPTIONAL_KEYS, MODEL_INFO_REQUIRED_KEYS,
 )
 
@@ -29,10 +31,25 @@ def authentication_blocked(response: object, _diagnostic: str) -> bool:
 
 
 def model_discovery_exit_code(status: str) -> int:
+    """Map a catalog status to this gate's verdict code, not to the observed CLI exit."""
     try:
         return MODEL_DISCOVERY_EXIT_CODES[status]
     except KeyError as error:
         raise AcceptanceFailure(f"unknown model discovery status: {status!r}") from error
+
+
+def model_discovery_allowed_exit_codes(response: dict[str, object]) -> frozenset[int]:
+    """Return the observed `delegate models` exits a validated response permits.
+
+    Catalog status and CLI exit have distinct Delegate owners: an invalid request
+    reports status failed with exit 2 and carries the typed failure envelope.
+    """
+    status = str(response.get("status"))
+    verdict = model_discovery_exit_code(status)
+    _validate_model_discovery_failure(response, status)
+    if status == "failed" and "failure" in response:
+        return frozenset({verdict, 2})
+    return frozenset({verdict})
 
 
 def validate_model_discovery_response(response: object, provider: str) -> dict[str, object]:
@@ -61,6 +78,7 @@ def validate_model_discovery_response(response: object, provider: str) -> dict[s
             not any(character.isspace() for character in reason_code),
             "model discovery reason code is invalid")
     require(type(response.get("complete")) is bool, "model discovery complete flag is invalid")
+    _validate_model_discovery_failure(response, status)
     source = response.get("source")
     require(isinstance(source, str), "model discovery source is invalid")
     efforts = response.get("efforts")
@@ -113,6 +131,43 @@ def validate_model_discovery_response(response: object, provider: str) -> dict[s
         "model_count": len(models),
         "effort_count": None if efforts is None else len(efforts),
     }
+
+
+def _validate_model_discovery_failure(response: dict[str, object], status: str) -> None:
+    """Validate the typed operational failure without copying its classification."""
+    if "failure" not in response and "error" not in response:
+        return
+    require("failure" in response and "error" in response,
+            "model discovery failure and error must appear together")
+    require(status in MODEL_DISCOVERY_FAILURE_STATUSES,
+            "model discovery failure requires a failed, unavailable or blocked status")
+    _require_text(response["error"], "model discovery error")
+    failure = response["failure"]
+    _require_fields(failure, required=MODEL_DISCOVERY_FAILURE_REQUIRED_KEYS,
+                    optional=MODEL_DISCOVERY_FAILURE_OPTIONAL_KEYS, label="model discovery failure")
+    for key in sorted(set(failure) - {"inspection"}):
+        _require_text(failure[key], f"model discovery failure {key}")
+    if "inspection" not in failure:
+        return
+    inspection = failure["inspection"]
+    _require_fields(inspection, required=MODEL_DISCOVERY_INSPECTION_REQUIRED_KEYS,
+                    optional=MODEL_DISCOVERY_INSPECTION_OPTIONAL_KEYS,
+                    label="model discovery failure inspection")
+    for key in sorted(MODEL_DISCOVERY_INSPECTION_REQUIRED_KEYS):
+        _require_text(inspection[key], f"model discovery failure inspection {key}")
+    if "journal_task_id" in inspection:
+        require(_task_identity(inspection["journal_task_id"]),
+                "model discovery failure inspection journal task id is invalid")
+
+
+def _require_fields(value: object, *, required: frozenset[str], optional: frozenset[str],
+                    label: str) -> None:
+    require(isinstance(value, dict) and required <= set(value) <= required | optional,
+            f"{label} is not an object with exactly its known fields")
+
+
+def _require_text(value: object, label: str) -> None:
+    require(isinstance(value, str) and bool(value), f"{label} is invalid")
 
 
 def _validate_model_choices(value: object, label: str) -> None:

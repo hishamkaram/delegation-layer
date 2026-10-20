@@ -7,6 +7,7 @@ import stat
 from scripts.delegate_acceptance.evidence.files import digest, write_json
 from scripts.delegate_acceptance.evidence.validation import require
 from scripts.delegate_acceptance.native.fixtures import require_replay_unchanged, require_same_session, verify_write_artifacts, verify_write_fixture
+from scripts.delegate_acceptance.native.provider_policy import model_discovery_exit_code
 from scripts.delegate_acceptance.native.workspace import has_git_ancestor, task_digest_snapshot, workspace_snapshot
 from scripts.delegate_acceptance.supervisor.queue_policy import done_result
 from scripts.delegate_acceptance.native.constants import CANONICAL_TASK_BUDGET, CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET, MAX_RAW_BYTES, TASK_BUDGET, TIMEOUT_RESUME_SOURCE_BUDGET, TIMEOUT_SOURCE_RUNNER_RESULTS
@@ -74,7 +75,7 @@ def run_interactive(owner) -> int:
         "interaction": interaction_receipt,
         "provider_launches": 1, "replay_launches": 0,
         "credentials_in_receipt": False,
-        "natural_daemon_shutdown": acceptance.closed,
+        **acceptance.lifecycle_receipt(),
     }
     return 0
 
@@ -124,6 +125,8 @@ def run_timeout_resume(owner) -> int:
         "requested_effort": getattr(acceptance.args, "effort", None),
         **acceptance.provider_runtime_receipt(),
         "tasks": {"timeout_source": source, "timeout_resume": successor},
+        **acceptance.production_acp_receipt(
+            {"timeout_source": source, "timeout_resume": successor}),
         "provider_sessions": {
             "timeout_source": source_session,
             "timeout_resume": successor_session,
@@ -136,7 +139,7 @@ def run_timeout_resume(owner) -> int:
         "source_immutable": True,
         "replay_launches": 0,
         "credentials_in_receipt": False,
-        "natural_daemon_shutdown": acceptance.closed,
+        **acceptance.lifecycle_receipt(),
     }
     return 0
 
@@ -158,11 +161,19 @@ def run(owner) -> int:
 def _run_model_discovery(owner) -> int:
     acceptance = owner
     acceptance.discover_models()
+    summary = acceptance.model_discovery_summary
+    require(isinstance(summary, dict), "model discovery summary is unavailable")
+    require(isinstance(acceptance.model_discovery_exit_code, int),
+            "model discovery exit code is unavailable")
+    # The catalog status owns the verdict; the observed CLI exit is only recorded.
+    verdict = model_discovery_exit_code(str(summary["status"]))
+    if verdict != 0:
+        # A negative catalog may precede any inspection root. The entry's failure
+        # finalizer and models failure receipt own it, never the success shutdown.
+        return verdict
     acceptance.shutdown()
     acceptance.success_receipt = {
-        "gate": "acceptance-native", "status":
-        "passed" if acceptance.model_discovery_exit_code == 0 else
-        "BLOCKED" if acceptance.model_discovery_exit_code == 2 else "failed",
+        "gate": "acceptance-native", "status": "passed",
         "provider": acceptance.provider, "mode": acceptance.mode,
         "task_budget": TASK_BUDGET,
         "canonical_task_budget": CANONICAL_TASK_BUDGET,
@@ -172,11 +183,9 @@ def _run_model_discovery(owner) -> int:
         "discovery_exit_code": acceptance.model_discovery_exit_code,
         "native_mode": acceptance.native_mode_receipt(),
         "credentials_in_receipt": False,
-        "natural_daemon_shutdown": acceptance.closed,
+        **acceptance.lifecycle_receipt(),
     }
-    require(isinstance(acceptance.model_discovery_exit_code, int),
-            "model discovery exit code is unavailable")
-    return acceptance.model_discovery_exit_code
+    return verdict
 
 def _run_review(owner) -> int:
     acceptance = owner
@@ -203,7 +212,7 @@ def _run_review(owner) -> int:
         "provider_sessions": {"fresh": first_session},
         "scenario": acceptance.scenario, "provider_launches": 1, "replay_launches": 0,
         "credentials_in_receipt": False,
-        "natural_daemon_shutdown": acceptance.closed,
+        **acceptance.lifecycle_receipt(),
     }
     return 0
 
@@ -263,9 +272,11 @@ def _run_resumable(owner) -> int:
             "fresh": acceptance.tasks["fresh"],
             "resume": acceptance.tasks["resume"],
         },
+        **acceptance.production_acp_receipt(
+            {"fresh": acceptance.tasks["fresh"], "resume": acceptance.tasks["resume"]}),
         "provider_sessions": {"fresh": first_session, "resume": second_session},
         "scenario": acceptance.scenario, "provider_launches": 2, "replay_launches": 0,
         "credentials_in_receipt": False,
-        "natural_daemon_shutdown": acceptance.closed,
+        **acceptance.lifecycle_receipt(),
     }
     return 0

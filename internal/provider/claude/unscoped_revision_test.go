@@ -14,12 +14,12 @@ import (
 // message scope existed: the read-only native-permissions-v4 and workspace-write
 // native-permissions-v5 references, and the interactive-v4 references. Their
 // bytes, unscoped attribution policy, and end-of-stream behavior stay frozen;
-// the current scoped digests of the same versions are pinned beside them.
+// the frozen scoped digests of the same versions are pinned beside them.
 const (
 	unscopedReadDigest         = "f7c1053edce279071b9caa46f727cf196d5998fc05d07afdf9c5378acd9eb25c"
-	currentReadDigest          = "b3c26a3eae4e39d6a68f55e191b7ac2aa7f05476103ee2d111de0fd873880f0d"
+	scopedReadDigest           = "b3c26a3eae4e39d6a68f55e191b7ac2aa7f05476103ee2d111de0fd873880f0d"
 	unscopedWriteDigest        = "333a689a864dfb03ecd4a6eace97bcf6964fea96768ddbbb86a92d98c4a7a76b"
-	currentWriteDigest         = "27bf2e76be4185559ecaa8cfbd404d81744281298b6a29b6bf99ab4e1f4b1b29"
+	scopedWriteDigest          = "27bf2e76be4185559ecaa8cfbd404d81744281298b6a29b6bf99ab4e1f4b1b29"
 	unscopedReadInteractive    = "4ae385f7773f6c9308186978b2727b584d18c367590d02e24997a6f699fb13ac"
 	unscopedWriteInteractive   = "b5fe9380ce877f896a2ef0fa84a9a45365582aee182faa535a82e4574505f641"
 	scopeOddParentTypeField    = `,"parent_tool_use_id":7`
@@ -35,13 +35,13 @@ func retainedRegistry(t *testing.T) predicate.Registry {
 	return registry
 }
 
-// unscopedRevisions pairs each mode's retained unscoped digest with the current
+// unscopedRevisions pairs each mode's retained unscoped digest with the frozen
 // scoped digest that shares its version string.
 var unscopedRevisions = []struct {
-	mode, version, frozen, current string
+	mode, version, frozen, scoped string
 }{
-	{Mode, "native-permissions-v4", unscopedReadDigest, currentReadDigest},
-	{WorkspaceWriteMode, "native-permissions-v5", unscopedWriteDigest, currentWriteDigest},
+	{Mode, "native-permissions-v4", unscopedReadDigest, scopedReadDigest},
+	{WorkspaceWriteMode, "native-permissions-v5", unscopedWriteDigest, scopedWriteDigest},
 }
 
 func otherMode(mode string) string {
@@ -53,17 +53,30 @@ func otherMode(mode string) string {
 
 func TestUnscopedRevisionsKeepFrozenIdentity(t *testing.T) {
 	for _, revision := range unscopedRevisions {
-		alias, current := unscopedReference(revision.mode), ReferenceForMode(revision.mode)
+		alias, scoped := unscopedReference(revision.mode), scopedReference(revision.mode)
 		if alias.Adapter != Provider || alias.Mode != revision.mode || alias.Version != revision.version || alias.SHA256 != revision.frozen ||
 			task.ComputeSHA256([]byte(unscopedNativeContract(revision.mode))) != revision.frozen {
 			t.Fatalf("%s retained unscoped reference changed: %+v", revision.mode, alias)
 		}
-		if current.Version != revision.version || current.SHA256 != revision.current || current.SHA256 == alias.SHA256 {
-			t.Fatalf("%s current reference must keep the version string under its own digest: %+v", revision.mode, current)
-		}
-		if !isUnscopedReference(revision.mode, alias) || isUnscopedReference(revision.mode, current) || isUnscopedReference(otherMode(revision.mode), alias) {
+		requireScopedRevisionIdentity(t, revision.mode, revision.version, revision.scoped, alias)
+		if !isUnscopedReference(revision.mode, alias) || isUnscopedReference(revision.mode, scoped) || isUnscopedReference(otherMode(revision.mode), alias) {
 			t.Fatalf("%s unscoped classification crossed a digest or mode", revision.mode)
 		}
+	}
+}
+
+// requireScopedRevisionIdentity requires the frozen scoped reference to keep
+// the unscoped version string under its own pinned digest, and the current
+// reference to use neither.
+func requireScopedRevisionIdentity(t *testing.T, mode, version, digest string, alias task.PredicateRef) {
+	t.Helper()
+	scoped := scopedReference(mode)
+	if scoped.Version != version || scoped.SHA256 != digest || scoped.SHA256 == alias.SHA256 ||
+		task.ComputeSHA256([]byte(scopedNativeContract(mode))) != digest {
+		t.Fatalf("%s scoped reference must keep the version string under its own digest: %+v", mode, scoped)
+	}
+	if current := ReferenceForMode(mode); current.Version == version || current.SHA256 == digest {
+		t.Fatalf("%s current reference reused a frozen version or digest: %+v", mode, current)
 	}
 }
 
@@ -84,8 +97,8 @@ func TestUnscopedClassificationNeverMatchesTheZeroReference(t *testing.T) {
 // read-only bytes apart from the current ones: the original init clause and
 // unscoped completion text, without the scoped read-only rewrite.
 func TestUnscopedReadOnlyContractKeepsOriginalUnscopedText(t *testing.T) {
-	frozen, current := unscopedNativeContract(Mode), ContractForMode(Mode)
-	if len(frozen) != 4858 || task.ComputeSHA256([]byte(frozen)) != unscopedReadDigest || task.ComputeSHA256([]byte(current)) != currentReadDigest {
+	frozen, current := unscopedNativeContract(Mode), scopedNativeContract(Mode)
+	if len(frozen) != 4858 || task.ComputeSHA256([]byte(frozen)) != unscopedReadDigest || task.ComputeSHA256([]byte(current)) != scopedReadDigest {
 		t.Fatalf("read-only contract bytes changed: frozen=%d bytes", len(frozen))
 	}
 	if !strings.Contains(frozen, "exactly one system/init object is required;") || !strings.Contains(frozen, unscopedCompletionAttributionContract) ||
@@ -93,15 +106,15 @@ func TestUnscopedReadOnlyContractKeepsOriginalUnscopedText(t *testing.T) {
 		t.Fatal("frozen read-only contract gained scoped text")
 	}
 	if strings.Contains(current, "exactly one system/init object is required;") || !strings.Contains(current, scopedCompletionAttributionContract) {
-		t.Fatal("current read-only contract lost scoped text")
+		t.Fatal("scoped read-only contract lost scoped text")
 	}
 }
 
 func TestUnscopedInteractionRevisionsKeepFrozenIdentity(t *testing.T) {
 	for mode, digest := range map[string]string{Mode: unscopedReadInteractive, WorkspaceWriteMode: unscopedWriteInteractive} {
-		frozen, fresh := unscopedInteractionReference(mode), interactionReference(mode)
-		if frozen.Version != "interactive-v4" || frozen.SHA256 != digest || fresh.Version != "interactive-v5" || fresh.SHA256 == digest {
-			t.Fatalf("%s interactive references frozen=%+v current=%+v", mode, frozen, fresh)
+		frozen, scoped := unscopedInteractionReference(mode), scopedInteractionReference(mode)
+		if frozen.Version != "interactive-v4" || frozen.SHA256 != digest || scoped.Version != "interactive-v5" || scoped.SHA256 == digest {
+			t.Fatalf("%s interactive references frozen=%+v scoped=%+v", mode, frozen, scoped)
 		}
 	}
 }
@@ -117,7 +130,7 @@ func TestCurrentContractsStateMessageScopeAndInitialInit(t *testing.T) {
 		if strings.Contains(frozen, "parent_tool_use_id") || strings.Contains(frozen, "root assistant") || strings.Contains(frozen, "leading acknowledgement") {
 			t.Fatal("frozen unscoped contract gained message-scope text")
 		}
-		if !strings.Contains(interactionContract, "nested agent message") || !strings.Contains(interactionContract, "leading acknowledgements") ||
+		if !strings.Contains(interactionContract(), "nested agent message") || !strings.Contains(interactionContract(), "leading acknowledgements") ||
 			strings.Contains(unscopedInteractionContract, "parent_tool_use_id") || strings.Contains(unscopedInteractionContract, "leading acknowledgement") {
 			t.Fatal("interactive revisions do not state their own scope policy inline")
 		}
@@ -131,13 +144,16 @@ func TestCurrentContractsStateMessageScopeAndInitialInit(t *testing.T) {
 func TestRegistryResolvesRetainedAndCurrentRevisionsByExactDigest(t *testing.T) {
 	registry := retainedRegistry(t)
 	for _, revision := range unscopedRevisions {
-		for _, reference := range []task.PredicateRef{unscopedReference(revision.mode), ReferenceForMode(revision.mode), unscopedInteractionReference(revision.mode), interactionReference(revision.mode)} {
+		for _, reference := range []task.PredicateRef{
+			unscopedReference(revision.mode), scopedReference(revision.mode), ReferenceForMode(revision.mode),
+			unscopedInteractionReference(revision.mode), scopedInteractionReference(revision.mode), interactionReference(revision.mode),
+		} {
 			resolved, err := registry.Resolve(reference)
 			if err != nil || !resolved.Reference().Equal(reference) {
 				t.Fatalf("%s/%s resolved %v err=%v", reference.Mode, reference.Version, resolved, err)
 			}
 		}
-		unknown := ReferenceForMode(revision.mode)
+		unknown := scopedReference(revision.mode)
 		unknown.SHA256 = strings.Repeat("0", 64)
 		if _, err := registry.Resolve(unknown); !errors.Is(err, task.ErrIncompatiblePredicate) {
 			t.Fatalf("%s unknown digest under a retained version resolved: %v", revision.mode, err)
@@ -201,7 +217,7 @@ func TestUnscopedRevisionKeepsUnscopedInterpretation(t *testing.T) {
 			t.Fatal(err)
 		}
 		current := NewInterpreter(mode)
-		nested := childScopeCases(mode)[0].lines
+		nested := childScopeCases(mode, false)[0].lines
 		if rejected, answer := evaluateWriteTrace(t, frozen, nested); rejected.Verdict != task.VerdictRejected || rejected.Refusal != refusalMalformed || answer != "" {
 			t.Fatalf("%s unscoped revision accepted nested messages before a parent init: %+v answer=%q", mode, rejected, answer)
 		}
@@ -263,7 +279,7 @@ func wrapInteractiveSession(lines []string) []string {
 func requireInteractiveNestedMessageScope(t *testing.T, mode string) {
 	t.Helper()
 	frozen, current := newUnscopedInteractionInterpreter(mode), newInteractionInterpreter(mode)
-	nested := wrapInteractiveSession(childScopeCases(mode)[0].lines)
+	nested := wrapInteractiveSession(childScopeCases(mode, false)[0].lines)
 	if rejected, answer := evaluateInteractiveTrace(t, frozen, nested); rejected.Verdict != task.VerdictRejected || answer != "" {
 		t.Fatalf("%s interactive-v4 accepted nested messages before a parent init: %+v answer=%q", mode, rejected, answer)
 	}

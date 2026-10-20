@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -94,7 +95,8 @@ func preparedInteraction(t *testing.T) (*invocation, *interactiveInvocation) {
 	invocation, err := prepareInvocation(td)
 	require(t, err)
 	t.Cleanup(func() { require(t, invocation.discard()) })
-	_, err = invocation.prepareInteraction(&interactionFixtureProtocol{})
+	protocol := &interactionFixtureProtocol{}
+	_, err = invocation.prepareInteraction(protocol, protocol)
 	require(t, err)
 	return invocation, invocation.interaction
 }
@@ -202,5 +204,21 @@ func TestInteractionCompletionPreservesUncertainConcurrentDelivery(t *testing.T)
 	c.writeFault = io.ErrShortWrite
 	if !errors.Is(c.completionError(), io.ErrShortWrite) {
 		t.Fatal("unrelated writer failure hidden")
+	}
+}
+
+// Expected input closure after native completion leaves only user delivery
+// unknown. The same state on a machine transport is a lost protocol reply.
+func TestCompletionForgivesClosedInputOnlyForUserDelivery(t *testing.T) {
+	for _, closed := range []error{os.ErrClosed, io.ErrClosedPipe, brokenPipe(t)} {
+		protocol := &interactionFixtureProtocol{done: true}
+		user := &interactiveInvocation{protocol: protocol, user: protocol, finished: true, writeFault: closed}
+		if err := user.completionError(); err != nil {
+			t.Fatalf("historical user closure %v became a fault: %v", closed, err)
+		}
+		machine := &interactiveInvocation{protocol: protocol, finished: true, writeFault: closed}
+		if err := machine.completionError(); !errors.Is(err, closed) {
+			t.Fatalf("machine write failure %v was forgiven: %v", closed, err)
+		}
 	}
 }

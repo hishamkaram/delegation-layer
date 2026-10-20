@@ -12,7 +12,7 @@ identity observer, input transport, output interpreter, and supported options.
 | `ccr:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model` (required alias), `effort` | CCR foreground launch |
 | `claude:print` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort`, `interactive` | `claude` print mode |
 | `pi:json` | `read-only`, `workspace-write` | `tool-allowlist` plus disabled extensions for read-only | `continuation`, `model`, `effort` | `pi --mode json` |
-| `opencode:run` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `opencode run --format json` |
+| `opencode:run` | `read-only`, `workspace-write` | `native-plan` | `continuation`, `model`, `effort` | `opencode acp` |
 
 The catalog is available locally with `delegate providers --json`. Its runtime
 metadata describes the help arguments and flags required by each adapter.
@@ -259,11 +259,17 @@ published answer is the first result, which must answer the caller's turn: its
 result carries consecutive `result_index` values and each later result has
 `origin.kind` `task-notification` without a `subkind`. Follow-up answers are
 never published. A failed caller result stays rejected. A failed follow-up, a
-changed repeated `system/init`, another origin such as a scheduled trigger or
-peer message, a missing or duplicate counter, or an unfinished follow-up at EOF
-also rejects. On every result, `terminal_reason`, when present, must be
-`completed`, and `queued_turn_count`, when present, must be `0`; older CLI
-releases that omit these fields remain accepted. An empty follow-up is accepted
+repeated `system/init` with a different session or permission mode, another
+origin such as a scheduled trigger or peer message, a missing or duplicate
+counter, or an unfinished follow-up at EOF also rejects. On every result,
+`terminal_reason`, when present, must be `completed`, and `queued_turn_count`,
+when present, must be `0`; older CLI releases that omit these fields remain
+accepted. The documented `max_turns`, `api_error`, `aborted_streaming`, and
+`aborted_tools` terminal reasons reject as provider failures. Under the current predicate
+revisions, an unrecognized `terminal_reason` or `stop_reason` string of at most 128 bytes rejects as
+`unsupported-completion` with diagnostic `unsupported_completion`; it is never
+success, a provider failure, or malformed output. An explicit null, mistyped,
+or oversized `terminal_reason` is malformed. An empty follow-up is accepted
 only as a coalesced batch acknowledgement with `num_turns` `0`, and a later
 non-empty follow-up must answer that batch before EOF. Main-agent usage comes
 from the caller's result; the cumulative cost comes from the last accepted
@@ -275,8 +281,9 @@ reaches the caller's turn, with leading acknowledgements: results with
 empty string `result`, `num_turns` explicitly `0`, and `result_index` values
 that start at `0` and are consecutive. They are accepted after the initial
 `system/init` and before any root assistant or user message since that init or
-the previous acknowledgement, and one identical repeated `system/init` is
-permitted once after each, before root messages. When acknowledgements precede
+the previous acknowledgement, and one repeated `system/init` with the same
+session and permission mode is permitted once after each, before root
+messages. When acknowledgements precede
 the caller's result, that result must carry the next consecutive
 `result_index`. An acknowledgement is never the answer, adds no usage or cost,
 and never closes an interactive input. A failed, refused, aborted, or queued
@@ -301,28 +308,44 @@ batch, is never an answer, and does not affect accounting. Any other value
 (empty, blank, oversized, not a string, or a case-aliased key) is malformed, before
 or after the caller's result. The id itself is opaque and is not tracked.
 
+The current `claude:print` revisions are read-only `native-permissions-v5`
+and workspace-write `native-permissions-v6`. They use an advisory wire:
+`session_id` and the native permission mode are the only `system/init`
+authority. Other init metadata, such as the CLI version, `cwd`, model, tools,
+and MCP servers, is advisory, is never defaulted, and may change on a repeated
+init. Duplicate keys reject among the selected authority and control fields;
+opaque tool, content, and extension payloads are validated as JSON syntax only,
+and unknown content block types are opaque.
+
 Tasks sealed under earlier predicate revisions keep their recorded
-interpretation. The retained exceptions are the read-only
-`native-permissions-v4` digest `f7c1053edce279071b9caa46f727cf196d5998fc05d07afdf9c5378acd9eb25c`
+interpretation. The retained scoped revisions are the read-only
+`native-permissions-v4` digest `b3c26a3eae4e39d6a68f55e191b7ac2aa7f05476103ee2d111de0fd873880f0d`
 and the workspace-write `native-permissions-v5` digest
+`27bf2e76be4185559ecaa8cfbd404d81744281298b6a29b6bf99ab4e1f4b1b29`. They keep
+the strict wire and the identical repeated-`system/init` rule they were sealed
+under. Each is replay-only and is never a fresh default. An offline recheck
+reassesses a scoped revision, like each other eligible earlier revision,
+directly under the current revision of its mode without changing the original
+outcome.
+
+The retained unscoped revisions share those version strings and differ by
+digest: the read-only `native-permissions-v4` digest
+`f7c1053edce279071b9caa46f727cf196d5998fc05d07afdf9c5378acd9eb25c` and the
+workspace-write `native-permissions-v5` digest
 `333a689a864dfb03ecd4a6eace97bcf6964fea96768ddbbb86a92d98c4a7a76b`. Both were
 admitted before message scope existed and treat every message after the
 caller's result as a root message. Each is replay-only, is never a fresh
-default, and is not a recheck source. The current `native-permissions-v4`
-(read-only) and `native-permissions-v5` (workspace-write) references keep their
-version strings and are identified by their new digests. An offline recheck
-reassesses each eligible earlier revision directly under the current revision
-without changing the original outcome.
+default, and is not a recheck source.
 
 A new continuation task is distinct from reconstruction of its predecessor.
 The predecessor's task record, metadata, and launch plan are never modified and
-keep rebuilding under their recorded predicate, including either retained
+keep rebuilding under their recorded predicate, including each retained
 digest above. In an ordinary noninteractive continuation, only the new
 successor task selects the current predicate of the same mode and launch shape,
 and only when the predecessor is a native print record sealed under the
 pre-attribution revision (read-only `native-permissions-v3`, workspace-write
-`native-permissions-v4`) or under the retained unscoped digest of its mode.
-Other records passed through this successor hook retain their recorded
+`native-permissions-v4`) or under the retained scoped or unscoped digest of its
+mode. Other records passed through this successor hook retain their recorded
 predicate. Interactive continuation instead builds the current interactive
 profile while preserving the exact recorded session and the predecessor
 environment. Reconstruction of an existing task always retains its recorded
@@ -340,12 +363,15 @@ published interactive answer follows the same caller-result and message-scope
 rules; a nested agent's `tool_result` never resolves a root question. Input
 closure is sticky, but the stream completes only when the session is idle again
 with no unsettled agent, question, cycle, or batch. Follow-up turns that arrive
-after input closure remain evidence. `interactive-v5` is the current revision;
-`interactive-v4` is retained for replay under its unscoped attribution (every
-message after a result opens a follow-up cycle) and its original end-of-stream
-rule (input closure plus the principal result, with no idle re-check of the
-session), and `interactive-v1` through `interactive-v4` recheck under
-`interactive-v5`. Public help checks do
+after input closure remain evidence. `interactive-v6` is the current revision
+and applies the same advisory wire, repeated-`system/init`, and
+`unsupported-completion` rules as the current print revisions.
+`interactive-v5` is retained for replay under its scoped attribution and
+strict wire. `interactive-v4` is retained for replay under its unscoped
+attribution (every message after a result opens a follow-up cycle) and its
+original end-of-stream rule (input closure plus the principal result, with no
+idle re-check of the session). `interactive-v1` through `interactive-v5`
+recheck under `interactive-v6`. Public help checks do
 not prove the SDK control protocol; its initialization and structured events are
 validated during the task.
 
@@ -379,20 +405,66 @@ listing does not prove remote authorization or quota.
 
 ## OpenCode
 
-`opencode:run` uses JSON event mode in the requested workspace. `read-only`
-selects the native `plan` agent; `workspace-write` selects `build` with native
-`--auto`. OpenCode loads its own configuration, plugins, permissions, and Git
-settings. The adapter does not require a Git checkout root or inspect workspace
-symlinks. Continuation and model use native options; `effort` maps to `--variant`.
+`opencode:run` keeps its profile name and launches `opencode acp`, OpenCode's
+[Agent Client Protocol](https://opencode.ai/v2/docs/cli/acp) agent, which
+speaks JSON-RPC 2.0 over standard input and output. Fresh tasks record profile
+revision `opencode-acp-v1` and predicate `acp-v1`. The adapter passes no other
+argument. The process starts in the canonical workspace, and the workspace,
+agent, model, effort, and session travel in protocol requests. The runtime probe
+validates `opencode --version` and requires `opencode acp --help` to succeed;
+no ACP flag allowlist is required. Help proves no protocol
+behavior, so every task validates the handshake, each configuration
+acknowledgement, and the terminal response.
+
+The execution core owns the standard input and output transport; the adapter
+only encodes and interprets protocol frames. It sends one request at a time:
+`initialize` with protocol version 1, then `session/new` for a fresh task.
+Next, `session/set_config_option` sets the native mode, then an explicit model,
+then an explicit non-default effort. Each option must be acknowledged before
+the next request. Finally, one `session/prompt` carries the brief. `read-only`
+selects the native `plan` mode and `workspace-write` selects `build`. The
+adapter answers each native permission request for the task session with
+`reject_once` in read-only mode and `allow_once` in workspace-write mode. A
+write-mode request that offers no `allow_once` option rejects the task. The
+client advertises no filesystem, terminal, elicitation, authentication, or
+child-session capability. OpenCode loads its own configuration, plugins, MCP
+servers, authentication, permissions, and Git settings. Its permission mode is
+provider-owned, not an independent sandbox. The adapter does not require a Git
+checkout root or inspect workspace symlinks.
+
+`--model` and `--effort` are sent unchanged as the native `model` and `effort`
+options. The model comes first because OpenCode's effort option belongs to the
+current model. An omitted or `default` effort sends nothing. OpenCode decides
+whether a value is valid: an option it does not acknowledge rejects the task.
+
+The answer is the ordered root `agent_message_chunk` text received during the
+prompt. Updates tagged as OpenCode child sessions are excluded. Success
+requires a `session/prompt` response with `stopReason` `end_turn`, one
+matching session identity, and non-whitespace root answer text. Any other stop
+reason, a JSON-RPC error, an unacknowledged option, or a session mismatch
+rejects. Usage from the terminal response is reported with unknown scope.
+OpenCode does not support `--interactive`. Its protocol channel carries no
+user clarification or steering and writes no interaction journal.
+
+Continuation resumes the exact recorded session with `session/resume` in the
+task workspace. The agent must advertise the resume capability, and a resume
+response that names another session rejects. The adapter never uses
+`session/load`, which replays earlier messages. It never falls back to
+`session/new` when resume is refused or unavailable.
 
 Previously admitted tasks retain their original preparation and output
-interpretation contracts. Dispatch a new task to use the simplified native
-profiles; upgrading does not silently change a queued task's launch settings.
-An ordinary exact-session continuation creates a new task by reconstructing the
-predecessor's recorded OpenCode preparation contract, then applying the exact
-session continuation. It does not adopt a newer flag or policy mapping merely
-because the installed Delegate version changed. Fresh dispatches use the
-current mapping, and the predecessor remains immutable.
+interpretation contracts. Records of the historical `opencode run --format
+json` profiles keep their recorded argv, runtime flag probe, and run predicate
+for reconstruction and replay. This covers the `--standalone` native profile,
+the earlier native profile with `--dir` and `--variant`, and the adapter-owned
+pure-mode profile. An offline recheck of run predicate revisions 2 through 4
+uses run revision 5; an ACP predicate is never a recheck target for a run
+record. An ordinary exact-session continuation of a historical native run
+predecessor creates a new ACP task. That task resumes the same recorded session
+with the recorded environment and writable roots under the current ACP launch,
+capability, and output contracts. Pure-mode and ACP predecessors continue under
+their recorded contract. The predecessor record and its outcome, including a
+failed outcome, never change.
 
 ## Adding a provider
 
@@ -435,9 +507,14 @@ route-preserving continuation therefore rejects a model override that would
 change the recorded route.
 
 CCR's foreground exit and sealed Claude stream must both indicate success.
-Fresh CCR tasks use the same Claude follow-up attribution rules as
-`claude:print`; earlier CCR predicate revisions keep their recorded
-single-result interpretation. An offline recheck of a route-preserving
+Fresh CCR tasks use the current `ccr-foreground-v6` revision, with the same
+advisory wire and Claude follow-up attribution rules as `claude:print`. The
+retained `ccr-foreground-v5` revision keeps its recorded multi-result
+interpretation under the scoped Claude attribution policy and strict wire;
+`ccr-foreground-v4` and earlier keep their recorded single-result
+interpretation. An ordinary exact-session continuation of a `v4` or `v5`
+predecessor selects the current `v6` revision of the same launch shape for
+the new task only. An offline recheck of a route-preserving
 revision uses the current route-preserving revision; modeled and older
 revisions use the current modeled revision.
 CCR reserves exit status `77` for unavailable configured provider credentials.

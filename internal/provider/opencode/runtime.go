@@ -6,10 +6,27 @@ import (
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 )
 
-// RuntimeRequirements describes only the command and flags used by the
-// adapter. The shared supervised inspection accepts any valid reported CLI
-// version when these capabilities are present.
+// RuntimeRequirements describes the current ACP launch. `opencode acp` takes
+// no flag from the adapter, so the shared supervised inspection checks only
+// that its help command succeeds. Help alone proves no protocol behavior: the
+// adapter's protocol validates the native handshake, configuration and
+// terminal response on every run. Any valid reported CLI version is accepted.
 func RuntimeRequirements() commonprovider.RuntimeCapability {
+	return commonprovider.RuntimeCapability{HelpArgs: []string{"acp"}}
+}
+
+// nativeV2RuntimeRequirements retains the capability description bound to
+// tasks admitted with the historical native run dialect.
+func nativeV2RuntimeRequirements() commonprovider.RuntimeCapability {
+	return commonprovider.RuntimeCapability{
+		HelpArgs:      []string{"run"},
+		RequiredFlags: []string{"--format", "--session", "--model", "--agent", "--auto", "--standalone"},
+	}
+}
+
+// nativeV1RuntimeRequirements retains the capability description bound to
+// tasks admitted with the historical native dialect.
+func nativeV1RuntimeRequirements() commonprovider.RuntimeCapability {
 	return commonprovider.RuntimeCapability{
 		HelpArgs: []string{"run"},
 		RequiredFlags: []string{

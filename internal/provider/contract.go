@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
@@ -72,7 +73,11 @@ const (
 // carries no process, pipe, stop, capture, sealing, collection, or publication
 // authority. The app runner owns those lifetimes after preparation returns.
 type PreparedProfile struct {
-	Interaction     func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.InteractionProtocol, error)
+	Interaction func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.InteractionProtocol, error)
+	// Protocol is the optional machine-protocol factory for a non-interactive
+	// task. It only translates the native protocol; it is never combined with
+	// Interaction or Identity. See execution.ValidateProtocolSelection.
+	Protocol        func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.Protocol, error)
 	Plan            execution.Plan
 	ObservedVersion string
 	// RuntimePreflightSHA256 names the immutable capability contract still to
@@ -117,8 +122,8 @@ func (p PreparedProfile) ValidateAdmission(request task.TaskRecord) error {
 }
 
 func (p PreparedProfile) validateShape(request task.TaskRecord) error {
-	if request.RequestedConfig.Interactive != (p.Interaction != nil) {
-		return ErrUnsupportedOption
+	if err := p.validateProtocolSelection(request.RequestedConfig.Interactive); err != nil {
+		return err
 	}
 	if err := validatePlanBindings(p.Plan); err != nil {
 		return err
@@ -142,6 +147,66 @@ func (p PreparedProfile) validateShape(request task.TaskRecord) error {
 		return task.ErrIdentityMismatch
 	}
 	return nil
+}
+
+// validateProtocolSelection applies the canonical execution selection table to
+// the profile's factories. A machine Protocol is refused beside an Identity
+// factory, as execution refuses the pair; a user Interaction keeps its
+// historical precedence over Identity.
+func (p PreparedProfile) validateProtocolSelection(interactive bool) error {
+	if execution.ValidateProtocolSelection(interactive, p.Protocol != nil, p.Interaction != nil) != nil || (p.Protocol != nil && p.Identity != nil) {
+		return ErrUnsupportedOption
+	}
+	return nil
+}
+
+// errProtocolFactoryEmpty reports a configured factory that produced no
+// protocol. It never falls back to finite input.
+var errProtocolFactoryEmpty = fmt.Errorf("%w: configured protocol factory returned no protocol", task.ErrInteractionUnavailable)
+
+// OpenProtocol invokes the one configured native protocol factory with the
+// caller's canonical session expectation and identity recorder. A profile with
+// no factory selects finite input and returns two nil values. A factory error,
+// an untyped nil or a typed nil is refused, never replaced by finite input. The
+// raw returned interface is passed through so optional record methods stay
+// visible to the execution core. Only the app runner calls it, after admission.
+func (p PreparedProfile) OpenProtocol(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.Protocol, execution.InteractionProtocol, error) {
+	switch {
+	case p.Interaction != nil:
+		interaction, err := p.Interaction(expected, record)
+		if err != nil {
+			return nil, nil, err
+		}
+		if isNilProtocol(interaction) {
+			return nil, nil, errProtocolFactoryEmpty
+		}
+		return nil, interaction, nil
+	case p.Protocol != nil:
+		protocol, err := p.Protocol(expected, record)
+		if err != nil {
+			return nil, nil, err
+		}
+		if isNilProtocol(protocol) {
+			return nil, nil, errProtocolFactoryEmpty
+		}
+		return protocol, nil, nil
+	default:
+		return nil, nil, nil
+	}
+}
+
+// nilableKinds are the reflect kinds whose zero value can sit in a non-nil
+// interface; reflect.Value.IsNil panics for every other kind.
+var nilableKinds = []reflect.Kind{reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice}
+
+// isNilProtocol reports an untyped or typed-nil protocol. The generic
+// parameter lets reflect inspect either interface without a type assertion.
+func isNilProtocol[P execution.Protocol](protocol P) bool {
+	value := reflect.ValueOf(protocol)
+	if !value.IsValid() {
+		return true
+	}
+	return slices.Contains(nilableKinds, value.Kind()) && value.IsNil()
 }
 
 // Matches checks a freshly prepared profile against immutable admitted

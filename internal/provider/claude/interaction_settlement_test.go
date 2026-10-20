@@ -30,7 +30,8 @@ type reopenedSettlementCase struct {
 }
 
 // reopenedSettlementCases states which evidence after input closure leaves the
-// invocation settled under the scoped interactive-v5 revision. Only the current
+// invocation settled under the strict end-of-stream rule shared by the retained
+// interactive-v5 and the current interactive-v6 revisions. Only the current
 // session state and tracked agents decide; the earlier closure does not. The
 // frozen interactive-v4 revision never re-checks them at end of stream; see
 // eofRevisionCases.
@@ -48,19 +49,29 @@ func reopenedSettlementCases(mode string) []reopenedSettlementCase {
 	}
 }
 
-func forEachSettlementCase(t *testing.T, check func(t *testing.T, mode string, tc reopenedSettlementCase)) {
+// forEachSettlementCase runs check for every settlement case under each strict
+// revision, identified by its exact reference: the retained interactive-v5 and
+// the current interactive-v6.
+func forEachSettlementCase(t *testing.T, check func(t *testing.T, mode string, reference task.PredicateRef, tc reopenedSettlementCase)) {
 	t.Helper()
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		for _, tc := range reopenedSettlementCases(mode) {
-			t.Run(mode+"/"+tc.name, func(t *testing.T) { check(t, mode, tc) })
+		for _, reference := range []task.PredicateRef{scopedInteractionReference(mode), interactionReference(mode)} {
+			for _, tc := range reopenedSettlementCases(mode) {
+				t.Run(mode+"/"+reference.Version+"/"+tc.name, func(t *testing.T) { check(t, mode, reference, tc) })
+			}
 		}
 	}
 }
 
-func TestInteractiveV5SealedPredicateRequiresCurrentSettlementAfterClosure(t *testing.T) {
-	forEachSettlementCase(t, func(t *testing.T, mode string, tc reopenedSettlementCase) {
+func TestStrictInteractiveSealedPredicatesRequireCurrentSettlementAfterClosure(t *testing.T) {
+	registry := retainedRegistry(t)
+	forEachSettlementCase(t, func(t *testing.T, mode string, reference task.PredicateRef, tc reopenedSettlementCase) {
+		sealed, err := registry.Resolve(reference)
+		if err != nil {
+			t.Fatal(err)
+		}
 		lines := append(closedInteractiveTrace(mode), tc.tail...)
-		interpretation, answer := evaluateInteractiveTrace(t, newInteractionInterpreter(mode), lines)
+		interpretation, answer := evaluateInteractiveTrace(t, sealed, lines)
 		if !tc.settled {
 			if interpretation.Verdict != task.VerdictRejected || answer != "" {
 				t.Fatalf("unsettled trace published: %+v answer=%q", interpretation, answer)
@@ -76,9 +87,11 @@ func TestInteractiveV5SealedPredicateRequiresCurrentSettlementAfterClosure(t *te
 	})
 }
 
-func TestLiveInteractiveV5CompleteRequiresCurrentSettlementAfterClosure(t *testing.T) {
-	forEachSettlementCase(t, func(t *testing.T, mode string, tc reopenedSettlementCase) {
-		p := liveAttributedInteractionIn(t, mode)
+// TestStrictLiveInteractiveCompleteRequiresCurrentSettlementAfterClosure binds
+// each live protocol to the completion policy its exact reference selects.
+func TestStrictLiveInteractiveCompleteRequiresCurrentSettlementAfterClosure(t *testing.T) {
+	forEachSettlementCase(t, func(t *testing.T, mode string, reference task.PredicateRef, tc reopenedSettlementCase) {
+		p := liveInteractionWithPolicy(t, mode, interactionCompletionPolicy(mode, reference))
 		var closure execution.InteractionUpdate
 		for _, line := range closedInteractiveTrace(mode) {
 			closure = receiveClaudeRecord(t, p, line)

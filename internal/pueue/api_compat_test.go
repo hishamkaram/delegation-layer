@@ -20,6 +20,19 @@ var (
 	_ = pueue.StateStashed
 	_ = pueue.StateRunning
 	_ = pueue.StateEnded
+	_ = pueue.PrivateEndpointReady
+	_ = pueue.PrivateEndpointAbsent
+	_ = pueue.PrivateEndpointRefused
+	_ = pueue.PublishedPairReady
+	_ = pueue.PublishedPairNotPublished
+	_ = pueue.PublishedPairIncomplete
+	_ = pueue.PublishedPairMemberMissing
+	_ = pueue.PublishedPairReconciled
+	_ = pueue.PublishedPairTransitionPending
+	_ = pueue.PublishedPairLiveUnavailable
+	_ = pueue.CompletedTaskRemoved
+	_ = pueue.CompletedTaskCleanupDeferred
+	_ = pueue.CompletedTaskLogicalLabelAbsent
 
 	_ = pueue.ErrConfiguration
 	_ = pueue.ErrBinding
@@ -95,6 +108,10 @@ var (
 	_ = pueue.ReadPrivateSchedulingEvidence
 	_ = pueue.ReadPrivateSupervisorBinding
 	_ = pueue.ReconcilePublishedPrivatePairWithLock
+	_ = pueue.ReconcilePublishedPrivatePairAttemptWithLock
+	_ = pueue.ObservePublishedPrivatePairWithLock
+	_ = pueue.AttemptPrivateRecovery
+	_ = pueue.PrivateSupervisorPairMissing
 	_ = pueue.RecordPrivateTerminalEvent
 	_ = pueue.RecordPrivateTerminalEventForMaintenance
 	_ = pueue.RefreshPrivateSupervisorBinding
@@ -137,6 +154,8 @@ var (
 	_ = (*pueue.Client).ReadPrivateTerminalEvent
 	_ = (*pueue.Client).Ready
 	_ = (*pueue.Client).Reconcile
+	_ = (*pueue.Client).AttemptCompletedTaskCleanup
+	_ = (*pueue.Client).ObservePrivateEndpoint
 	_ = (*pueue.Client).ReconcileInspection
 	_ = (*pueue.Client).ReconcileInspectionWithLease
 	_ = (*pueue.Client).ReconcileStatus
@@ -229,6 +248,11 @@ var (
 	_ pueue.Options
 	_ pueue.Pending
 	_ pueue.PrivateQueueCleanupPlan
+	_ pueue.PrivateRecovery
+	_ pueue.PrivateEndpointObservation
+	_ pueue.PublishedPairAvailability
+	_ pueue.PublishedPairReconciliation
+	_ pueue.CompletedTaskCleanup
 	_ pueue.PrivateRecoveryError
 	_ pueue.QueueSnapshot
 	_ pueue.ResolutionContext
@@ -252,4 +276,14 @@ var (
 	_ pueue.SubmissionGate              = func(context.Context, task.SupervisorRef) (pueue.SubmissionAuthorization, error) {
 		return pueue.SubmissionAuthorization{}, nil
 	}
+)
+
+// Typed fact APIs keep their projections' legacy signatures beside them.
+var (
+	_ func(context.Context, string, pueue.Options) (*pueue.Client, bool, error)                               = pueue.PreparePublishedPrivateWithLock
+	_ func(context.Context, string, pueue.Options) (pueue.PublishedPairAvailability, error)                   = pueue.ObservePublishedPrivatePairWithLock
+	_ func(context.Context, string, string, string, pueue.Options) error                                      = pueue.ReconcilePublishedPrivatePairWithLock
+	_ func(context.Context, string, string, string, pueue.Options) (pueue.PublishedPairReconciliation, error) = pueue.ReconcilePublishedPrivatePairAttemptWithLock
+	_ func(*pueue.Client, context.Context, pueue.Identity) error                                              = (*pueue.Client).RemoveCompletedTask
+	_ func(*pueue.Client, context.Context, pueue.Identity) (pueue.CompletedTaskCleanup, error)                = (*pueue.Client).AttemptCompletedTaskCleanup
 )

@@ -14,7 +14,7 @@ This document defines the normative requirements for provider adapters
 | `claude:print` | `read-only`, `workspace-write` | native `plan` for read-only; `bypassPermissions` for unattended writes | `claude --print ... --permission-mode <mode> ...` | independent containment |
 | `ccr:print` | `read-only`, `workspace-write` | Claude native `plan` for read-only; `bypassPermissions` for unattended writes | `ccr launch --model <alias> --auth-mode provider-only --print --permission-mode <mode> -- ...` | subscription pools, independent containment |
 | `pi:json` | `read-only`, `workspace-write` | read-only uses read,grep,find,ls with extensions disabled; workspace-write uses Pi's built-in read,bash,edit,write tools and provider-native approval | `pi --mode json ...`; read-only adds `--tools read,grep,find,ls --no-extensions`; workspace-write adds `--tools read,bash,edit,write` | independent containment |
-| `opencode:run` | `read-only`, `workspace-write` | native plan/build agent; native `--auto` for workspace-write | `opencode run --format json --dir <workspace> ...` | unrestricted execution |
+| `opencode:run` | `read-only`, `workspace-write` | native ACP `plan`/`build` mode; native permission requests answered `reject_once` for read-only and `allow_once` for workspace-write | `opencode acp` started in the workspace directory; mode, model, and effort are acknowledged `session/set_config_option` values | interactive clarification and steering, independent containment |
 
 Each native adapter locates its executable during static preparation and records
 the executable identity in the immutable candidate. Managed runtime-only
@@ -48,7 +48,12 @@ digest is compared with a checked-in value.
   approval where available. Native access may extend beyond the workspace;
   remaining provider restrictions are reported, not repaired by the adapter.
 - **Input Delivery**: Ordinary tasks deliver the finite brief through a regular
-  file on stdin followed by EOF. Explicit interactive tasks use a core-owned
+  file on stdin followed by EOF. A machine-protocol adapter, such as OpenCode
+  ACP, instead uses core-owned stdin for its protocol frames. The adapter
+  encodes the brief into its prompt request, the core writes every frame, and
+  native stdin closes when the protocol reports completion. This machine
+  channel has no user clarification or steering and writes no interaction
+  journal. Explicit interactive tasks use a core-owned
   pipe carrying one initial brief and bounded native clarification/steering
   frames. Adapters only encode and interpret frames. Brief text is never passed
   in argv; its size limit remains 8 MiB. The original budget includes waiting

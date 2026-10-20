@@ -44,6 +44,7 @@ func TestStatusPreparationInFlightUncertaintyKeepsLocalContinuation(t *testing.T
 	}{
 		{name: "closed lifetime", stage: rebootLifetimeClosedPreviousBoot, wantStatus: "interrupted"},
 		{name: "budget stop", stage: rebootLifetimeClosedPreviousBoot, budgetStop: true, wantStatus: "timed_out"},
+		{name: "budget closure", stage: rebootLifetimeClosedBudget, wantStatus: "timed_out"},
 		{name: "no local offer", stage: rebootLifetimeNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

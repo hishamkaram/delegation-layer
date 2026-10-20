@@ -133,6 +133,19 @@ type CaptureCandidate struct {
 	TreeOID       string  `json:"tree_oid"`
 	SnapshotRef   string  `json:"snapshot_ref"`
 	ObjectFormat  string  `json:"object_format"`
+	// IndexSHA256 and Turn are absent from captures recorded before per-turn
+	// observation existed; their absence never means unchanged.
+	IndexSHA256 string           `json:"index_sha256,omitempty"`
+	Turn        *TurnObservation `json:"turn,omitempty"`
+}
+
+// Equal is the canonical candidate equality; Turn compares by value.
+func (c CaptureCandidate) Equal(other CaptureCandidate) bool {
+	if (c.Turn == nil) != (other.Turn == nil) || (c.Turn != nil && *c.Turn != *other.Turn) {
+		return false
+	}
+	c.Turn, other.Turn = nil, nil
+	return c == other
 }
 
 // CaptureReceipt is core evidence, never provider completion authority.

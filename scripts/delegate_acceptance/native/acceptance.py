@@ -34,12 +34,14 @@ from scripts.delegate_acceptance.inspections.binding import (
 from scripts.delegate_acceptance.native.bindings import ProviderRuntimeBindings
 from scripts.delegate_acceptance.native.errors import BlockedFailure
 from scripts.delegate_acceptance.native.interactions import InteractionObserver
+from scripts.delegate_acceptance.native.production_acp import ProductionAcpEvidence
 from scripts.delegate_acceptance.native.model_discovery import ModelDiscoveryState
 import scripts.delegate_acceptance.native.acceptance_collection as acceptance_collection
 import scripts.delegate_acceptance.native.acceptance_diagnostics as acceptance_diagnostics
 import scripts.delegate_acceptance.native.acceptance_discovery as acceptance_discovery
 import scripts.delegate_acceptance.native.acceptance_dispatch as acceptance_dispatch
 import scripts.delegate_acceptance.native.acceptance_lifecycle as acceptance_lifecycle
+from scripts.delegate_acceptance.native.acceptance_lifecycle import SuccessCandidate
 import scripts.delegate_acceptance.native.acceptance_operations as acceptance_operations
 import scripts.delegate_acceptance.native.acceptance_scenarios as acceptance_scenarios
 from scripts.delegate_acceptance.native.acceptance_diagnostics import (
@@ -47,6 +49,7 @@ from scripts.delegate_acceptance.native.acceptance_diagnostics import (
 )
 from scripts.delegate_acceptance.native.acceptance_discovery import (
     native_environment,
+    require_adjacent_runner,
     require_discovery,
     resolve_executable,
 )
@@ -115,8 +118,12 @@ from scripts.delegate_acceptance.tasks.operations import (
 )
 
 
+# Providers selected for the workspace-write timeout-resume scenario.
+TIMEOUT_RESUME_PROVIDERS = frozenset({"codex:exec", "opencode:run"})
+
+
 class NativeAcceptance:
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args: argparse.Namespace, *, managed_runner: bool = True):
         if args.provider not in PROFILES:
             raise AcceptanceFailure(f"unsupported live provider: {args.provider}")
         profile = PROFILES[args.provider]
@@ -135,9 +142,9 @@ class NativeAcceptance:
             raise AcceptanceFailure("write scenario requires --permission workspace-write")
         if scenario == "non-git" and args.provider != "codex:exec":
             raise AcceptanceFailure("non-git scenario requires codex:exec")
-        if scenario == "timeout-resume" and (args.provider != "codex:exec" or
+        if scenario == "timeout-resume" and (args.provider not in TIMEOUT_RESUME_PROVIDERS or
                                                 requested_mode != "workspace-write"):
-            raise AcceptanceFailure("timeout-resume scenario requires codex:exec workspace-write")
+            raise AcceptanceFailure("timeout-resume scenario requires codex:exec or opencode:run workspace-write")
         if scenario == "interactive" and (args.provider != "claude:print" or
                                             requested_mode != "read-only"):
             raise AcceptanceFailure("interactive scenario requires claude:print read-only")
@@ -187,7 +194,7 @@ class NativeAcceptance:
                     "live acceptance base parent is unsafe")
             self.base = self._constructor_ownership.create(
                 "acceptance base", self.base, self.base_parent).directory
-            self._initialize_runtime_roots()
+            self._initialize_runtime_roots(managed_runner)
         except BaseException as error:
             try:
                 self._constructor_ownership.rollback()
@@ -197,7 +204,10 @@ class NativeAcceptance:
             raise
         self.owned_directories = self._constructor_ownership.transfer()
 
-    def _initialize_runtime_roots(self) -> None:
+    def _initialize_runtime_roots(self, managed_runner: bool) -> None:
+        if managed_runner:
+            # Refuse a mismatched bundle before any root, process, or paid admission.
+            require_adjacent_runner(self.delegate, self.runner)
         self.state = self.base / "state"
         self.workspace = self.base / "workspace"
         self.briefs = self.base / "briefs"
@@ -221,9 +231,13 @@ class NativeAcceptance:
         self.processes = Processes(
             self.output / "processes", self.environment,
             owner=self._constructor_ownership)
-        self.ops = NativeAcceptanceTaskOps(self)
+        self.ops = NativeAcceptanceTaskOps(self, managed_runner=managed_runner)
         self.daemon = None
         self.closed = False
+        # Success-only shutdown records the compact managed-lifetime proof.
+        self.lifetime_closure: dict[str, object] | None = None
+        # The lifecycle owner commits this candidate before any success cleanup.
+        self.success_candidate: SuccessCandidate | None = None
         self.model_discovery_state = ModelDiscoveryState()
         self.root_id: str | None = None
         self.provider_version: str | None = None
@@ -262,6 +276,10 @@ class NativeAcceptance:
     @cached_property
     def _provider_bindings(self) -> ProviderRuntimeBindings:
         return ProviderRuntimeBindings()
+
+    @cached_property
+    def _production_acp(self) -> ProductionAcpEvidence:
+        return ProductionAcpEvidence()
 
     @cached_property
     def _interaction_observer(self) -> InteractionObserver:
@@ -339,8 +357,8 @@ class NativeAcceptance:
     def finalize(self, success: bool, *, blocked: bool = False) -> bool:
         return acceptance_lifecycle.finalize(self, success, blocked=blocked)
 
-    def publish_success(self) -> None:
-        return acceptance_lifecycle.publish_success(self)
+    def publish_success(self, *, expected_gate: str = "acceptance-native") -> None:
+        return acceptance_lifecycle.publish_success(self, expected_gate=expected_gate)
 
     def direct(self, name: str, argv: list[object], expected=0, timeout=30):
         return acceptance_operations.direct(self, name, argv, expected, timeout)
@@ -363,6 +381,9 @@ class NativeAcceptance:
 
     def provider_runtime_receipt(self) -> dict[str, object]:
         return acceptance_operations.provider_runtime_receipt(self)
+
+    def production_acp_receipt(self, tasks: dict[str, str]) -> dict[str, object]:
+        return acceptance_operations.production_acp_receipt(self, tasks)
 
     def native_mode_receipt(self) -> dict[str, object] | None:
         return acceptance_operations.native_mode_receipt(self)
@@ -602,6 +623,9 @@ class NativeAcceptance:
 
     def shutdown(self) -> None:
         return acceptance_lifecycle.shutdown(self)
+
+    def lifecycle_receipt(self) -> dict[str, object]:
+        return acceptance_lifecycle.lifecycle_receipt(self)
 
     def safe_shutdown(self) -> bool:
         return acceptance_lifecycle.safe_shutdown(self)

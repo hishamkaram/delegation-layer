@@ -15,6 +15,7 @@ from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
 from scripts.delegate_acceptance.private_cli.commands import run_json
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
+from scripts.delegate_acceptance.supervisor.runner_layout import managed_state_runner
 import shutil
 import uuid
 
@@ -253,6 +254,6 @@ def observe_packaged_task(
         raise RuntimeError("packaged default collect did not publish success")
     meta = json.loads((default_state / "tasks" / task_id / "meta.json").read_text())
     runner_digest = file_fingerprint(sources["delegate-run"])["sha256"]
-    expected_runner = str(default_state / ".supervisor" / ("delegate-run-" + runner_digest))
+    expected_runner = str(managed_state_runner(default_state, runner_digest))
     if meta.get("runner_executable") != expected_runner:
         raise RuntimeError("packaged default dispatch did not resolve its adjacent runner")

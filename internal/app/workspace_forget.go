@@ -22,6 +22,8 @@ func forgetManagedWorkspace(ctx context.Context, store *taskdir.Store, resource 
 	source, err := resource.Source(ctx)
 	if workspace.OperationAbsent(err) && len(intent.Refs) == 0 {
 		err = nil
+	} else if err == nil && len(intent.Refs) != 0 {
+		err = workspacescore.VerifyRepositoryIdentity(source)
 	}
 	if err != nil {
 		return err

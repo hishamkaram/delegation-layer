@@ -107,6 +107,7 @@ def _sanitized_model_discovery_summary(run: NativeAcceptance | None) -> dict[str
 
 def _model_discovery_failure_receipt(
         args: argparse.Namespace, run: NativeAcceptance, code: int) -> dict[str, object]:
+    observed = run.model_discovery_exit_code
     return {
         "gate": "acceptance-native",
         "status": "BLOCKED" if code == 2 else "failed",
@@ -117,7 +118,7 @@ def _model_discovery_failure_receipt(
         "requested_model": args.model,
         "requested_effort": args.effort,
         "discover_models": True,
-        "discovery_exit_code": code,
+        "discovery_exit_code": observed if type(observed) is int else code,
         "model_discovery": _sanitized_model_discovery_summary(run),
         "no_retry": True,
         "credentials_in_receipt": False,

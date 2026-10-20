@@ -7,6 +7,7 @@ type (
 	Checkout         = contract.Checkout
 	CaptureCandidate = contract.CaptureCandidate
 	CaptureExport    = contract.CaptureExport
+	TurnBaseline     = contract.TurnBaseline
 )
 
 var (

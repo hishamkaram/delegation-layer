@@ -48,7 +48,10 @@ type leadingCase struct {
 	refusal string
 }
 
-func leadingCases(mode string) []leadingCase {
+// leadingCases states the verdicts of the scoped attribution revisions;
+// advisory selects the current revision's verdicts where its init authority
+// and unsupported completion reasons differ.
+func leadingCases(mode string, advisory bool) []leadingCase {
 	initial := interactiveInitLine(mode)
 	root := scopeMessage("assistant", scopeRootParent, scopeTextBlock)
 	nested := scopeMessage("assistant", scopeChildParent, scopeChildToolUse)
@@ -102,8 +105,23 @@ func leadingCases(mode string) []leadingCase {
 		{"queued acknowledgement only", prefix(initial, mutateLine(ack0, `"queued_turn_count":0`, `"queued_turn_count":2`)), false, refusalIncomplete},
 		{"refused acknowledgement with a later caller", prefix(initial, mutateLine(ack0, `"stop_reason":"end_turn"`, `"stop_reason":"refusal"`), initial, root, caller1), false, refusalRefused},
 		{"failed acknowledgement with a bad counter", prefix(initial, leadingFailure(1, ""), initial, root, caller1), false, refusalMalformed},
+		{"changed init permission", prefix(initial, ack0, mutateLine(initial, `"permissionMode":"`, `"permissionMode":"default","x":"`), root, caller1), false, refusalMalformed},
 	}
-	return cases
+	if !advisory {
+		return cases
+	}
+	for index, tc := range cases {
+		switch tc.name {
+		case "acknowledgement with undocumented terminal reason":
+			cases[index].refusal = refusalUnsupportedCompletion
+		case "changed init cwd":
+			cases[index].commit, cases[index].refusal = true, ""
+		}
+	}
+	return append(cases,
+		leadingCase{"changed init advisory metadata", prefix(initial, ack0, mutateLine(initial, `"model":"claude-test"`, `"model":"claude-other","apiKeySource":"x","claude_code_version":"9.9.9"`), root, caller1), true, ""},
+		leadingCase{"repeated init without advisory metadata", prefix(initial, ack0, fmt.Sprintf(`{"type":"system","subtype":"init","session_id":%q,"permissionMode":%q}`, claudeTestUUID, nativeDefaultPermission(mode)), root, caller1), true, ""},
+	)
 }
 
 // requireLeadingVerdict checks a verdict. Interactive predicates report every
@@ -126,24 +144,28 @@ func requireLeadingVerdict(t *testing.T, tc leadingCase, interactive bool, inter
 }
 
 func TestLeadingAcknowledgementsPrintCompletion(t *testing.T) {
-	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		for _, tc := range leadingCases(mode) {
-			t.Run(mode+"/"+tc.name, func(t *testing.T) {
-				interpretation, answer := evaluateWriteTrace(t, NewInterpreter(mode), tc.lines)
-				requireLeadingVerdict(t, tc, false, interpretation, answer)
-			})
+	for _, revision := range attributedRevisions() {
+		for _, mode := range []string{Mode, WorkspaceWriteMode} {
+			for _, tc := range leadingCases(mode, revision.advisory) {
+				t.Run(revision.name+"/"+mode+"/"+tc.name, func(t *testing.T) {
+					interpretation, answer := evaluateWriteTrace(t, revision.print(mode), tc.lines)
+					requireLeadingVerdict(t, tc, false, interpretation, answer)
+				})
+			}
 		}
 	}
 }
 
 func TestLeadingAcknowledgementsInteractiveSealedCompletion(t *testing.T) {
-	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		for _, tc := range leadingCases(mode) {
-			t.Run(mode+"/"+tc.name, func(t *testing.T) {
-				lines := append(append([]string{interactiveRunning}, tc.lines...), interactiveIdle)
-				interpretation, answer := evaluateInteractiveTrace(t, newInteractionInterpreter(mode), lines)
-				requireLeadingVerdict(t, tc, true, interpretation, answer)
-			})
+	for _, revision := range attributedRevisions() {
+		for _, mode := range []string{Mode, WorkspaceWriteMode} {
+			for _, tc := range leadingCases(mode, revision.advisory) {
+				t.Run(revision.name+"/"+mode+"/"+tc.name, func(t *testing.T) {
+					lines := append(append([]string{interactiveRunning}, tc.lines...), interactiveIdle)
+					interpretation, answer := evaluateInteractiveTrace(t, revision.interactive(mode), lines)
+					requireLeadingVerdict(t, tc, true, interpretation, answer)
+				})
+			}
 		}
 	}
 }
@@ -155,7 +177,7 @@ func TestLeadingAcknowledgementsInteractiveSealedCompletion(t *testing.T) {
 func TestLeadingAcknowledgementsKeepPrincipalUsageAndLatestCost(t *testing.T) {
 	wantCosts := map[string]string{"native-shaped leading acknowledgement": "0.35", "later notification after the caller": "0.4", "two consecutive acknowledgements": "0.36"}
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		for _, tc := range leadingCases(mode) {
+		for _, tc := range leadingCases(mode, true) {
 			wantCost, ok := wantCosts[tc.name]
 			if !ok {
 				continue
@@ -246,7 +268,7 @@ func TestFrozenRevisionsKeepRejectingLeadingAcknowledgements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	native := leadingCases(WorkspaceWriteMode)[0].lines
+	native := leadingCases(WorkspaceWriteMode, false)[0].lines
 	if got, answer := evaluateWriteTrace(t, frozen, native); got.Verdict != task.VerdictRejected || answer != "" {
 		t.Fatalf("retained unscoped write revision changed: %+v answer=%q", got, answer)
 	}
@@ -254,7 +276,7 @@ func TestFrozenRevisionsKeepRejectingLeadingAcknowledgements(t *testing.T) {
 		t.Fatalf("pre-attribution revision changed: %+v answer=%q", got, answer)
 	}
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		lines := append(append([]string{interactiveRunning}, leadingCases(mode)[0].lines...), interactiveIdle)
+		lines := append(append([]string{interactiveRunning}, leadingCases(mode, false)[0].lines...), interactiveIdle)
 		if got, answer := evaluateInteractiveTrace(t, newUnscopedInteractionInterpreter(mode), lines); got.Verdict != task.VerdictRejected || answer != "" {
 			t.Fatalf("%s interactive-v4 changed: %+v answer=%q", mode, got, answer)
 		}

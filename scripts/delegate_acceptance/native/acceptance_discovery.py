@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import time
 from pathlib import Path
 from scripts.delegate_acceptance.evidence.files import read_json, write_json
@@ -14,7 +15,7 @@ from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _
 from scripts.delegate_acceptance.native.constants import NATIVE_DISCOVERY_ENVIRONMENT
 from scripts.delegate_acceptance.native.errors import BlockedFailure
 from scripts.delegate_acceptance.native.fixtures import bounded_text
-from scripts.delegate_acceptance.native.provider_policy import model_discovery_exit_code, validate_model_discovery_response
+from scripts.delegate_acceptance.native.provider_policy import model_discovery_allowed_exit_codes, validate_model_discovery_response
 from scripts.delegate_acceptance.processes.observation import inherited_environment
 from scripts.delegate_acceptance.native.task_ops import ModelDiscoveryCleanupOps
 from scripts.delegate_acceptance.native.workspace import has_git_ancestor, workspace_snapshot
@@ -44,6 +45,24 @@ def resolve_executable(value: str | None, default: Path, label: str) -> Path:
     if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise BlockedFailure(f"{label} resolved target is not executable")
     return resolved
+
+
+def require_adjacent_runner(delegate: Path, runner: Path) -> None:
+    """Require the runner a managed admission will select before any launch.
+
+    With no explicit runner, Go selects the regular non-symlink sibling
+    delegate-run of the canonical delegate executable
+    (internal/supervisor/executable_selection.go managedRunnerFromExecutable,
+    ResolveRunner). The supplied runner is only the expected fingerprint.
+    """
+    sibling = Path(os.path.realpath(delegate)).parent / "delegate-run"
+    try:
+        metadata = sibling.lstat()
+    except OSError as error:
+        raise BlockedFailure("managed delegate-run is not adjacent to delegate") from error
+    if (not stat.S_ISREG(metadata.st_mode) or os.path.realpath(sibling) != str(sibling)
+            or not os.access(sibling, os.X_OK) or sibling != Path(os.path.realpath(runner))):
+        raise BlockedFailure("selected delegate-run is not the managed runner adjacent to delegate")
 
 
 def require_discovery(name: str, selected: Path, environment: dict[str, str]) -> None:
@@ -140,19 +159,17 @@ def discover_models(owner) -> None:
         expected={0, 1, 2}, timeout=MODEL_DISCOVERY_TIMEOUT_SECONDS)
     response = parse_json_output(process, "model discovery")
     summary = validate_model_discovery_response(response, acceptance.provider)
-    expected_exit = model_discovery_exit_code(str(response["status"]))
-    require(process.result.get("exit_code") == expected_exit,
+    observed_exit = process.result.get("exit_code")
+    require(type(observed_exit) is int and observed_exit in model_discovery_allowed_exit_codes(response),
             "model discovery exit status does not match its status")
     acceptance.model_discovery = response
     acceptance.model_discovery_summary = summary
-    acceptance.model_discovery_exit_code = expected_exit
+    acceptance.model_discovery_exit_code = observed_exit
     root_path = acceptance.models_state / "root.json"
     if root_path.is_file() and not root_path.is_symlink():
         root = read_json(root_path)
         root_id = root.get("root_id") if isinstance(root, dict) else None
-        require(isinstance(root_id, str) and len(root_id) == 32 and
-                all(character in "0123456789abcdef" for character in root_id),
-                "model discovery root identity is invalid")
+        require(_task_identity(root_id), "model discovery root identity is invalid")
         acceptance.models_root_id = root_id
     write_json(acceptance.output / "models.json", response)
     require(workspace_snapshot(acceptance.workspace) == before,
@@ -160,11 +177,12 @@ def discover_models(owner) -> None:
 
 def model_discovery_argv(owner) -> list[object]:
     acceptance = owner
-    return [
-        acceptance.delegate, "--root", acceptance.models_state,
-        "--pueue-config", acceptance.config, "--runner", acceptance.runner,
-        "models", "--provider", acceptance.provider, "--cwd", acceptance.workspace, "--json",
+    argv: list[object] = [
+        acceptance.delegate, "--root", acceptance.models_state, "--pueue-config", acceptance.config,
     ]
+    if not acceptance.ops.managed_runner:
+        argv.extend(["--runner", acceptance.runner])
+    return [*argv, "models", "--provider", acceptance.provider, "--cwd", acceptance.workspace, "--json"]
 
 def _validate_model_discovery_evidence(owner, status: dict[str, object],
                                        model_group: str) -> None:
@@ -195,7 +213,9 @@ def _validate_model_discovery_evidence(owner, status: dict[str, object],
     require(acceptance.model_discovery_task_id == task_id,
             "model discovery task identity changed")
     validator = NativeTaskOps(acceptance.processes, acceptance.delegate, acceptance.runner, acceptance.pueue,
-                              acceptance.models_state.parent, acceptance.models_state, acceptance.output)
+                              acceptance.models_state.parent, acceptance.models_state, acceptance.output,
+                              managed_runner=acceptance.ops.managed_runner,
+                              runner_placement=acceptance.ops.runner_placement)
     validator.bind_supervisor(acceptance.config, acceptance.daemon)
     validator.root_id = acceptance.models_root_id
     validator.dispatch_attempts = {task_id}
@@ -315,6 +335,8 @@ def require_default_model_prerequisite(owner) -> None:
     if status == "unavailable" and reason == "models_unavailable":
         raise BlockedFailure("Pi has no locally available model after native authentication and filtering")
     require(status != "failed", f"Pi default-model discovery failed: {reason}")
+    # The response was validated on receipt; its typed failure is operational, not advisory.
+    require("failure" not in response, f"Pi default-model discovery has an operational failure: {reason}")
 
 def _adopt_daemon(owner, process: object) -> None:
     acceptance = owner

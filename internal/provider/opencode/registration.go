@@ -25,7 +25,8 @@ func Description() commonprovider.Description {
 
 // Registration returns OpenCode's explicit catalog entry. Each permission
 // mode has a distinct predicate reference because mode is part of the
-// immutable output contract.
+// immutable output contract. The ACP interpreters serve fresh tasks; every
+// run revision stays registered for admitted records and their evidence.
 func Registration() commonprovider.Registration {
 	return commonprovider.Registration{
 		Description:      Description(),
@@ -35,6 +36,8 @@ func Registration() commonprovider.Registration {
 		Interpreters: []predicate.Interpreter{
 			NewInterpreter(ModeReadOnly),
 			NewInterpreter(ModeWorkspaceWrite),
+			newRunInterpreter(ModeReadOnly),
+			newRunInterpreter(ModeWorkspaceWrite),
 			newHistoricalCurrentV4Interpreter(ModeReadOnly),
 			newHistoricalCurrentV4Interpreter(ModeWorkspaceWrite),
 			newHistoricalCurrentV3Interpreter(ModeReadOnly),
