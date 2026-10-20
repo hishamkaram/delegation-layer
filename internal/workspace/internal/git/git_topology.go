@@ -42,9 +42,9 @@ func (g Git) withWorktreeMetadata(ctx context.Context, source contract.Source, r
 	return run(bound)
 }
 
-func (g Git) runWorktreeCommand(ctx context.Context, source contract.Source, args []string) error {
+func (g Git) runWorktreeCommand(ctx context.Context, source contract.Source, directory string, args []string) error {
 	return g.withWorktreeMetadata(ctx, source, func(bound Git) error {
-		return bound.run(ctx, source.Root, args, nil, nil, nil, nil)
+		return bound.run(ctx, directory, args, nil, nil, nil, nil)
 	})
 }
 

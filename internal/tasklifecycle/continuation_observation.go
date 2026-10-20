@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/hishamkaram/delegation-layer/internal/guardian"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -28,7 +29,8 @@ func ObserveTimeoutContinuationWithRecords(root string, td *taskdir.TaskDir, req
 
 // ObserveTimeoutContinuationWithRunner observes the automatic continuation
 // offer for a terminated budget stop or, without one, for a closure-proven
-// interruption. Callers check the published outcome first. The offer is
+// unpublished turn whose recorded termination cause decides between a timeout
+// and an interruption. Callers check the published outcome first. The offer is
 // derived first so its eligibility or session error stays authoritative; only
 // a derived offer reads the validated user stop that suppresses automatic
 // resume guidance.
@@ -81,13 +83,15 @@ func observedSessionSource(td *taskdir.TaskDir, req *task.TaskRecord) (Continuat
 
 // observeInterruptedContinuation recognizes a turn whose canonical native
 // lifetime closed after the runner released its lease, with no seal or
-// outcome. Queue state is never evidence. A held runner lease may still seal.
+// outcome. The closure's validated termination cause classifies it, so the
+// result never depends on a derived stop annotation or an earlier status
+// poll. Queue state is never evidence. A held runner lease may still seal.
 func observeInterruptedContinuation(root string, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, catalog commonprovider.Catalog, runnerReleased bool) (*ContinuationOffer, error) {
 	if req == nil || !runnerReleased {
 		return nil, nil
 	}
-	interrupted, err := closureInterruption(td)
-	if err != nil || !interrupted {
+	proof, closed, err := closureInterruption(td)
+	if err != nil || !closed {
 		return nil, err
 	}
 	source, err := observedSessionSource(td, req)
@@ -98,7 +102,16 @@ func observeInterruptedContinuation(root string, td *taskdir.TaskDir, req *task.
 	if err != nil {
 		return nil, err
 	}
-	return continuationOffer(req, catalog, continuationOfferFacts{cause: ContinuationInterrupted, source: source, launch: launch, runnerReleased: runnerReleased}), nil
+	return continuationOffer(req, catalog, continuationOfferFacts{cause: closureContinuationCause(proof), source: source, launch: launch, runnerReleased: runnerReleased}), nil
+}
+
+// closureContinuationCause reports a timeout only for an explicit budget
+// termination; every other recorded cause is an interruption.
+func closureContinuationCause(proof guardian.ClosureProof) ContinuationCause {
+	if proof.TerminationCause() == task.LifetimeTerminationBudget {
+		return ContinuationTimedOut
+	}
+	return ContinuationInterrupted
 }
 
 func observeContinuationLaunch(root string, td *taskdir.TaskDir, meta *task.MetaRecord) (continuationLaunch, error) {

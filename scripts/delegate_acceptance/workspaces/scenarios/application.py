@@ -30,6 +30,7 @@ from .source import (
     _prepare_source, _write_briefs, build_source_manifest,
 )
 from .lifecycle import _run_success
+from .lineage import _run_lineage
 from .timeout import _run_timeout
 from .capacity import _run_capacity
 
@@ -120,10 +121,22 @@ def _make_context(
     except OSError as error:
         raise AcceptanceBlocked("private-acceptance-root-unavailable") from error
     root_token = owner.adopt_created("managed workspace acceptance root", base_path, home)
+    processes: Processes | None = None
     try:
-        return _make_context_unchecked(args, binaries, owner, root_token)
+        layout = _create_layout(owner, root_token, binaries)
+        environment = _workspace_environment(layout)
+        processes = Processes(
+            layout.base,
+            environment=environment,
+            capture_root=root_token,
+            environment_keys_only=True,
+        )
+        return _make_context_unchecked(
+            args, binaries, owner, root_token,
+            layout=layout, environment=environment, processes=processes,
+        )
     except BaseException as error:
-        raise AcceptanceSetupFailure(error, owner, root_token) from error
+        raise AcceptanceSetupFailure(error, owner, root_token, processes) from error
 
 
 def _make_context_unchecked(
@@ -131,9 +144,11 @@ def _make_context_unchecked(
     binaries: dict[str, Path],
     owner: DirectoryOwner,
     root_token: OwnedDirectory,
+    *,
+    layout: WorkspaceLayout,
+    environment: dict[str, str],
+    processes: Processes,
 ) -> tuple[WorkspaceContext, dict[str, Path]]:
-    layout = _create_layout(owner, root_token, binaries)
-    environment = _workspace_environment(layout)
     git_path = _git_executable()
     binaries_for_receipt = {
         "delegate": binaries["delegate"],
@@ -143,12 +158,6 @@ def _make_context_unchecked(
         "git": git_path,
         "fixture": layout.provider_bin / "pi",
     }
-    processes = Processes(
-        layout.base,
-        environment=environment,
-        capture_root=root_token,
-        environment_keys_only=True,
-    )
     context = WorkspaceContext(
         owner=owner,
         root_token=root_token,
@@ -208,6 +217,18 @@ def _run(args: argparse.Namespace, finalizer: ReceiptFinalizer, context: Workspa
             workspace_count=len(context.workspace_ids),
             command_response_count=context.command_count,
         )
+    elif args.scenario == "lineage":
+        lineage: dict[str, object] = {}
+        finalizer.set_details(scenario="lineage", lineage=lineage)
+        _run_lineage(context, lineage)
+        source_final = _assert_source_untouched(context)
+        finalizer.set_details(
+            native_proofs=context.native_proofs,
+            source_final=source_final,
+            task_count=len(context.task_ids),
+            workspace_count=len(context.workspace_ids),
+            command_response_count=context.command_count,
+        )
     else:
         capacity = _run_capacity(context, args.parallel_tasks, args.dispatch_workers)
         source_final = _assert_source_untouched(context)
@@ -230,7 +251,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--pueue", type=Path, required=True)
     parser.add_argument("--pueued", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--scenario", choices=("lifecycle", "capacity"), default="lifecycle")
+    parser.add_argument("--scenario", choices=("lifecycle", "lineage", "capacity"), default="lifecycle")
     parser.add_argument("--parallel-tasks", type=int, default=DEFAULT_CAPACITY_TASKS)
     parser.add_argument("--dispatch-workers", type=int, default=DEFAULT_DISPATCH_WORKERS)
     parser.add_argument("--workspace-budget", default=DEFAULT_WORKSPACE_BUDGET)
@@ -239,7 +260,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--parallel-tasks must be positive")
     if args.dispatch_workers <= 0:
         parser.error("--dispatch-workers must be positive")
-    if args.scenario == "lifecycle" and args.parallel_tasks != DEFAULT_CAPACITY_TASKS:
+    if args.scenario != "capacity" and args.parallel_tasks != DEFAULT_CAPACITY_TASKS:
         parser.error("--parallel-tasks is only configurable for --scenario capacity")
     if args.scenario == "capacity":
         args.dispatch_workers = min(args.parallel_tasks, args.dispatch_workers)
@@ -303,45 +324,118 @@ def _execute_scenario(
     return context, setup_failure, verdict, reason
 
 
-def _finalize_run(
+def _cleanup_verdict(verdict: str, reason: str, cleanup: dict[str, object]) -> tuple[str, str]:
+    """Only the cleanup owner's authorization keeps a non-failed verdict."""
+    if verdict == "failed" or cleanup.get("authorized") is True:
+        return verdict, reason
+    decision = cleanup.get("decision")
+    canonical = (isinstance(decision, str) and 0 < len(decision) <= 80 and decision.isascii()
+                 and decision.islower() and decision.replace("-", "").isalnum())
+    return "failed", "cleanup-refused:" + (decision if canonical else "unrecorded")
+
+
+def _release_retained(
+    finalizer: ReceiptFinalizer, holder: WorkspaceContext | AcceptanceSetupFailure | None,
+    verdict: str, reason: str,
+) -> tuple[str, str]:
+    """Consume the finished run's directory pins; a release error fails the run visibly.
+
+    A non-failed verdict never reaches a live pin while authorized cleanup is canonical
+    removal, which consumes every token; this guards the invariant that such a verdict never
+    sits beside a failed release.
+    """
+    if holder is None:
+        return verdict, reason
+    try:
+        holder.release_retained()
+    except (OSError, RuntimeError) as error:
+        finalizer.set_details(retained_authority_release={"status": "failed", "error": str(error)})
+        if verdict == "failed":
+            return verdict, reason
+        return "failed", "retained-authority-release-failed: " + str(error)
+    finalizer.set_details(retained_authority_release={"status": "released"})
+    return verdict, reason
+
+
+def _settle_cleanup(
+    finalizer: ReceiptFinalizer, holder: WorkspaceContext | AcceptanceSetupFailure | None,
+    verdict: str, reason: str, cleanup: dict[str, object],
+) -> tuple[str, str]:
+    verdict, reason = _cleanup_verdict(verdict, reason, cleanup)
+    verdict, reason = _release_retained(finalizer, holder, verdict, reason)
+    finalizer.finalize(verdict, reason, cleanup)
+    return verdict, reason
+
+
+def _finalize_cleanup(
     finalizer: ReceiptFinalizer, context: WorkspaceContext | None,
     setup_failure: AcceptanceSetupFailure | None, verdict: str, reason: str,
 ) -> tuple[str, str]:
-    cleanup: dict[str, object] = {"status": "not-started"}
     if context is None:
-        finalizer.finalize(verdict, reason, cleanup)
-        if setup_failure is not None:
-            try:
-                cleanup = setup_failure.cleanup()
-            except BaseException as error:
-                verdict = "failed"
-                reason = "setup-cleanup-error: " + type(error).__name__ + ": " + str(error)
-                cleanup = {
-                    "authorized": False,
-                    "decision": "setup-cleanup-failed-evidence-retained",
-                    "error": str(error),
-                }
-            finalizer.finalize(verdict, reason, cleanup)
-        return verdict, reason
+        finalizer.finalize(verdict, reason, {"status": "not-started"})
+        if setup_failure is None:
+            return verdict, reason
+        try:
+            cleanup = setup_failure.cleanup()
+        except BaseException as error:
+            verdict = "failed"
+            reason = "setup-cleanup-error: " + type(error).__name__ + ": " + str(error)
+            cleanup = {
+                "authorized": False,
+                "decision": "setup-cleanup-failed-evidence-retained",
+                "error": str(error),
+            }
+        return _settle_cleanup(finalizer, setup_failure, verdict, reason, cleanup)
+    pending = verdict == "passed"
     finalizer.finalize(
-        verdict,
-        reason,
-        {"status": "committed-before-cleanup", "retained_until": "compact-receipt"},
+        "failed" if pending else verdict,
+        "cleanup-not-finalized" if pending else reason,
+        {"status": "committed-before-cleanup", "retained_until": "compact-receipt", "final": False},
     )
     try:
         cleanup = context.cleanup(verdict)
     except BaseException as error:
         verdict = "failed"
         reason = "cleanup-or-closure-error: " + type(error).__name__ + ": " + str(error)
+        # Removal may have started: paths are the creation inventory, presence is unverified.
         cleanup = {
             "authorized": False,
             "decision": "cleanup-failed-evidence-retained",
             "error": str(error),
             "retained_owned_directories": [str(entry.directory)
-                                            for entry in context.owner.transfer()],
+                                            for entry in context.retained_directories()],
+            "retained_owned_directories_status": "unverified",
         }
-    finalizer.finalize(verdict, reason, cleanup)
-    return verdict, reason
+    return _settle_cleanup(finalizer, context, verdict, reason, cleanup)
+
+
+def _dispose_after_failure(
+    finalizer: ReceiptFinalizer, holder: WorkspaceContext | AcceptanceSetupFailure | None,
+    error: BaseException,
+) -> None:
+    """Dispose the pins of an escaping error and keep every release failure beside the original."""
+    if holder is None:
+        return
+    recorded = finalizer.details.get("retained_authority_release")
+    if isinstance(recorded, dict) and recorded.get("status") == "failed":
+        error.add_note("retained directory authority release failed: " + str(recorded.get("error")))
+    try:
+        holder.release_retained()
+    except (OSError, RuntimeError) as release_error:
+        error.add_note("retained directory authority release failed: " + str(release_error))
+
+
+def _finalize_run(
+    finalizer: ReceiptFinalizer, context: WorkspaceContext | None,
+    setup_failure: AcceptanceSetupFailure | None, verdict: str, reason: str,
+) -> tuple[str, str]:
+    """Write the receipts around cleanup; any escaping error still disposes the directory pins."""
+    holder = context if context is not None else setup_failure
+    try:
+        return _finalize_cleanup(finalizer, context, setup_failure, verdict, reason)
+    except BaseException as error:
+        _dispose_after_failure(finalizer, holder, error)
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:

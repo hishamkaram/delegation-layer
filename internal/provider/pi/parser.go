@@ -33,6 +33,10 @@ type parserOptions struct {
 	settledTerminal           bool
 	rejectTrailingRetryEnd    bool
 	requireAgentEndErrorMatch bool
+	// nativeOutcome binds the current parser to the v9 policy: explicit
+	// native failure fields and documented display events are interpreted.
+	// Earlier current-wire revisions leave it false and stay byte-frozen.
+	nativeOutcome bool
 }
 
 type eventState struct {
@@ -54,6 +58,8 @@ type eventState struct {
 	settledTerminal           bool
 	rejectTrailingRetryEnd    bool
 	requireAgentEndErrorMatch bool
+	nativeOutcome             bool
+	nativeOutcomeFailed       bool
 	retryPending              bool
 
 	lastMessageText         []byte

@@ -26,6 +26,9 @@ func RegisteredCheckout(ctx context.Context, resource *workspace.Resource) (work
 	if source.Root != registration.SourceRoot || source.CommonDir != registration.CommonDir || source.GitDir != registration.GitDir || source.BaseOID != registration.BaseOID || source.ObjectFormat != registration.ObjectFormat || source.RelativeCwd != registration.RelativeCwd {
 		return workspace.Checkout{}, task.ErrIdentityMismatch
 	}
+	if err = VerifyRepositoryIdentity(source); err != nil {
+		return workspace.Checkout{}, err
+	}
 	anchor := filepath.Join(resource.Request().Container, resource.Request().WorkspaceID)
 	if registration.CheckoutPath != filepath.Join(anchor, "checkout") {
 		return workspace.Checkout{}, workspace.ErrIdentity
@@ -57,6 +60,21 @@ func RegisteredExecutionCheckout(ctx context.Context, resource *workspace.Resour
 		return checkout, errors.Join(workspace.ErrIdentity, err)
 	}
 	return checkout, nil
+}
+
+// VerifyRepositoryIdentity compares the recorded common-directory identity.
+// A source recorded before that pin retains the Git-level common-directory,
+// object-format and checkout-topology checks, which still refuse a changed
+// repository; the source checkout itself is not required after provisioning.
+func VerifyRepositoryIdentity(source workspace.Source) error {
+	identity, recorded := source.CommonDirIdentity()
+	if !recorded {
+		return nil
+	}
+	if err := VerifyDirectoryIdentity(source.CommonDir, identity); err != nil {
+		return errors.Join(workspace.ErrIdentity, err)
+	}
+	return nil
 }
 
 func VerifyCanonicalDirectory(path string) error {

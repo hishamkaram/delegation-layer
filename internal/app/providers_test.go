@@ -66,7 +66,9 @@ func assertNativeProviderMetadata(t *testing.T, response ProviderResponse) {
 		if len(description.SupportedModes) == 0 {
 			t.Fatalf("supported mode metadata missing: %+v", description)
 		}
-		if len(description.Runtime.RequiredFlags) == 0 {
+		// Mirrors the catalog rule: a help command or flag requirements must name
+		// an inspectable capability. OpenCode ACP has a help command and no flag.
+		if len(description.Runtime.RequiredFlags) == 0 && len(description.Runtime.HelpArgs) == 0 {
 			t.Fatalf("runtime capability metadata missing: %+v", description)
 		}
 		if description.ID != "codex:review" && description.Continuation != commonprovider.ContinuationNative {

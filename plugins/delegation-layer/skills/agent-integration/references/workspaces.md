@@ -48,7 +48,10 @@ delegate --root ROOT dispatch --isolation git-worktree --cwd ABS \
 `--base` resolves to a commit; the default is `HEAD`. Dirty and untracked
 source changes are observed but excluded from the managed checkout. The
 provider runs in the retained detached worktree, with the source-relative
-working subdirectory preserved. A request that attaches to an existing
+working subdirectory preserved. The source may itself be a managed checkout,
+such as a sibling in the same workspace container. After provisioning, the new
+workspace depends on the shared repository, not on the source checkout, so
+removing that source does not block capture, release, or forget. A request that attaches to an existing
 workspace uses its recorded checkout and source identity:
 
 ```text
@@ -117,6 +120,36 @@ facts. Normal capture covers the initial committed base through the captured
 tree, including worker commits and added untracked files that belong to the
 Git-content view. It uses a private temporary Git index and records an owned
 base pin plus tree/snapshot reference.
+
+Each provider turn also records its actual starting tree, `HEAD`, and index
+identity just before launch, so Lead edits made between turns belong to the
+next turn's start. The index identity covers every entry's mode, object, stage
+(including conflicts), path, assume-unchanged or skip-worktree flag, and
+intent-to-add (`git add -N`) state, but not stat caches or `HEAD`. A task capture's `candidate.turn` compares that start with the
+final capture: `content`, `head`, and `index` are `changed` or `unchanged`, and
+`baseline_ref` keeps the start tree. This is observed evidence, not
+enforcement: a read-only turn that commits or edits is reported, not rejected,
+and writes reverted before capture or ignored files are not observed.
+`status: "unavailable"` with `reason_code: "baseline_unavailable"` means no
+baseline exists, for example for a turn started before this evidence existed;
+treat it as unknown, never as unchanged. A capture without `candidate.turn`,
+such as one recorded before per-turn evidence existed or a release or exec
+recapture, is also unknown, never unchanged. A failed baseline refuses the
+provider launch for that task.
+
+An observed turn adds `turn-diff.patch` and `turn-name-status.z`, which diff
+that turn's start tree to the final tree with the same bounds as the
+cumulative artifacts. Use them to see which files the current turn touched;
+they exclude earlier turns and Lead edits made before its launch. Use the
+cumulative `diff.patch` and `name-status.z`, from the workspace base, to land
+or review the whole delegated result. Report a read-only turn whose `content`,
+`head`, or `index` is `changed` as a mutation, even when its turn file list is
+empty, and report an unavailable turn as unknown.
+
+`status` and `collect` for a task report that task's own capture, even after a
+later turn has used the workspace. The workspace `state` still reflects the
+resource now, so a sealed earlier capture does not make a busy, released, or
+forgotten workspace usable. `workspace status` reports the latest use.
 Optional binary patch and name-status artifacts are bounded to 8 MiB each; an
 overflow is omitted, never silently truncated. Verification diagnostics retain
 an 8 MiB prefix per stream, mark truncation explicitly, and continue draining
@@ -146,9 +179,10 @@ identity check retains the checkout and evidence for retry. `--discard` accepts
 loss of uncaptured checkout content; it does not waive native closure,
 ownership, or identity proof.
 
-Release leaves the pinned refs/blobs and capture receipts as evidence. After a
-proven release, `workspace forget ID` writes an exact inventory intent before
-removing only matching owned refs and optional artifacts by identity/CAS. It
+Release leaves the pinned refs/blobs, turn-baseline refs, and capture receipts
+as evidence. After a proven release, `workspace forget ID` writes an exact
+inventory intent before removing only matching owned refs and optional
+artifacts by identity/CAS. It
 retains capture receipts, tombstones, all provider outcomes, raw evidence, and
 payload descriptors. Readers should label an intentionally forgotten item as
 `forgotten`, not as corruption.

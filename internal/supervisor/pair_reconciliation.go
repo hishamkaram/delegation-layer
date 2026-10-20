@@ -13,12 +13,13 @@ import (
 
 // reconcilePublishedSupervisorWithLock is the single application eligibility
 // gate for path-only recovery. Inventory cannot select the active generation;
-// the retained pair is derived from the published content identity.
+// the retained pair is derived from the published content identity. It reads
+// control's typed facts and never reclassifies an operational error.
 func ReconcilePublishedSupervisorWithLock(ctx context.Context, store *taskdir.Store, options pueue.Options, explicitMigration bool) error {
 	// A healthy published pair does not depend on staged or retained inventory.
-	// Reuse its canonical validator before considering any relocation candidate.
-	ready, err := verifyAvailablePublishedSupervisorPair(ctx, store.Root, options)
-	if err != nil || ready {
+	// Its availability is decided before any relocation candidate.
+	availability, err := pueue.ObservePublishedPrivatePairWithLock(ctx, store.Root, options)
+	if err != nil || availability == pueue.PublishedPairReady || availability == pueue.PublishedPairNotPublished {
 		return err
 	}
 	published, found, err := pueue.ReadPrivateSupervisorBinding(store.Root)
@@ -33,14 +34,21 @@ func ReconcilePublishedSupervisorWithLock(ctx context.Context, store *taskdir.St
 	if err != nil || !available {
 		return err
 	}
-	err = pueue.ReconcilePublishedPrivatePairWithLock(ctx, store.Root, client, daemon, options)
-	var recovery *pueue.PrivateRecoveryError
-	if errors.As(err, &recovery) {
-		if recovery.ReasonCode == "transition_pending" || (explicitMigration && recovery.ReasonCode == "published_pair_unavailable_live") {
-			return nil // Preserve the existing bootstrap/migration recovery owner.
-		}
+	outcome, err := pueue.ReconcilePublishedPrivatePairAttemptWithLock(ctx, store.Root, client, daemon, options)
+	if err != nil {
+		return err
 	}
-	return err
+	switch outcome {
+	case pueue.PublishedPairReconciled:
+	case pueue.PublishedPairTransitionPending:
+		// Preserve the existing bootstrap/migration recovery owner.
+	case pueue.PublishedPairLiveUnavailable:
+		if !explicitMigration {
+			return outcome.ProjectedError()
+		}
+		// Explicit migration owns a live predecessor.
+	}
+	return nil
 }
 
 func resolveReconciliationPair(root string, published task.SupervisorRef, explicitMigration bool) (string, string, bool, error) {
@@ -74,20 +82,4 @@ func inspectionAllowsPairReconciliation(ctx context.Context, store *taskdir.Stor
 		return false, err
 	}
 	return task.SameSupervisorIdentity(head.Supervisor, published), nil
-}
-
-func verifyAvailablePublishedSupervisorPair(ctx context.Context, root string, options pueue.Options) (bool, error) {
-	current, prepared, err := pueue.PreparePublishedPrivateWithLock(ctx, root, options)
-	if err == nil && prepared {
-		return true, current.Close()
-	}
-	if current != nil {
-		err = errors.Join(err, current.CloseAfterPending(err))
-	}
-	if errors.Is(err, pueue.ErrInFlight) || ctx.Err() != nil {
-		return false, err
-	}
-	// An unavailable/incomplete published pair enters the single recovery gate
-	// below. That gate rereads its authority and retains the classified cause.
-	return false, nil
 }

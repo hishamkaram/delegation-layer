@@ -67,16 +67,13 @@ func existingEnvironment(meta task.MetaRecord) []string {
 
 func prepareCandidate(request task.TaskRecord, inputs candidateInputs) (commonprovider.ProfileCandidate, error) {
 	native, storedPredicate, providerID, review := inputs.native, inputs.storedPredicate, inputs.providerID, inputs.review
-	if request.RequestedConfig.Interactive && !storedPredicate.Equal(task.PredicateRef{}) &&
-		!storedPredicate.Equal(interactionReference(request.Mode)) &&
-		!storedPredicate.Equal(historicalInteractionReference(request.Mode)) {
-		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: stored Codex predicate is not interactive", ErrUnsupportedProfile)
-	}
 	predicateReference := profilePredicateReference(request.Mode, storedPredicate, providerID)
 	if request.RequestedConfig.Interactive {
-		if storedPredicate.Equal(task.PredicateRef{}) {
-			predicateReference = interactionReference(request.Mode)
-		} else {
+		predicateReference = interactionReference(request.Mode)
+		if !storedPredicate.Equal(task.PredicateRef{}) {
+			if _, known := interactionRevisionOf(storedPredicate, request.Mode); !known {
+				return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: stored Codex predicate is not interactive", ErrUnsupportedProfile)
+			}
 			predicateReference = storedPredicate
 		}
 	}
@@ -200,8 +197,12 @@ func buildPreparedCandidate(request task.TaskRecord, native bool, arguments []st
 		prepared.Plan.OutputArtifacts = nil
 		prepared.Plan.OutputWriterContract = ""
 		prepared.Identity = nil
+		revision, known := interactionRevisionOf(predicateReference, request.Mode)
+		if !known {
+			return commonprovider.PreparedProfile{}, fmt.Errorf("%w: Codex predicate is not interactive", ErrUnsupportedProfile)
+		}
 		prepared.Interaction = func(expected task.SessionExpectation, record func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
-			return newAppServerProtocolWithCapture(request, expected, record, predicateReference.Equal(interactionReference(request.Mode)))
+			return newAppServerProtocol(request, expected, record, revision)
 		}
 	}
 	if err := prepared.ValidateAdmission(request); err != nil {

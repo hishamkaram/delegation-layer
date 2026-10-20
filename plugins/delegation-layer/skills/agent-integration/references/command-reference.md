@@ -52,8 +52,8 @@ Dispatch flags:
 - `--model MODEL` and `--effort VALUE`: provider-advertised choices (CCR requires a model alias);
   Codex maps effort to TOML `model_reasoning_effort` for ordinary turns or a native
   turn parameter for interactive turns, while Claude and AGY
-  pass native effort flags; Pi maps effort to `--thinking`; OpenCode maps it to
-  `--variant`; CCR forwards effort to Claude and uses `--model` as a CCR alias; `default` is omitted;
+  pass native effort flags; Pi maps effort to `--thinking`; OpenCode sends model
+  and effort as acknowledged ACP session options; CCR forwards effort to Claude and uses `--model` as a CCR alias; `default` is omitted;
 - `--interactive`: enable advertised native clarification and steering; see [interaction](interaction.md);
 - `--native-timeout DURATION`: optional provider-native timeout where advertised.
 
@@ -135,7 +135,9 @@ enumeration, not effort metadata. `null` means effort metadata is unknown;
 `[]` means the provider explicitly reported no choices. Discovery exits `0`
 for `available` or `partial`, `2` for `blocked` or `unavailable`, and `1` for
 `failed`. Preserve a blocked or unavailable discovery result as unresolved;
-defaults remain allowed.
+defaults remain allowed. An operational discovery failure also includes an
+optional `failure` object and a fixed `error` message; keep both fields and
+follow `failure.next_action`.
 
 ## Checking readiness
 

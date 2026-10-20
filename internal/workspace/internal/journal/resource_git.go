@@ -284,6 +284,9 @@ func validateResourceSource(source contract.Source) error {
 	if err := contract.ValidateSourceShape(source); err != nil {
 		return err
 	}
+	if _, recorded := source.CommonDirIdentity(); !recorded && source.CommonDirDevice != 0 {
+		return errors.Join(contract.ErrInvalidGitContext, task.ErrIdentityMismatch)
+	}
 	for _, path := range []string{source.Root, source.CommonDir, source.GitDir} {
 		if err := contract.ValidateAbsoluteCleanPath(path); err != nil {
 			return errors.Join(contract.ErrInvalidGitContext, err)

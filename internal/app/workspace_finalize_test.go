@@ -58,7 +58,7 @@ func TestSeededDescribeClosedWorkspaceReservationUsesLatestIdentity(t *testing.T
 		t.Fatal(err)
 	}
 	response := WorkspaceResponse{}
-	if err := workspaces.DescribeClosedReservation(t.Context(), resource, &response); err != nil {
+	if err := workspaces.DescribeLatestUse(t.Context(), resource, &response); err != nil {
 		t.Fatal(err)
 	}
 	if response.Capture == nil || response.Capture.OperationID != captureID {

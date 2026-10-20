@@ -41,7 +41,9 @@ type scopeCase struct {
 // childScopeCases states which traces the scoped completion contract accepts.
 // A nested message keeps its structural, session, and ordering validation but
 // never opens, advances, or settles the root follow-up cycle or batch.
-func childScopeCases(mode string) []scopeCase {
+// advisory selects the current revision, whose unknown content block types
+// are opaque JSON while known blocks stay validated.
+func childScopeCases(mode string, advisory bool) []scopeCase {
 	initial := interactiveInitLine(mode)
 	principal := attributedResultLine(tracePrincipalText, `,"result_index":0`, 4, "0.1")
 	followUp := attributedResultLine("neutral", notificationAttribution(1), 1, "0.2")
@@ -67,8 +69,10 @@ func childScopeCases(mode string) []scopeCase {
 		{"parent message then init", []string{initial, principal, rootText, initial, followUp}, false},
 		{"parent message before init", []string{rootText, initial, principal}, false},
 		{"nested message before init", []string{childAssistant, initial, principal}, false},
-		{"nested message with invalid content after the principal", []string{initial, principal, scopeMessage("assistant", scopeChildParent, `{"type":"unknown"}`)}, false},
-		{"nested message with invalid content before the principal", []string{initial, scopeMessage("user", scopeChildParent, `{"type":"unknown"}`), principal}, false},
+		{"nested message with invalid content after the principal", []string{initial, principal, scopeMessage("assistant", scopeChildParent, `{"type":"unknown"}`)}, advisory},
+		{"nested message with invalid content before the principal", []string{initial, scopeMessage("user", scopeChildParent, `{"type":"unknown"}`), principal}, advisory},
+		{"nested message with an invalid known block after the principal", []string{initial, principal, scopeMessage("assistant", scopeChildParent, `{"type":"tool_use","id":"toolu_x","input":{}}`)}, false},
+		{"nested message with an invalid known block before the principal", []string{initial, scopeMessage("user", scopeChildParent, `{"type":"tool_result","is_error":"no"}`), principal}, false},
 		{"nested message from another session", []string{initial, principal, strings.Replace(childAssistant, claudeTestUUID, "123e4567-e89b-12d3-a456-426614174001", 1)}, false},
 	}
 	for _, scope := range []struct{ name, field string }{
@@ -94,24 +98,28 @@ func childScopeCases(mode string) []scopeCase {
 }
 
 func TestScopedPrintCompletionRoutesNestedMessages(t *testing.T) {
-	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		for _, tc := range childScopeCases(mode) {
-			t.Run(mode+"/"+tc.name, func(t *testing.T) {
-				interpretation, answer := evaluateWriteTrace(t, NewInterpreter(mode), tc.lines)
-				requireScopeVerdict(t, tc, interpretation, answer)
-			})
+	for _, revision := range attributedRevisions() {
+		for _, mode := range []string{Mode, WorkspaceWriteMode} {
+			for _, tc := range childScopeCases(mode, revision.advisory) {
+				t.Run(revision.name+"/"+mode+"/"+tc.name, func(t *testing.T) {
+					interpretation, answer := evaluateWriteTrace(t, revision.print(mode), tc.lines)
+					requireScopeVerdict(t, tc, interpretation, answer)
+				})
+			}
 		}
 	}
 }
 
 func TestScopedInteractiveSealedCompletionRoutesNestedMessages(t *testing.T) {
-	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		for _, tc := range childScopeCases(mode) {
-			t.Run(mode+"/"+tc.name, func(t *testing.T) {
-				lines := append(append([]string{interactiveRunning}, tc.lines...), interactiveIdle)
-				interpretation, answer := evaluateInteractiveTrace(t, newInteractionInterpreter(mode), lines)
-				requireScopeVerdict(t, tc, interpretation, answer)
-			})
+	for _, revision := range attributedRevisions() {
+		for _, mode := range []string{Mode, WorkspaceWriteMode} {
+			for _, tc := range childScopeCases(mode, revision.advisory) {
+				t.Run(revision.name+"/"+mode+"/"+tc.name, func(t *testing.T) {
+					lines := append(append([]string{interactiveRunning}, tc.lines...), interactiveIdle)
+					interpretation, answer := evaluateInteractiveTrace(t, revision.interactive(mode), lines)
+					requireScopeVerdict(t, tc, interpretation, answer)
+				})
+			}
 		}
 	}
 }
@@ -133,7 +141,7 @@ func TestScopedLiveInteractionRoutesNestedMessages(t *testing.T) {
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
 		t.Run(mode, func(t *testing.T) {
 			// The first case is the native-shaped nested-agent trace.
-			trace := append(append([]string{interactiveRunning}, childScopeCases(mode)[0].lines...), interactiveIdle)
+			trace := append(append([]string{interactiveRunning}, childScopeCases(mode, true)[0].lines...), interactiveIdle)
 			p := liveAttributedInteractionIn(t, mode)
 			ready := 0
 			for index, line := range trace {

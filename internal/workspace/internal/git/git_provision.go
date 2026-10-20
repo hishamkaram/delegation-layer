@@ -32,7 +32,8 @@ func (g Git) Provision(ctx context.Context, source contract.Source, checkoutPath
 	if config.PathsOverlap(path, source.Root) || config.PathsOverlap(path, source.CommonDir) || config.PathsOverlap(path, source.GitDir) {
 		return contract.Checkout{}, fmt.Errorf("%w: checkout path overlaps a Git identity path", contract.ErrInvalidGitContext)
 	}
-	if runErr := g.runWorktreeCommand(ctx, source, []string{"worktree", "add", "--detach", "--lock", path, source.BaseOID}); runErr != nil {
+	// Git copies sparse-checkout and per-worktree settings from this context.
+	if runErr := g.runWorktreeCommand(ctx, source, source.Root, []string{"worktree", "add", "--detach", "--lock", path, source.BaseOID}); runErr != nil {
 		return contract.Checkout{}, fmt.Errorf("provision Git worktree: %w", runErr)
 	}
 	checkout, err := g.InspectProvisioned(ctx, source, path)
@@ -101,7 +102,7 @@ func (g Git) inspectManagedCheckout(ctx context.Context, source contract.Source,
 	if ctx == nil {
 		return contract.Checkout{}, errors.Join(contract.ErrInvalidGitContext, errors.New("nil cleanup inspection context"))
 	}
-	if err := g.validateSourceIdentity(ctx, source); err != nil {
+	if err := g.validateRepositoryIdentity(ctx, source); err != nil {
 		return contract.Checkout{}, err
 	}
 	path, err := canonicalPath(checkoutPath, "checkout path")
@@ -173,7 +174,7 @@ func (g Git) Remove(ctx context.Context, checkout contract.Checkout) error {
 		return err
 	}
 	if registration.locked {
-		if unlockErr := g.runWorktreeCommand(ctx, checkout.Source, []string{"worktree", "unlock", checkout.CheckoutPath}); unlockErr != nil {
+		if unlockErr := g.runWorktreeCommand(ctx, checkout.Source, checkout.Source.CommonDir, []string{"worktree", "unlock", checkout.CheckoutPath}); unlockErr != nil {
 			return fmt.Errorf("unlock Git worktree: %w", unlockErr)
 		}
 	}
@@ -187,7 +188,7 @@ func (g Git) Remove(ctx context.Context, checkout contract.Checkout) error {
 	if registration.locked {
 		return fmt.Errorf("%w: Git worktree became locked before removal", contract.ErrIdentityMismatch)
 	}
-	if err := g.runWorktreeCommand(ctx, checkout.Source, []string{"worktree", "remove", "--force", checkout.CheckoutPath}); err != nil {
+	if err := g.runWorktreeCommand(ctx, checkout.Source, checkout.Source.CommonDir, []string{"worktree", "remove", "--force", checkout.CheckoutPath}); err != nil {
 		return fmt.Errorf("remove Git worktree: %w", err)
 	}
 	return g.VerifyRemoved(ctx, checkout)
@@ -200,7 +201,7 @@ func (g Git) VerifyRemoved(ctx context.Context, checkout contract.Checkout) erro
 	if ctx == nil {
 		return errors.Join(contract.ErrInvalidGitContext, errors.New("nil removed verification context"))
 	}
-	if err := g.validateSourceIdentity(ctx, checkout.Source); err != nil {
+	if err := g.validateRepositoryIdentity(ctx, checkout.Source); err != nil {
 		return err
 	}
 	path, err := canonicalPath(checkout.CheckoutPath, "checkout path")
@@ -233,7 +234,7 @@ func (g Git) VerifyRemoved(ctx context.Context, checkout contract.Checkout) erro
 }
 
 func (g Git) validateCheckout(ctx context.Context, checkout contract.Checkout) error {
-	if err := g.validateSourceIdentity(ctx, checkout.Source); err != nil {
+	if err := g.validateRepositoryIdentity(ctx, checkout.Source); err != nil {
 		return err
 	}
 	checkoutRoot, err := validateCheckoutPaths(checkout)
@@ -427,7 +428,7 @@ type worktreeInventoryEntry struct {
 // belongs to the target resolver, not to unrelated worktree validation.
 func (g Git) worktreeRegistrations(ctx context.Context, source contract.Source) (registrations []worktreeInventoryEntry, resultErr error) {
 	resultErr = g.withWorktreeMetadata(ctx, source, func(bound Git) error {
-		_, err := bound.readRecordOutput(ctx, source.Root, []string{"worktree", "list", "--porcelain", "-z"}, func(input io.Reader) error {
+		_, err := bound.readRecordOutput(ctx, source.CommonDir, []string{"worktree", "list", "--porcelain", "-z"}, func(input io.Reader) error {
 			var parseErr error
 			registrations, parseErr = parseWorktreeRegistrationsReader(input)
 			if parseErr != nil {

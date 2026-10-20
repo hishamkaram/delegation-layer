@@ -120,6 +120,10 @@ type Hooks struct {
 }
 
 type Options struct {
+	// Protocol selects a machine-only native protocol on the same transport as
+	// Interaction, without a user interaction journal. It is valid only for a
+	// non-interactive task; see ValidateProtocolSelection.
+	Protocol    Protocol
 	Interaction InteractionProtocol
 	// Preflight performs finite policy validation at the last boundary before
 	// provider Start; it has no provider-start authority. Any native inspection

@@ -61,11 +61,15 @@ func TestWorktreeMetadataCommandsExcludeOtherOwners(t *testing.T) {
 			source := topologyTestSource(t)
 			runner := topologyTestRunner(t, source, action)
 			git := Git{Runner: runner}
+			directory := source.CommonDir
+			if action == "add" {
+				directory = source.Root
+			}
 			var err error
 			if action == "list" {
 				_, err = git.worktreeRegistrations(t.Context(), source)
 			} else {
-				err = git.runWorktreeCommand(t.Context(), source, []string{"worktree", action})
+				err = git.runWorktreeCommand(t.Context(), source, directory, []string{"worktree", action})
 			}
 			if err != nil || len(runner.calls) != 1 {
 				t.Fatalf("metadata command = %v, calls = %d", err, len(runner.calls))
@@ -78,6 +82,13 @@ func TestWorktreeMetadataCommandsExcludeOtherOwners(t *testing.T) {
 func topologyTestRunner(t *testing.T, source Source, action string) *recordingGitRunner {
 	t.Helper()
 	return &recordingGitRunner{handler: func(command *exec.Cmd) error {
+		directory := source.CommonDir
+		if action == "add" {
+			directory = source.Root
+		}
+		if command.Dir != directory || command.Args[2] != directory {
+			t.Fatalf("worktree %s directory = %q/%q, want %q", action, command.Dir, command.Args[2], directory)
+		}
 		requireTopologyPeerBlocked(t, source.CommonDir)
 		if len(command.ExtraFiles) != 1 {
 			t.Fatal("Git did not inherit the topology lease")
@@ -93,6 +104,46 @@ func topologyTestRunner(t *testing.T, source Source, action string) *recordingGi
 	}}
 }
 
+func TestWorktreeCommandsUseSourceContextOnlyForAdd(t *testing.T) {
+	fixture := newCheckoutFixture(t)
+	if err := os.RemoveAll(fixture.checkout.CheckoutPath); err != nil {
+		t.Fatal(err)
+	}
+	source := fixture.checkout.Source
+	runner := newRepositoryFixtureRunner(source.Root, fixture.checkout.CheckoutPath, fixture.checkout.AdminDir, testBaseOID)
+	state := &removeRecoveryState{fixture: fixture, baseHandler: runner.handler, locked: true}
+	seen := make(map[string]bool)
+	runner.handler = func(command *exec.Cmd) error {
+		if args := command.Args[3:]; len(args) >= 2 && args[0] == "worktree" {
+			action := args[1]
+			directory := source.CommonDir
+			if action == "add" {
+				directory = source.Root
+			}
+			if command.Dir != directory || command.Args[2] != directory {
+				t.Fatalf("worktree %s directory = %q/%q, want %q", action, command.Dir, command.Args[2], directory)
+			}
+			requireTopologyPeerBlocked(t, source.CommonDir)
+			seen[action] = true
+		}
+		return state.handle(command)
+	}
+	git := Git{Runner: runner}
+	checkout, err := git.Provision(t.Context(), source, fixture.checkout.CheckoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = git.Remove(t.Context(), checkout); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"add", "list", "unlock", "remove"} {
+		if !seen[action] {
+			t.Fatalf("production provision/removal did not exercise worktree %s", action)
+		}
+	}
+	requireTopologyLeaseReleased(t, source.CommonDir)
+}
+
 func TestWorktreeMetadataLeaseUsesDirectoryIdentityAcrossAliases(t *testing.T) {
 	source := topologyTestSource(t)
 	alias := worktreeParentAlias(t, source.CommonDir)
@@ -102,7 +153,7 @@ func TestWorktreeMetadataLeaseUsesDirectoryIdentityAcrossAliases(t *testing.T) {
 		requireTopologyLeaseReleased(t, other.CommonDir)
 		return nil
 	}}
-	if err := (Git{Runner: runner}).runWorktreeCommand(t.Context(), source, []string{"worktree", "list"}); err != nil {
+	if err := (Git{Runner: runner}).runWorktreeCommand(t.Context(), source, source.CommonDir, []string{"worktree", "list"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -114,7 +165,7 @@ func TestWorktreeMetadataLeaseReleasesAfterRunnerFailure(t *testing.T) {
 		requireTopologyPeerBlocked(t, source.CommonDir)
 		return want
 	}}
-	err := (Git{Runner: runner}).runWorktreeCommand(t.Context(), source, []string{"worktree", "add"})
+	err := (Git{Runner: runner}).runWorktreeCommand(t.Context(), source, source.Root, []string{"worktree", "add"})
 	if !errors.Is(err, want) {
 		t.Fatalf("native failure was lost: %v", err)
 	}
@@ -130,7 +181,7 @@ func TestWorktreeMetadataLeaseRejectsExpiredDeadlineBeforeRunner(t *testing.T) {
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 	runner := &recordingGitRunner{}
-	err := (Git{Runner: runner}).runWorktreeCommand(ctx, source, []string{"worktree", "add"})
+	err := (Git{Runner: runner}).runWorktreeCommand(ctx, source, source.Root, []string{"worktree", "add"})
 	if !errors.Is(err, context.DeadlineExceeded) || len(runner.calls) != 0 {
 		t.Fatalf("expired command entered Git: %v, %d calls", err, len(runner.calls))
 	}
@@ -163,7 +214,7 @@ func TestWorktreeMetadataContendedLeaseHonorsCancellationAndRelease(t *testing.T
 			runner := &recordingGitRunner{}
 			done := make(chan error, 1)
 			go func() {
-				done <- (Git{Runner: runner}).runWorktreeCommand(observed, source, []string{"worktree", "add"})
+				done <- (Git{Runner: runner}).runWorktreeCommand(observed, source, source.Root, []string{"worktree", "add"})
 			}()
 			select {
 			case <-observed.waiting:

@@ -21,6 +21,7 @@ from scripts.delegate_acceptance.evidence.records import parse_json_output
 from scripts.delegate_acceptance.evidence.validation import require
 from scripts.delegate_acceptance.processes.operations import Process, Processes
 from scripts.delegate_acceptance.processes.observation import wait_until
+from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 from scripts.delegate_acceptance.tasks.publication import snapshot, verify_collected_outcome
 from scripts.delegate_acceptance.private_cli import control_fixture
@@ -651,6 +652,7 @@ def run_prepared_modern_contention(
         installed.state,
         response_directory,
         managed_runner=True,
+        runner_placement=STATE_INSTALLED_RUNNER,
     )
     fixture = ModernFixture(
         controls, installed.brief, installed.workspace, lifetime.gate, installed.waiter_directory, installed.lease_nonce

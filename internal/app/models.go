@@ -31,15 +31,24 @@ type ModelsResponse struct {
 	Provider      string `json:"provider"`
 	ObservedAt    string `json:"observed_at"`
 	commonprovider.ModelCatalog
+	// Failure and Error describe an operational discovery failure. They project
+	// dispatchFailure and its fixed public message, never the raw cause.
+	Failure *DispatchFailureResponse `json:"failure,omitempty"`
+	Error   string                   `json:"error,omitempty"`
 }
 
 func runModels(a Arguments, stdout io.Writer, deps Dependencies) int {
 	catalog, err := discoverModels(a, deps)
 	errorCode := 0
+	var failure *DispatchFailureResponse
+	var publicError string
 	if err != nil {
-		catalog, errorCode = modelDiscoveryFailureCatalog(err)
+		operational := dispatchFailure(err, "not_created")
+		failure = &operational
+		publicError = modelDiscoveryPublicError(err, operational)
+		catalog, errorCode = modelDiscoveryFailureCatalog(err, operational)
 	}
-	response := ModelsResponse{SchemaVersion: OutputSchemaVersion, Command: "models", Provider: a.Provider, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), ModelCatalog: catalog}
+	response := ModelsResponse{SchemaVersion: OutputSchemaVersion, Command: "models", Provider: a.Provider, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), ModelCatalog: catalog, Failure: failure, Error: publicError}
 	data, err := json.Marshal(response)
 	if err != nil || len(data)+1 > MaxJSONResponseBytes {
 		return 1
@@ -68,8 +77,9 @@ func runModels(a Arguments, stdout io.Writer, deps Dependencies) int {
 // modelDiscoveryFailureCatalog keeps a supervisor safety refusal distinct from
 // a provider-model failure. It reuses dispatch's canonical failure
 // classification so a new supervisor code cannot silently acquire a second
-// lifecycle policy here.
-func modelDiscoveryFailureCatalog(err error) (commonprovider.ModelCatalog, int) {
+// lifecycle policy here. The caller derives the failure once and passes it in,
+// so the catalog and the response projection share one classification.
+func modelDiscoveryFailureCatalog(err error, failure DispatchFailureResponse) (commonprovider.ModelCatalog, int) {
 	errorCode := classifyCode(err, 1)
 	catalog := commonprovider.ModelCatalog{Status: "failed", ReasonCode: "discovery_failed", Source: "none", Models: []commonprovider.ModelInfo{}}
 	if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) || errors.Is(err, commonprovider.ErrProfileUnavailable) {
@@ -79,7 +89,6 @@ func modelDiscoveryFailureCatalog(err error) (commonprovider.ModelCatalog, int) 
 		catalog.ReasonCode = "discovery_timeout"
 	}
 
-	failure := dispatchFailure(err, "not_created")
 	switch failure.Code {
 	case "supervisor_migration_blocked", "supervisor_migration_unsupported", "supervisor_upgrade_required":
 		catalog.Status = "blocked"
@@ -89,9 +98,24 @@ func modelDiscoveryFailureCatalog(err error) (commonprovider.ModelCatalog, int) 
 	return catalog, errorCode
 }
 
+// modelDiscoveryPublicError mirrors dispatch's public error text: a fixed
+// message per failure code, extended only by a fixed supervisor reason detail.
+func modelDiscoveryPublicError(err error, failure DispatchFailureResponse) string {
+	message := dispatchFailureMessage(failure.Code)
+	if failure.ReasonCode != "" {
+		message = publicSupervisorError(message, err).Error()
+	}
+	return message
+}
+
 func writeModelsHuman(out io.Writer, response ModelsResponse) error {
 	if _, err := fmt.Fprintf(out, "%s: %s (%s)\n", response.Provider, response.Status, response.ReasonCode); err != nil {
 		return err
+	}
+	if response.Failure != nil {
+		if err := writeModelsFailureHuman(out, response); err != nil {
+			return err
+		}
 	}
 	for _, model := range response.Models {
 		if _, err := fmt.Fprintf(out, "%s\t%s\tefforts: %v\n", model.ID, model.Name, modelEffortsHuman(model.Efforts)); err != nil {
@@ -102,51 +126,85 @@ func writeModelsHuman(out io.Writer, response ModelsResponse) error {
 	return err
 }
 
+func writeModelsFailureHuman(out io.Writer, response ModelsResponse) error {
+	failure := response.Failure
+	if _, err := fmt.Fprintf(out, "failure: %s (stage: %s, next action: %s)\n", failure.Code, failure.Stage, failure.NextAction); err != nil {
+		return err
+	}
+	if failure.ReasonCode != "" {
+		if _, err := fmt.Fprintf(out, "reason: %s\n", failure.ReasonCode); err != nil {
+			return err
+		}
+	}
+	if failure.RecoveryCommand != "" {
+		if _, err := fmt.Fprintf(out, "recovery: %s\n", failure.RecoveryCommand); err != nil {
+			return err
+		}
+	}
+	if inspected := failure.Inspection; inspected != nil {
+		if _, err := fmt.Fprintf(out, "inspection: %s (deadline: %s)\n", inspected.Class, inspected.DeadlineState); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(out, "error: %s\n", response.Error)
+	return err
+}
+
 func discoverModels(a Arguments, deps Dependencies) (catalog commonprovider.ModelCatalog, resultErr error) {
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {
-		return catalog, err
+		return catalog, admission.WithStage("resolve-state-root", err)
 	}
 	if a.Cwd == "" {
 		a.Cwd, err = os.Getwd()
 		if err != nil {
-			return catalog, err
+			return catalog, admission.WithStage("validate-request", err)
 		}
 	}
 	_, cwd, err := config.ValidateDirectories(root, a.Cwd)
 	if err != nil {
-		return catalog, err
+		return catalog, admission.WithStage("validate-request", err)
 	}
 	registration, err := deps.Catalog.Lookup(a.Provider)
 	if err != nil || registration.Models == nil || len(registration.Description.SupportedModes) == 0 {
-		return catalog, commonprovider.ErrProfileUnavailable
+		return catalog, admission.WithStage("select-provider", commonprovider.ErrProfileUnavailable)
 	}
 	store, err := openStore(root, deps.storeDependencies(), true)
 	if err != nil {
-		return catalog, err
+		return catalog, admission.WithStage("open-state", err)
 	}
-	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
+	defer func() { resultErr = joinCloseFailure(resultErr, "close-state", store.Close()) }()
 	return discoverModelsInStore(a, deps, store, cwd, registration.Description.SupportedModes[0])
+}
+
+// joinCloseFailure keeps the primary failure first so its stage owns the
+// public classification. A close fault alone is classified by its own stage.
+func joinCloseFailure(primary error, closeStage string, closeErr error) error {
+	return errors.Join(primary, admission.WithStage(closeStage, closeErr))
 }
 
 func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store, cwd, mode string) (result commonprovider.ModelCatalog, resultErr error) {
 	id, err := randomid.NewTaskID()
 	if err != nil {
-		return commonprovider.ModelCatalog{}, err
+		return commonprovider.ModelCatalog{}, admission.WithStage("prepare-model-discovery", err)
 	}
 	// Inspection records reuse the normalized request identity, but no task is
 	// admitted and this marker is never sent to a provider.
 	req, err := admission.BuildRequest(store.RootID, id, a.Provider, cwd, task.TaskConfig{Permission: mode, Budget: inspection.ModelDiscoveryTimeout.String()}, []byte("model discovery"), nil)
 	if err != nil {
-		return commonprovider.ModelCatalog{}, err
+		return commonprovider.ModelCatalog{}, admission.WithStage("prepare-model-discovery", err)
 	}
 	candidate, err := prepareModelsCandidate(deps, store.Root, req)
 	if err != nil {
-		return commonprovider.ModelCatalog{}, err
+		return commonprovider.ModelCatalog{}, admission.WithStage("prepare-model-discovery", err)
 	}
 	a, supervisor, queueRepairRunner, prepareErr := prepareModelDiscoverySupervisor(a, deps, store, candidate)
+	// The owner takes the client even when preparation also returned an error:
+	// a bootstrap probe may leave a live client behind that only it may close.
 	supervisorOwner, err := supervisorcore.AcquireClient(supervisor, prepareErr)
-	defer func() { resultErr = errors.Join(resultErr, supervisorOwner.CloseAfterPending(resultErr)) }()
+	defer func() {
+		resultErr = joinCloseFailure(resultErr, "close-supervisor", supervisorOwner.CloseAfterPending(resultErr))
+	}()
 	if err != nil {
 		return commonprovider.ModelCatalog{}, err
 	}
@@ -154,23 +212,23 @@ func discoverModelsInStore(a Arguments, deps Dependencies, store *taskdir.Store,
 	inspectionGroupReady := false
 	if candidate.Inspection != nil {
 		if groupErr := supervisorcore.EnsureInspectionGroup(store, supervisor, inspection.ModelDiscoveryTimeout); groupErr != nil {
-			return commonprovider.ModelCatalog{}, fmt.Errorf("prepare inspection supervisor before model discovery: %w", groupErr)
+			return commonprovider.ModelCatalog{}, admission.WithStage("start-supervisor", fmt.Errorf("prepare inspection supervisor before model discovery: %w", groupErr))
 		}
 		inspectionGroupReady = true
 	}
 	if queueRepairRunner != "" {
 		if repairErr := supervisorcore.EnsurePrivateQueuedRunnerRepair(store, supervisor, queueRepairRunner); repairErr != nil {
-			return commonprovider.ModelCatalog{}, fmt.Errorf("repair queued task runner paths before model discovery: %w", repairErr)
+			return commonprovider.ModelCatalog{}, admission.WithStage("start-supervisor", fmt.Errorf("repair queued task runner paths before model discovery: %w", repairErr))
 		}
 	}
 	facts, _, err := admissionInspectionFacts(a, deps, store, req, candidate, supervisor, inspectionGroupReady)
 	if err != nil {
-		return commonprovider.ModelCatalog{}, err
+		return commonprovider.ModelCatalog{}, admission.WithStage("inspect-provider", err)
 	}
 	if err = json.Unmarshal(facts, &result); err != nil {
-		return result, err
+		return result, admission.WithStage("finalize-provider", err)
 	}
-	return result, commonprovider.ValidateModelCatalog(result)
+	return result, admission.WithStage("finalize-provider", commonprovider.ValidateModelCatalog(result))
 }
 
 func prepareModelDiscoverySupervisor(a Arguments, deps Dependencies, store *taskdir.Store, candidate commonprovider.ProfileCandidate) (Arguments, *pueue.Client, string, error) {
@@ -180,11 +238,11 @@ func prepareModelDiscoverySupervisor(a Arguments, deps Dependencies, store *task
 	}
 	options, err := admission.SupervisorOptionsForCandidate(deps.SupervisorOptions, candidate)
 	if err != nil {
-		return Arguments{}, nil, "", err
+		return Arguments{}, nil, "", admission.WithStage("prepare-supervisor-options", err)
 	}
 	privateSupervisor, err := admissionUsesPrivateSupervisor(a, store.Root)
 	if err != nil {
-		return Arguments{}, nil, "", err
+		return Arguments{}, nil, "", admission.WithStage("prepare-supervisor-options", err)
 	}
 	// Model discovery shares dispatch's private-supervisor bootstrap. A model
 	// probe may not create a task record, but it must still migrate a changed
@@ -196,11 +254,11 @@ func prepareModelDiscoverySupervisor(a Arguments, deps Dependencies, store *task
 		supervisor, err = bindInitialForAdmission(a, deps, store.Root, options, candidate.Inspection != nil)
 	}
 	if err != nil {
-		return Arguments{}, supervisor, "", err
+		return Arguments{}, supervisor, "", admission.WithStage("start-supervisor", err)
 	}
 	if a.savedSupervisor != nil && pueue.IsPrivateConfig(store.Root, supervisor.Binding().ConfigPath) {
 		if err = supervisorcore.EnsureAdmissionScheduling(store, supervisor, options); err != nil {
-			return Arguments{}, supervisor, "", err
+			return Arguments{}, supervisor, "", admission.WithStage("start-supervisor", err)
 		}
 	}
 	return a, supervisor, queueRepairRunner, nil
@@ -214,7 +272,7 @@ func prepareModelDiscoveryExecutables(a Arguments, deps Dependencies, root strin
 	}
 	queueRepairRunner, err := admissionQueueRepairRunner(a, deps, runner)
 	if err != nil {
-		return Arguments{}, "", err
+		return Arguments{}, "", admission.WithStage("prepare-supervisor-executables", err)
 	}
 	a.runnerOwnership = runnerOwnership
 	a.Runner = runner
@@ -224,14 +282,14 @@ func prepareModelDiscoveryExecutables(a Arguments, deps Dependencies, root strin
 func prepareModelsCandidate(deps Dependencies, root string, req task.TaskRecord) (commonprovider.ProfileCandidate, error) {
 	registration, err := deps.Catalog.Lookup(req.Provider)
 	if err != nil || registration.Models == nil || registration.Prepare == nil {
-		return commonprovider.ProfileCandidate{}, commonprovider.ErrProfileUnavailable
+		return commonprovider.ProfileCandidate{}, admission.WithStage("select-provider", commonprovider.ErrProfileUnavailable)
 	}
 	candidate, err := registration.Prepare(req)
 	if err != nil {
-		return candidate, err
+		return candidate, admission.WithStage("prepare-provider", err)
 	}
 	if candidate.Inspection == nil {
-		return candidate, commonprovider.ErrProfileUnavailable
+		return candidate, admission.WithStage("select-provider", commonprovider.ErrProfileUnavailable)
 	}
 	models := registration.Models()
 	definition := *candidate.Inspection
@@ -247,7 +305,7 @@ func prepareModelsCandidate(deps Dependencies, root string, req task.TaskRecord)
 		return candidate, err
 	}
 	if candidate.Directory != req.CanonicalCwd || config.ValidateProvider(req.Provider) != nil {
-		return candidate, commonprovider.ErrProfileUnavailable
+		return candidate, admission.WithStage("select-provider", commonprovider.ErrProfileUnavailable)
 	}
 	return candidate, nil
 }

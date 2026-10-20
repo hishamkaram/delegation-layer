@@ -134,7 +134,7 @@ func parseCurrentClaudeStdoutForMode(reader io.Reader, mode string, policy compl
 }
 
 func processClaudeCurrentRecord(state *eventState, value providerjson.Value) error {
-	event, err := decodeClaudeCurrentEvent(value)
+	event, err := state.attribution.decodeEvent(value)
 	if err != nil {
 		state.markSemantic(err.Error())
 		return state.semanticErr
@@ -207,7 +207,7 @@ func applyClaudeCurrentSystem(state *eventState, fields map[string]providerjson.
 		state.markSemantic("multiple system/init events")
 		return
 	}
-	init, err := decodeClaudeCurrentInit(fields, state.mode)
+	init, err := state.attribution.decodeInit(fields, state.mode)
 	if err != nil {
 		state.markSemantic(err.Error())
 		return
@@ -217,27 +217,20 @@ func applyClaudeCurrentSystem(state *eventState, fields map[string]providerjson.
 	state.observedSessionID = init.sessionID
 }
 
+// decodeClaudeCurrentInit is the frozen strict init decoder: every listed
+// field is required or validated and compared on a repeated init.
 func decodeClaudeCurrentInit(fields map[string]providerjson.Value, mode string) (initState, error) {
-	sessionID, err := claudeCurrentRequiredString(fields, "session_id", 128)
-	if err != nil || !validSessionID(sessionID) {
-		return initState{}, errors.New("system/init session_id is not a UUID")
+	sessionID, err := decodeClaudeInitSession(fields)
+	if err != nil {
+		return initState{}, err
 	}
 	version, err := claudeCurrentRequiredText(fields, "claude_code_version", 256)
 	if err != nil {
 		return initState{}, errors.New("system/init claude_code_version is invalid")
 	}
-	permission, err := claudeCurrentRequiredText(fields, "permissionMode", 128)
+	permission, err := decodeClaudeInitPermission(fields, mode)
 	if err != nil {
 		return initState{}, err
-	}
-	wantPermission := "plan"
-	if mode == WorkspaceWriteMode {
-		wantPermission = "bypassPermissions"
-	} else if mode != Mode {
-		return initState{}, fmt.Errorf("unsupported Claude permission mode %q", mode)
-	}
-	if permission != wantPermission {
-		return initState{}, fmt.Errorf("system/init permissionMode is not %s", wantPermission)
 	}
 	apiKeySource, err := claudeCurrentRequiredText(fields, "apiKeySource", 256)
 	if err != nil {
@@ -319,20 +312,23 @@ func applyClaudeCurrentMessageEvent(state *eventState, fields map[string]provide
 		state.markSemantic(eventType + " event precedes system/init")
 		return
 	}
-	if err := validateClaudeCurrentMessageEvent(fields, eventType); err != nil {
+	if err := validateClaudeCurrentMessageEvent(fields, eventType, state.attribution.advisoryWire()); err != nil {
 		state.markSemantic(err.Error())
 	}
 }
 
-func validateClaudeCurrentMessageEvent(fields map[string]providerjson.Value, eventType string) error {
+// validateClaudeCurrentMessageEvent validates known content blocks. advisory
+// is the immutable policy's choice to accept an unknown content block type as
+// opaque JSON instead of rejecting it.
+func validateClaudeCurrentMessageEvent(fields map[string]providerjson.Value, eventType string, advisory bool) error {
 	message, ok := fields["message"]
 	if !ok || claudeCurrentValueIsNull(message) {
 		return nil
 	}
-	return validateClaudeCurrentMessage(message, eventType)
+	return validateClaudeCurrentMessage(message, eventType, advisory)
 }
 
-func validateClaudeCurrentMessage(value providerjson.Value, eventType string) error {
+func validateClaudeCurrentMessage(value providerjson.Value, eventType string, advisory bool) error {
 	message, err := value.Object("role", "content")
 	if err != nil {
 		return fmt.Errorf("%s message is not an object: %w", eventType, err)
@@ -345,14 +341,14 @@ func validateClaudeCurrentMessage(value providerjson.Value, eventType string) er
 		return nil
 	}
 	if err := content.Array(func(block providerjson.Value) error {
-		return validateClaudeCurrentContentBlock(block, eventType)
+		return validateClaudeCurrentContentBlock(block, eventType, advisory)
 	}); err != nil {
 		return err
 	}
 	return nil
 }
 
-func validateClaudeCurrentContentBlock(value providerjson.Value, eventType string) error {
+func validateClaudeCurrentContentBlock(value providerjson.Value, eventType string, advisory bool) error {
 	fields, err := value.Object("type")
 	if err != nil {
 		return fmt.Errorf("%s message content block is not an object", eventType)
@@ -373,6 +369,9 @@ func validateClaudeCurrentContentBlock(value providerjson.Value, eventType strin
 	case "tool_result":
 		return validateClaudeCurrentToolResult(value, eventType)
 	default:
+		if advisory {
+			return nil
+		}
 		return fmt.Errorf("unknown %s message content block type %q", eventType, kind)
 	}
 }

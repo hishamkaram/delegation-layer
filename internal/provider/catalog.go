@@ -134,11 +134,20 @@ func validateDescription(description Description) error {
 	if err := validateRuntimeCapability(description.Runtime); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidDescriptor, err)
 	}
-	if description.Discoverable && len(description.SupportedModes) == 0 {
+	return validateDiscoverable(description)
+}
+
+func validateDiscoverable(description Description) error {
+	if !description.Discoverable {
+		return nil
+	}
+	if len(description.SupportedModes) == 0 {
 		return fmt.Errorf("%w: discoverable provider %s has no supported mode", ErrInvalidDescriptor, description.ID)
 	}
-	if description.Discoverable && len(description.Runtime.RequiredFlags) == 0 {
-		return fmt.Errorf("%w: discoverable provider %s has no runtime flag requirements", ErrInvalidDescriptor, description.ID)
+	// Help arguments name an inspectable command invocation; version arguments
+	// alone prove no native capability and never suffice.
+	if len(description.Runtime.RequiredFlags) == 0 && len(description.Runtime.HelpArgs) == 0 {
+		return fmt.Errorf("%w: discoverable provider %s has no runtime help command or flag requirements", ErrInvalidDescriptor, description.ID)
 	}
 	return nil
 }

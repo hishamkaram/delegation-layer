@@ -29,10 +29,16 @@ const (
 )
 
 type (
+	// Input is transient interpretation context derived from the immutable
+	// prepared request and sealed evidence; it is never persisted authority.
+	// RequestedConfig is the task's requested configuration. Its Permission is
+	// mandatory in every valid task, so an empty Permission means the caller
+	// supplied no context. Empty Model and Effort are legitimate defaults.
 	Input struct {
 		Seal            task.ProviderExitRecord
 		ExpectedSession task.SessionExpectation
 		RecordedSession *task.SessionIdentity
+		RequestedConfig task.TaskConfig
 	}
 	// Evidence supplies callback-scoped readers; retaining a reader does not retain access.
 	Evidence interface {

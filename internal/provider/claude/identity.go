@@ -123,13 +123,16 @@ func (o *identityObserver) Observe(data []byte) {
 
 // ObserveRecord is the current record-aware identity path. It validates only
 // the session-bearing system/init controls and retains no native record data.
+// It reads the advisory projection: an opaque payload with repeated keys
+// cannot hide the session identity, while a duplicate selected field still
+// stops observation. Completion verdicts stay with the sealed predicate.
 func (o *identityObserver) ObserveRecord(value providerjson.Value) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.done {
 		return o.completeErr
 	}
-	event, err := decodeClaudeCurrentEvent(value)
+	event, err := decodeClaudeAdvisoryEvent(value)
 	if err != nil {
 		return err
 	}
@@ -159,9 +162,13 @@ func (o *identityObserver) observeCurrentRecord(event claudeCurrentEvent) error 
 	}
 	// Native background notification cycles repeat init for the session that
 	// was already bound to the expected ID above, so observing it is
-	// idempotent. This observer only binds identity: attributed predicate
-	// revisions compare every repeated init, and frozen single-result
-	// revisions reject any repeated init.
+	// idempotent. This observer only binds identity; each sealed predicate owns
+	// its repeated-init rule: the current advisory revisions compare the
+	// session and native permission mode only, the retained scoped and
+	// unscoped attributed revisions compare every init field they were sealed
+	// with, and the frozen single-result print revisions reject any repeated
+	// init. Retained interactive revisions permit a same-session
+	// reinitialization before completion.
 	if !o.seen {
 		o.observeInit(sessionID)
 	}

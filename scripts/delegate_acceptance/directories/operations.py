@@ -109,6 +109,11 @@ class OwnedDirectory:
                 "owned directory authority has no pinned directory: " + str(self.directory))
         return self._directory_fd
 
+    @property
+    def consumed(self) -> bool:
+        """Report whether this authority was already consumed, without touching descriptors."""
+        return self._consumed
+
     def assert_live(self) -> None:
         """Require the original directory to retain its owned pathname."""
         _validate_entry_parent(self)
@@ -448,6 +453,18 @@ def release_owned_directory(token: OwnedDirectory, deadline=None) -> bool:
         token.consume()
 
 
+def release_owned_directories(entries) -> None:
+    """Consume every token in reverse order, retaining directories; raise one aggregate."""
+    failures = []
+    for entry in reversed(tuple(entries)):
+        try:
+            release_owned_directory(entry)
+        except (OSError, RuntimeError) as error:
+            failures.append(entry.label + ": " + str(error))
+    if failures:
+        raise RuntimeError("directory ownership release failed: " + "; ".join(failures))
+
+
 def clear_owned_directory(token: OwnedDirectory, deadline=None) -> bool:
     """Remove an owned directory's contents while retaining its exact root."""
     require(isinstance(token, OwnedDirectory), "owned directory identity token is required")
@@ -599,16 +616,12 @@ class DirectoryOwner:
     def release(self) -> bool:
         """Retain owned directories while consuming this owner's authorities."""
         require(not self._transferred, "directory ownership was already transferred")
-        failures = []
-        for entry in reversed(self._entries):
-            try:
-                release_owned_directory(entry)
-            except (OSError, RuntimeError) as error:
-                failures.append(entry.label + ": " + str(error))
-        self._entries.clear()
-        self._transferred = True
-        if failures:
-            raise RuntimeError("directory ownership release failed: " + "; ".join(failures))
+        try:
+            release_owned_directories(tuple(self._entries))
+        finally:
+            # A handled aggregate consumed every token; an interruption keeps the live ones.
+            self._entries[:] = [entry for entry in self._entries if not entry.consumed]
+            self._transferred = not self._entries
         return True
 
     def clear(self) -> bool:

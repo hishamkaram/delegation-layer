@@ -25,27 +25,61 @@ const preAttributionInteractionContract = "Claude stream-json host clarification
 // sealed replay applies the reducer's settlement, with no idle re-check at EOF.
 const unscopedInteractionContract = "Claude stream-json host clarification v4: one initial user input; exact native session; repeated same-session initialization permitted before the principal result; AskUserQuestion answers only; never authorize other tools; input closes after the principal result, idle session, settled tracked agents, and settled follow-up cycles and batches; provider-native follow-ups after input closure remain evidence; completion attribution follows the current native print contract: the first result answers the caller turn with origin absent or human and result_index 0 when present, later results need consecutive result_index and origin task-notification without subkind, terminal_reason when present is completed, queued_turn_count when present is 0, an empty follow-up settles only as a documented zero-turn batch acknowledgement before its answering result, and follow-up failures, refusals, or unsettled cycles reject; only the principal result is selected; offset-streamed sealed records without a native event-size ceiling; stable runtime probe requires only --print; malformed, incomplete or conflicting evidence rejects; control journal sealed with raw streams\n"
 
-// interactionContract binds fresh interactive tasks to the same scoped
-// completion reducer as print evidence, stated inline; only question transport
-// and closure differ.
-const interactionContract = "Claude stream-json host clarification v5: one initial user input; exact native session; one initial system/init, with one identical repeated init permitted after each leading acknowledgement before root messages and, after the principal result, only at the start of a follow-up cycle before that cycle's root messages; AskUserQuestion answers only; never authorize other tools; a root tool_result resolves a pending question and a nested agent tool_result never does; input closes after the principal result, idle session, settled tracked agents, and settled follow-up cycles and batches, the closure is sticky, and end of stream requires the current session to be idle with no unsettled tracked agent, question, cycle, or batch; provider-native follow-ups after input closure remain evidence; completion attribution: the first result that is not a leading acknowledgement answers the caller turn with origin absent or human and result_index 0 when present, or the next consecutive index after leading acknowledgements, later results need consecutive result_index and origin task-notification without subkind, terminal_reason when present is completed, queued_turn_count when present is 0, an empty follow-up settles only as a documented zero-turn batch acknowledgement before its answering result, and follow-up failures, refusals, or unsettled cycles reject; leading acknowledgements: before the caller's result, results with origin task-notification without subkind that are successful, have an empty string result, num_turns explicitly 0, and consecutive result_index from 0, placed after the initial init and before any root message since that init or the previous acknowledgement, are accepted; they never answer, contribute usage or cost, or close the input, a failed, refused, aborted, or queued one always rejects, with its canonical refusal unless a higher-priority malformed or incomplete fault takes precedence, a stream of only acknowledgements is incomplete, and any other shape is malformed; message scope: a complete assistant or user message whose parent_tool_use_id is absent or null is a root message and, after a result, opens a follow-up cycle that its attributed result must close; a message whose parent_tool_use_id is a nonblank string of at most 1024 bytes without NUL or invalid UTF-8 is a nested agent message that stays structurally validated and session-bound but never opens, advances, or settles a cycle or batch, resolves a pending question, is selected as an answer, or affects accounting; any other parent_tool_use_id value, including an empty, blank, oversized, mistyped, or case-aliased field, is malformed before or after the principal result; only the principal result is selected; offset-streamed sealed records without a native event-size ceiling; stable runtime probe requires only --print; malformed, incomplete or conflicting evidence rejects; control journal sealed with raw streams\n"
+// scopedInteractionContract is the frozen interactive-v5 revision bound to the
+// scoped completion reducer and strict wire of print evidence at its
+// admission. Its bytes are retained for exact replay and reconstruction.
+const scopedInteractionContract = "Claude stream-json host clarification v5: one initial user input; exact native session; one initial system/init, with one identical repeated init permitted after each leading acknowledgement before root messages and, after the principal result, only at the start of a follow-up cycle before that cycle's root messages; AskUserQuestion answers only; never authorize other tools; a root tool_result resolves a pending question and a nested agent tool_result never does; input closes after the principal result, idle session, settled tracked agents, and settled follow-up cycles and batches, the closure is sticky, and end of stream requires the current session to be idle with no unsettled tracked agent, question, cycle, or batch; provider-native follow-ups after input closure remain evidence; completion attribution: the first result that is not a leading acknowledgement answers the caller turn with origin absent or human and result_index 0 when present, or the next consecutive index after leading acknowledgements, later results need consecutive result_index and origin task-notification without subkind, terminal_reason when present is completed, queued_turn_count when present is 0, an empty follow-up settles only as a documented zero-turn batch acknowledgement before its answering result, and follow-up failures, refusals, or unsettled cycles reject; leading acknowledgements: before the caller's result, results with origin task-notification without subkind that are successful, have an empty string result, num_turns explicitly 0, and consecutive result_index from 0, placed after the initial init and before any root message since that init or the previous acknowledgement, are accepted; they never answer, contribute usage or cost, or close the input, a failed, refused, aborted, or queued one always rejects, with its canonical refusal unless a higher-priority malformed or incomplete fault takes precedence, a stream of only acknowledgements is incomplete, and any other shape is malformed; message scope: a complete assistant or user message whose parent_tool_use_id is absent or null is a root message and, after a result, opens a follow-up cycle that its attributed result must close; a message whose parent_tool_use_id is a nonblank string of at most 1024 bytes without NUL or invalid UTF-8 is a nested agent message that stays structurally validated and session-bound but never opens, advances, or settles a cycle or batch, resolves a pending question, is selected as an answer, or affects accounting; any other parent_tool_use_id value, including an empty, blank, oversized, mistyped, or case-aliased field, is malformed before or after the principal result; only the principal result is selected; offset-streamed sealed records without a native event-size ceiling; stable runtime probe requires only --print; malformed, incomplete or conflicting evidence rejects; control journal sealed with raw streams\n"
+
+// interactionContract binds fresh interactive tasks to the same advisory
+// completion reducer and wire as print evidence, stated inline; only question
+// transport and closure differ. Its interactive-v6 text is the frozen
+// interactive-v5 bytes with advisoryInteractionEdits applied.
+func interactionContract() string {
+	return applyContractEdits(scopedInteractionContract, advisoryInteractionEdits())
+}
+
+// advisoryInteractionEdits are the ordered clause edits that derive the
+// interactive-v6 contract from the frozen interactive-v5 bytes: the revision
+// label, the repeated-init authority, unsupported completion reasons, and the
+// advisory wire with optional task_type.
+func advisoryInteractionEdits() []contractEdit {
+	return []contractEdit{
+		{"host clarification v5:", "host clarification v6:"},
+		{"with one identical repeated init permitted", "with one repeated init of the same session and native permission mode permitted"},
+		{
+			"terminal_reason when present is completed,",
+			"terminal_reason when present is completed, a documented failure reason rejects, any other terminal_reason or stop_reason string of at most 128 bytes is an unsupported completion that rejects as unsupported-completion and never as success, provider failure, or malformed output,",
+		},
+		{
+			"; only the principal result is selected; offset-streamed",
+			"; only the principal result is selected; advisory wire: session_id and the requested native permissionMode are the only init authority and other init metadata is advisory, never defaulted, and may change on a repeated init; selected authority and control fields must be unique, including case-folded aliases, and host control records stay unique as a whole, while opaque payloads are validated as JSON syntax only and unknown content block types are opaque; system/task_started without task_type is untracked; offset-streamed",
+		},
+	}
+}
 
 type interactionInterpreter struct {
 	mode       string
 	historical bool
 	reference  *task.PredicateRef
 	// completion is the reducer bound to this revision's identity: the current
-	// revision is scoped, interactive-v4 keeps its unscoped attribution, and
-	// the zero value is the frozen single-result policy.
+	// revision is advisory, interactive-v5 keeps its scoped attribution,
+	// interactive-v4 its unscoped attribution, and the zero value is the frozen
+	// single-result policy.
 	completion completionPolicy
 }
 
 func newInteractionInterpreter(mode string) predicate.Interpreter {
-	return interactionInterpreter{mode: mode, completion: scopedAttributedCompletion}
+	return interactionInterpreter{mode: mode, completion: advisoryScopedCompletion}
 }
 
 func interactionReference(mode string) task.PredicateRef {
-	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v5", SHA256: task.ComputeSHA256([]byte(interactionContract + mode + "\n"))}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v6", SHA256: task.ComputeSHA256([]byte(interactionContract() + mode + "\n"))}
+}
+
+// scopedInteractionReference is the frozen interactive-v5 revision, which
+// keeps its scoped attributed completion and strict wire for exact replay.
+func scopedInteractionReference(mode string) task.PredicateRef {
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v5", SHA256: task.ComputeSHA256([]byte(scopedInteractionContract + mode + "\n"))}
 }
 
 // unscopedInteractionReference is the frozen interactive-v4 revision, which
@@ -66,6 +100,11 @@ func previousInteractionReference(mode string) task.PredicateRef {
 
 func historicalInteractionReference(mode string) task.PredicateRef {
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: "interactive-v1", SHA256: task.ComputeSHA256([]byte(historicalInteractionContract + mode + "\n"))}
+}
+
+func newScopedInteractionInterpreter(mode string) predicate.Interpreter {
+	reference := scopedInteractionReference(mode)
+	return interactionInterpreter{mode: mode, reference: &reference, completion: scopedAttributedCompletion}
 }
 
 func newUnscopedInteractionInterpreter(mode string) predicate.Interpreter {
@@ -168,7 +207,7 @@ func (v interactionInterpreter) readCurrentInteractionStdout(raw predicate.Evide
 		var parserErr error
 		semantic, parserErr = providerjson.ReadRecords(reader, func(value providerjson.Value, _ uint64) error {
 			if p.expected == "" {
-				if event, err := decodeClaudeCurrentEvent(value); err == nil && event.typeName == "system" {
+				if event, err := p.state.attribution.decodeEvent(value); err == nil && event.typeName == "system" {
 					if session, sessionErr := claudeCurrentRequiredString(event.fields, "session_id", 128); sessionErr == nil {
 						p.expected = session
 					}
@@ -208,7 +247,7 @@ func (v interactionInterpreter) incompleteInteractionResult(p *claudeInteraction
 func (v interactionInterpreter) refusedInteractionResult(refusal string, p *claudeInteraction) task.Interpretation {
 	result := rejectedWithUsage(refusal, claudeCurrentUsageMetadata(p.state, task.UsageReliabilityUnreliable))
 	if !v.historical {
-		result.Diagnostics = append(result.Diagnostics, claudeCurrentDiagnostic(refusal))
+		result.Diagnostics = append(result.Diagnostics, claudeRefusalDiagnostic(refusal, p.state))
 		result.Diagnostics = append(result.Diagnostics, claudeCurrentUsageWarning(p.state)...)
 	}
 	return result
@@ -224,14 +263,15 @@ func (v interactionInterpreter) committedInteractionResult(p *claudeInteraction)
 
 func (v interactionInterpreter) Target() task.PredicateRef { return v.Reference() }
 
-// CanRecover makes the current scoped interactive parser the single recovery
-// target for every earlier interactive revision of this mode.
+// CanRecover makes the current advisory interactive parser the single
+// recovery target for every earlier interactive revision of this mode.
 func (v interactionInterpreter) CanRecover(source task.PredicateRef) bool {
 	if v.historical || v.reference != nil {
 		return false
 	}
 	return source.Equal(historicalInteractionReference(v.mode)) || source.Equal(previousInteractionReference(v.mode)) ||
-		source.Equal(preAttributionInteractionReference(v.mode)) || source.Equal(unscopedInteractionReference(v.mode))
+		source.Equal(preAttributionInteractionReference(v.mode)) || source.Equal(unscopedInteractionReference(v.mode)) ||
+		source.Equal(scopedInteractionReference(v.mode))
 }
 
 func (v interactionInterpreter) Recover(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {

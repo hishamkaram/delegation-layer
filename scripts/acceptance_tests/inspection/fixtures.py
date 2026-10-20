@@ -13,6 +13,7 @@ from unittest.mock import Mock
 from scripts import acceptance_provider_common as provider_common
 from scripts.acceptance_provider_common import NativeTaskOps, _inspection_group
 from scripts.acceptance_supervisor_common import digest, read_json, write_json
+from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER, managed_state_runner
 
 
 ROOT = "a" * 32
@@ -55,6 +56,21 @@ class InspectionFixture:
 
     def close(self):
         self.temporary.cleanup()
+
+    def managed_runner_copy(self) -> Path:
+        """Install the immutable state runner copy a private-root admission executes."""
+        installed = managed_state_runner(self.state, digest(self.runner))
+        if not installed.exists():
+            installed.parent.mkdir(mode=0o700, exist_ok=True)
+            installed.write_bytes(self.runner.read_bytes())
+            installed.chmod(0o700)
+        return installed
+
+    def placed_runner(self) -> Path:
+        """Return the runner path Go queues for the ledger's admission placement."""
+        if self.ops.runner_placement == STATE_INSTALLED_RUNNER:
+            return self.managed_runner_copy()
+        return self.runner
 
     def _write_completed_inspection(
             self, directory, request, request_sha, result, managed_exit_proof):
@@ -123,7 +139,7 @@ class InspectionFixture:
                 "definition_sha256": "d" * 64,
                 "helper_executable": str(self.base / "helper"),
                 "helper_sha256": "e" * 64,
-                "worker_executable": str(self.runner),
+                "worker_executable": str(self.placed_runner()),
                 "worker_sha256": digest(self.runner),
                 "supervisor": provider_common.supervisor_binding(
                     self.pueue, self.config, self.config.parent, digest(self.config),
@@ -240,7 +256,7 @@ class InspectionFixture:
         if runner_ownership is not None:
             self.check.assertIn(runner_ownership, {"managed", "custom"})
             meta.update({
-                "runner_executable": str(self.runner),
+                "runner_executable": str(self.placed_runner()),
                 "runner_ownership": runner_ownership,
             })
         if runtime_pending:
@@ -374,7 +390,7 @@ class InspectionFixture:
 
     def ordinary_row(self, result: object = "Success", name: str = "fresh",
                      task: str = TASK, number: int = 7) -> dict[str, object]:
-        argv = [str(self.runner)]
+        argv = [str(self.placed_runner())]
         if self.ops.managed_runner:
             argv.extend(["--guardian", "--supervised"])
         argv.extend(["--root", str(self.state), task])
@@ -386,7 +402,7 @@ class InspectionFixture:
         }
 
     def inspection_row(self, result: object = "Success") -> dict[str, object]:
-        command = shlex.join([str(self.runner), "--inspection", "--guardian", "--supervised",
+        command = shlex.join([str(self.placed_runner()), "--inspection", "--guardian", "--supervised",
                               "--root", str(self.state), TASK])
         return {
             "id": 42, "label": f"{_inspection_group(ROOT)}-{TASK}",

@@ -175,6 +175,9 @@ func ForgetInventory(ctx context.Context, store *taskdir.Store, resource *worksp
 	if err = appendWorkspaceCaptureRefs(ctx, resource, &intent); err != nil {
 		return intent, err
 	}
+	if err = appendWorkspaceBaselineRefs(ctx, resource, &intent); err != nil {
+		return intent, err
+	}
 	if err = appendWorkspaceArtifactInventory(ctx, store, resource, &intent); err != nil {
 		return intent, err
 	}
@@ -194,6 +197,19 @@ func appendWorkspaceCaptureRefs(ctx context.Context, resource *workspace.Resourc
 		} else if !workspace.OperationAbsent(candidateErr) {
 			return candidateErr
 		}
+	}
+	return nil
+}
+
+// Turn baselines are snapshots like captures: release retains them and only
+// the exact forget inventory removes their owned refs.
+func appendWorkspaceBaselineRefs(ctx context.Context, resource *workspace.Resource, intent *workspace.ForgetIntent) error {
+	baselines, err := resource.TurnBaselines(ctx)
+	if err != nil {
+		return err
+	}
+	for _, baseline := range baselines {
+		intent.Refs = append(intent.Refs, workspace.ForgetRef{Ref: baseline.Ref, ExpectedOID: baseline.TreeOID})
 	}
 	return nil
 }

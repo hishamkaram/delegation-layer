@@ -116,14 +116,20 @@ is distinct from reconstruction of an already admitted task: an immutable
 existing task is rebuilt exactly, while a provider's optional successor hook may
 select the current compatible output interpreter through its own exact
 compatibility rule. Without that hook the successor uses the recorded
-contract. Launch, session, permission, configuration, and probe contracts stay
-preserved. Four adapters declare that successor hook: Claude, CCR, OpenCode,
-and Antigravity. Each moves only an exact eligible earlier output predicate of
-the same mode and launch shape to the current one, and a record of any other
-revision or profile keeps its recorded predicate. Codex and Pi declare none and
-use the recorded contract through the fallback. The predecessor's task record,
-metadata, and launch plan always stay immutable and keep rebuilding under their
-recorded predicate; only the new successor task carries the current one.
+contract. Except for OpenCode's historical run predecessors below, launch,
+session, permission, configuration, and probe contracts stay preserved. Five
+adapters declare that successor hook: Claude, CCR, OpenCode, Antigravity, and
+Pi. Each moves only an exact eligible earlier output predicate of the same mode
+and launch shape to the current one, and a record of any other revision or
+profile keeps its recorded predicate. OpenCode is the exception: a successor of
+a historical native `opencode run` predecessor uses the current ACP launch,
+capability, and output contracts. It resumes the exact recorded session with
+the recorded environment and writable roots, and never falls back to a new
+session. Pi upgrades only its prior
+fresh-default revision. Codex declares none and uses the recorded contract
+through the fallback. The predecessor's task record, metadata, and launch plan
+always stay immutable and keep rebuilding under their recorded predicate; only
+the new successor task carries the current one.
 Interactive continuation is the deliberate exception:
 Codex and Claude build the current interactive profile while preserving the
 recorded session identity and restoring the predecessor environment needed to
@@ -171,6 +177,31 @@ across state roots. The command inherits the descriptor through the existing
 launch wrapper, so a helper's exit cannot release a live Git command's lease.
 Provider turns and content capture remain concurrent. Other repositories use
 different inodes, and external Git commands do not participate in this lease.
+
+After provisioning, the shared Git common directory, not the source checkout,
+is the repository identity for capture, ref, and cleanup commands. Its inode is
+pinned when the source is recorded, so a child survives removal of a transient
+parent checkout, including a sibling managed workspace used as its source, and
+a replaced repository is refused. Only the new workspace's own anchor must be
+disjoint from the source, Git, and state paths.
+
+Each managed provider turn records a baseline at the last preflight boundary
+before provider start, inside the task's own lifetime and deadline. It uses the
+same private-index algorithm as capture and pins the observed tree. Any baseline
+failure refuses that launch. Capture keeps the cumulative base-to-final tree and
+also reports the turn's observed tree, HEAD, and real-index changes. The index
+identity frames the digests of two streamed plumbing reads: the
+`ls-files --stage -v -z` inventory, and `diff-index --cached` against the empty
+tree with intent-to-add entries invisible, which separates an intent-to-add
+entry from a staged empty file. Flag-only and intent-only edits count;
+stat-cache refreshes and HEAD-only moves do not. Capture copies the real
+index, opened once, into a private read-only image, and both reads use that
+image, so they describe one observed index; a missing index is read as empty.
+HEAD and the worktree remain separate observations. Replace refs are ignored,
+and a Git that cannot hide intent-to-add entries fails the capture. An observed turn also exports a
+baseline-to-final patch and name-status pair through the same bounded export
+as the cumulative pair; forget removes both pairs. Task status and collect
+project the task's own reservation; workspace status reports the latest use.
 
 One shared reader assembles task, inspection, and workspace lifetime evidence in
 reverse dependency order. The pure closure resolver validates that set; individual

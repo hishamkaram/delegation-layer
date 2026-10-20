@@ -72,9 +72,11 @@ func (s launchSelectors) apply(t *testing.T, cliDir string) {
 }
 
 // recordedEnvironmentCase names one production provider registration and the
-// sealed stream that gives its predecessor an exact resumable session.
+// sealed stream that gives its predecessor an exact resumable session. A
+// nonempty predicateVersion is the output contract both tasks must carry.
 type recordedEnvironmentCase struct {
 	name, provider, binary, mode, session string
+	predicateVersion                      string
 	stream                                []string
 }
 
@@ -92,12 +94,11 @@ func recordedEnvironmentCases() []recordedEnvironmentCase {
 				`{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}`,
 			},
 		}, recordedEnvironmentCase{
-			name: "opencode/" + mode, provider: "opencode:run", binary: "opencode", mode: mode, session: "ses_01J9K7P2E5S8V1Z3B2C4D6F8G0",
-			stream: []string{
-				`{"type":"step_start","sessionID":"ses_01J9K7P2E5S8V1Z3B2C4D6F8G0","part":{"type":"step-start"}}`,
-				`{"type":"text","sessionID":"ses_01J9K7P2E5S8V1Z3B2C4D6F8G0","part":{"type":"text","text":"answer"}}`,
-				`{"type":"step_finish","sessionID":"ses_01J9K7P2E5S8V1Z3B2C4D6F8G0","part":{"type":"step-finish","reason":"stop","tokens":{"total":2,"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}}`,
-			},
+			// A fresh OpenCode predecessor is an ACP task, so its continuation is
+			// ACP to ACP under the same capability and output contract.
+			name: "opencode/" + mode, provider: openCodeProvider, binary: "opencode", mode: mode, session: outputUpgradeOpenCodeSession,
+			predicateVersion: openCodeACPVersion,
+			stream:           strings.Split(strings.TrimSuffix(openCodeACPStream(mode, outputUpgradeOpenCodeSession, true), "\n"), "\n"),
 		})
 	}
 	return cases
@@ -287,8 +288,15 @@ func (f *recordedEnvironmentFixture) sealPredecessor(t *testing.T, td *taskdir.T
 	if err = start.Release(); err != nil {
 		t.Fatal(err)
 	}
+	requireCommittedPredecessor(t, td, reference)
+}
+
+// requireCommittedPredecessor collects the sealed predecessor; its stream must
+// publish the answer so the continuation starts from a successful session.
+func requireCommittedPredecessor(t *testing.T, td *taskdir.TaskDir, reference task.PredicateRef) {
+	t.Helper()
 	outcome, cleanupErr, collectErr := td.Collect(reference)
-	if cleanupErr != nil || collectErr != nil || outcome == nil {
+	if cleanupErr != nil || collectErr != nil || outcome == nil || outcome.Verdict != task.VerdictCommitted {
 		t.Fatalf("sealing predecessor cleanup=%v collect=%v outcome=%+v", cleanupErr, collectErr, outcome)
 	}
 }
@@ -398,6 +406,9 @@ func (f *recordedEnvironmentFixture) assertSuccessor(t *testing.T, id string) {
 	}
 	if request.Mode != predecessorRequest.Mode || meta.RuntimePreflightSHA256 != predecessorMeta.RuntimePreflightSHA256 {
 		t.Fatalf("successor mode=%q capability=%q differ from predecessor mode=%q capability=%q", request.Mode, meta.RuntimePreflightSHA256, predecessorRequest.Mode, predecessorMeta.RuntimePreflightSHA256)
+	}
+	if version := f.testCase.predicateVersion; version != "" && (predecessorMeta.Predicate.Version != version || !meta.Predicate.Equal(predecessorMeta.Predicate)) {
+		t.Fatalf("successor predicate %+v and predecessor predicate %+v, want both %s", meta.Predicate, predecessorMeta.Predicate, version)
 	}
 	f.assertWorkerRebuild(t, request, meta)
 }

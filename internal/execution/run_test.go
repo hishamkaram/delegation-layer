@@ -85,6 +85,9 @@ func TestExecutionHelper(t *testing.T) {
 }
 
 func helperOutput(mode string) error {
+	if script, ok := protocolHelperScript(mode); ok {
+		return runProtocolHelper(script)
+	}
 	brief, err := io.ReadAll(io.LimitReader(os.Stdin, task.MaxBriefSize+1))
 	if err != nil {
 		return err

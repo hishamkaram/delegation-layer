@@ -19,6 +19,24 @@ from scripts.delegate_acceptance.processes.observation import failure_cleanup_de
 from pathlib import Path
 
 
+# One fixed, trusted message per cleanup operation. Cleanup receipts never carry
+# exception text, filenames or errno: those can hold provider or user text.
+_CLEANUP_FAILURES = {
+    "deadline": "acceptance cleanup deadline expired",
+    "consume": "owned directory authority could not be consumed",
+    "ancestor_release": "ancestor retained after descendant cleanup failure",
+    "retained_release": "retained owned directory could not be released",
+    "raw_release": "raw process capture directory could not be released",
+    "remove": "owned directory could not be removed",
+}
+
+
+def _cleanup_failure(entry: OwnedDirectory, operation: str, error: BaseException) -> dict[str, str]:
+    """The only description of a cleanup failure a receipt may hold."""
+    return {"label": entry.label, "operation": operation, "error": _CLEANUP_FAILURES[operation],
+            "error_class": type(error).__name__}
+
+
 def _validate_retained_owned_directories(
         entries: tuple[OwnedDirectory, ...],
         retained_entries: tuple[OwnedDirectory, ...],
@@ -188,37 +206,33 @@ def _finalize_owned_entries(
         try:
             _check_cleanup_deadline(deadline)
         except RuntimeError as error:
-            failures.append({"label": entry.label, "error": str(error)})
+            failures.append(_cleanup_failure(entry, "deadline", error))
             for retained_entry in ordered_entries[index:]:
                 record_retained(retained_entry)
                 try:
                     retained_entry.consume()
                 except RuntimeError as consume_error:
-                    failures.append({"label": retained_entry.label,
-                                     "error": str(consume_error)})
+                    failures.append(_cleanup_failure(retained_entry, "consume", consume_error))
             break
         if any(_is_ancestor_entry(entry, failed) for failed in failed_entries):
             try:
                 release_owned_directory(entry, deadline=deadline)
             except (OSError, RuntimeError) as error:
-                failures.append({
-                    "label": entry.label,
-                    "error": "ancestor retained after descendant cleanup failure: " + str(error),
-                })
+                failures.append(_cleanup_failure(entry, "ancestor_release", error))
             record_retained(entry)
             continue
         if id(entry) in retained_entry_ids:
             try:
                 release_owned_directory(entry, deadline=deadline)
             except (OSError, RuntimeError) as error:
-                failures.append({"label": entry.label, "error": str(error)})
+                failures.append(_cleanup_failure(entry, "retained_release", error))
             record_retained(entry)
             continue
         if entry is raw_process_captures_token and not raw_authorized:
             try:
                 release_owned_directory(entry, deadline=deadline)
             except (OSError, RuntimeError) as error:
-                failures.append({"label": entry.label, "error": str(error)})
+                failures.append(_cleanup_failure(entry, "raw_release", error))
             record_retained(entry)
             continue
         try:
@@ -227,6 +241,6 @@ def _finalize_owned_entries(
             if entry is raw_process_captures_token:
                 raw_removed = True
         except (OSError, RuntimeError) as error:
-            failures.append({"label": entry.label, "error": str(error)})
+            failures.append(_cleanup_failure(entry, "remove", error))
             failed_entries.append(entry)
     return failures, raw_removed

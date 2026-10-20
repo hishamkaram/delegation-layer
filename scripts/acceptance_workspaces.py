@@ -129,6 +129,9 @@ from scripts.delegate_acceptance.workspaces.scenarios.timeout import (
     _wait_for_timeout,
     _run_timeout,
 )
+from scripts.delegate_acceptance.workspaces.scenarios.lineage import (
+    _run_lineage,
+)
 from scripts.delegate_acceptance.workspaces.scenarios.capacity import (
     _dispatch_capacity_one,
     _settle_capacity_one,

@@ -1,8 +1,9 @@
 package opencode
 
 import (
-	"os"
-	"path/filepath"
+	"bytes"
+	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -15,24 +16,17 @@ import (
 
 const successorPredecessorTask = "0123456789abcdef0123456789abcdef"
 
-// successorFixture is the admitted native record of a predecessor and the
-// continuation request built from it. Only the stored predicate varies.
+// successorFixture is a continuation request and the admitted records of a
+// predecessor under each dialect: a native run record and an ACP record.
 type successorFixture struct {
 	request task.TaskRecord
-	meta    task.MetaRecord
+	run     task.MetaRecord
+	acp     task.MetaRecord
 }
 
-func newSuccessorFixture(t *testing.T, mode string) successorFixture {
+func newSuccessorFixture(t *testing.T, mode string, dialect launchDialect) successorFixture {
 	t.Helper()
-	directory, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(directory, "opencode"), []byte("fixture"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", directory)
-	t.Setenv("PATH", directory)
+	directory := installFixtureExecutable(t)
 	request := profileRequest(mode)
 	request.CanonicalCwd = directory
 	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: testSession, PredecessorTaskID: successorPredecessorTask}
@@ -41,98 +35,131 @@ func newSuccessorFixture(t *testing.T, mode string) successorFixture {
 		t.Fatal(err)
 	}
 	admitted := requireStaticAdmission(t, candidate)
-	return successorFixture{request: request, meta: task.MetaRecord{
+	run, _ := historicalRunRecord(t, request, dialect)
+	// A recorded environment differs from the successor's ambient one, so the
+	// successor must take it from the predecessor record.
+	run.Environment = append(slices.Clone(run.Environment), "OPENCODE_CONFIG_DIR="+directory+"/recorded")
+	slices.Sort(run.Environment)
+	return successorFixture{request: request, run: run, acp: task.MetaRecord{
 		EffectiveConfig: admitted.Effective, RuntimePreflightSHA256: admitted.RuntimePreflightSHA256,
 		Environment: slices.Clone(admitted.Plan.Environment), EnvironmentRecorded: true, Predicate: admitted.Plan.Predicate,
 	}}
 }
 
-func (f successorFixture) admit(t *testing.T, prepare func(task.TaskRecord, task.MetaRecord) (commonprovider.ProfileCandidate, error), reference task.PredicateRef) commonprovider.PreparedProfile {
+func TestSuccessorOfRunPredecessorContinuesThroughACP(t *testing.T) {
+	for _, dialect := range []launchDialect{dialectNativeV1, dialectNativeV2} {
+		for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+			fixture := newSuccessorFixture(t, mode, dialect)
+			for _, source := range []task.PredicateRef{historicalReferenceForMode(mode), historicalCurrentReferenceForMode(mode), historicalCurrentV4ReferenceForMode(mode), runReferenceForMode(mode)} {
+				t.Run(fmt.Sprintf("%d/%s/v%s", dialect, mode, source.Version), func(t *testing.T) {
+					predecessor := fixture.run
+					predecessor.Predicate = source
+					requireACPSuccessor(t, fixture.request, predecessor)
+					reconstructed, err := PrepareExistingCandidate(fixture.request, predecessor)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if rebuilt := requireStaticAdmission(t, reconstructed); !rebuilt.Plan.Predicate.Equal(source) || rebuilt.Plan.Arguments[0] != "run" || rebuilt.Protocol != nil {
+						t.Fatalf("the predecessor no longer reconstructs its run contract: predicate=%+v argv=%q", rebuilt.Plan.Predicate, rebuilt.Plan.Arguments)
+					}
+				})
+			}
+		}
+	}
+}
+
+// requireACPSuccessor requires the successor of a run record to be a fresh ACP
+// admission that keeps the recorded environment and writable roots, and
+// whose protocol resumes exactly the recorded session.
+func requireACPSuccessor(t *testing.T, request task.TaskRecord, predecessor task.MetaRecord) {
 	t.Helper()
-	meta := f.meta
-	meta.Predicate = reference
-	candidate, err := prepare(f.request, meta)
+	candidate, err := PrepareSuccessorCandidate(request, predecessor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return requireStaticAdmission(t, candidate)
+	successor := requireStaticAdmission(t, candidate)
+	if !slices.Equal(successor.Plan.Arguments, []string{"acp"}) || !successor.Plan.Predicate.Equal(ReferenceForMode(request.Mode)) ||
+		successor.Effective.Policy.ProfileRevision != acpProfileRevision || successor.Identity != nil || successor.Protocol == nil {
+		t.Fatalf("successor is not an ACP admission: argv=%q predicate=%+v revision=%q", successor.Plan.Arguments, successor.Plan.Predicate, successor.Effective.Policy.ProfileRevision)
+	}
+	if !slices.Equal(successor.Plan.Environment, predecessor.Environment) || !slices.Equal(successor.WritableRoots, predecessor.EffectiveConfig.Policy.WritableRoots) {
+		t.Fatalf("successor environment (%s) or writable roots differ from the recorded predecessor", summarizeValues(successor.Plan.Environment))
+	}
+	protocol, err := successor.Protocol(task.SessionExpectation{Required: true, ID: testSession}, func(task.SessionIdentity) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = protocol.Start([]byte("follow-up brief")); err != nil {
+		t.Fatal(err)
+	}
+	update, err := protocol.Receive([]byte(acpInitializeResult(1, true)))
+	if err != nil || len(update.Outbound) != 1 || !bytes.Contains(update.Outbound[0], []byte(`"method":"session/resume","params":{"sessionId":"`+testSession+`"`)) {
+		t.Fatalf("successor does not resume the exact recorded session: frames=%d err=%v", len(update.Outbound), err)
+	}
+	if _, err = successor.Protocol(task.SessionExpectation{}, func(task.SessionIdentity) error { return nil }); err == nil {
+		t.Fatal("successor protocol accepted a fresh-session expectation")
+	}
 }
 
-func TestSuccessorCandidateSelectsCurrentPredicateAndKeepsPreparation(t *testing.T) {
-	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
-		fixture := newSuccessorFixture(t, mode)
-		for _, source := range []task.PredicateRef{historicalReferenceForMode(mode), historicalCurrentReferenceForMode(mode), historicalCurrentV4ReferenceForMode(mode)} {
-			t.Run(mode+"/v"+source.Version, func(t *testing.T) {
-				successor := fixture.admit(t, PrepareSuccessorCandidate, source)
-				reconstructed := fixture.admit(t, PrepareExistingCandidate, source)
-				if !successor.Plan.Predicate.Equal(ReferenceForMode(mode)) {
-					t.Errorf("successor predicate %+v, want %+v", successor.Plan.Predicate, ReferenceForMode(mode))
-				}
-				if !reconstructed.Plan.Predicate.Equal(source) {
-					t.Errorf("reconstruction predicate %+v, want its source %+v", reconstructed.Plan.Predicate, source)
-				}
-				successor.Plan.Predicate, reconstructed.Plan.Predicate = task.PredicateRef{}, task.PredicateRef{}
-				planEqual := reflect.DeepEqual(successor.Plan, reconstructed.Plan)
-				effectiveEqual := reflect.DeepEqual(successor.Effective, reconstructed.Effective)
-				rootsEqual := slices.Equal(successor.WritableRoots, reconstructed.WritableRoots)
-				preflightEqual := successor.RuntimePreflightSHA256 == reconstructed.RuntimePreflightSHA256
-				if !planEqual || !effectiveEqual || !rootsEqual || !preflightEqual {
-					t.Errorf("successor preparation differs beyond the predicate: plan equal=%t effective config equal=%t writable roots equal=%t runtime preflight equal=%t",
-						planEqual, effectiveEqual, rootsEqual, preflightEqual)
-				}
-			})
-		}
+func TestSuccessorOfRunPredecessorNeverOpensANewSession(t *testing.T) {
+	fixture := newSuccessorFixture(t, ModeReadOnly, dialectNativeV1)
+	request := fixture.request
+	request.PriorSession = nil
+	if _, err := PrepareSuccessorCandidate(request, fixture.run); !errors.Is(err, ErrUnsupportedProfile) {
+		t.Fatalf("successor without the recorded session error=%v", err)
 	}
 }
 
 func TestSuccessorCandidateDoesNotModifyThePredecessorRecord(t *testing.T) {
-	fixture := newSuccessorFixture(t, ModeWorkspaceWrite)
-	fixture.meta.Predicate = historicalCurrentV4ReferenceForMode(ModeWorkspaceWrite)
-	before := fixture.meta
-	before.Environment = slices.Clone(fixture.meta.Environment)
-	if _, err := PrepareSuccessorCandidate(fixture.request, fixture.meta); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(before, fixture.meta) {
-		t.Error("predecessor record changed")
+	for _, dialect := range []launchDialect{dialectNativeV1, dialectNativeV2} {
+		fixture := newSuccessorFixture(t, ModeWorkspaceWrite, dialect)
+		before := fixture.run
+		before.Environment = slices.Clone(fixture.run.Environment)
+		policy := *fixture.run.EffectiveConfig.Policy
+		before.EffectiveConfig.Policy = &policy
+		if _, err := PrepareSuccessorCandidate(fixture.request, fixture.run); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(before, fixture.run) {
+			t.Errorf("dialect %d: predecessor record changed", dialect)
+		}
 	}
 }
 
-// TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed pairs each
-// unrelated stored predicate with the reconstruction of the same record: the
-// successor must behave identically, error included.
+// TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed pairs each ACP,
+// pure-mode, and unknown record with the reconstruction of the same record:
+// the successor must behave identically, error included.
 func TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed(t *testing.T) {
 	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
-		fixture := newSuccessorFixture(t, mode)
-		altered := historicalCurrentV4ReferenceForMode(mode)
-		altered.SHA256 = strings.Repeat("0", 64)
-		alteredCurrent := ReferenceForMode(mode)
-		alteredCurrent.SHA256 = strings.Repeat("1", 64)
-		cases := map[string]task.PredicateRef{
-			"current":             ReferenceForMode(mode),
-			"legacy v1":           LegacyReferenceForMode(mode),
-			"altered v4 digest":   altered,
-			"altered current":     alteredCurrent,
-			"zero":                {},
-			"other mode revision": historicalCurrentV4ReferenceForMode(otherMode(mode)),
-			"unknown revision":    {Adapter: Provider, Mode: mode, Version: "9", SHA256: strings.Repeat("2", 64)},
+		fixture := newSuccessorFixture(t, mode, dialectNativeV2)
+		altered := ReferenceForMode(mode)
+		altered.SHA256 = strings.Repeat("1", 64)
+		cases := map[string]task.MetaRecord{
+			"acp":                      fixture.acp,
+			"acp altered predicate":    withPredicate(fixture.acp, altered),
+			"acp run predicate":        withPredicate(fixture.acp, runReferenceForMode(mode)),
+			"acp other mode predicate": withPredicate(fixture.acp, ReferenceForMode(otherMode(mode))),
+			"legacy profile":           withRevision(withPredicate(fixture.run, historicalCurrentV4ReferenceForMode(mode)), ProfileRevision),
+			"unknown revision":         withRevision(fixture.run, "opencode-future-v9"),
 		}
-		for name, source := range cases {
+		for name, meta := range cases {
 			t.Run(mode+"/"+name, func(t *testing.T) {
-				meta := fixture.meta
-				meta.Predicate = source
 				requireSameCandidateOutcome(t, fixture.request, meta)
 			})
 		}
-		t.Run(mode+"/legacy profile", func(t *testing.T) {
-			meta := fixture.meta
-			policy := *meta.EffectiveConfig.Policy
-			policy.ProfileRevision = ProfileRevision
-			meta.EffectiveConfig.Policy = &policy
-			meta.Predicate = historicalCurrentV4ReferenceForMode(mode)
-			requireSameCandidateOutcome(t, fixture.request, meta)
-		})
 	}
+}
+
+func withPredicate(meta task.MetaRecord, reference task.PredicateRef) task.MetaRecord {
+	meta.Predicate = reference
+	return meta
+}
+
+func withRevision(meta task.MetaRecord, revision string) task.MetaRecord {
+	policy := *meta.EffectiveConfig.Policy
+	policy.ProfileRevision = revision
+	meta.EffectiveConfig.Policy = &policy
+	return meta
 }
 
 func otherMode(mode string) string {

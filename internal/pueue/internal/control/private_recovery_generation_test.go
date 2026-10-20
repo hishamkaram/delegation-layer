@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -378,6 +379,92 @@ func TestRecoverPrivateRejectsDifferentPairWhenCompletedBindingMissing(t *testin
 	if got := readPrivateSupervisorFile(t, privateDaemonIdentityPath(filepath.Join(fixture.stateRoot, privateSupervisorDirectory))); !bytes.Equal(got, identityBefore) {
 		t.Fatal("rejected legacy recovery changed daemon identity")
 	}
+}
+
+func TestAttemptPrivateRecoveryReportsMissingPairFact(t *testing.T) {
+	fixture := newCompletedPrivateSuccessorTestFixture(t, false)
+	compatibleClient, compatibleDaemon := installPrivateSupervisorPair(t, filepath.Join(fixture.base, "compatible"))
+	removePrivateTestPath(t, filepath.Join(fixture.base, "completed"))
+
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, fixture.saved, compatibleClient, compatibleDaemon, fixture.options)
+	if err != nil || !recovery.PairUnavailable() || recovery.Client() != nil {
+		t.Fatalf("missing completed pair = recovery %+v err %v, want PairUnavailable", recovery, err)
+	}
+	if !errors.Is(recovery.Cause(), ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("missing-pair cause lost its identity: %v", recovery.Cause())
+	}
+	// The compatibility projection keeps the existing public error.
+	if _, err = RecoverPrivate(context.Background(), fixture.stateRoot, fixture.saved, compatibleClient, compatibleDaemon, fixture.options); !errors.Is(err, ErrPrivateSupervisorMigrationRequired) {
+		t.Fatalf("RecoverPrivate projection = %v, want migration required", err)
+	}
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, 1)
+}
+
+// TestCompletedMigrationRecoveryInspectsUnverifiablePresentPair keeps the
+// compatible-client contract for a completed generation whose present pair no
+// longer verifies: a live endpoint is inspected through the caller's
+// compatible pair without a start, and a stopped endpoint is an operational
+// failure rather than the missing-pair fact.
+func TestCompletedMigrationRecoveryInspectsUnverifiablePresentPair(t *testing.T) {
+	for _, live := range []bool{true, false} {
+		t.Run(fmt.Sprintf("live %t", live), func(t *testing.T) {
+			assertCompletedMigrationRecoveryUnverifiablePresentPair(t, live)
+		})
+	}
+}
+
+// assertCompletedMigrationRecoveryUnverifiablePresentPair runs one live or
+// stopped scenario of the unverifiable-present-pair contract. The expected
+// start count covers only the fixture's own starts: recovery starts nothing.
+func assertCompletedMigrationRecoveryUnverifiablePresentPair(t *testing.T, live bool) {
+	t.Helper()
+	fixture := newCompletedPrivateSuccessorTestFixture(t, live)
+	compatibleClient, compatibleDaemon := installPrivateSupervisorPair(t, filepath.Join(fixture.base, "compatible"))
+	if err := os.WriteFile(fixture.daemonPath, []byte("#!/bin/sh\nexit 99\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, fixture.saved, compatibleClient, compatibleDaemon, fixture.options)
+	if client := recovery.Client(); client != nil {
+		t.Cleanup(func() {
+			if closeErr := client.Close(); closeErr != nil {
+				t.Error(closeErr)
+			}
+		})
+	}
+	t.Logf("live=%t recovery=%+v err=%v", live, recovery, err)
+	if recovery.PairUnavailable() {
+		t.Fatalf("a present pair was reported as the missing-pair fact: %+v", recovery)
+	}
+	if live && (err != nil || recovery.Client() == nil) {
+		t.Fatalf("live completed generation was not inspected through the compatible pair: %+v %v", recovery, err)
+	}
+	if !live && (recovery.Client() != nil || !errors.Is(err, ErrPrivateSupervisorMigrationRequired)) {
+		t.Fatalf("stopped unverifiable pair = %+v %v, want an operational migration-required failure", recovery, err)
+	}
+	starts := 1
+	if live {
+		starts = 2
+	}
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, starts)
+}
+
+// TestCompletedMigrationPreparationFaultCannotFallThrough keeps an unreadable
+// identity publication of the completed generation as the operational
+// result: the live compatible endpoint is not used to hide it and nothing
+// starts.
+func TestCompletedMigrationPreparationFaultCannotFallThrough(t *testing.T) {
+	fixture := newCompletedPrivateSuccessorTestFixture(t, true)
+	compatibleClient, compatibleDaemon := installPrivateSupervisorPair(t, filepath.Join(fixture.base, "compatible"))
+	makePrivateTestDirectory(t, filepath.Join(fixture.stateRoot, privateSupervisorDirectory, privateIdentityPublicationRecordName))
+
+	recovery, err := AttemptPrivateRecovery(context.Background(), fixture.stateRoot, fixture.saved, compatibleClient, compatibleDaemon, fixture.options)
+	if err == nil || recovery.PairUnavailable() || recovery.Client() != nil {
+		t.Fatalf("preparation fault = recovery %+v err %v, want operational failure", recovery, err)
+	}
+	if !errors.Is(err, ErrBinding) {
+		t.Fatalf("preparation fault lost its identity: %v", err)
+	}
+	assertPrivateDaemonStartCount(t, fixture.stateRoot, 2)
 }
 
 func newCompletedPrivateSuccessorTestFixture(t *testing.T, live bool) completedPrivateSuccessorTestFixture {

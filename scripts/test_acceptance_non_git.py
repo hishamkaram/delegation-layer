@@ -13,7 +13,7 @@ import acceptance_native as gate
 import acceptance_supervisor_common as common
 import native_acceptance_evidence as evidence
 from scripts.delegate_acceptance.native import acceptance as acceptance_impl
-from scripts.acceptance_tests.native.support import fake_native_python_script
+from scripts.acceptance_tests.native.support import adjacent_runner_bundle, fake_native_python_script
 
 
 def isolate_git_ancestors(root):
@@ -33,6 +33,7 @@ class NonGitAcceptanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             home = root / "home"
+            delegate, runner = adjacent_runner_bundle(root)
             runs = []
             with patch.object(gate.Path, "home", return_value=home), \
                     patch.object(acceptance_impl, "reject_tmp"), \
@@ -42,10 +43,11 @@ class NonGitAcceptanceTests(unittest.TestCase):
                     output.mkdir()
                     args = gate.build_parser().parse_args([
                         "--provider", "codex:exec", "--permission", "read-only",
-                        "--output", str(output), "--delegate", "/bin/sh", "--runner", "/bin/sh",
+                        "--output", str(output), "--delegate", str(delegate), "--runner", str(runner),
                         "--pueue", "/bin/sh", "--pueued", "/bin/sh", "--provider-executable", "/bin/sh",
                     ])
                     runs.append(gate.NativeAcceptance(args))
+                    self.assertTrue(runs[-1].ops.managed_runner)
             try:
                 self.assertTrue(common.rollback_owned_directories(runs[0].owned_directories))
                 self.assertFalse(runs[0].base.exists())
@@ -107,9 +109,10 @@ class NonGitAcceptanceTests(unittest.TestCase):
                 home = root / "home"
                 output = root / "evidence"
                 output.mkdir()
+                delegate, runner = adjacent_runner_bundle(root)
                 args = gate.build_parser().parse_args([
                     "--provider", "codex:exec", "--permission", mode, "--scenario", "non-git",
-                    "--output", str(output), "--delegate", "/bin/sh", "--runner", "/bin/sh",
+                    "--output", str(output), "--delegate", str(delegate), "--runner", str(runner),
                     "--pueue", "/bin/sh", "--pueued", "/bin/sh", "--provider-executable", "/bin/sh",
                 ])
                 with patch.object(gate.Path, "home", return_value=home), \
@@ -118,6 +121,7 @@ class NonGitAcceptanceTests(unittest.TestCase):
                         isolate_git_ancestors(root):
                     operation = gate.NativeAcceptance(args)
                 try:
+                    self.assertTrue(operation.ops.managed_runner)
                     with patch.object(operation.processes, "run") as run, isolate_git_ancestors(root):
                         operation._prepare_codex_workspace()
                         run.assert_not_called()
@@ -130,7 +134,7 @@ class NonGitAcceptanceTests(unittest.TestCase):
 
     def test_matrix_has_both_non_git_modes_after_stable_existing_cases(self):
         self.assertEqual(
-            [(case.case_id, case.permission, case.scenario) for case in evidence.EXPECTED_CASES[-2:]],
+            [(case.case_id, case.permission, case.scenario) for case in evidence.EXPECTED_CASES[14:16]],
             [("case-15-codex-exec-read-only-non-git", "read-only", "non-git"),
              ("case-16-codex-exec-workspace-write-non-git", "workspace-write", "non-git")],
         )

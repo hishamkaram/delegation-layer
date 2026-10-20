@@ -214,20 +214,9 @@ func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, de
 	}
 	drift := logicalDrift || daemonDrift
 	ready, readyErr := current.Reachable(ctx)
-	if readyErr != nil {
+	if readyErr != nil || !ready {
 		cleanupCause = readyErr
-		response.SupervisorControl.State = supervisorStatusState(drift, false)
-		response.SupervisorControl.LegacyReachability = "incompatible"
-		response.SupervisorControl.ActiveWork = "unknown"
-		response.SupervisorControl.NextAction = "run_supervisor_migrate"
-		return commandResult{response: response, code: 1, err: errors.New("private supervisor could not be verified")}
-	}
-	if !ready {
-		response.SupervisorControl.State = supervisorStatusState(drift, false)
-		response.SupervisorControl.LegacyReachability = "unreachable"
-		response.SupervisorControl.ActiveWork = "unknown"
-		response.SupervisorControl.NextAction = "run_supervisor_migrate"
-		return commandResult{response: response, code: 1, err: errors.New("private supervisor is unreachable")}
+		return privateStatusUnavailable(response, drift, readyErr)
 	}
 	response.SupervisorControl.State = supervisorStatusState(logicalDrift, true)
 	response.SupervisorControl.LegacyReachability = "ready"
@@ -248,6 +237,24 @@ func supervisorStatusWithoutInspectionGroup(ctx context.Context, root string, de
 		response.SupervisorControl.MigrationPhase = "adopted"
 	}
 	return commandResult{response: response, code: 0}
+}
+
+// privateStatusUnavailable presents a failed or negative readiness probe.
+// Status only observes a refusal; dispatch or migrate owns its closure.
+func privateStatusUnavailable(response Response, drift bool, readyErr error) commandResult {
+	response.SupervisorControl.State = supervisorStatusState(drift, false)
+	response.SupervisorControl.LegacyReachability = "unreachable"
+	response.SupervisorControl.ActiveWork = "unknown"
+	response.SupervisorControl.NextAction = "run_supervisor_migrate"
+	switch {
+	case errors.Is(readyErr, pueue.ErrPrivateEndpointRefused):
+		return commandResult{response: response, code: 1, err: &supervisorPublicError{message: "private supervisor is unreachable", cause: readyErr}}
+	case readyErr != nil:
+		response.SupervisorControl.LegacyReachability = "incompatible"
+		return commandResult{response: response, code: 1, err: errors.New("private supervisor could not be verified")}
+	default:
+		return commandResult{response: response, code: 1, err: errors.New("private supervisor is unreachable")}
+	}
 }
 
 func supervisorStatusState(drift, ready bool) string {
@@ -318,11 +325,12 @@ func legacySupervisorStateResult(response Response, legacy inspection.GroupReque
 		response.SupervisorControl.LegacyReachability = "incompatible"
 		response.SupervisorControl.ActiveWork = "unknown"
 		response.SupervisorControl.NextAction = "stop_and_report"
-		return commandResult{
-			response: response,
-			code:     1,
-			err:      errors.New("private supervisor could not be verified"),
-		}, true
+		err := errors.New("private supervisor could not be verified")
+		if errors.Is(currentErr, pueue.ErrPrivateEndpointRefused) {
+			response.SupervisorControl.LegacyReachability = "unreachable"
+			err = &supervisorPublicError{message: "private supervisor is unreachable", cause: currentErr}
+		}
+		return commandResult{response: response, code: 1, err: err}, true
 	}
 	if currentMatches && currentReady && daemonDrift {
 		response.SupervisorControl.State = "ready"

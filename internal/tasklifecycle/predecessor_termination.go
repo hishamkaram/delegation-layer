@@ -79,7 +79,7 @@ func releaseHandedOffPredecessor(td *taskdir.TaskDir, req *task.TaskRecord) (boo
 	}
 	budget := HasTerminatedBudgetStop(records)
 	if !budget {
-		interrupted, interruptionErr := closureInterruption(td)
+		_, interrupted, interruptionErr := closureInterruption(td)
 		if interruptionErr != nil || !interrupted {
 			return false, interruptionErr
 		}
@@ -100,21 +100,25 @@ func releaseHandedOffPredecessor(td *taskdir.TaskDir, req *task.TaskRecord) (boo
 // interruption: publication is unknown with no seal or outcome, and the
 // canonical native lifetime closed. Publication evidence is read first so
 // sealed work is collected rather than handed off. Queue state, elapsed
-// deadlines, and stop-readiness shortcuts are never closure proof. Callers
-// keep their own runner-lease checks.
-func closureInterruption(td *taskdir.TaskDir) (bool, error) {
+// deadlines, and stop-readiness shortcuts are never closure proof. An
+// eligible closure returns its validated proof so callers can read the
+// recorded termination cause. Callers keep their own runner-lease checks.
+func closureInterruption(td *taskdir.TaskDir) (guardian.ClosureProof, bool, error) {
 	inspection, err := td.Inspect()
 	if err != nil {
-		return false, err
+		return guardian.ClosureProof{}, false, err
 	}
 	if inspection.Publication != task.PublicationUnknown || inspection.SealExists || inspection.OutcomeExists {
-		return false, nil
+		return guardian.ClosureProof{}, false, nil
 	}
-	_, err = guardian.ReadClosureProof(context.Background(), td)
+	proof, err := guardian.ReadClosureProof(context.Background(), td)
 	if errors.Is(err, guardian.ErrProofPending) {
-		return false, nil
+		return guardian.ClosureProof{}, false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return guardian.ClosureProof{}, false, err
+	}
+	return proof, true, nil
 }
 
 func requireRunnerLeaseRelease(td *taskdir.TaskDir) error {

@@ -15,16 +15,30 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-const interactionPollInterval = 250 * time.Millisecond
+const (
+	interactionPollInterval = 250 * time.Millisecond
+	// outboundFrames bounds frames queued for the sole stdin writer.
+	outboundFrames = 16
+)
 
 type interactionFrame struct {
 	data      []byte
 	messageID string
 }
 
+// inactiveTimer never fires. A machine protocol has no user inbox to poll.
+type inactiveTimer struct{}
+
+func (inactiveTimer) C() <-chan time.Time { return nil }
+func (inactiveTimer) Stop() bool          { return false }
+
+// interactiveInvocation is the single protocol engine on the core transport.
+// Its user channel is nil for a machine protocol, which never touches the
+// interaction journal.
 type interactiveInvocation struct {
 	td           *taskdir.TaskDir
-	protocol     InteractionProtocol
+	protocol     Protocol
+	user         InteractionProtocol
 	input        *os.File
 	brief        []byte
 	chunks       chan []byte
@@ -43,9 +57,11 @@ type interactiveInvocation struct {
 	writeFault   error
 	closeFault   error
 	closeOnce    sync.Once
+	// outboundOnce closes the frame queue: at machine Done, or when the engine ends.
+	outboundOnce sync.Once
 }
 
-func (i *invocation) prepareInteraction(protocol InteractionProtocol) (IdentityObserver, error) {
+func (i *invocation) prepareInteraction(protocol Protocol, user InteractionProtocol) (IdentityObserver, error) {
 	if protocol == nil {
 		return nil, nil
 	}
@@ -56,8 +72,10 @@ func (i *invocation) prepareInteraction(protocol InteractionProtocol) (IdentityO
 	if len(brief) > task.MaxBriefSize {
 		return nil, task.ErrControlRecordTooBig
 	}
-	if err = i.td.BeginInteraction(); err != nil {
-		return nil, err
+	if user != nil {
+		if err = i.td.BeginInteraction(); err != nil {
+			return nil, err
+		}
 	}
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -67,12 +85,16 @@ func (i *invocation) prepareInteraction(protocol InteractionProtocol) (IdentityO
 		return nil, errors.Join(err, reader.Close(), writer.Close())
 	}
 	i.stdin = reader
-	i.interaction = &interactiveInvocation{
-		td: i.td, protocol: protocol, input: writer, brief: brief,
-		records: make(chan providerjson.Value, 16), chunks: make(chan []byte, 16), outbound: make(chan interactionFrame, 16), written: make(chan string, 16),
+	i.interaction = newInteractiveInvocation(i.td, protocol, user, writer, brief)
+	return i.interaction, nil
+}
+
+func newInteractiveInvocation(td *taskdir.TaskDir, protocol Protocol, user InteractionProtocol, input *os.File, brief []byte) *interactiveInvocation {
+	return &interactiveInvocation{
+		td: td, protocol: protocol, user: user, input: input, brief: brief,
+		records: make(chan providerjson.Value, 16), chunks: make(chan []byte, 16), outbound: make(chan interactionFrame, outboundFrames), written: make(chan string, 16),
 		protocolDone: make(chan struct{}), writerDone: make(chan struct{}), closerDone: make(chan struct{}), done: make(chan struct{}),
 	}
-	return i.interaction, nil
 }
 
 // Observe is called by the sole stdout capture worker, after raw bytes are saved.
@@ -104,8 +126,12 @@ func (c *interactiveInvocation) start(budget *budgetOwner, clock Clock, startErr
 			c.fault = c.run()
 		}
 		close(c.protocolDone)
-		c.closeInput()
-		close(c.outbound)
+		// A clean Done leaves input to the writer, which closes it after the last
+		// queued frame; any other end closes now so a stalled writer cannot hold it.
+		if c.fault != nil || !c.finished {
+			c.closeInput()
+		}
+		c.closeOutbound()
 		<-c.writerDone
 		<-c.closerDone
 	}()
@@ -149,16 +175,36 @@ func (c *interactiveInvocation) Complete() error {
 		close(c.records)
 	}
 	<-c.done
+	if c.user == nil {
+		return c.completionError()
+	}
 	return errors.Join(c.completionError(), c.flushWritten())
 }
 
+func (c *interactiveInvocation) userChannel() bool {
+	return c != nil && c.user != nil
+}
+
+func (c *interactiveInvocation) completionDiagnostic() string {
+	err := c.completionError()
+	switch {
+	case err == nil:
+		return ""
+	case c.user == nil:
+		return "native protocol did not complete: " + err.Error()
+	default:
+		return "interactive protocol did not complete: " + err.Error()
+	}
+}
+
 // Called only after the protocol and writer workers have joined. Native
-// completion is independent of whether a concurrent message reached stdin.
+// completion is independent of whether a concurrent user message reached stdin.
 // Keep that delivery unknown; expected pipe closure cannot revoke completion.
+// A machine reply is protocol state, so its write failure is never forgiven.
 func (c *interactiveInvocation) completionError() error {
 	protocolErr := c.protocol.Complete()
 	writeErr := c.writeFault
-	if c.finished && protocolErr == nil && (errors.Is(writeErr, os.ErrClosed) || errors.Is(writeErr, io.ErrClosedPipe) || errors.Is(writeErr, syscall.EPIPE)) {
+	if c.user != nil && c.finished && protocolErr == nil && (errors.Is(writeErr, os.ErrClosed) || errors.Is(writeErr, io.ErrClosedPipe) || errors.Is(writeErr, syscall.EPIPE)) {
 		writeErr = nil
 	}
 	return errors.Join(c.fault, writeErr, c.closeFault, protocolErr)
@@ -173,7 +219,7 @@ func (c *interactiveInvocation) run() error {
 	if err = c.apply(InteractionUpdate{Outbound: frames}); err != nil {
 		return err
 	}
-	timer := c.clock.NewTimer(interactionPollInterval)
+	timer := c.newInboxTimer()
 	defer func() { timer.Stop() }()
 	chunks, records := c.chunks, c.records
 	for chunks != nil || records != nil {
@@ -196,7 +242,7 @@ func (c *interactiveInvocation) run() error {
 			err = c.recordSent(id)
 		case <-timer.C():
 			err = c.pollInbox()
-			timer = c.clock.NewTimer(interactionPollInterval)
+			timer = c.newInboxTimer()
 		}
 		if err != nil {
 			return err
@@ -240,7 +286,17 @@ func (c *interactiveInvocation) endStream() error {
 	return c.apply(update)
 }
 
+func (c *interactiveInvocation) newInboxTimer() Timer {
+	if c.user == nil {
+		return inactiveTimer{}
+	}
+	return c.clock.NewTimer(interactionPollInterval)
+}
+
 func (c *interactiveInvocation) apply(update InteractionUpdate) error {
+	if c.user == nil {
+		return c.applyMachine(update)
+	}
 	// A late native receipt remains in raw stdout, but cannot reopen the sealed
 	// interaction boundary or turn uncertain delivery into a new send.
 	if c.finished {
@@ -275,6 +331,32 @@ func (c *interactiveInvocation) apply(update InteractionUpdate) error {
 	return nil
 }
 
+// applyMachine validates every record, including those after Done. Events are
+// refused before any outbound effect, and Done grants no later outbound.
+func (c *interactiveInvocation) applyMachine(update InteractionUpdate) error {
+	if len(update.Events) != 0 {
+		return errMachineProtocolEvents
+	}
+	for _, frame := range update.Outbound {
+		if err := c.queue(interactionFrame{data: frame}); err != nil {
+			return err
+		}
+	}
+	if !update.Done || c.finished {
+		return nil
+	}
+	c.finished = true
+	// Done ends the frame queue without blocking behind the writer. The writer
+	// drains every earlier frame, then closes input; it never signals a process.
+	// The provider must exit naturally; otherwise the original supervisor budget wins.
+	c.closeOutbound()
+	return nil
+}
+
+func (c *interactiveInvocation) closeOutbound() {
+	c.outboundOnce.Do(func() { close(c.outbound) })
+}
+
 func (c *interactiveInvocation) queue(frame interactionFrame) error {
 	if c.finished {
 		return task.ErrInteractionClosed
@@ -305,7 +387,7 @@ func (c *interactiveInvocation) deliver() error {
 	if err = c.budget.authorize(Options{}, "interaction-delivery-authorized"); err != nil {
 		return err
 	}
-	frame, err := c.protocol.Encode(*message)
+	frame, err := c.user.Encode(*message)
 	if err != nil {
 		return c.td.RecordInteraction(task.InteractionEvent{Kind: "delivery", Delivery: &task.InteractionDelivery{MessageID: message.ID, State: "rejected", Reason: err.Error()}})
 	}

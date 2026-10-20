@@ -27,8 +27,14 @@ const (
 	// single-result completion policy. Fresh tasks use the attributed policy.
 	preAttributionPredicateVersion               = "native-permissions-v3"
 	preAttributionWorkspaceWritePredicateVersion = "native-permissions-v4"
-	predicateVersion                             = "native-permissions-v4"
-	workspaceWritePredicateVersion               = "native-permissions-v5"
+	// The scoped revisions share their version strings with the retained
+	// unscoped revisions and differ by digest. Both are frozen for replay.
+	scopedPredicateVersion               = "native-permissions-v4"
+	scopedWorkspaceWritePredicateVersion = "native-permissions-v5"
+	// The current revisions bind the advisory wire projection under version
+	// strings no earlier digest of the same mode uses.
+	predicateVersion               = "native-permissions-v5"
+	workspaceWritePredicateVersion = "native-permissions-v6"
 
 	// The legacy reference keeps already-sealed read-only evidence collectible
 	// after release-version gates were removed. It is never used for admission.
@@ -109,10 +115,14 @@ func preAttributionNativeContractForMode(mode string) string {
 // parent_tool_use_id. Its bytes are frozen with those revisions' digests.
 const unscopedCompletionAttributionContract = `"completion_attribution":"the first result answers the caller turn: its origin is absent or kind=human, and its result_index, when present, is 0; later results in the same invocation are accepted only as provider-native background notifications: every result then carries result_index, indexes are consecutive without gap or duplicate, and each later result has origin kind=task-notification without subkind; another or unknown origin, any subkind, a missing or mixed counter, a second result without counters, or a later failed, refused, interrupted, or truncated result rejects; for every result, terminal_reason when present must be completed, documented max_turns, api_error, aborted_streaming, and aborted_tools reasons reject as failures, and any other value is malformed; queued_turn_count when present must be 0 and a positive count rejects as queued human input; an explicit null result_index, origin, terminal_reason, or queued_turn_count is malformed; an empty or missing follow-up answer settles only as a coalesced batch acknowledgement with num_turns=0, which stays pending until a later non-empty attributed result, and any other empty follow-up or a pending acknowledgement at EOF rejects; a follow-up cycle may repeat system/init only before its messages and only with the same session, version, cwd, permission mode, apiKeySource, model, tools, and MCP server count; assistant or user events after a result open a follow-up cycle that must end with an attributed result before EOF; only the principal result is selected as the answer, follow-up answers are never selected, and principal failure, refusal, empty answer, or identity conflict rejects regardless of later follow-ups; main-agent usage, num_turns, and duration come from the principal result, while cumulative whole-tree total_cost_usd comes from the last attributed result and is never summed"`
 
-// scopedCompletionAttributionContract is the current policy text: leading
+// scopedCompletionAttributionContract is the frozen policy text of the
+// retained scoped read-only (native-permissions-v4) and workspace-write
+// (native-permissions-v5) revisions, which CCR v5 also embeds: leading
 // acknowledgements may precede the caller's result, root messages open
 // follow-up cycles, nested agent messages are validated and excluded, and an
-// invalid message scope is malformed.
+// invalid message scope is malformed. Its bytes are frozen with those
+// revisions' digests; the current advisory revisions derive from it through
+// advisoryCompletionEdits.
 const scopedCompletionAttributionContract = `"completion_attribution":"the first result that is not a leading acknowledgement answers the caller turn: its origin is absent or kind=human, and its result_index, when present, is 0, or, after leading acknowledgements, is the next consecutive index and is then required; a leading acknowledgement precedes the caller's result and is a result with origin kind=task-notification without subkind, subtype success, is_error false, an empty string result, num_turns explicitly 0, and result_index starting at 0 and consecutive, accepted after the initial system/init and before any root assistant or user message since that init or the previous acknowledgement, with one identical repeated system/init permitted once after an acknowledgement and before root messages; an acknowledgement is never the answer, never contributes usage or a cost baseline, and never closes an interactive input; a failed, refused, aborted, or queued acknowledgement always rejects and reports its canonical refusal even when the caller's result succeeds or never arrives, unless a higher-priority malformed or incomplete fault takes precedence, which still rejects; a stream of only acknowledgements is incomplete, and a nonempty, missing, mistyped, or wrongly counted acknowledgement, a duplicate or unmatched repeated init, or a changed identity is malformed; later results in the same invocation are accepted only as provider-native background notifications: every result then carries result_index, indexes are consecutive without gap or duplicate, and each later result has origin kind=task-notification without subkind; another or unknown origin, any subkind, a missing or mixed counter, a second result without counters, or a later failed, refused, interrupted, or truncated result rejects; for every result, terminal_reason when present must be completed, documented max_turns, api_error, aborted_streaming, and aborted_tools reasons reject as failures, and any other value is malformed; queued_turn_count when present must be 0 and a positive count rejects as queued human input; an explicit null result_index, origin, terminal_reason, or queued_turn_count is malformed; an empty or missing follow-up answer settles only as a coalesced batch acknowledgement with num_turns=0, which stays pending until a later non-empty attributed result, and any other empty follow-up or a pending acknowledgement at EOF rejects; a follow-up cycle may repeat system/init only before its root messages and only with the same session, version, cwd, permission mode, apiKeySource, model, tools, and MCP server count; root assistant or user events after a result, those whose parent_tool_use_id is absent or null, open a follow-up cycle that must end with an attributed result before EOF; nested agent messages, those whose parent_tool_use_id is a nonblank string of at most 1024 bytes without NUL or invalid UTF-8, stay structurally validated and session-bound but never open, advance, or settle a cycle or batch, are never selected as an answer, and never affect accounting; any other parent_tool_use_id value, including an empty, blank, oversized, mistyped, or case-aliased field, is malformed before or after the principal result; only the principal result is selected as the answer, follow-up answers are never selected, and principal failure, refusal, empty answer, or identity conflict rejects regardless of later follow-ups; main-agent usage, num_turns, and duration come from the principal result, while cumulative whole-tree total_cost_usd comes from the last attributed result and is never summed"`
 
 // attributedNativeContractWithPolicy derives an attributed revision from the
@@ -134,15 +144,103 @@ func attributedNativeContractWithPolicy(mode, policy string) string {
 	return strings.Replace(contract, `,"success":`, `,`+policy+`,"success":`, 1)
 }
 
-// attributedNativeContractForMode is the current scoped contract. A later
+// scopedNativeContract returns the frozen bytes of the scoped revision for
+// mode: read-only native-permissions-v4 (digest
+// b3c26a3eae4e39d6a68f55e191b7ac2aa7f05476103ee2d111de0fd873880f0d) and
+// workspace-write native-permissions-v5 (digest
+// 27bf2e76be4185559ecaa8cfbd404d81744281298b6a29b6bf99ab4e1f4b1b29). A later
 // system/init is governed by completion_attribution, so the read-only init
 // clause states only the initial one.
-func attributedNativeContractForMode(mode string) string {
+func scopedNativeContract(mode string) string {
 	contract := attributedNativeContractWithPolicy(mode, scopedCompletionAttributionContract)
 	if mode == Mode {
 		contract = strings.Replace(contract, "exactly one system/init object is required;", "one initial system/init object is required, and any later system/init is governed only by completion_attribution;", 1)
 	}
 	return contract
+}
+
+// contractEdit replaces one exact clause of a frozen contract.
+type contractEdit struct{ old, new string }
+
+// applyContractEdits replaces each clause once, in order. The pinned digests
+// of the derived revisions detect any clause that no longer matches.
+func applyContractEdits(contract string, edits []contractEdit) string {
+	for _, edit := range edits {
+		contract = strings.Replace(contract, edit.old, edit.new, 1)
+	}
+	return contract
+}
+
+// advisoryCompletionEdits rewrite the scoped completion_attribution text into
+// the advisory policy: an unknown completion reason is unsupported, and a
+// repeated system/init is compared only on its authority fields.
+func advisoryCompletionEdits() []contractEdit {
+	return []contractEdit{
+		{
+			"with one identical repeated system/init permitted once after an acknowledgement",
+			"with one repeated system/init of the same session and permission mode permitted once after an acknowledgement",
+		},
+		{
+			"documented max_turns, api_error, aborted_streaming, and aborted_tools reasons reject as failures, and any other value is malformed",
+			"documented max_turns, api_error, aborted_streaming, and aborted_tools reasons reject as failures, and any other string of at most 128 bytes is an unsupported completion that rejects as unsupported-completion with diagnostic unsupported_completion naming the field, never as success, provider failure, or malformed output, while a null, mistyped, or oversized value is malformed",
+		},
+		{
+			"only with the same session, version, cwd, permission mode, apiKeySource, model, tools, and MCP server count",
+			"only with the same session and permission mode; advisory init metadata may change",
+		},
+	}
+}
+
+// advisoryReadOnlyEdits rewrite the scoped read-only line, init, message, and
+// stop_reason clauses into the advisory wire projection.
+func advisoryReadOnlyEdits() []contractEdit {
+	return []contractEdit{
+		{`"version":"native-permissions-v4"`, `"version":"native-permissions-v5"`},
+		{
+			"duplicate keys, including case-folded aliases, reject at every nesting level",
+			"every line is complete JSON; duplicate keys, including case-folded aliases, reject among the selected authority and control fields of an object, while opaque tool, content, and extension payloads are validated as JSON syntax only",
+		},
+		{
+			"its session_id is a canonical UUID, claude_code_version is a non-empty valid CLI-reported version string, permissionMode is plan, and provider-owned apiKeySource, tools (at most 4096 names), and mcp_servers fields are accepted when structurally valid",
+			"its session_id is a canonical UUID and permissionMode is plan, and these are its only authority; claude_code_version, apiKeySource, cwd, model, tools, mcp_servers, and other init metadata are advisory: a missing, malformed, or ambiguous advisory field is ignored and never defaulted, and only a valid model name is retained for usage",
+		},
+		{
+			"message content blocks are structurally validated;",
+			"known message content blocks are structurally validated and unknown content block types are opaque valid JSON;",
+		},
+		{"refusal, unknown stop_reason, unattributed", "refusal, unattributed"},
+		{
+			"null, end_turn, and stop_sequence stop reasons may complete;",
+			"null, end_turn, and stop_sequence stop reasons may complete, and any other string stop_reason of at most 128 bytes is an unsupported completion that rejects as unsupported-completion;",
+		},
+	}
+}
+
+// advisoryWorkspaceWriteEdits rewrite the scoped workspace-write version and
+// init clause; its other rules refer to the read-only interpreter.
+func advisoryWorkspaceWriteEdits() []contractEdit {
+	return []contractEdit{
+		{`"version":"native-permissions-v5"`, `"version":"native-permissions-v6"`},
+		{
+			"permissionMode=bypassPermissions; provider-owned apiKeySource, tools (at most 4096 names), and mcp_servers fields are accepted when structurally valid",
+			"session_id and permissionMode=bypassPermissions are the only authority; other init metadata is advisory as in the native read-only interpreter",
+		},
+	}
+}
+
+// advisoryNativeContract is the current contract for mode: the frozen scoped
+// bytes with the advisory wire clauses.
+func advisoryNativeContract(mode string) string {
+	var edits []contractEdit
+	switch mode {
+	case Mode:
+		edits = advisoryReadOnlyEdits()
+	case WorkspaceWriteMode:
+		edits = advisoryWorkspaceWriteEdits()
+	default:
+		return ""
+	}
+	return applyContractEdits(scopedNativeContract(mode), append(edits, advisoryCompletionEdits()...))
 }
 
 // unscopedNativeContract returns the exact contract bytes of the retained
@@ -158,7 +256,7 @@ func unscopedNativeContract(mode string) string {
 
 // Contract returns the current native canonical bytes whose digest identifies
 // the interpreter.
-func Contract() string { return attributedNativeContractForMode(Mode) }
+func Contract() string { return advisoryNativeContract(Mode) }
 
 // ContractDigest returns the lowercase SHA-256 digest bound into Reference.
 func ContractDigest() string { return task.ComputeSHA256([]byte(Contract())) }
@@ -169,7 +267,7 @@ func Reference() task.PredicateRef {
 }
 
 // WorkspaceWriteContract returns the current native workspace-write contract.
-func WorkspaceWriteContract() string { return attributedNativeContractForMode(WorkspaceWriteMode) }
+func WorkspaceWriteContract() string { return advisoryNativeContract(WorkspaceWriteMode) }
 
 // WorkspaceWriteReference returns a predicate reference bound to the native
 // bypassPermissions profile. Keeping a distinct reference prevents a read-only
@@ -180,7 +278,14 @@ func WorkspaceWriteReference() task.PredicateRef {
 
 // ContractForMode returns the immutable output contract for mode.
 func ContractForMode(mode string) string {
-	return attributedNativeContractForMode(mode)
+	return advisoryNativeContract(mode)
+}
+
+// ScopedNativeContractForMode returns the frozen scoped native contract that
+// ContractForMode exposed before the advisory wire revision. Adapters whose
+// retained predicates embed it use these exact bytes for reconstruction.
+func ScopedNativeContractForMode(mode string) string {
+	return scopedNativeContract(mode)
 }
 
 // PreAttributionNativeContractForMode returns the frozen relaxed-probe native
@@ -226,6 +331,20 @@ func ReferenceForMode(mode string) task.PredicateRef {
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
 }
 
+// scopedReference identifies the frozen scoped revision of mode. It is
+// replay-only and a direct recovery source of the current revision.
+func scopedReference(mode string) task.PredicateRef {
+	contract := scopedNativeContract(mode)
+	if contract == "" {
+		return task.PredicateRef{}
+	}
+	version := scopedPredicateVersion
+	if mode == WorkspaceWriteMode {
+		version = scopedWorkspaceWritePredicateVersion
+	}
+	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
+}
+
 func preAttributionReferenceForMode(mode string) task.PredicateRef {
 	contract := preAttributionNativeContractForMode(mode)
 	if contract == "" {
@@ -239,7 +358,7 @@ func preAttributionReferenceForMode(mode string) task.PredicateRef {
 }
 
 // unscopedReference identifies the retained unscoped attributed revision of
-// mode. It shares its version string with the current reference of the same
+// mode. It shares its version string with the scoped reference of the same
 // mode and differs by digest. Both modes were admitted under the unscoped
 // policy; the references are replay-only and never a fresh default, recovery
 // source, or recovery target. An unsupported mode has no revision.
@@ -248,9 +367,9 @@ func unscopedReference(mode string) task.PredicateRef {
 	if contract == "" {
 		return task.PredicateRef{}
 	}
-	version := predicateVersion
+	version := scopedPredicateVersion
 	if mode == WorkspaceWriteMode {
-		version = workspaceWritePredicateVersion
+		version = scopedWorkspaceWritePredicateVersion
 	}
 	return task.PredicateRef{Adapter: Provider, Mode: mode, Version: version, SHA256: task.ComputeSHA256([]byte(contract))}
 }

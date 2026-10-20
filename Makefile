@@ -16,7 +16,7 @@ GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-maintainability verify-maintainability-strict verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-maintainability verify-maintainability-strict verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-workspaces acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
 
 tools:
 	./scripts/install-tools.sh
@@ -181,6 +181,21 @@ acceptance-supervisor-upgrade-recovery: build
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--scenario supervisor-upgrade-recovery --parallel-tasks 2 \
 		--output "$$receipt_dir/receipt.json"
+
+# Fixture-only managed workspace regressions (lifecycle, lineage); not real provider acceptance.
+# Each scenario writes its own receipt under bin/managed-workspace-acceptance.XXXXXX; the script owns cleanup.
+acceptance-workspaces: build
+	@for scenario in lifecycle lineage; do \
+		receipt_dir=$$(mktemp -d "$(BIN_DIR)/managed-workspace-acceptance.XXXXXX") || exit $$?; \
+		echo "Managed workspace $$scenario acceptance evidence: $$receipt_dir/receipt.json"; \
+		python3 scripts/acceptance_workspaces.py \
+			--delegate "$(BIN_DIR)/delegate" \
+			--runner "$(BIN_DIR)/delegate-run" \
+			--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+			--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+			--scenario "$$scenario" \
+			--output "$$receipt_dir/receipt.json" || exit $$?; \
+	done
 
 acceptance-agy: build test-native-harness
 	./scripts/acceptance_native.sh antigravity:print

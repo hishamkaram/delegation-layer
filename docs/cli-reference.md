@@ -160,7 +160,7 @@ paths must remain disjoint.
 | `--permission MODE` | `read-only` (default) or authorized unattended `workspace-write`, including commands and edits. Native access can extend beyond the workspace. |
 | `--budget DURATION` | Positive Go duration; default `30m` for ordinary tasks and `1h` for `codex:review`. Queue time is excluded. |
 | `--model MODEL` | Model selector when the chosen profile advertises `model` (Codex, CCR, Claude, AGY, Pi, or OpenCode). `ccr:print` requires a configured CCR alias; see [CCR](providers.md#claude-code-router). |
-| `--effort EFFORT` | Provider effort selector when the chosen profile advertises it. Codex writes TOML `model_reasoning_effort`; CCR, Claude, and AGY pass their native effort flag; Pi maps it to `--thinking`; OpenCode maps it to `--variant`. `default` keeps the provider default and is omitted from native argv. |
+| `--effort EFFORT` | Provider effort selector when the chosen profile advertises it. Codex writes TOML `model_reasoning_effort`; CCR, Claude, and AGY pass their native effort flag; Pi maps it to `--thinking`; OpenCode sets its native ACP `effort` option after any explicit model. `default` keeps the provider default and is omitted from native argv or protocol options. |
 | `--native-timeout DURATION` | Antigravity's native print timeout, no greater than `--budget`. |
 | `--resume-task TASK_ID` | Exact predecessor for a continuation; creates a new task. |
 | `--interactive` | Enable native clarification and supported active-turn steering. Unsupported providers reject this option before admission. |
@@ -294,8 +294,10 @@ not rerun.
 
 Fresh dispatches compile the current provider mapping. Ordinary exact-session
 continuations reconstruct the predecessor's recorded preparation contract;
-this preserves historical OpenCode, Pi, and CCR mappings while creating a new
-turn around the recorded session. Provider-specific continuation validation
+this preserves historical Pi and CCR mappings while creating a new turn around
+the recorded session. A historical native OpenCode `run` predecessor is the
+exception: its successor resumes the exact recorded session through the current
+ACP profile; see [OpenCode](providers.md#opencode). Provider-specific continuation validation
 still applies, such as Pi's same-workspace rule and CCR's route-preserving model
 rule. Interactive continuation is the current exception: Codex and Claude use
 the current interactive profile, retain the exact recorded session, and restore
@@ -314,7 +316,10 @@ means the exact session can be continued; `mode` is `native`, `checkpoint`, or
 After a host restart, a task can be interrupted: its stored publication state
 is still unknown, with no provider exit or outcome, its canonical lifetime
 closure is proven, and its runner lease is released. A terminated budget stop
-is checked first and reports `timed_out` instead. Once real outcomes and
+is checked first and reports `timed_out` instead. A proven closure whose
+recorded termination cause is the budget also reports `timed_out`, even when no
+stop observation exists yet, so `collect` without `--watch` and `status` agree.
+Once real outcomes and
 concrete errors are checked, `status` reports `status: "interrupted"` with
 `publication: "unknown"` and no `outcome`, and `collect` exits `1` with
 `failure.code: "task_interrupted"`. Closure is not provider success and no
@@ -438,7 +443,12 @@ The status and process exit mapping is:
 | --- | ---: | --- |
 | `available` or `partial` | `0` | Model facts were returned; `partial` means enumeration is incomplete. |
 | `blocked` or `unavailable` | `2` | Discovery could not establish usable model facts. |
-| `failed` | `1` | Discovery or response processing failed. |
+| `failed` | `1` or `2` | Discovery or response processing failed. Exit `1` is an operational failure; exit `2` means the request was invalid or unsupported, such as an invalid `--cwd` or a root/workspace overlap. |
+
+Status and exit are separate observations: `failed` with exit `2` is not an
+authentication block. When the response includes the optional typed
+`failure` object and `error` message, keep both and follow
+`failure.next_action`.
 
 Discovery is never an admission allowlist. Dispatch still performs the
 provider's runtime checks and the provider remains authoritative for whether a

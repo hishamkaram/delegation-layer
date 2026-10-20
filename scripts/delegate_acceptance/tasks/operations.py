@@ -35,6 +35,12 @@ from scripts.delegate_acceptance.supervisor.membership import (
     validate_queue_membership,
 )
 from scripts.delegate_acceptance.supervisor.observation import wait_runner_terminal
+from scripts.delegate_acceptance.supervisor.runner_layout import (
+    BUNDLE_RUNNER,
+    RUNNER_PLACEMENTS,
+    RunnerPlacement,
+    managed_state_runner,
+)
 from scripts.delegate_acceptance.supervisor.queue_policy import (
     canonical_queue,
     done_result,
@@ -66,7 +72,8 @@ class NativeTaskOps:
                  pueue: Path, state_parent: Path, state: Path, output: Path,
                  watch_seconds: float = 150,
                  expected_inspection_binding_required: bool = True,
-                 managed_runner: bool = False) -> None:
+                 managed_runner: bool = False, *,
+                 runner_placement: RunnerPlacement = BUNDLE_RUNNER) -> None:
         self.processes = processes
         self.delegate = Path(delegate)
         self.runner = Path(runner)
@@ -78,8 +85,12 @@ class NativeTaskOps:
         require(type(expected_inspection_binding_required) is bool,
                 "expected inspection binding mode is invalid")
         require(type(managed_runner) is bool, "managed runner mode is invalid")
+        require(runner_placement in RUNNER_PLACEMENTS, "runner placement is invalid")
+        require(managed_runner or runner_placement == BUNDLE_RUNNER,
+                "only a managed admission installs a state runner")
         self.expected_inspection_binding_required = expected_inspection_binding_required
         self.managed_runner = managed_runner
+        self.runner_placement: RunnerPlacement = runner_placement
         self.pueue_config: Path | None = None
         self.daemon: object | None = None
         self.root_id: str | None = None
@@ -95,9 +106,36 @@ class NativeTaskOps:
         self.queue_before_replay: dict[str, object] | None = None
         self.closed = False
 
+    def _expected_runner(self, task: str) -> Path:
+        """Return the one runner executable every validator expects for a task.
+
+        The default expects this ledger's runner. A consumer that admits tasks
+        through another runner overrides this selection with an immutable
+        per-task binding and must refuse any task it did not bind.
+        """
+        return self.runner
+
+    def _queued_runner(self, task: str) -> Path:
+        """Return the runner path every queue row and inspection binding executes.
+
+        The supervisor placement, never whichever file exists, selects the
+        path. A custom admission or a managed admission through an external
+        supervisor queues the expected bundle runner itself. A managed
+        admission through the private state-rooted supervisor queues the
+        immutable state copy Go installs for the expected runner's digest.
+        """
+        expected = self._expected_runner(task)
+        if self.runner_placement == BUNDLE_RUNNER:
+            return expected
+        expected_digest = digest(expected)
+        queued = managed_state_runner(self.state, expected_digest)
+        require(queued.is_file() and not queued.is_symlink() and digest(queued) == expected_digest,
+                f"managed runner executable changed for {task}")
+        return queued
+
     def _ordinary_runner_executable(self, task: str) -> Path:
         if not self.managed_runner:
-            return self.runner
+            return self._queued_runner(task)
         meta = _read_control_record(
             self.state / "tasks" / task / "meta.json",
             f"ordinary task metadata for {task}")
@@ -106,9 +144,8 @@ class NativeTaskOps:
                 isinstance(executable, str) and Path(executable).is_absolute() and
                 Path(executable) == Path(os.path.normpath(executable)),
                 f"ordinary task managed runner binding is invalid for {task}")
-        runner = Path(executable)
-        require(runner.is_file() and not runner.is_symlink() and
-                digest(runner) == digest(self.runner),
+        runner = self._queued_runner(task)
+        require(Path(executable) == runner,
                 f"ordinary task managed runner executable changed for {task}")
         return runner
 
@@ -384,7 +421,8 @@ class NativeTaskOps:
                                      expected_binding_required: bool = True) -> dict[str, object]:
         root = self._known_root_id()
         return validate_inspection_evidence(
-            state=self.state, root=root, root_created_at=self.root_created_at, runner=self.runner, pueue=self.pueue,
+            state=self.state, root=root, root_created_at=self.root_created_at,
+            runner=self._queued_runner(task), pueue=self.pueue,
             pueue_config=self.pueue_config, inspection_bindings=self.inspection_bindings, task=task,
             directory=directory,
             allow_failure=allow_failure, expected_binding_required=expected_binding_required)
@@ -451,9 +489,12 @@ class NativeTaskOps:
     def _validate_inspection_queue_row(self, row: dict[str, object], journal: dict[str, object],
                                        allow_failure: bool,
                                        terminal_required: bool = True) -> None:
+        task = journal.get("task_id")
+        if not isinstance(task, str):
+            raise AcceptanceFailure("inspection queue journal has no task identity")
         return validate_inspection_queue_row(
             row=row, journal=journal, allow_failure=allow_failure, state_parent=self.state_parent, pueue_config=self.pueue_config,
-            runner=self.runner, state_root=self.state, terminal_required=terminal_required)
+            runner=self._queued_runner(task), state_root=self.state, terminal_required=terminal_required)
 
     def _durable_ordinary_admission(
             self, task: str,

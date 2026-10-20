@@ -272,7 +272,7 @@ func recoverSealedTask(response Response, td *taskdir.TaskDir, inspection *taskd
 	return commandResult{response: response, code: 0}, true
 }
 
-func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, profile PreparedProfile, client *pueue.Client, lifetimeChild *openedLifetimeChild, deps Dependencies) commandResult {
+func runProvider(response Response, store *taskdir.Store, td *taskdir.TaskDir, req *task.TaskRecord, profile PreparedProfile, client *pueue.Client, lifetimeChild *openedLifetimeChild, deps Dependencies) commandResult {
 	stopper := &budgetStopper{client: client, taskDir: td, lifetime: lifetimeChild.Lifetime()}
 	identityObserver, err := makeIdentityObserver(profile, *req, td)
 	if err != nil {
@@ -284,21 +284,22 @@ func runProvider(response Response, td *taskdir.TaskDir, req *task.TaskRecord, p
 	}
 	preflight := func(scope execution.PreflightScope, _ execution.Plan) (execution.Plan, error) {
 		root := filepath.Dir(filepath.Dir(td.Dir))
-		return freshPreflightProfile(deps, root, *admittedReq, *admittedMeta, scope)
+		plan, preflightErr := freshPreflightProfile(deps, root, *admittedReq, *admittedMeta, scope)
+		if preflightErr != nil {
+			return plan, preflightErr
+		}
+		return plan, observeManagedTurnBaseline(scope, store, *admittedReq)
 	}
 	permit, err := td.PrepareStart(0)
 	if err != nil {
 		return failed(response, err, 1)
 	}
-	var interaction execution.InteractionProtocol
-	if profile.Interaction != nil {
-		interaction, err = profile.Interaction(continuationExpectation(req), func(identity task.SessionIdentity) error { return td.RecordProviderIdentity(identity) })
-		if err != nil {
-			return failed(response, errors.Join(err, permit.Release()), 1)
-		}
+	protocol, interaction, err := profile.OpenProtocol(continuationExpectation(req), func(identity task.SessionIdentity) error { return td.RecordProviderIdentity(identity) })
+	if err != nil {
+		return failed(response, errors.Join(err, permit.Release()), 1)
 	}
 	runResult := execution.Run(td, permit, profile.Plan, execution.Options{
-		Interaction: interaction, PreflightPlan: preflight, Stopper: stopper,
+		Protocol: protocol, Interaction: interaction, PreflightPlan: preflight, Stopper: stopper,
 		Lifetime: lifetimeChild.Lifetime(), Deadline: lifetimeChild.Deadline(),
 		Identity: identityObserver, Hooks: deps.ExecutionHooks,
 	})
@@ -399,7 +400,7 @@ func runPreparedRunner(response Response, parsed runnerArguments, deps Dependenc
 	if err != nil {
 		return failed(response, err, classifyCode(err, 1))
 	}
-	return runProvider(response, td, req, profile, client, lifetimeChild, deps)
+	return runProvider(response, store, td, req, profile, client, lifetimeChild, deps)
 }
 
 func reconcileRunnerMode(ctx context.Context, parsed runnerArguments, root string, response *Response, td *taskdir.TaskDir, req *task.TaskRecord, meta *task.MetaRecord, supervisorOptions pueue.Options, initialSupervisorExecutable string) (*pueue.Client, pueue.Observation, error) {

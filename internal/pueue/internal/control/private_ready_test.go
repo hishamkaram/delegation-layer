@@ -171,13 +171,26 @@ func TestWaitUnavailableWaitsForPrivateDaemonProcessExit(t *testing.T) {
 	}
 }
 
+// startBlockingProcess starts one cat child that blocks on a test-owned pipe.
+// All fallible lookup work precedes Start, and cleanup is registered directly
+// after Start. The finisher runs once: it closes both pipe ends, always joins
+// the child, and returns every close and wait error. A repeated call returns
+// nil because the first caller already received the result.
 func startBlockingProcess(t *testing.T) (*exec.Cmd, string, func() error) {
 	t.Helper()
+	catPath, err := exec.LookPath("cat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemonPath, err := canonicalExecutable(catPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	processInput, processOutput, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	process := exec.Command("cat")
+	process := exec.Command(catPath)
 	process.Stdin = processInput
 	if err = process.Start(); err != nil {
 		if closeErr := processOutput.Close(); closeErr != nil {
@@ -188,31 +201,18 @@ func startBlockingProcess(t *testing.T) (*exec.Cmd, string, func() error) {
 		}
 		t.Fatal(err)
 	}
-	catPath, err := exec.LookPath("cat")
-	if err != nil {
-		t.Fatal(err)
-	}
-	daemonPath, err := canonicalExecutable(catPath)
-	if err != nil {
-		t.Fatal(err)
-	}
 	finished := false
 	finish := func() error {
 		if finished {
 			return nil
 		}
 		finished = true
-		if err = processOutput.Close(); err != nil {
-			return err
-		}
-		if err = processInput.Close(); err != nil {
-			return err
-		}
-		return process.Wait()
+		// Closing the write end first gives cat EOF, so Wait completes.
+		return errors.Join(processOutput.Close(), processInput.Close(), process.Wait())
 	}
 	t.Cleanup(func() {
 		if cleanupErr := finish(); cleanupErr != nil {
-			t.Logf("finish blocking process: %v", cleanupErr)
+			t.Errorf("finish blocking process: %v", cleanupErr)
 		}
 	})
 	return process, daemonPath, finish

@@ -108,8 +108,33 @@ func WaitForPrivateQueueMaintenanceIdle(ctx context.Context, stateRoot string) e
 }
 
 type (
-	SubmissionAuthorization = control.SubmissionAuthorization
-	SubmissionGate          = control.SubmissionGate
+	SubmissionAuthorization     = control.SubmissionAuthorization
+	SubmissionGate              = control.SubmissionGate
+	PrivateEndpointState        = control.PrivateEndpointState
+	PrivateEndpointObservation  = control.PrivateEndpointObservation
+	PrivateRecovery             = control.PrivateRecovery
+	PublishedPairAvailability   = control.PublishedPairAvailability
+	CompletedTaskCleanup        = control.CompletedTaskCleanup
+	PublishedPairReconciliation = control.PublishedPairReconciliation
+)
+
+const (
+	PrivateEndpointReady   = control.PrivateEndpointReady
+	PrivateEndpointAbsent  = control.PrivateEndpointAbsent
+	PrivateEndpointRefused = control.PrivateEndpointRefused
+
+	PublishedPairReady         = control.PublishedPairReady
+	PublishedPairNotPublished  = control.PublishedPairNotPublished
+	PublishedPairIncomplete    = control.PublishedPairIncomplete
+	PublishedPairMemberMissing = control.PublishedPairMemberMissing
+
+	PublishedPairReconciled        = control.PublishedPairReconciled
+	PublishedPairTransitionPending = control.PublishedPairTransitionPending
+	PublishedPairLiveUnavailable   = control.PublishedPairLiveUnavailable
+
+	CompletedTaskRemoved            = control.CompletedTaskRemoved
+	CompletedTaskCleanupDeferred    = control.CompletedTaskCleanupDeferred
+	CompletedTaskLogicalLabelAbsent = control.CompletedTaskLogicalLabelAbsent
 )
 
 var (
@@ -118,6 +143,7 @@ var (
 	ErrPrivateSupervisorTransitionIncomplete = control.ErrPrivateSupervisorTransitionIncomplete
 	ErrPrivateSupervisorSubmissionIncomplete = control.ErrPrivateSupervisorSubmissionIncomplete
 	ErrPrivateSupervisorNotInitialized       = control.ErrPrivateSupervisorNotInitialized
+	ErrPrivateEndpointRefused                = control.ErrPrivateEndpointRefused
 )
 
 func PrivateConfigPath(stateRoot string) string {
@@ -188,6 +214,14 @@ func RecoverPrivate(ctx context.Context, stateRoot string, saved task.Supervisor
 	return control.RecoverPrivate(ctx, stateRoot, saved, clientExecutable, daemonExecutable, options)
 }
 
+func PrivateSupervisorPairMissing(binding task.SupervisorRef) (bool, error) {
+	return control.PrivateSupervisorPairMissing(binding)
+}
+
+func AttemptPrivateRecovery(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable string, daemonExecutable string, options Options) (PrivateRecovery, error) {
+	return control.AttemptPrivateRecovery(ctx, stateRoot, saved, clientExecutable, daemonExecutable, options)
+}
+
 func RecoverSaved(ctx context.Context, saved task.SupervisorRef, options Options) (*Client, bool, error) {
 	return control.RecoverSaved(ctx, saved, options)
 }
@@ -230,6 +264,10 @@ func PreparePrivateForMigrationWithLock(ctx context.Context, clientExecutable st
 
 func PreparePublishedPrivateWithLock(ctx context.Context, stateRoot string, options Options) (*Client, bool, error) {
 	return control.PreparePublishedPrivateWithLock(ctx, stateRoot, options)
+}
+
+func ObservePublishedPrivatePairWithLock(ctx context.Context, stateRoot string, options Options) (PublishedPairAvailability, error) {
+	return control.ObservePublishedPrivatePairWithLock(ctx, stateRoot, options)
 }
 
 func ReadPrivateSchedulingEvidence(stateRoot string) ([]byte, bool, error) {
@@ -280,6 +318,10 @@ func PrepareRecordedPrivateMigrationWithLock(ctx context.Context, root string, t
 
 func ReconcilePublishedPrivatePairWithLock(ctx context.Context, stateRoot string, exactClient string, exactDaemon string, options Options) error {
 	return control.ReconcilePublishedPrivatePairWithLock(ctx, stateRoot, exactClient, exactDaemon, options)
+}
+
+func ReconcilePublishedPrivatePairAttemptWithLock(ctx context.Context, stateRoot string, exactClient string, exactDaemon string, options Options) (PublishedPairReconciliation, error) {
+	return control.ReconcilePublishedPrivatePairAttemptWithLock(ctx, stateRoot, exactClient, exactDaemon, options)
 }
 
 func PublishVerifiedPrivatePredecessorWithLock(ctx context.Context, root string, predecessor task.SupervisorRef) error {

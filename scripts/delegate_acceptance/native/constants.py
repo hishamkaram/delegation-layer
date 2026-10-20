@@ -70,7 +70,14 @@ MODEL_DISCOVERY_REQUIRED_KEYS = {
     "schema_version", "command", "provider", "observed_at", "status",
     "reason_code", "complete", "source", "models", "efforts",
 }
-MODEL_DISCOVERY_OPTIONAL_KEYS = frozenset()
+# Delegate attaches the typed dispatch-failure projection and its fixed public
+# message only to an operational discovery failure (internal/app/models.go).
+MODEL_DISCOVERY_OPTIONAL_KEYS = frozenset({"failure", "error"})
+MODEL_DISCOVERY_FAILURE_STATUSES = frozenset({"failed", "unavailable", "blocked"})
+MODEL_DISCOVERY_FAILURE_REQUIRED_KEYS = frozenset({"code", "stage", "next_action"})
+MODEL_DISCOVERY_FAILURE_OPTIONAL_KEYS = frozenset({"reason_code", "recovery_command", "inspection"})
+MODEL_DISCOVERY_INSPECTION_REQUIRED_KEYS = frozenset({"class", "deadline_state"})
+MODEL_DISCOVERY_INSPECTION_OPTIONAL_KEYS = frozenset({"journal_task_id"})
 MODEL_INFO_REQUIRED_KEYS = {"id", "efforts"}
 MODEL_INFO_OPTIONAL_KEYS = {"name", "default_effort"}
 FAILURE_DIAGNOSTICS_BYTES = 256 * 1024

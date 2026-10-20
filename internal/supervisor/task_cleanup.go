@@ -42,7 +42,11 @@ func CleanupCompletedTask(ctx context.Context, root string, td *taskdir.TaskDir,
 		MetaSHA256:    receipt.MetaSHA256,
 		NumericTaskID: &numericTaskID,
 	}
-	if err = client.RemoveCompletedTask(ctx, identity); err != nil && !errors.Is(err, pueue.ErrCleanupDeferred) {
+	// Every operational error is reported, including one joined beside a
+	// deferral. A removed, deferred, or logically absent row is quiet: an
+	// absent label proves neither that the numeric ID is free nor who removed
+	// the row.
+	if _, err = client.AttemptCompletedTaskCleanup(ctx, identity); err != nil {
 		log.Printf("delegation-layer: completed supervisor task %d retained for retry: %v", receipt.NumericTaskID, err)
 	}
 }

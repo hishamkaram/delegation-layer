@@ -27,7 +27,7 @@ func evaluateCurrentInteractionAgainst(v interactionInterpreter, input predicate
 	if raw == nil || out == nil {
 		return task.Interpretation{}, task.ErrEvidenceFault
 	}
-	p := &appServerProtocol{expected: input.ExpectedSession, phase: 1, requests: map[string]json.RawMessage{}, steering: map[string]bool{}, agentItems: make(map[string]currentItemState), replay: true}
+	p := &appServerProtocol{expected: input.ExpectedSession, phase: 1, requests: map[string]json.RawMessage{}, steering: map[string]bool{}, agentItems: make(map[string]currentItemState), replay: true, revision: v.revision}
 	readErr, semanticErr := readCurrentInteraction(raw, p)
 	if readErr != nil {
 		return task.Interpretation{}, readErr
@@ -70,11 +70,12 @@ func currentInteractionRejection(result task.Interpretation) (task.Interpretatio
 }
 
 func (v interactionInterpreter) CanRecover(source task.PredicateRef) bool {
-	return !v.historical && source.Equal(historicalInteractionReference(v.mode))
+	earlier, ok := v.revision.recoversFrom()
+	return ok && source.Equal(earlier.reference(v.mode))
 }
 
-// Target is the explicit current predicate selected by recovery. Historical
-// interactive registrations remain replay-only because CanRecover is false.
+// Target is the explicit predicate selected by recovery. The historical
+// interactive registration remains replay-only because CanRecover is false.
 func (v interactionInterpreter) Target() task.PredicateRef { return v.Reference() }
 
 func (v interactionInterpreter) Recover(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
@@ -214,6 +215,9 @@ func (p *appServerProtocol) turnResponseRecord(result providerjson.Value) (execu
 }
 
 func (p *appServerProtocol) currentNotification(method string, nativeID []byte, fields map[string]providerjson.Value, record providerjson.Value) (execution.InteractionUpdate, error) {
+	if update, handled, err := p.classifyEnvelope(method, nativeID); handled {
+		return update, err
+	}
 	switch method {
 	case "turn/started":
 		return p.currentTurnStarted(fields)
@@ -221,21 +225,39 @@ func (p *appServerProtocol) currentNotification(method string, nativeID []byte, 
 		return p.currentTurnCompleted(fields)
 	case "item/completed":
 		return execution.InteractionUpdate{}, p.currentItemCompleted(fields, record)
-	case "item/tool/requestUserInput":
+	case requestUserInputMethod:
 		return p.currentRequestInput(nativeID, fields)
 	case "serverRequest/resolved":
 		return p.currentRequestResolved(fields)
 	case "error":
 		return execution.InteractionUpdate{}, p.currentError(fields)
 	default:
-		if len(nativeID) > 0 {
-			return denyAppServerRequest(json.RawMessage(nativeID))
-		}
-		if strings.HasPrefix(method, "thread/") || strings.HasPrefix(method, "turn/") || strings.HasPrefix(method, "item/") || strings.HasPrefix(method, "serverRequest/") {
+		return p.unrecognizedMethod(method, nativeID, fields)
+	}
+}
+
+// unrecognizedMethod applies the revision's treatment of a method this
+// predicate does not interpret. An unrecognized request (it carries an id) is
+// always denied. An unrecognized notification never changes lifecycle state:
+// interactive-v2 faults on lifecycle namespaces, while later revisions ignore
+// any structurally valid one, so added native metadata cannot end the session
+// or stand in for the affirmative turn/completed record.
+func (p *appServerProtocol) unrecognizedMethod(method string, nativeID []byte, fields map[string]providerjson.Value) (execution.InteractionUpdate, error) {
+	if len(nativeID) > 0 {
+		return denyAppServerRequest(json.RawMessage(nativeID))
+	}
+	if p.revision.ignoresUnidentifiedNotifications() {
+		_, hasResult := fields["result"]
+		_, hasError := fields["error"]
+		if hasResult || hasError {
 			return execution.InteractionUpdate{}, task.ErrInteractionRequest
 		}
 		return execution.InteractionUpdate{}, nil
 	}
+	if strings.HasPrefix(method, "thread/") || strings.HasPrefix(method, "turn/") || strings.HasPrefix(method, "item/") || strings.HasPrefix(method, "serverRequest/") {
+		return execution.InteractionUpdate{}, task.ErrInteractionRequest
+	}
+	return execution.InteractionUpdate{}, nil
 }
 
 func (p *appServerProtocol) currentTurnStarted(fields map[string]providerjson.Value) (execution.InteractionUpdate, error) {

@@ -195,9 +195,32 @@
       "py:__future__",
       "py:dataclasses",
       "py:delegate_acceptance.evidence.digests",
+      "py:delegate_acceptance.native_evidence.lifetime_closure",
+      "py:delegate_acceptance.native_evidence.production_acp",
       "py:json",
       "py:pathlib",
       "py:posixpath",
+      "py:re"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.lifetime_closure",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:re",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.production_acp",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.digests",
+      "py:json",
       "py:re"
     ]
   },
@@ -447,6 +470,17 @@
       "py:delegate_acceptance.evidence.validation",
       "py:pathlib",
       "py:shlex"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.supervisor.runner_layout",
+    "owner": "py:delegate_acceptance.supervisor",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.validation",
+      "py:pathlib",
+      "py:typing"
     ]
   },
   {

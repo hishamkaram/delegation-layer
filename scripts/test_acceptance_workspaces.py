@@ -317,6 +317,9 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
                 "operation_id": "a" * 32,
                 "subject": {"id": TASK_ID},
             }),
+            mock.patch.object(scenario_lifecycle, "verify_task_turn", return_value={
+                "snapshot_ref": "ref", "subject": {"kind": "task", "id": TASK_ID},
+            }),
         ):
             with self.assertRaisesRegex(RuntimeError, "reused capture receipt unavailable"):
                 driver._run_success(context)
@@ -680,6 +683,120 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             driver._workspace_exec(context, {"workspace_id": WORKSPACE_ID, "task_id": TASK_ID})
         self.assertEqual(observe.call_args.kwargs["state"], "retained")
 
+    def _main(self, run, cleanup, *, setup_cleanup=None):
+        """Drive the real main with a canonical cleanup result; return exit, receipt, finalize calls."""
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "receipt.json"
+            context = mock.Mock(spec=driver.WorkspaceContext)
+            context.cleanup.return_value = cleanup
+            binary = Path(driver.__file__)
+            make = mock.Mock(return_value=(context, {}))
+            if setup_cleanup is not None:
+                failure = driver.AcceptanceSetupFailure(
+                    driver.AcceptanceBlocked("fixture-unavailable"), driver.DirectoryOwner(), mock.Mock())
+                failure.cleanup = mock.Mock(return_value=setup_cleanup)
+                make = mock.Mock(side_effect=failure)
+            finalize = driver.ReceiptFinalizer.finalize
+            with (
+                mock.patch.object(scenario_application, "_require_executable", return_value=binary),
+                mock.patch.object(scenario_application, "_make_context", make),
+                mock.patch.object(scenario_application, "_run", side_effect=run),
+                mock.patch.object(driver.ReceiptFinalizer, "finalize", autospec=True,
+                                  side_effect=finalize) as finalized,
+                mock.patch.object(driver.sys.stdout, "write"),
+            ):
+                result = driver.main([
+                    "--delegate", str(binary), "--runner", str(binary),
+                    "--pueue", str(binary), "--pueued", str(binary), "--output", str(output),
+                ])
+            return result, json.loads(output.read_text()), [call.args[1:3] for call in finalized.call_args_list]
+
+    @staticmethod
+    def _passed(*_arguments):
+        return "passed", "managed workspace fixture acceptance passed"
+
+    @staticmethod
+    def _failed(*_arguments):
+        raise RuntimeError("injected scenario failure")
+
+    @staticmethod
+    def _blocked(*_arguments):
+        raise driver.AcceptanceBlocked("fixture-unavailable")
+
+    def _refusals(self):
+        retained = {"retained_owned_directories": ["owned-fixture"]}
+        policy = {
+            "lifetime": driver.cleanup_decision("passed", lifetime_closed=False, daemon_closed=True,
+                                                task_count=1, pending_process_count=0),
+            "daemon": driver.cleanup_decision("passed", lifetime_closed=True, daemon_closed=False,
+                                              task_count=1, pending_process_count=0),
+            "processes": driver.cleanup_decision("passed", lifetime_closed=True, daemon_closed=True,
+                                                 task_count=1, pending_process_count=1),
+        }
+        refused = [dict(authorized=allowed, decision=decision, **retained)
+                   for allowed, decision in policy.values()]
+        return refused + [dict(authorized=False, decision="cleanup-failed-evidence-retained",
+                               error="removal failed", **retained)]
+
+    def test_returned_cleanup_refusal_fails_a_passing_run_with_its_retained_evidence(self):
+        refusals = self._refusals()
+        self.assertEqual({item["decision"] for item in refusals}, {
+            "managed-lifetime-closure-unproven", "private-daemon-closure-unproven",
+            "process-observation-pending", "cleanup-failed-evidence-retained"})
+        for cleanup in refusals:
+            with self.subTest(cleanup["decision"]):
+                code, receipt, calls = self._main(self._passed, cleanup)
+                self.assertEqual(code, 1)
+                self.assertEqual((receipt["verdict"], receipt["reason"]),
+                                 ("failed", "cleanup-refused:" + cleanup["decision"]))
+                self.assertEqual(receipt["cleanup"], cleanup)
+                self.assertEqual(calls[-1][0], "failed")
+
+    def test_cleanup_without_a_true_authorization_never_passes(self):
+        for cleanup in ({}, {"decision": "x-y"}, {"authorized": "yes", "decision": "d"},
+                        {"authorized": 1, "decision": "d"}, {"authorized": None, "decision": 7},
+                        {"authorized": False, "decision": "Bad Decision/../"}):
+            with self.subTest(cleanup):
+                code, receipt, _calls = self._main(self._passed, cleanup)
+                self.assertEqual(code, 1)
+                self.assertEqual(receipt["verdict"], "failed")
+                self.assertTrue(receipt["reason"].startswith("cleanup-refused:"))
+        self.assertEqual(receipt["reason"], "cleanup-refused:unrecorded")
+
+    def test_authorized_cleanup_keeps_a_pass_and_marks_the_preliminary_receipt_nonfinal(self):
+        cleanup = {"authorized": True, "decision": "passed-with-closed-managed-lifetimes"}
+        code, receipt, calls = self._main(self._passed, cleanup)
+        self.assertEqual((code, receipt["verdict"], receipt["cleanup"]), (0, "passed", cleanup))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0], "failed")
+        self.assertEqual(calls[1], ("passed", "managed workspace fixture acceptance passed"))
+
+    def test_cleanup_refusal_preserves_a_genuine_failure_reason(self):
+        for cleanup in (self._refusals()[0], {"authorized": True, "decision": "d"}):
+            code, receipt, _calls = self._main(self._failed, cleanup)
+            self.assertEqual(code, 1)
+            self.assertEqual(receipt["reason"], "RuntimeError: injected scenario failure")
+
+    def test_blocked_run_is_neutral_only_when_cleanup_is_authorized(self):
+        authorized = {"authorized": True, "decision": "blocked-before-task-or-daemon"}
+        code, receipt, _calls = self._main(self._blocked, authorized)
+        self.assertEqual((code, receipt["verdict"], receipt["reason"]), (3, "BLOCKED", "fixture-unavailable"))
+        code, receipt, _calls = self._main(self._blocked, self._refusals()[0])
+        self.assertEqual((code, receipt["verdict"]), (1, "failed"))
+        self.assertEqual(receipt["reason"], "cleanup-refused:managed-lifetime-closure-unproven")
+
+    def test_setup_failure_block_is_neutral_only_when_its_cleanup_is_authorized(self):
+        unused = {"authorized": False, "decision": "unused"}
+        removed = {"authorized": True, "decision": "setup-failure-exact-root-removed",
+                   "removed_owned_directories": ["setup"]}
+        code, receipt, _calls = self._main(self._passed, unused, setup_cleanup=removed)
+        self.assertEqual((code, receipt["verdict"], receipt["cleanup"]), (3, "BLOCKED", removed))
+        retained = {"authorized": False, "decision": "setup-cleanup-failed-evidence-retained",
+                    "error": "removal failed", "retained_owned_directories": ["setup"]}
+        code, receipt, _calls = self._main(self._passed, unused, setup_cleanup=retained)
+        self.assertEqual((code, receipt["verdict"], receipt["cleanup"]), (1, "failed", retained))
+        self.assertEqual(receipt["reason"], "cleanup-refused:setup-cleanup-failed-evidence-retained")
+
     def test_capture_verification_binds_artifact_bytes_and_ref(self):
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary)
@@ -690,6 +807,8 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             patch = b"diff --git a/managed b/managed\n"
             patch_path = artifact_root / "diff.patch"
             patch_path.write_bytes(patch)
+            name_status = b"A\x00managed\x00"
+            (artifact_root / "name-status.z").write_bytes(name_status)
             capture = {
                 "status": "captured",
                 "workspace_id": WORKSPACE_ID,
@@ -710,6 +829,10 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
                     "name": "diff.patch",
                     "length": len(patch),
                     "sha256": hashlib.sha256(patch).hexdigest(),
+                }, {
+                    "name": "name-status.z",
+                    "length": len(name_status),
+                    "sha256": hashlib.sha256(name_status).hexdigest(),
                 }],
             }
             evidence = driver.verify_capture_receipt(state, capture)
@@ -719,6 +842,47 @@ class ManagedWorkspaceDriverTests(unittest.TestCase):
             capture["artifacts"][0]["length"] += 1
             with self.assertRaisesRegex(RuntimeError, "artifact digest"):
                 driver.verify_capture_receipt(state, capture)
+
+    def test_capture_turn_artifacts_follow_the_turn_observation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            root_id = "e" * 32
+            (state / "root.json").write_text(json.dumps({"root_id": root_id}))
+            artifact_root = state / "workspace-operations" / OPERATION_ID / "artifacts"
+            artifact_root.mkdir(parents=True)
+            files = {"diff.patch": b"diff --git a/managed b/managed\n",
+                     "name-status.z": b"A\x00managed\x00", "turn-diff.patch": b"",
+                     "turn-name-status.z": b"A\x00current-turn\x00"}
+            descriptors = []
+            for name, data in files.items():
+                (artifact_root / name).write_bytes(data)
+                descriptors.append({"name": name, "length": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+
+            def capture(turn, artifacts):
+                candidate = {
+                    "workspace_id": WORKSPACE_ID, "operation_id": OPERATION_ID,
+                    "subject": {"kind": "task", "id": TASK_ID, "sha256": SUBJECT_SHA},
+                    "base_oid": BASE_OID, "observed_head": HEAD_OID, "tree_oid": TREE_OID,
+                    "snapshot_ref": "refs/delegate/" + root_id + "/workspaces/" + WORKSPACE_ID + "/captures/" + OPERATION_ID,
+                    "object_format": "sha1",
+                }
+                if turn is not None:
+                    candidate["turn"] = turn
+                return {"status": "captured", "workspace_id": WORKSPACE_ID, "operation_id": OPERATION_ID,
+                        "termination_sha256": TERMINATION_SHA, "worker_wait_sha256": WAIT_SHA,
+                        "candidate": candidate, "artifacts": artifacts}
+
+            observed = {"status": "observed", "content": "changed", "head": "unchanged", "index": "unchanged"}
+            unavailable = {"status": "unavailable", "reason_code": "baseline_unavailable"}
+            evidence = driver.verify_capture_receipt(state, capture(observed, descriptors))
+            self.assertEqual({item["name"] for item in evidence["artifacts"]}, set(files))
+            driver.verify_capture_receipt(state, capture(unavailable, descriptors[:2]))
+            driver.verify_capture_receipt(state, capture(None, descriptors[:2]))
+            for turn, artifacts in ((observed, descriptors[:3]), (unavailable, descriptors), (None, descriptors)):
+                with self.assertRaisesRegex(RuntimeError, "turn artifacts"):
+                    driver.verify_capture_receipt(state, capture(turn, artifacts))
+            with self.assertRaisesRegex(RuntimeError, "duplicated"):
+                driver.verify_capture_receipt(state, capture(observed, descriptors + descriptors[2:3]))
 
     def test_failure_finalizer_writes_bounded_receipt_and_retains_on_failure(self):
         with tempfile.TemporaryDirectory() as temporary:

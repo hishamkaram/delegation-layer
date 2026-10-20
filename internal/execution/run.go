@@ -59,12 +59,12 @@ func Run(td *taskdir.TaskDir, permit *taskdir.StartPermit, plan Plan, opts Optio
 		result.Error = errors.Join(err, i.discard())
 		return result
 	}
-	if request.RequestedConfig.Interactive != (opts.Interaction != nil) {
-		result.Error = errors.Join(task.ErrInteractionUnavailable, i.discard())
+	if err = validateProtocolOptions(request.RequestedConfig.Interactive, opts); err != nil {
+		result.Error = errors.Join(err, i.discard())
 		return result
 	}
-	if opts.Interaction != nil {
-		opts.Identity, err = i.prepareInteraction(opts.Interaction)
+	if protocol, user := opts.selectedProtocol(); protocol != nil {
+		opts.Identity, err = i.prepareInteraction(protocol, user)
 		if err != nil {
 			result.Error = errors.Join(err, i.discard())
 			return result
@@ -155,7 +155,7 @@ func finishInvocation(i *invocation, plan Plan, startErr error, opts Options) (r
 		result.StopError = i.budget.await()
 		result.Error = errors.Join(result.Error, opts.Lifetime.CloseTask(context.Background()))
 	}
-	if i.interaction != nil {
+	if i.interaction.userChannel() {
 		result.Error = errors.Join(result.Error, i.td.SealInteraction())
 	}
 	if result.Error == nil {
@@ -501,9 +501,7 @@ func observedWaitError(err error) error {
 func sealAndPublish(td *taskdir.TaskDir, i *invocation, plan Plan, startErr error, opts Options) (*task.OutcomeRecord, error, error) {
 	invocationState, exitCode, diagnostic := task.InvocationStarted, 0, ""
 	if i.interaction != nil && opts.Identity != nil {
-		if interactionErr := i.interaction.completionError(); interactionErr != nil {
-			diagnostic = "interactive protocol did not complete: " + interactionErr.Error()
-		}
+		diagnostic = i.interaction.completionDiagnostic()
 	}
 	if startErr != nil {
 		invocationState, exitCode, diagnostic = task.InvocationStartFailed, 1, startErr.Error()

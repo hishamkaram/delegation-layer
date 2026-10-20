@@ -583,3 +583,40 @@ func TestCatalogSuccessorCandidateBindsRegistryToFinalizedPredicate(t *testing.T
 		t.Fatalf("successor finalized an unregistered predicate: %v", err)
 	}
 }
+
+func TestNewCatalogDiscoverableCommandRequirements(t *testing.T) {
+	cases := []struct {
+		name    string
+		runtime RuntimeCapability
+		invalid bool
+	}{
+		{name: "required flags only", runtime: RuntimeCapability{RequiredFlags: []string{"--json"}}},
+		{name: "help command only", runtime: RuntimeCapability{HelpArgs: []string{"acp"}}},
+		{name: "help command and flags", runtime: RuntimeCapability{HelpArgs: []string{"acp"}, RequiredFlags: []string{"--json"}}},
+		{name: "version arguments only", runtime: RuntimeCapability{VersionArgs: []string{"--version"}}, invalid: true},
+		{name: "neither", runtime: RuntimeCapability{}, invalid: true},
+		{name: "help command with duplicate argument", runtime: RuntimeCapability{HelpArgs: []string{"acp", "acp"}}, invalid: true},
+		{name: "help command with empty argument", runtime: RuntimeCapability{HelpArgs: []string{""}}, invalid: true},
+		{name: "help command with malformed flag", runtime: RuntimeCapability{HelpArgs: []string{"acp"}, RequiredFlags: []string{"json"}}, invalid: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			registration := testRegistration("alpha:print", "read-only")
+			registration.Description.Runtime = testCase.runtime
+			catalog, err := NewCatalog(registration)
+			if testCase.invalid {
+				if !errors.Is(err, ErrInvalidDescriptor) {
+					t.Fatalf("invalid runtime capability was accepted: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := catalog.Descriptions()[0].Runtime
+			if !reflect.DeepEqual(got.HelpArgs, testCase.runtime.HelpArgs) || !reflect.DeepEqual(got.RequiredFlags, testCase.runtime.RequiredFlags) {
+				t.Fatalf("runtime capability was not retained: %+v", got)
+			}
+		})
+	}
+}

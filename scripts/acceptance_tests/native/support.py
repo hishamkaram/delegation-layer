@@ -89,7 +89,12 @@ case "$1" in
                 versions='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":"1.0","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":"1.1"}'
                 runtimes='{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"executable":"/fixture/provider","version":"1.0","sha256":"1111111111111111111111111111111111111111111111111111111111111111"},"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb":{"executable":"/fixture/provider","version":"1.1","sha256":"6666666666666666666666666666666666666666666666666666666666666666"}}'
             fi
-            printf '{"gate":"acceptance-native","status":"passed","requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s","tasks":%s,"provider_sessions":%s,"provider_versions":%s,"provider_runtime_identities":%s,"natural_daemon_shutdown":true}\\n' "$model_json" "$provider" "$mode" "$scenario" "$tasks" "$sessions" "$versions" "$runtimes" >"$output/success.json"
+            production_acp=
+            if [ "$provider" = opencode:run ]; then
+                production_acp=',"production_acp":'"$("$REAL_PYTHON" -c 'import json, sys; sys.path[:0] = ["scripts", "."]; from scripts.acceptance_tests.native.support import production_acp_source; print(json.dumps(production_acp_source(json.loads(sys.argv[1]), json.loads(sys.argv[2]))))' "$tasks" "$sessions")"
+            fi
+            closure=$("$REAL_PYTHON" -c 'import json, sys; sys.path[:0] = ["scripts", "."]; from scripts.acceptance_tests.native.support import lifetime_closure_source; print(json.dumps(lifetime_closure_source(json.loads(sys.argv[1]))))' "$tasks")
+            printf '{"gate":"acceptance-native","status":"passed","requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s","tasks":%s,"provider_sessions":%s,"provider_versions":%s,"provider_runtime_identities":%s,"natural_daemon_shutdown":true,"lifetime_closure":%s%s}\\n' "$model_json" "$provider" "$mode" "$scenario" "$tasks" "$sessions" "$versions" "$runtimes" "$closure" "$production_acp" >"$output/success.json"
             printf '{"requested_model":%s,"requested_effort":null,"provider":"%s","mode":"%s","scenario":"%s","provider_identity_scope":"first-admitted-task","provider_task_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","provider_executable":"/fixture/provider","provider_version":"1.0","provider_sha256":"1111111111111111111111111111111111111111111111111111111111111111","delegate_sha256":"2222222222222222222222222222222222222222222222222222222222222222","runner_sha256":"3333333333333333333333333333333333333333333333333333333333333333","pueue_sha256":"4444444444444444444444444444444444444444444444444444444444444444","pueued_sha256":"5555555555555555555555555555555555555555555555555555555555555555"}\\n' "$model_json" "$provider" "$mode" "$scenario" >"$output/binding.json"
             printf '{"status":"removed","supervisor_shutdown_observed":true,"raw_process_captures":"removed"}\\n' >"$output/cleanup.json"
         elif [ "$code" -eq 2 ]; then
@@ -103,6 +108,70 @@ case "$1" in
 esac
 exit 7
 '''
+
+
+PRODUCTION_ACP_PREDECESSORS = {"resume": "fresh", "timeout_resume": "timeout_source"}
+
+
+def production_acp_source(tasks: dict[str, str], sessions: dict[str, str]) -> dict[str, object]:
+    """Return a well-formed source ACP marker bound to fixture task identities."""
+    turns: dict[str, dict[str, object]] = {}
+    for alias, task_id in tasks.items():
+        committed = alias != "timeout_source"
+        predecessor = PRODUCTION_ACP_PREDECESSORS.get(alias)
+        turns[alias] = {
+            "task_id": task_id, "session_id": sessions[alias],
+            "predecessor_task_id": tasks[predecessor] if predecessor else None,
+            "profile_revision": "opencode-acp-v1", "predicate_version": "acp-v1",
+            "predicate_sha256": "7" * 64, "spec_sha256": "8" * 64, "meta_sha256": "9" * 64,
+            "noninteractive": True, "interaction_journal": "absent",
+            "publication": "committed" if committed else "unpublished",
+            "manifest_sha256": "a" * 64 if committed else None,
+            "seal_sha256": "b" * 64 if committed else None,
+            "outcome_sha256": "c" * 64 if committed else None,
+        }
+    return {
+        "schema_version": 1, "kind": "opencode-production-acp",
+        "profile_revision": "opencode-acp-v1", "predicate_version": "acp-v1", "tasks": turns,
+    }
+
+
+def lifetime_closure_fact(*, cause: str = "completed", inspection: bool = False) -> dict[str, object]:
+    """Return one positive compact managed-lifetime fact."""
+    identity = {"request_sha256": "d" * 64} if inspection else {"spec_sha256": "8" * 64, "meta_sha256": "9" * 64}
+    return {
+        "cause": cause, "scope_empty": True, "wait_result": "success", "recovered": False,
+        "launch_count": 1, "registration_sha256": "a" * 64, "termination_sha256": "b" * 64,
+        "wait_sha256": "c" * 64, **identity,
+    }
+
+
+def lifetime_closure_source(tasks: dict[str, str], *, model_discovery: str | None = None) -> dict[str, object]:
+    """Return a positive compact closure proof bound to fixture task identities."""
+    discovery = None if model_discovery is None else {
+        "root_id": "f" * 32, "launch": "admitted", "tasks": {},
+        "inspections": {model_discovery: lifetime_closure_fact(inspection=True)},
+    }
+    return {
+        "schema_version": 1, "kind": "native-lifetime-closure",
+        "ordinary": {
+            "root_id": "e" * 32, "launch": "admitted", "inspections": {},
+            "tasks": {task_id: lifetime_closure_fact(cause="budget" if alias == "timeout_source" else "completed")
+                      for alias, task_id in sorted(tasks.items())},
+        },
+        "model_discovery": discovery,
+    }
+
+
+def adjacent_runner_bundle(root: Path) -> tuple[Path, Path]:
+    """Create one artifact directory holding delegate and its managed runner."""
+    bundle = root / "bundle"
+    bundle.mkdir()
+    delegate, runner = bundle / "delegate", bundle / "delegate-run"
+    for path in (delegate, runner):
+        path.write_text("#!/bin/sh\nexit 0\n")
+        path.chmod(0o700)
+    return delegate, runner
 
 
 def physical_test_root(directory: str) -> Path:

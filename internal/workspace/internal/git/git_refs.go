@@ -35,7 +35,7 @@ func (g Git) PinBase(ctx context.Context, source contract.Source, ref string) er
 	if err := g.validateSourceIdentity(ctx, source); err != nil {
 		return err
 	}
-	return g.pinCreateOnly(ctx, source.Root, ref, source.BaseOID, source.ObjectFormat, "commit", "pin Git base ref")
+	return g.pinCreateOnly(ctx, source.CommonDir, ref, source.BaseOID, source.ObjectFormat, "commit", "pin Git base ref")
 }
 
 // PinCapture creates an immutable Delegate-owned tree ref after the caller
@@ -58,7 +58,34 @@ func (g Git) PinCapture(ctx context.Context, checkout contract.Checkout, ref str
 	if err := g.validateCandidateObjects(ctx, checkout, candidate); err != nil {
 		return err
 	}
-	return g.pinCreateOnly(ctx, checkout.Source.Root, ref, candidate.TreeOID, checkout.Source.ObjectFormat, "tree", "pin Git capture ref")
+	return g.pinCreateOnly(ctx, checkout.Source.CommonDir, ref, candidate.TreeOID, checkout.Source.ObjectFormat, "tree", "pin Git capture ref")
+}
+
+// PinTurnBaseline publishes a turn baseline's owned tree ref through the same
+// create-only ref owner as captures. The baseline is a tree pin: its recorded
+// HEAD is an observation, and a later history rewrite may prune that commit.
+// The tree and the source base must still exist, and an existing ref must
+// already name the recorded tree.
+func (g Git) PinTurnBaseline(ctx context.Context, checkout contract.Checkout, baseline contract.TurnBaseline) error {
+	if ctx == nil {
+		return errors.Join(contract.ErrInvalidGitContext, errors.New("nil baseline pin context"))
+	}
+	if err := contract.ValidateOwnedRef(baseline.Ref); err != nil {
+		return err
+	}
+	if err := g.validateCheckout(ctx, checkout); err != nil {
+		return err
+	}
+	if err := validateCaptureCandidate(baseline.Observation(), checkout.Source); err != nil {
+		return err
+	}
+	if err := g.verifyObject(ctx, checkout.Source.CommonDir, baseline.BaseOID, checkout.Source.ObjectFormat, "commit"); err != nil {
+		return fmt.Errorf("validate baseline base object: %w", err)
+	}
+	if err := g.verifyObject(ctx, checkout.CheckoutPath, baseline.TreeOID, checkout.Source.ObjectFormat, "tree"); err != nil {
+		return fmt.Errorf("validate baseline tree object: %w", err)
+	}
+	return g.pinCreateOnly(ctx, checkout.Source.CommonDir, baseline.Ref, baseline.TreeOID, checkout.Source.ObjectFormat, "tree", "pin Git turn baseline ref")
 }
 
 // DeleteRef deletes one Delegate-owned ref only when it still points at
@@ -88,10 +115,10 @@ func (g Git) DeleteRefs(ctx context.Context, source contract.Source, prefix stri
 	if err != nil {
 		return err
 	}
-	if err = g.validateSourceIdentity(ctx, source); err != nil {
+	if err = g.validateRepositoryIdentity(ctx, source); err != nil {
 		return err
 	}
-	inventory, err := g.listOwnedRefs(ctx, source.Root, prefix)
+	inventory, err := g.listOwnedRefs(ctx, source.CommonDir, prefix)
 	if err != nil {
 		return err
 	}
@@ -100,7 +127,7 @@ func (g Git) DeleteRefs(ctx context.Context, source contract.Source, prefix stri
 		return err
 	}
 	transaction := deleteRefsTransaction(deletions)
-	_, stderr, err := g.runOutput(ctx, source.Root, []string{"update-ref", "--stdin", "-z", "--no-deref"}, nil, bytes.NewReader(transaction))
+	_, stderr, err := g.runOutput(ctx, source.CommonDir, []string{"update-ref", "--stdin", "-z", "--no-deref"}, nil, bytes.NewReader(transaction))
 	if err != nil {
 		return fmt.Errorf("delete Git refs transaction: %w", gitCommandError(err, stderr))
 	}
@@ -317,7 +344,7 @@ func (g Git) verifyObject(ctx context.Context, directory, objectID, objectFormat
 }
 
 func (g Git) validateCandidateObjects(ctx context.Context, checkout contract.Checkout, candidate contract.CaptureCandidate) error {
-	if err := g.verifyObject(ctx, checkout.Source.Root, candidate.BaseOID, checkout.Source.ObjectFormat, "commit"); err != nil {
+	if err := g.verifyObject(ctx, checkout.Source.CommonDir, candidate.BaseOID, checkout.Source.ObjectFormat, "commit"); err != nil {
 		return fmt.Errorf("validate capture base object: %w", err)
 	}
 	if err := g.verifyObject(ctx, checkout.CheckoutPath, candidate.ObservedHEAD, checkout.Source.ObjectFormat, "commit"); err != nil {
@@ -325,6 +352,11 @@ func (g Git) validateCandidateObjects(ctx context.Context, checkout contract.Che
 	}
 	if err := g.verifyObject(ctx, checkout.CheckoutPath, candidate.TreeOID, checkout.Source.ObjectFormat, "tree"); err != nil {
 		return fmt.Errorf("validate capture tree object: %w", err)
+	}
+	if candidate.ObservedTurn() {
+		if err := g.verifyObject(ctx, checkout.CheckoutPath, candidate.Turn.StartTreeOID, checkout.Source.ObjectFormat, "tree"); err != nil {
+			return fmt.Errorf("validate turn baseline tree object: %w", err)
+		}
 	}
 	return nil
 }

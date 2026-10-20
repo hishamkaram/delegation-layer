@@ -114,6 +114,7 @@
         "OwnedDirectory": {
           "parent_fd": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
           "directory_fd": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
+          "consumed": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
           "assert_live": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
           "consume": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])"
         },
@@ -155,7 +156,7 @@
           "adopt_created": "c3652fba3d1086ad8c51dd2b4be547c87c446319ee0c8f9ad2a0cbaf1a38801d",
           "transfer": "0d02f33808778cd2e6ba7c02a75a725d4b00868315166b59ed5180d4be480d25",
           "transfer_child_to": "9dea3902b3dfd3cd03323ba0d3f154bc6f5dfba9f3aadd585e45f199f6b1c482",
-          "release": "46cf9d341a4827640c8aedb68e58164b061f8878d99939cd2c23426dc80661c3",
+          "release": "d05f8dc73d9b12dcc99e315f46a43a583530f3541f45e6891594a4e5d14067eb",
           "clear": "afc2b42d55cadb4e12ee06c509443eb1608d0e662b6928e1c7996648c9c8fbd7",
           "rollback": "c8a3d83db145a7db07d9548594a770f6b9e3b057e6342578ca73873c313e07f6"
         },
@@ -363,7 +364,9 @@
       "classes": {
         "AcceptanceFailure": {},
         "NativeTaskOps": {
-          "__init__": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='processes', annotation=Name(id='object', ctx=Load())), arg(arg='delegate', annotation=Name(id='Path', ctx=Load())), arg(arg='runner', annotation=Name(id='Path', ctx=Load())), arg(arg='pueue', annotation=Name(id='Path', ctx=Load())), arg(arg='state_parent', annotation=Name(id='Path', ctx=Load())), arg(arg='state', annotation=Name(id='Path', ctx=Load())), arg(arg='output', annotation=Name(id='Path', ctx=Load())), arg(arg='watch_seconds', annotation=Name(id='float', ctx=Load())), arg(arg='expected_inspection_binding_required', annotation=Name(id='bool', ctx=Load())), arg(arg='managed_runner', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=150), Constant(value=True), Constant(value=False)])",
+          "__init__": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='processes', annotation=Name(id='object', ctx=Load())), arg(arg='delegate', annotation=Name(id='Path', ctx=Load())), arg(arg='runner', annotation=Name(id='Path', ctx=Load())), arg(arg='pueue', annotation=Name(id='Path', ctx=Load())), arg(arg='state_parent', annotation=Name(id='Path', ctx=Load())), arg(arg='state', annotation=Name(id='Path', ctx=Load())), arg(arg='output', annotation=Name(id='Path', ctx=Load())), arg(arg='watch_seconds', annotation=Name(id='float', ctx=Load())), arg(arg='expected_inspection_binding_required', annotation=Name(id='bool', ctx=Load())), arg(arg='managed_runner', annotation=Name(id='bool', ctx=Load()))], kwonlyargs=[arg(arg='runner_placement', annotation=Name(id='RunnerPlacement', ctx=Load()))], kw_defaults=[Name(id='BUNDLE_RUNNER', ctx=Load())], defaults=[Constant(value=150), Constant(value=True), Constant(value=False)])",
+          "_expected_runner": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='task', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
+          "_queued_runner": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='task', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
           "_ordinary_runner_executable": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='task', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
           "_ordinary_lifetime_validation_required": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='task', annotation=Name(id='str', ctx=Load()))], kwonlyargs=[], kw_defaults=[], defaults=[])",
           "validate_ordinary_queue_row": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='row', annotation=Subscript(value=Name(id='dict', ctx=Load()), slice=Tuple(elts=[Name(id='str', ctx=Load()), Name(id='object', ctx=Load())], ctx=Load()), ctx=Load())), arg(arg='label', annotation=Name(id='str', ctx=Load())), arg(arg='task', annotation=Name(id='str', ctx=Load())), arg(arg='numeric', annotation=BinOp(left=Name(id='int', ctx=Load()), op=BitOr(), right=Constant(value=None))), arg(arg='group', annotation=BinOp(left=Name(id='str', ctx=Load()), op=BitOr(), right=Constant(value=None)))], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None), Constant(value=None)])",
@@ -406,8 +409,8 @@
       },
       "frozen_methods": {
         "NativeTaskOps": {
-          "__init__": "ab2f5c83107055c5eb4254a55b231a6f1814ff910bf30e1d49410fde2a40f154",
-          "_ordinary_runner_executable": "262cf1b9c4d13b4140b2542f69e2afe37366f9d155a505279fc9b9dad43189ef",
+          "__init__": "cf1c5e1c51dd97bc864756375116b4859a5bfc54f6f9c9de00f90aec52b9b7c1",
+          "_ordinary_runner_executable": "739867316a4690b5935a2ea67fba643cbaad35603e525d8e01e295ea13fd538b",
           "_ordinary_lifetime_validation_required": "5905e82b4a0b61726c2f1c5ebe738d3150149b78259272fd7c8a5d514332953c",
           "validate_ordinary_queue_row": "d85cefb8b89ae765b6c9cc47b51523bfea81693a6a33aa4a6545811779506c21",
           "bind_supervisor": "dd32d20464f04ee398b16ee26c6cd542ac95bef95266c5b0db167a119986da70",

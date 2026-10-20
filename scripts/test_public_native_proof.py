@@ -417,6 +417,21 @@ class PublicNativeProofTests(unittest.TestCase):
                 with self.assertRaisesRegex(PublicProofError, "public_identity_binding_mismatch"):
                     validate_public_identity(modified, self.expectation)
 
+    def test_private_lifetime_closure_is_bound_by_digest_and_redacted_publicly(self) -> None:
+        entries = _read_members(self.public_zip)
+        for definition in CASE_DEFINITIONS:
+            with self.subTest(case=definition.case_id):
+                public_case = _object(json.loads(entries[f"cases/{definition.case_id}.json"]))
+                public_lifecycle = _object(_object(public_case["source_proof"])["lifecycle_proof"])
+                self.assertNotIn("closure", public_lifecycle)
+                self.assertEqual(public_lifecycle["state"], "complete")
+                compact_bytes = (self.stage / "case-receipts" / f"{definition.case_id}.json").read_bytes()
+                self.assertEqual(public_case["source_compact_sha256"], sha256(compact_bytes))
+                private_proof = _object(_object(json.loads(compact_bytes))["source_proof"])
+                closure = _object(_object(private_proof["lifecycle_proof"])["closure"])
+                self.assertEqual(set(_object(_object(closure["ordinary"])["tasks"])),
+                                 set(private_proof["task_ids"]))
+
     def test_public_source_bindings_contain_only_the_trusted_digest(self) -> None:
         envelope = inspect_public_proof(self.public_zip)
         identity = _object(envelope["identity"])

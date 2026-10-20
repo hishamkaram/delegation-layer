@@ -10,6 +10,7 @@ from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.processes.operations import Processes
 from scripts.delegate_acceptance.private_cli.contention_controls import ModernFixture, install_contention_client
 from scripts.delegate_acceptance.private_cli.contention_policy import ModernInstallation
+from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 from scripts.acceptance_tests.private_cli.modern_application_fixture import migration_response, publish_pair
 
@@ -98,6 +99,7 @@ class ModernControlFixture:
             self.processes, self.baseline.delegate, self.baseline.runner, self.baseline.libexec / "pueue",
             self.root.directory, self.state, self.controls.directory,
             expected_inspection_binding_required=False, managed_runner=True,
+            runner_placement=STATE_INSTALLED_RUNNER,
         )
 
     def modern_input(self):

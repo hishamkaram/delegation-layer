@@ -28,14 +28,19 @@ type interpreter struct {
 	historicalCurrentV3 bool
 }
 
-// NewInterpreter returns an OpenCode JSONL interpreter. With no argument it
-// returns the default workspace-write profile for compatibility with other
-// single-mode provider packages.
+// NewInterpreter returns the current OpenCode ACP interpreter. With no
+// argument it returns the default workspace-write profile for compatibility
+// with other single-mode provider packages.
 func NewInterpreter(modes ...string) predicate.Interpreter {
 	mode := ModeWorkspaceWrite
 	if len(modes) > 0 {
 		mode = modes[0]
 	}
+	return acpInterpreter{mode: mode}
+}
+
+// newRunInterpreter returns the newest run-dialect JSONL interpreter.
+func newRunInterpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode}
 }
 
@@ -68,7 +73,7 @@ func (v interpreter) Reference() task.PredicateRef {
 	if v.historicalCurrent {
 		return historicalReferenceForMode(v.mode)
 	}
-	return ReferenceForMode(v.mode)
+	return runReferenceForMode(v.mode)
 }
 
 func (v interpreter) Evaluate(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {

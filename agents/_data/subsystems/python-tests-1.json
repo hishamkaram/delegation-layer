@@ -45,11 +45,31 @@
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.acceptance_discovery",
       "py:delegate_acceptance.native.output",
+      "py:delegate_acceptance.supervisor.runner_layout",
       "py:hashlib",
       "py:json",
       "py:native_acceptance_evidence",
       "py:pathlib",
       "py:tempfile",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.native.test_native_acceptance_closure",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_supervisor_common",
+      "py:acceptance_tests.inspection.fixtures",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.acceptance_lifecycle",
+      "py:delegate_acceptance.native_evidence.lifetime_closure",
+      "py:delegate_acceptance.native_evidence.public_validation",
+      "py:json",
+      "py:pathlib",
+      "py:shutil",
       "py:types",
       "py:unittest",
       "py:unittest.mock"
@@ -79,6 +99,7 @@
       "py:acceptance_tests.native.support",
       "py:acceptance_tests.resources",
       "py:delegate_acceptance.native.acceptance",
+      "py:delegate_acceptance.native.acceptance_lifecycle",
       "py:json",
       "py:os",
       "py:pathlib",
@@ -98,15 +119,50 @@
     "imports": [
       "py:acceptance_native",
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.native.support",
       "py:acceptance_tests.resources",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.acceptance_lifecycle",
       "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.supervisor.runner_layout",
       "py:hashlib",
       "py:json",
       "py:pathlib",
       "py:tempfile",
       "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.native.test_native_acceptance_model_failure",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_native",
+      "py:ast",
+      "py:delegate_acceptance.native.acceptance",
+      "py:delegate_acceptance.native.provider_policy",
+      "py:inspect",
+      "py:json",
+      "py:pathlib",
+      "py:tempfile",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.native.test_native_acceptance_model_negative",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_native",
+      "py:delegate_acceptance.native.acceptance",
+      "py:hashlib",
+      "py:json",
+      "py:pathlib",
+      "py:tempfile",
       "py:unittest",
       "py:unittest.mock"
     ]
@@ -118,8 +174,10 @@
     "imports": [
       "py:acceptance_native",
       "py:acceptance_provider_common",
+      "py:acceptance_tests.inspection.fixtures",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.acceptance_collection",
+      "py:delegate_acceptance.supervisor.runner_layout",
       "py:hashlib",
       "py:pathlib",
       "py:shlex",
@@ -131,12 +189,79 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.native.test_native_acceptance_production_acp",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "test",
+    "imports": [
+      "py:delegate_acceptance.native.acceptance",
+      "py:delegate_acceptance.native.acceptance_operations",
+      "py:delegate_acceptance.native.production_acp",
+      "py:pathlib",
+      "py:tempfile",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.native.test_native_acceptance_receipts",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "test",
+    "imports": [
+      "py:delegate_acceptance.native.acceptance_scenarios",
+      "py:delegate_acceptance.native.constants",
+      "py:pathlib",
+      "py:tempfile",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.native.test_native_acceptance_runner_pair",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_native",
+      "py:acceptance_supervisor_common",
+      "py:acceptance_tests.native.support",
+      "py:delegate_acceptance.native.acceptance",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:shutil",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.native.test_native_acceptance_success_commit",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_native",
+      "py:acceptance_tests.native.support",
+      "py:delegate_acceptance.evidence.bounded_files",
+      "py:delegate_acceptance.native.acceptance",
+      "py:delegate_acceptance.native.acceptance_lifecycle",
+      "py:hashlib",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:tempfile",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.native.test_native_acceptance_timeout",
     "owner": "py:delegate_acceptance.native",
     "layer": "test",
     "imports": [
       "py:acceptance_provider_common",
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.native.support",
       "py:acceptance_tests.resources",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.timeouts",
@@ -177,6 +302,8 @@
       "py:acceptance_ccr_fixture",
       "py:acceptance_supervisor_common",
       "py:acceptance_tests.resources",
+      "py:delegate_acceptance.native.acceptance_lifecycle",
+      "py:hashlib",
       "py:json",
       "py:pathlib",
       "py:sys",
@@ -211,6 +338,22 @@
       "py:pathlib",
       "py:tempfile",
       "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:test_acceptance_finalization_receipt",
+    "owner": "py:test_acceptance_finalization_receipt",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_supervisor_common",
+      "py:contextlib",
+      "py:delegate_acceptance.directories.finalization",
+      "py:delegate_acceptance.directories.operations",
+      "py:os",
+      "py:pathlib",
+      "py:tempfile",
       "py:unittest",
       "py:unittest.mock"
     ]
@@ -331,6 +474,7 @@
     "imports": [
       "py:acceptance_private_cli",
       "py:acceptance_supervisor_common",
+      "py:delegate_acceptance.directories.operations",
       "py:pathlib",
       "py:tempfile",
       "py:unittest"
@@ -479,6 +623,7 @@
     "imports": [
       "py:__future__",
       "py:acceptance_supervisor_common",
+      "py:acceptance_tests.native.support",
       "py:delegate_acceptance.directories.journal",
       "py:delegate_acceptance.native_evidence.cases",
       "py:delegate_acceptance.native_evidence.contract",
@@ -543,6 +688,7 @@
     "owner": "py:test_verify_release_archive",
     "layer": "test",
     "imports": [
+      "py:acceptance_tests.native.support",
       "py:argparse",
       "py:delegate_acceptance.directories.journal",
       "py:delegate_acceptance.release_verification.contract",

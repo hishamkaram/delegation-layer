@@ -1,14 +1,19 @@
 package app
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/provider/ccr"
+	"github.com/hishamkaram/delegation-layer/internal/provider/claude"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -128,38 +133,153 @@ func (f *outputUpgradeFixture) createPredecessor(t *testing.T) {
 	}
 }
 
-// sealOutputUpgradeTask records the exact session, publishes the raw stream
-// under reference, and returns the collected outcome. It is the single
-// terminal-evidence path for both predecessor and successor tasks.
+// sealOutputUpgradeTask records the exact session itself, publishes the raw
+// stream under reference, and returns the collected outcome. It is the
+// historical fixture's provider turn on the canonical seal path.
 func sealOutputUpgradeTask(t *testing.T, td *taskdir.TaskDir, provider, session string, reference task.PredicateRef, stdout string) *task.OutcomeRecord {
 	t.Helper()
+	return sealOutputUpgradeTurn(t, td, reference, stdout, func() error {
+		return td.RecordProviderIdentity(task.SessionIdentity{Provider: provider, ConversationID: session})
+	})
+}
+
+// sealOutputUpgradeTurn is the single terminal-evidence path for fixture
+// tasks, predecessor and successor alike: turn runs inside the consumed start
+// after the start is recorded, as a provider turn does, and may record the
+// session; its stdout is then sealed under reference and collected.
+func sealOutputUpgradeTurn(t *testing.T, td *taskdir.TaskDir, reference task.PredicateRef, stdout string, turn func() error) *task.OutcomeRecord {
+	t.Helper()
+	outcome, err := sealFixtureEvidence(td, reference, stdout, turn)
+	if err != nil {
+		t.Fatalf("seal and collect under %+v: %v", reference, err)
+	}
+	return outcome
+}
+
+// sealFixtureEvidence owns the start lease for one fixture turn: PrepareStart,
+// Consume, RecordStarted, turn, raw stdout, Seal, an explicit Release, then
+// Collect. The lease is released on every path; a failure keeps its own error
+// joined with the release result.
+func sealFixtureEvidence(td *taskdir.TaskDir, reference task.PredicateRef, stdout string, turn func() error) (_ *task.OutcomeRecord, resultErr error) {
 	permit, err := td.PrepareStart(0)
+	if err != nil {
+		return nil, err
+	}
+	released := false
+	defer func() {
+		if !released {
+			resultErr = errors.Join(resultErr, permit.Release())
+		}
+	}()
+	if err = permit.Consume(); err != nil {
+		return nil, err
+	}
+	if err = td.RecordStarted(0); err != nil {
+		return nil, err
+	}
+	if err = turn(); err != nil {
+		return nil, fmt.Errorf("provider turn: %w", err)
+	}
+	if err = td.WriteRawFiles(stdout, ""); err != nil {
+		return nil, err
+	}
+	if _, err = td.Seal(task.InvocationStarted, 0, "", reference); err != nil {
+		return nil, err
+	}
+	released = true
+	if err = permit.Release(); err != nil {
+		return nil, err
+	}
+	outcome, cleanupErr, collectErr := td.Collect(reference)
+	if err = errors.Join(cleanupErr, collectErr); err != nil {
+		return nil, err
+	}
+	if outcome == nil {
+		return nil, errors.New("collection returned no outcome")
+	}
+	return outcome, nil
+}
+
+// TestSealFixtureEvidenceRunsTheTurnInsideTheRecordedStart observes the
+// canonical fixture lifecycle through the real store. The turn runs once,
+// after the start is recorded and before any seal or outcome, under the held
+// lease that can still record the session. A failing turn ends without a seal and
+// still releases the start lease, exactly as a completed turn does.
+func TestSealFixtureEvidenceRunsTheTurnInsideTheRecordedStart(t *testing.T) {
+	for _, failing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failing turn=%t", failing), func(t *testing.T) {
+			requireFixtureTurnLifecycle(t, failing)
+		})
+	}
+}
+
+func requireFixtureTurnLifecycle(t *testing.T, failing bool) {
+	t.Helper()
+	reference := claude.ReferenceForMode(config.ModeReadOnly)
+	store, err := taskdir.InitStoreWithPredicates(filepath.Join(t.TempDir(), "state"), NativeCatalog().Registry())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = permit.Consume(); err != nil {
+	// Each closer is registered the moment its handle is acquired; cleanups
+	// run in reverse, so the task closes before its store.
+	piConsumerCloser(t, "store", store)
+	taskID := strings.Repeat("d", 32)
+	td := createProviderRecheckTask(t, store, taskID, providerRecheckSource{provider: claude.Provider, reference: reference})
+	piConsumerCloser(t, "task", td)
+	session, err := claude.FreshSessionID(store.RootID, taskID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err = td.RecordProviderIdentity(task.SessionIdentity{Provider: provider, ConversationID: session}); err != nil {
-		t.Fatal(err)
+	turnErr := errors.New("fixture turn failed")
+	turns := 0
+	outcome, err := sealFixtureEvidence(td, reference, outputUpgradeCase{provider: claude.Provider, mode: config.ModeReadOnly}.predecessorStream(session), func() error {
+		turns++
+		if insideErr := requireTurnInsideStart(td); insideErr != nil {
+			return insideErr
+		}
+		if recordErr := td.RecordProviderIdentity(task.SessionIdentity{Provider: claude.Provider, ConversationID: session}); recordErr != nil || failing {
+			return errors.Join(recordErr, turnErr)
+		}
+		return nil
+	})
+	switch {
+	case turns != 1:
+		t.Fatalf("turn ran %d times", turns)
+	case failing && (!errors.Is(err, turnErr) || outcome != nil):
+		t.Fatalf("failing turn outcome=%+v err=%v, want only the turn failure", outcome, err)
+	case !failing && (err != nil || outcome == nil || outcome.Verdict != task.VerdictCommitted):
+		t.Fatalf("completed turn outcome=%+v err=%v, want committed", outcome, err)
 	}
-	if err = td.RecordStarted(0); err != nil {
-		t.Fatal(err)
+	requireFixtureTurnEnded(t, td, !failing)
+}
+
+// requireFixtureTurnEnded requires the start lease released and the seal and
+// outcome present exactly when the turn completed.
+func requireFixtureTurnEnded(t *testing.T, td *taskdir.TaskDir, sealed bool) {
+	t.Helper()
+	if inspection, err := td.Inspect(); err != nil || inspection.SealExists != sealed || inspection.OutcomeExists != sealed {
+		t.Fatalf("after the turn: inspection=%+v err=%v, want sealed=%t", inspection, err, sealed)
 	}
-	if err = td.WriteRawFiles(stdout, ""); err != nil {
-		t.Fatal(err)
+	if released, err := td.RunnerLeaseReleased(); err != nil || !released {
+		t.Fatalf("start lease released=%t err=%v after the turn ended", released, err)
 	}
-	if _, err = td.Seal(task.InvocationStarted, 0, "", reference); err != nil {
-		t.Fatal(err)
+}
+
+// requireTurnInsideStart reports a turn that is not running under the held
+// start lease after the start was recorded and before any seal or outcome.
+func requireTurnInsideStart(td *taskdir.TaskDir) error {
+	inspection, err := td.Inspect()
+	if err != nil {
+		return err
 	}
-	if err = permit.Release(); err != nil {
-		t.Fatal(err)
+	released, err := td.RunnerLeaseReleased()
+	if err != nil {
+		return err
 	}
-	outcome, cleanupErr, collectErr := td.Collect(reference)
-	if cleanupErr != nil || collectErr != nil || outcome == nil {
-		t.Fatalf("collect under %+v: outcome=%+v cleanup=%v err=%v", reference, outcome, cleanupErr, collectErr)
+	if released || !inspection.StartedExists || inspection.SealExists || inspection.OutcomeExists {
+		return errors.New("turn ran outside the held, recorded, unsealed start")
 	}
-	return outcome
+	return nil
 }
 
 // outputUpgradeCCRCatalog is the production CCR registration with one harness

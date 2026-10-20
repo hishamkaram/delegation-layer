@@ -1,0 +1,491 @@
+"""Setup-failure ownership tests: real directory tokens and Process/Processes, fake native handle."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest import mock
+
+import scripts.delegate_acceptance.workspaces.scenarios.application as application
+import scripts.delegate_acceptance.directories.operations as directories_operations
+import scripts.delegate_acceptance.processes.operations as processes_operations
+from scripts.delegate_acceptance.directories.operations import DirectoryOwner
+from scripts.delegate_acceptance.processes.operations import Processes
+from scripts.delegate_acceptance.workspaces.scenarios.context import AcceptanceSetupFailure
+from scripts.delegate_acceptance.workspaces.scenarios.evidence import ReceiptFinalizer
+
+
+class RecordingOwner(DirectoryOwner):
+    """A real owner that also records every token it hands out, so tests can prove none is lost."""
+
+    def __init__(self):
+        super().__init__()
+        self.tokens = []
+
+    def create(self, *arguments, **options):
+        self.tokens.append(super().create(*arguments, **options))
+        return self.tokens[-1]
+
+    def adopt_created(self, *arguments, **options):
+        self.tokens.append(super().adopt_created(*arguments, **options))
+        return self.tokens[-1]
+
+
+class SetupProcessOwnershipTests(unittest.TestCase):
+    """Production Process/Processes and real directory tokens, with only the native handle faked."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.home = Path(self.directory.name).resolve()
+        self.owner = RecordingOwner()
+        self.child_exit = None
+        self.write_faults = {}
+        real_write = processes_operations.write_json
+        test = self
+
+        def write(path, value, *arguments, **options):
+            if Path(path).name in test.write_faults:
+                raise test.write_faults[Path(path).name]
+            return real_write(path, value, *arguments, **options)
+
+        class Popen:
+            def __init__(self, _argv, **_options):
+                self.pid, self.stdin = 4242, None
+
+            def poll(self):
+                return test.child_exit
+
+            wait = poll
+
+        self.registries = []
+        registries = self.registries
+
+        class RecordingProcesses(Processes):
+            """The production registry, remembered so teardown can observe what it still owns."""
+
+            def __init__(self, *arguments, **options):
+                super().__init__(*arguments, **options)
+                registries.append(self)
+
+        for patch in (
+            mock.patch.object(Path, "home", return_value=self.home),
+            mock.patch.object(application, "DirectoryOwner", return_value=self.owner),
+            mock.patch.object(application, "Processes", RecordingProcesses),
+            mock.patch.object(processes_operations, "write_json", side_effect=write),
+            mock.patch.object(processes_operations, "subprocess", mock.Mock(Popen=Popen)),
+        ):
+            self.enterContext(patch)
+        self.addCleanup(self._settle_children)
+
+    def _settle_children(self):
+        """Let each fake child exit naturally, then observe it through its own registry.
+
+        Registered after the patches, so it runs while the fake handle and the temporary
+        directory still exist, even when the test body failed.
+        """
+        self.write_faults.clear()
+        if self.child_exit is None:
+            self.child_exit = 0
+        for registry in self.registries:
+            if all(entry.result is not None for entry in registry.entries):
+                continue
+            self.assertEqual(registry.pending(), [])
+            for entry in registry.entries:
+                self.assertTrue(entry.stdout.closed and entry.stderr.closed)
+                self.assertTrue((entry.directory / "completed.json").is_file())
+
+    @staticmethod
+    def _layout(owner, root_token, _binaries):
+        base = root_token.directory
+        owner.create("managed workspace state", base / "state", base)
+        return application.WorkspaceLayout(
+            base=base, state=base / "state", source=base / "source", provider_bin=base / "bin",
+            waiter_directory=base / "waiters", response_directory=base / "responses",
+            home_dir=base / "home", install=base / "install", libexec=base / "libexec",
+            gate_path=base / "gate", fixture_session_marker=base / "marker.json", lease_nonce="n",
+        )
+
+    @staticmethod
+    def _argv():
+        return [str(application._git_executable()), "init"]
+
+    def _run_git(self, context):
+        context.processes.run("git-init", self._argv(), context.source)
+
+    def _start_then_expire(self, context):
+        context.processes.start("git-init", self._argv(), context.source).wait(0)
+
+    def _make(self, *, layout=None, prepare=None):
+        binaries = dict.fromkeys(("delegate", "runner", "pueue", "pueued"), Path("/binary"))
+        with (
+            mock.patch.object(application, "_create_layout", side_effect=layout or self._layout),
+            mock.patch.object(application, "_prepare_source",
+                              side_effect=prepare or self._run_git),
+        ):
+            return application._make_context(mock.Mock(workspace_budget="5m"), binaries)
+
+    def _setup_failure(self, **options):
+        with self.assertRaises(AcceptanceSetupFailure) as raised:
+            self._make(**options)
+        self.addCleanup(raised.exception.release_retained)
+        return raised.exception
+
+    def _context(self):
+        context, _binaries = self._make(prepare=lambda _context: None)
+        self.addCleanup(context.release_retained)
+        return context
+
+    def _assert_pinned_then_released(self, holder):
+        """Every recorded token is retained and live, then consumed by release with dirs kept."""
+        retained = holder.retained_directories()
+        self.assertEqual(len(retained), len(self.owner.tokens))
+        self.assertTrue(all(kept is made for kept, made in zip(retained, self.owner.tokens)))
+        for token in retained:
+            token.assert_live()
+        holder.release_retained()
+        self.assertTrue(all(token.consumed and token.directory.is_dir() for token in retained))
+        holder.release_retained()
+        self.assertEqual(holder.retained_directories(), ())
+
+    def test_started_receipt_failure_keeps_every_pin_until_release_and_the_child_still_completes(self):
+        fault = OSError("started receipt write failed")
+        self.write_faults["started.json"] = fault
+        failure = self._setup_failure()
+        self.assertIs(failure.cause, fault)
+        self.assertEqual(len(self.owner.tokens), 2)
+        cleanup = failure.cleanup()
+        self.assertEqual((cleanup["authorized"], cleanup["decision"]),
+                         (False, "process-observation-pending"))
+        self.assertEqual(cleanup["retained_owned_directories"],
+                         [str(token.directory) for token in self.owner.tokens])
+        self.assertNotIn("retained_owned_directories_status", cleanup)
+        self._assert_pinned_then_released(failure)
+        self.child_exit = 0
+        self.assertEqual(failure.processes.pending(), [])
+        self.assertTrue((failure.processes.entries[0].directory / "completed.json").is_file())
+
+    def test_observation_timeout_of_a_registered_child_retains_the_root(self):
+        failure = self._setup_failure(prepare=self._start_then_expire)
+        self.assertRegex(str(failure.cause), "process observation expired; ownership retained")
+        cleanup = failure.cleanup()
+        self.assertEqual((cleanup["authorized"], cleanup["decision"]),
+                         (False, "process-observation-pending"))
+        self._assert_pinned_then_released(failure)
+
+    def test_a_failed_assertion_still_settles_every_registered_child(self):
+        class Failing(SetupProcessOwnershipTests):
+            def test_body(self):
+                self._setup_failure(prepare=self._start_then_expire)
+                self.fail("assertion after the child was registered")
+
+        inner = Failing("test_body")
+        result = unittest.TestResult()
+        inner.run(result)
+        self.assertEqual((len(result.failures), len(result.errors)), (1, 0))
+        (entry,) = (entry for registry in inner.registries for entry in registry.entries)
+        self.assertTrue(entry.stdout.closed and entry.stderr.closed)
+        self.assertEqual(entry.result["exit_code"], 0)
+
+    def _assert_poll_failure_retains(self, fault):
+        self.child_exit = 0
+        self.write_faults["completed.json"] = fault
+        failure = self._setup_failure()
+        self.assertIs(failure.cause, fault)
+        cleanup = failure.cleanup()
+        self.assertEqual((cleanup["authorized"], cleanup["decision"], cleanup["error"]),
+                         (False, "setup-process-closure-unproven", str(fault)))
+        self._assert_pinned_then_released(failure)
+        self.write_faults.clear()
+        self.assertEqual(failure.processes.pending(), [])
+        self.assertTrue((failure.processes.entries[0].directory / "completed.json").is_file())
+
+    def test_completion_receipt_oserror_retains_the_root(self):
+        self._assert_poll_failure_retains(OSError("completion receipt write failed"))
+
+    def test_completion_receipt_runtimeerror_retains_the_root(self):
+        self._assert_poll_failure_retains(RuntimeError("receipt mismatch"))
+
+    def _assert_exact_root_removed(self, failure):
+        cleanup = failure.cleanup()
+        self.assertEqual((cleanup["authorized"], cleanup["decision"]),
+                         (True, "setup-failure-exact-root-removed"))
+        self.assertFalse(failure.root_token.directory.exists())
+        self.assertTrue(all(token.consumed for token in self.owner.tokens))
+
+    def test_no_registry_failure_removes_the_exact_root(self):
+        failure = self._setup_failure(layout=mock.Mock(side_effect=RuntimeError("layout refused")))
+        self.assertIsNone(failure.processes)
+        self._assert_exact_root_removed(failure)
+
+    def test_empty_registry_failure_removes_the_exact_root(self):
+        failure = self._setup_failure(prepare=mock.Mock(side_effect=RuntimeError("layout refused")))
+        self.assertEqual(failure.processes.entries, [])
+        self._assert_exact_root_removed(failure)
+
+    def test_fully_observed_nonzero_exit_removes_the_exact_root(self):
+        self.child_exit = 1
+        failure = self._setup_failure()
+        self.assertRegex(str(failure.cause), "unexpected exit 1")
+        self._assert_exact_root_removed(failure)
+
+    def test_public_setup_failure_without_a_registry_keeps_exact_removal(self):
+        owner = DirectoryOwner()
+        root_token = owner.adopt_created(
+            "setup root", Path(tempfile.mkdtemp(prefix=".dl-workspaces-", dir=self.home)).resolve(),
+            self.home)
+        cleanup = AcceptanceSetupFailure(RuntimeError("early"), owner, root_token).cleanup()
+        self.assertTrue(cleanup["authorized"])
+        self.assertFalse(root_token.directory.exists())
+
+    def test_interruption_before_the_handoff_leaves_the_inventory_for_terminal_release(self):
+        failure = self._setup_failure(layout=mock.Mock(side_effect=RuntimeError("layout refused")))
+        with mock.patch.object(failure.owner, "transfer", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                failure.cleanup()
+        self._assert_pinned_then_released(failure)
+
+    def test_interruption_after_the_handoff_keeps_the_pins_reachable(self):
+        failure = self._setup_failure(prepare=mock.Mock(side_effect=RuntimeError("layout refused")))
+        with mock.patch.object(failure.processes, "pending", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                failure.cleanup()
+        self._assert_pinned_then_released(failure)
+
+    def _direct_failure(self, prefix):
+        owner = DirectoryOwner()
+        base = Path(tempfile.mkdtemp(prefix=prefix, dir=self.home)).resolve()
+        root = owner.adopt_created("setup root", base, self.home)
+        child = owner.create("setup child", base / "child", base)
+        failure = AcceptanceSetupFailure(RuntimeError("early"), owner, root)
+        self.addCleanup(failure.release_retained)
+        return failure, root, child
+
+    def test_pre_rollback_guard_failure_leaves_every_token_to_terminal_release(self):
+        failure, root, child = self._direct_failure("not-private-")
+        cleanup = failure.cleanup()
+        self.assertEqual((cleanup["authorized"], cleanup["decision"]),
+                         (False, "setup-cleanup-failed-evidence-retained"))
+        self.assertFalse(root.consumed or child.consumed)
+        failure.release_retained()
+        self.assertTrue(root.consumed and child.consumed and child.directory.is_dir())
+
+    def test_interrupted_removal_leaves_consumed_and_live_tokens_without_double_release(self):
+        failure, root, child = self._direct_failure(".dl-interrupted-")
+        real = directories_operations.remove_owned_directory
+        calls = []
+
+        def interrupt_second(token, *arguments):
+            calls.append(token)
+            if len(calls) == 2:
+                raise KeyboardInterrupt()
+            return real(token, *arguments)
+
+        with mock.patch.object(directories_operations, "remove_owned_directory",
+                               side_effect=interrupt_second):
+            with self.assertRaises(KeyboardInterrupt):
+                failure.cleanup()
+        self.assertEqual((child.consumed, root.consumed), (True, False))
+        failure.release_retained()
+        self.assertTrue(root.consumed and root.directory.is_dir() and not child.directory.exists())
+
+    def test_release_error_aggregates_consumes_every_ordinary_token_and_deletes_nothing(self):
+        failure, root, child = self._direct_failure(".dl-replaced-")
+        root.directory.rename(self.home / "moved")
+        root.directory.mkdir()
+        with self.assertRaisesRegex(RuntimeError, "directory ownership release failed: .*setup root"):
+            failure.release_retained()
+        self.assertTrue(root.consumed and child.consumed)
+        self.assertEqual(failure.retained_directories(), ())
+        failure.release_retained()
+        self.assertTrue((self.home / "moved" / "child").is_dir())
+
+    def test_release_failure_fails_every_unfailed_verdict_and_keeps_a_failed_reason(self):
+        for verdict, reason in (("passed", "ok"), ("BLOCKED", "git-unavailable"),
+                                ("failed", "original reason")):
+            with self.subTest(verdict):
+                failure, root, child = self._direct_failure(".dl-replaced-")
+                moved = self.home / ("moved-" + verdict)
+                child.directory.rename(moved)
+                child.directory.mkdir()
+                error = ("directory ownership release failed: setup child: "
+                         "owned directory was replaced: " + str(child.directory))
+                finalizer = ReceiptFinalizer(self.home / "receipt.json", [], {})
+                result = application._release_retained(finalizer, failure, verdict, reason)
+                self.assertEqual(result, ("failed", reason if verdict == "failed"
+                                          else "retained-authority-release-failed: " + error))
+                self.assertEqual(finalizer.details["retained_authority_release"],
+                                 {"status": "failed", "error": error})
+                self.assertTrue(root.consumed and child.consumed)
+                self.assertEqual(failure.retained_directories(), ())
+                self.assertTrue(moved.is_dir())
+
+    def test_partial_setup_removal_failure_lists_the_unverified_creation_inventory(self):
+        failure, root, child = self._direct_failure(".dl-partial-")
+        real = directories_operations.remove_owned_directory
+
+        def remove_child_then_refuse_root(token, *arguments):
+            if token is root:
+                raise RuntimeError("root removal refused")
+            return real(token, *arguments)
+
+        with mock.patch.object(directories_operations, "remove_owned_directory",
+                               side_effect=remove_child_then_refuse_root):
+            cleanup = failure.cleanup()
+        self.assertEqual((cleanup["authorized"], cleanup["decision"]),
+                         (False, "setup-cleanup-failed-evidence-retained"))
+        self.assertEqual(cleanup["retained_owned_directories"],
+                         [str(root.directory), str(child.directory)])
+        self.assertEqual(cleanup["retained_owned_directories_status"], "unverified")
+        self.assertTrue(root.directory.is_dir() and not child.directory.exists())
+
+    def test_workspace_context_refusal_retains_all_pins_until_terminal_release(self):
+        context = self._context()
+        cleanup = context.cleanup("failed")
+        self.assertFalse(cleanup["authorized"])
+        self.assertEqual(cleanup["retained_owned_directories"],
+                         [str(token.directory) for token in self.owner.tokens])
+        self.assertNotIn("retained_owned_directories_status", cleanup)
+        self._assert_pinned_then_released(context)
+
+    def test_exceptional_cleanup_after_the_handoff_does_not_transfer_twice_or_skip_the_receipt(self):
+        context = self._context()
+
+        def transfer_then_fail(_verdict):
+            context.retained_directories()
+            raise RuntimeError("closure exploded")
+
+        output = self.home / "receipt.json"
+        finalizer = ReceiptFinalizer(output, [], {})
+        with mock.patch.object(context, "cleanup", side_effect=transfer_then_fail):
+            result = application._finalize_run(finalizer, context, None, "passed", "ok")
+        self.assertEqual(result, ("failed", "cleanup-or-closure-error: RuntimeError: closure exploded"))
+        receipt = json.loads(output.read_text())
+        self.assertEqual(receipt["cleanup"]["retained_owned_directories"],
+                         [str(token.directory) for token in self.owner.tokens])
+        self.assertEqual(receipt["cleanup"]["retained_owned_directories_status"], "unverified")
+        self.assertEqual(receipt["details"]["retained_authority_release"], {"status": "released"})
+        self.assertTrue(all(token.consumed for token in self.owner.tokens))
+
+    def test_exceptional_cleanup_after_partial_removal_lists_the_full_unverified_inventory(self):
+        context = self._context()
+        state = next(token for token in self.owner.tokens if token.directory.name == "state")
+
+        def remove_state_then_fail(_verdict):
+            context.retained_directories()
+            directories_operations.remove_owned_directory(state)
+            raise RuntimeError("closure exploded")
+
+        output = self.home / "receipt.json"
+        with mock.patch.object(context, "cleanup", side_effect=remove_state_then_fail):
+            application._finalize_run(ReceiptFinalizer(output, [], {}), context, None, "passed", "ok")
+        cleanup = json.loads(output.read_text())["cleanup"]
+        self.assertEqual(cleanup["retained_owned_directories"],
+                         [str(token.directory) for token in self.owner.tokens])
+        self.assertEqual(cleanup["retained_owned_directories_status"], "unverified")
+        self.assertTrue(context.root_token.directory.is_dir() and not state.directory.exists())
+
+    def _main(self, *, run=None, **options):
+        output = Path(tempfile.mkdtemp(dir=self.home)) / "receipt.json"
+        binary = Path(application.__file__)
+        arguments = ["--delegate", str(binary), "--runner", str(binary), "--pueue", str(binary),
+                     "--pueued", str(binary), "--output", str(output)]
+        passed = ("passed", "managed workspace fixture acceptance passed")
+        with (
+            mock.patch.object(application, "_create_layout", side_effect=options.get("layout") or self._layout),
+            mock.patch.object(application, "_prepare_source",
+                              side_effect=options.get("prepare") or self._run_git),
+            mock.patch.object(application, "_run", side_effect=run or (lambda *_arguments: passed)),
+            mock.patch.object(application, "_require_executable", return_value=binary),
+            mock.patch.object(application.sys.stdout, "write"),
+        ):
+            code = application.main(arguments)
+        return code, json.loads(output.read_text())
+
+    def test_main_fails_with_the_original_error_and_retains_the_pending_root(self):
+        self.write_faults["started.json"] = OSError("started receipt write failed")
+        code, receipt = self._main()
+        self.assertEqual((code, receipt["verdict"]), (1, "failed"))
+        self.assertEqual(receipt["reason"], "OSError: started receipt write failed")
+        cleanup = receipt["cleanup"]
+        self.assertEqual((cleanup["authorized"], cleanup["decision"]),
+                         (False, "process-observation-pending"))
+        self.assertTrue(all(Path(path).is_dir() for path in cleanup["retained_owned_directories"]))
+        self.assertEqual(receipt["details"]["retained_authority_release"], {"status": "released"})
+        self.assertTrue(all(token.consumed for token in self.owner.tokens))
+
+    def test_main_refused_cleanup_keeps_its_reason_beside_a_failed_release(self):
+        code, receipt = self._main(run=self._passing_run(True), prepare=lambda _context: None)
+        self.assertEqual((code, receipt["verdict"], receipt["reason"]),
+                         (1, "failed", "cleanup-refused:managed-lifetime-closure-unproven"))
+        release = receipt["details"]["retained_authority_release"]
+        self.assertEqual(release["status"], "failed")
+        self.assertRegex(release["error"], "directory ownership release failed: "
+                         "managed workspace state: owned directory was replaced")
+        self.assertTrue(all(token.consumed for token in self.owner.tokens))
+        self.assertTrue((self.owner.tokens[0].directory / "moved-state").is_dir())
+
+    def test_main_removes_a_safely_failed_setup_and_keeps_a_neutral_block(self):
+        code, receipt = self._main(prepare=mock.Mock(side_effect=RuntimeError("layout refused")))
+        self.assertEqual((code, receipt["verdict"], receipt["reason"]),
+                         (1, "failed", "RuntimeError: layout refused"))
+        self.assertTrue(receipt["cleanup"]["authorized"])
+        self.owner = RecordingOwner()
+        blocked = application.AcceptanceBlocked("git-unavailable")
+        with (mock.patch.object(application, "_git_executable", side_effect=blocked),
+              mock.patch.object(application, "DirectoryOwner", return_value=self.owner)):
+            code, receipt = self._main()
+        self.assertEqual((code, receipt["verdict"]), (3, "BLOCKED"))
+        self.assertTrue(receipt["cleanup"]["authorized"])
+
+    @staticmethod
+    def _passing_run(replace_state):
+        def run(_arguments, _finalizer, context):
+            if replace_state:
+                context.state.rename(context.base / "moved-state")
+                context.state.mkdir()
+            return "passed", "managed workspace fixture acceptance passed"
+
+        return run
+
+    def _main_with_receipt_fault(self, call, fault, *, replace_state=False):
+        real, calls = ReceiptFinalizer.finalize, []
+
+        def finalize(finalizer, *arguments):
+            calls.append(arguments)
+            if len(calls) == call:
+                raise fault
+            return real(finalizer, *arguments)
+
+        with mock.patch.object(ReceiptFinalizer, "finalize", autospec=True, side_effect=finalize):
+            with self.assertRaises(type(fault)) as raised:
+                self._main(run=self._passing_run(replace_state), prepare=lambda _context: None)
+        self.assertIs(raised.exception, fault)
+        self.assertTrue(all(token.consumed for token in self.owner.tokens))
+        return raised.exception
+
+    def test_preliminary_receipt_write_failure_still_disposes_the_pins(self):
+        error = self._main_with_receipt_fault(1, OSError("preliminary receipt write failed"))
+        self.assertFalse(hasattr(error, "__notes__"))
+
+    def test_final_receipt_write_failure_still_disposes_the_pins(self):
+        error = self._main_with_receipt_fault(2, OSError("final receipt write failed"))
+        self.assertFalse(hasattr(error, "__notes__"))
+
+    def test_interrupted_receipt_write_is_not_swallowed_and_pins_are_disposed(self):
+        self._main_with_receipt_fault(1, KeyboardInterrupt())
+
+    def test_receipt_and_release_failures_are_both_preserved(self):
+        for call in (1, 2):
+            with self.subTest(call):
+                self.owner = RecordingOwner()
+                with mock.patch.object(application, "DirectoryOwner", return_value=self.owner):
+                    error = self._main_with_receipt_fault(
+                        call, OSError("receipt write failed"), replace_state=True)
+                self.assertRegex("\n".join(error.__notes__), "retained directory authority release failed")
+
+
+if __name__ == "__main__":
+    unittest.main()

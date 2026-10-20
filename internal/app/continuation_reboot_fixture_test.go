@@ -32,6 +32,13 @@ const (
 	// rebootLifetimeClosedPreviousBoot adds the previous-boot empty-scope
 	// termination and the previous-boot worker absence disposition.
 	rebootLifetimeClosedPreviousBoot
+	// rebootLifetimeClosedBudget closes the registered scope natively: the
+	// guardian recorded a budget empty-scope termination, then the worker's
+	// native Wait exited with an error.
+	rebootLifetimeClosedBudget
+	// rebootLifetimeClosedRequested is the same native closure after a user
+	// stop won the recorded termination cause.
+	rebootLifetimeClosedRequested
 )
 
 const (
@@ -233,13 +240,38 @@ func recordRebootLifetime(t *testing.T, td *taskdir.TaskDir, stage rebootLifetim
 	if _, err = td.RecordLifetimeWorkerContext(ctx, taskdir.LifetimeWorkerFacts{PID: rebootWorkerPID, ProcessStart: "reboot-worker-start", BootID: rebootPreviousBootID}); err != nil {
 		t.Fatal(err)
 	}
-	if stage != rebootLifetimeClosedPreviousBoot {
-		return
+	switch stage {
+	case rebootLifetimeNone, rebootLifetimeOpen:
+		// An open lifetime keeps only intent, registration, and worker.
+	case rebootLifetimeClosedPreviousBoot:
+		if _, err = td.RecordLifetimeTerminationContext(ctx, task.LifetimeTerminationPreviousBoot); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = td.RecordLifetimeWorkerAbsenceContext(ctx, task.LifetimeAbsencePreviousBoot, rebootCurrentBootID); err != nil {
+			t.Fatal(err)
+		}
+	case rebootLifetimeClosedBudget:
+		recordNativeLifetimeClosure(t, td, task.LifetimeTerminationBudget)
+	case rebootLifetimeClosedRequested:
+		recordNativeLifetimeClosure(t, td, task.LifetimeTerminationRequested)
 	}
-	if _, err = td.RecordLifetimeTerminationContext(ctx, task.LifetimeTerminationPreviousBoot); err != nil {
+}
+
+// recordNativeLifetimeClosure records the guardian's empty-scope termination
+// with cause, then the worker's native Wait that exited with an error.
+func recordNativeLifetimeClosure(t *testing.T, td *taskdir.TaskDir, cause string) {
+	t.Helper()
+	ctx := t.Context()
+	if _, err := td.RecordLifetimeTerminationContext(ctx, cause); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = td.RecordLifetimeWorkerAbsenceContext(ctx, task.LifetimeAbsencePreviousBoot, rebootCurrentBootID); err != nil {
+	workerDigest, err := td.LifetimeWorkerDigestContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exitCode := 1
+	wait := taskdir.LifetimeWorkerWaitFacts{WorkerSHA256: workerDigest, ChildPID: rebootWorkerPID, Result: task.LifetimeWorkerWaitExitError, ExitCode: &exitCode}
+	if _, err = td.RecordLifetimeWorkerWaitContext(ctx, wait); err != nil {
 		t.Fatal(err)
 	}
 }

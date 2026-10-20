@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,6 +22,7 @@ func TestExistingNativeProfilePreservesPersistedPredicate(t *testing.T) {
 				{name: "v2", ref: historicalReferenceForMode(mode)},
 				{name: "v3", ref: historicalCurrentReferenceForMode(mode)},
 				{name: "v4", ref: historicalCurrentV4ReferenceForMode(mode)},
+				{name: "v5", ref: runReferenceForMode(mode)},
 			} {
 				t.Run(revision.name, func(t *testing.T) {
 					testPersistedProfile(t, mode, revision.ref)
@@ -154,7 +156,183 @@ func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
 	}
 }
 
+// testPersistedProfile reconstructs a native run record stored under
+// reference: the record keeps its run argv, identity observer, effective
+// configuration and predicate.
 func testPersistedProfile(t *testing.T, mode string, reference task.PredicateRef) {
+	t.Helper()
+	directory := installFixtureExecutable(t)
+	request := profileRequest(mode)
+	request.CanonicalCwd = directory
+	meta, _ := historicalRunRecord(t, request, dialectNativeV2)
+	meta.Predicate = reference
+	existing, err := PrepareExistingCandidate(request, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantArguments, err := runArguments(request, dialectNativeV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := finalizeWithFixtureRuntime(t, existing)
+	if !rebuilt.Plan.Predicate.Equal(reference) || !slices.Equal(rebuilt.Plan.Arguments, wantArguments) || !task.CompareEffectiveConfigs(meta.EffectiveConfig, rebuilt.Effective) {
+		t.Fatalf("predicate or launch contract changed: rebuilt=%+v argv=%q", rebuilt.Plan.Predicate, rebuilt.Plan.Arguments)
+	}
+	if rebuilt.Identity == nil || rebuilt.Protocol != nil {
+		t.Fatal("a run record must keep its identity observer and no protocol")
+	}
+}
+
+func TestCurrentACPProfileLaunchesInPlanDirectory(t *testing.T) {
+	directory := installFixtureExecutable(t)
+	request := profileRequest(ModeWorkspaceWrite)
+	request.CanonicalCwd = directory
+	request.RequestedConfig.Model, request.RequestedConfig.Effort = "anthropic/claude-sonnet", "high"
+	candidate, err := PrepareCandidate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireACPProfile(t, candidate, requireStaticAdmission(t, candidate), directory)
+	// ACP sets an explicit effort on the current model and refuses the turn
+	// when OpenCode does not acknowledge it, so no model is required here.
+	request.RequestedConfig.Model = ""
+	if _, err = PrepareCandidate(request); err != nil {
+		t.Fatalf("explicit effort without a model: %v", err)
+	}
+}
+
+func requireACPProfile(t *testing.T, candidate commonprovider.ProfileCandidate, admitted commonprovider.PreparedProfile, directory string) {
+	t.Helper()
+	if !slices.Equal(admitted.Plan.Arguments, []string{"acp"}) || admitted.Plan.Directory != directory || candidate.Directory != directory {
+		t.Fatalf("argv=%q directory=%q candidate directory=%q want argv [acp] in %q", admitted.Plan.Arguments, admitted.Plan.Directory, candidate.Directory, directory)
+	}
+	if policy := admitted.Effective.Policy; policy.ProfileRevision != acpProfileRevision || admitted.Effective.Approval != "build:allow_once" {
+		t.Fatalf("profile revision=%q approval=%q", policy.ProfileRevision, admitted.Effective.Approval)
+	}
+	if runtime := candidate.Inspection.Runtime; candidate.Inspection.Directory != directory || !slices.Equal(runtime.HelpArgs, []string{"acp"}) || len(runtime.RequiredFlags) != 0 {
+		t.Fatalf("inspection directory=%q help=%q flags=%q", candidate.Inspection.Directory, runtime.HelpArgs, runtime.RequiredFlags)
+	}
+	if admitted.Protocol == nil || admitted.Identity != nil || admitted.Interaction != nil {
+		t.Fatal("the ACP profile must supply only the machine protocol factory")
+	}
+	if !admitted.Plan.Predicate.Equal(ReferenceForMode(ModeWorkspaceWrite)) {
+		t.Fatalf("predicate=%+v want the ACP reference", admitted.Plan.Predicate)
+	}
+	if commonprovider.HasNativeProfile(task.MetaRecord{EffectiveConfig: admitted.Effective}) {
+		t.Fatal("current OpenCode profile was reported as the shared native revision")
+	}
+}
+
+// TestHistoricalRunProfilesReconstructUnchanged binds a record admitted
+// under each native run dialect to its original argv, effective digest, and
+// static runtime capability digest, both pending and finalized. The current
+// ACP dialect never replaces a recorded run launch.
+func TestHistoricalRunProfilesReconstructUnchanged(t *testing.T) {
+	for _, dialect := range []launchDialect{dialectNativeV1, dialectNativeV2} {
+		for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+			t.Run(fmt.Sprintf("%d/%s", dialect, mode), func(t *testing.T) {
+				requireHistoricalRunReconstruction(t, dialect, mode)
+			})
+		}
+	}
+}
+
+func requireHistoricalRunReconstruction(t *testing.T, dialect launchDialect, mode string) {
+	t.Helper()
+	directory := installFixtureExecutable(t)
+	request := profileRequest(mode)
+	request.CanonicalCwd = directory
+	request.RequestedConfig.Model, request.RequestedConfig.Effort = "anthropic/claude-sonnet", "high"
+	meta, wantCapability := historicalRunRecord(t, request, dialect)
+	wantArguments, err := runArguments(request, dialect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirements, err := dialect.runtimeRequirements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := PrepareExistingCandidate(request, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantArguments[0] != "run" || !slices.Equal(candidate.Inspection.Runtime.RequiredFlags, requirements.RequiredFlags) {
+		t.Fatalf("historical argv=%q inspection flags=%q", wantArguments, candidate.Inspection.Runtime.RequiredFlags)
+	}
+	pending := requireStaticAdmission(t, candidate)
+	if pending.RuntimePreflightSHA256 != wantCapability {
+		t.Fatalf("capability digest=%q want %q", pending.RuntimePreflightSHA256, wantCapability)
+	}
+	requireRecordedLaunch(t, "pending", pending, meta, wantArguments)
+	requireRecordedLaunch(t, "finalized", finalizeWithFixtureRuntime(t, candidate), meta, wantArguments)
+}
+
+func finalizeWithFixtureRuntime(t *testing.T, candidate commonprovider.ProfileCandidate) commonprovider.PreparedProfile {
+	t.Helper()
+	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256, Version: "fixture"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalized, err := candidate.Finalize(facts, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return finalized
+}
+
+func requireRecordedLaunch(t *testing.T, name string, rebuilt commonprovider.PreparedProfile, meta task.MetaRecord, wantArguments []string) {
+	t.Helper()
+	if !slices.Equal(rebuilt.Plan.Arguments, wantArguments) || rebuilt.Effective.Digest != meta.EffectiveConfig.Digest ||
+		!task.CompareEffectiveConfigs(rebuilt.Effective, meta.EffectiveConfig) || !rebuilt.Plan.Predicate.Equal(meta.Predicate) {
+		t.Fatalf("%s reconstruction changed: argv=%q effective=%+v predicate=%+v", name, rebuilt.Plan.Arguments, rebuilt.Effective, rebuilt.Plan.Predicate)
+	}
+}
+
+// historicalRunRecord returns a pending record as a historical native run
+// dialect admitted it, and that record's static runtime capability digest.
+func historicalRunRecord(t *testing.T, request task.TaskRecord, dialect launchDialect) (task.MetaRecord, string) {
+	t.Helper()
+	current, err := PrepareCandidate(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted := requireStaticAdmission(t, current)
+	approval, err := dialect.approval(request.Mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := admitted.Effective.Policy
+	effective, err := dialect.nativeEffectiveConfig(request, policy.WritableRoots, policy.RuntimeSHA256, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effective.Digest == admitted.Effective.Digest {
+		t.Fatalf("historical effective config %+v is not distinct from current %+v", effective, admitted.Effective)
+	}
+	requirements, err := dialect.runtimeRequirements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli := commonprovider.CLIInfo{Path: current.Inspection.Executable, SHA256: current.Inspection.ExecutableSHA256}
+	definition, err := commonprovider.NewRuntimeInspectionDefinition(cli, request.CanonicalCwd, admitted.Plan.Environment, requirements)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := commonprovider.RuntimeCapabilityDigest(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capability == admitted.RuntimePreflightSHA256 {
+		t.Fatal("historical and current capability digests are identical")
+	}
+	return task.MetaRecord{
+		EffectiveConfig: effective, RuntimePreflightSHA256: capability,
+		Environment: slices.Clone(admitted.Plan.Environment), EnvironmentRecorded: true,
+		Predicate: historicalCurrentV4ReferenceForMode(request.Mode),
+	}, capability
+}
+
+func installFixtureExecutable(t *testing.T) string {
 	t.Helper()
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -165,29 +343,5 @@ func testPersistedProfile(t *testing.T, mode string, reference task.PredicateRef
 	}
 	t.Setenv("HOME", directory)
 	t.Setenv("PATH", directory)
-	request := profileRequest(mode)
-	request.CanonicalCwd = directory
-	candidate, err := PrepareCandidate(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	facts, err := commonprovider.EncodeInspectionFacts(commonprovider.RuntimeFacts{Executable: candidate.Inspection.Executable, SHA256: candidate.Inspection.ExecutableSHA256, Version: "fixture"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	current, err := candidate.Finalize(facts, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	existing, err := PrepareExistingCandidate(request, task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rebuilt, err := existing.Finalize(facts, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !current.Plan.Predicate.Equal(ReferenceForMode(mode)) || !rebuilt.Plan.Predicate.Equal(reference) || !slices.Equal(current.Plan.Arguments, rebuilt.Plan.Arguments) || !task.CompareEffectiveConfigs(current.Effective, rebuilt.Effective) {
-		t.Fatalf("predicate or launch contract changed: current=%+v rebuilt=%+v", current.Plan.Predicate, rebuilt.Plan.Predicate)
-	}
+	return directory
 }

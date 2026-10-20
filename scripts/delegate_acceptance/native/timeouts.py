@@ -299,7 +299,7 @@ class TimeoutLeaseOwner:
         path = briefs / f"{name}.txt"
         if resume:
             text = (
-                "Continue the exact previous Codex session. The prior turn intentionally timed out after "
+                "Continue the exact previous provider session. The prior turn intentionally timed out after "
                 "creating its marker. Verify acceptance-timeout-marker.txt, then create "
                 "acceptance-timeout-resumed.txt containing exactly "
                 f"`{self.resume_marker}` followed by one newline. Reply exactly "

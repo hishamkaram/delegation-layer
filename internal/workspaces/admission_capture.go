@@ -21,11 +21,10 @@ func RecordTaskCapture(store *taskdir.Store, request task.TaskRecord) (resultErr
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, resource.Close()) }()
-	data, err := task.MarshalCanonical(request)
+	subject, err := TaskSubject(request)
 	if err != nil {
 		return err
 	}
-	subject := workspace.Subject{Kind: workspace.SubjectTask, ID: request.TaskID, SHA256: task.ComputeSHA256(data)}
 	previous, previousErr := resource.CaptureObligation(ctx, request.Workspace.Reservation)
 	if previousErr == nil {
 		if previous.Subject != subject {

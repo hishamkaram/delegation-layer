@@ -576,11 +576,14 @@ func bindPrivateRecoveryClient(ctx context.Context, record privateRecoveryBindin
 		return nil, false, true, errors.Join(err, client.Close())
 	}
 	client.binding = saved
-	ready, err := client.availableForBootstrap(ctx)
+	observation, err := client.availableForTransition(ctx, true)
+	if err == nil {
+		err = client.closeRefusedPrivateEndpoint(ctx, observation)
+	}
 	if err != nil {
 		return nil, false, true, errors.Join(err, client.CloseAfterPending(err))
 	}
-	if ready {
+	if observation.ready() {
 		return client, false, true, nil
 	}
 	if err = startDaemon(client.runtimeBinding.DaemonExecutable, client.runtimeBinding.DaemonSHA256, client.runtimeBinding.ConfigPath, filepath.Dir(client.runtimeBinding.ConfigPath), options); err != nil {

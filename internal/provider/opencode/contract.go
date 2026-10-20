@@ -1,9 +1,9 @@
 // Package opencode contains the bounded direct OpenCode CLI adapter.
 //
-// The adapter invokes `opencode run --format json` and interprets only the
-// finite JSONL stream emitted by that command.  It does not own process
-// lifetime, capture, or publication; those responsibilities remain in the
-// execution core.
+// Fresh tasks invoke `opencode acp` and translate its JSON-RPC Agent Client
+// Protocol stream; admitted tasks keep the `opencode run` dialect they
+// recorded. The adapter does not own process lifetime, transport, capture, or
+// publication; those responsibilities remain in the execution core.
 package opencode
 
 import (
@@ -24,9 +24,10 @@ const (
 	OutputWriterContract = ""
 
 	// v2, v3, and v4 remain registered for sealed evidence produced by earlier
-	// interpreters. Fresh tasks use v5, whose parser additionally tolerates an
-	// empty repeated step marker emitted by current OpenCode builds.
-	predicateVersion                    = "5"
+	// interpreters. Run-dialect records use v5, whose parser additionally
+	// tolerates an empty repeated step marker. Fresh tasks use the ACP
+	// predicate instead.
+	runPredicateVersion                 = "5"
 	historicalCurrentV4PredicateVersion = "4"
 	historicalCurrentPredicateVersion   = "3"
 	historicalPredicateVersion          = "2"
@@ -50,7 +51,7 @@ const nativeContractReadOnly = `{"adapter":"opencode:run","mode":"read-only","ve
 const nativeContractWorkspaceWrite = `{"adapter":"opencode:run","mode":"workspace-write","version":"2","native":"OpenCode run JSONL producer","permissions":"workspace-write selects the native build agent and passes native --auto approval; OpenCode owns configuration, MCP servers, hooks, plugins, skills, authentication, permissions, and Git settings; the adapter does not impose an independent workspace boundary","events":"the current interpreter preserves the legacy JSONL identity, step lifecycle, text selection, tool-state, malformed-event, and bounded-output rules","success":"exit_code=0, sealed error empty, one matching session identity, at least one step_start, a terminal step_finish with reason stop, and non-whitespace text","failure":"malformed or oversized JSONL, invalid UTF-8, missing or conflicting identity, missing terminal step_finish, empty answer, provider error, nonzero exit, start failure, seal error, or usage row bound exceeded rejects","usage":"each completed step's part.tokens and part.cost are copied as an independent provider-event record with unknown scope; no conversation total is synthesized"}` + "\n"
 
 func correctedContractForMode(mode string) string {
-	return currentContractForMode(mode, predicateVersion, "the current interpreter validates bounded JSONL identity and event shapes; an empty repeated step_start before meaningful step content is ignored, each step_start opens a step, each step_finish closes it, reason=tool-calls permits another step, and reason=stop selects that step as the current final answer until a later step supersedes it")
+	return currentContractForMode(mode, runPredicateVersion, "the current interpreter validates bounded JSONL identity and event shapes; an empty repeated step_start before meaningful step content is ignored, each step_start opens a step, each step_finish closes it, reason=tool-calls permits another step, and reason=stop selects that step as the current final answer until a later step supersedes it")
 }
 
 func currentContractForMode(mode, version, stepDescription string) string {
@@ -85,16 +86,15 @@ func historicalCurrentContractForMode(mode string) string {
 	return contract
 }
 
-// Contract returns the default workspace-write predicate contract.
-func Contract() string { return correctedContractForMode(ModeWorkspaceWrite) }
+// Contract returns the current default workspace-write predicate contract.
+func Contract() string { return ContractForMode(ModeWorkspaceWrite) }
 
 // ContractDigest returns the digest of the default workspace-write contract.
 func ContractDigest() string { return task.ComputeSHA256([]byte(Contract())) }
 
-// ContractForMode returns the immutable contract bytes for a supported mode.
-func ContractForMode(mode string) string {
-	return correctedContractForMode(mode)
-}
+// ContractForMode returns the current immutable ACP contract bytes for a
+// supported mode.
+func ContractForMode(mode string) string { return acpContractForMode(mode) }
 
 func legacyContractForMode(mode string) string {
 	if mode == ModeReadOnly {
@@ -106,22 +106,25 @@ func legacyContractForMode(mode string) string {
 	return ""
 }
 
-// Reference returns the predicate reference for the default workspace-write
-// profile.
+// Reference returns the current predicate reference for the default
+// workspace-write profile.
 func Reference() task.PredicateRef { return ReferenceForMode(ModeWorkspaceWrite) }
 
-// ReferenceForMode returns the exact predicate reference for mode. An
-// unsupported mode returns the zero reference and is rejected by registration
-// or request validation before launch.
-func ReferenceForMode(mode string) task.PredicateRef {
-	contract := ContractForMode(mode)
+// ReferenceForMode returns the exact current (ACP) predicate reference for
+// mode. An unsupported mode returns the zero reference and is rejected by
+// registration or request validation before launch.
+func ReferenceForMode(mode string) task.PredicateRef { return acpReferenceForMode(mode) }
+
+// runReferenceForMode returns the newest run-dialect predicate reference.
+func runReferenceForMode(mode string) task.PredicateRef {
+	contract := correctedContractForMode(mode)
 	if contract == "" {
 		return task.PredicateRef{}
 	}
 	return task.PredicateRef{
 		Adapter: Provider,
 		Mode:    mode,
-		Version: predicateVersion,
+		Version: runPredicateVersion,
 		SHA256:  task.ComputeSHA256([]byte(contract)),
 	}
 }

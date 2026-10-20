@@ -8,6 +8,7 @@ from pathlib import Path
 from scripts.delegate_acceptance.evidence.files import digest, write_json
 from scripts.delegate_acceptance.evidence.validation import _hex_digest, _task_identity, require
 from scripts.delegate_acceptance.native.fixtures import shell_append_continuation_command, shell_digest_command
+from scripts.delegate_acceptance.native.production_acp import OPENCODE_PROVIDER
 from scripts.delegate_acceptance.paths.operations import write_bytes
 from scripts.delegate_acceptance.native.constants import CANONICAL_TASK_BUDGET, TASK_BUDGET, TIMEOUT_LEASE_SETUP_SECONDS
 
@@ -95,6 +96,13 @@ def _record_provider_runtime_identity(
 def provider_runtime_receipt(owner) -> dict[str, object]:
     acceptance = owner
     return acceptance._provider_bindings.receipt(set(acceptance.tasks.values()))
+
+def production_acp_receipt(owner, tasks: dict[str, str]) -> dict[str, object]:
+    """Return the compact ACP marker for OpenCode cases; other providers have none."""
+    acceptance = owner
+    if acceptance.provider != OPENCODE_PROVIDER:
+        return {}
+    return {"production_acp": acceptance._production_acp.receipt(tasks)}
 
 def native_mode_receipt(owner) -> dict[str, object] | None:
     acceptance = owner

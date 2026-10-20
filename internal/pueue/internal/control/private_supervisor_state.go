@@ -258,12 +258,13 @@ func (c *Client) StartPrivate(ctx context.Context, stateRoot string) error {
 	if _, err := recoverPrivateIdentityPublication(stateRoot); err != nil {
 		return err
 	}
-	ready, err := c.availableForBootstrap(ctx)
+	observation, err := c.availableForTransition(ctx, true)
 	if err != nil {
 		return err
 	}
+	ready := observation.ready()
 	if err := verifyPrivateSupervisorBinding(stateRoot, c.binding, ready); err != nil {
-		return err
+		return errors.Join(err, observation.projectedError())
 	}
 	if ready {
 		_, daemonFound, identityErr := loadPrivateDaemonIdentity(filepath.Join(stateRoot, privateSupervisorDirectory))
@@ -276,6 +277,9 @@ func (c *Client) StartPrivate(ctx context.Context, stateRoot string) error {
 			}
 		}
 		return clearPrivateBootstrapPending(stateRoot)
+	}
+	if err := c.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
+		return err
 	}
 	return c.startPrivate(ctx)
 }
@@ -304,33 +308,136 @@ func PreparePrivateForMigrationWithLock(ctx context.Context, clientExecutable, d
 // consulting staged successor inventory. The bool reports whether a published
 // generation exists.
 func PreparePublishedPrivateWithLock(ctx context.Context, stateRoot string, options Options) (*Client, bool, error) {
+	client, found, pairErr, err := preparePublishedPrivate(ctx, stateRoot, options)
+	if err != nil {
+		return nil, found, err
+	}
+	if pairErr != nil {
+		return nil, true, privatePublishedRecoveryError(pairErr)
+	}
+	return client, found, nil
+}
+
+// preparePublishedPrivate separates the exact published pair's verification
+// failure (pairErr) from every other preparation or close fault (err), so a
+// recovery owner can test the canonical missing-pair fact without discarding
+// an operational fault.
+func preparePublishedPrivate(ctx context.Context, stateRoot string, options Options) (client *Client, found bool, pairErr, resultErr error) {
+	head, err := readPublishedPrivateHead(stateRoot)
+	if err != nil || !head.found {
+		return nil, head.found, nil, err
+	}
+	if !head.complete {
+		if head.replayed {
+			return nil, true, nil, privateTransitionPostconditionError()
+		}
+		return nil, true, nil, ErrPrivateSupervisorTransitionIncomplete
+	}
+	client, pairErr, err = preparePublishedPrivatePair(ctx, head.published, options)
+	return client, true, pairErr, err
+}
+
+// publishedPrivateHead is the completed-generation fact shared by preparation
+// and availability observation: the replayed publication, the published
+// binding, and whether every transition of that binding is complete.
+type publishedPrivateHead struct {
+	published task.SupervisorRef
+	found     bool
+	replayed  bool
+	complete  bool
+}
+
+func readPublishedPrivateHead(stateRoot string) (publishedPrivateHead, error) {
 	replayed, err := recoverPrivateIdentityPublication(stateRoot)
 	if err != nil {
-		return nil, false, privatePublishedRecoveryError(err)
+		return publishedPrivateHead{}, privatePublishedRecoveryError(err)
 	}
 	published, found, err := loadPrivateSupervisorBinding(stateRoot)
 	if err != nil || !found {
-		return nil, found, err
+		return publishedPrivateHead{found: found}, err
 	}
-	incompleteErr := ErrPrivateSupervisorTransitionIncomplete
-	if replayed {
-		incompleteErr = privateTransitionPostconditionError()
-	}
-	if err = ensurePrivateSupervisorMigrationComplete(stateRoot, published, incompleteErr); err != nil {
-		return nil, true, err
-	}
-	options, err = optionsForPublishedPrivateBinding(published, options)
+	complete, err := PrivateSupervisorMigrationComplete(stateRoot, published)
 	if err != nil {
-		return nil, true, privatePublishedRecoveryError(err)
+		return publishedPrivateHead{}, privatePublishedRecoveryError(err)
 	}
-	client, err := NewClient(published, options)
+	return publishedPrivateHead{published: published, found: true, replayed: replayed, complete: complete}, nil
+}
+
+// preparePublishedPrivatePair opens and verifies the exact present published
+// pair. A verification failure is pairErr; a close fault after it is err.
+func preparePublishedPrivatePair(ctx context.Context, published task.SupervisorRef, options Options) (client *Client, pairErr, resultErr error) {
+	options, err := optionsForPublishedPrivateBinding(published, options)
 	if err != nil {
-		return nil, true, privatePublishedRecoveryError(err)
+		return nil, nil, privatePublishedRecoveryError(err)
+	}
+	client, err = NewClient(published, options)
+	if err != nil {
+		return nil, nil, privatePublishedRecoveryError(err)
 	}
 	if err = verifyPublishedPrivatePair(ctx, client, published); err != nil {
-		return nil, true, errors.Join(privatePublishedRecoveryError(err), client.CloseAfterPending(err))
+		if closeErr := client.CloseAfterPending(err); closeErr != nil {
+			return nil, nil, errors.Join(privatePublishedRecoveryError(err), closeErr)
+		}
+		return nil, err, nil
 	}
-	return client, true, nil
+	return client, nil, nil
+}
+
+// PublishedPairAvailability is the clean availability fact of the completed
+// published pair. The zero value is no fact and is returned only with an
+// error. A fact never authorizes a start, unlink, or publication; it selects
+// the existing owner of that state.
+type PublishedPairAvailability uint8
+
+const (
+	// PublishedPairReady is a complete generation whose present pair verified.
+	PublishedPairReady PublishedPairAvailability = iota + 1
+	// PublishedPairNotPublished is a root with no published generation.
+	PublishedPairNotPublished
+	// PublishedPairIncomplete is a published generation with an unfinished
+	// transition, restart intent, or launch witness for another pair.
+	PublishedPairIncomplete
+	// PublishedPairMemberMissing is a complete generation with a recorded
+	// executable that no longer exists.
+	PublishedPairMemberMissing
+)
+
+// ObservePublishedPrivatePairWithLock observes the completed published pair
+// while the caller holds WithBootstrapLock. Completeness is decided before
+// presence: an incomplete generation, such as a launch witness that names a
+// relocated pair, belongs to reconciliation even when the published pair is
+// present. Only a complete, present pair is opened and verified, then closed.
+// Every read, verification, pending, context, or close fault returns the zero
+// fact with its error.
+func ObservePublishedPrivatePairWithLock(ctx context.Context, stateRoot string, options Options) (PublishedPairAvailability, error) {
+	head, err := readPublishedPrivateHead(stateRoot)
+	if err != nil {
+		return 0, privateRecoveryFailure("state_unreadable", err)
+	}
+	if !head.found {
+		return PublishedPairNotPublished, nil
+	}
+	if !head.complete {
+		return PublishedPairIncomplete, nil
+	}
+	missing, err := PrivateSupervisorPairMissing(head.published)
+	if err != nil {
+		return 0, privateRecoveryFailure("state_unreadable", err)
+	}
+	if missing {
+		return PublishedPairMemberMissing, nil
+	}
+	client, pairErr, err := preparePublishedPrivatePair(ctx, head.published, options)
+	if err != nil {
+		return 0, err
+	}
+	if pairErr != nil {
+		return 0, privatePublishedRecoveryError(pairErr)
+	}
+	if err = client.Close(); err != nil {
+		return 0, err
+	}
+	return PublishedPairReady, nil
 }
 
 func optionsForPublishedPrivateBinding(published task.SupervisorRef, options Options) (Options, error) {
@@ -466,23 +573,23 @@ func optionsForSavedBinding(saved task.SupervisorRef, options Options) (Options,
 	return options, nil
 }
 
-func bindPrivateClient(ctx context.Context, clientPath, daemonPath, configPath string, options Options) (*Client, bool, error) {
-	return bindPrivateClientWithCleanup(ctx, clientPath, daemonPath, configPath, options, true)
-}
-
-func bindPrivateClientWithCleanup(ctx context.Context, clientPath, daemonPath, configPath string, options Options, cleanupSuccessful bool) (*Client, bool, error) {
+// bindPrivateTransitionClient returns the endpoint observation beside any
+// operational error. On an observation the verified client stays open, so an
+// exclusive caller can finish its binding checks before the canonical
+// closure. Every operational failure closes the client and returns no client.
+func bindPrivateTransitionClient(ctx context.Context, clientPath, daemonPath, configPath string, options Options, cleanupSuccessful bool) (*Client, PrivateEndpointObservation, error) {
 	client, err := Bind(ctx, clientPath, configPath, options)
 	if err != nil {
-		return nil, false, err
+		return nil, PrivateEndpointObservation{}, err
 	}
 	if err = attachPrivateDaemon(client, daemonPath); err != nil {
-		return nil, false, err
+		return nil, PrivateEndpointObservation{}, errors.Join(err, client.Close())
 	}
-	ready, err := privateClientReadyWithCleanup(ctx, client, cleanupSuccessful)
+	_, observation, err := privateClientObserveSnapshot(ctx, client, cleanupSuccessful)
 	if err != nil {
-		return nil, false, err
+		return nil, PrivateEndpointObservation{}, errors.Join(err, client.CloseAfterPending(err))
 	}
-	return client, ready, nil
+	return client, observation, nil
 }
 
 func (c *Client) available(ctx context.Context) (bool, error) {
@@ -516,15 +623,15 @@ func isPrivateClient(c *Client) bool {
 	return private
 }
 
-func (c *Client) endpointUnavailable(ctx context.Context) (bool, error) {
+func (c *Client) endpointProbe(ctx context.Context) (unavailable, refused bool, resultErr error) {
 	if c == nil || ctx == nil {
-		return false, context.Canceled
+		return false, false, context.Canceled
 	}
 	path, err := privateEndpointSocketPath(c.runtimeBinding.Endpoint)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return privateEndpointUnavailable(ctx, path)
+	return privateEndpointProbe(ctx, path)
 }
 
 func privateEndpointSocketPath(endpoint string) (string, error) {
@@ -533,11 +640,6 @@ func privateEndpointSocketPath(endpoint string) (string, error) {
 		return path, nil
 	}
 	return "", privateDaemonIdentityError(invalid)
-}
-
-func privateEndpointUnavailable(ctx context.Context, path string) (bool, error) {
-	unavailable, _, err := privateEndpointProbe(ctx, path)
-	return unavailable, err
 }
 
 func privateEndpointProbe(ctx context.Context, path string) (unavailable, refused bool, resultErr error) {

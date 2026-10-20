@@ -214,11 +214,13 @@ func TestInitPolicyAndExactFieldNamesAreRequired(t *testing.T) {
 		name string
 		init string
 		want string
+		// advisoryCommits marks advisory init metadata the current revision ignores.
+		advisoryCommits bool
 	}{
 		{name: "permission mode", init: strings.Replace(initLine(claudeTestUUID), `"permissionMode":"plan"`, `"permissionMode":"default"`, 1), want: refusalMalformed},
 		{name: "wrong case type", init: strings.Replace(initLine(claudeTestUUID), `"type"`, `"Type"`, 1), want: refusalMalformed},
 		{name: "wrong case session", init: strings.Replace(initLine(claudeTestUUID), `"session_id"`, `"Session_ID"`, 1), want: refusalMalformed},
-		{name: "wrong case api key source", init: strings.Replace(initLine(claudeTestUUID), `"apiKeySource"`, `"apikeysource"`, 1), want: refusalMalformed},
+		{name: "wrong case api key source", init: strings.Replace(initLine(claudeTestUUID), `"apiKeySource"`, `"apikeysource"`, 1), want: refusalMalformed, advisoryCommits: true},
 		{name: "wrong case is_error", init: initLine(claudeTestUUID), want: refusalMalformed},
 	}
 	for _, testCase := range cases {
@@ -227,10 +229,14 @@ func TestInitPolicyAndExactFieldNamesAreRequired(t *testing.T) {
 			if testCase.name == "wrong case is_error" {
 				stdout = jsonl(initLine(claudeTestUUID), strings.Replace(resultLine(claudeTestUUID, "answer"), `"is_error"`, `"Is_Error"`, 1))
 			}
-			var answer bytes.Buffer
-			interp, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &answer)
-			if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != testCase.want || answer.Len() != 0 {
-				t.Fatalf("interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
+			interp, answer := evaluateRevisionStdout(t, newScopedInterpreter(Mode), stdout)
+			if interp.Verdict != task.VerdictRejected || interp.Refusal != testCase.want || answer != "" {
+				t.Fatalf("scoped interpretation=%+v answer=%q", interp, answer)
+			}
+			interp, answer = evaluateRevisionStdout(t, NewInterpreter(), stdout)
+			if testCase.advisoryCommits != (interp.Verdict == task.VerdictCommitted && answer == "answer") ||
+				(!testCase.advisoryCommits && (interp.Refusal != testCase.want || answer != "")) {
+				t.Fatalf("current interpretation=%+v answer=%q", interp, answer)
 			}
 		})
 	}
@@ -459,8 +465,10 @@ func TestModelNamesRejectUsageInvalidWhitespace(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
+			// The scoped revision requires a valid init model; the current
+			// revision drops it as advisory metadata (see advisory_wire_test.go).
 			var answer bytes.Buffer
-			interp, err := NewInterpreter().Evaluate(claudeContinuationInput(testCase.stdout, claudeTestUUID), &claudeTestEvidence{stdout: testCase.stdout}, &answer)
+			interp, err := newScopedInterpreter(Mode).Evaluate(revisionInput(testCase.stdout, scopedReference(Mode)), &claudeTestEvidence{stdout: testCase.stdout}, &answer)
 			if testCase.valid {
 				if err != nil || interp.Verdict != task.VerdictCommitted || answer.String() != "answer" {
 					t.Fatalf("optional model usage interpretation=%+v answer=%q err=%v", interp, answer.String(), err)
@@ -497,16 +505,19 @@ func TestInterruptionAndUnknownStopReasonsCannotPublish(t *testing.T) {
 		name       string
 		stopReason string
 		want       string
+		advisory   string
 	}{
-		{name: "interrupted stop", stopReason: "interrupted", want: refusalProviderFailed},
-		{name: "unknown stop", stopReason: "unknown", want: refusalMalformed},
+		{name: "interrupted stop", stopReason: "interrupted", want: refusalProviderFailed, advisory: refusalProviderFailed},
+		{name: "unknown stop", stopReason: "unknown", want: refusalMalformed, advisory: refusalUnsupportedCompletion},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			result := strings.Replace(resultLine(claudeTestUUID, "answer"), `"end_turn"`, fmt.Sprintf("%q", testCase.stopReason), 1)
 			stdout := jsonl(initLine(claudeTestUUID), result)
-			interp, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &bytes.Buffer{})
-			if err != nil || interp.Verdict != task.VerdictRejected || interp.Refusal != testCase.want {
-				t.Fatalf("interpretation=%+v want=%q err=%v", interp, testCase.want, err)
+			if interp, _ := evaluateRevisionStdout(t, newScopedInterpreter(Mode), stdout); interp.Verdict != task.VerdictRejected || interp.Refusal != testCase.want {
+				t.Fatalf("scoped interpretation=%+v want=%q", interp, testCase.want)
+			}
+			if interp, _ := evaluateRevisionStdout(t, NewInterpreter(), stdout); interp.Verdict != task.VerdictRejected || interp.Refusal != testCase.advisory {
+				t.Fatalf("current interpretation=%+v want=%q", interp, testCase.advisory)
 			}
 		})
 	}
@@ -737,16 +748,21 @@ func TestCurrentInterpreterSkipsLargeOpaqueToolInputAndDuplicateMetadata(t *test
 	}
 }
 
-func TestCurrentInterpreterRejectsDuplicateUnknownNestedKeys(t *testing.T) {
+// TestScopedInterpreterRejectsDuplicateUnknownNestedKeys pins the frozen
+// whole-record key check; the current revision's opaque payload rule is in
+// advisory_wire_test.go.
+func TestScopedInterpreterRejectsDuplicateUnknownNestedKeys(t *testing.T) {
 	assistant := fmt.Sprintf(`{"type":"assistant","session_id":%q,"message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"provider-tool","input":{"metadata":{"same":1,"SAME":2}}}]}}`, claudeTestUUID)
 	stdout := jsonl(initLine(claudeTestUUID), assistant, resultLine(claudeTestUUID, "answer"))
-	interpretation, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, io.Discard)
+	interpretation, err := newScopedInterpreter(Mode).Evaluate(revisionInput(stdout, scopedReference(Mode)), &claudeTestEvidence{stdout: stdout}, io.Discard)
 	if err != nil || interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != refusalMalformed {
 		t.Fatalf("duplicate nested key interpretation=%+v err=%v", interpretation, err)
 	}
 }
 
-func TestCurrentToolInventoryIsBounded(t *testing.T) {
+// TestScopedToolInventoryIsBounded pins the frozen init inventory bound; the
+// current revision never retains the advisory inventory.
+func TestScopedToolInventoryIsBounded(t *testing.T) {
 	var tools strings.Builder
 	for index := 0; index <= maxCurrentToolCount; index++ {
 		if index > 0 {
@@ -756,7 +772,7 @@ func TestCurrentToolInventoryIsBounded(t *testing.T) {
 	}
 	init := strings.Replace(initLine(claudeTestUUID), `"tools":["Read","Glob","Grep"]`, `"tools":[`+tools.String()+`]`, 1)
 	stdout := jsonl(init, resultLine(claudeTestUUID, "answer"))
-	interpretation, err := NewInterpreter().Evaluate(claudeContinuationInput(stdout, claudeTestUUID), &claudeTestEvidence{stdout: stdout}, &bytes.Buffer{})
+	interpretation, err := newScopedInterpreter(Mode).Evaluate(revisionInput(stdout, scopedReference(Mode)), &claudeTestEvidence{stdout: stdout}, &bytes.Buffer{})
 	if err != nil || interpretation.Verdict != task.VerdictRejected || interpretation.Refusal != refusalMalformed {
 		t.Fatalf("unbounded tool inventory interpretation=%+v err=%v", interpretation, err)
 	}

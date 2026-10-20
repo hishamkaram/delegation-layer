@@ -69,7 +69,7 @@ func assertExternalSupervisorGenerationError(t *testing.T, err error) {
 	if failure.RecoveryCommand != "delegate supervisor migrate --root <same-state-root> --json" {
 		t.Fatalf("external inspection error omitted managed recovery command: %+v", failure)
 	}
-	if dispatchFailureMessage(failure.Code) == "Delegate could not complete dispatch." {
+	if dispatchFailureMessage(failure.Code) == genericFailureMessage {
 		t.Fatalf("external inspection failure has no user-facing message: %+v", failure)
 	}
 }

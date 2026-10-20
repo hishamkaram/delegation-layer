@@ -63,9 +63,9 @@ func (f successorFixture) admit(t *testing.T, prepare func(task.TaskRecord, task
 
 // eligibleSuccessorSources are the exact print predicates the current
 // predicate of the same mode corrects: pre-attribution and the retained
-// unscoped revision.
+// unscoped and scoped revisions.
 func eligibleSuccessorSources(mode string) []task.PredicateRef {
-	return []task.PredicateRef{preAttributionReferenceForMode(mode), unscopedReference(mode)}
+	return []task.PredicateRef{preAttributionReferenceForMode(mode), unscopedReference(mode), scopedReference(mode)}
 }
 
 func TestSuccessorCandidateSelectsCurrentPredicateAndKeepsPreparation(t *testing.T) {
@@ -125,6 +125,8 @@ func TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed(t *testing.T) {
 			"legacy native":          legacyNativeReferenceForMode(mode),
 			"portable":               legacyPortableReferenceForMode(mode),
 			"interactive":            interactionReference(mode),
+			"scoped interactive":     scopedInteractionReference(mode),
+			"other mode scoped":      scopedReference(otherMode(mode)),
 			"altered digest":         altered,
 			"altered current digest": alteredCurrent,
 			"unknown":                {Adapter: Provider, Mode: mode, Version: "native-permissions-v9", SHA256: strings.Repeat("2", 64)},

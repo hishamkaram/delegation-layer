@@ -63,7 +63,7 @@ type piCurrentEvent struct {
 	value    providerjson.Value
 }
 
-func decodePiCurrentEvent(value providerjson.Value) (piCurrentEvent, error) {
+func decodePiCurrentEvent(value providerjson.Value, nativeOutcome bool) (piCurrentEvent, error) {
 	base, err := value.Object("type")
 	if err != nil {
 		return piCurrentEvent{}, err
@@ -72,30 +72,18 @@ func decodePiCurrentEvent(value providerjson.Value) (piCurrentEvent, error) {
 	if err != nil {
 		return piCurrentEvent{}, errors.New("event type is not a nonempty string")
 	}
-	names := []string{}
-	switch typeName {
-	case eventSession:
-		names = []string{"id", "version", "cwd"}
-	case eventMessageStart, eventMessageEnd:
-		names = []string{"message"}
-	case eventMessageUpdate:
-		names = []string{"assistantMessageEvent"}
-	case eventTurnEnd:
-		names = []string{"message", "toolResults"}
-	case eventAgentEnd:
-		names = []string{"messages"}
-	case eventError:
-		names = []string{"error"}
-	}
-	fields, err := value.Object(names...)
+	fields, err := value.Object(piCurrentSelectedFields(typeName, nativeOutcome)...)
 	if err != nil {
 		return piCurrentEvent{}, err
 	}
 	return piCurrentEvent{typeName: typeName, fields: fields, value: value}, nil
 }
 
-func parseStdout(reader io.Reader, _ ...parserOptions) (eventState, error) {
+func parseStdout(reader io.Reader, options ...parserOptions) (eventState, error) {
 	state := eventState{current: true, currentUsageReliable: true, allowNativeRetry: true, settledTerminal: true, rejectTrailingRetryEnd: true, requireAgentEndErrorMatch: true}
+	if len(options) > 0 {
+		state.nativeOutcome = options[0].nativeOutcome
+	}
 	semanticErr, readErr := providerjson.ReadRecords(reader, func(value providerjson.Value, _ uint64) error {
 		if state.semanticErr != nil {
 			return state.semanticErr
@@ -116,7 +104,7 @@ func parseStdout(reader io.Reader, _ ...parserOptions) (eventState, error) {
 }
 
 func processPiCurrentRecord(state *eventState, value providerjson.Value) error {
-	event, err := decodePiCurrentEvent(value)
+	event, err := decodePiCurrentEvent(value, state.nativeOutcome)
 	if err != nil {
 		state.markSemantic(err.Error())
 		return state.semanticErr
@@ -127,6 +115,9 @@ func processPiCurrentRecord(state *eventState, value providerjson.Value) error {
 
 func applyPiCurrentEvent(state *eventState, event piCurrentEvent) {
 	if state.semanticErr != nil {
+		return
+	}
+	if state.nativeOutcome && piCurrentObservationalEvent(event.typeName) {
 		return
 	}
 	if state.agentSettled && state.settledTerminal {
@@ -160,7 +151,7 @@ func applyPiCurrentBeforeAgentEnd(state *eventState, event piCurrentEvent) {
 	case eventAgentEnd:
 		applyPiCurrentAgentEnd(state, event.fields)
 	case eventAutoRetryStart, eventAutoRetryEnd:
-		applyPiCurrentRetryEvent(state, event.typeName)
+		applyPiCurrentRetryEvent(state, event)
 	case eventError:
 		applyPiCurrentError(state)
 	default:
@@ -179,8 +170,8 @@ func applyPiCurrentMessageEvent(state *eventState, event piCurrentEvent) {
 	}
 }
 
-func applyPiCurrentRetryEvent(state *eventState, typeName string) {
-	if typeName == eventAutoRetryStart {
+func applyPiCurrentRetryEvent(state *eventState, event piCurrentEvent) {
+	if event.typeName == eventAutoRetryStart {
 		applyPiCurrentRetryStart(state)
 		return
 	}
@@ -188,7 +179,9 @@ func applyPiCurrentRetryEvent(state *eventState, typeName string) {
 	// is provider-owned and does not establish success by itself.
 	if !state.agentStarted {
 		state.markSemantic("auto_retry_end appears outside an active cycle")
+		return
 	}
+	applyPiCurrentRetryOutcome(state, event.fields)
 }
 
 func applyPiCurrentError(state *eventState) {
@@ -212,12 +205,15 @@ func applyPiCurrentAfterAgentEnd(state *eventState, event piCurrentEvent) {
 			return
 		}
 		state.agentSettled = true
+		applyPiCurrentSettledOutcome(state, event.fields)
 	case eventAutoRetryStart:
 		applyPiCurrentRetryStart(state)
 	case eventAutoRetryEnd:
 		if state.rejectTrailingRetryEnd && !state.providerFail && !state.retryPending {
 			state.markSemantic("auto_retry_end appears after agent_end")
+			return
 		}
+		applyPiCurrentRetryOutcome(state, event.fields)
 	case eventSession, eventAgentStart, eventTurnStart, eventTurnEnd, eventMessageStart, eventMessageUpdate, eventMessageEnd:
 		state.markSemantic("event appears after agent_end: " + event.typeName)
 	case eventError:
@@ -250,6 +246,7 @@ func beginPiCurrentCycle(state *eventState) {
 	state.currentTurnMessageStart = 0
 	state.currentTurnMessageEnd = 0
 	state.retryPending = false
+	state.nativeOutcomeFailed = false
 	state.providerFail = state.stickyProviderFail
 }
 

@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/pueue/internal/transport"
@@ -548,19 +547,7 @@ func commandResultRecord(result CommandResult) *controlOwnerResultRecord {
 	}
 	record.ErrorMessage = result.Err.Error()
 	record.ControlLimit = errors.Is(result.Err, ErrControlLimit)
-	var exitErr *exec.ExitError
-	var errno syscall.Errno
-	switch {
-	case errors.As(result.Err, &exitErr):
-		record.ErrorKind = "exit"
-	case errors.As(result.Err, &errno):
-		record.ErrorKind = "errno"
-		record.Errno = int(errno)
-	case !result.Started:
-		record.ErrorKind = "start"
-	default:
-		record.ErrorKind = "wait"
-	}
+	record.ErrorKind, record.Errno = commandCompletionRecordKind(result)
 	return record
 }
 
@@ -608,17 +595,7 @@ func validateControlOwnerResultRecord(record *controlOwnerResultRecord) error {
 	} else if record.PID != 0 || record.ExitCode != -1 {
 		return ErrConfiguration
 	}
-	if record.ErrorMessage == "" {
-		if record.ErrorKind != "" || record.Errno != 0 {
-			return ErrConfiguration
-		}
-	} else if record.ErrorKind == "" {
-		return ErrConfiguration
-	}
-	if record.Started && record.ExitCode > 0 && record.ErrorMessage == "" {
-		return ErrConfiguration
-	}
-	return nil
+	return validateControlOwnerErrorFields(record)
 }
 
 func decodeControlOwnerOutput(encoded string) ([]byte, error) {
@@ -627,33 +604,6 @@ func decodeControlOwnerOutput(encoded string) ([]byte, error) {
 		return nil, ErrConfiguration
 	}
 	return decoded, nil
-}
-
-func controlOwnerErrorFromRecord(record *controlOwnerResultRecord) (error, error) {
-	if record.ErrorMessage == "" {
-		if record.ControlLimit {
-			return ErrControlLimit, nil
-		}
-		return nil, nil
-	}
-	var resultErr error
-	switch record.ErrorKind {
-	case "exit":
-		resultErr = &controlExitError{code: record.ExitCode, message: record.ErrorMessage}
-	case "errno":
-		if record.Errno <= 0 {
-			return nil, ErrConfiguration
-		}
-		resultErr = errors.Join(errors.New(record.ErrorMessage), syscall.Errno(record.Errno))
-	case "start", "wait":
-		resultErr = errors.New(record.ErrorMessage)
-	default:
-		return nil, ErrConfiguration
-	}
-	if record.ControlLimit {
-		resultErr = errors.Join(resultErr, ErrControlLimit)
-	}
-	return resultErr, nil
 }
 
 func snapshotRecord(snapshot QueueSnapshot) controlOwnerSnapshotRecord {

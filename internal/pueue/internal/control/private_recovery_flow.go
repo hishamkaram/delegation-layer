@@ -14,59 +14,88 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-// RecoverPrivate reopens a saved private task through the state-rooted
+// PrivateRecovery is the result of one private recovery attempt. It holds
+// either the recovered client or the verified fact that the completed
+// published pair is missing and no compatible pair answers. The fact names no
+// action; the supervisor owns the decision to reconcile.
+type PrivateRecovery struct {
+	client          *Client
+	cause           error
+	pairUnavailable bool
+}
+
+// Client returns the recovered client, or nil when the pair is unavailable.
+func (r PrivateRecovery) Client() *Client { return r.client }
+
+// PairUnavailable reports the verified missing-pair fact.
+func (r PrivateRecovery) PairUnavailable() bool { return r.pairUnavailable }
+
+// Cause returns the diagnostic error behind PairUnavailable, or nil.
+func (r PrivateRecovery) Cause() error { return r.cause }
+
+// RecoverPrivate is the compatibility projection of AttemptPrivateRecovery:
+// an unavailable pair returns its existing migration-required cause.
+func RecoverPrivate(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, error) {
+	recovery, err := AttemptPrivateRecovery(ctx, stateRoot, saved, clientExecutable, daemonExecutable, options)
+	if err != nil {
+		return nil, err
+	}
+	if recovery.pairUnavailable {
+		return nil, recovery.cause
+	}
+	return recovery.client, nil
+}
+
+// AttemptPrivateRecovery reopens a saved private task through the state-rooted
 // supervisor. It first adopts a live, completed successor proven to own the
 // saved generation; a stopped endpoint is restarted only from that exact
 // completed publication. A genuinely legacy root may restart only the exact
 // saved pair when its daemon identity proves the same generation. The durable
 // task binding remains unchanged while the runtime binding names the active
-// generation actually used for control.
-func RecoverPrivate(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, error) {
+// generation actually used for control. Every operational fault is returned
+// as the error, never as PairUnavailable.
+func AttemptPrivateRecovery(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (PrivateRecovery, error) {
 	if !IsPrivateConfig(stateRoot, saved.ConfigPath) {
-		return nil, fmt.Errorf("%w: supervisor config is not private to the state root", ErrConfiguration)
+		return PrivateRecovery{}, fmt.Errorf("%w: supervisor config is not private to the state root", ErrConfiguration)
 	}
 	if err := validatePrivateSupervisorRef(saved); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrBinding, err)
+		return PrivateRecovery{}, fmt.Errorf("%w: %w", ErrBinding, err)
 	}
 	bootstrapContext, cancel, options, err := privateBootstrapOptions(ctx, options)
 	if err != nil {
-		return nil, err
+		return PrivateRecovery{}, err
 	}
 	defer cancel()
 	options, err = optionsForSavedBinding(saved, options)
 	if err != nil {
-		return nil, err
+		return PrivateRecovery{}, err
 	}
 	// Validate the exact saved config before any endpoint or client probe. In
 	// particular, an absent saved config must remain ErrBinding rather than
 	// becoming Bind's ErrConfiguration after a probe has already run.
 	if err = validateSavedPrivateConfig(stateRoot, saved, options); err != nil {
-		return nil, err
+		return PrivateRecovery{}, err
 	}
 	if probed, probeErr := probeSavedPrivate(bootstrapContext, stateRoot, saved, clientExecutable, daemonExecutable, options); probeErr != nil || probed != nil {
-		return probed, probeErr
+		return PrivateRecovery{client: probed}, probeErr
 	}
-	var recovered *Client
+	var recovery PrivateRecovery
 	if err = WithBootstrapLockContext(bootstrapContext, stateRoot, func(lockedContext context.Context) error {
 		// A pending explicit repair may have preserved the old config under a
 		// root-owned alias. Reopen that exact endpoint first so its queued work
 		// remains recoverable; this is the only recovery exception to the
 		// current state-root config.
-		var found bool
-		var recoveryErr error
-		recovered, _, found, recoveryErr = recoverPrivateRecoveryBinding(lockedContext, stateRoot, saved, clientExecutable, daemonExecutable, options)
-		if recoveryErr != nil {
+		recovered, _, found, recoveryErr := recoverPrivateRecoveryBinding(lockedContext, stateRoot, saved, clientExecutable, daemonExecutable, options)
+		if recoveryErr != nil || found {
+			recovery = PrivateRecovery{client: recovered}
 			return recoveryErr
 		}
-		if found {
-			return nil
-		}
-		recovered, err = recoverPrivateGenerationWithLock(lockedContext, stateRoot, saved, clientExecutable, daemonExecutable, options)
-		return err
+		recovery, recoveryErr = recoverPrivateGenerationWithLock(lockedContext, stateRoot, saved, clientExecutable, daemonExecutable, options)
+		return recoveryErr
 	}); err != nil {
-		return nil, err
+		return PrivateRecovery{}, errors.Join(err, recovery.client.CloseAfterPending(err))
 	}
-	return recovered, nil
+	return recovery, nil
 }
 
 func validateSavedPrivateConfig(stateRoot string, saved task.SupervisorRef, options Options) error {
@@ -79,7 +108,7 @@ func validateSavedPrivateConfig(stateRoot string, saved task.SupervisorRef, opti
 }
 
 func probeSavedPrivate(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, error) {
-	probed, ready, err := ProbePrivateWithGate(ctx, clientExecutable, daemonExecutable, stateRoot, options, func(checkContext context.Context, client *Client, _ QueueSnapshot) (bool, error) {
+	probed, ready, _, err := observePrivateWithGate(ctx, clientExecutable, daemonExecutable, stateRoot, options, privateProbeSnapshot, privateGenerationObservable, func(checkContext context.Context, client *Client, _ QueueSnapshot) (bool, error) {
 		current, found, resolveErr := ResolvePrivateSupervisorSuccessorWithLock(checkContext, stateRoot, saved)
 		if resolveErr != nil {
 			return false, resolveErr
@@ -93,60 +122,106 @@ func probeSavedPrivate(ctx context.Context, stateRoot string, saved task.Supervi
 		probed.binding = saved
 		return probed, nil
 	}
+	// An absent or refused endpoint is not ready. Exclusive recovery
+	// re-observes it before its canonical closure; a close fault still fails.
 	if probed != nil {
 		return nil, probed.Close()
 	}
 	return nil, nil
 }
 
-func recoverPrivateGenerationWithLock(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (*Client, error) {
+func recoverPrivateGenerationWithLock(ctx context.Context, stateRoot string, saved task.SupervisorRef, clientExecutable, daemonExecutable string, options Options) (PrivateRecovery, error) {
 	published, found, err := loadPrivateSupervisorBinding(stateRoot)
 	if err != nil {
-		return nil, fmt.Errorf("%w: read completed private supervisor generation: %w", ErrPrivateSupervisorMigrationRequired, err)
+		return PrivateRecovery{}, fmt.Errorf("%w: read completed private supervisor generation: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	if !found {
-		return recoverLegacyPrivateGeneration(ctx, stateRoot, saved, options)
+		client, legacyErr := recoverLegacyPrivateGeneration(ctx, stateRoot, saved, options)
+		return PrivateRecovery{client: client}, legacyErr
 	}
 
 	current, connected, err := ResolvePrivateSupervisorSuccessorWithLock(ctx, stateRoot, saved)
 	if err != nil {
-		return nil, err
+		return PrivateRecovery{}, err
 	}
 	if !connected || !privateFullGenerationMatches(current, published) {
-		return nil, fmt.Errorf("%w: saved private supervisor is unrelated to the completed active generation", ErrPrivateSupervisorMigrationRequired)
+		return PrivateRecovery{}, fmt.Errorf("%w: saved private supervisor is unrelated to the completed active generation", ErrPrivateSupervisorMigrationRequired)
 	}
 
-	client, prepared, prepareErr := PreparePublishedPrivateWithLock(ctx, stateRoot, options)
-	if prepareErr == nil && prepared {
+	client, prepared, pairErr, prepareErr := preparePublishedPrivate(ctx, stateRoot, options)
+	if prepareErr == nil && prepared && pairErr == nil {
 		if err = client.StartPrivate(ctx, stateRoot); err != nil {
-			return nil, errors.Join(err, client.CloseAfterPending(err))
+			return PrivateRecovery{}, errors.Join(err, client.CloseAfterPending(err))
 		}
 		client.binding = saved
-		return client, nil
+		return PrivateRecovery{client: client}, nil
 	}
-	if client != nil {
-		prepareErr = errors.Join(prepareErr, client.CloseAfterPending(prepareErr))
-	}
-	if complete, completeErr := privateSupervisorMigrationComplete(stateRoot, published, false); completeErr != nil {
-		return nil, completeErr
-	} else if !complete {
-		return nil, errors.Join(
+	return recoverUnpreparedPublishedPrivate(ctx, unpreparedPublishedPrivate{
+		stateRoot:        stateRoot,
+		saved:            saved,
+		published:        published,
+		clientExecutable: clientExecutable,
+		daemonExecutable: daemonExecutable,
+		options:          options,
+		prepared:         prepared,
+		pairErr:          pairErr,
+		prepareErr:       prepareErr,
+	})
+}
+
+// unpreparedPublishedPrivate is the completed generation whose published pair
+// could not be prepared for a clean start, with the preparation outcome.
+type unpreparedPublishedPrivate struct {
+	stateRoot        string
+	saved            task.SupervisorRef
+	published        task.SupervisorRef
+	clientExecutable string
+	daemonExecutable string
+	options          Options
+	prepared         bool
+	pairErr          error
+	prepareErr       error
+}
+
+func recoverUnpreparedPublishedPrivate(ctx context.Context, attempt unpreparedPublishedPrivate) (PrivateRecovery, error) {
+	diagnostic := errors.Join(attempt.prepareErr, privatePublishedRecoveryError(attempt.pairErr))
+	if complete, completeErr := privateSupervisorMigrationComplete(attempt.stateRoot, attempt.published, false); completeErr != nil {
+		return PrivateRecovery{}, errors.Join(completeErr, diagnostic)
+	} else if !complete || (!attempt.prepared && attempt.prepareErr == nil) {
+		return PrivateRecovery{}, errors.Join(
 			fmt.Errorf("%w: completed private supervisor transition changed during recovery", ErrPrivateSupervisorMigrationRequired),
-			prepareErr,
+			diagnostic,
 		)
 	}
-
-	// The completed pair may have disappeared after publication. A compatible
-	// pair can still inspect the live endpoint, but it is never allowed to start
-	// a stopped generation or publish its own identity.
-	compatible, ready, probeErr := probePrivateCompatiblePair(ctx, saved, published, clientExecutable, daemonExecutable, options)
+	// A completed migration is not permission to discard a preparation or
+	// close fault; only a verification failure of the published pair may be
+	// inspected through a compatible pair.
+	if attempt.prepareErr != nil {
+		return PrivateRecovery{}, diagnostic
+	}
+	missing, err := PrivateSupervisorPairMissing(attempt.published)
+	if err != nil {
+		return PrivateRecovery{}, errors.Join(diagnostic, err)
+	}
+	// A compatible pair can still inspect the live endpoint of the completed
+	// generation, but it is never allowed to start a stopped generation or
+	// publish its own identity. Its own fault is the operational result.
+	compatible, ready, probeErr := probePrivateCompatiblePair(ctx, attempt.saved, attempt.published, attempt.clientExecutable, attempt.daemonExecutable, attempt.options)
 	if probeErr != nil {
-		return nil, probeErr
+		return PrivateRecovery{}, probeErr
 	}
 	if ready {
-		return compatible, nil
+		return PrivateRecovery{client: compatible}, nil
 	}
-	return nil, fmt.Errorf("%w: completed private supervisor pair is unavailable for restart", ErrPrivateSupervisorMigrationRequired)
+	cause := errors.Join(
+		fmt.Errorf("%w: completed private supervisor pair is unavailable for restart", ErrPrivateSupervisorMigrationRequired),
+		diagnostic,
+	)
+	if !missing {
+		// A present pair that fails verification is not the missing-pair fact.
+		return PrivateRecovery{}, cause
+	}
+	return PrivateRecovery{pairUnavailable: true, cause: cause}, nil
 }
 
 func recoverLegacyPrivateGeneration(ctx context.Context, stateRoot string, saved task.SupervisorRef, options Options) (*Client, error) {
@@ -166,18 +241,19 @@ func recoverLegacyPrivateGeneration(ctx context.Context, stateRoot string, saved
 
 	// A missing completed binding is recoverable only through the exact saved
 	// pair. The caller's pair is intentionally ignored in this branch.
-	client, ready, err := bindPrivateClientWithCleanup(ctx, saved.ClientExecutable, saved.DaemonExecutable, saved.ConfigPath, options, false)
+	client, observation, err := bindPrivateTransitionClient(ctx, saved.ClientExecutable, saved.DaemonExecutable, saved.ConfigPath, options, false)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reopen exact legacy private supervisor pair: %w", ErrPrivateSupervisorMigrationRequired, err)
 	}
 	if !privateFullGenerationMatches(client.Binding(), saved) {
-		return nil, errors.Join(
-			fmt.Errorf("%w: exact legacy private supervisor generation changed", ErrPrivateSupervisorMigrationRequired),
-			client.Close(),
-		)
+		return nil, failPrivateTransitionClient(client, observation,
+			fmt.Errorf("%w: exact legacy private supervisor generation changed", ErrPrivateSupervisorMigrationRequired))
 	}
-	if !ready {
-		if err = client.startPrivate(ctx); err != nil {
+	if !observation.ready() {
+		if err = client.closeRefusedPrivateEndpoint(ctx, observation); err == nil {
+			err = client.startPrivate(ctx)
+		}
+		if err != nil {
 			return nil, errors.Join(
 				fmt.Errorf("%w: restart exact legacy private supervisor: %w", ErrPrivateSupervisorMigrationRequired, err),
 				client.CloseAfterPending(err),
@@ -267,20 +343,27 @@ func recoverSavedWithSelectedPair(ctx context.Context, saved task.SupervisorRef,
 		client.runtimeBinding.DaemonExecutable = daemon
 		client.runtimeBinding.DaemonSHA256 = digest
 	}
-	ready, err := client.availableForBootstrap(ctx)
+	observation, err := client.availableForTransition(ctx, true)
+	if err == nil && !private {
+		// External supervisors keep their original refused-endpoint failure.
+		err = observation.projectedError()
+	}
 	if err != nil {
 		return nil, false, errors.Join(err, client.CloseAfterPending(err))
 	}
-	if ready {
+	if observation.ready() {
 		return client, false, nil
 	}
 
 	daemon, digest, err := selectRecoveryDaemon(saved, daemonExecutable)
 	if err != nil {
-		return nil, false, errors.Join(err, client.Close())
+		return nil, false, failPrivateTransitionClient(client, observation, err)
 	}
 	client.runtimeBinding.DaemonExecutable = daemon
 	client.runtimeBinding.DaemonSHA256 = digest
+	if err = client.closeRefusedPrivateEndpoint(ctx, observation); err != nil {
+		return nil, false, errors.Join(err, client.CloseAfterPending(err))
+	}
 	if err = startDaemon(daemon, digest, client.runtimeBinding.ConfigPath, filepath.Dir(client.runtimeBinding.ConfigPath), options); err != nil {
 		return nil, false, errors.Join(err, client.Close())
 	}

@@ -192,7 +192,7 @@ class InspectionHarnessTests(unittest.TestCase):
             "admission": "unknown", "liveness": "undetermined", "publication": "unknown",
             "failure": {"code": "dispatch_failed", "stage": "create-task-record",
                          "next_action": "stop_and_report"},
-            "error": "Delegate could not complete dispatch.",
+            "error": "Delegate could not complete the operation.",
         }
         submission_race = {
             "task_id": TASK, "root_id": ROOT, "task_record": "created",

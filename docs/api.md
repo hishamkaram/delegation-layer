@@ -189,8 +189,12 @@ name. A listed model does not prove that the account can execute it.
 Discovery is advisory and never an admission allowlist. Dispatch validates the
 requested model and effort through the selected adapter and its runtime probe.
 The result status maps to process exit codes as follows: `available` and
-`partial` use `0`; `blocked` and `unavailable` use `2`; `failed` uses `1`.
-JSON remains parseable for each status.
+`partial` use `0`; `blocked` and `unavailable` use `2`. `failed` is a
+discovery failure and uses `1` for an ordinary operational failure or `2` for
+an invalid or unsupported request, such as an invalid `--cwd` or a
+root/workspace overlap. Status and exit are separate observations; `failed`
+with exit `2` is not an authentication block. JSON remains parseable for each
+status.
 
 When Delegate cannot safely use or transition the state root's supervisor,
 discovery returns `status: "blocked"` with one of the stable supervisor reason
@@ -198,6 +202,14 @@ codes: `supervisor_migration_blocked`,
 `supervisor_migration_unsupported`, or `supervisor_upgrade_required`. It does
 not misreport that condition as a provider or model failure, and it returns no
 model facts.
+
+When discovery fails operationally, the response also includes an optional
+`failure` object with the same fields as a `not_created` dispatch failure
+(`code`, optional `reason_code`, `stage`, `next_action`, optional
+`recovery_command`, and optional `inspection`) and a fixed public `error`
+message. Keep both fields and
+follow `failure.next_action`; a `stop_and_report` response is reported, not
+retried.
 
 ## Capability contract
 

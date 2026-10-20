@@ -86,7 +86,7 @@ func TestModelDiscoverySupervisorFailuresRemainBlocked(t *testing.T) {
 		{name: "private upgrade", err: pueue.ErrPrivateSupervisorMigrationRequired, code: "supervisor_upgrade_required"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog, exitCode := modelDiscoveryFailureCatalog(test.err)
+			catalog, exitCode := modelDiscoveryFailureCatalog(test.err, dispatchFailure(test.err, "not_created"))
 			if exitCode != 2 || catalog.Status != "blocked" || catalog.ReasonCode != test.code || catalog.Complete || len(catalog.Models) != 0 || catalog.Source != "none" {
 				t.Fatalf("supervisor safety refusal was misclassified: exit=%d catalog=%+v", exitCode, catalog)
 			}

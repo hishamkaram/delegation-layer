@@ -18,6 +18,7 @@ from scripts.delegate_acceptance.native import (
     acceptance_discovery as discovery_impl,
     output as output_impl,
 )
+from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
 
 
 class NativeAcceptanceOracleTests(unittest.TestCase):
@@ -212,7 +213,8 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation.root_id = None
             operation.tasks = {}
             operation.numeric_ids = {}
-            operation.ops = SimpleNamespace(dispatch_attempts=set(), inspection_attempts=set())
+            operation.ops = SimpleNamespace(dispatch_attempts=set(), inspection_attempts=set(),
+                                            managed_runner=True, runner_placement=BUNDLE_RUNNER)
             operation.state = root / "state"
             operation.state.mkdir()
             operation.models_state = root / "models-state"
@@ -264,6 +266,9 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 validator = validator_type.return_value
                 validator.validate_inspection_journals.return_value = {task_id: journal}
                 operation._validate_model_discovery_evidence(status, model_group)
+                # Discovery is admitted with the acceptance ledger's managed expectation.
+                self.assertIs(validator_type.call_args.kwargs["managed_runner"], True)
+                self.assertEqual(validator_type.call_args.kwargs["runner_placement"], BUNDLE_RUNNER)
 
                 journal["request"]["binding"]["helper_executable"] = str(foreign.resolve())
                 with self.assertRaisesRegex(gate.AcceptanceFailure,

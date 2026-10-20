@@ -49,12 +49,23 @@ type claudeCurrentEvent struct {
 	scope    claudeMessageScope
 }
 
-func claudeCurrentEventFields(value providerjson.Value, typeName string) (map[string]providerjson.Value, claudeMessageScope, error) {
+// claudeCurrentEventFields selects the top-level fields of one event. The advisory
+// projection selects only the authority and the controls of a system event's
+// own subtype, so an ambiguous advisory or unconsumed field cannot reject it.
+func claudeCurrentEventFields(value providerjson.Value, typeName string, advisory bool) (map[string]providerjson.Value, claudeMessageScope, error) {
 	names := []string{"session_id"}
 	message := false
 	switch typeName {
 	case "system":
-		names = append(names, "subtype", "claude_code_version", "permissionMode", "cwd", "apiKeySource", "tools", "mcp_servers", "model", "state", "task_type", "task_id", "patch")
+		if advisory {
+			selected, err := claudeAdvisorySystemFields(value)
+			if err != nil {
+				return nil, claudeMessageScopeRoot, err
+			}
+			names = selected
+		} else {
+			names = append(names, "subtype", "claude_code_version", "permissionMode", "cwd", "apiKeySource", "tools", "mcp_servers", "model", "state", "task_type", "task_id", "patch")
+		}
 	case "result":
 		names = append(names, "subtype", "is_error", "result", "stop_reason", "errors", "permission_denials")
 	case "assistant", "user":
@@ -94,6 +105,8 @@ func decodeClaudeMessageScope(fields map[string]providerjson.Value) claudeMessag
 	return claudeMessageScopeNested
 }
 
+// decodeClaudeCurrentEvent is the frozen strict projection: every key of the
+// whole record is unique, including case-folded aliases, at every level.
 func decodeClaudeCurrentEvent(value providerjson.Value) (claudeCurrentEvent, error) {
 	if err := value.ValidateUniqueKeys(); err != nil {
 		return claudeCurrentEvent{}, err
@@ -102,7 +115,11 @@ func decodeClaudeCurrentEvent(value providerjson.Value) (claudeCurrentEvent, err
 	if err != nil {
 		return claudeCurrentEvent{}, err
 	}
-	fields, scope, err := claudeCurrentEventFields(value, typeName)
+	return projectClaudeCurrentEvent(value, typeName, false)
+}
+
+func projectClaudeCurrentEvent(value providerjson.Value, typeName string, advisory bool) (claudeCurrentEvent, error) {
+	fields, scope, err := claudeCurrentEventFields(value, typeName, advisory)
 	if err != nil {
 		return claudeCurrentEvent{}, err
 	}

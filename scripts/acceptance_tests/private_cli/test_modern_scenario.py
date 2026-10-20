@@ -13,6 +13,7 @@ from scripts.acceptance_tests.private_cli.modern_fixtures import ModernControlFi
 from scripts.delegate_acceptance.private_cli import contention_controls as controls
 from scripts.delegate_acceptance.private_cli.contention_locks import probe_generation_lease
 from scripts.delegate_acceptance.private_cli.leases import LiveFIFOLeaseCohort
+from scripts.delegate_acceptance.supervisor.runner_layout import STATE_INSTALLED_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
 
@@ -29,6 +30,7 @@ class ModernContentionScenarioTests(unittest.TestCase):
             self.fixture.controls.directory,
             expected_inspection_binding_required=False,
             managed_runner=True,
+            runner_placement=STATE_INSTALLED_RUNNER,
         )
         self.brief = self.fixture.root.directory / "brief.md"
         self.brief.write_text("finite provider fixture\n")

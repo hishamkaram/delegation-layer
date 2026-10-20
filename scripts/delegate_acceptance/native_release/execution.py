@@ -162,10 +162,12 @@ def observe_native(receipt: Receipt) -> dict[str, object]:
         blocked_before_runtime = (case.get("status") == "BLOCKED"
                                   and observation.get("method") == "blocked-before-runtime-cleanup"
                                   and proof.get("state") == "blocked-before-runtime")
-        # The canonical finalizer records acceptance.closed here after task
-        # lifetime and exact child closure. Raw retention is a separate fact;
-        # failure.json has no success-only natural_daemon_shutdown field.
+        # Cleanup records supervisor shutdown. A PASS also needs the validated
+        # lifecycle state, which binds every admitted task's managed lifetime
+        # closure; failure.json has no success-only closure proof.
         closed = lifecycle.get("supervisor_shutdown_observed") is True
+        if case.get("status") == "PASS" and lifecycle.get("state") != "complete":
+            raise ReleaseError("native_ownership_unproven", incomplete=True)
         if not closed and not blocked_before_runtime:
             raise ReleaseError("native_ownership_unproven", incomplete=True)
     return {**result, "aggregate_sha256": digest, "status": aggregate["status"],

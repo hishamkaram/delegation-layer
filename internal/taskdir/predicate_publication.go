@@ -118,8 +118,12 @@ func (td *TaskDir) interpretationInput(seal *task.ProviderExitRecord) (predicate
 	if err != nil {
 		return predicate.Input{}, err
 	}
-	input := predicate.Input{Seal: *seal}
+	input := predicate.Input{Seal: *seal, RequestedConfig: req.RequestedConfig}
 	input.Seal.RawManifest = append([]task.RawManifestEntry(nil), seal.RawManifest...)
+	if target := req.RequestedConfig.ReviewTarget; target != nil {
+		copied := *target
+		input.RequestedConfig.ReviewTarget = &copied
+	}
 	if req.PriorSession != nil {
 		input.ExpectedSession = task.SessionExpectation{Required: true, ID: req.PriorSession.ConversationID}
 	}

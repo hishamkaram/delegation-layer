@@ -60,6 +60,12 @@ func newHistoricalV7Interpreter(mode string) predicate.Interpreter {
 	return interpreter{mode: mode, version: "7"}
 }
 
+// newPriorCurrentInterpreter replays the previous fresh-default revision of
+// mode (read-only v6, workspace-write v8) with its frozen evidence policy.
+func newPriorCurrentInterpreter(mode string) predicate.Interpreter {
+	return interpreter{mode: mode, version: priorVersionForMode(mode)}
+}
+
 func (i interpreter) Reference() task.PredicateRef {
 	return referenceForVersion(i.mode, i.version)
 }
@@ -78,8 +84,8 @@ func (i interpreter) evaluateAgainst(input predicate.Input, raw predicate.Eviden
 	nativeRetryContract := i.version == predicateVersion || i.version == historicalPredicateV3
 	var stdout eventState
 	var err error
-	if usesCurrentEvidence(i.mode, i.version) {
-		stdout, err = readCurrentEvidence(raw)
+	if options, current := currentEvidencePolicy(i.mode, i.version); current {
+		stdout, err = readCurrentEvidence(raw, options)
 	} else {
 		stdout, err = readEvidenceWithOptions(raw, parserOptions{
 			allowNativeRetry:          nativeRetryContract,
@@ -140,12 +146,21 @@ func validateEvaluationInput(input predicate.Input, raw predicate.Evidence, out 
 // interpreter values expose it as well, but CanRecover keeps them replay-only.
 func (i interpreter) Target() task.PredicateRef { return i.Reference() }
 
-// CanRecover permits the corrected parser to reassess the immediately prior
-// native revision for the same Pi permission mode. Older policy revisions are
-// deliberately not treated as interchangeable evidence.
+// CanRecover permits the current native-outcome parser to reassess the
+// sealed evidence of every earlier current-wire revision for the same Pi
+// permission mode. Those revisions share the wire, so the original seal and
+// outcome stay untouched while the corrected policy is applied to the same
+// bytes. Older policy revisions are deliberately not interchangeable evidence.
 func (i interpreter) CanRecover(source task.PredicateRef) bool {
-	return !i.legacy && i.version == currentVersionForMode(i.mode) &&
-		source.Equal(previousReferenceForMode(i.mode))
+	if i.legacy || i.version != currentVersionForMode(i.mode) {
+		return false
+	}
+	for _, recoverable := range recoverableReferencesForMode(i.mode) {
+		if source.Equal(recoverable) {
+			return true
+		}
+	}
+	return false
 }
 
 func currentVersionForMode(mode string) string {
@@ -155,17 +170,41 @@ func currentVersionForMode(mode string) string {
 	return currentWorkspaceVersion
 }
 
-func previousReferenceForMode(mode string) task.PredicateRef {
+func priorVersionForMode(mode string) string {
 	if mode == ModeReadOnly {
-		return readOnlyV5Reference()
+		return priorReadOnlyVersion
 	}
-	return workspaceWriteV7Reference()
+	return priorWorkspaceVersion
 }
 
-func usesCurrentEvidence(mode, version string) bool {
-	return version == currentPredicateVersion ||
-		(mode == ModeReadOnly && version == currentReadOnlyVersion) ||
-		(mode == ModeWorkspaceWrite && (version == "7" || version == currentWorkspaceVersion))
+func priorReferenceForMode(mode string) task.PredicateRef {
+	return referenceForVersion(mode, priorVersionForMode(mode))
+}
+
+func recoverableReferencesForMode(mode string) []task.PredicateRef {
+	if mode == ModeReadOnly {
+		return []task.PredicateRef{readOnlyV6Reference(), readOnlyV5Reference()}
+	}
+	return []task.PredicateRef{workspaceWriteV8Reference(), workspaceWriteV7Reference()}
+}
+
+// currentEvidencePolicy reports whether the predicate revision reads the
+// record-aware current wire and the parser policy its contract binds. Only
+// the v9 contract opts into native outcome fields; the earlier current-wire
+// revisions (v5, read-only v6, workspace-write v7 and v8) keep the zero policy.
+func currentEvidencePolicy(mode, version string) (parserOptions, bool) {
+	switch {
+	case version == outcomeEvidenceVersion && validMode(mode):
+		return parserOptions{nativeOutcome: true}, true
+	case version == currentPredicateVersion:
+		return parserOptions{}, true
+	case mode == ModeReadOnly && version == priorReadOnlyVersion:
+		return parserOptions{}, true
+	case mode == ModeWorkspaceWrite && (version == "7" || version == priorWorkspaceVersion):
+		return parserOptions{}, true
+	default:
+		return parserOptions{}, false
+	}
 }
 
 func (i interpreter) Recover(input predicate.Input, raw predicate.Evidence, out io.Writer) (task.Interpretation, error) {
@@ -186,11 +225,11 @@ func readEvidenceWithOptions(raw predicate.Evidence, options parserOptions) (eve
 	return stdout, errors.Join(stdoutErr, stderrErr)
 }
 
-func readCurrentEvidence(raw predicate.Evidence) (eventState, error) {
+func readCurrentEvidence(raw predicate.Evidence, options parserOptions) (eventState, error) {
 	var stdout eventState
 	stdoutErr := raw.Read(predicate.Stdout, func(reader io.Reader) error {
 		var err error
-		stdout, err = parseStdout(reader)
+		stdout, err = parseStdout(reader, options)
 		return err
 	})
 	stderrErr := raw.Read(predicate.Stderr, commonprovider.DrainReader)
@@ -219,6 +258,9 @@ func refusalForCompletedCycle(input predicate.Input, state eventState) string {
 	}
 	if state.retryPending || !state.turnEnded || !state.agentEnded {
 		return refusalIncomplete
+	}
+	if state.nativeOutcomeFailed {
+		return refusalProviderFailed
 	}
 	if state.current {
 		return currentCycleAnswerRefusal(state)

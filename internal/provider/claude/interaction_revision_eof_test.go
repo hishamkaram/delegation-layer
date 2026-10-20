@@ -18,21 +18,22 @@ type eofExpectation struct {
 }
 
 // eofRevisionCase is one stream that follows a validly closed invocation, with
-// the expectation of each attributed interactive revision. The frozen column is
-// the executed verdict of interactive-v4 at its original admission; the scoped
-// column is the strict current interactive-v5 rule.
+// the expectation of each attributed interactive revision. The unscoped column
+// is the executed verdict of the frozen interactive-v4 at its original
+// admission; the strict column is the end-of-stream settlement rule shared by
+// the retained interactive-v5 and the current interactive-v6.
 type eofRevisionCase struct {
-	name   string
-	tail   []string
-	frozen eofExpectation
-	scoped eofExpectation
+	name     string
+	tail     []string
+	unscoped eofExpectation
+	strict   eofExpectation
 }
 
 // eofRevisionCases covers evidence after input closure. Interactive-v4 checked
 // only its sticky closure and reducer at end of stream, so a settled cycle
 // with the session still running commits; a repeated init without its result
-// is accepted live but rejected by the sealed reducer. Interactive-v5 also
-// requires the current idle, agent, question, cycle, and batch settlement.
+// is accepted live but rejected by the sealed reducer. Interactive-v5 and v6
+// also require the current idle, agent, question, cycle, and batch settlement.
 func eofRevisionCases(mode string) []eofRevisionCase {
 	follow := reopenedFollowUp(mode)
 	with := func(prefix []string, suffix ...string) []string {
@@ -147,16 +148,23 @@ func (r eofRevision) require(t *testing.T, tail []string, want eofExpectation) {
 }
 
 // TestInteractiveRevisionsDifferOnlyInEndOfStreamSettlement pins the frozen
-// interactive-v4 end-of-stream rule beside the strict interactive-v5 one, in
-// both permission modes.
+// interactive-v4 end-of-stream rule beside the strict rule of the retained
+// interactive-v5 and the current interactive-v6, in both permission modes.
+// Each revision is reached through its exact reference: the recorded profile
+// reconstruction for the retained ones and fresh preparation for v6.
 func TestInteractiveRevisionsDifferOnlyInEndOfStreamSettlement(t *testing.T) {
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
-		frozen := newEOFRevision(t, "interactive-v4", mode, unscopedInteractionReference(mode))
-		scoped := newEOFRevision(t, "interactive-v5", mode, interactionReference(mode))
+		unscoped := newEOFRevision(t, "interactive-v4", mode, unscopedInteractionReference(mode))
+		strict := []eofRevision{
+			newEOFRevision(t, "interactive-v5", mode, scopedInteractionReference(mode)),
+			newEOFRevision(t, "interactive-v6", mode, interactionReference(mode)),
+		}
 		for _, tc := range eofRevisionCases(mode) {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
-				frozen.require(t, tc.tail, tc.frozen)
-				scoped.require(t, tc.tail, tc.scoped)
+				unscoped.require(t, tc.tail, tc.unscoped)
+				for _, revision := range strict {
+					revision.require(t, tc.tail, tc.strict)
+				}
 			})
 		}
 	}

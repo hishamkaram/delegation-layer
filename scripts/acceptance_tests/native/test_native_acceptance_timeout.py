@@ -11,6 +11,7 @@ from typing import Callable
 
 import acceptance_provider_common as provider_common
 import acceptance_supervisor_common as supervisor_common
+from scripts.acceptance_tests.native.support import adjacent_runner_bundle
 from scripts.acceptance_tests.resources import track_directory_pins
 from scripts.delegate_acceptance.native import (
     acceptance as gate,
@@ -30,6 +31,7 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
         timeout_state = TimeoutLeaseOwner(workspace_token.directory, True, owner)
         raw_token = owner.create("raw process captures", output / "processes", output)
         operation = object.__new__(gate.NativeAcceptance)
+        operation.success_candidate = None
         operation.output = output
         operation.workspace = workspace_token.directory
         operation.briefs = briefs_token.directory
@@ -320,15 +322,21 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
             operation._cleanup_timeout_leases()
 
     def test_timeout_leases_are_inside_the_native_workspace_write_boundary(self):
+        for provider in ("codex:exec", "opencode:run"):
+            with self.subTest(provider=provider):
+                self._assert_timeout_leases_inside_workspace(provider)
+
+    def _assert_timeout_leases_inside_workspace(self, provider: str) -> None:
         with tempfile.TemporaryDirectory(prefix="native-timeout-root-unit-") as directory:
             root = Path(directory)
             output = root / "evidence"
             output.mkdir()
             home = root / "home"
+            delegate, runner = adjacent_runner_bundle(root)
             args = SimpleNamespace(
-                provider="codex:exec", mode="workspace-write", scenario="timeout-resume",
-                discover_models=False, output=str(output), delegate="/bin/sh",
-                runner="/bin/sh", pueue="/bin/sh", pueued="/bin/sh",
+                provider=provider, mode="workspace-write", scenario="timeout-resume",
+                discover_models=False, output=str(output), delegate=str(delegate),
+                runner=str(runner), pueue="/bin/sh", pueued="/bin/sh",
                 provider_executable="/bin/sh", model=None, effort=None,
             )
             with patch.object(gate.Path, "home", return_value=home), \
@@ -344,10 +352,37 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                     lease.path.is_relative_to(operation.workspace)
                     for lease in operation.timeout_state.leases.values()
                 ))
+                self.assertEqual((operation.provider, operation.scenario),
+                                 (provider, "timeout-resume"))
+                self.assertTrue(operation.ops.managed_runner)
+                if provider == "opencode:run":
+                    self.assertIsNone(operation.git)
             finally:
                 self.assertTrue(operation._cleanup_timeout_leases())
                 self.assertTrue(supervisor_common.rollback_owned_directories(
                     operation.owned_directories))
+
+    def test_timeout_resume_brief_names_the_previous_provider_session_neutrally(self):
+        with tempfile.TemporaryDirectory(prefix="native-timeout-resume-brief-") as directory:
+            operation = self._timeout_lease_operation(Path(directory))
+            resume = operation.timeout_brief("timeout-resume", resume=True).read_text()
+            source = operation.timeout_brief("timeout-source").read_text()
+
+            self.assertIn("Continue the exact previous provider session.", resume)
+            self.assertNotIn("Codex", resume)
+            self.assertNotIn("Codex", source)
+            self.assertIn(f"`{operation.timeout_state.resume_marker}` followed by one newline", resume)
+            self.assertIn(operation.timeout_state.marker_file.name, resume)
+            self.assertIn(operation.timeout_state.resume_file.name, resume)
+            self.assertIn("`DELEGATION_TIMEOUT_RESUMED`", resume)
+            command = source.split("`", 2)[1]
+            for lease in operation.timeout_state.leases.values():
+                self.assertIn(str(lease.path), command)
+            self.assertIn(operation.timeout_state.parent_ready_marker, command)
+            self.assertIn(operation.timeout_state.child_ready_marker, command)
+            self.assertIn(operation.timeout_state.marker, command)
+            self.assertIn("exec sleep 600", command)
+            operation._cleanup_timeout_leases()
 
     def test_timeout_liveness_fifo_unavailability_is_blocked(self):
         with tempfile.TemporaryDirectory(prefix="native-timeout-lease-platform-") as directory:

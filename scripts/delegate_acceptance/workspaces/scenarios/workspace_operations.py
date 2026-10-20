@@ -20,13 +20,17 @@ from .model import (
     WORKSPACE_OPERATION_BUDGET,
 )
 from .operations import (
-    _control, _operation_id, _wait_workspace, _workspace_from,
+    _control, _operation_id, _task_record, _wait_workspace, _workspace_from,
 )
 from .policy import (
     _validate_hex, classify_control_response,
 )
 from .source import _git, _git_ok, _git_process
 
+
+FIXTURE_EXEC_COMMAND = (
+    "/bin/sh", "-c", "test -f " + FIXTURE_FILE + " && printf '%s\\n' workspace-exec-ok",
+)
 
 
 @dataclass(frozen=True)
@@ -111,44 +115,71 @@ def _capture_binding(state: Path, capture: dict[str, object]) -> CaptureBinding:
     )
 
 
+CUMULATIVE_CAPTURE_ARTIFACTS = frozenset({"diff.patch", "name-status.z"})
+TURN_CAPTURE_ARTIFACTS = frozenset({"turn-diff.patch", "turn-name-status.z"})
+
+
+def _capture_observed_turn(capture: dict[str, object]) -> bool:
+    """Report whether the capture compares against its own prelaunch baseline."""
+    candidate = capture.get("candidate")
+    turn = candidate.get("turn") if isinstance(candidate, dict) else None
+    if turn is None:
+        return False
+    require(isinstance(turn, dict) and turn.get("status") in {"observed", "unavailable"},
+            "capture turn observation is invalid")
+    return turn["status"] == "observed"
+
+
+def _verify_artifact_descriptor(artifact_root: Path, artifact: object) -> dict[str, object]:
+    """Match the Go descriptor contract, then bind complete bytes to the retained file."""
+    require(isinstance(artifact, dict), "capture artifact is not an object")
+    name = artifact.get("name")
+    require(isinstance(name, str) and name in CUMULATIVE_CAPTURE_ARTIFACTS | TURN_CAPTURE_ARTIFACTS,
+            "capture artifact name is not allowlisted")
+    omitted = artifact.get("omitted", "")
+    require(isinstance(omitted, str), "capture omitted reason is invalid")
+    require(artifact.get("truncated", False) is False, "capture artifact is truncated")
+    length = artifact.get("length")
+    require(type(length) is int and length >= 0, "capture artifact length is invalid")
+    if omitted:
+        require(omitted == "limit" and length == 0 and artifact.get("sha256", "") == "",
+                "capture omitted artifact is not an empty limit descriptor")
+        return {"name": name, "omitted": omitted}
+    sha256 = _validate_hex(artifact.get("sha256"), SHA256_RE, "capture artifact SHA256")
+    path = artifact_root / name
+    require(path.parent == artifact_root and path.is_file() and not path.is_symlink(),
+            "capture artifact path is not a retained regular file")
+    require(len(path.read_bytes()) == length and digest(path) == sha256,
+            "capture artifact digest does not match retained bytes")
+    return {"name": name, "length": length, "sha256": sha256}
+
+
 def _verify_capture_artifacts(
-    state: Path, operation_id: str, artifacts_value: object,
+    state: Path, operation_id: str, artifacts_value: object, observed_turn: bool,
 ) -> list[dict[str, object]]:
     require(isinstance(artifacts_value, list), "capture artifact inventory is not a list")
-    verified: list[dict[str, object]] = []
     artifact_root = Path(state) / "workspace-operations" / operation_id / "artifacts"
+    verified: list[dict[str, object]] = []
     for artifact in artifacts_value:
-        require(isinstance(artifact, dict), "capture artifact is not an object")
-        name = artifact.get("name")
-        require(
-            isinstance(name, str) and name in {"diff.patch", "name-status.z"},
-            "capture artifact name is not allowlisted",
-        )
-        omitted = artifact.get("omitted", "")
-        if omitted:
-            require(isinstance(omitted, str), "capture omitted reason is invalid")
-            verified.append({"name": name, "omitted": omitted})
-            continue
-        length = artifact.get("length")
-        require(type(length) is int and length >= 0, "capture artifact length is invalid")
-        sha256 = _validate_hex(artifact.get("sha256"), SHA256_RE, "capture artifact SHA256")
-        path = artifact_root / name
-        require(path.parent == artifact_root and path.is_file() and not path.is_symlink(),
-                "capture artifact path is not a retained regular file")
-        data = path.read_bytes()
-        require(len(data) == length and digest(path) == sha256,
-                "capture artifact digest does not match retained bytes")
-        verified.append({"name": name, "length": length, "sha256": sha256})
-    require(any(item.get("name") == "diff.patch" and item.get("length", 0) > 0
-                for item in verified),
+        item = _verify_artifact_descriptor(artifact_root, artifact)
+        require(all(prior["name"] != item["name"] for prior in verified),
+                "capture artifact name is duplicated")
+        verified.append(item)
+    names = {item["name"] for item in verified}
+    require(CUMULATIVE_CAPTURE_ARTIFACTS <= names, "capture omitted a cumulative artifact")
+    require(any(item["name"] == "diff.patch" and item.get("length", 0) > 0 for item in verified),
             "capture did not retain a nonempty patch")
+    require(names & TURN_CAPTURE_ARTIFACTS == (TURN_CAPTURE_ARTIFACTS if observed_turn else frozenset()),
+            "capture turn artifacts do not match its turn observation")
     return verified
 
 
 def verify_capture_receipt(state: Path, capture: dict[str, object]) -> dict[str, object]:
     """Verify capture digests and artifact paths against retained state evidence."""
     binding = _capture_binding(state, capture)
-    artifacts = _verify_capture_artifacts(state, binding.operation_id, capture.get("artifacts"))
+    artifacts = _verify_capture_artifacts(
+        state, binding.operation_id, capture.get("artifacts"), _capture_observed_turn(capture),
+    )
     subject = binding.subject
     return {
         "workspace_id": binding.workspace_id,
@@ -165,6 +196,76 @@ def verify_capture_receipt(state: Path, capture: dict[str, object]) -> dict[str,
         "snapshot_ref": binding.snapshot_ref,
         "artifacts": artifacts,
     }
+
+
+def _task_baseline_ref(
+    context: WorkspaceContext, evidence: dict[str, object], *, task_id: str,
+) -> str:
+    record = _task_record(context, task_id)
+    require(record.get("root_id") == evidence["root_id"], "turn task root identity changed")
+    binding = record.get("workspace")
+    require(isinstance(binding, dict) and binding.get("id") == evidence["workspace_id"],
+            "turn task workspace binding changed")
+    sequence = binding.get("reservation")
+    require(type(sequence) is int and 0 < sequence < 2**64,
+            "turn task reservation is invalid")
+    return ("refs/delegate/" + str(evidence["root_id"]) + "/workspaces/"
+            + str(evidence["workspace_id"]) + f"/baselines/{sequence:020d}")
+
+
+def _turn_files(data: bytes) -> frozenset[bytes]:
+    """Decode Git's --no-renames --name-status -z pairs without splitting path bytes."""
+    if not data:
+        return frozenset()
+    require(data.endswith(b"\x00"), "turn name-status is not NUL terminated")
+    fields = data[:-1].split(b"\x00")
+    require(len(fields) % 2 == 0, "turn name-status has an incomplete status/path pair")
+    files: set[bytes] = set()
+    for status, path in zip(fields[::2], fields[1::2], strict=True):
+        require(status in {b"A", b"D", b"M", b"T", b"U", b"X", b"B"} and bool(path),
+                "turn name-status has an invalid status/path pair")
+        require(path not in files, "turn name-status has a duplicate path")
+        files.add(path)
+    return frozenset(files)
+
+
+def verify_task_turn(
+    context: WorkspaceContext, capture: dict[str, object], *, task_id: str,
+    expected_files: frozenset[str], forbidden_files: frozenset[str] = frozenset(),
+) -> dict[str, object]:
+    """Require a fresh task's own baseline and retained, attributable turn artifacts."""
+    _validate_hex(task_id, TASK_ID_RE, "turn task ID")
+    evidence = verify_capture_receipt(context.state, capture)
+    subject = evidence["subject"]
+    require(isinstance(subject, dict) and subject.get("kind") == "task"
+            and subject.get("id") == task_id and capture.get("subject") == subject,
+            "turn capture is not bound to the exact task subject")
+    candidate = capture["candidate"]
+    turn = candidate.get("turn")
+    require(isinstance(turn, dict) and turn.get("status") == "observed"
+            and turn.get("reason_code", "") == "", "fresh task turn was not observed")
+    for field in ("content", "head", "index"):
+        require(turn.get(field) in {"changed", "unchanged"},
+                "fresh task turn has invalid " + field + " observation")
+    reference = _task_baseline_ref(context, evidence, task_id=task_id)
+    require(turn.get("baseline_ref") == reference, "turn baseline ref does not match task reservation")
+    tree = _validate_hex(turn.get("start_tree_oid"), OID_RE, "turn start tree OID")
+    observed = _git_ok(
+        context, ["-C", str(context.source), "rev-parse", "--verify", reference + "^{tree}"],
+        context.source, label="turn-baseline-tree",
+    ).decode("ascii").strip()
+    require(observed == tree, "turn baseline ref does not resolve to its start tree")
+    require(all(not item.get("omitted") for item in evidence["artifacts"]
+                if item["name"] in TURN_CAPTURE_ARTIFACTS), "fresh task turn artifacts were omitted")
+    path = (context.state / "workspace-operations" / evidence["operation_id"]
+            / "artifacts" / "turn-name-status.z")
+    files = _turn_files(path.read_bytes())
+    require({os_name.encode("utf-8") for os_name in expected_files} <= files,
+            "turn attribution omitted expected files")
+    require(not {os_name.encode("utf-8") for os_name in forbidden_files} & files,
+            "turn attribution includes a forbidden previous-turn file")
+    require(not files or turn["content"] == "changed", "turn files require changed content")
+    return {**evidence, "turn": dict(turn)}
 
 
 def _capture_roundtrip(
@@ -212,19 +313,23 @@ def _capture_roundtrip(
     return evidence
 
 
-def _workspace_exec(context: WorkspaceContext, task: dict[str, object]) -> dict[str, object]:
+def _workspace_exec(
+    context: WorkspaceContext,
+    task: dict[str, object],
+    *,
+    command: tuple[str, ...] = FIXTURE_EXEC_COMMAND,
+    label: str = "workspace-exec",
+) -> dict[str, object]:
+    """Run one literal argv through supervised workspace verification and wait for its result."""
     workspace_id = task["workspace_id"]
     code, response = _workspace_mutation(
         context,
         [
             "--root", str(context.state), "workspace", "exec", workspace_id,
-            "--budget", WORKSPACE_OPERATION_BUDGET, "--json", "--",
-            "/bin/sh", "-c",
-            "test -f managed-workspace-fixture.txt && "
-            "printf '%s\\n' workspace-exec-ok",
+            "--budget", WORKSPACE_OPERATION_BUDGET, "--json", "--", *command,
         ],
         action="exec", workspace_id=workspace_id,
-        label="workspace-exec", task_id=task["task_id"],
+        label=label, task_id=task["task_id"],
     )
     operation_id = _operation_id(response)
     require(operation_id is not None, "workspace exec omitted operation identity")

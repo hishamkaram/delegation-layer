@@ -136,6 +136,25 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+      - name: Prove managed workspace fixtures through delegate CLI
+        id: workspaces
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-workspaces
+
+      - name: Retain managed workspace acceptance receipts
+        if: >-
+          always() && (steps.workspaces.outcome == 'success' ||
+          steps.workspaces.outcome == 'failure' ||
+          steps.workspaces.outcome == 'cancelled')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: managed-workspace-receipts-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/managed-workspace-acceptance.*/receipt.json
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Run supervisor acceptance
         id: supervisor
         env:
@@ -252,6 +271,25 @@ jobs:
           path: bin/private-cli-acceptance.*/receipt.json
           retention-days: 7
           if-no-files-found: ignore
+
+      - name: Prove managed workspace fixtures through delegate CLI
+        id: workspaces
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-workspaces
+
+      - name: Retain managed workspace acceptance receipts
+        if: >-
+          always() && (steps.workspaces.outcome == 'success' ||
+          steps.workspaces.outcome == 'failure' ||
+          steps.workspaces.outcome == 'cancelled')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: managed-workspace-receipts-${{ runner.os }}-${{ github.run_attempt }}
+          path: bin/managed-workspace-acceptance.*/receipt.json
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Run supervisor acceptance
         id: supervisor

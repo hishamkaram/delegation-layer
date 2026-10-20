@@ -61,9 +61,32 @@ func TestPreAttributionReferencesRetainSealedContractDigests(t *testing.T) {
 		})
 	}
 	for _, mode := range []string{config.ModeReadOnly, config.ModeWorkspaceWrite} {
-		if Reference(mode).Version != "ccr-foreground-v5" || modeledReference(mode).Version != "ccr-foreground-v5-modeled" ||
+		if Reference(mode).Version != "ccr-foreground-v6" || modeledReference(mode).Version != "ccr-foreground-v6-modeled" ||
 			Reference(mode).Equal(preAttributionReference(mode, true)) || modeledReference(mode).Equal(preAttributionReference(mode, false)) {
 			t.Fatalf("attributed CCR references were not versioned: %+v %+v", Reference(mode), modeledReference(mode))
+		}
+	}
+}
+
+// TestScopedReferencesRetainSealedContractDigests pins the CCR v5 digests
+// sealed under Claude's scoped policy and strict wire, and the current v6
+// digests bound to the advisory contract.
+func TestScopedReferencesRetainSealedContractDigests(t *testing.T) {
+	for _, test := range []struct {
+		got           task.PredicateRef
+		version, want string
+	}{
+		{scopedReference(config.ModeReadOnly, true), "ccr-foreground-v5", "54250742f26a4f9e4fe1378d9dad1b85f5e3793d5f4ebdcf7b1ed6e3d96c3a44"},
+		{scopedReference(config.ModeReadOnly, false), "ccr-foreground-v5-modeled", "7483b129ea91cc745e5a45573df3669a7297b98b8bf43d2c1f28a3edae874f3c"},
+		{scopedReference(config.ModeWorkspaceWrite, true), "ccr-foreground-v5", "468b9b0e25cd7d9936ef2293197ba6b72f16ac2aa9546eac70f837b7f5fdcb59"},
+		{scopedReference(config.ModeWorkspaceWrite, false), "ccr-foreground-v5-modeled", "e8413e812488699abb7b6c1695665927dfd39d820cb54ebe380b7cb8cdf4da61"},
+		{Reference(config.ModeReadOnly), "ccr-foreground-v6", "7076f23f03b4560307f3543c47aa7afe25f6e7f716df9db84f2b66820eb27cdf"},
+		{modeledReference(config.ModeReadOnly), "ccr-foreground-v6-modeled", "fcc68c97680afa51aabe05f85319c27352bb267d5063cc560bcc970e2995dcaa"},
+		{Reference(config.ModeWorkspaceWrite), "ccr-foreground-v6", "fb854fcff38fd76896c85710067517612a1cda601957818fe602b861f36615fd"},
+		{modeledReference(config.ModeWorkspaceWrite), "ccr-foreground-v6-modeled", "b66e115dbcaa16aa8d46fdaf6fd64b4489c287b7bc380b65c6d4f7bfd004692e"},
+	} {
+		if test.got.Version != test.version || test.got.SHA256 != test.want {
+			t.Fatalf("CCR reference=%+v want %s/%s", test.got, test.version, test.want)
 		}
 	}
 }
@@ -83,6 +106,8 @@ func requireRegisteredReferences(t *testing.T, registration commonprovider.Regis
 	wanted := []task.PredicateRef{
 		Reference(config.ModeReadOnly), Reference(config.ModeWorkspaceWrite),
 		modeledReference(config.ModeReadOnly), modeledReference(config.ModeWorkspaceWrite),
+		scopedReference(config.ModeReadOnly, true), scopedReference(config.ModeWorkspaceWrite, true),
+		scopedReference(config.ModeReadOnly, false), scopedReference(config.ModeWorkspaceWrite, false),
 		preAttributionReference(config.ModeReadOnly, true), preAttributionReference(config.ModeWorkspaceWrite, true),
 		preAttributionReference(config.ModeReadOnly, false), preAttributionReference(config.ModeWorkspaceWrite, false),
 		preCredentialReference(config.ModeReadOnly, true), preCredentialReference(config.ModeWorkspaceWrite, true),
@@ -143,6 +168,8 @@ func requireFrozenReferencesClaimNoRecovery(t *testing.T, registration commonpro
 
 func ccrRecoveryMatrix(mode string) []struct{ source, target task.PredicateRef } {
 	return []struct{ source, target task.PredicateRef }{
+		{scopedReference(mode, true), Reference(mode)},
+		{scopedReference(mode, false), modeledReference(mode)},
 		{preAttributionReference(mode, true), Reference(mode)},
 		{preCredentialReference(mode, true), Reference(mode)},
 		{preAttributionReference(mode, false), modeledReference(mode)},
