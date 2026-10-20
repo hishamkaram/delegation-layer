@@ -35,6 +35,11 @@ PUBLICATION_WRITES = ("_authToken", "npm publish", "gh release edit", "publish-h
 STATUS_OVERRIDE = re.compile(r"\b(?:always|failure|cancelled)\(\)|!\s*success\(\)")
 
 
+def conditions(text: str, indent: int) -> list[str]:
+    """Return each `if:` at one key indent, with its more-indented block-scalar lines."""
+    return re.findall(rf"(?m)^ {{{indent}}}if:(.*(?:\n {{{indent + 1},}}\S.*)*)", text)
+
+
 def job_steps(body: str) -> dict[str, str]:
     return {chunk.split("\n", 1)[0]: chunk for chunk in body.split("\n      - name: ")[1:]}
 
@@ -50,7 +55,7 @@ def publication_gate_violations(source: str) -> list[str]:
         body = workflow_job(source, job)
         header = body.split("\n    steps:\n", 1)[0]
         if re.search(r"(?m)^    continue-on-error:", header) or any(
-                STATUS_OVERRIDE.search(condition) for condition in re.findall(r"(?m)^    if: (.+)$", header)):
+                STATUS_OVERRIDE.search(condition) for condition in conditions(header, 4)):
             violations.append(f"{job}: job status override")
         if parent is not None and re.findall(r"(?m)^    needs: (.+)$", header) != [parent]:
             violations.append(f"{job}: needs is not exactly {parent}")
@@ -64,7 +69,7 @@ def publication_gate_violations(source: str) -> list[str]:
         for name in (*validations, *writers):
             step = steps[name]
             if re.search(r"(?m)^        continue-on-error:", step) or any(
-                    STATUS_OVERRIDE.search(condition) for condition in re.findall(r"(?m)^        if: (.+)$", step)):
+                    STATUS_OVERRIDE.search(condition) for condition in conditions(step, 8)):
                 violations.append(f"{job}: {name}: step status override")
     return violations
 
@@ -132,24 +137,34 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         writer, gate = "      - name: Publish GitHub Release\n", f"      - name: {NATIVE_GATE}\n"
         diagnostic = ("      - name: Retain promotion diagnostics\n        if: always()\n"
                       "        continue-on-error: true\n        uses: actions/upload-artifact@v4\n")
-        self.assertEqual(publication_gate_violations(source.replace(writer, diagnostic + writer)), [])
+        folded_diagnostic = diagnostic.replace("if: always()", "if: >-\n          always()")
+        for permitted in (diagnostic, folded_diagnostic):
+            with self.subTest(permitted=permitted):
+                self.assertEqual(publication_gate_violations(source.replace(writer, permitted + writer)), [])
+        writer_condition = writer + "        if: ${{ !inputs.resume_published }}"
+        homebrew_needs = "    needs: published-npm\n"
         refused = {
-            "promote: Validate exact proof and public installation prerequisites: step status override":
-                source.replace(gate, gate + "        continue-on-error: true\n"),
-            "promote: Publish GitHub Release: step status override":
-                source.replace(writer + "        if: ${{ !inputs.resume_published }}",
+            "promote: Validate exact proof and public installation prerequisites: step status override": [
+                source.replace(gate, gate + "        continue-on-error: true\n")],
+            "promote: Publish GitHub Release: step status override": [
+                source.replace(writer_condition,
                                writer + "        if: ${{ !cancelled() && !inputs.resume_published }}"),
-            "publish-homebrew: job status override":
-                source.replace("    needs: published-npm\n", "    needs: published-npm\n    if: always()\n"),
-            "publish-homebrew: needs is not exactly published-npm":
-                source.replace("    needs: published-npm\n", "    needs: promote\n"),
-            "promote: publication write precedes validation":
-                source.replace(gate, "      - name: Early release edit\n        run: gh release edit x\n" + gate),
+                source.replace(writer_condition, writer + "        if: >-\n          always()"),
+                source.replace(writer_condition, writer + "        if: |\n          ${{ always() }}")],
+            "publish-homebrew: job status override": [
+                source.replace(homebrew_needs, homebrew_needs + "    if: always()\n"),
+                source.replace(homebrew_needs, homebrew_needs + "    if: >-\n      always()\n"),
+                source.replace(homebrew_needs, homebrew_needs + "    if: |\n      !success()\n")],
+            "publish-homebrew: needs is not exactly published-npm": [
+                source.replace(homebrew_needs, "    needs: promote\n")],
+            "promote: publication write precedes validation": [
+                source.replace(gate, "      - name: Early release edit\n        run: gh release edit x\n" + gate)],
         }
-        for expected, mutated in refused.items():
-            with self.subTest(expected=expected):
-                self.assertNotEqual(mutated, source)
-                self.assertIn(expected, publication_gate_violations(mutated))
+        for expected, variants in refused.items():
+            for index, mutated in enumerate(variants):
+                with self.subTest(expected=expected, variant=index):
+                    self.assertNotEqual(mutated, source)
+                    self.assertIn(expected, publication_gate_violations(mutated))
 
     def test_every_tag_uses_one_workflow_wide_publication_lock(self):
         source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
