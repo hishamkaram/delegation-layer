@@ -12,9 +12,10 @@ from ..evidence.bounded_files import BoundedReadError, ReadFailure, read_bounded
 from .contract import (
     EvidenceError,
     MAX_INPUT_BYTES,
+    MAX_DIRECTORY_CHILDREN,
     MAX_RECEIPT_BYTES,
-    MAX_WALK_BYTES,
-    MAX_WALK_ENTRIES,
+    PRIVATE_INVENTORY_MAX_BYTES,
+    PRIVATE_INVENTORY_MAX_ENTRIES,
     _empty_summary,
     canonical_json,
 )
@@ -124,6 +125,7 @@ def _inside(root: Path, candidate: Path) -> Path:
 
 
 def _tree_summary(path: Path) -> dict[str, int | bool]:
+    """Inventory one private raw-evidence tree within the private budget."""
     _reject_path_components(path)
     if not path.exists() and not path.is_symlink():
         return _empty_summary()
@@ -140,7 +142,7 @@ def _tree_summary(path: Path) -> dict[str, int | bool]:
             with os.scandir(current) as entries:
                 for entry in entries:
                     visited += 1
-                    if visited > MAX_WALK_ENTRIES:
+                    if visited > PRIVATE_INVENTORY_MAX_ENTRIES:
                         complete = False
                         break
                     metadata = entry.stat(follow_symlinks=False)
@@ -149,7 +151,7 @@ def _tree_summary(path: Path) -> dict[str, int | bool]:
                         continue
                     count += 1
                     total += metadata.st_size
-                    if total > MAX_WALK_BYTES:
+                    if total > PRIVATE_INVENTORY_MAX_BYTES:
                         complete = False
                         break
     except OSError as error:
@@ -165,7 +167,7 @@ def _tree_summary(path: Path) -> dict[str, int | bool]:
     }
 
 
-def _bounded_children(path: Path, *, limit: int = MAX_WALK_ENTRIES) -> list[Path]:
+def _bounded_children(path: Path, *, limit: int = MAX_DIRECTORY_CHILDREN) -> list[Path]:
     _reject_path_components(path)
     children: list[Path] = []
     try:

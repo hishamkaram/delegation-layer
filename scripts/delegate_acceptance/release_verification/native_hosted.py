@@ -12,7 +12,8 @@ from scripts.delegate_acceptance.native_evidence.public_contract import (
 from scripts.delegate_acceptance.native_evidence.public_validation import (
     inspect_public_proof, validate_public_identity, validate_public_proof,
 )
-from .assets import gh_environment
+# GITHUB_AUTH_MODES is re-exported for the promotion CLI's accepted choices.
+from .assets import GITHUB_AUTH_MODES, gh_environment
 from .contract import MAX_RECEIPT, VerificationError
 from .filesystem import _bounded_file_bytes, read_receipt, write_receipt
 from .github import GitHubClient, object_value, positive_id
@@ -136,7 +137,8 @@ def _enforce_history(client: GitHubClient, repo: str, report: dict) -> None:
 
 
 def validate_promotion(args: argparse.Namespace) -> int:
-    client = GitHubClient({"commands": []}, gh_environment())
+    auth_mode = getattr(args, "github_auth", "environment")
+    client = GitHubClient({"commands": []}, gh_environment(auth_mode=auth_mode))
     repo, harness_revision = args.repo, args.source_revision
     repository_id = repository_identity(client, repo, harness_revision)
     require_public_repository(client, repo)

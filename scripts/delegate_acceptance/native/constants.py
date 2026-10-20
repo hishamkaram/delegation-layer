@@ -38,6 +38,9 @@ TASK_BUDGET = "5m"
 CANONICAL_TASK_BUDGET = "5m0s"
 TASK_BUDGET_NANOS = 300_000_000_000
 WATCH_SECONDS = 330
+# Every native runner-status call is a retained private process capture.
+# Poll slowly so a full WATCH_SECONDS wait stays a small, bounded inventory.
+RUNNER_STATUS_POLL_SECONDS = 5
 TIMEOUT_RESUME_SOURCE_BUDGET = "3m"
 CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET = "3m0s"
 TIMEOUT_RESUME_SOURCE_BUDGET_NANOS = 180_000_000_000

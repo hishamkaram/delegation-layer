@@ -11,7 +11,9 @@ from scripts.delegate_acceptance.release_verification.github import GitHubClient
 from scripts.delegate_acceptance.release_verification.native_history import proof_title
 from scripts.delegate_acceptance.release_verification.native_remote_history import matching_runs
 from scripts.delegate_acceptance.release_verification.native_reports import ReportScope
-from .contract import ReleaseError, WORKFLOW, digest_value, integer, object_value, text_value
+from .contract import (
+    ReleaseError, WORKFLOW, WORKFLOW_RUN_PATHS, digest_value, integer, object_value, text_value,
+)
 from .preflight import recheck_submission
 from .projection import read_public
 from .receipt import Receipt
@@ -103,13 +105,18 @@ def validate_run(receipt: Receipt, value: object, *, expected_id: int | None = N
              if expected_title is None else expected_title)
     revision = receipt.stage("preflight").result.get("harness_revision")
     repo = receipt.invocation.request.repo
-    if (expected_id is not None and run_id != expected_id
-            or row.get("display_title") != title
-            or row.get("head_sha") != revision or row.get("head_branch") != "main"
-            or row.get("event") != "workflow_dispatch"
-            or row.get("path") != f".github/workflows/{WORKFLOW}"
-            or row.get("html_url") != f"https://github.com/{repo}/actions/runs/{run_id}"):
-        raise ReleaseError("native_validation_run_unbound", incomplete=True)
+    bindings = (
+        ("id", expected_id is None or run_id == expected_id),
+        ("display_title", row.get("display_title") == title),
+        ("head_sha", row.get("head_sha") == revision),
+        ("head_branch", row.get("head_branch") == "main"),
+        ("event", row.get("event") == "workflow_dispatch"),
+        ("path", any(row.get("path") == path for path in WORKFLOW_RUN_PATHS)),
+        ("html_url", row.get("html_url") == f"https://github.com/{repo}/actions/runs/{run_id}"),
+    )
+    mismatched = tuple(name for name, bound in bindings if not bound)
+    if mismatched:
+        raise ReleaseError("native_validation_run_unbound", incomplete=True, mismatched=mismatched)
     return row
 
 

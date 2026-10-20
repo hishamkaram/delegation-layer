@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from scripts.delegate_acceptance.native.constants import WATCH_SECONDS
+from scripts.delegate_acceptance.native.constants import RUNNER_STATUS_POLL_SECONDS, WATCH_SECONDS
 from scripts.delegate_acceptance.supervisor.runner_layout import BUNDLE_RUNNER
 from scripts.delegate_acceptance.tasks.operations import NativeTaskOps
 
@@ -44,7 +44,8 @@ class NativeAcceptanceTaskOps(NativeTaskOps):
                          owner.base, owner.state, owner.output,
                          watch_seconds=WATCH_SECONDS,
                          expected_inspection_binding_required=False,
-                         managed_runner=managed_runner, runner_placement=BUNDLE_RUNNER)
+                         managed_runner=managed_runner, runner_placement=BUNDLE_RUNNER,
+                         runner_poll_seconds=RUNNER_STATUS_POLL_SECONDS)
         self.owner = owner
 
     def _validate_queue_membership(

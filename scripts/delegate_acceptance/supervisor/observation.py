@@ -8,6 +8,11 @@ from scripts.delegate_acceptance.supervisor.queue_policy import done_result
 from typing import Callable
 
 
+# Hermetic consumers keep the established fast cadence; a consumer whose
+# every observation is a retained process capture chooses a slower one.
+RUNNER_POLL_SECONDS = 0.1
+
+
 def wait_runner_terminal(
     client: Callable[..., object],
     root_id: str,
@@ -16,12 +21,23 @@ def wait_runner_terminal(
     timeout: float = 150,
     sleep_fn: Callable[[float], None] = time.sleep,
     monotonic_fn: Callable[[], float] = time.monotonic,
+    *,
+    poll_seconds: float = RUNNER_POLL_SECONDS,
 ) -> dict[str, object]:
-    """Observe one exact delegate runner row until it reaches one expected result."""
+    """Observe one exact delegate runner row until it reaches one expected result.
+
+    Every status call and every pause is clamped to the remaining deadline, and
+    no status call starts once the deadline has passed. Only a terminal row the
+    client actually returned can satisfy the wait.
+    """
+    require(type(poll_seconds) in (int, float) and 0 < poll_seconds < float("inf"),
+            "runner poll interval must be a positive finite number of seconds")
     label = "delegate:" + root_id + ":" + task_id
     deadline = monotonic_fn() + timeout
-    while monotonic_fn() < deadline:
+    while True:
         remaining = deadline - monotonic_fn()
+        if remaining <= 0:
+            break
         result = client("runner-status", ["status", "--json"], timeout=remaining)
         value = result.json()
         require(isinstance(value, dict), "supervisor status response is not an object")
@@ -46,7 +62,10 @@ def wait_runner_terminal(
             require(accepted,
                     f"supervisor result {actual_result!r}, expected {expectation}")
             return row
-        sleep_fn(0.1)
+        remaining = deadline - monotonic_fn()
+        if remaining <= 0:
+            break
+        sleep_fn(min(poll_seconds, remaining))
     raise RuntimeError("runner completion was not observed within acceptance deadline")
 
 

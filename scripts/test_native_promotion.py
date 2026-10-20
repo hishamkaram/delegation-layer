@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+from scripts import validate_native_release as native_cli
 from scripts.delegate_acceptance.native_evidence.public_contract import ProofExpectation
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.native_submission import SubmissionIdentity
@@ -138,6 +139,7 @@ class NativePromotionTests(ReleaseFixture):
         self.client = PromotionGitHub(self.receipt)
         self.expectation = self.make_expectation(REPORT_MODEL, REPORT_CCR_MODEL)
         self.proof_result = {"status": "PASS", "case_results_verdict": "PASS"}
+        self.auth_modes: list[str] = []
 
     @staticmethod
     def make_expectation(opencode_model: str, ccr_model: str | None) -> ProofExpectation:
@@ -157,16 +159,34 @@ class NativePromotionTests(ReleaseFixture):
             started_at="2026-10-17T12:00:01Z",
         )
 
+    def seed_admitted_failure_before_selected_pass(self) -> None:
+        self.client.add_run(81, 1)
+        self.client.add_run(82, 1)
+        self.client.add_attempt(
+            81, 1, admission="admitted", verdict="fail", stage="validate-native-facts",
+            started_at="2026-10-17T12:00:01Z", conclusion="failure",
+        )
+        self.client.add_attempt(
+            82, 1, admission="admitted", verdict="pass", stage="complete",
+            started_at="2026-10-17T12:00:02Z",
+        )
+
     def arguments(self, run_id: int = 82) -> argparse.Namespace:
+        # Deliberately omits github_auth: older callers must keep hosted auth.
         return argparse.Namespace(
             repo=REPO, source_revision=HEAD, tag=TAG,
             native_validation_run_id=run_id, work_dir=str(self.base),
         )
 
-    def invoke(self, run_id: int = 82) -> int:
+    def environment(self, *, auth_mode: str = "environment") -> dict[str, str]:
+        self.auth_modes.append(auth_mode)
+        return {}
+
+    def invoke(self, run_id: int = 82, *, args: argparse.Namespace | None = None,
+               argv: list[str] | None = None) -> int:
         with (
             patch(HOSTED + "GitHubClient", return_value=self.client),
-            patch(HOSTED + "gh_environment", return_value={}),
+            patch(HOSTED + "gh_environment", self.environment),
             patch(SUBMISSION + "resolve_release_identity",
                   return_value={"commit_sha": RELEASE}),
             patch(HOSTED + "archive_expectation", return_value=self.expectation) as archive,
@@ -176,7 +196,9 @@ class NativePromotionTests(ReleaseFixture):
         ):
             self.archive_mock = archive
             self.proof_validator_mock = validator
-            return validate_promotion(self.arguments(run_id))
+            if argv is not None:
+                return native_cli.main(argv)
+            return validate_promotion(args or self.arguments(run_id))
 
     def test_selected_latest_attempt_is_used_even_when_run_list_is_unsorted(self):
         self.client.add_run(83, 1)
@@ -251,16 +273,7 @@ class NativePromotionTests(ReleaseFixture):
         self.assertEqual(self.client.asset_reads, 0)
 
     def test_admitted_failure_in_another_run_blocks_selected_pass(self):
-        self.client.add_run(81, 1)
-        self.client.add_run(82, 1)
-        self.client.add_attempt(
-            81, 1, admission="admitted", verdict="fail", stage="validate-native-facts",
-            started_at="2026-10-17T12:00:01Z", conclusion="failure",
-        )
-        self.client.add_attempt(
-            82, 1, admission="admitted", verdict="pass", stage="complete",
-            started_at="2026-10-17T12:00:02Z",
-        )
+        self.seed_admitted_failure_before_selected_pass()
         with self.assertRaisesRegex(VerificationError, "native_history_blocked"):
             self.invoke()
         self.assertEqual(self.client.asset_reads, 0)
@@ -315,6 +328,89 @@ class NativePromotionTests(ReleaseFixture):
             VerificationError, "native_promotion_proof_not_passing",
         ):
             self.invoke()
+
+    def test_promotion_without_auth_field_keeps_hosted_environment_auth(self):
+        self.seed_passing_attempt()
+        self.assertEqual(self.invoke(), 0)
+        self.assertEqual(self.auth_modes, ["environment"])
+
+    def test_promotion_forwards_requested_auth_mode_to_the_environment_owner(self):
+        self.seed_passing_attempt()
+        args = self.arguments()
+        args.github_auth = "local-config"
+        self.assertEqual(self.invoke(args=args), 0)
+        self.assertEqual(self.auth_modes, ["local-config"])
+
+    def test_unknown_auth_mode_is_rejected_by_the_owner_before_github_reads(self):
+        args = self.arguments()
+        args.github_auth = "token-extraction"
+        with patch(HOSTED + "GitHubClient", return_value=self.client), \
+                self.assertRaisesRegex(VerificationError, "github_auth_mode_invalid"):
+            validate_promotion(args)
+        self.assertEqual(self.client.calls, [])
+
+    def test_local_config_promotion_still_blocks_admitted_failure_before_proof_reads(self):
+        self.seed_admitted_failure_before_selected_pass()
+        args = self.arguments()
+        args.github_auth = "local-config"
+        with self.assertRaises(VerificationError) as caught:
+            self.invoke(args=args)
+        self.assertEqual((caught.exception.code, caught.exception.stage),
+                         ("native_history_blocked", "promotion-history"))
+        self.assertEqual(self.auth_modes, ["local-config"])
+        self.assertEqual(self.client.asset_reads, 0)
+        self.archive_mock.assert_not_called()
+
+    def test_local_config_cli_reports_admitted_failure_before_proof_reads(self):
+        self.seed_admitted_failure_before_selected_pass()
+        argv = ["promotion", "--tag", TAG, "--repo", REPO, "--source-revision", HEAD,
+                "--native-validation-run-id", "82", "--work-dir", str(self.base),
+                "--github-auth", "local-config"]
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(self.invoke(argv=argv), 1)
+        self.assertEqual(
+            stderr.getvalue(),
+            "Native proof validation failed: native_history_blocked (promotion-history)\n",
+        )
+        self.assertEqual(self.auth_modes, ["local-config"])
+        self.assertEqual(self.client.asset_reads, 0)
+        self.archive_mock.assert_not_called()
+
+
+class NativeReleaseCliAuthTests(unittest.TestCase):
+    PROMOTION = ["promotion", "--tag", TAG, "--repo", REPO, "--source-revision", HEAD,
+                 "--native-validation-run-id", "82", "--work-dir", "/work"]
+    VALIDATE = ["validate", "--tag", TAG, "--asset-id", str(PROOF_ASSET_ID),
+                "--proof-sha256", PROOF_HASH, "--invocation-id", "1" * 32,
+                "--opencode-model", REPORT_MODEL, "--report", "report.json"]
+
+    def test_promotion_defaults_to_environment_and_accepts_local_config(self):
+        seen: list[str] = []
+        with patch.object(native_cli, "validate_promotion",
+                          lambda args: seen.append(args.github_auth) or 0):
+            self.assertEqual(native_cli.main(self.PROMOTION), 0)
+            self.assertEqual(native_cli.main([*self.PROMOTION, "--github-auth", "local-config"]), 0)
+        self.assertEqual(seen, ["environment", "local-config"])
+
+    def test_promotion_rejects_unknown_auth_mode_before_validation(self):
+        with patch.object(native_cli, "validate_promotion") as promotion, \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr, \
+                self.assertRaises(SystemExit) as caught:
+            native_cli.main([*self.PROMOTION, "--github-auth", "token"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("invalid choice: 'token'", stderr.getvalue())
+        promotion.assert_not_called()
+
+    def test_hosted_validate_subcommand_rejects_auth_flag(self):
+        with patch.object(native_cli, "validate_submission", return_value=0) as submission:
+            self.assertEqual(native_cli.main(self.VALIDATE), 0)
+            self.assertFalse(hasattr(submission.call_args.args[0], "github_auth"))
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr, \
+                    self.assertRaises(SystemExit) as caught:
+                native_cli.main([*self.VALIDATE, "--github-auth", "local-config"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments: --github-auth local-config", stderr.getvalue())
+        self.assertEqual(submission.call_count, 1)
 
 
 if __name__ == "__main__":

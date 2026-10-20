@@ -87,6 +87,7 @@ class FakeGitHub(GitHubClient):
         self.asset_pages: dict[int, list[object]] = {}
         self.run_pages: dict[int, list[object]] = {}
         self.total_runs = 0
+        self.run_path = f".github/workflows/{WORKFLOW}"
 
     def asset(self, *, asset_id: int = 71) -> dict[str, object]:
         return {"id": asset_id, "name": self.invocation.proof_name, "size": len(PAYLOAD),
@@ -95,7 +96,7 @@ class FakeGitHub(GitHubClient):
     def run(self, *, run_id: int = 81) -> dict[str, object]:
         return {"id": run_id, "display_title": proof_title(TAG, self.invocation.invocation_id, PROOF_HASH),
                 "head_sha": HEAD, "head_branch": "main", "event": "workflow_dispatch",
-                "path": f".github/workflows/{WORKFLOW}", "status": "queued", "run_attempt": 1,
+                "path": self.run_path, "status": "queued", "run_attempt": 1,
                 "html_url": f"https://github.com/{REPO}/actions/runs/{run_id}"}
 
     def json(self, endpoint: str, *, method: str = "GET",

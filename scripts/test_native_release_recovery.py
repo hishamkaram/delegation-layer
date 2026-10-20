@@ -187,6 +187,23 @@ class CliRecoveryTests(ReleaseFixture):
         native.assert_not_called()
 
 
+    def test_watch_run_binding_mismatch_reports_field_names_without_redispatch(self) -> None:
+        self.seed_upload_with_intent()
+        with patch.object(submission, "recheck_submission"):
+            dispatch(self.receipt, self.client)
+        self.client.run_path = ".github/workflows/release.yml"
+        with patch.object(submission, "recheck_submission"), \
+                patch.object(coordinator, "native") as native:
+            exit_code, report = self.run_resume()
+        self.assertEqual((exit_code, report["status"]), (3, "INCOMPLETE"))
+        self.assertEqual(report["reason"], "submission_intent_unresolved_resume_required:"
+                                           "native_validation_run_unbound:mismatch=path")
+        self.assertNotIn("release.yml", report["reason"])
+        self.assertEqual(Receipt.load(self.receipt.path).stage("watch").state, "intended")
+        self.assertEqual(self.client.posts, 1)
+        native.assert_not_called()
+
+
 class CleanupTests(ReleaseFixture):
     def test_completed_stage_cannot_be_mutated_through_caller_or_reader(self) -> None:
         intent = {"inputs": {"model": "exact"}}
