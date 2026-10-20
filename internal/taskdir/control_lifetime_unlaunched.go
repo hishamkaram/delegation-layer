@@ -227,29 +227,29 @@ func ensureNoNativeLifetimeRecordsTx(tx *ControlTransaction, l *ControlLifetime)
 	return rejectOrphanedLifetimeLaunchesTx(tx, l)
 }
 
+// rejectOrphanedLifetimeLaunchesTx refuses an operation that already holds any
+// launch record, at any inventoried sequence. The lowest record is validated
+// and verified so a foreign or corrupt record keeps its own identity.
 func rejectOrphanedLifetimeLaunchesTx(tx *ControlTransaction, l *ControlLifetime) error {
-	for sequence := uint64(1); sequence <= task.MaxLifetimeLaunches; sequence++ {
-		var record task.LifetimeLaunchRecord
-		name := controlLifetimeLaunchName(sequence)
-		err := tx.Read(name, &record)
-		if task.RecordAbsent(err) {
-			continue
-		}
-		if err != nil {
-			return controlLifetimeReadError(name, err)
-		}
-		if err := task.ValidateLifetimeLaunchRecord(&record); err != nil {
-			return err
-		}
-		if record.RootID != l.rootID || record.TaskID != l.operationID {
-			return task.ErrIdentityMismatch
-		}
-		if err := tx.Verify(name, record); err != nil {
-			return err
-		}
-		return fmt.Errorf("%w: lifetime launch record already exists", task.ErrAlreadyStarted)
+	sequences, err := tx.lifetimeLaunchSequences()
+	if err != nil || len(sequences) == 0 {
+		return err
 	}
-	return nil
+	var record task.LifetimeLaunchRecord
+	name := controlLifetimeLaunchName(sequences[0])
+	if err = tx.Read(name, &record); err != nil {
+		return inventoriedLifetimeLaunchReadError(name, err)
+	}
+	if err = task.ValidateLifetimeLaunchRecord(&record); err != nil {
+		return err
+	}
+	if record.RootID != l.rootID || record.TaskID != l.operationID {
+		return task.ErrIdentityMismatch
+	}
+	if err = tx.Verify(name, record); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: lifetime launch record already exists", task.ErrAlreadyStarted)
 }
 
 func readControlLifetimeTerminationPresenceTx(tx *ControlTransaction, l *ControlLifetime) (*task.LifetimeTerminationRecord, error) {

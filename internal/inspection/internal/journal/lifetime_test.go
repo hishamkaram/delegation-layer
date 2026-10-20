@@ -296,9 +296,10 @@ func TestInspectionLifetimeLaunchesRejectGapsAndOverflow(t *testing.T) {
 		var err error
 		registrationDigest, err := op.LifetimeRegistrationDigest()
 		mustInspection(t, err)
-		for sequence := uint64(1); sequence <= task.MaxLifetimeLaunches+1; sequence++ {
-			putInspectionLifetimeLaunch(t, op, registrationDigest, sequence)
-		}
+		// The inventory refuses a record named beyond the shared namespace
+		// before reading any record; writing a full namespace is unnecessary.
+		putInspectionLifetimeLaunch(t, op, registrationDigest, 1)
+		putInspectionLifetimeLaunch(t, op, registrationDigest, task.MaxLifetimeLaunches+1)
 		if _, err = op.ReadLifetimeLaunches(); !errors.Is(err, task.ErrEvidenceFault) {
 			t.Fatalf("overflow read error = %v, want evidence fault", err)
 		}

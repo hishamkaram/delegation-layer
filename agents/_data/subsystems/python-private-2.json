@@ -124,11 +124,15 @@
     "owner": "py:delegate_acceptance.private_cli",
     "layer": "runtime",
     "imports": [
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.records",
+      "py:delegate_acceptance.evidence.validation",
       "py:delegate_acceptance.lifetime.identity",
+      "py:delegate_acceptance.lifetime.policy",
       "py:delegate_acceptance.private_cli.capacity_policy",
       "py:delegate_acceptance.private_cli.lease_policy",
       "py:hashlib",
-      "py:json"
+      "py:os"
     ]
   },
   {

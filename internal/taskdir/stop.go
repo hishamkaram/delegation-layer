@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -362,25 +361,10 @@ func (td *TaskDir) discoverStopRecordIDs() (ids stopRecordIDs, resultErr error) 
 	if err != nil {
 		return stopRecordIDs{}, err
 	}
-	for {
-		names, readErr := stopDir.Readdirnames(1)
-		for _, name := range names {
-			if resultErr = addStopRecordName(&ids, name); resultErr != nil {
-				break
-			}
-		}
-		if resultErr != nil {
-			break
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			resultErr = readErr
-			break
-		}
-	}
-	resultErr = errors.Join(resultErr, stopDir.Close())
+	// Stop discovery has no caller context; the shared scanner owns Close.
+	resultErr = scanDirectoryNames(notCanceled, stopDir, func(name string) error {
+		return addStopRecordName(&ids, name)
+	})
 	if resultErr != nil {
 		return stopRecordIDs{}, resultErr
 	}

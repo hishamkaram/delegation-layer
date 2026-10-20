@@ -457,8 +457,8 @@ func validateLifetimeEvidenceRecords(evidence LifetimeEvidence) error {
 			return err
 		}
 	}
-	if uint64(len(evidence.Launches)) > MaxLifetimeLaunches {
-		return fmt.Errorf("%w: too many lifetime launches", ErrEvidenceFault)
+	if err := ValidateLifetimeLaunchCapacity(evidence.Launches); err != nil {
+		return err
 	}
 	return validateLifetimeEvidenceLaunches(evidence, identity)
 }
@@ -517,7 +517,7 @@ func validateLifetimeEvidenceTermination(evidence LifetimeEvidence) error {
 	if evidence.Termination == nil {
 		return nil
 	}
-	launchSetDigest, err := lifetimeLaunchSetDigest(evidence.Launches)
+	launchSetDigest, err := LifetimeLaunchSetDigest(evidence.Launches)
 	if err != nil {
 		return err
 	}
@@ -533,17 +533,6 @@ type lifetimeCompletionDigestRecord interface {
 
 func lifetimeCompletionDigest[T lifetimeCompletionDigestRecord](record T) (string, error) {
 	data, err := MarshalCanonical(record)
-	if err != nil {
-		return "", err
-	}
-	return ComputeSHA256(data), nil
-}
-
-func lifetimeLaunchSetDigest(launches []LifetimeLaunchRecord) (string, error) {
-	if launches == nil {
-		launches = make([]LifetimeLaunchRecord, 0)
-	}
-	data, err := MarshalCanonical(launches)
 	if err != nil {
 		return "", err
 	}

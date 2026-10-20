@@ -95,8 +95,12 @@ func TestDeleteRefsUsesOneInventoryAndTransactionalUpdate(t *testing.T) {
 	if err := (Git{Runner: runner}).DeleteRefs(context.Background(), source, prefix, refs); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 5 {
-		t.Fatalf("Git command count = %d, want common-repository validation + inventory + transaction", len(runner.calls))
+	if len(runner.calls) != 6 {
+		t.Fatalf("Git command count = %d, want common-repository validation + inventory + absence verification + transaction", len(runner.calls))
+	}
+	wantVerify := []byte("start\x00symref-verify " + prefix + "missing\x00\x00prepare\x00abort\x00")
+	if len(runner.verifyInputs) != 1 || !bytes.Equal(runner.verifyInputs[0], wantVerify) {
+		t.Fatalf("absence verification batches = %q, want %q", runner.verifyInputs, wantVerify)
 	}
 	if len(runner.updateInputs) != 1 {
 		t.Fatalf("update-ref transactions = %d, want 1", len(runner.updateInputs))
@@ -196,6 +200,9 @@ func TestDeleteRefsLargeReplayKeepsLaunchesAndArgvBounded(t *testing.T) {
 	if len(runner.updateInputs) != 1 || bytes.Count(runner.updateInputs[0], []byte("delete ")) != 1500 {
 		t.Fatalf("transaction delete records = %d, want 1500", bytes.Count(runner.updateInputs[0], []byte("delete ")))
 	}
+	// The first and third calls each verify one first name, then the rest in
+	// one batch: 1+499 and 1+1999 names. The conflict stops before any batch.
+	assertAbsenceBatchNames(t, runner.verifyInputs, []int{1, 499, 1, 1999})
 	for _, command := range runner.calls {
 		if len(command.Args[3:]) > 4 {
 			t.Fatalf("Git command grew per-ref argv: %v", command.Args[3:])
@@ -203,12 +210,20 @@ func TestDeleteRefsLargeReplayKeepsLaunchesAndArgvBounded(t *testing.T) {
 	}
 }
 
+// deleteRefsTestRunner models one common directory. Verify-only batches
+// (prepare then abort) are recorded apart from mutating transactions; by
+// default native symref-verify proves every non-hidden name absent.
 type deleteRefsTestRunner struct {
 	*recordingGitRunner
 	inventory    []byte
 	updateErr    error
 	updateInputs [][]byte
 	updateArgs   []string
+	verifyInputs [][]byte
+	hidden       map[string]bool
+	legacy       bool
+	refStorage   string
+	configReads  int
 }
 
 func newDeleteRefsRunner(root, prefix string, inventory []byte, updateErr error) *deleteRefsTestRunner {
@@ -228,10 +243,20 @@ func newDeleteRefsRunner(root, prefix string, inventory []byte, updateErr error)
 		case slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, prefix}):
 			_, err := command.Stdout.Write(runner.inventory)
 			return err
+		case slices.Equal(args, []string{"config", "--file=" + filepath.Join(root, ".git", "config"), "--get-all", "extensions.refStorage"}):
+			runner.configReads++
+			if runner.refStorage == "" {
+				return gitTestExitError(1)
+			}
+			return writeCommandOutput(command, runner.refStorage)
 		case slices.Equal(args, []string{"update-ref", "--stdin", "-z", "--no-deref"}):
 			data, err := io.ReadAll(command.Stdin)
 			if err != nil {
 				return err
+			}
+			if bytes.HasSuffix(data, []byte("prepare\x00abort\x00")) {
+				runner.verifyInputs = append(runner.verifyInputs, data)
+				return runner.answerVerify(command, data)
 			}
 			runner.updateInputs = append(runner.updateInputs, data)
 			runner.updateArgs = slices.Clone(args)
@@ -241,6 +266,29 @@ func newDeleteRefsRunner(root, prefix string, inventory []byte, updateErr error)
 		}
 	}
 	return runner
+}
+
+// answerVerify models native symref-verify with no old target, or an older
+// Git that dies at its first unknown record.
+func (r *deleteRefsTestRunner) answerVerify(command *exec.Cmd, batch []byte) error {
+	if !slices.Contains(command.Env, "LC_ALL=C") {
+		return errors.New("ref absence verification did not pin the diagnostic locale")
+	}
+	var names []string
+	for _, record := range bytes.Split(batch, []byte{0}) {
+		if name, found := bytes.CutPrefix(record, []byte("symref-verify ")); found {
+			names = append(names, string(name))
+		}
+	}
+	if r.legacy {
+		return writeTestStreams(command, "start: ok\n", "fatal: unknown command: symref-verify "+names[0]+"\n", gitTestExitError(128))
+	}
+	for _, name := range names {
+		if r.hidden[name] {
+			return writeTestStreams(command, "start: ok\n", "fatal: cannot lock ref '"+name+"': reference already exists\n", gitTestExitError(128))
+		}
+	}
+	return writeCommandOutput(command, "start: ok\nprepare: ok\nabort: ok\n")
 }
 
 // gitDirectoryAnswer mirrors native rev-parse: the source checkout reports

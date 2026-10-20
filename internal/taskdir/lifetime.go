@@ -4,12 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
 	"reflect"
-	"sort"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
@@ -283,8 +279,8 @@ func (td *TaskDir) RecordLifetimeLaunchContext(ctx context.Context, facts Lifeti
 	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
-	if facts.Sequence == 0 || facts.Sequence > task.MaxLifetimeLaunches {
-		return nil, fmt.Errorf("%w: lifetime launch sequence is outside 1..%d", task.ErrEvidenceFault, task.MaxLifetimeLaunches)
+	if err := task.ValidateLifetimeLaunchSequence(facts.Sequence); err != nil {
+		return nil, err
 	}
 	if _, err := td.ReadLifetimeTerminationContext(ctx); err == nil {
 		return nil, task.ErrTerminalTask
@@ -309,6 +305,9 @@ func (td *TaskDir) RecordLifetimeLaunchContext(ctx context.Context, facts Lifeti
 	if err = task.ValidateLifetimeLaunchRecord(&record); err != nil {
 		return nil, err
 	}
+	if err = td.requireLifetimeLaunchCapacity(ctx, &record); err != nil {
+		return nil, err
+	}
 	name := lifetimeLaunchName(facts.Sequence)
 	err = td.recordSameContext(ctx, filepath.Join(lifetimeDirectory, name), record, func() (bool, error) {
 		existing, readErr := td.readLifetimeLaunchContext(ctx, facts.Sequence)
@@ -331,66 +330,58 @@ func (td *TaskDir) ReadLifetimeLaunches() ([]task.LifetimeLaunchRecord, error) {
 // ReadLifetimeLaunchesContext reads the complete contiguous launch set while
 // retaining the caller's cancellation and deadline for each record read.
 func (td *TaskDir) ReadLifetimeLaunchesContext(ctx context.Context) ([]task.LifetimeLaunchRecord, error) {
-	sequences, err := td.readLifetimeLaunchSequencesContext(ctx)
+	set, err := td.readLifetimeLaunchSetContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	launches := make([]task.LifetimeLaunchRecord, 0, len(sequences))
-	for index, sequence := range sequences {
-		if err := lifetimeContextErr(ctx); err != nil {
-			return nil, err
-		}
-		if sequence != uint64(index+1) {
-			return nil, task.ErrIdentityMismatch
-		}
-		launch, readErr := td.readLifetimeLaunchContext(ctx, sequence)
-		if readErr != nil {
-			return nil, readErr
-		}
-		launches = append(launches, *launch)
-	}
-	return launches, nil
+	return set.records, nil
 }
 
-func (td *TaskDir) readLifetimeLaunchSequencesContext(ctx context.Context) ([]uint64, error) {
+// readLifetimeLaunchSetContext reads the complete contiguous launch set and
+// the capacity its persisted winners already use.
+func (td *TaskDir) readLifetimeLaunchSetContext(ctx context.Context) (lifetimeLaunchSet, error) {
 	if err := lifetimeContextErr(ctx); err != nil {
-		return nil, err
+		return lifetimeLaunchSet{}, err
 	}
-	dir, err := td.store.openDir(filepath.Join(td.Dir, lifetimeDirectory))
+	sequences, err := td.store.readLifetimeLaunchInventory(ctx, filepath.Join(td.Dir, lifetimeDirectory), taskLifetimeLaunchNaming())
 	if err != nil {
-		return nil, err
+		return lifetimeLaunchSet{}, err
 	}
-	var sequences []uint64
-	for {
-		if contextErr := lifetimeContextErr(ctx); contextErr != nil {
-			err = contextErr
-			break
-		}
-		names, readErr := dir.Readdirnames(1)
-		for _, name := range names {
-			sequence, launch := parseLifetimeLaunchName(name)
-			if launch {
-				sequences = append(sequences, sequence)
-			}
-		}
-		if uint64(len(sequences)) > task.MaxLifetimeLaunches {
-			err = errors.Join(err, fmt.Errorf("%w: more than %d lifetime launches", task.ErrEvidenceFault, task.MaxLifetimeLaunches))
-			break
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
+	if err = requireContiguousLifetimeLaunches(sequences); err != nil {
+		return lifetimeLaunchSet{}, err
+	}
+	set := lifetimeLaunchSet{records: make([]task.LifetimeLaunchRecord, 0, len(sequences))}
+	if len(sequences) == 0 {
+		return set, nil
+	}
+	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
+	if err != nil {
+		return lifetimeLaunchSet{}, lifetimeValidationDependencyError(err)
+	}
+	for _, sequence := range sequences {
+		launch, readErr := td.readRegisteredLifetimeLaunchContext(ctx, sequence, registrationDigest)
 		if readErr != nil {
-			err = errors.Join(err, readErr)
-			break
+			return lifetimeLaunchSet{}, readErr
+		}
+		if err = set.add(launch); err != nil {
+			return lifetimeLaunchSet{}, err
 		}
 	}
-	err = errors.Join(err, dir.Close(), lifetimeContextErr(ctx))
+	return set, nil
+}
+
+// requireLifetimeLaunchCapacity adds a new candidate once to the capacity of
+// the current complete set before it is published. A rerecord of an existing
+// sequence is already counted by that set.
+func (td *TaskDir) requireLifetimeLaunchCapacity(ctx context.Context, candidate *task.LifetimeLaunchRecord) error {
+	set, err := td.readLifetimeLaunchSetContext(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	sort.Slice(sequences, func(i, j int) bool { return sequences[i] < sequences[j] })
-	return sequences, nil
+	if candidate.Sequence <= uint64(len(set.records)) {
+		return nil
+	}
+	return set.capacity.Add(candidate)
 }
 
 func (td *TaskDir) RecordLifetimeTermination(cause string) (*task.LifetimeTerminationRecord, error) {
@@ -414,7 +405,7 @@ func (td *TaskDir) RecordLifetimeTerminationContext(ctx context.Context, cause s
 	if err != nil {
 		return nil, err
 	}
-	launchSetDigest, err := lifetimeLaunchSetDigest(launches)
+	launchSetDigest, err := task.LifetimeLaunchSetDigest(launches)
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +472,7 @@ func (td *TaskDir) ReadLifetimeTerminationContext(ctx context.Context) (*task.Li
 	if err != nil {
 		return nil, lifetimeValidationDependencyError(err)
 	}
-	digest, err := lifetimeLaunchSetDigest(launches)
+	digest, err := task.LifetimeLaunchSetDigest(launches)
 	if err != nil {
 		return nil, err
 	}
@@ -538,6 +529,19 @@ func (td *TaskDir) readLifetimeLaunchContext(ctx context.Context, sequence uint6
 	if err := lifetimeContextErr(ctx); err != nil {
 		return nil, err
 	}
+	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
+	if err != nil {
+		return nil, lifetimeValidationDependencyError(err)
+	}
+	return td.readRegisteredLifetimeLaunchContext(ctx, sequence, registrationDigest)
+}
+
+// readRegisteredLifetimeLaunchContext reads one launch bound to an already
+// read registration digest, so a set read reads its registration once.
+func (td *TaskDir) readRegisteredLifetimeLaunchContext(ctx context.Context, sequence uint64, registrationDigest string) (*task.LifetimeLaunchRecord, error) {
+	if err := lifetimeContextErr(ctx); err != nil {
+		return nil, err
+	}
 	var record task.LifetimeLaunchRecord
 	path := filepath.Join(td.Dir, lifetimeDirectory, lifetimeLaunchName(sequence))
 	if err := td.store.readRecordContext(ctx, path, &record); err != nil {
@@ -554,10 +558,6 @@ func (td *TaskDir) readLifetimeLaunchContext(ctx context.Context, sequence uint6
 	}
 	if err := td.matchLifetimeIdentity(record.RootID, record.TaskID); err != nil {
 		return nil, err
-	}
-	registrationDigest, err := td.LifetimeRegistrationDigestContext(ctx)
-	if err != nil {
-		return nil, lifetimeValidationDependencyError(err)
 	}
 	if registrationDigest != record.RegistrationSHA256 {
 		return nil, task.ErrIdentityMismatch
@@ -607,24 +607,4 @@ func (td *TaskDir) matchLifetimeIdentity(root, id string) error {
 
 func lifetimeLaunchName(sequence uint64) string {
 	return fmt.Sprintf("%020d%s", sequence, lifetimeLaunchSuffix)
-}
-
-func parseLifetimeLaunchName(name string) (uint64, bool) {
-	if !strings.HasSuffix(name, lifetimeLaunchSuffix) {
-		return 0, false
-	}
-	prefix := strings.TrimSuffix(name, lifetimeLaunchSuffix)
-	if len(prefix) != 20 {
-		return 0, false
-	}
-	sequence, err := strconv.ParseUint(prefix, 10, 64)
-	return sequence, err == nil && sequence > 0
-}
-
-func lifetimeLaunchSetDigest(launches []task.LifetimeLaunchRecord) (string, error) {
-	data, err := task.MarshalCanonical(launches)
-	if err != nil {
-		return "", err
-	}
-	return task.ComputeSHA256(data), nil
 }

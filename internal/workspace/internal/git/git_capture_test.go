@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/hishamkaram/delegation-layer/internal/workspace/contract"
 )
 
 func TestBuildCaptureUsesPrivateIndexAndPreservesExactCandidate(t *testing.T) {
@@ -309,18 +311,23 @@ func TestPinBaseUsesCreateOnlyCASAndExpectedObjectFormat(t *testing.T) {
 	source := Source{Root: root, CommonDir: gitDir, GitDir: gitDir, RelativeCwd: ".", BaseOID: testBaseOID, ObjectFormat: "sha1"}
 	runner := newRepositoryFixtureRunner(root, "", "", testBaseOID)
 	baseHandler := runner.handler
+	created := false
 	runner.handler = func(command *exec.Cmd) error {
 		args := command.Args[3:]
 		if slices.Equal(args, []string{"update-ref", "--no-deref", "refs/delegate/base", testBaseOID, strings.Repeat("0", 40)}) {
+			created = true
 			return nil
 		}
-		if slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, "refs/delegate/base"}) {
+		if slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, "refs/delegate/base"}) && created {
 			return writeCommandOutput(command, string(refInventoryRecord("refs/delegate/base", testBaseOID, "commit", "")))
 		}
 		return baseHandler(command)
 	}
 	if err := (Git{Runner: runner}).PinBase(context.Background(), source, "refs/delegate/base"); err != nil {
 		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("absent base ref was not created")
 	}
 }
 
@@ -359,12 +366,16 @@ func runPinBaseRecoveryCase(t *testing.T, test pinBaseRecoveryCase) {
 	source := Source{Root: root, CommonDir: gitDir, GitDir: gitDir, RelativeCwd: ".", BaseOID: testBaseOID, ObjectFormat: "sha1"}
 	runner := newRepositoryFixtureRunner(root, "", "", testBaseOID)
 	baseHandler := runner.handler
+	// The pre-CAS observation sees an absent ref; the ambiguous CAS failure
+	// is then followed by the recorded winner or inspection fault.
+	attempted := false
 	runner.handler = func(command *exec.Cmd) error {
 		args := command.Args[3:]
 		if slices.Equal(args, []string{"update-ref", "--no-deref", "refs/delegate/replay", testBaseOID, strings.Repeat("0", 40)}) {
+			attempted = true
 			return gitTestExitError(1)
 		}
-		if slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, "refs/delegate/replay"}) {
+		if slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, "refs/delegate/replay"}) && attempted {
 			if test.refErr != nil {
 				return test.refErr
 			}
@@ -497,12 +508,14 @@ func TestPinCaptureCreateOnlyCASAcceptsMatchingExistingTreeRef(t *testing.T) {
 	fixture := newCheckoutFixture(t)
 	runner := newRepositoryFixtureRunner(fixture.root, fixture.checkout.CheckoutPath, fixture.checkout.AdminDir, testBaseOID)
 	baseHandler := runner.handler
+	attempted := false
 	runner.handler = func(command *exec.Cmd) error {
 		args := command.Args[3:]
 		if slices.Equal(args, []string{"update-ref", "--no-deref", "refs/delegate/capture", testTreeOID, strings.Repeat("0", 40)}) {
+			attempted = true
 			return gitTestExitError(1)
 		}
-		if slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, "refs/delegate/capture"}) {
+		if slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, "refs/delegate/capture"}) && attempted {
 			return writeCommandOutput(command, string(refInventoryRecord("refs/delegate/capture", testTreeOID, "tree", "")))
 		}
 		return baseHandler(command)
@@ -602,12 +615,12 @@ func pinTurnBaselineHandler(test pinTurnBaselineCase, published *bool, baseHandl
 			}
 			return nil
 		case slices.Equal(args, []string{"for-each-ref", "--format=" + gitOwnedRefFormat, "refs/delegate/baseline"}):
-			target := test.winner
-			if target == "" && *published {
-				target = testTreeOID
-			}
-			if target == "" {
+			if !*published {
 				return nil
+			}
+			target := test.winner
+			if target == "" {
+				target = testTreeOID
 			}
 			return writeCommandOutput(command, string(refInventoryRecord("refs/delegate/baseline", target, "tree", "")))
 		}
@@ -718,6 +731,11 @@ func newRepositoryFixtureRunner(root, checkout, admin, head string) *recordingGi
 		if slices.Equal(args, []string{"symbolic-ref", "-q", "HEAD"}) {
 			return gitTestExitError(1)
 		}
+		// The fixture repository holds no symbolic owned ref, so an exact
+		// owned-ref query is native's clean not-symbolic exit.
+		if isOwnedSymbolicRefQuery(args) {
+			return gitTestExitError(1)
+		}
 		if slices.Equal(args, []string{"worktree", "list", "--porcelain", "-z"}) {
 			return writeCommandOutput(command, "worktree "+root+"\x00HEAD "+head+"\x00worktree "+checkout+"\x00HEAD "+head+"\x00locked\x00")
 		}
@@ -798,6 +816,11 @@ func objectTreeOutput(expression string) string {
 		return testTreeOID + "\n"
 	}
 	return "\n"
+}
+
+// isOwnedSymbolicRefQuery matches the exact single-name owned-ref observation.
+func isOwnedSymbolicRefQuery(args []string) bool {
+	return len(args) == 4 && slices.Equal(args[:3], []string{"symbolic-ref", "--quiet", "--no-recurse"}) && contract.ValidateOwnedRef(args[3]) == nil
 }
 
 func writeCommandOutput(command *exec.Cmd, data string) error {

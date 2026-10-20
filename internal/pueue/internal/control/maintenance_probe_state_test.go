@@ -34,9 +34,7 @@ func TestPrivateMaintenanceRetriesApplicationSettlingPlan(t *testing.T) {
 		}
 		return PrivateQueueCleanupPlan{RemoveIDs: []int64{0}}, nil
 	}
-	if !client.MaintainPrivateQueue(t.Context()) {
-		t.Fatal("private maintenance was unavailable")
-	}
+	startPrivateMaintenancePass(t, client, func() {}).requireCompleted(t)
 	if got := authorizations.Load(); got != 2 {
 		t.Fatalf("settling cleanup authorization calls=%d want=2", got)
 	}
@@ -48,13 +46,10 @@ func TestPrivateMaintenanceRetriesApplicationSettlingPlan(t *testing.T) {
 
 func TestPrivateMaintenanceReleasesQueueIdentityWhileSettling(t *testing.T) {
 	fixture, client := newMaintenanceProbeFixture(t)
-	// The synchronization channels, not wall time, prove that maintenance
-	// releases queue identity while settling. Leave enough command budget for
-	// race instrumentation on slower builders.
-	client.options.ObservationTimeout = time.Second
 	firstAuthorization := make(chan struct{})
 	leaseEntered := make(chan struct{})
 	leaseRelease := make(chan struct{})
+	releaseLease := sync.OnceFunc(func() { close(leaseRelease) })
 	var authorizations atomic.Int64
 	client.options.SuccessfulCleanupAuthorizer = func(ctx context.Context, _ string, _ task.SupervisorRef, _ []Job) (PrivateQueueCleanupPlan, error) {
 		if authorizations.Add(1) == 1 {
@@ -74,37 +69,37 @@ func TestPrivateMaintenanceReleasesQueueIdentityWhileSettling(t *testing.T) {
 		}
 	}
 
-	maintenanceDone := make(chan bool, 1)
-	go func() { maintenanceDone <- client.MaintainPrivateQueue(t.Context()) }()
-	<-firstAuthorization
-	leaseDone := make(chan error, 1)
+	// The synchronization channels, not wall time, prove that maintenance
+	// releases queue identity while settling. The derived pass budget bounds
+	// every wait.
+	pass := startPrivateMaintenancePass(t, client, releaseLease)
+	pass.awaitBeforeCompletion(t, firstAuthorization, "cleanup authorization")
+	var leaseErr error
+	leaseDone := make(chan struct{})
+	t.Cleanup(func() {
+		releaseLease()
+		<-leaseDone
+	})
 	go func() {
-		leaseDone <- client.withPrivateQueueIdentityLease(t.Context(), func(context.Context) error {
+		defer close(leaseDone)
+		leaseErr = client.withPrivateQueueIdentityLease(pass.ctx, func(context.Context) error {
 			close(leaseEntered)
 			<-leaseRelease
 			return nil
 		})
 	}()
 
+	pass.awaitBeforeCompletion(t, leaseEntered, "queue identity lease entry during settlement")
+	releaseLease()
 	select {
-	case <-leaseEntered:
-	case available := <-maintenanceDone:
-		t.Fatalf("maintenance finished before settlement released queue identity: available=%t", available)
-	case <-time.After(2 * time.Second):
-		t.Fatal("queue identity lease did not enter during settlement")
+	case <-leaseDone:
+	case <-pass.ctx.Done():
+		t.Fatalf("released queue identity lease did not return: %v", pass.ctx.Err())
 	}
-	close(leaseRelease)
-	if err := <-leaseDone; err != nil {
-		t.Fatal(err)
+	if leaseErr != nil {
+		t.Fatal(leaseErr)
 	}
-	select {
-	case available := <-maintenanceDone:
-		if !available {
-			t.Fatal("private maintenance became unavailable")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("maintenance did not finish after settlement")
-	}
+	pass.requireCompleted(t)
 	if got := authorizations.Load(); got != 2 {
 		t.Fatalf("settling cleanup authorization calls=%d want=2", got)
 	}
@@ -112,6 +107,78 @@ func TestPrivateMaintenanceReleasesQueueIdentityWhileSettling(t *testing.T) {
 	if removed := string(readPrivateSupervisorFile(t, filepath.Join(base, "test-kill-task-id"))); removed != "0\n" {
 		t.Fatalf("settled maintenance removed unexpected numeric targets: %q", removed)
 	}
+}
+
+// MaintainPrivateQueue reports availability. An opportunistic pass whose
+// command outlives the caller is deferred and is not resumed by that pass.
+func TestPrivateMaintenanceAvailabilityDoesNotImplyRemoval(t *testing.T) {
+	fixture, client := newMaintenanceProbeFixture(t)
+	base := filepath.Join(fixture.stateRoot, privateSupervisorDirectory)
+	removedPath := filepath.Join(base, "test-kill-task-id")
+	logOutput := captureMaintenanceProbeLog(t)
+	gate := canonicalTemp(t)
+	started, release := filepath.Join(gate, "status-started"), filepath.Join(gate, "status-release")
+	client.options.Environment = append(os.Environ(), "PRIVATE_STATUS_STARTED="+started, "PRIVATE_STATUS_RELEASE="+release)
+	var authorizations atomic.Int64
+	client.options.SuccessfulCleanupAuthorizer = func(context.Context, string, task.SupervisorRef, []Job) (PrivateQueueCleanupPlan, error) {
+		authorizations.Add(1)
+		return PrivateQueueCleanupPlan{RemoveIDs: []int64{0}}, nil
+	}
+	var eventLock sync.Mutex
+	var events []CommandEvent
+	client.options.Observer = func(event CommandEvent) {
+		eventLock.Lock()
+		defer eventLock.Unlock()
+		events = append(events, event)
+	}
+
+	callerContext, cancelCaller := context.WithCancel(t.Context())
+	budget, cancelBudget := context.WithTimeout(t.Context(), privateQueueMaintenanceTimeout(client.options.ObservationTimeout))
+	defer cancelBudget()
+	maintained := make(chan struct{})
+	var available bool
+	t.Cleanup(func() {
+		releasePrivateStatusOnCleanup(t, release)
+		cancelCaller()
+		<-maintained
+	})
+	go func() {
+		defer close(maintained)
+		available = client.MaintainPrivateQueue(callerContext)
+	}()
+	waitForPrivateFixtureMarker(t, started)
+	// The caller leaves while the held status command still owns the pass.
+	cancelCaller()
+	select {
+	case <-maintained:
+	case <-budget.Done():
+		t.Fatalf("canceled maintenance caller did not return within the derived pass budget: %v", budget.Err())
+	}
+	if !available {
+		t.Fatal("private maintenance was unavailable")
+	}
+	assertPrivateTestPathMissing(t, removedPath)
+	output := logOutput()
+	if strings.Count(output, "terminal supervisor cleanup deferred") != 1 ||
+		!strings.Contains(output, context.Canceled.Error()) || !strings.Contains(output, ErrInFlight.Error()) {
+		t.Fatalf("deferred maintenance diagnostic=%q, want one canceled in-flight deferral", output)
+	}
+	// The pending status command retains the generation lease after return.
+	supervisorLeaseTestBlocked(t, fixture.stateRoot, WithBootstrapLock)
+
+	releasePrivateStatus(t, release)
+	if err := client.Close(); err != nil {
+		t.Fatalf("close after natural maintenance command completion: %v", err)
+	}
+	supervisorLeaseTestEnters(t, fixture.stateRoot, WithBootstrapLock)
+	assertPrivateTestPathMissing(t, removedPath)
+	if got := authorizations.Load(); got != 0 {
+		t.Fatalf("deferred maintenance authorization calls=%d want=0", got)
+	}
+	eventLock.Lock()
+	observed := append([]CommandEvent(nil), events...)
+	eventLock.Unlock()
+	assertDeferredMaintenanceStatusOnly(t, observed)
 }
 
 func TestScheduledPrivateMaintenanceCoalescesRequestsAcrossClientsWithoutWaiting(t *testing.T) {

@@ -209,8 +209,9 @@ func (o *Operation) RecordLifetimeLaunchContext(ctx context.Context, facts taskd
 	return lifetime.RecordLifetimeLaunchContext(ctx, facts)
 }
 
-// ReadLifetimeLaunches probes the bounded canonical sequence namespace and
-// rejects gaps, malformed winners, conflicting identities, and overflow.
+// ReadLifetimeLaunches reads the launch records named by the directory
+// inventory and rejects malformed names, gaps, malformed winners, conflicting
+// identities, and overflow.
 func (o *Operation) ReadLifetimeLaunches() ([]task.LifetimeLaunchRecord, error) {
 	return o.ReadLifetimeLaunchesContext(context.Background())
 }

@@ -175,6 +175,7 @@
       "py:delegate_acceptance.lifetime.absence_policy",
       "py:delegate_acceptance.lifetime.identity",
       "py:delegate_acceptance.lifetime.policy",
+      "py:os",
       "py:pathlib"
     ]
   },
@@ -184,9 +185,7 @@
     "layer": "runtime",
     "imports": [
       "py:__future__",
-      "py:delegate_acceptance.evidence.encoding",
       "py:delegate_acceptance.evidence.records",
-      "py:delegate_acceptance.evidence.timestamps",
       "py:delegate_acceptance.evidence.validation",
       "py:delegate_acceptance.lifetime.identity",
       "py:delegate_acceptance.lifetime.policy",

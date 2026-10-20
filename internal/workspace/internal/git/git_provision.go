@@ -343,16 +343,17 @@ func (g Git) checkoutRegistration(ctx context.Context, source contract.Source, c
 	return registration, nil
 }
 
+// requireDetached shares the exact symbolic-ref protocol: only one clean
+// not-symbolic exit with empty streams proves a detached HEAD.
 func (g Git) requireDetached(ctx context.Context, checkoutRoot string) error {
-	_, err := g.runScalar(ctx, checkoutRoot, []string{"symbolic-ref", "-q", "HEAD"}, nil)
-	if err == nil {
+	stdout, stderr, runErr := g.runOutput(ctx, checkoutRoot, []string{"symbolic-ref", "-q", "HEAD"}, nil, nil)
+	if runErr == nil {
 		return fmt.Errorf("%w: provisioned checkout is attached to a branch", contract.ErrIdentityMismatch)
 	}
-	var exitCoder gitExitCoder
-	if errors.As(err, &exitCoder) && exitCoder.ExitCode() == 1 {
-		return nil
+	if _, err := classifySymbolicRef(stdout, stderr, runErr); err != nil {
+		return fmt.Errorf("inspect provisioned checkout HEAD attachment: %w", err)
 	}
-	return fmt.Errorf("inspect provisioned checkout HEAD attachment: %w", err)
+	return nil
 }
 
 func mappedWorkdirPath(checkoutRoot, relative string) (string, error) {
