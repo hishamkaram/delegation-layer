@@ -230,7 +230,7 @@ func appendWorkspaceArtifactInventory(ctx context.Context, store *taskdir.Store,
 			return errors.Join(completionErr, closeErr)
 		}
 		if completionErr != nil {
-			if errors.Is(completionErr, workspace.ErrPending) {
+			if errors.Is(completionErr, workspace.ErrPending) && PendingError(completionErr) {
 				return workspace.ErrBusy
 			}
 			if !workspace.OperationAbsent(completionErr) {

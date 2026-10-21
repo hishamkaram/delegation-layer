@@ -366,6 +366,7 @@
     "imports": [
       "py:__future__",
       "py:datetime",
+      "py:delegate_acceptance.evidence.files",
       "py:delegate_acceptance.evidence.limits",
       "py:delegate_acceptance.evidence.records",
       "py:delegate_acceptance.evidence.timestamps",
@@ -373,6 +374,7 @@
       "py:delegate_acceptance.lifetime.evidence",
       "py:delegate_acceptance.lifetime.identity",
       "py:delegate_acceptance.lifetime.unlaunched",
+      "py:delegate_acceptance.workspaces.checkpoint_records",
       "py:delegate_acceptance.workspaces.specification",
       "py:pathlib",
       "py:stat"

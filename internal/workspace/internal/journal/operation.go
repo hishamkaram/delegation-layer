@@ -40,11 +40,11 @@ func OpenOperation(ctx context.Context, store *taskdir.Store, request contract.O
 		}
 	}()
 	err = control.WithLock(ctx, func(tx *taskdir.ControlTransaction) error {
-		_, putErr := tx.Put("request.json", request)
+		_, putErr := tx.Put(operationRequestName, request)
 		if putErr != nil {
 			return putErr
 		}
-		return tx.Verify("request.json", request)
+		return tx.Verify(operationRequestName, request)
 	})
 	if err != nil {
 		return nil, err
@@ -66,7 +66,7 @@ func LoadOperation(ctx context.Context, store *taskdir.Store, id string) (operat
 	var request contract.OperationRequest
 	var deadline time.Time
 	err = control.WithLock(ctx, func(tx *taskdir.ControlTransaction) error {
-		if readErr := tx.Read("request.json", &request); readErr != nil {
+		if readErr := tx.Read(operationRequestName, &request); readErr != nil {
 			return readErr
 		}
 		var validationErr error
@@ -74,7 +74,7 @@ func LoadOperation(ctx context.Context, store *taskdir.Store, id string) (operat
 		if validationErr != nil || request.OperationID != id {
 			return task.ErrIdentityMismatch
 		}
-		return tx.Verify("request.json", request)
+		return tx.Verify(operationRequestName, request)
 	})
 	if err != nil {
 		return nil, err

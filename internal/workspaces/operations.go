@@ -61,37 +61,19 @@ func bindWorkspacePurpose(ctx context.Context, resource *workspace.Resource, req
 	if err := ValidateActionRequest(ctx, resource, request); err != nil {
 		return err
 	}
-	// Verification is indexed only by the owner of its accepted reservation.
-	// A failed Reserve must not leave an unfinished authorized resource use.
-	if request.Kind == workspace.OperationVerify {
+	// Verification and managed checkpoints are indexed only by the owner of
+	// their accepted reservation. A failed Reserve must not leave an
+	// unfinished authorized resource use.
+	if request.Kind == workspace.OperationVerify || request.Kind == workspace.OperationCheckpoint {
 		return nil
 	}
 	return resource.RecordOperation(ctx, request)
 }
 
 func createWorkspaceOperation(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps OperationOptions, spec OperationSpec) (operation *workspace.Operation, resultErr error) {
-	deadline, err := workspaceOperationDeadline(spec)
+	request, err := newWorkspaceOperationRequest(ctx, store, deps, resource.Request().WorkspaceID, spec)
 	if err != nil {
 		return nil, err
-	}
-	runner, supervisor, err := workspaceOperationRuntime(ctx, store, deps, deadline)
-	if err != nil {
-		return nil, err
-	}
-	id, err := randomid.NewTaskID()
-	if err != nil {
-		return nil, err
-	}
-	digest, err := commonprovider.FingerprintExecutable(runner)
-	if err != nil {
-		return nil, err
-	}
-	request := workspace.OperationRequest{
-		SchemaVersion: task.SchemaVersion, RootID: store.RootID, OperationID: id,
-		WorkspaceID: resource.Request().WorkspaceID, Kind: spec.Kind, Subject: spec.Subject,
-		Deadline:         deadline,
-		WorkerExecutable: runner, WorkerSHA256: digest, Supervisor: supervisor,
-		Arguments: spec.Arguments, Discard: spec.Discard,
 	}
 	operation, err = workspace.OpenOperation(ctx, store, request)
 	if err != nil {
@@ -101,7 +83,7 @@ func createWorkspaceOperation(ctx context.Context, store *taskdir.Store, resourc
 	if err != nil {
 		return operation, err
 	}
-	if winner != id {
+	if winner != request.OperationID {
 		if err = operation.Close(); err != nil {
 			return nil, err
 		}
@@ -114,6 +96,35 @@ func createWorkspaceOperation(ctx context.Context, store *taskdir.Store, resourc
 		return operation, err
 	}
 	return operation, nil
+}
+
+// newWorkspaceOperationRequest binds one finite helper's deadline, published
+// runtime binding, fresh identity and executable fingerprint. Associating the
+// request with a workspace purpose stays with its caller.
+func newWorkspaceOperationRequest(ctx context.Context, store *taskdir.Store, deps OperationOptions, workspaceID string, spec OperationSpec) (workspace.OperationRequest, error) {
+	deadline, err := workspaceOperationDeadline(spec)
+	if err != nil {
+		return workspace.OperationRequest{}, err
+	}
+	runner, supervisor, err := workspaceOperationRuntime(ctx, store, deps, deadline)
+	if err != nil {
+		return workspace.OperationRequest{}, err
+	}
+	id, err := randomid.NewTaskID()
+	if err != nil {
+		return workspace.OperationRequest{}, err
+	}
+	digest, err := commonprovider.FingerprintExecutable(runner)
+	if err != nil {
+		return workspace.OperationRequest{}, err
+	}
+	return workspace.OperationRequest{
+		SchemaVersion: task.SchemaVersion, RootID: store.RootID, OperationID: id,
+		WorkspaceID: workspaceID, Kind: spec.Kind, Subject: spec.Subject,
+		Deadline:         deadline,
+		WorkerExecutable: runner, WorkerSHA256: digest, Supervisor: supervisor,
+		Arguments: spec.Arguments, Discard: spec.Discard, Checkpoint: cloneCheckpointSelection(spec.Checkpoint),
+	}, nil
 }
 
 func workspaceOperationRuntime(ctx context.Context, store *taskdir.Store, deps OperationOptions, deadline string) (runner string, binding task.SupervisorRef, resultErr error) {
@@ -161,23 +172,11 @@ func SubmitOperation(ctx context.Context, store *taskdir.Store, operation *works
 		resultErr = ControlError(resultErr)
 	}()
 	request := operation.Request()
-	if err := validateStoredWorkspaceActionRequest(ctx, store, request); err != nil {
+	if err := validateStoredWorkspaceActionRequest(ctx, store, operation); err != nil {
 		return err
 	}
-	if _, err := OperationClosed(ctx, operation); err == nil {
-		return nil
-	} else if !errors.Is(err, workspace.ErrPending) {
+	if awaiting, err := awaitingSubmission(ctx, operation); !awaiting {
 		return err
-	}
-	// The guardian publishes intent only after enqueue. A running helper does
-	// not need another supervisor bind or queue reconciliation on every poll.
-	if _, err := operation.ReadLifetimeIntentContext(ctx); err == nil {
-		return nil
-	} else if !workspace.OperationAbsent(err) {
-		return err
-	}
-	if !time.Now().Before(operation.Deadline()) {
-		return workspace.ErrPending
 	}
 	supervisorOwner, err := supervisorcore.AcquireClient(deps.Runtime.OpenSaved(ctx, store.Root, request.Supervisor))
 	defer func() { resultErr = errors.Join(resultErr, supervisorOwner.CloseAfterPending(resultErr)) }()
@@ -214,6 +213,28 @@ func SubmitOperation(ctx context.Context, store *taskdir.Store, operation *works
 	launch := pueue.Launch{RunnerExecutable: request.WorkerExecutable, RootPath: store.Root, Supervised: true, WorkspaceOperation: true}
 	_, err = supervisor.SubmitConcurrentInspectionStagedWithGate(ctx, permit, identity, launch, supervisorcore.SubmissionGate(store.Root), commit)
 	return err
+}
+
+// awaitingSubmission reports whether an operation still needs its supervisor
+// submission: it is open, has no lifetime intent and is before its deadline.
+// Otherwise it returns the operation's settled error, nil when nothing remains.
+func awaitingSubmission(ctx context.Context, operation *workspace.Operation) (bool, error) {
+	if _, err := OperationClosed(ctx, operation); err == nil {
+		return false, nil
+	} else if !errors.Is(err, workspace.ErrPending) || !PendingError(err) {
+		return false, err
+	}
+	// The guardian publishes intent only after enqueue. A running helper does
+	// not need another supervisor bind or queue reconciliation on every poll.
+	if _, err := operation.ReadLifetimeIntentContext(ctx); err == nil {
+		return false, nil
+	} else if !workspace.OperationAbsent(err) {
+		return false, err
+	}
+	if !time.Now().Before(operation.Deadline()) {
+		return false, workspace.ErrPending
+	}
+	return true, nil
 }
 
 func recoverWorkspaceSubmission(ctx context.Context, root string, operation *workspace.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, commit pueue.InspectionObservationCommit) error {
@@ -293,7 +314,7 @@ func workspaceNativeOperationProof(ctx context.Context, operation *workspace.Ope
 }
 
 func AcceptedOperation(ctx context.Context, store *taskdir.Store, operation *workspace.Operation) (workspace.OperationResult, guardian.ClosureProof, error) {
-	if err := validateStoredWorkspaceActionRequest(ctx, store, operation.Request()); err != nil {
+	if err := validateStoredWorkspaceActionRequest(ctx, store, operation); err != nil {
 		return workspace.OperationResult{}, guardian.ClosureProof{}, err
 	}
 	proof, err := OperationClosed(ctx, operation)

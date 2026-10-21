@@ -80,7 +80,8 @@ func ManagedBaseRef(rootID, workspaceID string) string {
 }
 
 func validateWorkspaceOperationSpec(request workspace.OperationRequest, spec OperationSpec) error {
-	if request.Kind != spec.Kind || request.Subject != spec.Subject || request.Discard != spec.Discard || !slices.Equal(request.Arguments, spec.Arguments) {
+	if request.Kind != spec.Kind || request.Subject != spec.Subject || request.Discard != spec.Discard || !slices.Equal(request.Arguments, spec.Arguments) ||
+		!equalCheckpointSelection(request.Checkpoint, spec.Checkpoint) {
 		return task.ErrIdentityMismatch
 	}
 	if spec.Deadline != "" && request.Deadline != spec.Deadline {

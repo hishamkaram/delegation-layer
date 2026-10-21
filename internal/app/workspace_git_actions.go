@@ -19,6 +19,11 @@ import (
 func runWorkspaceAction(scope execution.PreflightScope, store *taskdir.Store, operation *workspace.Operation) (candidate workspace.OperationResult, resultErr error) {
 	request := operation.Request()
 	candidate = workspace.OperationResult{SchemaVersion: task.SchemaVersion, OperationID: request.OperationID, RequestSHA256: operation.Digest(), Status: "succeeded"}
+	git := workspace.Git{Runner: workspaceCommandRunner{scope: scope}}
+	// Ordinary checkpoints and removals have no workspace resource to load.
+	if request.Kind == workspace.OperationCheckpoint || request.Kind == workspace.OperationCheckpointRemove {
+		return candidate, runCheckpointAction(scope.Context(), store, operation, git)
+	}
 	resource, err := workspace.LoadResource(scope.Context(), store, request.WorkspaceID)
 	if err != nil {
 		return candidate, err
@@ -27,7 +32,6 @@ func runWorkspaceAction(scope execution.PreflightScope, store *taskdir.Store, op
 	if err = workspacescore.ValidateActionRequest(scope.Context(), resource, request); err != nil {
 		return candidate, err
 	}
-	git := workspace.Git{Runner: workspaceCommandRunner{scope: scope}}
 	switch request.Kind {
 	case workspace.OperationProvision:
 		resultErr = provisionManagedCheckout(scope.Context(), store, resource, git)

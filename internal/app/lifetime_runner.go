@@ -18,6 +18,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
 	"golang.org/x/sys/unix"
 )
 
@@ -171,7 +172,7 @@ func runGuardianWithWorkspaceCompletion(lifetimeOwner *guardian.Guardian, store 
 	if parsed.Inspection {
 		return guardianErr
 	}
-	if wakeErr := reconcileWorkspaceAfterGuardian(store, parsed, deps); wakeErr != nil && !errors.Is(wakeErr, workspace.ErrPending) {
+	if wakeErr := reconcileWorkspaceAfterGuardian(store, parsed, deps); wakeErr != nil && (!errors.Is(wakeErr, workspace.ErrPending) || !workspacescore.PendingError(wakeErr)) {
 		// Capture remains recoverable without rewriting the provider result.
 		log.Printf("delegate: workspace capture deferred: %v", wakeErr)
 	}

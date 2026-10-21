@@ -88,7 +88,7 @@ func awaitProvision(ctx context.Context, store *taskdir.Store, resource *workspa
 		if err == nil {
 			return resource.Registration(ctx)
 		}
-		if !errors.Is(err, workspace.ErrPending) {
+		if !errors.Is(err, workspace.ErrPending) || !PendingError(err) {
 			return registration, err
 		}
 		if err = WaitObservation(ctx); err != nil {

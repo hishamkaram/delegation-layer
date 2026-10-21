@@ -28,8 +28,9 @@ func TestWorkspaceReleaseRecoversObligationAfterReservationCrash(t *testing.T) {
 			}
 			fixture.Restart(t)
 			workspacefixture.RecoveryUseOwner(t, fixture)
-			if err = restoreWorkspaceCaptureObligation(t.Context(), fixture.Store, fixture.Resource, reservation); err != nil {
-				t.Fatal(err)
+			handled, err := restoreWorkspaceCaptureObligation(t.Context(), fixture.Store, fixture.Resource, reservation, OperationOptions{})
+			if err != nil || handled {
+				t.Fatalf("release obligation recovery handled=%v error=%v", handled, err)
 			}
 			obligation, err := fixture.Resource.CaptureObligation(t.Context(), reservation.Sequence)
 			if err != nil || obligation.Subject != subject || obligation.Predecessor != nil || obligation.BudgetNanos != action.BudgetNanos {

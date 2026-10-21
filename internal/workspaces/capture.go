@@ -34,8 +34,9 @@ func ReconcileUse(ctx context.Context, store *taskdir.Store, resource *workspace
 		if reservation.Subject.Kind == workspace.SubjectAdmission {
 			return ReconcileUnlaunchedAdmission(ctx, store, resource, reservation, deps.RecoverInspection)
 		}
-		if err = restoreWorkspaceCaptureObligation(ctx, store, resource, reservation); err != nil {
-			return err
+		handled, restoreErr := restoreWorkspaceCaptureObligation(ctx, store, resource, reservation, deps)
+		if restoreErr != nil || handled {
+			return restoreErr
 		}
 		obligation, err = resource.CaptureObligation(ctx, reservation.Sequence)
 	}
@@ -58,22 +59,27 @@ func ReconcileUse(ctx context.Context, store *taskdir.Store, resource *workspace
 
 // The use-owner lease excludes a live publisher. Reconstruct only from the
 // original typed authorization; a missing follow-up write is not new work.
-func restoreWorkspaceCaptureObligation(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, reservation workspace.Reservation) (resultErr error) {
+// handled reports that the reservation's checkpoint use was settled instead,
+// which never reads or creates a capture obligation.
+func restoreWorkspaceCaptureObligation(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, reservation workspace.Reservation, deps OperationOptions) (handled bool, resultErr error) {
 	if reservation.Subject.Kind != workspace.SubjectOperation {
-		return task.ErrEvidenceFault
+		return false, task.ErrEvidenceFault
 	}
 	operation, err := workspace.LoadOperation(ctx, store, reservation.Subject.ID)
 	if workspace.OperationAbsent(err) {
 		if _, err = resource.ReleaseAction(ctx, reservation.Subject); err != nil {
-			return errors.Join(task.ErrEvidenceFault, err)
+			return false, errors.Join(task.ErrEvidenceFault, err)
 		}
-		return resource.RecordReleaseCapture(ctx, reservation, reservation.Subject)
+		return false, resource.RecordReleaseCapture(ctx, reservation, reservation.Subject)
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
-	return RecordVerificationUse(ctx, resource, reservation, operation)
+	if operation.Request().Kind == workspace.OperationCheckpoint {
+		return true, settleManagedCheckpointUse(ctx, store, resource, reservation, operation, deps)
+	}
+	return false, RecordVerificationUse(ctx, resource, reservation, operation)
 }
 
 func RecordVerificationUse(ctx context.Context, resource *workspace.Resource, reservation workspace.Reservation, operation *workspace.Operation) error {
@@ -144,14 +150,12 @@ func recordWorkspaceCapture(ctx context.Context, resource *workspace.Resource, r
 }
 
 func BuildCaptureReceipt(ctx context.Context, resource *workspace.Resource, request workspace.OperationRequest, result workspace.OperationResult, proof guardian.ClosureProof, resultErr error) (workspace.CaptureReceipt, error) {
+	closure := receiptClosureEvidence(proof)
 	receipt := workspace.CaptureReceipt{
-		SchemaVersion: task.SchemaVersion, WorkspaceID: request.WorkspaceID, OperationID: request.OperationID,
+		LifetimeClosure: closure.Kind, SchemaVersion: task.SchemaVersion, WorkspaceID: request.WorkspaceID, OperationID: request.OperationID,
 		Subject: request.Subject, Status: "unavailable", ReasonCode: "capture_failed",
-		TerminationSHA256: proof.TerminationSHA256(), WorkerWaitSHA256: proof.WorkerWaitSHA256(),
-		UnlaunchedSHA256: proof.UnlaunchedSHA256(),
-	}
-	if proof.Kind() == task.LifetimeClosureUnregisteredRecovered || proof.Kind() == task.LifetimeClosureLegacyPreviousBoot {
-		receipt.LifetimeClosure = proof.Kind()
+		TerminationSHA256: closure.TerminationSHA256, WorkerWaitSHA256: closure.WorkerWaitSHA256,
+		UnlaunchedSHA256: closure.UnlaunchedSHA256,
 	}
 	if proof.UnlaunchedSHA256() != "" || proof.Kind() == task.LifetimeClosureUnregisteredRecovered {
 		receipt.ReasonCode = "capture_not_launched"

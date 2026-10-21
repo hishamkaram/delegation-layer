@@ -24,6 +24,12 @@ func LoadOperation(ctx context.Context, store *taskdir.Store, id string) (*Opera
 	return journal.LoadOperation(ctx, store, id)
 }
 
+// OperationRequestPresent probes one existing operation directory for its
+// request record without locking, creating or decoding it.
+func OperationRequestPresent(ctx context.Context, store *taskdir.Store, id string) (bool, error) {
+	return journal.OperationRequestPresent(ctx, store, id)
+}
+
 func EstablishResource(ctx context.Context, store *taskdir.Store, request ResourceRequest) (*Resource, error) {
 	return journal.EstablishResource(ctx, store, request)
 }

@@ -16,7 +16,7 @@ func (m *Admission) Finish(store *taskdir.Store, cause error, taskCreated bool, 
 	finished := AdmissionFinish{OperationID: m.operationID}
 	if cause != nil && !m.existing && m.reservation.Sequence != 0 && !taskCreated {
 		abortErr := ReconcileUnlaunchedAdmission(ctx, store, m.resource, m.reservation, recoverInspection)
-		if abortErr != nil && !errors.Is(abortErr, workspace.ErrPending) {
+		if abortErr != nil && (!errors.Is(abortErr, workspace.ErrPending) || !PendingError(abortErr)) {
 			finished.AbortError = abortErr
 			cause = errors.Join(cause, abortErr)
 		}
@@ -25,7 +25,7 @@ func (m *Admission) Finish(store *taskdir.Store, cause error, taskCreated bool, 
 	if m.operationID != "" {
 		description.OperationID = m.operationID
 		operationErr := DescribeOperation(ctx, store, m.resource, m.operationID, &description)
-		if operationErr != nil && !errors.Is(operationErr, workspace.ErrPending) && cause == nil {
+		if operationErr != nil && (!errors.Is(operationErr, workspace.ErrPending) || !PendingError(operationErr)) && cause == nil {
 			err = errors.Join(err, operationErr)
 		}
 	}

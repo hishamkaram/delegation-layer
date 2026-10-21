@@ -160,6 +160,10 @@ func workspaceActionFailureReason(kind string, err error) string {
 		return "workspace_removal_failed"
 	case workspace.OperationForget:
 		return "workspace_forget_failed"
+	case workspace.OperationCheckpoint:
+		return "checkpoint_failed"
+	case workspace.OperationCheckpointRemove:
+		return "checkpoint_removal_failed"
 	default:
 		return "workspace_operation_failed"
 	}

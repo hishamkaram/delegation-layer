@@ -28,6 +28,11 @@ func validateIntentionallyForgottenArtifact(ctx context.Context, store *taskdir.
 		return errors.Join(missingErr, err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
+	// An ordinary checkpoint or removal has no workspace, so nothing could
+	// have forgotten its artifacts: the original missing error stands.
+	if operation.Request().WorkspaceID == "" {
+		return missingErr
+	}
 	resource, err := workspace.LoadResource(ctx, store, operation.Request().WorkspaceID)
 	if err != nil {
 		return errors.Join(missingErr, err)
