@@ -17,6 +17,9 @@ from scripts.delegate_acceptance.directories.policy import require
 from .model import TASK_ID_RE
 from .policy import cleanup_decision
 
+# Matches the private CLI fixture's post-release closure wait (private_cli/finalization.py).
+MANAGED_LIFETIME_CLOSURE_TIMEOUT = 45
+
 
 class RetainedDirectories:
     """Hold one explicit handoff of a DirectoryOwner inventory until idempotent terminal release.
@@ -210,9 +213,11 @@ class WorkspaceContext:
         daemon_closed = not self.private_config.exists()
         daemon_error = None
         if self.state.exists():
+            # A worker released by the gates may still be closing; wait for canonical closure
+            # so a late close cannot skip the private daemon's shutdown.
             try:
-                private_cli_supervisor.authorize_managed_lifetime_closure(
-                    self.state, tuple(self.task_ids),
+                private_cli_supervisor.await_managed_lifetime_closure(
+                    self.state, tuple(self.task_ids), timeout=MANAGED_LIFETIME_CLOSURE_TIMEOUT,
                 )
                 lifetime_closed = True
             except (RuntimeError, OSError) as error:

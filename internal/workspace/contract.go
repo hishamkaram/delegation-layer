@@ -27,6 +27,27 @@ const (
 	CaptureNameStatusName = contract.CaptureNameStatusName
 	TurnPatchName         = contract.TurnPatchName
 	TurnNameStatusName    = contract.TurnNameStatusName
+
+	OperationCheckpoint       = contract.OperationCheckpoint
+	OperationCheckpointRemove = contract.OperationCheckpointRemove
+	CheckpointOrdinary        = contract.CheckpointOrdinary
+	CheckpointManaged         = contract.CheckpointManaged
+
+	CheckpointCommitPayloadLimit = contract.CheckpointCommitPayloadLimit
+	CheckpointTrailer            = contract.CheckpointTrailer
+	CheckpointRequestTrailer     = contract.CheckpointRequestTrailer
+
+	CheckpointCheckpointed      = contract.CheckpointCheckpointed
+	CheckpointUnavailable       = contract.CheckpointUnavailable
+	CheckpointFailed            = contract.CheckpointFailed
+	CheckpointNotLaunched       = contract.CheckpointNotLaunched
+	CheckpointResultUnavailable = contract.CheckpointResultUnavailable
+
+	CheckpointRemoved                  = contract.CheckpointRemoved
+	CheckpointNothingToRemove          = contract.CheckpointNothingToRemove
+	CheckpointRemovalFailed            = contract.CheckpointRemovalFailed
+	CheckpointRemovalNotLaunched       = contract.CheckpointRemovalNotLaunched
+	CheckpointRemovalResultUnavailable = contract.CheckpointRemovalResultUnavailable
 )
 
 type (
@@ -60,6 +81,17 @@ type (
 	Subject            = contract.Subject
 	TurnBaseline       = contract.TurnBaseline
 	TurnObservation    = contract.TurnObservation
+)
+
+// Checkpoint records are additive to the managed workspace contract.
+type (
+	CheckpointCandidate        = contract.CheckpointCandidate
+	CheckpointReceipt          = contract.CheckpointReceipt
+	CheckpointRemovalReceipt   = contract.CheckpointRemovalReceipt
+	CheckpointRemovalReference = contract.CheckpointRemovalReference
+	CheckpointSelection        = contract.CheckpointSelection
+	CheckpointTarget           = contract.CheckpointTarget
+	ClosureEvidence            = contract.ClosureEvidence
 )
 
 var (

@@ -47,19 +47,48 @@ func (g Git) BuildCapture(ctx context.Context, checkout contract.Checkout, scrat
 	if validateErr := contract.ValidateOID(observedHead, checkout.Source.ObjectFormat); validateErr != nil {
 		return contract.CaptureCandidate{}, fmt.Errorf("observe checkout HEAD: %w", validateErr)
 	}
-	scratchFiles, scratchErr := newCaptureScratch(scratch)
-	if scratchErr != nil {
-		return contract.CaptureCandidate{}, scratchErr
+	target := captureTarget{root: checkout.CheckoutPath, adminDir: checkout.AdminDir, objectFormat: checkout.Source.ObjectFormat}
+	treeOID, indexDigest, err := g.buildCaptureContent(ctx, target, scratch)
+	if treeOID == "" {
+		return contract.CaptureCandidate{}, err
 	}
-	defer func() { err = errors.Join(err, removeScratchFiles(scratchFiles.all())) }()
-	treeOID, indexDigest, treeErr := g.buildPrivateTree(ctx, checkout, scratchFiles)
-	if treeErr != nil {
-		return contract.CaptureCandidate{}, fmt.Errorf("write Git capture tree: %w", treeErr)
+	// A verified tree stays returned alongside any scratch-removal error.
+	return contract.CaptureCandidate{BaseOID: checkout.Source.BaseOID, ObservedHEAD: observedHead, TreeOID: treeOID, IndexSHA256: indexDigest, ObjectFormat: checkout.Source.ObjectFormat}, err
+}
+
+// captureTarget is the validated worktree whose content one private-index
+// capture reads. A caller fills it only after validating that worktree's
+// repository identity: managed capture after validateCheckout. root is the
+// worktree top level where every Git command runs, adminDir is the
+// per-worktree Git directory holding the real index, and objectFormat checks
+// every object name. The builder never writes the real index or HEAD.
+type captureTarget struct {
+	root         string
+	adminDir     string
+	objectFormat string
+}
+
+// buildCaptureContent writes the target's current content as a verified tree
+// through private files in scratchDir and returns the tree with the semantic
+// identity of the real index it overlaid. The caller has already validated
+// scratchDir and separated it from the Git context. Every private file is
+// removed before it returns. The tree and identity are nonempty only after the
+// tree object is verified; a later scratch-removal error is joined to err
+// without clearing them.
+func (g Git) buildCaptureContent(ctx context.Context, target captureTarget, scratchDir string) (treeOID, indexDigest string, err error) {
+	scratch, err := newCaptureScratch(scratchDir)
+	if err != nil {
+		return "", "", err
 	}
-	if err = g.verifyObject(ctx, checkout.CheckoutPath, treeOID, checkout.Source.ObjectFormat, "tree"); err != nil {
-		return contract.CaptureCandidate{}, fmt.Errorf("validate capture tree: %w", err)
+	defer func() { err = errors.Join(err, removeScratchFiles(scratch.all())) }()
+	treeOID, indexDigest, err = g.buildPrivateTree(ctx, target, scratch)
+	if err != nil {
+		return "", "", fmt.Errorf("write Git capture tree: %w", err)
 	}
-	return contract.CaptureCandidate{BaseOID: checkout.Source.BaseOID, ObservedHEAD: observedHead, TreeOID: treeOID, IndexSHA256: indexDigest, ObjectFormat: checkout.Source.ObjectFormat}, nil
+	if err = g.verifyObject(ctx, target.root, treeOID, target.objectFormat, "tree"); err != nil {
+		return "", "", fmt.Errorf("validate capture tree: %w", err)
+	}
+	return treeOID, indexDigest, nil
 }
 
 // captureScratch owns the private files of one capture. observed is the
@@ -91,38 +120,38 @@ func (s captureScratch) all() []string {
 	return []string{s.index, s.skip, s.preserve, s.rules, s.overlay, s.observed}
 }
 
-func (g Git) buildPrivateTree(ctx context.Context, checkout contract.Checkout, scratch captureScratch) (string, string, error) {
-	if err := g.run(ctx, checkout.CheckoutPath, []string{"read-tree", "HEAD"}, map[string]string{"GIT_INDEX_FILE": scratch.index}, nil, nil, nil); err != nil {
+func (g Git) buildPrivateTree(ctx context.Context, target captureTarget, scratch captureScratch) (string, string, error) {
+	if err := g.run(ctx, target.root, []string{"read-tree", "HEAD"}, map[string]string{"GIT_INDEX_FILE": scratch.index}, nil, nil, nil); err != nil {
 		return "", "", fmt.Errorf("seed private Git index: %w", err)
 	}
-	if err := freezeIndexImage(ctx, checkout, scratch.observed); err != nil {
+	if err := freezeIndexImage(ctx, target, scratch.observed); err != nil {
 		return "", "", err
 	}
-	inventoryDigest, err := g.collectIndexInventory(ctx, checkout, scratch)
+	inventoryDigest, err := g.collectIndexInventory(ctx, target, scratch)
 	if err != nil {
 		return "", "", err
 	}
-	indexDigest, err := g.indexIdentity(ctx, checkout, inventoryDigest, scratch.observed)
+	indexDigest, err := g.indexIdentity(ctx, target, inventoryDigest, scratch.observed)
 	if err != nil {
 		return "", "", err
 	}
-	if err = applyIndexInput(ctx, g, checkout.CheckoutPath, scratch.index, scratch.overlay, []string{"update-index", "-z", "--index-info"}); err != nil {
+	if err = applyIndexInput(ctx, g, target.root, scratch.index, scratch.overlay, []string{"update-index", "-z", "--index-info"}); err != nil {
 		return "", "", fmt.Errorf("overlay current Git index: %w", err)
 	}
-	if err = g.prepareSparsePreservation(ctx, checkout, scratch.skip, scratch.preserve, scratch.rules); err != nil {
+	if err = g.prepareSparsePreservation(ctx, target, scratch.skip, scratch.preserve, scratch.rules); err != nil {
 		return "", "", err
 	}
-	if err = applyIndexInput(ctx, g, checkout.CheckoutPath, scratch.index, scratch.preserve, []string{"update-index", "--skip-worktree", "-z", "--stdin"}); err != nil {
+	if err = applyIndexInput(ctx, g, target.root, scratch.index, scratch.preserve, []string{"update-index", "--skip-worktree", "-z", "--stdin"}); err != nil {
 		return "", "", fmt.Errorf("preserve sparse Git entries: %w", err)
 	}
-	if err = g.run(ctx, checkout.CheckoutPath, []string{"add", "--sparse", "-A"}, map[string]string{"GIT_INDEX_FILE": scratch.index}, nil, nil, nil); err != nil {
+	if err = g.run(ctx, target.root, []string{"add", "--sparse", "-A"}, map[string]string{"GIT_INDEX_FILE": scratch.index}, nil, nil, nil); err != nil {
 		return "", "", fmt.Errorf("add checkout content to private Git index: %w", err)
 	}
-	treeOID, err := g.runScalar(ctx, checkout.CheckoutPath, []string{"write-tree"}, map[string]string{"GIT_INDEX_FILE": scratch.index})
+	treeOID, err := g.runScalar(ctx, target.root, []string{"write-tree"}, map[string]string{"GIT_INDEX_FILE": scratch.index})
 	if err != nil {
 		return "", "", err
 	}
-	if err = contract.ValidateOID(treeOID, checkout.Source.ObjectFormat); err != nil {
+	if err = contract.ValidateOID(treeOID, target.objectFormat); err != nil {
 		return "", "", err
 	}
 	return treeOID, indexDigest, nil
@@ -134,8 +163,8 @@ func (g Git) buildPrivateTree(ctx context.Context, checkout contract.Checkout, s
 // file from the repository. The bytes are copied opaquely, never parsed. An
 // absent index stays absent, because native Git reads a missing index file as
 // an empty index. Any open, read, write or sync failure fails the capture.
-func freezeIndexImage(ctx context.Context, checkout contract.Checkout, observed string) (result error) {
-	live, err := os.Open(filepath.Join(checkout.AdminDir, "index"))
+func freezeIndexImage(ctx context.Context, target captureTarget, observed string) (result error) {
+	live, err := os.Open(filepath.Join(target.adminDir, "index"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -179,7 +208,7 @@ func (r contextReader) Read(data []byte) (int, error) {
 // digest; stat caches never appear in this stream. Stage-zero records form
 // the private overlay, and skip-worktree paths absent from the worktree are
 // listed for sparse preservation.
-func (g Git) collectIndexInventory(ctx context.Context, checkout contract.Checkout, scratch captureScratch) (indexDigest string, result error) {
+func (g Git) collectIndexInventory(ctx context.Context, target captureTarget, scratch captureScratch) (indexDigest string, result error) {
 	overlay, err := os.OpenFile(scratch.overlay, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("open private Git index overlay: %w", err)
@@ -196,7 +225,7 @@ func (g Git) collectIndexInventory(ctx context.Context, checkout contract.Checko
 	}
 	inputPath := input.Name()
 	defer func() { result = errors.Join(result, input.Close(), os.Remove(inputPath)) }()
-	if err = g.run(ctx, checkout.CheckoutPath, []string{"ls-files", "--stage", "-v", "-z"}, map[string]string{"GIT_INDEX_FILE": scratch.observed}, nil, input, nil); err != nil {
+	if err = g.run(ctx, target.root, []string{"ls-files", "--stage", "-v", "-z"}, map[string]string{"GIT_INDEX_FILE": scratch.observed}, nil, input, nil); err != nil {
 		return "", fmt.Errorf("read current Git index: %w", err)
 	}
 	if err = input.Sync(); err != nil {
@@ -205,7 +234,7 @@ func (g Git) collectIndexInventory(ctx context.Context, checkout contract.Checko
 	if _, err = input.Seek(0, io.SeekStart); err != nil {
 		return "", fmt.Errorf("rewind current Git index: %w", err)
 	}
-	sink := indexInventorySink{overlay: overlay, skip: skip, workdir: checkout.CheckoutPath, objectFormat: checkout.Source.ObjectFormat}
+	sink := indexInventorySink{overlay: overlay, skip: skip, workdir: target.root, objectFormat: target.objectFormat}
 	if indexDigest, err = copyIndexInventory(input, sink); err != nil {
 		return "", err
 	}
@@ -226,14 +255,14 @@ func (g Git) collectIndexInventory(ctx context.Context, checkout contract.Checko
 // index image, so they describe one observed index; HEAD and the worktree are
 // separate observations. A Git without --ita-invisible-in-index fails the
 // capture rather than reporting an unchanged index.
-func (g Git) indexIdentity(ctx context.Context, checkout contract.Checkout, inventoryDigest, observedIndex string) (string, error) {
-	emptyTree, err := g.emptyTreeOID(ctx, checkout)
+func (g Git) indexIdentity(ctx context.Context, target captureTarget, inventoryDigest, observedIndex string) (string, error) {
+	emptyTree, err := g.emptyTreeOID(ctx, target)
 	if err != nil {
 		return "", err
 	}
 	visible := sha256.New()
 	args := []string{"--no-replace-objects", "diff-index", "--cached", "--raw", "-z", "--no-abbrev", "--no-renames", "--ita-invisible-in-index", "--end-of-options", emptyTree}
-	if err = g.run(ctx, checkout.CheckoutPath, args, map[string]string{"GIT_INDEX_FILE": observedIndex}, nil, visible, nil); err != nil {
+	if err = g.run(ctx, target.root, args, map[string]string{"GIT_INDEX_FILE": observedIndex}, nil, visible, nil); err != nil {
 		return "", fmt.Errorf("read visible Git index entries: %w", err)
 	}
 	identity := sha256.Sum256([]byte(inventoryDigest + "\n" + hex.EncodeToString(visible.Sum(nil)) + "\n"))
@@ -242,13 +271,13 @@ func (g Git) indexIdentity(ctx context.Context, checkout contract.Checkout, inve
 
 // emptyTreeOID asks Git for the empty tree in the repository's own object
 // format without writing an object.
-func (g Git) emptyTreeOID(ctx context.Context, checkout contract.Checkout) (string, error) {
-	stdout, stderr, err := g.runOutput(ctx, checkout.CheckoutPath, []string{"hash-object", "-t", "tree", "--stdin"}, nil, strings.NewReader(""))
+func (g Git) emptyTreeOID(ctx context.Context, target captureTarget) (string, error) {
+	stdout, stderr, err := g.runOutput(ctx, target.root, []string{"hash-object", "-t", "tree", "--stdin"}, nil, strings.NewReader(""))
 	if err != nil {
 		return "", fmt.Errorf("compute empty Git tree: %w", gitCommandError(err, stderr))
 	}
 	oid := removeOneTerminatingNewline(string(stdout))
-	if err = contract.ValidateOID(oid, checkout.Source.ObjectFormat); err != nil {
+	if err = contract.ValidateOID(oid, target.objectFormat); err != nil {
 		return "", fmt.Errorf("compute empty Git tree: %w", err)
 	}
 	return oid, nil
@@ -373,7 +402,7 @@ func indexRecordSeparator(record []byte) int {
 	return -1
 }
 
-func (g Git) prepareSparsePreservation(ctx context.Context, checkout contract.Checkout, skipPath, preservePath, rulesPath string) (result error) {
+func (g Git) prepareSparsePreservation(ctx context.Context, target captureTarget, skipPath, preservePath, rulesPath string) (result error) {
 	if err := truncateFile(preservePath); err != nil {
 		return err
 	}
@@ -384,14 +413,14 @@ func (g Git) prepareSparsePreservation(ctx context.Context, checkout contract.Ch
 	if len(paths) == 0 {
 		return nil
 	}
-	sparse, err := g.runScalar(ctx, checkout.CheckoutPath, []string{"config", "--bool", "--default", "false", "core.sparseCheckout"}, nil)
+	sparse, err := g.runScalar(ctx, target.root, []string{"config", "--bool", "--default", "false", "core.sparseCheckout"}, nil)
 	if err != nil {
 		return fmt.Errorf("read sparse-checkout setting: %w", err)
 	}
 	if sparse != "true" {
 		return nil
 	}
-	included, err := g.sparseIncludedPaths(ctx, checkout.CheckoutPath, skipPath, rulesPath)
+	included, err := g.sparseIncludedPaths(ctx, target.root, skipPath, rulesPath)
 	if err != nil {
 		return fmt.Errorf("read sparse-checkout rules: %w", err)
 	}

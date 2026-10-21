@@ -113,6 +113,56 @@ func TestBuildCaptureFailsWhenVisibleIndexEntriesAreUnavailable(t *testing.T) {
 	}
 }
 
+// Scratch removal runs after the tree is verified. Its failure reaches the
+// caller together with the exact verified candidate, never in place of it.
+func TestBuildCaptureReturnsVerifiedCandidateWithScratchRemovalError(t *testing.T) {
+	fixture := newCheckoutFixture(t)
+	stageRecord := "100644 " + testBlobOID + " 0\tignored-staged\x00"
+	runner := captureRunner(fixture, stageRecord)
+	inner := runner.handler
+	privateIndex := ""
+	runner.handler = func(command *exec.Cmd) error {
+		if slices.Equal(command.Args[3:], []string{"write-tree"}) {
+			// A nonempty directory at the private index path cannot be removed.
+			privateIndex = indexOverride(command.Env)
+			if err := os.MkdirAll(filepath.Join(privateIndex, "held"), 0o700); err != nil {
+				return err
+			}
+		}
+		return inner(command)
+	}
+	candidate, err := (Git{Runner: runner}).BuildCapture(context.Background(), fixture.checkout, fixture.scratch)
+	var removeErr *os.PathError
+	if !errors.As(err, &removeErr) || removeErr.Op != "remove" || removeErr.Path != privateIndex {
+		t.Fatalf("capture error = %v, want the private index removal failure", err)
+	}
+	if !containsArgs(runner.calls, []string{"rev-parse", "--verify", "--end-of-options", testTreeOID + "^{tree}"}) {
+		t.Fatal("capture tree was not verified before scratch removal")
+	}
+	want := contract.CaptureCandidate{BaseOID: testBaseOID, ObservedHEAD: testHeadOID, TreeOID: testTreeOID, IndexSHA256: wantIndexIdentity("H "+stageRecord, testVisibleIndex), ObjectFormat: "sha1"}
+	if !candidate.Equal(want) {
+		t.Fatalf("candidate = %+v, want the verified candidate %+v alongside the removal error", candidate, want)
+	}
+}
+
+// A written tree that fails object verification is never returned, even
+// though capture already knows its name.
+func TestBuildCaptureReturnsZeroCandidateWhenTreeVerificationFails(t *testing.T) {
+	fixture := newCheckoutFixture(t)
+	runner := captureRunner(fixture, "")
+	inner := runner.handler
+	runner.handler = func(command *exec.Cmd) error {
+		if slices.Equal(command.Args[3:], []string{"rev-parse", "--verify", "--end-of-options", testTreeOID + "^{tree}"}) {
+			return gitTestExitError(128)
+		}
+		return inner(command)
+	}
+	candidate, err := (Git{Runner: runner}).BuildCapture(context.Background(), fixture.checkout, fixture.scratch)
+	if err == nil || !strings.Contains(err.Error(), "validate capture tree") || !candidate.Equal(contract.CaptureCandidate{}) {
+		t.Fatalf("capture with an unverified tree = %+v, %v; want a zero candidate and the tree validation failure", candidate, err)
+	}
+}
+
 func TestBuildCaptureRunsGitFromCheckoutRootForRelativeSourceCwd(t *testing.T) {
 	fixture := newCheckoutFixture(t)
 	nested := filepath.Join(fixture.checkout.CheckoutPath, "nested")

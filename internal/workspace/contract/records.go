@@ -19,6 +19,12 @@ const (
 	OperationRemove    = "remove"
 	OperationForget    = "forget"
 
+	// OperationCheckpoint records one Git checkpoint of an ordinary or managed
+	// checkout; its operation ID is the checkpoint ID.
+	OperationCheckpoint = "checkpoint"
+	// OperationCheckpointRemove removes one checkpoint's owned ref.
+	OperationCheckpointRemove = "checkpoint-remove"
+
 	SubjectTask      = "task"
 	SubjectOperation = "operation"
 	SubjectAdmission = "admission"
@@ -111,6 +117,9 @@ type OperationRequest struct {
 	Supervisor       task.SupervisorRef `json:"supervisor"`
 	Arguments        []string           `json:"arguments,omitempty"`
 	Discard          bool               `json:"discard,omitempty"`
+	// Checkpoint is present exactly for checkpoint creation; absent for every
+	// earlier kind, so their canonical bytes and digests are unchanged.
+	Checkpoint *CheckpointSelection `json:"checkpoint,omitempty"`
 }
 
 // Artifact describes complete optional bytes, or their explicit omission.
@@ -187,11 +196,11 @@ func ValidateOperation(request OperationRequest, rootID string) (time.Time, erro
 	if request.SchemaVersion != task.SchemaVersion || request.RootID != rootID {
 		return time.Time{}, task.ErrIdentityMismatch
 	}
-	if err := errors.Join(task.ValidateRootID(rootID), task.ValidateTaskID(request.OperationID), task.ValidateTaskID(request.WorkspaceID), ValidateSubject(request.Subject)); err != nil {
+	if err := errors.Join(task.ValidateRootID(rootID), task.ValidateTaskID(request.OperationID), validateOperationScope(request), ValidateSubject(request.Subject)); err != nil {
 		return time.Time{}, err
 	}
 	switch request.Kind {
-	case OperationProvision, OperationCapture, OperationVerify, OperationRemove, OperationForget:
+	case OperationProvision, OperationCapture, OperationVerify, OperationRemove, OperationForget, OperationCheckpoint, OperationCheckpointRemove:
 	default:
 		return time.Time{}, task.ErrIdentityMismatch
 	}

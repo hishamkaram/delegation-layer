@@ -584,6 +584,9 @@
     "imports": [
       "py:__future__",
       "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.private_cli.leases",
+      "py:delegate_acceptance.private_cli.supervisor",
       "py:delegate_acceptance.processes.operations",
       "py:delegate_acceptance.workspaces.scenarios.application",
       "py:delegate_acceptance.workspaces.scenarios.context",
