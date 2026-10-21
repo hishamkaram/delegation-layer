@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
@@ -92,14 +93,24 @@ func TestAwaitProvisionReturnsReleaseFaultWithoutPolling(t *testing.T) {
 	}
 }
 
+// The bubble's clock advances only while every goroutine is durably blocked,
+// so record I/O cannot consume the deadline; it expires in the observation
+// wait, strictly between two polls.
 func TestAwaitProvisionPendingOnlyWaitsForItsDeadline(t *testing.T) {
-	fixture, _ := openUnfinishedHelper(t, workspace.OperationProvision)
-	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
-	defer cancel()
-	_, err := awaitProvision(ctx, fixture.Store, fixture.Resource, genericDescribedHelperID)
-	if !errors.Is(err, workspace.ErrPending) || !errors.Is(err, context.DeadlineExceeded) || !PendingError(err) {
-		t.Fatalf("pending provision = %v, want pending at its deadline", err)
-	}
+	const deadline = 250 * time.Millisecond
+	synctest.Test(t, func(t *testing.T) {
+		fixture, _ := openUnfinishedHelper(t, workspace.OperationProvision)
+		ctx, cancel := context.WithTimeout(t.Context(), deadline)
+		defer cancel()
+		started := time.Now()
+		_, err := awaitProvision(ctx, fixture.Store, fixture.Resource, genericDescribedHelperID)
+		if !errors.Is(err, workspace.ErrPending) || !errors.Is(err, context.DeadlineExceeded) || !PendingError(err) {
+			t.Fatalf("pending provision = %v, want pending at its deadline", err)
+		}
+		if elapsed := time.Since(started); elapsed != deadline {
+			t.Fatalf("pending provision returned after %v, want exactly its %v deadline", elapsed, deadline)
+		}
+	})
 }
 
 func TestForgetIntentKeepsReleaseFaultInsteadOfBusy(t *testing.T) {

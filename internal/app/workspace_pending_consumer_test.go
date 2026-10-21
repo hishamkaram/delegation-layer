@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
@@ -86,11 +87,14 @@ func expiredVerificationRequest(t *testing.T, fixture *workspacefixture.Recovery
 	return request
 }
 
+// watchDuration is the public status action's watch and deadline.
+const watchDuration = 500 * time.Millisecond
+
 // watchStatus runs the public status action and its projection over the
 // fixture's production store, as workspaceCommand does under its use owner.
 func watchStatus(t *testing.T, fixture *workspacefixture.RecoveryFixture, operationID string) commandResult {
 	t.Helper()
-	a := Arguments{WorkspaceAction: "status", Watch: 500 * time.Millisecond, WorkspaceOperationID: operationID}
+	a := Arguments{WorkspaceAction: "status", Watch: watchDuration, WorkspaceOperationID: operationID}
 	ctx, cancel := context.WithTimeout(t.Context(), a.Watch)
 	defer cancel()
 	ack, err := runWorkspaceCommandAction(ctx, a, fixture.Store, fixture.Resource, Dependencies{}, time.Minute)
@@ -119,14 +123,24 @@ func TestWorkspaceWatchReturnsUseFaultJoinedWithPending(t *testing.T) {
 	}
 }
 
+// The bubble's clock advances only while every goroutine is durably blocked,
+// so record I/O consumes neither the watch nor the response-read budget. The
+// exact elapsed time proves the watch expired in its observation wait; it is
+// not a native latency bound.
 func TestWorkspaceWatchPendingOnlyExpiresAsPending(t *testing.T) {
-	for _, selector := range watchSelectors {
-		fixture := newPendingAdmissionUse(t)
-		result := watchStatus(t, fixture, selector)
-		if result.code != 3 || result.response.Workspace == nil || result.response.Workspace.NextAction != "watch_workspace" || result.response.Workspace.OperationID != selector {
-			t.Fatalf("pending watch with selector %q = %+v; want exit 3", selector, result)
+	synctest.Test(t, func(t *testing.T) {
+		for _, selector := range watchSelectors {
+			fixture := newPendingAdmissionUse(t)
+			started := time.Now()
+			result := watchStatus(t, fixture, selector)
+			if result.code != 3 || result.response.Workspace == nil || result.response.Workspace.NextAction != "watch_workspace" || result.response.Workspace.OperationID != selector {
+				t.Fatalf("pending watch with selector %q = %+v; want exit 3", selector, result)
+			}
+			if elapsed := time.Since(started); elapsed != watchDuration {
+				t.Fatalf("pending watch with selector %q returned after %v, want exactly its %v watch", selector, elapsed, watchDuration)
+			}
 		}
-	}
+	})
 }
 
 // observeExpiredVerification observes the workspace selecting the expired
