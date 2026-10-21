@@ -16,7 +16,6 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 
 	supervisorfixture "github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
-	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
@@ -85,40 +84,34 @@ func TestAwaitInspectionFallsBackToExactRowWhenTerminalEventRegistrationOrCallba
 
 func testInspectionTerminalEventFallback(t *testing.T, registrationKnown, registered bool) {
 	t.Helper()
-	store := supervisorfixture.NewInspectionStore(t)
-	supervisor, statusCalls := newTerminalEventInspectionSupervisor(t, store)
-	operation, job := admissionfixture.NewTerminalInspectionCleanupOperation(t, store, supervisor, inspection.ResultEligible, true)
-	admissionfixture.CompleteInspectionPollTestLifetime(t, operation, task.LifetimeTerminationCompleted)
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	if err := operation.RecordReceiptContext(ctx, job.ID); err != nil {
-		t.Fatal(err)
-	}
-	admissionfixture.WriteTerminalEventStatus(t, store, job, admissionfixture.TerminalEventDoneState(job.Succeeded))
-	if registered {
-		if err := supervisor.RegisterPrivateTerminalEvent(ctx, job.ID); err != nil {
-			t.Fatal(err)
+	supervisor := newTerminalEventClockSupervisor(t)
+	runTerminalEventClockBubble(t, supervisor, func(t *testing.T, scope *terminalEventClockScope) {
+		probe := newTerminalEventClockInspection(t, supervisor, 0, registered)
+		admissionfixture.WriteTerminalEventStatus(t, supervisor.store, probe.job, admissionfixture.TerminalEventDoneState(probe.job.Succeeded))
+		baseline := requireTerminalEventClockBaseline(t, supervisor, probe.job.ID)
+		ctx, cancel := context.WithTimeout(scope.ctx, 2*time.Second)
+		defer cancel()
+		facts, err := awaitInspectionWithSubmissionState(ctx, probe.operation, supervisor.client, inspectionSubmissionState{
+			terminalEventRegistrationKnown: registrationKnown,
+			terminalEventRegistered:        registered,
+		})
+		if err != nil || string(facts) != "{\"eligible\":true}\n" {
+			t.Fatalf("exact terminal-row fallback facts=%s err=%v", facts, err)
 		}
-	}
-	facts, err := awaitInspectionWithSubmissionState(ctx, operation, supervisor, inspectionSubmissionState{
-		terminalEventRegistrationKnown: registrationKnown,
-		terminalEventRegistered:        registered,
+		requireTerminalEventClockUnexpired(t, probe.operation)
+		requireTerminalEventClockCandidates(t, ctx, supervisor, baseline, probe.job.ID)
+		runInspectionMaintenanceBatch(t, ctx, supervisor.client, supervisor.launches.Load(), 1)
+		removed, readErr := os.ReadFile(filepath.Join(supervisor.store.Root, ".supervisor", "terminal-event-removals"))
+		if readErr != nil {
+			t.Fatalf("private queue maintenance completed without removal record: %v", readErr)
+		}
+		if string(removed) != "7\n" {
+			t.Fatalf("fallback removal contents=%q, want %q", removed, "7\n")
+		}
+		// One exact reconciliation and one candidate revalidation, then one
+		// cleanup authorization/revalidation pair.
+		requireTerminalEventClockCleanup(t, ctx, supervisor, baseline, 2, 2, probe.job.ID)
 	})
-	if err != nil || string(facts) != "{\"eligible\":true}\n" {
-		t.Fatalf("exact terminal-row fallback facts=%s err=%v", facts, err)
-	}
-	removals := filepath.Join(store.Root, ".supervisor", "terminal-event-removals")
-	admissionfixture.WaitForPrivateQueueMaintenanceIdle(t, t.Context(), supervisor)
-	removed, readErr := os.ReadFile(removals)
-	if readErr != nil {
-		t.Fatalf("private queue maintenance completed without removal record: %v", readErr)
-	}
-	if string(removed) != "7\n" {
-		t.Fatalf("fallback removal contents=%q, want %q", removed, "7\n")
-	}
-	if got := statusCalls.Load(); got != 4 {
-		t.Fatalf("fallback made %d status calls, want one exact reconciliation, one candidate revalidation and one cleanup authorization/revalidation pair", got)
-	}
 }
 
 func TestDelayedTerminalEventAfterNumericIDReuseCannotAuthorizeNewInspection(t *testing.T) {

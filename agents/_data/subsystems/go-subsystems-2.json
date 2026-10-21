@@ -55,6 +55,7 @@
       "go:sync",
       "go:sync/atomic",
       "go:testing",
+      "go:testing/synctest",
       "go:time"
     ]
   },

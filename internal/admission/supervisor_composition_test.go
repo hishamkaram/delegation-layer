@@ -1,7 +1,6 @@
 package admission
 
 import (
-	"context"
 	"sync/atomic"
 	"testing"
 
@@ -22,11 +21,6 @@ func newTerminalEventInspectionSupervisor(t *testing.T, store *taskdir.Store) (*
 func newTerminalEventInspectionSupervisorWithEnvironment(t *testing.T, store *taskdir.Store, extraEnvironment ...string) (*pueue.Client, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	return admissionfixture.NewTerminalEventInspectionSupervisorWithEnvironment(t, store, TerminalEvidence{}, extraEnvironment...)
-}
-
-func newTerminalEventInspectionSupervisorWithLauncher(t *testing.T, store *taskdir.Store, launcher func(context.Context, string, string) error, extraEnvironment ...string) (*pueue.Client, *atomic.Int32, *atomic.Int32) {
-	t.Helper()
-	return admissionfixture.NewTerminalEventInspectionSupervisorWithLauncher(t, store, TerminalEvidence{}, launcher, extraEnvironment...)
 }
 
 func newTerminalInspectionCleanupSupervisor(t *testing.T, store *taskdir.Store) (*pueue.Client, string, string) {
