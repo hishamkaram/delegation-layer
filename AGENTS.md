@@ -62,6 +62,11 @@ machine-checked boundaries and budgets.
    and pair permitted observations with refused mutations in the same state.
    Preserve each consumer's error identities, exit codes and JSON guidance;
    helper tests must not replace the public command's existing contract.
+   Classify pending or busy from the whole returned error with the owning
+   domain's canonical policy, not a marker `errors.Is` alone, which can hide a
+   joined concrete fault; the
+   [whole-error rule](agents/_data/maintainability-contract.md#whole-error-pending-classification)
+   owns the details.
    Do not replace a long function with helpers that pass its entire local state
    through long positional argument lists. Use named call contracts; introduce
    an immutable record only when it represents an actual cohesive domain value.

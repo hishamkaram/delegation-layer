@@ -268,6 +268,40 @@ contract. Preserve the original consumer's classifications when adding a typed
 cause; do not broaden a shared sentinel to satisfy a new helper's test. Pair
 the helper cases with the actual public command and independent joined faults.
 
+### Whole-error pending classification
+
+A consumer decides "pending" or "busy" from the whole returned error with the
+canonical policy of the domain that owns the marker, not from a marker
+`errors.Is` alone. A joined error carries every cause, so a marker match can
+hide a lease-release, store, or evidence fault.
+
+For workspace-operation consumers, that policy is `workspaces.PendingError`
+([`operation_policy.go`](../../internal/workspaces/operation_policy.go)); do not
+test `errors.Is(err, workspace.ErrPending)` or `errors.Is(err, workspace.ErrBusy)`
+alone. Other domains keep their own markers and policy owners, and dependencies
+keep pointing inward: this rule adds no classifier, shared framework, or import,
+and does not move workspace policy into a lower layer such as Pueue.
+
+- `PendingError` first requires one of the two markers, then accepts the error
+  only when every leaf cause is a marker or a known pending cause (deadline,
+  lock-busy, in-flight or uncertain submission/enqueue). A bare deadline or
+  lock-busy is not pending. A concrete cause joined to a marker is always a
+  fault, whatever the deadline.
+- Each consumer keeps its preexisting marker semantics, such as pending-only or
+  pending-or-busy, and its public error identities, exit codes and JSON
+  guidance. The rule does not make every busy consumer accept or reject alike.
+- `Close` and unlock faults stay errors. Do not erase a marker or a cause to
+  reach a verdict.
+- Marker-identity checks and proof-reader translations remain valid where they
+  ask which marker an error carries, not whether the whole error is pending.
+- A change or review traces the indirect consumers to their public commands and
+  pairs, over the same durable state, a genuine pending case (including an
+  approved deadline), a busy-only case, and a joined concrete-fault case, each
+  from producer to public consumer.
+  [`pending_consumer_test.go`](../../internal/workspaces/pending_consumer_test.go) and
+  [`workspace_pending_consumer_test.go`](../../internal/app/workspace_pending_consumer_test.go)
+  illustrate the pending/deadline and joined-fault regression pairs.
+
 ### Local release acceptance and hosted proof validation
 
 The native-release coordinator owns invocation stages and their create-once

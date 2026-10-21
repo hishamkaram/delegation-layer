@@ -50,6 +50,9 @@ Git-subprocess lifecycle policy in the review skill.
    Trace shared gates through indirect callers to public commands. A helper's
    name or immediate caller does not establish its role. Pair allowed reader
    behavior with refused mutations using the same durable-state fixture.
+   Check that every pending or busy verdict classifies the whole returned error
+   with its owning domain's canonical policy under the
+   [whole-error rule](../../agents/_data/maintainability-contract.md#whole-error-pending-classification).
 2. Assess ownership and lifetimes, dependency direction, interface ownership,
    duplicated lifecycle/capability-check/harness logic, error diagnostics and
    secret handling, compatibility, and contributor effort. Review every affected
