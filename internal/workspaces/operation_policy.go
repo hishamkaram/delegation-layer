@@ -24,6 +24,19 @@ func PendingError(err error) bool {
 	})
 }
 
+// PendingAtDeadline adds pending identity only when this observer's own
+// deadline interrupted an operation that already reports a deadline.
+func PendingAtDeadline(ctx context.Context, err error) error {
+	if PendingError(err) || !errors.Is(ctx.Err(), context.DeadlineExceeded) || !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	pending := errors.Join(workspace.ErrPending, err)
+	if PendingError(pending) {
+		return pending
+	}
+	return err
+}
+
 func ForgetPurpose(intent workspace.ForgetIntent) string {
 	return "forget-" + intent.OperationID + ".json"
 }

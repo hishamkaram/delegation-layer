@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -90,15 +92,37 @@ func expiredVerificationRequest(t *testing.T, fixture *workspacefixture.Recovery
 // watchDuration is the public status action's watch and deadline.
 const watchDuration = 500 * time.Millisecond
 
+// watchOutcome keeps the status action's own error beside its public
+// projection, which drops the error of a pending exit 3.
+type watchOutcome struct {
+	actionErr error
+	result    commandResult
+}
+
 // watchStatus runs the public status action and its projection over the
 // fixture's production store, as workspaceCommand does under its use owner.
-func watchStatus(t *testing.T, fixture *workspacefixture.RecoveryFixture, operationID string) commandResult {
+func watchStatus(t *testing.T, fixture *workspacefixture.RecoveryFixture, operationID string) watchOutcome {
 	t.Helper()
-	a := Arguments{WorkspaceAction: "status", Watch: watchDuration, WorkspaceOperationID: operationID}
-	ctx, cancel := context.WithTimeout(t.Context(), a.Watch)
+	ctx, cancel := context.WithTimeout(t.Context(), watchDuration)
 	defer cancel()
+	return workspaceWatch(ctx, fixture, operationID)
+}
+
+func workspaceWatch(ctx context.Context, fixture *workspacefixture.RecoveryFixture, operationID string) watchOutcome {
+	a := Arguments{WorkspaceAction: "status", Watch: watchDuration, WorkspaceOperationID: operationID}
 	ack, err := runWorkspaceCommandAction(ctx, a, fixture.Store, fixture.Resource, Dependencies{}, time.Minute)
-	return workspaceCommandActionResponse(ctx, fixture.Store, fixture.Resource, a.WorkspaceAction, false, ack, newResponse("workspace"), err)
+	return watchOutcome{actionErr: err, result: workspaceCommandActionResponse(ctx, fixture.Store, fixture.Resource, a.WorkspaceAction, false, ack, newResponse("workspace"), err)}
+}
+
+// assertPendingWorkspaceVisible requires the response to describe the
+// still-reserved workspace and the selected operation. That description is
+// the resource's own projection; it is independent of the observer's exit.
+func assertPendingWorkspaceVisible(t *testing.T, selector string, result commandResult) {
+	t.Helper()
+	described := result.response.Workspace
+	if described == nil || described.State != "busy" || described.NextAction != "watch_workspace" || described.OperationID != selector {
+		t.Fatalf("watch with selector %q described %+v; want the busy workspace to watch", selector, described)
+	}
 }
 
 // watchSelectors are the nil and exact operation selectors of a watch.
@@ -112,7 +136,11 @@ func TestWorkspaceWatchReturnsUseFaultJoinedWithPending(t *testing.T) {
 				return
 			}
 			fault := injectOperationOwnerUnlockFault(t, fixture.Store, pendingAdmissionHelperID)
-			result := watchStatus(t, fixture, selector)
+			observed := watchStatus(t, fixture, selector)
+			result := observed.result
+			if workspacescore.PendingError(observed.actionErr) {
+				t.Fatalf("watch with selector %q classified its use fault as pending: %v", selector, observed.actionErr)
+			}
 			if !fault.fired || result.code != 1 || !errors.Is(result.err, errOperationOwnerUnlock) || !errors.Is(result.err, workspace.ErrPending) {
 				t.Fatalf("watch with selector %q = %+v; want exit 1 with the whole use fault", selector, result)
 			}
@@ -128,19 +156,67 @@ func TestWorkspaceWatchReturnsUseFaultJoinedWithPending(t *testing.T) {
 // exact elapsed time proves the pending watch returns at its virtual deadline;
 // it is not a native latency bound.
 func TestWorkspaceWatchPendingOnlyExpiresAsPending(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		for _, selector := range watchSelectors {
-			fixture := newPendingAdmissionUse(t)
-			started := time.Now()
-			result := watchStatus(t, fixture, selector)
-			if result.code != 3 || result.response.Workspace == nil || result.response.Workspace.NextAction != "watch_workspace" || result.response.Workspace.OperationID != selector {
-				t.Fatalf("pending watch with selector %q = %+v; want exit 3", selector, result)
-			}
-			if elapsed := time.Since(started); elapsed != watchDuration {
-				t.Fatalf("pending watch with selector %q returned after %v, want exactly its %v watch", selector, elapsed, watchDuration)
-			}
+	for name, selector := range watchSelectors {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fixture := newPendingAdmissionUse(t)
+				started := time.Now()
+				observed := watchStatus(t, fixture, selector)
+				if !errors.Is(observed.actionErr, context.DeadlineExceeded) || !workspacescore.PendingError(observed.actionErr) {
+					t.Fatalf("expired watch with selector %q = %v; want its own deadline classified as pending", selector, observed.actionErr)
+				}
+				if observed.result.code != 3 || observed.result.err != nil {
+					t.Fatalf("pending watch with selector %q = %+v; want exit 3", selector, observed.result)
+				}
+				assertPendingWorkspaceVisible(t, selector, observed.result)
+				if elapsed := time.Since(started); elapsed != watchDuration {
+					t.Fatalf("pending watch with selector %q returned after %v, want exactly its %v watch", selector, elapsed, watchDuration)
+				}
+			})
+		})
+	}
+}
+
+// canceledPollDelay cancels after the first poll interval has elapsed, so
+// the watcher has completed a poll and is durably blocked in its next wait.
+const canceledPollDelay = 150 * time.Millisecond
+
+// Canceling only the observer is a fault of that observer: its pending
+// marker stays joined with the cancellation, but the whole error is not
+// pending. The workspace itself is still busy and is described as such.
+func TestWorkspaceWatchCancellationDuringPollIsNotPending(t *testing.T) {
+	for name, selector := range watchSelectors {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fixture := newPendingAdmissionUse(t)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				started := time.Now()
+				outcomes := make(chan watchOutcome, 1)
+				go func() { outcomes <- workspaceWatch(ctx, fixture, selector) }()
+				time.Sleep(canceledPollDelay)
+				cancel()
+				observed := <-outcomes
+				if elapsed := time.Since(started); elapsed != canceledPollDelay {
+					t.Fatalf("canceled watch with selector %q returned after %v, want exactly its %v cancellation", selector, elapsed, canceledPollDelay)
+				}
+				assertCanceledWatch(t, selector, observed)
+			})
+		})
+	}
+}
+
+func assertCanceledWatch(t *testing.T, selector string, observed watchOutcome) {
+	t.Helper()
+	for _, err := range []error{observed.actionErr, observed.result.err} {
+		if !errors.Is(err, workspace.ErrPending) || !errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || workspacescore.PendingError(err) {
+			t.Fatalf("canceled watch with selector %q = %v; want cancellation retained and not pending", selector, err)
 		}
-	})
+	}
+	if observed.result.code != 1 || observed.result.response.Error == "" {
+		t.Fatalf("canceled watch with selector %q = code %d, error %q; want exit 1 with the reported cause", selector, observed.result.code, observed.result.response.Error)
+	}
+	assertPendingWorkspaceVisible(t, selector, observed.result)
 }
 
 // observeExpiredVerification observes the workspace selecting the expired
@@ -238,6 +314,95 @@ func dispatchRefusedProvision(t *testing.T, fixture checkpointRuntimeFixture, fa
 		t.Fatalf("refused provision dispatch = %+v", observed)
 	}
 	return observed
+}
+
+type pendingProvisionRuntime struct{ checkpointTestRuntime }
+
+func (pendingProvisionRuntime) OpenSaved(context.Context, string, task.SupervisorRef) (*pueue.Client, error) {
+	return nil, pueue.ErrInFlight
+}
+
+func dispatchPendingProvision(t *testing.T) tasklifecycle.DispatchResult {
+	t.Helper()
+	fixture := newCheckpointRuntimeFixture(t)
+	options := dispatchOptions(fixture.deps, false)
+	options.Workspace = fixture.options
+	options.Workspace.Runtime = pendingProvisionRuntime{checkpointTestRuntime: fixture.runtime}
+	options.OpenStore = func(root string, create bool) (*taskdir.Store, error) {
+		return openStore(root, fixture.deps.storeDependencies(), create)
+	}
+	request := dispatchRequest(Arguments{
+		Root: fixture.lineage.store.Root, Cwd: fixture.lineage.main, Provider: "codex:exec", Isolation: "git-worktree", WorkspaceBudget: "1m",
+		BriefBytes: []byte("bounded task"), Config: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m"},
+	})
+	observed := tasklifecycle.Dispatch(request, options)
+	return observed
+}
+
+func assertPendingProvisionState(t *testing.T, observed tasklifecycle.DispatchResult) {
+	t.Helper()
+	if observed.Workspace == nil || observed.Phase != tasklifecycle.DispatchWorkspace || observed.RecordPresence() != tasklifecycle.RecordAbsent || !workspacescore.PendingError(observed.Failure) {
+		t.Fatalf("pending provision dispatch = %+v", observed)
+	}
+	if observed.Workspace.OperationID == "" || observed.Workspace.Description.State != "busy" || observed.Workspace.Description.Path != "" {
+		t.Fatalf("pending provision description = %+v", observed.Workspace)
+	}
+}
+
+func assertPendingProvisionWireResponse(t *testing.T, observed tasklifecycle.DispatchResult) {
+	t.Helper()
+	result := dispatchCommandResult(observed)
+	if result.code != 3 || result.response.TaskRecord != "not_created" || result.response.Failure == nil || result.response.Failure.Code != "workspace_provision_pending" || result.response.Failure.NextAction != "watch_workspace" || result.response.Failure.RecoveryCommand != workspaceStatusCommand(observed.Root, observed.Workspace.Description.ID) {
+		t.Fatalf("pending provision dispatch projection = %+v", result)
+	}
+	var output bytes.Buffer
+	if err := writeJSONResponse(&output, "dispatch", &result.response, result.err); err != nil {
+		t.Fatal(err)
+	}
+	var decoded Response
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TaskRecord != "not_created" || decoded.Failure == nil || decoded.Failure.Code != "workspace_provision_pending" || decoded.Failure.RecoveryCommand != result.response.Failure.RecoveryCommand {
+		t.Fatalf("pending provision wire response = %+v", decoded)
+	}
+}
+
+func assertPendingProvisionProjection(t *testing.T, observed tasklifecycle.DispatchResult) {
+	t.Helper()
+	assertPendingProvisionState(t, observed)
+	assertPendingProvisionWireResponse(t, observed)
+}
+
+func assertPendingProvisionProjectionControls(t *testing.T, observed tasklifecycle.DispatchResult) {
+	t.Helper()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*tasklifecycle.DispatchResult)
+	}{
+		{name: "unknown record", mutate: func(candidate *tasklifecycle.DispatchResult) { candidate.Record = tasklifecycle.RecordUnknown }},
+		{name: "concrete fault", mutate: func(candidate *tasklifecycle.DispatchResult) {
+			candidate.Failure = errors.Join(candidate.Failure, task.ErrEvidenceFault)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := observed
+			tc.mutate(&candidate)
+			projected := dispatchCommandResult(candidate)
+			if tc.name == "unknown record" && projected.response.TaskRecord != "unknown" {
+				t.Fatalf("unknown record became %q", projected.response.TaskRecord)
+			}
+			if projected.code == 3 && projected.response.Failure != nil && projected.response.Failure.Code == "workspace_provision_pending" {
+				t.Fatalf("%s received not-created recovery guidance: %+v", tc.name, projected.response)
+			}
+		})
+	}
+}
+
+func TestManagedDispatchProvisionPendingSurvivesPublicProjection(t *testing.T) {
+	observed := dispatchPendingProvision(t)
+	assertPendingProvisionProjection(t, observed)
+	assertPendingProvisionProjectionControls(t, observed)
 }
 
 func TestManagedDispatchAbortKeepsOwnerFaultJoinedWithPending(t *testing.T) {

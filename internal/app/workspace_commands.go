@@ -165,11 +165,7 @@ func listManagedWorkspaces(a Arguments, store *taskdir.Store, response Response)
 }
 
 func watchManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps Dependencies, a Arguments) (resultErr error) {
-	defer func() {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.Is(resultErr, context.DeadlineExceeded) {
-			resultErr = errors.Join(workspace.ErrPending, resultErr)
-		}
-	}()
+	defer func() { resultErr = workspacescore.PendingAtDeadline(ctx, resultErr) }()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -179,7 +175,7 @@ func watchManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *
 			return err
 		}
 		if waitErr := workspacescore.WaitObservation(ctx); waitErr != nil {
-			return workspace.ErrPending
+			return errors.Join(workspace.ErrPending, waitErr)
 		}
 	}
 }

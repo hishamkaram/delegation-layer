@@ -52,12 +52,13 @@ func (r checkpointTestRuntime) OpenSaved(ctx context.Context, root string, saved
 }
 
 type checkpointRuntimeFixture struct {
-	lineage nativeLineage
-	deps    Dependencies
-	options workspaces.OperationOptions
-	runtime checkpointTestRuntime
-	hooks   *checkpointRuntimeHooks
-	adds    *atomic.Int32
+	lineage  nativeLineage
+	deps     Dependencies
+	options  workspaces.OperationOptions
+	runtime  checkpointTestRuntime
+	hooks    *checkpointRuntimeHooks
+	adds     *atomic.Int32
+	enqueues *atomic.Int32
 }
 
 func newCheckpointRuntimeFixture(t *testing.T) checkpointRuntimeFixture {
@@ -83,10 +84,16 @@ func ownerReleaseRuntimeFixture(t *testing.T) (checkpointRuntimeFixture, bool) {
 func newCheckpointRuntimeFixtureOf(t *testing.T, lineage nativeLineage) checkpointRuntimeFixture {
 	t.Helper()
 	supervisor, _ := newTerminalEventInspectionSupervisor(t, lineage.store)
-	adds := &atomic.Int32{}
+	adds, enqueues := &atomic.Int32{}, &atomic.Int32{}
 	observer := func(event pueue.CommandEvent) {
-		if event.Stage == "completed" && slices.Contains(event.Argv, "add") && !slices.Contains(event.Argv, "--help") {
+		if event.Stage != "entry" || slices.Contains(event.Argv, "--help") {
+			return
+		}
+		if slices.Contains(event.Argv, "add") {
 			adds.Add(1)
+		}
+		if slices.Contains(event.Argv, "enqueue") {
+			enqueues.Add(1)
 		}
 	}
 	deps := Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: pueue.Options{Environment: os.Environ(), Observer: observer}}
@@ -94,7 +101,7 @@ func newCheckpointRuntimeFixtureOf(t *testing.T, lineage nativeLineage) checkpoi
 	hooks := &checkpointRuntimeHooks{}
 	runtime := checkpointTestRuntime{saved: options.Runtime, runner: executablePath(t), binding: supervisor.Binding(), hooks: hooks}
 	options.Runtime = runtime
-	return checkpointRuntimeFixture{lineage: lineage, deps: deps, options: options, runtime: runtime, hooks: hooks, adds: adds}
+	return checkpointRuntimeFixture{lineage: lineage, deps: deps, options: options, runtime: runtime, hooks: hooks, adds: adds, enqueues: enqueues}
 }
 
 func (f checkpointRuntimeFixture) ctx() context.Context { return f.lineage.scope.ctx }
