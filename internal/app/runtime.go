@@ -39,6 +39,7 @@ Commands:
   continue      Continue one terminal task through its exact session
   supervisor    Inspect or migrate Delegate's private supervisor
   workspace     Inspect, verify, release, or forget a managed Git workspace
+  checkpoint    Create, observe, list, or remove a Git content checkpoint
   help          Show this help message
   version       Print version information
 
@@ -61,6 +62,15 @@ Managed Git workspaces (optional):
   workspace forget ID [--budget DURATION] --json
   --workspace-budget DURATION sets the finite helper budget (default: 5m).
   Source edits are excluded; landing changes belongs to the Lead.
+
+Git checkpoints (optional):
+  checkpoint create --cwd ABS [--budget DURATION] --json
+  checkpoint create --workspace ID [--budget DURATION] --json
+  checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json
+  checkpoint list [--after CHECKPOINT_ID] [--limit 50] --json
+  checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
+  Creation names exactly one target. --operation selects an acknowledged
+  removal attempt; without it status observes the creation and latest removal.
 
 Interactive tasks:
   dispatch ... --interactive
@@ -225,6 +235,8 @@ func runCommand(a Arguments, deps Dependencies) commandResult {
 		return supervisorCommand(a, deps)
 	case "workspace":
 		return workspaceCommand(a, deps)
+	case "checkpoint":
+		return checkpointCommand(a, deps)
 	default:
 		return commandResult{response: newResponse(a.Command), code: 2, err: fmt.Errorf("unknown command %q", a.Command)}
 	}

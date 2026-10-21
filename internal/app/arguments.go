@@ -48,6 +48,15 @@ type Arguments struct {
 	ExecArguments        []string
 	workspaceBinding     *task.WorkspaceBinding
 
+	// Checkpoint values are requested only; creation targets reuse Cwd and
+	// WorkspaceID, and status reuses Watch.
+	CheckpointAction      string
+	CheckpointID          string
+	CheckpointOperationID string
+	CheckpointAfter       string
+	CheckpointLimit       int
+	CheckpointBudget      string
+
 	// savedSupervisor is populated only by the continuation command after the
 	// predecessor binding has been loaded and validated. It never comes from
 	// public argv; continuation admission must reuse that exact authority.
@@ -72,6 +81,9 @@ func ParseArguments(args []string) (Arguments, error) {
 	a := Arguments{Command: command}
 	if command == "workspace" {
 		return parseWorkspaceArguments(a, rest)
+	}
+	if command == "checkpoint" {
+		return parseCheckpointArguments(a, rest)
 	}
 	if command == "supervisor" {
 		var action string
@@ -145,7 +157,7 @@ func separateCommand(args []string) (string, []string, error) {
 			command = "help"
 		case "--version":
 			command = "version"
-		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace":
+		case "help", "version", "dispatch", "continue", "preflight", "providers", "capabilities", "models", "status", "collect", "recheck", "cancel", "logs", "reply", "steer", "events", "supervisor", "workspace", "checkpoint":
 		default:
 			return "", nil, fmt.Errorf("unknown command or flag %q", args[i])
 		}
