@@ -19,7 +19,7 @@ func (r *Resource) RecordOperation(ctx context.Context, operation contract.Opera
 	if _, err := contract.ValidateOperation(operation, r.request.RootID); err != nil {
 		return err
 	}
-	if operation.WorkspaceID != r.request.WorkspaceID {
+	if operation.WorkspaceID != r.request.WorkspaceID || !resourceOperationKind(operation) {
 		return task.ErrIdentityMismatch
 	}
 	reference := contract.OperationReference{
@@ -98,10 +98,30 @@ func validateOperationReference(reference contract.OperationReference, workspace
 	if err := errors.Join(task.ValidateTaskID(reference.WorkspaceID), task.ValidateTaskID(reference.OperationID)); err != nil {
 		return err
 	}
-	switch reference.Kind {
-	case contract.OperationProvision, contract.OperationCapture, contract.OperationVerify, contract.OperationRemove, contract.OperationForget:
-		return nil
-	default:
+	if !resourceReferenceKind(reference.Kind) {
 		return task.ErrIdentityMismatch
 	}
+	return nil
+}
+
+// resourceReferenceKind lists the operation kinds a workspace reference names.
+func resourceReferenceKind(kind string) bool {
+	switch kind {
+	case contract.OperationProvision, contract.OperationCapture, contract.OperationVerify, contract.OperationRemove, contract.OperationForget,
+		contract.OperationCheckpoint:
+		return true
+	default:
+		return false
+	}
+}
+
+// resourceOperationKind admits a request only when its reference can be read
+// back. A checkpoint is attached only through its managed selection, whose
+// WorkspaceID is the workspace identity authority; an ordinary checkpoint and
+// a checkpoint removal never belong to a workspace resource.
+func resourceOperationKind(operation contract.OperationRequest) bool {
+	if operation.Kind == contract.OperationCheckpoint && (operation.Checkpoint == nil || operation.Checkpoint.Kind != contract.CheckpointManaged) {
+		return false
+	}
+	return resourceReferenceKind(operation.Kind)
 }

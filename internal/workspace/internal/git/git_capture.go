@@ -30,12 +30,9 @@ func (g Git) BuildCapture(ctx context.Context, checkout contract.Checkout, scrat
 	if err = g.validateCheckout(ctx, checkout); err != nil {
 		return contract.CaptureCandidate{}, err
 	}
-	scratch, scratchErr := existingDirectory(scratchDir)
+	scratch, scratchErr := validateScratchDirectory(scratchDir, "capture", checkoutContextPaths(checkout)...)
 	if scratchErr != nil {
-		return contract.CaptureCandidate{}, fmt.Errorf("validate capture scratch directory: %w", scratchErr)
-	}
-	if config.PathsOverlap(scratch, checkout.CheckoutPath) || config.PathsOverlap(scratch, checkout.Workdir) || config.PathsOverlap(scratch, checkout.Source.Root) || config.PathsOverlap(scratch, checkout.Source.CommonDir) || config.PathsOverlap(scratch, checkout.Source.GitDir) {
-		return contract.CaptureCandidate{}, fmt.Errorf("%w: capture scratch directory overlaps Git context", contract.ErrInvalidGitContext)
+		return contract.CaptureCandidate{}, scratchErr
 	}
 	if err = g.verifyObject(ctx, checkout.Source.CommonDir, checkout.Source.BaseOID, checkout.Source.ObjectFormat, "commit"); err != nil {
 		return contract.CaptureCandidate{}, fmt.Errorf("validate capture source base: %w", err)
@@ -56,9 +53,32 @@ func (g Git) BuildCapture(ctx context.Context, checkout contract.Checkout, scrat
 	return contract.CaptureCandidate{BaseOID: checkout.Source.BaseOID, ObservedHEAD: observedHead, TreeOID: treeOID, IndexSHA256: indexDigest, ObjectFormat: checkout.Source.ObjectFormat}, err
 }
 
+// validateScratchDirectory resolves an existing private scratch directory and
+// refuses it when it overlaps any protected Git context path, before any
+// private file exists. purpose names the operation in its errors.
+func validateScratchDirectory(scratchDir, purpose string, protected ...string) (string, error) {
+	scratch, err := existingDirectory(scratchDir)
+	if err != nil {
+		return "", fmt.Errorf("validate %s scratch directory: %w", purpose, err)
+	}
+	for _, path := range protected {
+		if config.PathsOverlap(scratch, path) {
+			return "", fmt.Errorf("%w: %s scratch directory overlaps Git context", contract.ErrInvalidGitContext, purpose)
+		}
+	}
+	return scratch, nil
+}
+
+// checkoutContextPaths lists a managed checkout's worktree, mapped directory
+// and source Git paths that no scratch directory may overlap.
+func checkoutContextPaths(checkout contract.Checkout) []string {
+	return []string{checkout.CheckoutPath, checkout.Workdir, checkout.Source.Root, checkout.Source.CommonDir, checkout.Source.GitDir}
+}
+
 // captureTarget is the validated worktree whose content one private-index
 // capture reads. A caller fills it only after validating that worktree's
-// repository identity: managed capture after validateCheckout. root is the
+// repository identity: managed capture and checkpoint after validateCheckout,
+// an ordinary checkpoint after validateSourceIdentity. root is the
 // worktree top level where every Git command runs, adminDir is the
 // per-worktree Git directory holding the real index, and objectFormat checks
 // every object name. The builder never writes the real index or HEAD.
@@ -592,12 +612,9 @@ func (g Git) ExportCapture(ctx context.Context, checkout contract.Checkout, cand
 	if err = g.validateCandidateObjects(ctx, checkout, candidate); err != nil {
 		return contract.CaptureExport{}, err
 	}
-	scratch, scratchErr := existingDirectory(scratchDir)
+	scratch, scratchErr := validateScratchDirectory(scratchDir, "export", checkoutContextPaths(checkout)...)
 	if scratchErr != nil {
-		return contract.CaptureExport{}, fmt.Errorf("validate export scratch directory: %w", scratchErr)
-	}
-	if config.PathsOverlap(scratch, checkout.CheckoutPath) || config.PathsOverlap(scratch, checkout.Workdir) || config.PathsOverlap(scratch, checkout.Source.Root) || config.PathsOverlap(scratch, checkout.Source.CommonDir) || config.PathsOverlap(scratch, checkout.Source.GitDir) {
-		return contract.CaptureExport{}, fmt.Errorf("%w: export scratch directory overlaps Git context", contract.ErrInvalidGitContext)
+		return contract.CaptureExport{}, scratchErr
 	}
 	cumulative, err := g.exportDiff(ctx, checkout, scratch, diffExport{patchName: contract.CapturePatchName, nameStatusName: contract.CaptureNameStatusName, from: candidate.BaseOID, to: candidate.TreeOID})
 	export = contract.CaptureExport{Patch: cumulative.Patch, NameStatus: cumulative.NameStatus}

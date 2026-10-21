@@ -13,6 +13,9 @@ type (
 	SubmissionPermit = journal.SubmissionPermit
 )
 
+// ErrCheckpointRemovalHeadChanged reports a lost removal registration race.
+var ErrCheckpointRemovalHeadChanged = journal.ErrCheckpointRemovalHeadChanged
+
 func OpenOperation(ctx context.Context, store *taskdir.Store, request OperationRequest) (*Operation, error) {
 	return journal.OpenOperation(ctx, store, request)
 }

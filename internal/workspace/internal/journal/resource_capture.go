@@ -335,28 +335,28 @@ func validateCaptureReceiptRecord(receipt contract.CaptureReceipt, workspaceID s
 	return nil
 }
 
+// validateCaptureClosure applies the canonical closure rule. A capture whose
+// worker never ran keeps its historical order: the unavailable disposition is
+// checked before the closure digests. ValidateClosureEvidence reports a worker
+// that never ran for every unlaunched or unregistered shape, including one
+// whose digests it refuses; an unknown or open kind is refused first, and any
+// other refused shape yields the same identity mismatch either way.
+// TestCaptureClosureKeepsHistoricalErrorOrder pins this classification.
 func validateCaptureClosure(receipt contract.CaptureReceipt) error {
-	switch receipt.LifetimeClosure {
-	case task.LifetimeClosureUnregisteredRecovered:
-		return validateIntentCaptureClosure(receipt)
-	case task.LifetimeClosureLegacyPreviousBoot:
-		return validatePreviousBootCaptureClosure(receipt)
-	case task.LifetimeClosureOpen, task.LifetimeClosureRegisteredNative, task.LifetimeClosureRegisteredRecovered:
-		return task.ErrInvalidEnum
-	case "":
-	default:
-		return task.ErrInvalidEnum
+	closure := contract.ClosureEvidence{
+		Kind: receipt.LifetimeClosure, TerminationSHA256: receipt.TerminationSHA256,
+		WorkerWaitSHA256: receipt.WorkerWaitSHA256, UnlaunchedSHA256: receipt.UnlaunchedSHA256,
 	}
-	if receipt.UnlaunchedSHA256 != "" {
-		if err := validateUnavailableCaptureClosure(receipt, "capture_not_launched"); err != nil {
-			return err
-		}
-		if receipt.TerminationSHA256 != "" || receipt.WorkerWaitSHA256 != "" {
-			return task.ErrIdentityMismatch
-		}
-		return task.ValidateSHA256(receipt.UnlaunchedSHA256)
+	workerMayHaveRun, err := contract.ValidateClosureEvidence(closure)
+	if errors.Is(err, task.ErrInvalidEnum) {
+		return err
 	}
-	return errors.Join(task.ValidateSHA256(receipt.TerminationSHA256), task.ValidateSHA256(receipt.WorkerWaitSHA256))
+	if !workerMayHaveRun {
+		if statusErr := validateUnavailableCaptureClosure(receipt, "capture_not_launched"); statusErr != nil {
+			return statusErr
+		}
+	}
+	return err
 }
 
 func validateUnavailableCaptureClosure(receipt contract.CaptureReceipt, reason string) error {
@@ -364,23 +364,6 @@ func validateUnavailableCaptureClosure(receipt contract.CaptureReceipt, reason s
 		return task.ErrIdentityMismatch
 	}
 	return nil
-}
-
-func validateIntentCaptureClosure(receipt contract.CaptureReceipt) error {
-	if err := validateUnavailableCaptureClosure(receipt, "capture_not_launched"); err != nil {
-		return err
-	}
-	if receipt.TerminationSHA256 != "" || receipt.UnlaunchedSHA256 != "" {
-		return task.ErrIdentityMismatch
-	}
-	return task.ValidateSHA256(receipt.WorkerWaitSHA256)
-}
-
-func validatePreviousBootCaptureClosure(receipt contract.CaptureReceipt) error {
-	if receipt.WorkerWaitSHA256 != "" || receipt.UnlaunchedSHA256 != "" {
-		return task.ErrIdentityMismatch
-	}
-	return task.ValidateSHA256(receipt.TerminationSHA256)
 }
 
 func validateArtifact(artifact contract.Artifact) error {

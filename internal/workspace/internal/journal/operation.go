@@ -92,13 +92,26 @@ func newOperation(control *taskdir.ControlDir, request contract.OperationRequest
 	if err != nil {
 		return nil, err
 	}
-	request.Arguments = slices.Clone(request.Arguments)
-	return &Operation{ControlLifetime: journal, control: control, request: request, digest: digest, deadline: deadline}, nil
+	return &Operation{ControlLifetime: journal, control: control, request: cloneOperationRequest(request), digest: digest, deadline: deadline}, nil
 }
 
 func (o *Operation) Request() contract.OperationRequest {
-	request := o.request
+	return cloneOperationRequest(o.request)
+}
+
+// cloneOperationRequest detaches every nested slice and pointer, so neither
+// the caller's input nor a returned request can alias the retained request
+// whose canonical bytes produced the operation digest.
+func cloneOperationRequest(request contract.OperationRequest) contract.OperationRequest {
 	request.Arguments = slices.Clone(request.Arguments)
+	if request.Checkpoint != nil {
+		selection := *request.Checkpoint
+		if selection.CwdIdentity != nil {
+			identity := *selection.CwdIdentity
+			selection.CwdIdentity = &identity
+		}
+		request.Checkpoint = &selection
+	}
 	return request
 }
 

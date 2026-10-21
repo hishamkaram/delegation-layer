@@ -12,14 +12,13 @@ import (
 
 type (
 	LifetimeOwnerLease struct {
-		mu                      sync.Mutex
-		maintenance             *LockFile
-		owner                   *LockFile
-		ownerClosed             bool
-		maintenanceUnlockFailed bool
-		maintenanceUnlocked     bool
-		released                bool
-		releaseErr              error
+		mu                  sync.Mutex
+		maintenance         *LockFile
+		owner               *LockFile
+		ownerClosed         bool
+		maintenanceUnlocked bool
+		released            bool
+		releaseErr          error
 	}
 )
 
@@ -137,21 +136,8 @@ func (l *LifetimeOwnerLease) Release() error {
 
 	var maintenanceErr error
 	if !l.maintenanceUnlocked {
-		if l.maintenanceUnlockFailed {
-			// LockFile.Unlock decrements its local shared count before the
-			// underlying flock operation. Restore that reference before retrying
-			// an unlock that failed, so the kernel lease remains authoritative.
-			maintenanceErr = l.maintenance.LockSHNonblocking()
-		}
-		if maintenanceErr == nil {
-			maintenanceErr = l.maintenance.Unlock()
-		}
-		if maintenanceErr == nil {
-			l.maintenanceUnlocked = true
-			l.maintenanceUnlockFailed = false
-		} else {
-			l.maintenanceUnlockFailed = true
-		}
+		maintenanceErr = l.maintenance.Unlock()
+		l.maintenanceUnlocked = maintenanceErr == nil
 	}
 
 	l.releaseErr = errors.Join(ownerErr, maintenanceErr)
