@@ -47,8 +47,10 @@ type CheckpointRemovalDescription struct {
 
 // ObserveCheckpoint reconciles one checkpoint and describes it. It qualifies
 // the creation, redriving an unfinished ordinary helper, and reconciles the
-// latest removal attempt without registering another. Only the workspace use
-// owner redrives a managed creation.
+// latest removal attempt without registering another. A managed creation's
+// still-active reservation is settled through ReconcileUse under a free use
+// owner; a held owner leaves it to that owner. A recovery fault is joined
+// with the description of the creation's own records.
 func ObserveCheckpoint(ctx context.Context, store *taskdir.Store, deps OperationOptions, checkpointID string) (description CheckpointDescription, resultErr error) {
 	control, cancel := workspaceSchedulingControl(ctx, deps)
 	defer cancel()
@@ -58,19 +60,87 @@ func ObserveCheckpoint(ctx context.Context, store *taskdir.Store, deps Operation
 	}
 	defer func() { resultErr = errors.Join(resultErr, original.Close()) }()
 	_, observeErr := QualifyCheckpoint(control, store, original)
-	if PendingError(observeErr) && original.Request().WorkspaceID == "" {
-		observeErr = errors.Join(observeErr, ScheduleExistingOperation(control, store, original, deps))
+	if observeErr != nil && !PendingError(observeErr) {
+		return description, observeErr
 	}
-	if observeErr == nil {
+	var recoverErr error
+	if original.Request().WorkspaceID == "" {
+		if observeErr != nil {
+			observeErr = errors.Join(observeErr, ScheduleExistingOperation(control, store, original, deps))
+		}
+	} else {
+		var reconciled bool
+		reconciled, recoverErr = reconcileManagedCheckpointUse(control, store, original, deps)
+		if reconciled && recoverErr == nil {
+			_, observeErr = QualifyCheckpoint(control, store, original)
+		}
+	}
+	if observeErr == nil && recoverErr == nil {
 		_, observeErr = reconcileCheckpointRemoval(control, store, original, deps)
 	}
 	if observeErr != nil && !PendingError(observeErr) {
-		return description, observeErr
+		return description, errors.Join(observeErr, recoverErr)
 	}
 	// Description validates its own fresh inventory: another attempt may have
 	// registered since reconciliation.
 	description, err = describeCheckpoint(control, original)
-	return description, errors.Join(observeErr, err)
+	return description, errors.Join(observeErr, recoverErr, err)
+}
+
+// reconcileManagedCheckpointUse hands original's still-active reservation to
+// ReconcileUse, the settlement owner, under a nonblocking use-owner lease.
+// The reservation naming original's operation ID is authenticated before the
+// lease and again under it: a forged binding is a fault even while another
+// owner holds the lease. A clean absence, another use or clean owner
+// contention is no work; any other read, lease or close fault is returned
+// whole.
+func reconcileManagedCheckpointUse(ctx context.Context, store *taskdir.Store, original *workspace.Operation, deps OperationOptions) (reconciled bool, resultErr error) {
+	resource, err := workspace.LoadResource(ctx, store, original.Request().WorkspaceID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, resource.Close()) }()
+	if selected, selectErr := checkpointReservationActive(ctx, resource, original); selectErr != nil || !selected {
+		return false, selectErr
+	}
+	owner, err := resource.TryAcquireUseOwner(ctx)
+	if useOwnerContended(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, owner.Release()) }()
+	if selected, selectErr := checkpointReservationActive(ctx, resource, original); selectErr != nil || !selected {
+		return false, selectErr
+	}
+	return true, ReconcileUse(ctx, store, resource, deps)
+}
+
+// checkpointReservationActive reports whether resource's active reservation
+// names original's operation. Only a clean absence means no active use, and
+// a reservation naming original's ID must carry its full settlement binding.
+func checkpointReservationActive(ctx context.Context, resource *workspace.Resource, original *workspace.Operation) (bool, error) {
+	reservation, err := resource.Reservation(ctx)
+	if workspace.OperationAbsent(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if reservation.Subject.Kind != workspace.SubjectOperation || reservation.Subject.ID != original.Request().OperationID {
+		return false, nil
+	}
+	if err = requireManagedCheckpointReservation(resource, reservation, original); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// useOwnerContended reports a lease refusal whose every cause is another
+// live owner; a joined concrete fault is not contention.
+func useOwnerContended(err error) bool {
+	return task.AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, task.ErrLockBusy) })
 }
 
 // ListCheckpoints describes checkpoint creations after the cursor in ID order

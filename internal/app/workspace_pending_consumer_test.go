@@ -125,8 +125,8 @@ func TestWorkspaceWatchReturnsUseFaultJoinedWithPending(t *testing.T) {
 
 // The bubble's clock advances only while every goroutine is durably blocked,
 // so record I/O consumes neither the watch nor the response-read budget. The
-// exact elapsed time proves the watch expired in its observation wait; it is
-// not a native latency bound.
+// exact elapsed time proves the pending watch returns at its virtual deadline;
+// it is not a native latency bound.
 func TestWorkspaceWatchPendingOnlyExpiresAsPending(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		for _, selector := range watchSelectors {

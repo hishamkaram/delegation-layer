@@ -238,10 +238,8 @@ func FinalizeCheckpoint(ctx context.Context, store *taskdir.Store, operation *wo
 // disposition and closes that same reservation without any capture work.
 func settleManagedCheckpointUse(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, reservation workspace.Reservation, operation *workspace.Operation, deps OperationOptions) error {
 	request := operation.Request()
-	subject := workspace.Subject{Kind: workspace.SubjectOperation, ID: request.OperationID, SHA256: operation.Digest()}
-	if reservation.Subject != subject || request.WorkspaceID != resource.Request().WorkspaceID ||
-		request.Checkpoint == nil || request.Checkpoint.Kind != workspace.CheckpointManaged {
-		return task.ErrEvidenceFault
+	if err := requireManagedCheckpointReservation(resource, reservation, operation); err != nil {
+		return err
 	}
 	if err := validateStoredWorkspaceActionRequest(ctx, store, operation); err != nil {
 		return err
@@ -256,4 +254,16 @@ func settleManagedCheckpointUse(ctx context.Context, store *taskdir.Store, resou
 		return err
 	}
 	return resource.CloseReservation(ctx, reservation, "operation-completed", "")
+}
+
+// requireManagedCheckpointReservation binds reservation to operation's full
+// subject, its managed checkpoint request and resource's workspace.
+func requireManagedCheckpointReservation(resource *workspace.Resource, reservation workspace.Reservation, operation *workspace.Operation) error {
+	request := operation.Request()
+	subject := workspace.Subject{Kind: workspace.SubjectOperation, ID: request.OperationID, SHA256: operation.Digest()}
+	if reservation.Subject != subject || request.WorkspaceID != resource.Request().WorkspaceID ||
+		request.Checkpoint == nil || request.Checkpoint.Kind != workspace.CheckpointManaged {
+		return task.ErrEvidenceFault
+	}
+	return nil
 }
