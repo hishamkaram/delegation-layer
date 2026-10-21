@@ -116,18 +116,22 @@ func requireExpiredTerminalEventCandidate(t *testing.T, ctx context.Context, sup
 }
 
 type abandonedTerminalEventCaller struct {
+	scopeErr     error
 	admissionErr error
+	expired      bool
 	identityErr  error
 	reconcileErr error
 }
 
 // TestTerminalEventClockBubbleJoinsCallersBeforeClientClose registers an
-// unjoined admission caller on a running row and returns from the bubble body
-// at once, as a Fatal or early error would, so cancellation may precede the
-// caller's first observation. The caller waits until every other bubble
-// goroutine is durably blocked, then reads its operation journal and issues
-// a native command. Both succeed only if the bubble cancelled and joined the
-// caller before client Close and before the operation cleanup.
+// admission caller on a running row and returns from the bubble body at once,
+// as a Fatal or early error would. The caller waits for the bubble's scope
+// cancellation before admission entry, so admission returns that cancellation
+// from its first context check while the operation remains unexpired. The
+// caller then waits until every other bubble goroutine is durably blocked,
+// reads its operation journal and issues a native command. Both succeed only
+// if the bubble cancelled and joined the caller before client Close and before
+// the operation cleanup.
 func TestTerminalEventClockBubbleJoinsCallersBeforeClientClose(t *testing.T) {
 	supervisor := newTerminalEventClockSupervisor(t)
 	runTerminalEventClockBubble(t, supervisor, func(t *testing.T, scope *terminalEventClockScope) {
@@ -137,8 +141,11 @@ func TestTerminalEventClockBubbleJoinsCallersBeforeClientClose(t *testing.T) {
 		t.Cleanup(func() {
 			select {
 			case observed := <-joined:
-				if !errors.Is(observed.admissionErr, context.Canceled) || observed.identityErr != nil || observed.reconcileErr != nil {
-					t.Errorf("abandoned caller admission=%v identity=%v reconcile=%v, want cancellation then open journal and client", observed.admissionErr, observed.identityErr, observed.reconcileErr)
+				if !errors.Is(observed.scopeErr, context.Canceled) || !errors.Is(observed.admissionErr, context.Canceled) ||
+					errors.Is(observed.admissionErr, inspection.ErrAdmissionExpired) || observed.expired ||
+					observed.identityErr != nil || observed.reconcileErr != nil {
+					t.Errorf("abandoned caller scope=%v admission=%v expired=%t identity=%v reconcile=%v, want scope cancellation before admission entry on an unexpired operation, then open journal and client",
+						observed.scopeErr, observed.admissionErr, observed.expired, observed.identityErr, observed.reconcileErr)
 				}
 			default:
 				t.Error("abandoned caller was not joined before client close and operation cleanup")
@@ -147,13 +154,19 @@ func TestTerminalEventClockBubbleJoinsCallersBeforeClientClose(t *testing.T) {
 		probe := newTerminalEventClockInspection(t, supervisor, 0, true)
 		admissionfixture.WriteTerminalEventStatus(t, supervisor.store, probe.job, terminalEventRunningState())
 		scope.callers.Go(func() {
+			<-scope.ctx.Done()
+			scopeErr := scope.ctx.Err()
 			_, admissionErr := awaitInspectionWithSubmissionState(scope.ctx, probe.operation, supervisor.client, inspectionSubmissionState{})
+			expired := probe.operation.Expired(time.Now())
 			synctest.Wait()
 			ctx, cancel := context.WithTimeout(context.Background(), inspection.AdmissionTimeout)
 			defer cancel()
 			identity, identityErr := InspectionIdentityContext(ctx, probe.operation)
 			_, reconcileErr := supervisor.client.ReconcileInspection(ctx, identity)
-			joined <- abandonedTerminalEventCaller{admissionErr: admissionErr, identityErr: identityErr, reconcileErr: reconcileErr}
+			joined <- abandonedTerminalEventCaller{
+				scopeErr: scopeErr, admissionErr: admissionErr, expired: expired,
+				identityErr: identityErr, reconcileErr: reconcileErr,
+			}
 		})
 	})
 }
