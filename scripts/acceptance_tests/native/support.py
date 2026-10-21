@@ -5,6 +5,11 @@ import shlex
 
 import acceptance_provider_common as provider_common
 from scripts.delegate_acceptance.native import acceptance as gate
+# The fixture builds the current contract; tests assert its literal pins independently.
+from scripts.delegate_acceptance.native_evidence.production_acp import (
+    ACP_PREDICATE_VERSION,
+    ACP_PROFILE_REVISION,
+)
 
 
 AGGREGATE_WRAPPER_TEST_TIMEOUT = 60
@@ -122,7 +127,7 @@ def production_acp_source(tasks: dict[str, str], sessions: dict[str, str]) -> di
         turns[alias] = {
             "task_id": task_id, "session_id": sessions[alias],
             "predecessor_task_id": tasks[predecessor] if predecessor else None,
-            "profile_revision": "opencode-acp-v1", "predicate_version": "acp-v1",
+            "profile_revision": ACP_PROFILE_REVISION, "predicate_version": ACP_PREDICATE_VERSION,
             "predicate_sha256": "7" * 64, "spec_sha256": "8" * 64, "meta_sha256": "9" * 64,
             "noninteractive": True, "interaction_journal": "absent",
             "publication": "committed" if committed else "unpublished",
@@ -132,7 +137,8 @@ def production_acp_source(tasks: dict[str, str], sessions: dict[str, str]) -> di
         }
     return {
         "schema_version": 1, "kind": "opencode-production-acp",
-        "profile_revision": "opencode-acp-v1", "predicate_version": "acp-v1", "tasks": turns,
+        "profile_revision": ACP_PROFILE_REVISION, "predicate_version": ACP_PREDICATE_VERSION,
+        "tasks": turns,
     }
 
 

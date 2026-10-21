@@ -202,3 +202,34 @@ func requireSameCandidateOutcome(t *testing.T, request task.TaskRecord, meta tas
 		t.Fatalf("successor finalized %+v err=%v, reconstruction %+v err=%v", got.Plan.Predicate, gotErr, want.Plan.Predicate, wantErr)
 	}
 }
+
+// TestACPV1RecordReconstructsV1AndItsSuccessorUsesV2 keeps an admitted
+// acp-v1 record on acp-v1 for reconstruction, while its new exact-session
+// successor resumes the recorded session under the current acp-v2 contract.
+// The predecessor record never changes.
+func TestACPV1RecordReconstructsV1AndItsSuccessorUsesV2(t *testing.T) {
+	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newSuccessorFixture(t, mode, dialectNativeV2)
+			for _, recorded := range []task.PredicateRef{acpV1ReferenceForMode(mode), ReferenceForMode(mode)} {
+				predecessor := withPredicate(fixture.acp, recorded)
+				predecessor.Environment = slices.Clone(fixture.acp.Environment)
+				before := predecessor
+				before.Environment = slices.Clone(predecessor.Environment)
+				policy := *predecessor.EffectiveConfig.Policy
+				before.EffectiveConfig.Policy = &policy
+				requireACPSuccessor(t, fixture.request, predecessor)
+				reconstructed, err := PrepareExistingCandidate(fixture.request, predecessor)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if rebuilt := requireStaticAdmission(t, reconstructed); !rebuilt.Plan.Predicate.Equal(recorded) || !slices.Equal(rebuilt.Plan.Arguments, []string{"acp"}) {
+					t.Fatalf("%s record reconstructed predicate=%+v argv=%q", recorded.Version, rebuilt.Plan.Predicate, rebuilt.Plan.Arguments)
+				}
+				if !reflect.DeepEqual(before, predecessor) {
+					t.Fatalf("%s predecessor record changed", recorded.Version)
+				}
+			}
+		})
+	}
+}

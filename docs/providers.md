@@ -408,7 +408,7 @@ listing does not prove remote authorization or quota.
 `opencode:run` keeps its profile name and launches `opencode acp`, OpenCode's
 [Agent Client Protocol](https://opencode.ai/v2/docs/cli/acp) agent, which
 speaks JSON-RPC 2.0 over standard input and output. Fresh tasks record profile
-revision `opencode-acp-v1` and predicate `acp-v1`. The adapter passes no other
+revision `opencode-acp-v1` and predicate `acp-v2`. The adapter passes no other
 argument. The process starts in the canonical workspace, and the workspace,
 agent, model, effort, and session travel in protocol requests. The runtime probe
 validates `opencode --version` and requires `opencode acp --help` to succeed;
@@ -437,12 +437,24 @@ options. The model comes first because OpenCode's effort option belongs to the
 current model. An omitted or `default` effort sends nothing. OpenCode decides
 whether a value is valid: an option it does not acknowledge rejects the task.
 
-The answer is the ordered root `agent_message_chunk` text received during the
-prompt. Updates tagged as OpenCode child sessions are excluded. Success
-requires a `session/prompt` response with `stopReason` `end_turn`, one
-matching session identity, and non-whitespace root answer text. Any other stop
-reason, a JSON-RPC error, an unacknowledged option, or a session mismatch
-rejects. Usage from the terminal response is reported with unknown scope.
+Root `agent_message_chunk` updates received during the prompt form message
+runs. A run is a sequence of root chunks that name one `messageId`, compared
+by its decoded string; the empty string is a valid ID. Thoughts, tool calls,
+plans, usage, other update kinds, and updates tagged as OpenCode child sessions
+never end a run, and child updates are excluded from the answer. The answer is
+the ordered root text of the final run. A nontext chunk counts toward its run,
+so a final run without nonwhitespace text rejects as empty; an earlier
+preamble is never used instead. When any root chunk has no `messageId` or a
+null one, the answer is all root text of the prompt and the
+`answer_message_boundary_unavailable` diagnostic is reported. When the final
+`messageId` also named an earlier, separated run, the same whole-prompt
+answer is used with `answer_message_boundary_ambiguous`. A duplicated
+`messageId`, or one that is neither a string nor null, rejects the sealed
+answer as invalid output; it never stops the live protocol. Success requires a
+`session/prompt` response with `stopReason` `end_turn`, one matching session
+identity, and non-whitespace selected answer text. Any other stop reason, a
+JSON-RPC error, an unacknowledged option, or a session mismatch rejects. Usage
+from the terminal response is reported with unknown scope.
 OpenCode does not support `--interactive`. Its protocol channel carries no
 user clarification or steering and writes no interaction journal.
 
@@ -453,18 +465,23 @@ response that names another session rejects. The adapter never uses
 `session/new` when resume is refused or unavailable.
 
 Previously admitted tasks retain their original preparation and output
-interpretation contracts. Records of the historical `opencode run --format
-json` profiles keep their recorded argv, runtime flag probe, and run predicate
-for reconstruction and replay. This covers the `--standalone` native profile,
-the earlier native profile with `--dir` and `--variant`, and the adapter-owned
-pure-mode profile. An offline recheck of run predicate revisions 2 through 4
-uses run revision 5; an ACP predicate is never a recheck target for a run
-record. An ordinary exact-session continuation of a historical native run
-predecessor creates a new ACP task. That task resumes the same recorded session
-with the recorded environment and writable roots under the current ACP launch,
-capability, and output contracts. Pure-mode and ACP predecessors continue under
-their recorded contract. The predecessor record and its outcome, including a
-failed outcome, never change.
+interpretation contracts. An ACP record admitted under `acp-v1` keeps that
+predicate for reconstruction and replay, its answer remains all root text of
+the prompt, and it is never rechecked under `acp-v2`. An exact-session
+continuation of an `acp-v1` or `acp-v2` predecessor resumes the recorded
+session with the recorded environment and writable roots and uses `acp-v2`;
+an ACP record with any other predicate is refused. Records of the historical
+`opencode run --format json` profiles keep their recorded argv, runtime flag
+probe, and run predicate for reconstruction and replay. This covers the
+`--standalone` native profile, the earlier native profile with `--dir` and
+`--variant`, and the adapter-owned pure-mode profile. An offline recheck of
+run predicate revisions 2 through 4 uses run revision 5; an ACP predicate is
+never a recheck target for a run record. An ordinary exact-session
+continuation of a historical native run predecessor creates a new ACP task.
+That task resumes the same recorded session with the recorded environment and
+writable roots under the current ACP launch, capability, and output contracts.
+Pure-mode predecessors continue under their recorded contract. The predecessor
+record and its outcome, including a failed outcome, never change.
 
 ## Adding a provider
 

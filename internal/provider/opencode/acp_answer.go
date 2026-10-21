@@ -19,6 +19,18 @@ type acpAnswer struct {
 	seen     bool
 	nonblank bool
 	sinkErr  error
+	// runs observes root message runs for the acp-v2 final-run selection and
+	// decides which text reaches the sink. The live protocol and acp-v1
+	// attach none, so every root text chunk is the answer.
+	runs *acpMessageRuns
+}
+
+// message observes the boundary of one root agent_message_chunk, text or
+// not, before its content is read.
+func (a *acpAnswer) message(update providerjson.Value) {
+	if a.runs != nil {
+		a.runs.message(update)
+	}
 }
 
 func (a *acpAnswer) add(text providerjson.Value) error {
@@ -36,7 +48,12 @@ func (a *acpAnswer) Write(p []byte) (int, error) {
 	if !a.nonblank && len(bytes.TrimSpace(p)) > 0 {
 		a.nonblank = true
 	}
-	if a.sink == nil {
+	streams := a.sink != nil
+	if a.runs != nil {
+		a.runs.text(p)
+		streams = streams && a.runs.streams()
+	}
+	if !streams {
 		return len(p), nil
 	}
 	n, err := a.sink.Write(p)

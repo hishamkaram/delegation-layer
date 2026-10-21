@@ -12,6 +12,7 @@
     "imports": [
       "py:acceptance_provider_common",
       "py:delegate_acceptance.native.acceptance",
+      "py:delegate_acceptance.native_evidence.production_acp",
       "py:pathlib",
       "py:shlex"
     ]

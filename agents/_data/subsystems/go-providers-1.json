@@ -285,6 +285,7 @@
     "imports": [
       "go:bufio",
       "go:bytes",
+      "go:crypto/sha256",
       "go:encoding/json",
       "go:errors",
       "go:fmt",
