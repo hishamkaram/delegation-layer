@@ -541,6 +541,30 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.workspaces.test_checkpoints",
+    "owner": "py:delegate_acceptance.workspaces",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.processes.operations",
+      "py:delegate_acceptance.workspaces.scenarios.application",
+      "py:delegate_acceptance.workspaces.scenarios.checkpoint_policy",
+      "py:delegate_acceptance.workspaces.scenarios.checkpoints",
+      "py:delegate_acceptance.workspaces.scenarios.context",
+      "py:delegate_acceptance.workspaces.scenarios.evidence",
+      "py:delegate_acceptance.workspaces.scenarios.lineage",
+      "py:delegate_acceptance.workspaces.scenarios.source",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:tempfile",
+      "py:unittest"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.workspaces.test_checkpoint_records",
     "owner": "py:delegate_acceptance.workspaces",
     "layer": "test",

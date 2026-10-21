@@ -585,6 +585,18 @@
     ]
   },
   {
+    "name": "py:delegate_acceptance.workspaces.scenarios.checkpoint_policy",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.workspaces.checkpoint_records",
+      "py:delegate_acceptance.workspaces.scenarios.model"
+    ]
+  },
+  {
     "name": "py:delegate_acceptance.workspaces.scenarios.policy",
     "owner": "py:delegate_acceptance.workspaces.scenarios",
     "layer": "pure",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import os
@@ -31,6 +32,7 @@ from .source import (
 )
 from .lifecycle import _run_success
 from .lineage import _run_lineage
+from .checkpoints import _run_checkpoints
 from .timeout import _run_timeout
 from .capacity import _run_capacity
 
@@ -157,6 +159,9 @@ def _make_context_unchecked(
         "pueued": binaries["pueued"],
         "git": git_path,
         "fixture": layout.provider_bin / "pi",
+        # The copies the private CLI actually executes, beside the supplied builds above.
+        "installed-delegate": layout.install / "delegate",
+        "installed-runner": layout.install / "delegate-run",
     }
     context = WorkspaceContext(
         owner=owner,
@@ -189,6 +194,24 @@ def _make_context_unchecked(
     return context, binaries_for_receipt
 
 
+def _run_staged(
+    finalizer: ReceiptFinalizer, context: WorkspaceContext, scenario: str,
+    run_stages: Callable[[WorkspaceContext, dict[str, object]], None],
+) -> None:
+    """Expose the stage record before running so a failed stage stays in the receipt."""
+    record: dict[str, object] = {}
+    finalizer.set_details(scenario=scenario, **{scenario: record})
+    run_stages(context, record)
+    source_final = _assert_source_untouched(context)
+    finalizer.set_details(
+        native_proofs=context.native_proofs,
+        source_final=source_final,
+        task_count=len(context.task_ids),
+        workspace_count=len(context.workspace_ids),
+        command_response_count=context.command_count,
+    )
+
+
 def _run(args: argparse.Namespace, finalizer: ReceiptFinalizer, context: WorkspaceContext) -> tuple[str, str]:
     manifest = build_source_manifest(context)
     finalizer.set_source_manifest(manifest)
@@ -218,17 +241,9 @@ def _run(args: argparse.Namespace, finalizer: ReceiptFinalizer, context: Workspa
             command_response_count=context.command_count,
         )
     elif args.scenario == "lineage":
-        lineage: dict[str, object] = {}
-        finalizer.set_details(scenario="lineage", lineage=lineage)
-        _run_lineage(context, lineage)
-        source_final = _assert_source_untouched(context)
-        finalizer.set_details(
-            native_proofs=context.native_proofs,
-            source_final=source_final,
-            task_count=len(context.task_ids),
-            workspace_count=len(context.workspace_ids),
-            command_response_count=context.command_count,
-        )
+        _run_staged(finalizer, context, "lineage", _run_lineage)
+    elif args.scenario == "checkpoint":
+        _run_staged(finalizer, context, "checkpoint", _run_checkpoints)
     else:
         capacity = _run_capacity(context, args.parallel_tasks, args.dispatch_workers)
         source_final = _assert_source_untouched(context)
@@ -251,7 +266,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--pueue", type=Path, required=True)
     parser.add_argument("--pueued", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--scenario", choices=("lifecycle", "lineage", "capacity"), default="lifecycle")
+    parser.add_argument("--scenario", choices=("lifecycle", "lineage", "checkpoint", "capacity"), default="lifecycle")
     parser.add_argument("--parallel-tasks", type=int, default=DEFAULT_CAPACITY_TASKS)
     parser.add_argument("--dispatch-workers", type=int, default=DEFAULT_DISPATCH_WORKERS)
     parser.add_argument("--workspace-budget", default=DEFAULT_WORKSPACE_BUDGET)
