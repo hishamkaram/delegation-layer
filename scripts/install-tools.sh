@@ -5,20 +5,40 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BIN_DIR="${REPO_ROOT}/bin"
 
-mkdir -p "${BIN_DIR}"
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "${TMP_DIR}"' EXIT
+# The root .go-version file owns the compiler pin: one stable X.Y.Z line.
+GO_VERSION_FILE="${REPO_ROOT}/.go-version"
+if [[ ! -f "${GO_VERSION_FILE}" ]] || ! GO_PIN_BYTES="$(wc -c <"${GO_VERSION_FILE}")"; then
+    echo "ERROR: Go compiler pin not readable at ${GO_VERSION_FILE}." >&2
+    exit 1
+fi
+# read fails unless a real LF ends the first line. Bash drops NUL bytes, so the
+# byte count must equal that line plus its LF: no NUL or trailing data.
+if ! IFS= read -r GO_PIN <"${GO_VERSION_FILE}" || [[ ! "${GO_PIN}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ || "${GO_PIN_BYTES}" -ne $((${#GO_PIN} + 1)) ]]; then
+    echo "ERROR: Invalid Go compiler pin in ${GO_VERSION_FILE}. Required: exactly one stable X.Y.Z line." >&2
+    exit 1
+fi
 
+if [[ "${GOTOOLCHAIN:-}" != "" && "${GOTOOLCHAIN:-}" != "local" ]]; then
+    echo "ERROR: Conflicting GOTOOLCHAIN setting: '${GOTOOLCHAIN}'. Must be unset or 'local'." >&2
+    exit 1
+fi
 export GOTOOLCHAIN=local
 
 # Verify Go version
-GO_VERSION_OUTPUT="$(go version)"
-GO_VERSION_TOKEN="$(echo "${GO_VERSION_OUTPUT}" | awk '{print $3}')"
-if [[ "${GO_VERSION_TOKEN}" != "go1.27.2" ]]; then
-    echo "ERROR: Go version mismatch. Required: go1.27.2. Found: ${GO_VERSION_TOKEN}" >&2
-    echo "Action: Install Go 1.27.2 and ensure GOTOOLCHAIN=local is respected." >&2
+if ! GO_VERSION_OUTPUT="$(go version)"; then
+    echo "ERROR: 'go version' command failed." >&2
     exit 1
 fi
+GO_VERSION_TOKEN="$(echo "${GO_VERSION_OUTPUT}" | awk '{print $3}')"
+if [[ "${GO_VERSION_TOKEN}" != "go${GO_PIN}" ]]; then
+    echo "ERROR: Go version mismatch. Required: go${GO_PIN}. Found: ${GO_VERSION_TOKEN}" >&2
+    echo "Action: Install Go ${GO_PIN} and ensure GOTOOLCHAIN=local is respected." >&2
+    exit 1
+fi
+
+mkdir -p "${BIN_DIR}"
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"

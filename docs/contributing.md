@@ -5,8 +5,11 @@ provider differences explicit at the adapter boundary.
 
 ## Development setup
 
-Install Go 1.27.2, Python 3.12, Node.js 22 or newer, and the repository's pinned
-verification tools. Node.js is used by the npm and plugin package checks.
+Install the exact Go release named in the root [`.go-version`](../.go-version)
+file, Python 3.12, Node.js 22 or newer, and the repository's pinned
+verification tools. `make tool-versions` requires `go version` to report that
+release with `GOTOOLCHAIN` unset or `local`. Node.js is used by the npm and
+plugin package checks.
 `make acceptance-private-cli` executes the current build against a Pi-shaped
 executable fixture and a real private supervisor on macOS and Linux. This gate
 checks startup, dispatch, status, collection, model discovery, and
@@ -205,6 +208,15 @@ existing supervised execution boundary. Auxiliary operation deadlines do not
 renew provider tasks, and exact native closure plus the managed-worker
 disposition precede capture and cleanup. Owned native proof controls cleanup;
 the Lead owns landing changes.
+
+Git checkpoints follow rows CP1–CP7 of the same matrix. Keep admission,
+qualification, removal ranking, and pending classification in
+`internal/workspaces`; the `checkpoint` command projects acknowledgements and
+descriptions and decides no lifecycle policy. Classify pending from the whole
+returned error with `workspaces.PendingError`, as the [whole-error
+rule](../agents/_data/maintainability-contract.md#whole-error-pending-classification)
+requires. A checkpoint change pairs accepted-pending with refused-busy
+responses and a joined concrete fault through the public command.
 
 ## Adapter boundary
 

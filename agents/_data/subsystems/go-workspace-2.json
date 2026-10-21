@@ -25,6 +25,18 @@
     ]
   },
   {
+    "name": "go:internal/workspace/contract#test",
+    "owner": "workspace",
+    "layer": "test",
+    "imports": [
+      "go:errors",
+      "go:internal/task",
+      "go:reflect",
+      "go:strings",
+      "go:testing"
+    ]
+  },
+  {
     "name": "go:internal/workspace/internal/git",
     "owner": "workspace",
     "layer": "runtime",

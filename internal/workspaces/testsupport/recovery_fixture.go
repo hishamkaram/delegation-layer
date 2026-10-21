@@ -51,7 +51,19 @@ type RecoveryFixture struct {
 
 func NewRecoveryFixture(t *testing.T) *RecoveryFixture {
 	t.Helper()
-	store, err := taskdir.InitStore(filepath.Join(supervisorfixture.CanonicalTempDir(t), "workspace-recovery-state"))
+	return NewRecoveryFixtureIn(t, supervisorfixture.CanonicalTempDir(t))
+}
+
+// RecoveryFixtureRoot is the store root of a recovery fixture under base.
+func RecoveryFixtureRoot(base string) string {
+	return filepath.Join(base, "workspace-recovery-state")
+}
+
+// NewRecoveryFixtureIn establishes a recovery fixture under base, which its
+// caller owns and removes; test cleanup only closes the fixture's handles.
+func NewRecoveryFixtureIn(t *testing.T, base string) *RecoveryFixture {
+	t.Helper()
+	store, err := taskdir.InitStore(RecoveryFixtureRoot(base))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,17 +93,21 @@ func NewRecoveryFixture(t *testing.T) *RecoveryFixture {
 	return fixture
 }
 
+// CloseHandles closes the resource and store handles. A handle is cleared
+// only after it closes, so a failed close leaves it with its owner.
 func (f *RecoveryFixture) CloseHandles() error {
-	var resultErr error
+	var resourceErr, storeErr error
 	if f.Resource != nil {
-		resultErr = errors.Join(resultErr, f.Resource.Close())
-		f.Resource = nil
+		if resourceErr = f.Resource.Close(); resourceErr == nil {
+			f.Resource = nil
+		}
 	}
 	if f.Store != nil {
-		resultErr = errors.Join(resultErr, f.Store.Close())
-		f.Store = nil
+		if storeErr = f.Store.Close(); storeErr == nil {
+			f.Store = nil
+		}
 	}
-	return resultErr
+	return errors.Join(resourceErr, storeErr)
 }
 
 func (f *RecoveryFixture) Restart(t *testing.T) {
@@ -117,6 +133,33 @@ func (f *RecoveryFixture) Reopen(t *testing.T, root string) {
 		t.Fatal(err)
 	}
 	f.Store, f.Resource = store, resource
+}
+
+// ReopenRecoveryFixture reopens the recovery fixture another process
+// established at root; test cleanup closes these handles.
+func ReopenRecoveryFixture(t *testing.T, root string) *RecoveryFixture {
+	t.Helper()
+	fixture := &RecoveryFixture{}
+	fixture.Reopen(t, root)
+	t.Cleanup(func() {
+		if closeErr := fixture.CloseHandles(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	return fixture
+}
+
+// PersistSelectionOperation records request as OpenSelectionOperation does
+// and closes the operation handle immediately.
+func PersistSelectionOperation(t *testing.T, fixture *RecoveryFixture, request workspace.OperationRequest) {
+	t.Helper()
+	operation, err := workspace.OpenOperation(t.Context(), fixture.Store, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = errors.Join(fixture.Resource.RecordOperation(t.Context(), request), operation.Close()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f *RecoveryFixture) CorruptResourceRecord(t *testing.T, name string) {

@@ -557,6 +557,19 @@
     ]
   },
   {
+    "name": "py:delegate_acceptance.workspaces.checkpoint_records",
+    "owner": "py:delegate_acceptance.workspaces",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.encoding",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.paths.policy",
+      "py:delegate_acceptance.tasks.specification"
+    ]
+  },
+  {
     "name": "py:delegate_acceptance.workspaces.scenarios",
     "owner": "py:delegate_acceptance.workspaces.scenarios",
     "layer": "pure",
@@ -569,6 +582,18 @@
     "imports": [
       "py:__future__",
       "py:re"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.workspaces.scenarios.checkpoint_policy",
+    "owner": "py:delegate_acceptance.workspaces.scenarios",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.workspaces.checkpoint_records",
+      "py:delegate_acceptance.workspaces.scenarios.model"
     ]
   },
   {

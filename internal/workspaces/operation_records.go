@@ -22,6 +22,9 @@ type OperationSpec struct {
 	Deadline  string
 	Arguments []string
 	Discard   bool
+	// Checkpoint is the creation's complete selection, bound into its request
+	// and compared on replay; absent for every other kind.
+	Checkpoint *workspace.CheckpointSelection
 }
 
 type OperationError struct{ reason string }

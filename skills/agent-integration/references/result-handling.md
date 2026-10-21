@@ -3,7 +3,11 @@
 Use the response fields independently. A successful control command is not
 the same as a successful provider result.
 
-1. Save `task_id` immediately after dispatch or continue.
+1. Save `task_id` immediately after dispatch or continue. It is the durable
+   Delegate identity. `supervisor.numeric_task_id` and a stop's
+   `numeric_task_id` are private, ephemeral queue addresses. The queue can
+   reuse a number for a later task, so a repeated number is not a binding
+   error; never use it as a task handle.
 2. For a dispatch or continue error, inspect `task_record` first. When it is
    `created`, observe the returned ID with `status`. Before applying the generic
    `not_created` stop rule, handle the sole migration exception: when
@@ -135,6 +139,42 @@ does not replace the provider outcome. Keep the checkout retained until the
 Lead has terminal task/capture evidence and explicitly releases it. Read
 [managed workspace guidance](workspaces.md) for the exact command surface and
 review/capture/forgetting boundaries.
+
+## Checkpoint results
+
+A `checkpoint` response has `command: "checkpoint"` and no `task_id` or
+`outcome`. A checkpoint receipt is Git-content evidence; it never replaces a
+provider outcome, and a provider outcome never proves a checkpoint. Read
+`checkpoint.id`, `checkpoint.operation_id`, `checkpoint.current`,
+`checkpoint.operation`, `checkpoint.reason_code`, `checkpoint.next_action`, and
+`error` separately, together with the exit code. Exit `0` alone is not enough.
+
+| Command and response | Meaning and next action |
+| --- | --- |
+| `create`: exit `3`, `id` C, `next_action: "watch_checkpoint"` | Accepted, not yet captured. Watch `status C`; never repeat `create`. |
+| `create`: exit `3`, `requested_action_not_authorized`, `retry_create`, no `id` | Busy refusal; nothing was accepted. Apply the [busy rule](workspaces.md#checkpoint-before-fork). Never wait for your own turn or switch to `--cwd`. |
+| `remove C`: exit `3`, `id` C, `operation_id` R, `watch_checkpoint` | Removal attempt R is accepted. Watch `status C --operation R`; never repeat `remove` to observe it. |
+| `remove C`: exit `3`, `requested_action_not_authorized`, `retry_remove`, no `operation_id` | Not accepted, usually because creation is still pending. The `id` in your command is not a removal ID. Watch `status C` until it settles, then retry `remove C` once. |
+| `remove C`: exit `0` with `operation_id` R | R already succeeded. No new attempt was registered. |
+| `status C`: exit `0` | Successful observation. Fork only when `current.state` is `checkpointed` and `current.usable` is `true`. With `next_action: "stop_and_report"`, report the unavailable creation or latest removal; do not fork. |
+| `status C`: exit `3`, `watch_checkpoint` | Creation or latest removal is still pending. Keep watching the same C. |
+| `status C --operation R`: exit `0`, `1`, or `3` | R's own result: `removed` or `nothing_to_remove` is `0`; `unavailable` is `1` with `stop_and_report`; pending is `3`. A newer attempt in `current.removal` never replaces R's outcome. Keep watching R, not the newer head. |
+| `list`: exit `0` | One metadata page. Entries may be pending, unavailable, or removed. Run `status C` for a reconciled verdict. |
+| Exit `1` with `stop_and_report` | Concrete failure. Report `error` and every ID already returned; do not repeat the mutation. |
+| Exit `2` | Invalid request. Parse errors print usage on stderr without guaranteed JSON; correct the request. |
+
+Take `C` only from `checkpoint.id` and `R` only from `checkpoint.operation_id`
+of a response that returned them. Never invent an operation ID or reuse a
+creation ID as `--operation`. Returned IDs stay valid after a later read
+fault; an unreadable `current` or `operation` is omitted rather than shown as
+empty availability.
+
+`status --watch` repeats the same observation of the same IDs until a settled
+or failed result or the bound ends. It never begins another action, renews a
+helper deadline, or cancels accepted work. The latest observation chooses the
+exit. A watch that ends at exit `3` means keep observing; it is not a failure.
+If writing the response itself fails (exit `1`), accepted work stays accepted;
+observe it with `status` instead of repeating the mutation.
 
 ## Offline recovery
 

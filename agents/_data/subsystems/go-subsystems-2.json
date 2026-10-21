@@ -55,6 +55,7 @@
       "go:sync",
       "go:sync/atomic",
       "go:testing",
+      "go:testing/synctest",
       "go:time"
     ]
   },
@@ -722,6 +723,7 @@
     "imports": [
       "go:context",
       "go:errors",
+      "go:golang.org/x/sys/unix",
       "go:internal/pueue",
       "go:internal/task",
       "go:internal/taskdir",
@@ -738,15 +740,39 @@
     "owner": "go:internal/workspaces",
     "layer": "test",
     "imports": [
+      "go:bytes",
       "go:context",
       "go:errors",
+      "go:fmt",
       "go:internal/guardian",
       "go:internal/guardian/testsupport",
+      "go:internal/predicate",
       "go:internal/supervisor/testsupport",
       "go:internal/task",
       "go:internal/taskdir",
       "go:internal/workspace",
       "go:os",
+      "go:os/exec",
+      "go:path/filepath",
+      "go:regexp",
+      "go:slices",
+      "go:strings",
+      "go:testing",
+      "go:time"
+    ]
+  },
+  {
+    "name": "go:internal/workspaces/testsupport#test",
+    "owner": "go:internal/workspaces",
+    "layer": "test",
+    "imports": [
+      "go:errors",
+      "go:golang.org/x/sys/unix",
+      "go:internal/task",
+      "go:internal/taskdir",
+      "go:internal/workspace",
+      "go:os",
+      "go:os/exec",
       "go:path/filepath",
       "go:strings",
       "go:testing",

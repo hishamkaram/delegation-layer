@@ -245,8 +245,12 @@ func readWorkspaceActionOperation(ctx context.Context, store *taskdir.Store, res
 	return operation, rank, nil
 }
 
+// workspaceActionOperationRank keeps historical ranking for existing kinds. A
+// checkpoint helper ranks as a success only with the strict checkpoint
+// closure qualification, never from a successful result alone.
 func workspaceActionOperationRank(ctx context.Context, operation *workspace.Operation) (workspaceActionOperationState, error) {
-	if _, err := OperationClosed(ctx, operation); err != nil {
+	proof, err := OperationClosed(ctx, operation)
+	if err != nil {
 		if PendingError(err) {
 			return workspaceActionUnfinished, nil
 		}
@@ -259,7 +263,7 @@ func workspaceActionOperationRank(ctx context.Context, operation *workspace.Oper
 	if err != nil {
 		return 0, err
 	}
-	if result.Status == "succeeded" {
+	if result.Status == "succeeded" && (!checkpointOperationKind(operation.Request().Kind) || checkpointClosureQualified(proof)) {
 		return workspaceActionClosedSuccess, nil
 	}
 	return workspaceActionClosedFailure, nil

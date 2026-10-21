@@ -133,7 +133,12 @@ tasks may proceed; the failed attempt must remain reported as failed or blocked.
     or provider comparison. For independent parallel writes, choose
     `--isolation git-worktree` automatically unless the user explicitly chooses
     shared coordination; the model chooses fan-out and task scope. A read-only
-    review may attach a retained workspace with `--workspace ID`.
+    review may attach a retained workspace with `--workspace ID`. To fork a
+    worker from current uncommitted content, follow
+    [checkpoint before fork](references/workspaces.md#checkpoint-before-fork):
+    fork only from a `checkpointed`, `usable` checkpoint commit. If your own
+    turn holds the workspace, do not wait or retry through `--cwd`; report so
+    the Lead checkpoints after your turn closes.
 
 For an explicit Codex code review, use the discoverable `codex:review` profile
 with one persisted target: `--review-target uncommitted`,
@@ -379,7 +384,9 @@ recruit more agents unless that is explicitly part of the task.
 - Read [continuation](references/continuation.md) for timeout or interruption
   recovery or an exact-session follow-up.
 - Read [managed workspaces](references/workspaces.md) for optional Git
-  worktrees, capture, review scope, release, and forgetting.
+  worktrees, capture, review scope, release, and forgetting, and
+  [Git checkpoints](references/workspaces.md#git-checkpoints) before creating,
+  observing, forking from, or removing a checkpoint.
 - Use [read-only example](examples/read-only-task.md),
   [write example](examples/workspace-write-task.md),
   [JSON examples](examples/json-results.md), and

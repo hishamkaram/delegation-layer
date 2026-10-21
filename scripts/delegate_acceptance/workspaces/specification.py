@@ -23,13 +23,21 @@ _OPERATION_REQUEST_REQUIRED_KEYS = {
 }
 
 
-_OPERATION_REQUEST_OPTIONAL_KEYS = {"arguments", "discard"}
+_OPERATION_REQUEST_OPTIONAL_KEYS = {"arguments", "discard", "checkpoint"}
 
 
 _OPERATION_SUBJECT_KEYS = {"kind", "id", "sha256"}
 
 
-_OPERATION_KINDS = {"provision", "capture", "verify", "remove", "forget"}
+_OPERATION_KINDS = {
+    "provision", "capture", "verify", "remove", "forget", "checkpoint", "checkpoint-remove",
+}
+
+
+_CHECKPOINT_SELECTION_OPTIONAL_KEYS = {"cwd", "cwd_identity"}
+
+
+_DIRECTORY_IDENTITY_KEYS = {"device", "inode"}
 
 
 _RESOURCE_REQUEST_KEYS = {
@@ -190,10 +198,10 @@ def _canonical_operation_request_bytes(
             f"{label} root identity mismatch")
     require(operation_id == operation and _task_identity(operation_id),
             f"{label} operation identity mismatch")
-    require(_task_identity(workspace_id), f"{label} workspace identity is invalid")
     kind = value.get("kind")
     require(kind in _OPERATION_KINDS, f"{label} kind is invalid")
     subject = _canonical_operation_subject(value.get("subject"), label + " subject")
+    checkpoint = _canonical_operation_scope(value, kind, subject, label)
     deadline_value = value.get("deadline")
     _canonical_timestamp(deadline_value, label + " deadline")
     worker = value.get("worker_executable")
@@ -237,7 +245,57 @@ def _canonical_operation_request_bytes(
         canonical["arguments"] = arguments
     if discard:
         canonical["discard"] = True
+    if checkpoint is not None:
+        canonical["checkpoint"] = checkpoint
     return canonical_go_json(canonical)
+
+
+def _canonical_operation_scope(
+        value: dict[str, object], kind: str, subject: dict[str, str], label: str,
+        ) -> dict[str, object] | None:
+    """Mirror contract.validateOperationScope and return the canonical selection.
+
+    workspace_id stays a required encoded field. It is empty only for an
+    ordinary checkpoint and a checkpoint removal; every other kind, including a
+    managed checkpoint, carries a valid workspace identity.
+    """
+    workspace_id = value.get("workspace_id")
+    if kind == "checkpoint":
+        require("checkpoint" in value, f"{label} checkpoint selection is missing")
+        return _canonical_checkpoint_selection(value["checkpoint"], workspace_id, label)
+    require("checkpoint" not in value, f"{label} checkpoint selection is not allowed for {kind}")
+    if kind == "checkpoint-remove":
+        require(workspace_id == "" and subject["kind"] == "operation",
+                f"{label} checkpoint removal scope is invalid")
+        return None
+    require(_task_identity(workspace_id), f"{label} workspace identity is invalid")
+    return None
+
+
+def _canonical_checkpoint_selection(
+        value: object, workspace_id: object, label: str) -> dict[str, object]:
+    """Validate contract.CheckpointSelection and preserve its omitempty shape."""
+    label = label + " checkpoint selection"
+    require(isinstance(value, dict), f"{label} is not an object")
+    _exact_keys(value, {"kind"}, _CHECKPOINT_SELECTION_OPTIONAL_KEYS, label)
+    kind = value.get("kind")
+    if kind == "managed":
+        require(set(value) == {"kind"} and _task_identity(workspace_id),
+                f"{label} managed scope is invalid")
+        return {"kind": kind}
+    require(kind == "ordinary", f"{label} kind is invalid")
+    cwd = value.get("cwd")
+    require(workspace_id == "" and _raw_clean_absolute_path(cwd) and "\x00" not in cwd,
+            f"{label} ordinary scope is invalid")
+    identity = value.get("cwd_identity")
+    require(isinstance(identity, dict), f"{label} cwd identity is missing")
+    _exact_keys(identity, _DIRECTORY_IDENTITY_KEYS, label=label + " cwd identity")
+    for key in ("device", "inode"):
+        require(type(identity.get(key)) is int and 0 <= identity[key] <= _MAX_UINT64,
+                f"{label} cwd identity {key} is invalid")
+    require(identity["inode"] != 0, f"{label} cwd identity is not pinned")
+    return {"kind": kind, "cwd": cwd,
+            "cwd_identity": {"device": identity["device"], "inode": identity["inode"]}}
 
 
 def _canonical_operation_guard_bytes(value: object, request_digest: str, label: str) -> bytes:

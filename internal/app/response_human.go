@@ -20,6 +20,7 @@ func writeHumanResponse(w io.Writer, response Response) error {
 	writeHumanRaw(&output, response.Raw)
 	writeHumanStops(&output, response.Stop, response.Stops)
 	writeHumanWorkspaceResponse(&output, response)
+	writeHumanCheckpointResponse(&output, response)
 	if err := writeHumanInteraction(&output, response); err != nil {
 		return err
 	}

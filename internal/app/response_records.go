@@ -7,6 +7,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
 const (
@@ -62,6 +63,11 @@ type Response struct {
 	Workspaces        []WorkspaceResponse        `json:"workspaces,omitempty"`
 	WorkspaceCursor   string                     `json:"workspace_cursor,omitempty"`
 	WorkspaceSupport  *WorkspaceSupportReport    `json:"workspace_support,omitempty"`
+	Checkpoint        *CheckpointResponse        `json:"checkpoint,omitempty"`
+	// Checkpoints is set only by a successful list. The pointer keeps an
+	// empty page as [] there while every other command omits the field.
+	Checkpoints      *[]workspacescore.CheckpointDescription `json:"checkpoints,omitempty"`
+	CheckpointCursor string                                  `json:"checkpoint_cursor,omitempty"`
 }
 
 // DispatchFailureResponse gives an agent a stable recovery decision without

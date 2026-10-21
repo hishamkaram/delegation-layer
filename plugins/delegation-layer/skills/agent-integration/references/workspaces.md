@@ -4,7 +4,7 @@ Managed workspaces are an optional Delegate feature for tasks that need a
 retained Git worktree. Ordinary delegation, including ordinary work in a
 non-Git directory, is unchanged. Git is required only when a request creates
 or attaches to a managed workspace (`--isolation git-worktree` or
-`--workspace ID`).
+`--workspace ID`), or creates or removes a [Git checkpoint](#git-checkpoints).
 
 This reference is self-contained guidance for using managed workspaces.
 
@@ -168,6 +168,98 @@ proves closure without inventing a native `Wait` or provider success. The
 expired provider scope is never renewed or reused. If capture
 is unavailable after closure, the closure evidence can still preserve a valid
 continuation decision; it does not rewrite the provider outcome.
+
+## Git checkpoints
+
+A checkpoint records the current Git content of one checkout as a synthetic
+commit pinned by the owned ref `refs/delegate/ROOT_ID/checkpoints/CHECKPOINT_ID`.
+It does not move `HEAD`, create or switch a branch, or change the real index.
+The commit's tree is the full current Git-content view, built through a private
+index with the capture algorithm above, so the same exclusions apply. Its single
+parent is the `HEAD` the helper observed. Author, committer, and timestamp are
+fixed Delegate values; trailers carry the checkpoint ID and request digest.
+This is unrelated to a provider continuation `mode: "checkpoint"`.
+
+```text
+delegate --root ROOT checkpoint create --cwd ABS [--budget DURATION] --json
+delegate --root ROOT checkpoint create --workspace ID [--budget DURATION] --json
+delegate --root ROOT checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json
+delegate --root ROOT checkpoint list [--after CHECKPOINT_ID] [--limit 1..50] --json
+delegate --root ROOT checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
+```
+
+- `create` names exactly one target: `--cwd` for an absolute ordinary Git
+  checkout directory, or `--workspace` for a managed workspace ID. Nothing is
+  inferred from the current directory. Select a managed checkout only by
+  `--workspace ID`; never pass its path as `--cwd`.
+- `status` and `remove` take the checkpoint ID `C` from the create response.
+  `list` takes no target and runs no Git command.
+- Only `create --cwd` may initialize a new state root. Every other checkpoint
+  command needs the existing root and fails with exit `1` without creating it.
+  Use one state root for every command about the same checkpoint.
+- `--budget` is the finite helper budget (default 5m). It is persisted with the
+  operation and does not renew any provider task budget. `--watch` exists only
+  on `status`.
+
+A managed checkpoint is a workspace use. It needs the workspace's use owner and
+holds that workspace's usage reservation while its helper runs, so a concurrent
+turn or `workspace exec` on that workspace gets the normal busy response. It
+closes without content capture. Create it while the workspace is retained.
+
+Delegate does not restore, apply, merge, or land a checkpoint into any checkout.
+It does not control nested delegation budgets or lifetimes either. A fork from
+a checkpoint is an ordinary new managed dispatch with its own task budget.
+
+### Checkpoint before fork
+
+Use this sequence to start an isolated worker from current uncommitted work.
+Save every response and exit code once; follow
+[checkpoint results](result-handling.md#checkpoint-results) for each one.
+
+1. Run `checkpoint create` with one target. Exit `3` with `checkpoint.id` and
+   `next_action: "watch_checkpoint"` means the request was accepted. It does
+   not mean the content was captured. Save that exact ID as `C`.
+2. Run `checkpoint status C --watch 30s --json` until the exit is not `3`.
+   Never repeat `create` to observe it.
+3. Fork only when `status` exits `0` and `checkpoint.current.state` is
+   `checkpointed` and `checkpoint.current.usable` is `true`. A `commit_oid` or
+   `snapshot_ref` alone is not proof: an unavailable creation can still name a
+   retained candidate.
+4. Dispatch the worker with the qualified `checkpoint.current.commit_oid` as
+   the existing `--base` of a new managed workspace. Use an ordinary checkout of
+   the same repository as `--cwd`, normally the source the Lead already uses:
+
+   ```text
+   delegate --root ROOT dispatch --auto --brief ABS_BRIEF --cwd ABS_SOURCE \
+     --isolation git-worktree --base COMMIT_OID \
+     --permission workspace-write --budget 30m --json
+   ```
+
+5. Remove the checkpoint explicitly when the Lead no longer needs it.
+
+`status` exit `0` means a successful metadata observation, not an available
+checkpoint. `usable` is `true` only for a `checkpointed` creation with no
+registered removal attempt, including a failed one. It is derived from
+Delegate's records; it is not proof that an external Git command left the ref
+in place.
+
+If `checkpoint create --workspace ID` returns exit `3` with
+`reason_code: "requested_action_not_authorized"` and `retry_create`, no
+checkpoint was accepted and no ID was assigned. When that workspace is in use
+by the turn you are running in, do not wait for yourself, retry in a loop, or
+retry through `--cwd`. Finish and report; the Lead creates the checkpoint after
+your turn closes. When another use holds it, the Lead observes that workspace
+until it is retained again, then retries the same create once.
+
+Checkpoint refs outlive `workspace release` and `workspace forget`: the forget
+inventory covers only the workspace's own base, capture, and baseline refs.
+`checkpoint remove C` is the only command that removes a checkpoint ref.
+Removal needs only the shared Git common directory, so it works after the
+source checkout or managed checkout is gone. A missing or replaced common
+directory makes that removal attempt `unavailable`, never `removed`. Creation
+history stays observable after removal: `current.state` keeps the creation
+disposition, while `current.usable` becomes `false` and `current.removal`
+shows the latest attempt.
 
 ## Retention and forgetting
 

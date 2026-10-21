@@ -301,6 +301,14 @@ reference](skills/agent-integration/references/workspaces.md) for attachment,
 continuation, verification, review scope, release, and forgetting. This
 feature does not automatically apply, commit, branch, or merge worker changes.
 
+To fork a worker from current uncommitted work, first record a Git checkpoint
+with `delegate checkpoint create --cwd ABS` (or `--workspace ID`). It stores a
+synthetic commit under a Delegate-owned ref without moving `HEAD` or touching
+the real index. After `checkpoint status` reports it `checkpointed` and
+`usable`, pass its commit to `dispatch --isolation git-worktree --base`.
+Checkpoints stay until `checkpoint remove`; see the [checkpoint
+guidance](skills/agent-integration/references/workspaces.md#git-checkpoints).
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install and run a first task.

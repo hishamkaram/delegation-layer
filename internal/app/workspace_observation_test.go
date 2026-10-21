@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -359,5 +360,111 @@ func TestWorkspaceKnownAcknowledgementDoesNotRequireAnotherAuthorizationRead(t *
 	result := workspaceCommandActionResponse(t.Context(), store, resource, "forget", false, ack, newResponse("workspace"), workspace.ErrPending)
 	if result.code != 3 || result.response.Workspace.NextAction != "watch_workspace" || result.response.Workspace.State != "undetermined" {
 		t.Fatalf("known durable authorization was lost at a later view timeout: %+v", result)
+	}
+}
+
+var errOperationOwnerUnlock = errors.New("operation lifetime owner unlock failed")
+
+// injectOperationOwnerUnlockFault fails releasing operationID's lifetime
+// owner once. Recovery of a helper with no lifetime intent then returns the
+// production joined error: pending plus this concrete release fault.
+func injectOperationOwnerUnlockFault(t *testing.T, store *taskdir.Store, operationID string) *workspaceResultUnlockFault {
+	t.Helper()
+	fault := &workspaceResultUnlockFault{path: filepath.Join(store.Root, "workspace-operations", operationID, ".lifetime-owner.lock"), failure: errOperationOwnerUnlock}
+	store.SetFaultInjector(fault)
+	t.Cleanup(func() { store.SetFaultInjector(nil) })
+	return fault
+}
+
+// requireOperationResponse asserts the selected operation keeps its ID and
+// is projected as pending guidance only when no concrete fault is joined.
+func requireOperationResponse(t *testing.T, result commandResult, operationID string, fault *workspaceResultUnlockFault) {
+	t.Helper()
+	if result.response.Workspace == nil || result.response.Workspace.OperationID != operationID {
+		t.Fatalf("operation response lost its ID: %+v", result)
+	}
+	if fault == nil {
+		if result.code != 3 || result.response.Workspace.NextAction != "watch_workspace" {
+			t.Fatalf("pending operation response = %+v", result)
+		}
+		return
+	}
+	if !fault.fired || result.code != 1 || !errors.Is(result.err, errOperationOwnerUnlock) || !errors.Is(result.err, workspace.ErrPending) {
+		t.Fatalf("joined owner fault response = %+v; want exit 1 with the whole fault", result)
+	}
+}
+
+// acknowledgedVerificationID names the unexpired verification helper of an
+// acknowledged action.
+var acknowledgedVerificationID = strings.Repeat("7", 32)
+
+// newAcknowledgedVerification reserves the workspace for one unexpired
+// verification helper that has not published lifetime intent.
+func newAcknowledgedVerification(t *testing.T) (*taskdir.Store, *workspace.Resource, workspaces.ActionAcknowledgement) {
+	t.Helper()
+	store, resource := testsupport.NewResource(t)
+	reserveVerification(t, store, resource)
+	return store, resource, acknowledgeVerification(t, store, resource)
+}
+
+func reserveVerification(t *testing.T, store *taskdir.Store, resource *workspace.Resource) *workspace.Operation {
+	t.Helper()
+	subject := workspace.Subject{Kind: workspace.SubjectOperation, ID: acknowledgedVerificationID, SHA256: task.ComputeSHA256([]byte("verification"))}
+	request := testsupport.CheckpointOperationRequest(store, acknowledgedVerificationID, workspace.OperationVerify, resource.Request().WorkspaceID, subject, nil, time.Now().Add(time.Hour))
+	request.Arguments = []string{"/usr/bin/true"}
+	operation := testsupport.OpenCheckpointOperation(t, store, request)
+	if _, err := resource.Reserve(t.Context(), workspace.Subject{Kind: workspace.SubjectOperation, ID: acknowledgedVerificationID, SHA256: operation.Digest()}); err != nil {
+		t.Fatal(err)
+	}
+	return operation
+}
+
+func acknowledgeVerification(t *testing.T, store *taskdir.Store, resource *workspace.Resource) workspaces.ActionAcknowledgement {
+	t.Helper()
+	ack, err := workspaces.AcknowledgeAction(t.Context(), store, resource, "exec", false, acknowledgedVerificationID)
+	if err != nil || !ack.Authorized() {
+		t.Fatalf("verification acknowledgement = %+v, %v", ack, err)
+	}
+	return ack
+}
+
+// persistAcknowledgedVerification reserves the verification helper in a
+// parent fixture and closes its handle; the child acknowledges it.
+func persistAcknowledgedVerification(t *testing.T, fixture *testsupport.RecoveryFixture) {
+	t.Helper()
+	if err := reserveVerification(t, fixture.Store, fixture.Resource).Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// operationProjection projects the acknowledged operation through path.
+func operationProjection(t *testing.T, store *taskdir.Store, resource *workspace.Resource, ack workspaces.ActionAcknowledgement, path string) commandResult {
+	t.Helper()
+	if path == "status" {
+		return workspaceCommandResponse(t.Context(), store, resource, ack.OperationID(), newResponse("workspace"), workspace.ErrPending)
+	}
+	return workspaceCommandActionResponse(t.Context(), store, resource, path, false, ack, newResponse("workspace"), workspace.ErrPending)
+}
+
+// TestWorkspaceOperationResponsesKeepOwnerFaultJoinedWithPending enters the
+// status and acknowledged-action projections with a real recovery error.
+func TestWorkspaceOperationResponsesKeepOwnerFaultJoinedWithPending(t *testing.T) {
+	for _, path := range []string{"status", "exec"} {
+		t.Run(path, func(t *testing.T) {
+			fixture := testsupport.OwnerReleaseRecoveryFixture(t, persistAcknowledgedVerification, acknowledgedVerificationID)
+			if fixture == nil {
+				return
+			}
+			ack := acknowledgeVerification(t, fixture.Store, fixture.Resource)
+			fault := injectOperationOwnerUnlockFault(t, fixture.Store, ack.OperationID())
+			requireOperationResponse(t, operationProjection(t, fixture.Store, fixture.Resource, ack, path), ack.OperationID(), fault)
+		})
+	}
+}
+
+func TestWorkspaceOperationResponsesPendingOnly(t *testing.T) {
+	for _, path := range []string{"status", "exec"} {
+		store, resource, ack := newAcknowledgedVerification(t)
+		requireOperationResponse(t, operationProjection(t, store, resource, ack, path), ack.OperationID(), nil)
 	}
 }

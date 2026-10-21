@@ -46,6 +46,10 @@ delegate [--root ABS] workspace status ID [--operation OP] [--watch DURATION] --
 delegate [--root ABS] workspace exec ID --budget DURATION -- ARGV...
 delegate [--root ABS] workspace release ID [--discard] [--budget DURATION] --json
 delegate [--root ABS] workspace forget ID [--budget DURATION] --json
+delegate [--root ABS] checkpoint create (--cwd ABS | --workspace ID) [--budget DURATION] --json
+delegate [--root ABS] checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json
+delegate [--root ABS] checkpoint list [--after CHECKPOINT_ID] [--limit 1..50] --json
+delegate [--root ABS] checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
 delegate help
 delegate version
 ```
@@ -254,6 +258,65 @@ A known pre-task provision wait returns `task_record: "not_created"`,
 Observe that workspace before reuse. Unknown creation state and other failures
 follow their returned next action. Partial-provision release retains changed
 or unverifiable paths rather than guessing ownership.
+
+## Git checkpoints
+
+Checkpoints are optional and launch no provider work. A checkpoint records the
+current Git content of one checkout as a synthetic commit pinned by
+`refs/delegate/ROOT_ID/checkpoints/CHECKPOINT_ID`, without moving `HEAD`,
+changing a branch, or touching the real index. It uses the capture content
+rules, including their exclusions. The Lead can fork a separate worker from a
+qualified checkpoint commit through the existing `dispatch --isolation
+git-worktree --base COMMIT`.
+
+```sh
+delegate --root "$HOME/delegation-state" checkpoint create \
+  --cwd /absolute/git/checkout --budget 5m --json
+delegate --root "$HOME/delegation-state" checkpoint create \
+  --workspace WORKSPACE_ID --budget 5m --json
+delegate --root "$HOME/delegation-state" checkpoint status CHECKPOINT_ID \
+  [--operation OPERATION_ID] --watch 30s --json
+delegate --root "$HOME/delegation-state" checkpoint list [--after CHECKPOINT_ID] --limit 50 --json
+delegate --root "$HOME/delegation-state" checkpoint remove CHECKPOINT_ID --budget 5m --json
+```
+
+- `create` requires exactly one of `--cwd ABS` (an ordinary Git checkout) or
+  `--workspace ID` (a managed workspace); no target is inferred. A managed
+  checkout is selected only by its ID. A managed checkpoint uses the
+  workspace's use owner; while another use holds it, creation is refused with
+  `requested_action_not_authorized` and `retry_create`.
+- `create` and `remove` validate the Git environment; `status` and `list` do
+  not. `list` returns metadata only, runs no Git, and never reconciles,
+  redrives, or settles an operation.
+- Only `create --cwd` may initialize a new state root. Every other checkpoint
+  command fails with exit `1` and creates nothing when the root is missing.
+  A valid root with no checkpoints lists `checkpoints: []`.
+- `--budget` is the finite helper budget (default 5m); `--watch` exists only
+  on `status`, is finite, and never begins an action or renews a deadline.
+- `--operation OP` selects one removal attempt returned by `remove`; without
+  it, `status` observes the creation and its latest removal attempt.
+- `--limit` is between 1 and 50; pass a returned `checkpoint_cursor` as
+  `--after` for the next page.
+
+| Command | Exit `0` | Exit `3` | Exit `1` |
+| --- | --- | --- | --- |
+| `create` | — | Accepted with `checkpoint.id` and `watch_checkpoint`; or a busy refusal with no ID and `retry_create` | Concrete failure, or a requested creation qualified `unavailable`; known IDs are retained |
+| `remove C` | An existing attempt already succeeded; its `operation_id` is returned | Accepted attempt with `operation_id` and `watch_checkpoint`; or a refusal with no `operation_id` and `retry_remove` | Concrete failure |
+| `status C` | Successful observation, including unavailable history with `stop_and_report` | Creation or latest removal pending | Concrete failure |
+| `status C --operation R` | R is `removed` or `nothing_to_remove` | R is pending | R is `unavailable`, or a concrete failure |
+| `list` | One metadata page; entries may be pending or unavailable | — | Concrete failure |
+
+Exit `2` is an invalid request; parse errors print usage on stderr without
+guaranteed JSON. `status` exit `0` does not mean the checkpoint is usable.
+Fork only when `checkpoint.current.state` is `checkpointed` and
+`checkpoint.current.usable` is `true`; `usable` becomes `false` once any
+removal attempt is registered, even a failed one. Commit and ref fields alone
+are not success. A selected attempt's own receipt chooses its exit even when a
+newer attempt exists. Checkpoint refs survive `workspace release` and
+`workspace forget` until `checkpoint remove`. Delegate does not apply,
+restore, or merge a checkpoint. See the [checkpoint
+guidance](../skills/agent-integration/references/workspaces.md#git-checkpoints)
+and [checkpoint results](../skills/agent-integration/references/result-handling.md#checkpoint-results).
 
 ## Preflight and continuation
 

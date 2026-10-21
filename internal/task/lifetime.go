@@ -39,12 +39,16 @@ const (
 // RecordAbsent reports only a direct, non-contextual record absence.
 // Store readers must add ErrIdentityMismatch or ErrEvidenceFault after a
 // primary record has been read and a required dependency is missing.
+// Every leaf cause must be an absence: a join that also carries an I/O,
+// permission, or lock-release failure is a fault, not an absent record.
 func RecordAbsent(err error) bool {
-	return errors.Is(err, fs.ErrNotExist) &&
-		!errors.Is(err, ErrIdentityMismatch) &&
-		!errors.Is(err, ErrEvidenceFault) &&
-		!errors.Is(err, context.Canceled) &&
-		!errors.Is(err, context.DeadlineExceeded)
+	if errors.Is(err, ErrIdentityMismatch) ||
+		errors.Is(err, ErrEvidenceFault) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return AllErrorCauses(err, func(cause error) bool { return errors.Is(cause, fs.ErrNotExist) })
 }
 
 // LifetimeWorkerWaitResult is the closed classification of one managed-worker

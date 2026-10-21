@@ -8,6 +8,12 @@ cap or TTL eviction. A read-only review may attach a retained workspace with
 release rules live in [managed workspace guidance](workspaces.md); do not
 restate them in each collaboration brief.
 
+When a participant must start from the Lead's current uncommitted work, the
+Lead checkpoints that content first and forks each worker from the qualified
+checkpoint commit with `--base`. Follow
+[checkpoint before fork](workspaces.md#checkpoint-before-fork); a worker never
+checkpoints a workspace its own turn is using.
+
 ## Keep each request identifiable
 
 Choose the fan-out needed for the user's task. Each participant needs its own

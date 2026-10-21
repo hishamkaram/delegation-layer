@@ -23,6 +23,7 @@ mkdir -p "${DISPOSABLE_REPO}/scripts" "${DISPOSABLE_REPO}/bin"
 cp "${REPO_ROOT}/scripts/check-tool-versions.sh" "${DISPOSABLE_REPO}/scripts/"
 cp "${REPO_ROOT}/scripts/install-tools.sh" "${DISPOSABLE_REPO}/scripts/"
 cp "${REPO_ROOT}/scripts/verify-gates.sh" "${DISPOSABLE_REPO}/scripts/"
+cp "${REPO_ROOT}/.go-version" "${DISPOSABLE_REPO}/.go-version"
 cp "${REPO_ROOT}/.golangci.yml" "${DISPOSABLE_REPO}/.golangci.yml"
 cp "${REPO_ROOT}/Makefile" "${DISPOSABLE_REPO}/Makefile"
 mkdir -p "${DISPOSABLE_REPO}/cmd"
@@ -32,15 +33,82 @@ package main
 func main() {}
 EOF
 
-create_valid_stubs() {
-    cat << 'EOF' > "${DISPOSABLE_REPO}/bin/go"
+# Every positive compiler fixture derives from the disposable copy of the pin.
+GO_PIN_FILE="${DISPOSABLE_REPO}/.go-version"
+GO_PIN="$(<"${GO_PIN_FILE}")"
+# The last compiler release affected by GO-2026-6809; it must stay rejected.
+PREVIOUS_GO_PIN="1.27.2"
+
+INSTALL_BIN="${TMP_HARNESS}/install_bin"
+mkdir -p "${INSTALL_BIN}"
+DOWNLOAD_RECORD="${TMP_HARNESS}/curl_invoked.txt"
+cat << EOF > "${INSTALL_BIN}/curl"
 #!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.2 darwin/arm64"; exit 0; fi
-if [[ "$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
-if [[ "$*" == "run ./cmd/maintainability --go-sources" ]]; then printf '%s\0' "$PWD/cmd/dummy.go"; exit 0; fi
+echo "CURL_INVOKED" >> "${DOWNLOAD_RECORD}"
+exit 99
+EOF
+chmod +x "${INSTALL_BIN}/curl"
+
+# write_go_stub DIR VERSION_TEXT VERSION_EXIT writes a fake go whose
+# `go version` prints VERSION_TEXT and exits VERSION_EXIT.
+write_go_stub() {
+    cat << EOF > "$1/go"
+#!/usr/bin/env bash
+if [[ "\$*" == "version" ]]; then echo "$2"; exit $3; fi
+if [[ "\$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
+if [[ "\$*" == "run ./cmd/maintainability --go-sources" ]]; then printf '%s\0' "\$PWD/cmd/dummy.go"; exit 0; fi
 exit 0
 EOF
-    chmod +x "${DISPOSABLE_REPO}/bin/go"
+    chmod +x "$1/go"
+}
+
+# run_guard BIN SCRIPT runs a disposable guard with BIN first on PATH. The
+# working directory is the real repository, whose own pin must not be read.
+run_guard() {
+    set +e
+    output="$(cd "${REPO_ROOT}" && PATH="$1:${PATH}" "${DISPOSABLE_REPO}/scripts/$2" 2>&1)"
+    status=$?
+    set -e
+}
+
+# expect_guard_failure NAME BIN SCRIPT TEXT requires a nonzero exit with TEXT
+# and no recorded download.
+expect_guard_failure() {
+    run_guard "$2" "$3"
+    if [[ "${status}" -ne 0 && "${output}" == *"$4"* && ! -f "${DOWNLOAD_RECORD}" ]]; then
+        assert_pass "$1"
+    else
+        echo "FAIL: Expected $1, got exit ${status}: ${output}" >&2
+        exit 1
+    fi
+}
+
+expect_check_pass() {
+    run_guard "${DISPOSABLE_REPO}/bin" check-tool-versions.sh
+    if [[ "${status}" -eq 0 && "${output}" == *"Tool verification passed"* ]]; then
+        assert_pass "$1"
+    else
+        echo "FAIL: Expected $1, got exit ${status}: ${output}" >&2
+        exit 1
+    fi
+}
+
+# expect_download_boundary NAME requires install-tools to pass its Go guard and
+# stop at the recording curl stub.
+expect_download_boundary() {
+    rm -f "${DOWNLOAD_RECORD}"
+    run_guard "${INSTALL_BIN}" install-tools.sh
+    if [[ "${status}" -eq 99 && -f "${DOWNLOAD_RECORD}" && "$(cat "${DOWNLOAD_RECORD}")" == "CURL_INVOKED" ]]; then
+        assert_pass "$1"
+    else
+        echo "FAIL: Expected $1 at the curl boundary (exit 99), got exit ${status}: ${output}" >&2
+        exit 1
+    fi
+    rm -f "${DOWNLOAD_RECORD}"
+}
+
+create_valid_stubs() {
+    write_go_stub "${DISPOSABLE_REPO}/bin" "go version go${GO_PIN} darwin/arm64" 0
 
     cat << 'EOF' > "${DISPOSABLE_REPO}/bin/golangci-lint"
 #!/usr/bin/env bash
@@ -87,74 +155,24 @@ EOF
 create_valid_stubs
 
 # --- 1. check-tool-versions: Exact-Positive Control ---
-set +e
-output="$(PATH="${DISPOSABLE_REPO}/bin:${PATH}" "${DISPOSABLE_REPO}/scripts/check-tool-versions.sh" 2>&1)"
-status=$?
-set -e
-if [[ "${status}" -eq 0 && "${output}" == *"Tool verification passed"* ]]; then
-    assert_pass "check-tool-versions exact-positive control passes all 5 tools"
-else
-    echo "FAIL: Expected check-tool-versions positive control to succeed, got exit ${status}: ${output}" >&2
-    exit 1
-fi
+expect_check_pass "check-tool-versions exact-positive control passes all 5 tools"
 
 # --- 2. check-tool-versions: Go Compiler Guards ---
 # 2a. Near/suffix version
-cat << 'EOF' > "${DISPOSABLE_REPO}/bin/go"
-#!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.20 darwin/arm64"; exit 0; fi
-if [[ "$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
-exit 0
-EOF
-chmod +x "${DISPOSABLE_REPO}/bin/go"
-set +e
-output="$(PATH="${DISPOSABLE_REPO}/bin:${PATH}" "${DISPOSABLE_REPO}/scripts/check-tool-versions.sh" 2>&1)"
-status=$?
-set -e
-if [[ "${status}" -ne 0 && "${output}" == *"Go version mismatch"* ]]; then
-    assert_pass "check-tool-versions rejects near-version Go (go1.27.20)"
-else
-    echo "FAIL: Expected rejection of go1.27.20, got exit ${status}: ${output}" >&2
-    exit 1
-fi
+write_go_stub "${DISPOSABLE_REPO}/bin" "go version go${GO_PIN}0 darwin/arm64" 0
+expect_guard_failure "check-tool-versions rejects near-version Go (go${GO_PIN}0)" "${DISPOSABLE_REPO}/bin" check-tool-versions.sh "Go version mismatch"
 
 # 2b. Malformed version
-cat << 'EOF' > "${DISPOSABLE_REPO}/bin/go"
-#!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version devel-unknown darwin/arm64"; exit 0; fi
-if [[ "$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
-exit 0
-EOF
-chmod +x "${DISPOSABLE_REPO}/bin/go"
-set +e
-output="$(PATH="${DISPOSABLE_REPO}/bin:${PATH}" "${DISPOSABLE_REPO}/scripts/check-tool-versions.sh" 2>&1)"
-status=$?
-set -e
-if [[ "${status}" -ne 0 && "${output}" == *"Go version mismatch"* ]]; then
-    assert_pass "check-tool-versions rejects malformed Go version"
-else
-    echo "FAIL: Expected rejection of malformed Go version, got exit ${status}: ${output}" >&2
-    exit 1
-fi
+write_go_stub "${DISPOSABLE_REPO}/bin" "go version devel-unknown darwin/arm64" 0
+expect_guard_failure "check-tool-versions rejects malformed Go version" "${DISPOSABLE_REPO}/bin" check-tool-versions.sh "Go version mismatch"
 
 # 2c. Nonzero exit with valid-looking text
-cat << 'EOF' > "${DISPOSABLE_REPO}/bin/go"
-#!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.2 darwin/arm64"; exit 42; fi
-if [[ "$*" == "env GOTOOLCHAIN" ]]; then echo "local"; exit 0; fi
-exit 0
-EOF
-chmod +x "${DISPOSABLE_REPO}/bin/go"
-set +e
-output="$(PATH="${DISPOSABLE_REPO}/bin:${PATH}" "${DISPOSABLE_REPO}/scripts/check-tool-versions.sh" 2>&1)"
-status=$?
-set -e
-if [[ "${status}" -ne 0 ]]; then
-    assert_pass "check-tool-versions rejects Go version command failure (exit 42)"
-else
-    echo "FAIL: Expected rejection on Go exit 42, got exit ${status}: ${output}" >&2
-    exit 1
-fi
+write_go_stub "${DISPOSABLE_REPO}/bin" "go version go${GO_PIN} darwin/arm64" 42
+expect_guard_failure "check-tool-versions rejects Go version command failure (exit 42)" "${DISPOSABLE_REPO}/bin" check-tool-versions.sh "'go version' command failed"
+
+# 2d. The previous, vulnerable compiler pin
+write_go_stub "${DISPOSABLE_REPO}/bin" "go version go${PREVIOUS_GO_PIN} darwin/arm64" 0
+expect_guard_failure "check-tool-versions rejects previous Go pin (go${PREVIOUS_GO_PIN})" "${DISPOSABLE_REPO}/bin" check-tool-versions.sh "Required: go${GO_PIN}. Found: go${PREVIOUS_GO_PIN}"
 create_valid_stubs
 
 # --- 3. check-tool-versions: golangci-lint Guards ---
@@ -439,35 +457,9 @@ fi
 create_valid_stubs
 
 # --- 7. install-tools: Go Guard and Download Boundary ---
-INSTALL_BIN="${TMP_HARNESS}/install_bin"
-mkdir -p "${INSTALL_BIN}"
-DOWNLOAD_RECORD="${TMP_HARNESS}/curl_invoked.txt"
-
-cat << EOF > "${INSTALL_BIN}/curl"
-#!/usr/bin/env bash
-echo "CURL_INVOKED" >> "${DOWNLOAD_RECORD}"
-exit 99
-EOF
-chmod +x "${INSTALL_BIN}/curl"
-
 # 7a. Bad version rejected before download
-cat << 'EOF' > "${INSTALL_BIN}/go"
-#!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.20 darwin/arm64"; exit 0; fi
-exit 0
-EOF
-chmod +x "${INSTALL_BIN}/go"
-
-set +e
-output="$(PATH="${INSTALL_BIN}:${PATH}" "${DISPOSABLE_REPO}/scripts/install-tools.sh" 2>&1)"
-status=$?
-set -e
-if [[ "${status}" -ne 0 && "${output}" == *"Go version mismatch"* && ! -f "${DOWNLOAD_RECORD}" ]]; then
-    assert_pass "install-tools rejects near-version Go before initiating any download"
-else
-    echo "FAIL: Expected install-tools to reject go1.27.20 without downloading, got exit ${status}: ${output}" >&2
-    exit 1
-fi
+write_go_stub "${INSTALL_BIN}" "go version go${GO_PIN}0 darwin/arm64" 0
+expect_guard_failure "install-tools rejects near-version Go before initiating any download" "${INSTALL_BIN}" install-tools.sh "Go version mismatch"
 
 # 7b. Failed Go version command rejected before download
 cat << 'EOF' > "${INSTALL_BIN}/go"
@@ -476,36 +468,18 @@ if [[ "$*" == "version" ]]; then echo "fatal" >&2; exit 42; fi
 exit 0
 EOF
 chmod +x "${INSTALL_BIN}/go"
+expect_guard_failure "install-tools rejects Go command failure (exit 42) before downloading" "${INSTALL_BIN}" install-tools.sh "'go version' command failed"
 
-set +e
-output="$(PATH="${INSTALL_BIN}:${PATH}" "${DISPOSABLE_REPO}/scripts/install-tools.sh" 2>&1)"
-status=$?
-set -e
-if [[ "${status}" -ne 0 && ! -f "${DOWNLOAD_RECORD}" ]]; then
-    assert_pass "install-tools rejects Go command failure (exit 42) before downloading"
-else
-    echo "FAIL: Expected install-tools to reject failed go without downloading, got exit ${status}: ${output}" >&2
-    exit 1
-fi
+# 7c. Previous, vulnerable compiler pin rejected before download
+write_go_stub "${INSTALL_BIN}" "go version go${PREVIOUS_GO_PIN} darwin/arm64" 0
+expect_guard_failure "install-tools rejects previous Go pin (go${PREVIOUS_GO_PIN}) before downloading" "${INSTALL_BIN}" install-tools.sh "Required: go${GO_PIN}. Found: go${PREVIOUS_GO_PIN}"
 
-# 7c. Valid Go control reaches the harmless recorded boundary
-cat << 'EOF' > "${INSTALL_BIN}/go"
-#!/usr/bin/env bash
-if [[ "$*" == "version" ]]; then echo "go version go1.27.2 darwin/arm64"; exit 0; fi
-exit 0
-EOF
-chmod +x "${INSTALL_BIN}/go"
+# 7d. A conflicting GOTOOLCHAIN is rejected, not silently replaced
+write_go_stub "${INSTALL_BIN}" "go version go${GO_PIN} darwin/arm64" 0
+GOTOOLCHAIN=auto expect_guard_failure "install-tools rejects conflicting GOTOOLCHAIN=auto before downloading" "${INSTALL_BIN}" install-tools.sh "Conflicting GOTOOLCHAIN setting"
 
-set +e
-output="$(PATH="${INSTALL_BIN}:${PATH}" "${DISPOSABLE_REPO}/scripts/install-tools.sh" 2>&1)"
-status=$?
-set -e
-if [[ "${status}" -eq 99 && -f "${DOWNLOAD_RECORD}" && "$(cat "${DOWNLOAD_RECORD}")" == "CURL_INVOKED" ]]; then
-    assert_pass "install-tools valid control passes Go check and reaches recorded download boundary"
-else
-    echo "FAIL: Expected install-tools valid control to reach curl boundary (exit 99), got exit ${status}: ${output}" >&2
-    exit 1
-fi
+# 7e. Valid Go control reaches the harmless recorded boundary
+expect_download_boundary "install-tools valid control passes Go check and reaches recorded download boundary"
 
 # --- 8. verify-gates: Linter Exit Code Black-Box Harness ---
 # Setup controlled mock golangci-lint inside DISPOSABLE_REPO/bin
@@ -711,6 +685,7 @@ create_valid_stubs
 SPACED_REPO="${TMP_HARNESS}/lead scratch/repo with spaces"
 mkdir -p "${SPACED_REPO}/scripts" "${SPACED_REPO}/bin" "${SPACED_REPO}/cmd"
 cp "${REPO_ROOT}/scripts/check-tool-versions.sh" "${SPACED_REPO}/scripts/"
+cp "${REPO_ROOT}/.go-version" "${SPACED_REPO}/.go-version"
 cp "${REPO_ROOT}/.golangci.yml" "${SPACED_REPO}/.golangci.yml"
 cp "${REPO_ROOT}/Makefile" "${SPACED_REPO}/Makefile"
 cp "${DISPOSABLE_REPO}/cmd/dummy.go" "${SPACED_REPO}/cmd/"
@@ -775,5 +750,38 @@ else
     echo "FAIL: Expected config-check to succeed in spaced repo, got exit ${status}: ${output}" >&2
     exit 1
 fi
+
+# --- 12. Compiler Pin Data Ownership ---
+# 12a. Missing, empty, and malformed pins fail before Go or any download runs.
+write_go_stub "${INSTALL_BIN}" "go version go${GO_PIN} darwin/arm64" 0
+rm -f "${GO_PIN_FILE}"
+expect_guard_failure "check-tool-versions rejects a missing pin" "${DISPOSABLE_REPO}/bin" check-tool-versions.sh "Go compiler pin not readable"
+expect_guard_failure "install-tools rejects a missing pin before downloading" "${INSTALL_BIN}" install-tools.sh "Go compiler pin not readable"
+for invalid_pin in "" "${GO_PIN}" "${GO_PIN}\n\n" "${GO_PIN}\n${GO_PIN}\n" "go${GO_PIN}\n" "${GO_PIN%.*}\n" "${GO_PIN}rc1\n" " ${GO_PIN}\n" "0${GO_PIN}\n" ">=${GO_PIN}\n"; do
+    printf '%b' "${invalid_pin}" > "${GO_PIN_FILE}"
+    expect_guard_failure "check-tool-versions rejects pin '${invalid_pin}'" "${DISPOSABLE_REPO}/bin" check-tool-versions.sh "Invalid Go compiler pin"
+    expect_guard_failure "install-tools rejects pin '${invalid_pin}' before downloading" "${INSTALL_BIN}" install-tools.sh "Invalid Go compiler pin"
+done
+# 12a'. printf writes raw NUL bytes; Bash drops NUL, so a NUL must not pass
+# as the required newline or hide inside or after the pin line.
+for nul_pin in "${GO_PIN}\0" "${GO_PIN}\0\n" "${GO_PIN%.*}\0.${GO_PIN##*.}\n" "${GO_PIN}\n\0"; do
+    printf '%b' "${nul_pin}" > "${GO_PIN_FILE}"
+    expect_guard_failure "check-tool-versions rejects raw pin bytes '${nul_pin}'" "${DISPOSABLE_REPO}/bin" check-tool-versions.sh "Invalid Go compiler pin"
+    expect_guard_failure "install-tools rejects raw pin bytes '${nul_pin}' before downloading" "${INSTALL_BIN}" install-tools.sh "Invalid Go compiler pin"
+done
+
+# 12b. Both guards follow a changed disposable pin and reject the real one.
+ALTERNATE_GO_PIN="1.99.4"
+printf '%s\n' "${ALTERNATE_GO_PIN}" > "${GO_PIN_FILE}"
+write_go_stub "${DISPOSABLE_REPO}/bin" "go version go${ALTERNATE_GO_PIN} darwin/arm64" 0
+write_go_stub "${INSTALL_BIN}" "go version go${ALTERNATE_GO_PIN} darwin/arm64" 0
+expect_check_pass "check-tool-versions follows a changed pin (go${ALTERNATE_GO_PIN})"
+expect_download_boundary "install-tools follows a changed pin (go${ALTERNATE_GO_PIN}) to the download boundary"
+write_go_stub "${DISPOSABLE_REPO}/bin" "go version go${GO_PIN} darwin/arm64" 0
+write_go_stub "${INSTALL_BIN}" "go version go${GO_PIN} darwin/arm64" 0
+expect_guard_failure "check-tool-versions rejects go${GO_PIN} under a changed pin" "${DISPOSABLE_REPO}/bin" check-tool-versions.sh "Required: go${ALTERNATE_GO_PIN}. Found: go${GO_PIN}"
+expect_guard_failure "install-tools rejects go${GO_PIN} under a changed pin" "${INSTALL_BIN}" install-tools.sh "Required: go${ALTERNATE_GO_PIN}. Found: go${GO_PIN}"
+cp "${REPO_ROOT}/.go-version" "${GO_PIN_FILE}"
+create_valid_stubs
 
 echo "All ${PASSED_CASES} black-box tooling regression checks passed successfully."

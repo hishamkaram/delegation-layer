@@ -82,16 +82,26 @@ func (s *Store) openFile(path string, flags int) (*os.File, error) {
 		return nil, err
 	}
 	defer closeFileQuietly(dir)
-	fd, err := unix.Openat(int(dir.Fd()), filepath.Base(path), flags|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0o600)
+	f, err := openLeafAt(dir, filepath.Base(path), path, flags)
 	if err != nil {
 		return nil, err
 	}
-	f := os.NewFile(uintptr(fd), path)
 	if err = validatePrivateFile(f, false); err != nil {
 		closeFileQuietly(f)
 		return nil, err
 	}
 	return f, nil
+}
+
+// openLeafAt opens one entry relative to an already pinned directory without
+// following a symlink. The caller validates and owns the returned descriptor;
+// the open error is returned unwrapped so the caller can classify it.
+func openLeafAt(dir *os.File, name, path string, flags int) (*os.File, error) {
+	fd, err := unix.Openat(int(dir.Fd()), name, flags|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
 }
 
 func (s *Store) exists(path string) (bool, error) {

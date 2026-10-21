@@ -67,11 +67,17 @@ func newNativeLineage(t *testing.T) nativeLineage {
 // newNativeLineageFormat initializes the main repository with objectFormat.
 func newNativeLineageFormat(t *testing.T, objectFormat string) nativeLineage {
 	t.Helper()
+	return newNativeLineageIn(t, supervisorfixture.CanonicalTempDir(t), objectFormat)
+}
+
+// newNativeLineageIn initializes the lineage under root, which its caller
+// owns and removes; its store root is nativeLineageStateRoot(root).
+func newNativeLineageIn(t *testing.T, root, objectFormat string) nativeLineage {
+	t.Helper()
 	scope := nativeWorktreeGateScope(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 	t.Cleanup(cancel)
 	scope.ctx = ctx
-	root := supervisorfixture.CanonicalTempDir(t)
 	lineage := nativeLineage{scope: scope, owner: &nativeFixtureOwner{}, root: root, main: filepath.Join(root, "main")}
 	lineage.git = workspace.Git{Runner: nativeWorkspaceGitRunner{launch: lineage.launch}}
 	if err := os.Mkdir(lineage.main, 0o700); err != nil {
@@ -82,10 +88,12 @@ func newNativeLineageFormat(t *testing.T, objectFormat string) nativeLineage {
 	writeLineageFile(t, filepath.Join(lineage.main, "removed.txt"), "remove me\n")
 	lineage.gitIn(t, lineage.main, "add", "-A")
 	lineage.commit(t, lineage.main, "base")
-	lineage.store = openLineageStore(t, filepath.Join(root, "state"))
+	lineage.store = openLineageStore(t, nativeLineageStateRoot(root))
 	lineage.container = workspace.ContainerPath(lineage.store.Root, lineage.store.RootID)
 	return lineage
 }
+
+func nativeLineageStateRoot(root string) string { return filepath.Join(root, "state") }
 
 func openLineageStore(t *testing.T, path string) *taskdir.Store {
 	t.Helper()

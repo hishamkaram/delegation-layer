@@ -77,22 +77,31 @@ func RequireProvisionHelpersClosed(ctx context.Context, store *taskdir.Store, re
 	return nil
 }
 
-func awaitProvision(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, operationID string) (registration workspace.Registration, resultErr error) {
+// The registration read follows an accepted helper; its own deadline is not a
+// pending helper.
+func awaitProvision(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, operationID string) (workspace.Registration, error) {
+	if err := observeProvision(ctx, store, operationID); err != nil {
+		return workspace.Registration{}, PendingAtDeadline(ctx, err)
+	}
+	return resource.Registration(ctx)
+}
+
+func observeProvision(ctx context.Context, store *taskdir.Store, operationID string) (resultErr error) {
 	operation, err := workspace.LoadOperation(ctx, store, operationID)
 	if err != nil {
-		return registration, err
+		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
 	for {
 		_, _, err = AcceptedOperation(ctx, store, operation)
 		if err == nil {
-			return resource.Registration(ctx)
+			return nil
 		}
-		if !errors.Is(err, workspace.ErrPending) {
-			return registration, err
+		if !errors.Is(err, workspace.ErrPending) || !PendingError(err) {
+			return err
 		}
 		if err = WaitObservation(ctx); err != nil {
-			return registration, errors.Join(workspace.ErrPending, err)
+			return errors.Join(workspace.ErrPending, err)
 		}
 	}
 }

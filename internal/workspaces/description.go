@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 
 	"github.com/hishamkaram/delegation-layer/internal/task"
 
@@ -49,13 +50,22 @@ func describeResource(ctx context.Context, resource *workspace.Resource, evidenc
 	return response, nil
 }
 
+// appendArtifactDescriptions is the one flattened artifact projection. A
+// descriptor equal in every field to one already projected by an earlier
+// source, such as a capture operation described both by its receipt and as
+// the requested operation, is shown once. Distinct descriptors, including
+// repeats within this one source, keep their first-seen order.
 func appendArtifactDescriptions(root, operationID string, artifacts []workspace.Artifact, response *Description) {
+	projected := len(response.Artifacts)
 	for _, artifact := range artifacts {
 		descriptor := ArtifactDescription{Artifact: artifact, OperationID: operationID, EvidenceState: response.EvidenceState}
 		if artifact.Omitted != "" {
 			descriptor.EvidenceState = "omitted"
 		} else if response.EvidenceState == "retained" {
 			descriptor.Path = filepath.Join(workspace.ScratchPath(root, operationID), artifact.Name)
+		}
+		if slices.Contains(response.Artifacts[:projected], descriptor) {
+			continue
 		}
 		response.Artifacts = append(response.Artifacts, descriptor)
 	}
@@ -190,6 +200,9 @@ func DescribeOperation(ctx context.Context, store *taskdir.Store, resource *work
 	if operation.Request().WorkspaceID != resource.Request().WorkspaceID {
 		return task.ErrIdentityMismatch
 	}
+	if operation.Request().Kind == workspace.OperationCheckpoint {
+		return describeCheckpointOperation(ctx, store, operation, response)
+	}
 	result, _, err := AcceptedOperation(ctx, store, operation)
 	if errors.Is(err, ErrOperationResultUnavailable) {
 		response.ReasonCode = "operation_result_unavailable"
@@ -198,7 +211,7 @@ func DescribeOperation(ctx context.Context, store *taskdir.Store, resource *work
 		response.Operation = &result
 		response.ReasonCode = result.ReasonCode
 	}
-	if errors.Is(err, workspace.ErrPending) {
+	if errors.Is(err, workspace.ErrPending) && PendingError(err) {
 		response.NextAction = "watch_workspace"
 		return nil
 	}
@@ -206,5 +219,20 @@ func DescribeOperation(ctx context.Context, store *taskdir.Store, resource *work
 		return err
 	}
 	appendArtifactDescriptions(store.Root, operationID, result.Artifacts, response)
+	return nil
+}
+
+// describeCheckpointOperation never projects a generic helper result as a
+// checkpoint success; only the qualified receipt describes its outcome.
+func describeCheckpointOperation(ctx context.Context, store *taskdir.Store, operation *workspace.Operation, response *Description) error {
+	receipt, err := QualifyCheckpoint(ctx, store, operation)
+	if errors.Is(err, workspace.ErrPending) && PendingError(err) {
+		response.NextAction = "watch_workspace"
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	response.ReasonCode = receipt.ReasonCode
 	return nil
 }

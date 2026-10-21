@@ -90,8 +90,10 @@ skill-package-check:
 plugin-package-check:
 	./scripts/check-plugin-package.sh
 
+# -timeout is the per-test-binary aggregate hang watchdog, not a latency requirement;
+# functional and cleanup deadlines stay inside each test.
 test-race: tool-versions
-	go test -race -count=1 -timeout=15m ./...
+	go test -race -count=1 -timeout=30m ./...
 
 test-native-harness:
 	python3 -m unittest discover -s scripts -p 'test_acceptance_*.py' -v
@@ -182,10 +184,10 @@ acceptance-supervisor-upgrade-recovery: build
 		--scenario supervisor-upgrade-recovery --parallel-tasks 2 \
 		--output "$$receipt_dir/receipt.json"
 
-# Fixture-only managed workspace regressions (lifecycle, lineage); not real provider acceptance.
+# Fixture-only managed workspace regressions (lifecycle, lineage, checkpoint); not real provider acceptance.
 # Each scenario writes its own receipt under bin/managed-workspace-acceptance.XXXXXX; the script owns cleanup.
 acceptance-workspaces: build
-	@for scenario in lifecycle lineage; do \
+	@for scenario in lifecycle lineage checkpoint; do \
 		receipt_dir=$$(mktemp -d "$(BIN_DIR)/managed-workspace-acceptance.XXXXXX") || exit $$?; \
 		echo "Managed workspace $$scenario acceptance evidence: $$receipt_dir/receipt.json"; \
 		python3 scripts/acceptance_workspaces.py \

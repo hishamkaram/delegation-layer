@@ -8,6 +8,10 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+// workspaceOperationsDirectory is the state-root entry holding one directory
+// per workspace operation journal.
+const workspaceOperationsDirectory = "workspace-operations"
+
 // StateRoot returns the root owning this pinned control directory.
 func (d *ControlDir) StateRoot() string { return d.store.Root }
 
@@ -40,11 +44,11 @@ func (s *Store) OpenWorkspaceOperation(ctx context.Context, id string, create bo
 	if err := task.ValidateTaskID(id); err != nil {
 		return nil, err
 	}
-	return s.openControlDirContext(ctx, filepath.Join(s.Root, "workspace-operations", id), create)
+	return s.openControlDirContext(ctx, filepath.Join(s.Root, workspaceOperationsDirectory, id), create)
 }
 
 // WorkspaceArtifactDirectory is the one layout owner for optional workspace
 // bytes. Callers validate operation identities before constructing locations.
 func WorkspaceArtifactDirectory(root, operationID string) string {
-	return filepath.Join(root, "workspace-operations", operationID, "artifacts")
+	return filepath.Join(root, workspaceOperationsDirectory, operationID, "artifacts")
 }

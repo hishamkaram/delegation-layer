@@ -395,6 +395,10 @@ func (l *LockFile) tryLock(mode lockMode) (lockAttempt, error) {
 
 // Unlock decrements a shared lease or releases an exclusive lock.
 // The kernel flock is only released when all shared leases have been released.
+// When releasing the exclusive lock or the last shared lease fails, the
+// LockFile keeps that ownership and returns the wrapped error: the caller still
+// owns the lease and may retry Unlock, or Close the descriptor. Retention is
+// conservative; the error does not prove that the kernel still holds the lock.
 func (l *LockFile) Unlock() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -407,13 +411,14 @@ func (l *LockFile) Unlock() error {
 		return nil
 	}
 
-	if l.shCount > 0 {
+	switch {
+	case l.shCount > 1:
 		l.shCount--
-		if l.shCount == 0 {
-			if err := l.flockUnlock(); err != nil {
-				return fmt.Errorf("unlock SH %s: %w", l.path, err)
-			}
+	case l.shCount == 1:
+		if err := l.flockUnlock(); err != nil {
+			return fmt.Errorf("unlock SH %s: %w", l.path, err)
 		}
+		l.shCount = 0
 	}
 
 	return nil

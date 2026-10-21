@@ -165,28 +165,24 @@ func listManagedWorkspaces(a Arguments, store *taskdir.Store, response Response)
 }
 
 func watchManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps Dependencies, a Arguments) (resultErr error) {
-	defer func() {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) && errors.Is(resultErr, context.DeadlineExceeded) {
-			resultErr = errors.Join(workspace.ErrPending, resultErr)
-		}
-	}()
+	defer func() { resultErr = workspacescore.PendingAtDeadline(ctx, resultErr) }()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		err := observeManagedWorkspace(ctx, store, resource, deps, a.WorkspaceOperationID)
-		if err == nil || !errors.Is(err, workspace.ErrPending) || a.Watch == 0 {
+		if err == nil || !errors.Is(err, workspace.ErrPending) || !workspacescore.PendingError(err) || a.Watch == 0 {
 			return err
 		}
 		if waitErr := workspacescore.WaitObservation(ctx); waitErr != nil {
-			return workspace.ErrPending
+			return errors.Join(workspace.ErrPending, waitErr)
 		}
 	}
 }
 
 func observeManagedWorkspace(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps Dependencies, operationID string) (resultErr error) {
 	useErr := reconcileWorkspaceUse(ctx, store, resource, deps)
-	if useErr != nil && !errors.Is(useErr, workspace.ErrPending) {
+	if useErr != nil && (!errors.Is(useErr, workspace.ErrPending) || !workspacescore.PendingError(useErr)) {
 		return useErr
 	}
 	if operationID == "" {
@@ -200,8 +196,7 @@ func observeManagedWorkspace(ctx context.Context, store *taskdir.Store, resource
 	if operation.Request().WorkspaceID != resource.Request().WorkspaceID {
 		return task.ErrIdentityMismatch
 	}
-	_, _, err = workspacescore.AcceptedOperation(ctx, store, operation)
-	return errors.Join(useErr, err)
+	return errors.Join(useErr, workspacescore.OperationOutcome(ctx, store, operation))
 }
 
 func beginWorkspaceVerification(ctx context.Context, store *taskdir.Store, resource *workspace.Resource, deps Dependencies, arguments []string, budget time.Duration) (ack workspacescore.ActionAcknowledgement, resultErr error) {

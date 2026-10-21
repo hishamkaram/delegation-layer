@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import stat
 from datetime import datetime
+from scripts.delegate_acceptance.evidence.files import digest
 from scripts.delegate_acceptance.evidence.limits import MAX_PROVIDER_BYTES
 from scripts.delegate_acceptance.evidence.records import _read_canonical_control_record
 from scripts.delegate_acceptance.evidence.timestamps import _canonical_timestamp
@@ -20,6 +21,20 @@ from scripts.delegate_acceptance.lifetime.identity import (
 from scripts.delegate_acceptance.lifetime.unlaunched import (
     _auxiliary_lifetime_unlaunched,
     _operation_lifetime_owner_live,
+)
+from scripts.delegate_acceptance.workspaces.checkpoint_records import (
+    CHECKPOINT_CANDIDATE_RECORD,
+    CHECKPOINT_CREATION_RECORDS,
+    CHECKPOINT_RECEIPT_RECORD,
+    ClosureProof,
+    canonical_checkpoint_candidate_bytes,
+    canonical_checkpoint_receipt_bytes,
+    canonical_checkpoint_removal_receipt_bytes,
+    canonical_checkpoint_removal_reference_bytes,
+    checkpoint_removal_name,
+    checkpoint_removal_record,
+    require_receipt_closure,
+    resolved_closure_kind,
 )
 from scripts.delegate_acceptance.workspaces.specification import (
     _canonical_operation_guard_bytes,
@@ -83,7 +98,8 @@ def _workspace_operation_entries(directory: Path, operation: str) -> set[str]:
         allowed = (name == "request.json" or name in _WORKSPACE_OPERATION_GUARDS or
                    name in _WORKSPACE_OPERATION_LOCKS or
                    name in _WORKSPACE_LIFETIME_RECORDS or
-                   _lifetime_launch_sequence("workspace", name) is not None)
+                   _lifetime_launch_sequence("workspace", name) is not None or
+                   _checkpoint_record(name))
         require(allowed, f"workspace operation has an unexpected record: {operation}/{name}")
         require(stat.S_ISREG(metadata.st_mode),
                 f"workspace operation record is not regular: {operation}/{name}")
@@ -184,6 +200,24 @@ def validate_managed_workspace_operation_closure(
         directory: Path, root: str) -> dict[str, object]:
     """Validate one exact operation with the same authority as root cleanup."""
     operation = directory.name
+    names, request, request_digest = _read_workspace_operation(directory, root, operation)
+    closure = _workspace_operation_closure(
+        directory, root, operation, request, request_digest, names)
+    if request["kind"] == "checkpoint":
+        return {**closure, "checkpoint": _checkpoint_creation_evidence(
+            directory, root, request, request_digest, names, closure)}
+    require(not any(_checkpoint_record(name) for name in names),
+            f"workspace operation has checkpoint records for kind {request['kind']}: {operation}")
+    if request["kind"] == "checkpoint-remove":
+        return {**closure, "checkpoint_removal": _checkpoint_removal_registration(
+            directory, root, request, request_digest, names, closure)}
+    return closure
+
+
+def _read_workspace_operation(
+        directory: Path, root: str, operation: str,
+        ) -> tuple[set[str], dict[str, object], str]:
+    """Read one operation's bounded namespace and its exact canonical request."""
     require(_task_identity(operation),
             "managed workspace operation has an invalid operation identity")
     require(directory.is_dir() and not directory.is_symlink(),
@@ -197,6 +231,14 @@ def validate_managed_workspace_operation_closure(
         lambda value: _canonical_operation_request_bytes(
             value, root, operation, f"workspace operation request for {operation}"),
     )
+    return names, request, request_digest
+
+
+def _workspace_operation_closure(
+        directory: Path, root: str, operation: str, request: dict[str, object],
+        request_digest: str, names: set[str],
+        ) -> dict[str, object]:
+    """Classify the generic lifetime closure shared by every operation kind."""
     _validate_workspace_operation_records(
         directory, root, operation, request, request_digest, names)
     deadline = _canonical_timestamp(
@@ -227,3 +269,156 @@ def validate_managed_workspace_operation_closure(
         "mode": "unsubmitted",
         "request_sha256": request_digest,
     }
+
+
+def _checkpoint_record(name: str) -> bool:
+    """Recognize checkpoint names; a malformed removal-family name is refused."""
+    return name in CHECKPOINT_CREATION_RECORDS or checkpoint_removal_record(name) is not None
+
+
+def _operation_closure_proof(directory: Path, closure: dict[str, object]) -> ClosureProof:
+    """Project the validated lifetime records as guardian.ReadAuxiliaryClosureProof does."""
+    mode = closure["mode"]
+    require(mode != "unsubmitted",
+            f"workspace operation has a checkpoint receipt without closure: {directory.name}")
+    if mode == "unlaunched":
+        return ClosureProof(kind="", unlaunched_sha256=str(closure["unlaunched_sha256"]))
+    lifetime = closure["managed_lifetime"]
+    termination = lifetime["termination"]
+    wait = lifetime["worker_wait"]
+    return ClosureProof(
+        kind=resolved_closure_kind(
+            registered=lifetime["registration"] is not None, worker_wait=wait),
+        termination_sha256="" if termination is None else digest(
+            directory / "lifetime-termination.json"),
+        termination_cause="" if termination is None else str(termination["cause"]),
+        worker_wait_sha256="" if wait is None else digest(
+            directory / "lifetime-worker-wait.json"))
+
+
+def _checkpoint_creation_evidence(
+        directory: Path, root: str, request: dict[str, object], request_digest: str,
+        names: set[str], closure: dict[str, object],
+        ) -> dict[str, object]:
+    """Validate one checkpoint journal's candidate, receipt and removal attempts."""
+    operation = directory.name
+    candidate = None
+    if CHECKPOINT_CANDIDATE_RECORD in names:
+        label = f"checkpoint candidate for {operation}"
+        candidate, _ = _read_canonical_control_record(
+            directory / CHECKPOINT_CANDIDATE_RECORD, label,
+            lambda value: canonical_checkpoint_candidate_bytes(
+                value, request, request_digest, label))
+    status = None
+    if CHECKPOINT_RECEIPT_RECORD in names:
+        label = f"checkpoint receipt for {operation}"
+        receipt, _ = _read_canonical_control_record(
+            directory / CHECKPOINT_RECEIPT_RECORD, label,
+            lambda value: canonical_checkpoint_receipt_bytes(
+                value, request, request_digest, label))
+        require("candidate" not in receipt or receipt["candidate"] == candidate,
+                f"{label} candidate differs from the stored candidate")
+        status = receipt["status"]
+        require_receipt_closure(
+            receipt, _operation_closure_proof(directory, closure),
+            success=status == "checkpointed", label=label)
+    removals = [
+        _checkpoint_removal_outcome(
+            directory, root, request_digest, attempt, names,
+            candidate_present=candidate is not None)
+        for attempt in _checkpoint_removal_attempts(directory, names)
+    ]
+    # The coordinator registers a new attempt only after the head holds an
+    # unavailable receipt, so every attempt before the head must keep one.
+    require(all(removal["status"] == "unavailable" for removal in removals[:-1]),
+            f"checkpoint removal history has a prior attempt without an unavailable receipt: {operation}")
+    return {"candidate": candidate is not None, "status": status, "removals": removals}
+
+
+def _checkpoint_removal_attempts(
+        directory: Path, names: set[str]) -> list[dict[str, object]]:
+    """Read registered attempts 1..N as Go's readCheckpointRemovalAttemptsTx does."""
+    checkpoint = directory.name
+    families: dict[str, set[int]] = {"attempt": set(), "receipt": set()}
+    for name in names:
+        record = checkpoint_removal_record(name)
+        if record is not None:
+            families[record[0]].add(record[1])
+    head = len(families["attempt"])
+    require(all(sequence <= head for sequence in families["attempt"]),
+            f"checkpoint removal attempts are not contiguous: {checkpoint}")
+    require(all(sequence <= head for sequence in families["receipt"]),
+            f"checkpoint removal receipt has no registered attempt: {checkpoint}")
+    attempts: list[dict[str, object]] = []
+    for sequence in range(1, head + 1):
+        label = f"checkpoint removal attempt {sequence} for {checkpoint}"
+        attempt, _ = _read_canonical_control_record(
+            directory / checkpoint_removal_name("attempt", sequence), label,
+            lambda value, number=sequence, record=label:
+                canonical_checkpoint_removal_reference_bytes(value, checkpoint, number, record))
+        require(all(attempt["operation_id"] != prior["operation_id"] for prior in attempts),
+                f"{label} repeats a registered removal operation")
+        attempts.append(attempt)
+    return attempts
+
+
+def _checkpoint_removal_outcome(
+        directory: Path, root: str, request_digest: str, attempt: dict[str, object],
+        names: set[str], *, candidate_present: bool,
+        ) -> dict[str, object]:
+    """Bind one registered attempt to its removal request, closure and receipt."""
+    removal = str(attempt["operation_id"])
+    removal_directory = directory.parent / removal
+    removal_names, removal_request, removal_digest = _read_workspace_operation(
+        removal_directory, root, removal)
+    require(removal_request["kind"] == "checkpoint-remove" and
+            removal_request["subject"] == {
+                "kind": "operation", "id": directory.name, "sha256": request_digest} and
+            removal_digest == attempt["request_sha256"],
+            f"checkpoint removal attempt does not bind its removal request: {removal}")
+    name = checkpoint_removal_name("receipt", int(attempt["sequence"]))
+    status = None
+    if name in names:
+        label = f"checkpoint removal receipt {attempt['sequence']} for {directory.name}"
+        receipt, _ = _read_canonical_control_record(
+            directory / name, label,
+            lambda value: canonical_checkpoint_removal_receipt_bytes(value, attempt, label))
+        status = receipt["status"]
+        require(status != "removed" or candidate_present,
+                f"{label} removed a checkpoint without a candidate")
+        removal_closure = _workspace_operation_closure(
+            removal_directory, root, removal, removal_request, removal_digest, removal_names)
+        require_receipt_closure(
+            receipt, _operation_closure_proof(removal_directory, removal_closure),
+            success=status in {"removed", "nothing_to_remove"}, label=label)
+    return {"sequence": attempt["sequence"], "operation_id": removal, "status": status}
+
+
+def _checkpoint_removal_registration(
+        directory: Path, root: str, request: dict[str, object], request_digest: str,
+        names: set[str], closure: dict[str, object],
+        ) -> dict[str, object]:
+    """Bind a removal journal to its checkpoint's registered attempt.
+
+    An unregistered removal request must never be submitted, so a guard or any
+    native lifetime fact requires its exact attempt in the original journal.
+    """
+    operation = directory.name
+    subject = request["subject"]
+    checkpoint = str(subject["id"])
+    creation = directory.parent / checkpoint
+    submitted = bool(names & _WORKSPACE_OPERATION_GUARDS) or "managed_lifetime" in closure
+    if not submitted and not creation.exists() and not creation.is_symlink():
+        return {"checkpoint_id": checkpoint, "sequence": None}
+    creation_names, creation_request, creation_digest = _read_workspace_operation(
+        creation, root, checkpoint)
+    require(creation_request["kind"] == "checkpoint" and subject["sha256"] == creation_digest,
+            f"checkpoint removal names a foreign checkpoint request: {operation}")
+    registered = [attempt for attempt in _checkpoint_removal_attempts(creation, creation_names)
+                  if attempt["operation_id"] == operation]
+    require(not registered or registered[0]["request_sha256"] == request_digest,
+            f"checkpoint removal attempt does not bind this request: {operation}")
+    require(registered or not submitted,
+            f"unregistered checkpoint removal was submitted: {operation}")
+    return {"checkpoint_id": checkpoint,
+            "sequence": registered[0]["sequence"] if registered else None}

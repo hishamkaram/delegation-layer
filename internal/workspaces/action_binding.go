@@ -37,8 +37,15 @@ func ValidateActionRequest(ctx context.Context, resource *workspace.Resource, re
 	return nil
 }
 
-func validateStoredWorkspaceActionRequest(ctx context.Context, store *taskdir.Store, request workspace.OperationRequest) (resultErr error) {
-	if request.Kind != workspace.OperationForget {
+func validateStoredWorkspaceActionRequest(ctx context.Context, store *taskdir.Store, operation *workspace.Operation) (resultErr error) {
+	request := operation.Request()
+	switch request.Kind {
+	case workspace.OperationCheckpoint:
+		return validateCheckpointCreationIntent(request)
+	case workspace.OperationCheckpointRemove:
+		return validateRegisteredCheckpointRemoval(ctx, store, operation)
+	case workspace.OperationForget:
+	default:
 		return nil
 	}
 	resource, err := workspace.LoadResource(ctx, store, request.WorkspaceID)

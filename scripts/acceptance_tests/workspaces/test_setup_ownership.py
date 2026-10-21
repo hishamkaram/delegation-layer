@@ -10,11 +10,33 @@ from unittest import mock
 
 import scripts.delegate_acceptance.workspaces.scenarios.application as application
 import scripts.delegate_acceptance.directories.operations as directories_operations
+import scripts.delegate_acceptance.private_cli.leases as private_cli_leases
+import scripts.delegate_acceptance.private_cli.supervisor as private_cli_supervisor
 import scripts.delegate_acceptance.processes.operations as processes_operations
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
+from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure
 from scripts.delegate_acceptance.processes.operations import Processes
-from scripts.delegate_acceptance.workspaces.scenarios.context import AcceptanceSetupFailure
+from scripts.delegate_acceptance.workspaces.scenarios.context import (
+    MANAGED_LIFETIME_CLOSURE_TIMEOUT, AcceptanceSetupFailure,
+)
 from scripts.delegate_acceptance.workspaces.scenarios.evidence import ReceiptFinalizer
+
+TASK_ID = "0123456789abcdef0123456789abcdef"
+
+
+class SupervisorClock:
+    """The supervisor module's time binding: sleeping advances monotonic time instantly."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
 
 
 class RecordingOwner(DirectoryOwner):
@@ -62,6 +84,7 @@ class SetupProcessOwnershipTests(unittest.TestCase):
 
         self.registries = []
         registries = self.registries
+        self.clock = SupervisorClock()
 
         class RecordingProcesses(Processes):
             """The production registry, remembered so teardown can observe what it still owns."""
@@ -76,6 +99,7 @@ class SetupProcessOwnershipTests(unittest.TestCase):
             mock.patch.object(application, "Processes", RecordingProcesses),
             mock.patch.object(processes_operations, "write_json", side_effect=write),
             mock.patch.object(processes_operations, "subprocess", mock.Mock(Popen=Popen)),
+            mock.patch.object(private_cli_supervisor, "time", self.clock),
         ):
             self.enterContext(patch)
         self.addCleanup(self._settle_children)
@@ -344,11 +368,148 @@ class SetupProcessOwnershipTests(unittest.TestCase):
     def test_workspace_context_refusal_retains_all_pins_until_terminal_release(self):
         context = self._context()
         cleanup = context.cleanup("failed")
-        self.assertFalse(cleanup["authorized"])
+        self.assertEqual((cleanup["authorized"], cleanup["decision"]),
+                         (False, "managed-lifetime-closure-unproven"))
+        self.assertRegex(cleanup["lifetime_error"],
+                         "^managed lifetime closure remained incomplete .*managed lifetime root record")
+        self.assertAlmostEqual(self.clock.now, MANAGED_LIFETIME_CLOSURE_TIMEOUT)
+        self.assertGreater(len(self.clock.sleeps), 1)
         self.assertEqual(cleanup["retained_owned_directories"],
                          [str(token.directory) for token in self.owner.tokens])
         self.assertNotIn("retained_owned_directories_status", cleanup)
         self._assert_pinned_then_released(context)
+
+    def _daemon_context(self, events, *, private_config=True):
+        """A context with one task, optionally a private daemon config, and a gate and cohort."""
+        context = self._context()
+        context.add_task(TASK_ID)
+        context.attempted_task_ids.append(TASK_ID)
+        if private_config:
+            context.private_config.parent.mkdir()
+            context.private_config.write_text("fixture\n", encoding="utf-8")
+        gate = mock.create_autospec(private_cli_leases.LockedReleaseGate, instance=True)
+        gate.release.side_effect = lambda: events.append("gate-released")
+        cohort = mock.create_autospec(private_cli_leases.LiveFIFOLeaseCohort, instance=True)
+        cohort.close.side_effect = lambda: events.append("cohort-closed")
+        context.gates.append(gate)
+        context.cohorts.append(cohort)
+        return context, cohort
+
+    def _finalize_failed_with_closure(self, context, events, closure_results):
+        """Run the real finalizer with only closure validation and native shutdown evidence faked."""
+        results = iter(closure_results)
+        test = self
+
+        def validate(state, task_ids):
+            events.append("closure-checked")
+            test.assertEqual((state, task_ids), (context.state, (TASK_ID,)))
+            for token in test.owner.tokens:
+                token.assert_live()
+            result = next(results)
+            if isinstance(result, BaseException):
+                raise result
+            return result
+
+        def shutdown_command(*arguments, **options):
+            events.append("shutdown")
+            for token in test.owner.tokens:
+                token.assert_live()
+
+        endpoint = context.private_config.parent / "run" / "pueue.sock"
+        native = mock.Mock()
+        native.evidence.return_value = (4242, endpoint, (1, 2))
+        native.gone.side_effect = [False, True]
+        native.closed.return_value = True
+        native.command.side_effect = shutdown_command
+        output = self.home / "receipt.json"
+        with (
+            mock.patch.object(private_cli_supervisor, "validate_managed_lifetime_closure",
+                              side_effect=validate),
+            mock.patch.object(private_cli_supervisor, "private_shutdown_evidence", native.evidence),
+            mock.patch.object(private_cli_supervisor, "private_daemon_process_gone", native.gone),
+            mock.patch.object(private_cli_supervisor, "private_shutdown_endpoint_closed", native.closed),
+            mock.patch.object(private_cli_supervisor, "pueue_command", native.command),
+        ):
+            result = application._finalize_run(
+                ReceiptFinalizer(output, [], {}), context, None, "failed", "original reason")
+        self.assertEqual(result, ("failed", "original reason"))
+        receipt = json.loads(output.read_text())
+        self.assertEqual((receipt["verdict"], receipt["reason"]), ("failed", "original reason"))
+        self.assertEqual(receipt["cleanup"]["retained_owned_directories"],
+                         [str(token.directory) for token in self.owner.tokens])
+        self.assertEqual(receipt["details"]["retained_authority_release"], {"status": "released"})
+        self.assertTrue(all(token.consumed and token.directory.is_dir() for token in self.owner.tokens))
+        return receipt["cleanup"], native
+
+    def test_worker_closing_after_gate_release_still_shuts_down_the_private_daemon(self):
+        events = []
+        context, cohort = self._daemon_context(events)
+        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        cleanup, native = self._finalize_failed_with_closure(
+            context, events, [AcceptanceFailure("worker still closing"), closed, closed])
+        self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked",
+                                  "closure-checked", "closure-checked", "shutdown"])
+        cohort.remove_closed_fifos.assert_not_called()
+        self.assertEqual((context.gates, context.cohorts), ([], []))
+        self.assertEqual(len(self.clock.sleeps), 1)
+        native.evidence.assert_called_once_with(context.private_config)
+        native.command.assert_called_once()
+        self.assertEqual(native.command.call_args.args,
+                         (context.pueue, context.private_config, context.environment, ["shutdown"]))
+        self.assertIs(native.command.call_args.kwargs["capture_root"], context.root_token)
+        self.assertTrue(all(call.kwargs["capture_root"] is context.root_token
+                            for call in native.gone.call_args_list))
+        self.assertEqual(
+            (cleanup["lifetime_closed"], cleanup["daemon_closed"], cleanup["authorized"],
+             cleanup["decision"]),
+            (True, True, False, "failure-evidence-retained"))
+        self.assertNotIn("lifetime_error", cleanup)
+        self.assertNotIn("daemon_error", cleanup)
+
+    def test_closure_without_a_private_config_is_awaited_and_no_shutdown_is_called(self):
+        events = []
+        context, _cohort = self._daemon_context(events, private_config=False)
+        closed = {"root_id": "root", "tasks": {}, "inspections": {}}
+        cleanup, native = self._finalize_failed_with_closure(
+            context, events, [AcceptanceFailure("worker still closing"), closed])
+        self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked",
+                                  "closure-checked"])
+        self.assertEqual(len(self.clock.sleeps), 1)
+        native.evidence.assert_not_called()
+        native.command.assert_not_called()
+        self.assertEqual((cleanup["lifetime_closed"], cleanup["authorized"], cleanup["decision"]),
+                         (True, False, "failure-evidence-retained"))
+        self.assertNotIn("lifetime_error", cleanup)
+
+    def test_closure_incomplete_at_the_deadline_skips_shutdown_and_retains_evidence(self):
+        events = []
+        context, _cohort = self._daemon_context(events)
+        pending = AcceptanceFailure("worker still closing")
+        cleanup, native = self._finalize_failed_with_closure(context, events, [pending] * 1000)
+        self.assertEqual(MANAGED_LIFETIME_CLOSURE_TIMEOUT, 45)
+        self.assertAlmostEqual(self.clock.now, 45)
+        self.assertEqual(events.count("closure-checked"), len(self.clock.sleeps) + 1)
+        self.assertEqual(events[:2], ["gate-released", "cohort-closed"])
+        self.assertNotIn("shutdown", events)
+        native.evidence.assert_not_called()
+        self.assertEqual(
+            (cleanup["lifetime_closed"], cleanup["daemon_closed"], cleanup["authorized"],
+             cleanup["decision"]),
+            (False, False, False, "managed-lifetime-closure-unproven"))
+        self.assertEqual(cleanup["lifetime_error"],
+                         "managed lifetime closure remained incomplete before supervisor "
+                         "shutdown: worker still closing")
+
+    def test_non_retryable_closure_error_is_reported_without_waiting(self):
+        events = []
+        context, _cohort = self._daemon_context(events)
+        cleanup, native = self._finalize_failed_with_closure(
+            context, events, [RuntimeError("state root unreadable")])
+        self.assertEqual(events, ["gate-released", "cohort-closed", "closure-checked"])
+        self.assertEqual(self.clock.sleeps, [])
+        native.evidence.assert_not_called()
+        self.assertEqual((cleanup["lifetime_closed"], cleanup["decision"], cleanup["lifetime_error"]),
+                         (False, "managed-lifetime-closure-unproven", "state root unreadable"))
 
     def test_exceptional_cleanup_after_the_handoff_does_not_transfer_twice_or_skip_the_receipt(self):
         context = self._context()

@@ -7,6 +7,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
+	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
 func reconcileWorkspaceAfterGuardian(store *taskdir.Store, parsed runnerArguments, deps Dependencies) (resultErr error) {
@@ -41,7 +42,13 @@ func workspaceForGuardian(ctx context.Context, store *taskdir.Store, parsed runn
 		if err != nil {
 			return "", err
 		}
-		return operation.Request().WorkspaceID, operation.Close()
+		defer func() { resultErr = errors.Join(resultErr, operation.Close()) }()
+		// Ordinary checkpoints and removals own no workspace use. Their
+		// coordinator finalizer only publishes the qualified receipt.
+		if operation.Request().WorkspaceID == "" {
+			return "", workspacescore.FinalizeCheckpoint(ctx, store, operation)
+		}
+		return operation.Request().WorkspaceID, nil
 	}
 	td, err := store.OpenTask(parsed.TaskID)
 	if err != nil {

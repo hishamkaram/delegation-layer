@@ -66,3 +66,64 @@ Save each response and exit code once. A created task is observed with
 success; continue observing the same task. The Lead reviews the capture and
 owns landing any changes. `workspace release` is explicit; no automatic
 apply, commit, branch merge, TTL eviction, or provider-CLI fallback occurs.
+
+## Fork from a checkpoint
+
+Use this sequence when the worker must start from current uncommitted content
+instead of a committed base. Run it from the Lead, not from inside a worker
+that uses the same workspace. The [checkpoint guidance](../references/workspaces.md#checkpoint-before-fork)
+owns the rules; [checkpoint results](../references/result-handling.md#checkpoint-results)
+owns every response decision.
+
+```sh
+SOURCE="$PWD"
+RESPONSE="$(mktemp)"
+if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" checkpoint create \
+  --cwd "$SOURCE" --budget 5m --json >"$RESPONSE.checkpoint"; then
+  checkpoint_exit=0
+else
+  checkpoint_exit=$?
+fi
+printf '%s\n' "$checkpoint_exit" >"$RESPONSE.checkpoint.exit"
+cat "$RESPONSE.checkpoint"
+```
+
+Exit `3` with `checkpoint.id` and `next_action: "watch_checkpoint"` means the
+request was accepted, not captured. Use that `checkpoint.id` as
+`CHECKPOINT_ID`. Do not run `create` again.
+
+```sh
+if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" checkpoint status CHECKPOINT_ID \
+  --watch 30s --json >"$RESPONSE.checkpoint.status"; then
+  checkpoint_status_exit=0
+else
+  checkpoint_status_exit=$?
+fi
+printf '%s\n' "$checkpoint_status_exit" >"$RESPONSE.checkpoint.status.exit"
+cat "$RESPONSE.checkpoint.status"
+```
+
+Repeat that status command while it exits `3`. Fork only when it exits `0`,
+`checkpoint.current.state` is `checkpointed`, and `checkpoint.current.usable`
+is `true`. Use `checkpoint.current.commit_oid` as `COMMIT_OID` in the first
+dispatch example, replacing `--base HEAD` with `--base COMMIT_OID`. Report a
+`stop_and_report` result instead of forking.
+
+When the Lead no longer needs the checkpoint, remove it explicitly:
+
+```sh
+if delegate --root "${DELEGATE_ROOT:-$HOME/delegation-state}" checkpoint remove CHECKPOINT_ID \
+  --budget 5m --json >"$RESPONSE.checkpoint.remove"; then
+  checkpoint_remove_exit=0
+else
+  checkpoint_remove_exit=$?
+fi
+printf '%s\n' "$checkpoint_remove_exit" >"$RESPONSE.checkpoint.remove.exit"
+cat "$RESPONSE.checkpoint.remove"
+```
+
+Exit `3` with `checkpoint.operation_id` and `watch_checkpoint` means removal
+attempt `OPERATION_ID` was accepted. Observe that exact attempt with
+`checkpoint status CHECKPOINT_ID --operation OPERATION_ID --watch 30s --json`,
+saving its response and exit the same way. A `retry_remove` response has no
+`operation_id` and accepted nothing.

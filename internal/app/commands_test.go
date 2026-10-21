@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
@@ -767,4 +768,107 @@ func TestRequestHashesUseExactPreparedRecordBytes(t *testing.T) {
 	if gotMetaHash != task.ComputeSHA256(noncanonical) || gotMetaHash == task.ComputeSHA256(canonical) {
 		t.Fatalf("request hash was reconstructed canonically: got=%s", gotMetaHash)
 	}
+}
+
+// These cases characterize the documented public collect --watch placement
+// (root before collect, task ID before --watch) for an unreplicated field
+// report; they are coverage, not a fix. Fake time makes each bound exact:
+// a pending publication returns 3 only after its whole watch, every fresh
+// call observes again, and a committed winner returns at once.
+
+func collectWatchCLI(t *testing.T, root, id, watch string) (int, Response, time.Duration) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	started := time.Now()
+	code := Run([]string{"--root", root, "collect", id, "--watch", watch, "--json"}, &stdout, &stderr, Dependencies{})
+	elapsed := time.Since(started)
+	var response Response
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("collect --watch %s: stdout %q stderr %q: %v", watch, stdout.String(), stderr.String(), err)
+	}
+	return code, response, elapsed
+}
+
+func requirePendingPublication(t *testing.T, label string, code int, response Response) {
+	t.Helper()
+	if code != 3 || response.Pending == nil || response.Pending.Kind != "publication" || response.Outcome != nil || response.Error != "" {
+		t.Fatalf("%s = exit %d %+v, want pending publication", label, code, response)
+	}
+}
+
+func TestCollectWatchPendingPublicationReturnsOnlyAfterItsBound(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store, td, req := newAppTestTask(t, false)
+		defer closeAppTestTask(t, store, td)
+		code, response, elapsed := collectWatchCLI(t, store.Root, req.TaskID, "0s")
+		requirePendingPublication(t, "zero watch", code, response)
+		if elapsed != 0 {
+			t.Fatalf("zero watch waited %s", elapsed)
+		}
+		// The earlier pending result is not reused: this fresh call waits.
+		code, response, elapsed = collectWatchCLI(t, store.Root, req.TaskID, "30s")
+		requirePendingPublication(t, "30s watch", code, response)
+		if elapsed < 30*time.Second {
+			t.Fatalf("30s watch returned pending after %s", elapsed)
+		}
+	})
+}
+
+func TestCollectWatchPendingPublicationWaitsOnNativeTimers(t *testing.T) {
+	store, td, req := newAppTestTask(t, false)
+	defer closeAppTestTask(t, store, td)
+	const watch = 300 * time.Millisecond
+	code, response, elapsed := collectWatchCLI(t, store.Root, req.TaskID, watch.String())
+	requirePendingPublication(t, "native watch", code, response)
+	if elapsed < watch {
+		t.Fatalf("native watch returned pending after %s, before its %s bound", elapsed, watch)
+	}
+}
+
+// sealRetainingRunnerLease starts and seals the fixture task while its runner
+// lease stays held, so publication remains with that runner.
+func sealRetainingRunnerLease(t *testing.T, td *taskdir.TaskDir) *taskdir.StartPermit {
+	t.Helper()
+	permit, err := td.PrepareStart(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = errors.Join(permit.Consume(), td.RecordStarted(0), td.WriteRawFiles("answer\n", "")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = td.Seal(task.InvocationStarted, 0, "", task.FixturePredicateRef()); err != nil {
+		t.Fatal(err)
+	}
+	return permit
+}
+
+func requireImmediateWinner(t *testing.T, label, root, id string) {
+	t.Helper()
+	code, response, elapsed := collectWatchCLI(t, root, id, "30s")
+	if code != 0 || response.Publication != task.PublicationCommitted.String() || response.Outcome == nil || response.Pending != nil || elapsed != 0 {
+		t.Fatalf("%s = exit %d after %s: %+v", label, code, elapsed, response)
+	}
+}
+
+// TestCollectWatchReplaysLockedWinnerImmediately publishes while the fixture
+// keeps the runner lease, so collect reads the locked winner.
+func TestCollectWatchReplaysLockedWinnerImmediately(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store, td, req := newAppTestTask(t, false)
+		defer closeAppTestTask(t, store, td)
+		permit := sealRetainingRunnerLease(t, td)
+		code, response, elapsed := collectWatchCLI(t, store.Root, req.TaskID, "2s")
+		requirePendingPublication(t, "sealed while the runner lease is held", code, response)
+		if elapsed < 2*time.Second {
+			t.Fatalf("sealed control returned pending after %s", elapsed)
+		}
+		if _, verdictErr, finalizeErr := td.Finalize(task.FixturePredicateRef()); verdictErr != nil || finalizeErr != nil {
+			t.Fatalf("finalize = %v, %v", verdictErr, finalizeErr)
+		}
+		requireImmediateWinner(t, "locked winner", store.Root, req.TaskID)
+		if err := permit.Release(); err != nil {
+			t.Fatal(err)
+		}
+		requireImmediateWinner(t, "released winner", store.Root, req.TaskID)
+	})
 }
