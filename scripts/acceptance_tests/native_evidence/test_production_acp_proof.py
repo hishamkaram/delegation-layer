@@ -10,9 +10,14 @@ from scripts import native_acceptance_evidence as evidence
 from scripts.acceptance_tests.native.support import production_acp_source
 from scripts.delegate_acceptance.native_evidence.contract import (
     EvidenceError,
+    _validate_case_binaries,
+    _validate_case_completion,
     _validate_case_proof_identity,
+    _validate_case_sessions,
 )
 from scripts.delegate_acceptance.native_evidence.production_acp import (
+    ACP_PREDICATE_VERSION,
+    ACP_PROFILE_REVISION,
     compact_production_acp,
     production_acp_proof_error,
 )
@@ -42,6 +47,16 @@ FRESH, RESUME = "1" * 32, "2" * 32
 SOURCE, SUCCESSOR = "3" * 32, "4" * 32
 
 
+def historical(marker: dict[str, object], *aliases: str, envelope: bool = True) -> dict[str, object]:
+    """Return a copy whose envelope and the named turns carry the retired predicate."""
+    value = deepcopy(marker)
+    if envelope:
+        value["predicate_version"] = "acp-v1"
+    for alias in aliases:
+        value["tasks"][alias]["predicate_version"] = "acp-v1"
+    return value
+
+
 def bindings(tasks: dict[str, str]) -> list[dict[str, str]]:
     return [{"alias": alias, "task_id": task_id, "session_id": "session-1"}
             for alias, task_id in sorted(tasks.items())]
@@ -63,6 +78,10 @@ class ProductionAcpProofTests(unittest.TestCase):
             [(case.provider, case.permission) for case in cases if case.scenario == "timeout-resume"],
             [("codex:exec", "workspace-write"), ("opencode:run", "workspace-write")])
 
+    def test_release_pins_are_the_current_predicate_and_unchanged_profile(self):
+        self.assertEqual((ACP_PROFILE_REVISION, ACP_PREDICATE_VERSION),
+                         ("opencode-acp-v1", "acp-v2"))
+
     def test_complete_marker_binds_every_turn_to_its_sealed_task(self):
         for tasks, aliases in (({"fresh": FRESH, "resume": RESUME}, ("fresh", "resume")),
                                ({"timeout_source": SOURCE, "timeout_resume": SUCCESSOR},
@@ -72,7 +91,10 @@ class ProductionAcpProofTests(unittest.TestCase):
                 proof = self.compact(marker, tasks, aliases)
                 self.assertEqual(proof["state"], "complete")
                 self.assertEqual(proof["profile_revision"], "opencode-acp-v1")
-                self.assertEqual(proof["predicate_version"], "acp-v1")
+                self.assertEqual(proof["predicate_version"], "acp-v2")
+                self.assertEqual({turn["alias"]: turn["publication"] for turn in proof["tasks"]},
+                                 {alias: "unpublished" if alias == "timeout_source" else "committed"
+                                  for alias in aliases})
                 self.assertEqual([turn["alias"] for turn in proof["tasks"]], sorted(aliases))
                 self.assertEqual(proof, self.compact(deepcopy(marker), tasks, aliases))
                 self.assertNotIn("session_id", json.dumps(proof["tasks"]))
@@ -115,6 +137,23 @@ class ProductionAcpProofTests(unittest.TestCase):
                 marker = production_acp_source(tasks, {alias: "session-1" for alias in tasks})
                 mutate(marker)
                 self.assertEqual(self.compact(marker, tasks, aliases), {"state": "invalid"})
+
+    def test_retired_predicate_is_invalid_for_every_turn_and_envelope_mix(self):
+        for tasks, aliases in (({"fresh": FRESH, "resume": RESUME}, ("fresh", "resume")),
+                               ({"timeout_source": SOURCE, "timeout_resume": SUCCESSOR},
+                                ("timeout_resume", "timeout_source"))):
+            marker = production_acp_source(tasks, {alias: "session-1" for alias in tasks})
+            self.assertEqual(self.compact(marker, tasks, aliases)["state"], "complete")
+            mixes = {"all retired": historical(marker, *aliases),
+                     "retired envelope only": historical(marker),
+                     **{f"only {alias} retired": historical(marker, alias, envelope=False)
+                        for alias in aliases},
+                     **{f"retired envelope, {alias} current": {
+                         **historical(marker, *(other for other in aliases if other != alias))}
+                        for alias in aliases}}
+            for label, value in mixes.items():
+                with self.subTest(aliases=aliases, mix=label):
+                    self.assertEqual(self.compact(value, tasks, aliases), {"state": "invalid"})
 
     def test_container_predicate_digest_is_invalid_not_a_crash(self):
         tasks = {"fresh": FRESH, "resume": RESUME}
@@ -179,6 +218,11 @@ class ProductionAcpProofTests(unittest.TestCase):
         relabeled = deepcopy(proof)
         relabeled["production_acp"]["profile_revision"] = "opencode-native-v2"
         self.assertEqual(error("opencode:run", relabeled), "aggregate_case_production_acp_invalid")
+        # Every other fact is valid and bound; only the retired predicate is wrong.
+        retired = deepcopy(proof)
+        retired["production_acp"]["predicate_version"] = "acp-v1"
+        self.assertEqual(error("opencode:run", retired), "aggregate_case_production_acp_invalid")
+        self.assertEqual(error("opencode:run", proof), None)
 
 
 class ProductionAcpAggregateTests(unittest.TestCase):
@@ -246,6 +290,58 @@ class ProductionAcpAggregateTests(unittest.TestCase):
                 tampered["source_proof"]["production_acp"]["state"] = state
                 with self.assertRaisesRegex(EvidenceError, "aggregate_case_production_acp_invalid"):
                     _validate_case_proof_identity(case, tampered)
+
+    def test_retired_predicate_source_cannot_claim_pass(self):
+        def retire(value, *aliases, envelope=True):
+            value["production_acp"] = historical(value["production_acp"], *aliases, envelope=envelope)
+
+        for name, mutate in (
+                ("all retired", lambda value: retire(value, "fresh", "resume")),
+                ("retired envelope only", lambda value: retire(value)),
+                ("one retired task", lambda value: retire(value, "resume", envelope=False))):
+            with self.subTest(source=name):
+                _root, aggregate, code = self.build(name.replace(" ", "-"), mutate)
+                self.assertEqual((code, aggregate["status"]), (1, "FAIL"))
+                case, compact = self.compact_case(
+                    aggregate, "case-06-opencode-run-workspace-write-write")
+                self.assertEqual(case["evidence_status"], "UNRESOLVED")
+                self.assertEqual(compact["evidence_error"], "source_production_acp_invalid")
+                self.assertEqual(compact["source_proof"]["state"], "unresolved")
+                self.assertEqual(compact["source_proof"]["production_acp"], {"state": "invalid"})
+
+    def test_retired_predicate_failed_source_stays_unresolved_with_evidence_retained(self):
+        root = self.root / "retired-failure"
+        matrix = self.fixture.make_matrix(root, status="PASS", failed_index=5)
+        case_directory = root / evidence.EXPECTED_CASES[5].case_output
+        aliases = ("fresh", "resume")
+        tasks = {alias: task_id for alias, task_id in zip(aliases, (FRESH, RESUME))}
+        sessions = {alias: "session-1" for alias in aliases}
+        failure = case_directory / "failure.json"
+        value = json.loads(failure.read_text(encoding="utf-8"))
+        value.update(tasks=tasks, provider_sessions=sessions, production_acp=historical(
+            production_acp_source(tasks, sessions), *aliases))
+        failure.write_text(json.dumps(value), encoding="utf-8")
+        source_bytes = failure.read_bytes()
+        raw = case_directory / "raw-provider-output"
+        raw_bytes = raw.read_bytes()
+
+        aggregate, code = evidence.build_aggregate(
+            root, matrix, root / evidence.AGGREGATE_RECEIPT_NAME,
+            tag="v1.2.3", source_revision="a" * 40, require_pass=True)
+        self.assertEqual((code, aggregate["status"], aggregate["unresolved_case_count"]),
+                         (1, "FAIL", 1))
+        self.assertEqual((failure.read_bytes(), raw.read_bytes()), (source_bytes, raw_bytes))
+        case, compact = self.compact_case(aggregate, evidence.EXPECTED_CASES[5].case_id)
+        proof = compact["source_proof"]
+        self.assertEqual((case["evidence_status"], proof["state"], proof["final_status"]),
+                         ("UNRESOLVED", "unresolved", "FAIL"))
+        self.assertEqual(proof["source_receipt_sha256"], evidence.sha(source_bytes))
+        self.assertEqual(proof["production_acp"], {"state": "invalid"})
+        checked = _validate_case_proof_identity(dict(case), compact)
+        sessions_proof = _validate_case_sessions(checked)
+        binaries = _validate_case_binaries(dict(case), checked)
+        _validate_case_completion(dict(case), checked, sessions_proof, binaries)
+        evidence.validate_aggregate_receipt(root / evidence.AGGREGATE_RECEIPT_NAME)
 
     def test_historical_or_tampered_opencode_source_is_explicitly_unresolved(self):
         for name, mutate, reason in (

@@ -46,6 +46,18 @@ type outputUpgradeFixture struct {
 
 func newOutputUpgradeFixture(t *testing.T, testCase outputUpgradeCase) *outputUpgradeFixture {
 	t.Helper()
+	fixture := initOutputUpgradeFixture(t, testCase)
+	fixture.createPredecessor(t)
+	return fixture
+}
+
+// initOutputUpgradeFixture owns the fixture's resources for testCase: the
+// state root, workspace, runner, recording supervisor (closed on cleanup),
+// provider-only HOME and PATH, and the case's catalog dependencies. Its
+// partial postcondition is that no store or predecessor exists yet: request,
+// meta and session are unset until the caller creates its predecessor.
+func initOutputUpgradeFixture(t *testing.T, testCase outputUpgradeCase) *outputUpgradeFixture {
+	t.Helper()
 	// Claude's native writable tree includes the system temp directory, so the
 	// state root lives under the caller's home, as in the CCR continuation tests.
 	userHome, err := os.UserHomeDir()
@@ -75,7 +87,6 @@ func newOutputUpgradeFixture(t *testing.T, testCase outputUpgradeCase) *outputUp
 		InitialSupervisorExecutable: fixture.supervisor.Binding().ClientExecutable,
 		RunnerExecutable:            fixture.runner,
 	}
-	fixture.createPredecessor(t)
 	return fixture
 }
 

@@ -127,12 +127,13 @@ func (dialect launchDialect) nativeEffectiveConfig(request task.TaskRecord, root
 
 // recordedPredicate returns the predicate a reconstructed record keeps. A
 // native run record keeps any registered run revision; an ACP record keeps
-// only the ACP revision of its mode. The pure-mode dialect keeps its recorded
-// predicate, or the legacy one when none was recorded.
+// exactly its recorded ACP revision of its mode, acp-v1 or acp-v2. The
+// pure-mode dialect keeps its recorded predicate, or the legacy one when none
+// was recorded.
 func (dialect launchDialect) recordedPredicate(mode string, recorded task.PredicateRef) (task.PredicateRef, error) {
 	switch {
 	case dialect == dialectACP:
-		if !recorded.Equal(acpReferenceForMode(mode)) {
+		if !isKnownACPReference(mode, recorded) {
 			return task.PredicateRef{}, fmt.Errorf("%w: OpenCode ACP record has an unknown predicate", ErrUnsupportedProfile)
 		}
 		return recorded, nil

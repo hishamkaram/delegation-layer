@@ -10,7 +10,9 @@ from ..evidence.digests import sha as _digest_bytes
 
 OPENCODE_PROVIDER = "opencode:run"
 ACP_PROFILE_REVISION = "opencode-acp-v1"
-ACP_PREDICATE_VERSION = "acp-v1"
+# The release proof accepts only the current predicate. Historical acp-v1 task
+# replay is owned by the Go task contract and is never promotable evidence here.
+ACP_PREDICATE_VERSION = "acp-v2"
 PRODUCTION_ACP_KIND = "opencode-production-acp"
 PRODUCTION_ACP_SCHEMA_VERSION = 1
 PRODUCTION_ACP_STATES = frozenset({"complete", "missing", "invalid"})

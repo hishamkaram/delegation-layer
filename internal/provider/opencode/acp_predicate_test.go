@@ -13,11 +13,12 @@ import (
 )
 
 // TestPredicateContractDigestsArePinned binds every registered OpenCode
-// contract to its exact bytes. Historical run revisions never change; the ACP
-// revision is new.
+// contract to its exact bytes. Historical run revisions and acp-v1 never
+// change; acp-v2 is the current revision.
 func TestPredicateContractDigestsArePinned(t *testing.T) {
 	want := map[string]map[string]string{
 		ModeReadOnly: {
+			"acp-v2": "baa34ff1bf27c2a15152509de747058d8ac00d48b373729c934c19466d84af57",
 			"acp-v1": "84091a88654cbbef98c32c623559b98a510f5edc7e7efc7df47373a47a8115ca",
 			"5":      "a5908a2a500a4fc4203b6b16d403e3b2f350380645ee38b4fcdd445ea03b1a3f",
 			"4":      "b375397104da62801651c8ad3c2c9f20d6144436264b276b47ae94e2287d7c20",
@@ -26,6 +27,7 @@ func TestPredicateContractDigestsArePinned(t *testing.T) {
 			"1":      "b81dbba63db7fe7b902a2cbefaeb277cae79378b3823cd68bfd44989188fa7ec",
 		},
 		ModeWorkspaceWrite: {
+			"acp-v2": "e06654f08b1808e1cecd621efe0a7dba2e1179895d2253e754e34a14162f9214",
 			"acp-v1": "10d0b4534c133b94adebcb4c4403bd25ae5af9da50732cd28d2f30712d1c1059",
 			"5":      "da63dc56abdbe64127c204b3e3afddb3f41f7b9ce12d2d6b2a7c397cee41c8be",
 			"4":      "1bdc5fea3de999a79475b080da565e5c74807f1e7d1b44e944002036772e58c9",
@@ -36,14 +38,14 @@ func TestPredicateContractDigestsArePinned(t *testing.T) {
 	}
 	for mode, digests := range want {
 		for _, reference := range []task.PredicateRef{
-			ReferenceForMode(mode), runReferenceForMode(mode), historicalCurrentV4ReferenceForMode(mode),
+			ReferenceForMode(mode), acpV1ReferenceForMode(mode), runReferenceForMode(mode), historicalCurrentV4ReferenceForMode(mode),
 			historicalCurrentReferenceForMode(mode), historicalReferenceForMode(mode), LegacyReferenceForMode(mode),
 		} {
 			if reference.Adapter != Provider || reference.Mode != mode || reference.SHA256 != digests[reference.Version] {
 				t.Errorf("%s v%s digest=%s want %s", mode, reference.Version, reference.SHA256, digests[reference.Version])
 			}
 		}
-		if contract := ContractForMode(mode); task.ComputeSHA256([]byte(contract)) != digests["acp-v1"] || !strings.HasSuffix(contract, "\n") {
+		if contract := ContractForMode(mode); task.ComputeSHA256([]byte(contract)) != digests["acp-v2"] || !strings.HasSuffix(contract, "\n") {
 			t.Errorf("%s current contract is not the pinned ACP contract", mode)
 		}
 	}

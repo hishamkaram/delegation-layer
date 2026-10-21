@@ -232,15 +232,18 @@ func (s *acpSession) notification(message acpMessage) error {
 	if err != nil || child {
 		return err
 	}
-	return s.rootText(update)
+	return s.rootText(update, fields["update"])
 }
 
 // rootText streams one root answer chunk. Root answer text outside the active
-// prompt cannot belong to this task's single turn.
-func (s *acpSession) rootText(update map[string]providerjson.Value) error {
+// prompt cannot belong to this task's single turn. Every root chunk inside
+// the prompt, text or not, is a message boundary observation; raw is the
+// whole update, so the selector reads its messageId without the reducer.
+func (s *acpSession) rootText(update map[string]providerjson.Value, raw providerjson.Value) error {
 	if s.phase != acpPhasePrompting {
 		return fmt.Errorf("%w: root answer text outside the task prompt", errACPProtocol)
 	}
+	s.answer.message(raw)
 	content, err := acpRequiredObject(update, "content", "type", "text")
 	if err != nil {
 		return err

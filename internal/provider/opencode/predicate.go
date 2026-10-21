@@ -36,7 +36,7 @@ func NewInterpreter(modes ...string) predicate.Interpreter {
 	if len(modes) > 0 {
 		mode = modes[0]
 	}
-	return acpInterpreter{mode: mode}
+	return acpInterpreter{mode: mode, selection: acpSelectFinalRun}
 }
 
 // newRunInterpreter returns the newest run-dialect JSONL interpreter.

@@ -19,19 +19,37 @@ import (
 // collection with deterministic ACP and run evidence. They launch no provider:
 // native OpenCode behavior is proven only by Root's native acceptance runs.
 
-// openCodeACPVersion is the ACP output contract version; its pinned digests
-// are the independent expectation for fresh and migrated tasks.
-const openCodeACPVersion = "acp-v1"
+// openCodeACPVersion is the current ACP output contract version, whose answer
+// is the final root message run; its pinned digests are the independent
+// expectation for fresh tasks and every new successor.
+const openCodeACPVersion = "acp-v2"
 
 var openCodeACPDigests = map[string]string{
+	config.ModeReadOnly:       "baa34ff1bf27c2a15152509de747058d8ac00d48b373729c934c19466d84af57",
+	config.ModeWorkspaceWrite: "e06654f08b1808e1cecd621efe0a7dba2e1179895d2253e754e34a14162f9214",
+}
+
+// openCodeACPV1Version is the historical ACP output contract, whose answer is
+// all root text of the prompt. Its digests never change: admitted acp-v1
+// records keep reconstructing and replaying under them.
+const openCodeACPV1Version = "acp-v1"
+
+var openCodeACPV1Digests = map[string]string{
 	config.ModeReadOnly:       "84091a88654cbbef98c32c623559b98a510f5edc7e7efc7df47373a47a8115ca",
 	config.ModeWorkspaceWrite: "10d0b4534c133b94adebcb4c4403bd25ae5af9da50732cd28d2f30712d1c1059",
 }
 
-// openCodeACPReference is the registered ACP predicate pinned for mode.
+// openCodeACPReference is the registered current ACP predicate pinned for mode.
 func openCodeACPReference(t *testing.T, mode string) task.PredicateRef {
 	t.Helper()
 	return exactReference(t, catalogRegistration(t, openCodeProvider), mode, openCodeACPVersion, openCodeACPDigests[mode])
+}
+
+// openCodeACPV1Reference is the registered historical acp-v1 predicate pinned
+// for mode.
+func openCodeACPV1Reference(t *testing.T, mode string) task.PredicateRef {
+	t.Helper()
+	return exactReference(t, catalogRegistration(t, openCodeProvider), mode, openCodeACPV1Version, openCodeACPV1Digests[mode])
 }
 
 func openCodeAgent(mode string) string {

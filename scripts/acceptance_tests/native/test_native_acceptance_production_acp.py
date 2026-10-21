@@ -20,13 +20,15 @@ ROOT = "e" * 32
 FRESH = "1" * 32
 RESUME = "2" * 32
 PREDICATE = {"adapter": "opencode:run", "mode": "workspace-write",
-             "version": "acp-v1", "sha256": "f" * 64}
+             "version": "acp-v2", "sha256": "f" * 64}
+HISTORICAL_PREDICATE = {**PREDICATE, "version": "acp-v1"}
 
 
 class AcpTask:
     """One on-disk admitted OpenCode task with the records the core writes."""
 
-    def __init__(self, base: Path, task_id: str, *, prior: dict[str, object] | None = None):
+    def __init__(self, base: Path, task_id: str, *, prior: dict[str, object] | None = None,
+                 predicate: dict[str, object] = PREDICATE):
         self.task_id = task_id
         self.directory = base / "tasks" / task_id
         (self.directory / "raw").mkdir(parents=True)
@@ -38,15 +40,15 @@ class AcpTask:
         self.meta = {"root_id": ROOT, "task_id": task_id, "spec_sha256": self.spec_digest,
                      "requested_config": {"permission": "workspace-write"},
                      "effective_config": {"policy": {"profile_revision": "opencode-acp-v1"}},
-                     "predicate": dict(PREDICATE)}
+                     "predicate": dict(predicate)}
         self.write_meta()
         gate.write_json(self.directory / "provider.exit", {
-            "task_id": task_id, "predicate": dict(PREDICATE), "exit_code": 0, "error": "",
+            "task_id": task_id, "predicate": dict(predicate), "exit_code": 0, "error": "",
             "raw_manifest": [{"path": "raw/stderr"}, {"path": "raw/stdout"}],
             "manifest_sha256": "a" * 64,
         })
         gate.write_json(self.directory / "outcome.json", {
-            "task_id": task_id, "verdict": "committed", "predicate": dict(PREDICATE),
+            "task_id": task_id, "verdict": "committed", "predicate": dict(predicate),
             "evidence_sha256": "a" * 64,
         })
 
@@ -76,7 +78,7 @@ class ProductionAcpMarkerTests(unittest.TestCase):
         marker = self.fresh.marker()
         self.assertEqual(marker, {
             "task_id": FRESH, "session_id": "ses-acp-1", "predecessor_task_id": None,
-            "profile_revision": "opencode-acp-v1", "predicate_version": "acp-v1",
+            "profile_revision": "opencode-acp-v1", "predicate_version": "acp-v2",
             "predicate_sha256": "f" * 64, "spec_sha256": self.fresh.spec_digest,
             "meta_sha256": self.fresh.meta_digest, "noninteractive": True,
             "interaction_journal": "absent", "publication": "committed",
@@ -111,6 +113,19 @@ class ProductionAcpMarkerTests(unittest.TestCase):
                 task.write_meta()
                 with self.assertRaisesRegex(gate.AcceptanceFailure, message):
                     task.marker()
+
+    def test_coherent_historical_acp_task_is_not_current_production_acp(self):
+        committed = AcpTask(self.base / "committed", FRESH, predicate=HISTORICAL_PREDICATE)
+        unpublished = AcpTask(self.base / "unpublished", FRESH, predicate=HISTORICAL_PREDICATE)
+        (unpublished.directory / "outcome.json").unlink()
+        for label, task, publishes in (("committed", committed, True),
+                                       ("unpublished", unpublished, False)):
+            with self.subTest(source=label):
+                with self.assertRaisesRegex(gate.AcceptanceFailure,
+                                            "does not bind the production ACP predicate"):
+                    task.marker(committed=publishes)
+        control = AcpTask(self.base / "current", FRESH)
+        self.assertEqual(control.marker()["predicate_version"], "acp-v2")
 
     def test_interactive_request_or_interaction_journal_is_refused(self):
         for target in ("record", "meta"):
@@ -154,6 +169,26 @@ class ProductionAcpMarkerTests(unittest.TestCase):
         published = AcpTask(self.base / "published", FRESH)
         with self.assertRaisesRegex(gate.AcceptanceFailure, "published an outcome"):
             published.marker(committed=False)
+
+
+    def test_timeout_resume_pair_projects_the_current_predicate_and_unchanged_profile(self):
+        source = AcpTask(self.base / "source", FRESH)
+        (source.directory / "outcome.json").unlink()
+        prior = {"provider": "opencode:run", "predecessor_task_id": FRESH,
+                 "conversation_id": "ses-acp-1"}
+        resume = AcpTask(self.base / "resume", RESUME, prior=prior)
+        owner = ProductionAcpEvidence()
+        owner.record(FRESH, source.marker(committed=False))
+        owner.record(RESUME, resume.marker())
+        receipt = owner.receipt({"timeout_source": FRESH, "timeout_resume": RESUME})
+        self.assertEqual((receipt["schema_version"], receipt["profile_revision"],
+                          receipt["predicate_version"]), (1, "opencode-acp-v1", "acp-v2"))
+        self.assertEqual({alias: (turn["publication"], turn["predicate_version"],
+                                  turn["profile_revision"])
+                          for alias, turn in receipt["tasks"].items()},
+                         {"timeout_source": ("unpublished", "acp-v2", "opencode-acp-v1"),
+                          "timeout_resume": ("committed", "acp-v2", "opencode-acp-v1")})
+        self.assertEqual(receipt["tasks"]["timeout_resume"]["predecessor_task_id"], FRESH)
 
 
 class ProductionAcpOwnerTests(unittest.TestCase):

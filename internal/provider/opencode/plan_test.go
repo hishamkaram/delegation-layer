@@ -203,7 +203,7 @@ func assertOpenCodeRegistration(t *testing.T, registration commonprovider.Regist
 	t.Helper()
 	var want []task.PredicateRef
 	for _, references := range []func(string) task.PredicateRef{
-		ReferenceForMode, runReferenceForMode, historicalCurrentV4ReferenceForMode, historicalCurrentReferenceForMode, historicalReferenceForMode, LegacyReferenceForMode,
+		ReferenceForMode, acpV1ReferenceForMode, runReferenceForMode, historicalCurrentV4ReferenceForMode, historicalCurrentReferenceForMode, historicalReferenceForMode, LegacyReferenceForMode,
 	} {
 		want = append(want, references(ModeReadOnly), references(ModeWorkspaceWrite))
 	}
