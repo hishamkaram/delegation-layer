@@ -60,6 +60,55 @@ match the response.
 outcome and an operational `error`; the error describes an ancillary failure
 such as cleanup or a descriptor read and does not erase the committed result.
 
+`task_id` is the durable Delegate identity. `supervisor.numeric_task_id` and
+`stops[].numeric_task_id` are private, ephemeral queue addresses that the
+bundled queue may reuse for a later task; they are not task handles.
+
+## Checkpoint response
+
+`checkpoint` commands return the same versioned envelope with
+`command: "checkpoint"` and no `task_id` or `outcome`. Three optional fields
+carry checkpoint facts:
+
+```text
+checkpoint: {
+  id?, operation_id?,
+  current?: CheckpointDescription,
+  operation?: CheckpointRemovalDescription,
+  reason_code?, next_action?
+}
+checkpoints: [CheckpointDescription]   (list only; [] when empty)
+checkpoint_cursor?: string             (list only; next --after value)
+
+CheckpointDescription: id, selection ("ordinary" | "managed"), workspace_id?,
+  cwd?, state ("pending" | "checkpointed" | "unavailable"), reason_code?,
+  snapshot_ref?, commit_oid?, usable, removal?: CheckpointRemovalDescription
+CheckpointRemovalDescription: operation_id, attempts, state
+  ("pending" | "removed" | "nothing_to_remove" | "unavailable"), reason_code?
+```
+
+An `unavailable` creation has `reason_code` `checkpoint_failed`,
+`checkpoint_not_launched`, or `checkpoint_result_unavailable`; an unavailable
+removal uses the matching `checkpoint_removal_*` reason.
+
+`id` is the acknowledged or authenticated creation; `operation_id` names only
+an acknowledged or authenticated registered removal attempt. Both survive a
+later read fault, and an unreadable description is omitted rather than shown
+as empty availability. `current.removal` is the latest attempt; `operation` is
+the attempt selected with `--operation`, and its own state chooses that exit.
+`attempts` counts every registered attempt, not the described attempt's
+position. Command `reason_code` and `next_action` (`watch_checkpoint`,
+`stop_and_report`, `retry_create`, `retry_remove`, or
+`requested_action_not_authorized` as a reason) never overwrite a receipt's
+reason inside a description.
+
+`state` is the immutable creation history; `usable` is derived current
+availability. It is `true` only for a `checkpointed` creation with no
+registered removal attempt. It describes Delegate's records, not a fresh Git
+ref read. A `snapshot_ref` or `commit_oid` can describe a retained candidate of
+an unavailable creation. Exit codes and the full decision table are in the
+[CLI reference](cli-reference.md#git-checkpoints).
+
 ## State model
 
 The three status dimensions are independent:

@@ -6,7 +6,8 @@ All paths passed to `--root`, `--cwd`, and `--brief` must be absolute. Add
 Pass the intended workspace directly. Delegate handles provider launch options;
 do not initialize Git, change trust settings, or call a provider CLI as a
 workspace workaround. Ordinary tasks support non-Git directories. Git is
-required for managed worktree creation/attachment only; native review retains
+required for managed worktree creation/attachment and checkpoint creation or
+removal only; native review retains
 its separate explicit review-target contract. See [managed workspace guidance](workspaces.md)
 for the policy owner.
 
@@ -100,6 +101,27 @@ Continuation flags:
 - `--brief FILE`: optional new follow-up instruction;
 - `--budget DURATION`, `--model MODEL`, and `--effort VALUE`: optional overrides;
 - `--interactive`: enable interaction when supported; already-interactive predecessors keep it.
+
+## Checkpoint commands
+
+Git checkpoints are optional and launch no provider work. Use them to fork a
+worker from current uncommitted content; the canonical
+[checkpoint guidance](workspaces.md#git-checkpoints) owns targets, limits, and
+the checkpoint-before-fork sequence, and
+[checkpoint results](result-handling.md#checkpoint-results) owns the decisions.
+
+```sh
+delegate --root ROOT checkpoint create --cwd ABS [--budget DURATION] --json
+delegate --root ROOT checkpoint create --workspace ID [--budget DURATION] --json
+delegate --root ROOT checkpoint status CHECKPOINT_ID [--operation OP] [--watch DURATION] --json
+delegate --root ROOT checkpoint list [--after CHECKPOINT_ID] [--limit 1..50] --json
+delegate --root ROOT checkpoint remove CHECKPOINT_ID [--budget DURATION] --json
+```
+
+`create` takes exactly one of `--cwd` or `--workspace`. `--operation` selects a
+removal attempt ID returned by `remove`; without it, `status` observes the
+creation and its latest removal. `list` pages with the returned
+`checkpoint_cursor` as `--after`.
 
 ## Choosing models and effort
 

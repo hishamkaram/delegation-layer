@@ -206,6 +206,15 @@ renew provider tasks, and exact native closure plus the managed-worker
 disposition precede capture and cleanup. Owned native proof controls cleanup;
 the Lead owns landing changes.
 
+Git checkpoints follow rows CP1–CP7 of the same matrix. Keep admission,
+qualification, removal ranking, and pending classification in
+`internal/workspaces`; the `checkpoint` command projects acknowledgements and
+descriptions and decides no lifecycle policy. Classify pending from the whole
+returned error with `workspaces.PendingError`, as the [whole-error
+rule](../agents/_data/maintainability-contract.md#whole-error-pending-classification)
+requires. A checkpoint change pairs accepted-pending with refused-busy
+responses and a joined concrete fault through the public command.
+
 ## Adapter boundary
 
 An adapter is responsible for:

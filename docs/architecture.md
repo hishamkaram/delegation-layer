@@ -218,6 +218,26 @@ Failed workspace helpers retain a bounded `error.txt` artifact when its bytes ca
 be durably written. Public responses expose descriptors; they do not inline that
 diagnostic. File closure and directory synchronization precede result publication.
 
+Git checkpoints reuse the same workspace-operation runtime; see rows CP1–CP7
+of the [transition matrix](../agents/_data/maintainability-contract.md#managed-workspace-transitions)
+and the [checkpoint guidance](../skills/agent-integration/references/workspaces.md#git-checkpoints).
+The workspaces coordinator (`internal/workspaces`) owns admission,
+scheduling, qualification, removal registration, and description. The Git
+owner prepares the full-tree candidate through the capture private index,
+writes its stored payload, and pins or deletes the create-only owned ref; it
+never moves `HEAD`, a branch, or the real index. The operation journal owns the
+immutable creation request, candidate, creation receipt, and the append-only
+removal attempt references and receipts. The application layer only parses,
+opens the store, calls the coordinator, and projects its acknowledgement and
+descriptions to JSON and exit codes. An ordinary checkpoint owns no workspace
+resource or lease. A managed checkpoint is a workspace use under the use-owner
+lease and its reservation, and it closes without content capture. Success
+requires the helper's exact native `Wait`; recovered or unlaunched closures
+qualify only as `unavailable`. Creation history is a stored receipt; current
+availability is derived from registered removal attempts. Workspace forget
+does not remove checkpoint refs. No landing, restore, or nested-lifetime
+control is part of this boundary.
+
 Pueue owns scheduling and worker-row state. One application lifetime state
 machine owns native-lifetime transition policy for both the live guardian and
 recovery. Task or inspection storage owns its durable lifetime records. The
