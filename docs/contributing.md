@@ -5,8 +5,11 @@ provider differences explicit at the adapter boundary.
 
 ## Development setup
 
-Install Go 1.27.2, Python 3.12, Node.js 22 or newer, and the repository's pinned
-verification tools. Node.js is used by the npm and plugin package checks.
+Install the exact Go release named in the root [`.go-version`](../.go-version)
+file, Python 3.12, Node.js 22 or newer, and the repository's pinned
+verification tools. `make tool-versions` requires `go version` to report that
+release with `GOTOOLCHAIN` unset or `local`. Node.js is used by the npm and
+plugin package checks.
 `make acceptance-private-cli` executes the current build against a Pi-shaped
 executable fixture and a real private supervisor on macOS and Linux. This gate
 checks startup, dispatch, status, collection, model discovery, and

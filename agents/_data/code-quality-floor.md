@@ -4,7 +4,13 @@ This document specifies the non-negotiable engineering floor for the repository.
 
 ## 1. Toolchain & Environment
 - **Go Version**: `go 1.27.0` declared in `go.mod`.
-- **Compiler Pin**: Exactly `go1.27.2` in development and CI.
+- **Compiler Pin**: Exactly the release in the root [`.go-version`](../../.go-version)
+  file, one stable `X.Y.Z` line, in development and CI. The two repository
+  tool guard scripts validate that exact format and fail on a missing or
+  malformed pin before any download. Every Delegate `actions/setup-go` step
+  only reads the same file; it is not a pin format validator. The CCR
+  integration workflow pins the separate external CCR builder compiler
+  independently; it must satisfy the pinned CCR checkout's `go.mod` minimum.
 - **Python Toolchain**: Python 3.12 for repository checks and acceptance scripts; CI selects it explicitly.
 - **Local Toolchain Guard**: `GOTOOLCHAIN=local` is strictly enforced to prevent ambient, untracked compiler downloads.
 - **Project Tools Pinning**:
