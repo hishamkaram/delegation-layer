@@ -38,6 +38,7 @@ def child_environment(invocation: Invocation) -> dict[str, str]:
         "DELEGATE_ACCEPTANCE_TAG": invocation.request.tag,
         "OPENCODE_LIVE_MODEL": invocation.request.opencode_model,
         "CCR_LIVE_MODEL": invocation.request.ccr_model or "",
+        "AGY_LIVE_MODEL": invocation.request.agy_model or "",
         "DELEGATION_REQUIRE_LIVE_ACCEPTANCE": "0",
         "DELEGATE_ACCEPTANCE_RESOLVED_RETENTION": "3",
         "PATH": str(invocation.assets / "extracted") + os.pathsep + env.get("PATH", os.defpath),

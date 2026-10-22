@@ -158,6 +158,51 @@ class NativeAcceptanceOracleTests(unittest.TestCase):
                 f"blocked={len(native_evidence.EXPECTED_CASES) - timeout_passes} failed=0",
                 successful_timeout.stdout)
 
+    def test_aggregate_forwards_agy_model_only_to_agy_cases(self):
+        wrapper = repository_root() / "scripts/acceptance_native_all.sh"
+        recorder = (
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "    *acceptance_native.py) shift\n"
+            "        \"$REAL_PYTHON\" -c 'import json, os, sys; "
+            "open(os.environ[\"ARGV_LOG\"], \"a\").write(json.dumps(sys.argv[1:]) + \"\\n\")' \"$@\"\n"
+            "        exit 2 ;;\n"
+            "esac\n"
+            "exec \"$REAL_PYTHON\" \"$@\"\n"
+        )
+        models = {"ccr:print": "ccr/exact-alias", "opencode:run": "opencode/exact-model"}
+        for agy_model in ("vendor/agy-exact", ""):
+            with self.subTest(agy_model=agy_model), \
+                    tempfile.TemporaryDirectory(prefix="native-aggregate-agy-unit-") as directory:
+                fake_python = Path(directory) / "python3"
+                fake_python.write_text(recorder)
+                fake_python.chmod(0o700)
+                argv_log = Path(directory) / "argv.jsonl"
+                environment = os.environ.copy()
+                environment.update({
+                    "PATH": str(fake_python.parent) + os.pathsep + environment["PATH"],
+                    "DELEGATE_ACCEPTANCE_OUTPUT_ROOT": str(physical_test_root(directory) / "aggregate"),
+                    "REAL_PYTHON": sys.executable, "ARGV_LOG": str(argv_log),
+                    "AGY_LIVE_MODEL": agy_model, "CCR_LIVE_MODEL": models["ccr:print"],
+                    "OPENCODE_LIVE_MODEL": models["opencode:run"],
+                })
+                environment.pop("DELEGATE_ACCEPTANCE_BIN_DIR", None)
+                subprocess.run(
+                    ["sh", str(wrapper)], cwd=repository_root(), env=environment,
+                    capture_output=True, text=True, check=False,
+                    timeout=AGGREGATE_WRAPPER_TEST_TIMEOUT)
+                calls = [json.loads(line) for line in argv_log.read_text().splitlines()]
+                self.assertEqual(
+                    [(argv[argv.index("--provider") + 1], argv[argv.index("--permission") + 1],
+                      argv[argv.index("--scenario") + 1]) for argv in calls],
+                    [(case.provider, case.permission, case.scenario)
+                     for case in native_evidence.EXPECTED_CASES])
+                for argv in calls:
+                    provider = argv[argv.index("--provider") + 1]
+                    expected = agy_model if provider == "antigravity:print" else models.get(provider, "")
+                    forwarded = [argv[index + 1] for index, item in enumerate(argv) if item == "--model"]
+                    self.assertEqual(forwarded, [expected] if expected else [], provider)
+
     def test_aggregate_uses_each_case_exit_contract_without_a_second_receipt_oracle(self):
         wrapper = repository_root() / "scripts/acceptance_native_all.sh"
         with tempfile.TemporaryDirectory(prefix="native-aggregate-timeout-unit-") as directory:

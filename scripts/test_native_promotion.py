@@ -21,6 +21,7 @@ from scripts.test_native_release_support import (
 
 HOSTED = "scripts.delegate_acceptance.release_verification.native_hosted."
 SUBMISSION = "scripts.delegate_acceptance.release_verification.native_submission."
+GITHUB_JSON = "scripts.delegate_acceptance.release_verification.github.GitHubClient.json"
 PROOF_ASSET_ID = 71
 SENDER_ID = 61
 REPORT_MODEL = "vendor/report-model"
@@ -411,6 +412,96 @@ class NativeReleaseCliAuthTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments: --github-auth local-config", stderr.getvalue())
         self.assertEqual(submission.call_count, 1)
+
+
+class PublicPrerequisiteCliTests(unittest.TestCase):
+    ARGV = ["public-prerequisite", "--repo", REPO]
+    POLICY_CODE = "anonymous_installation_requires_public_repository"
+    PREFIX = "Public repository prerequisite failed: "
+
+    def run_cli(self, argv, facts):
+        with patch(GITHUB_JSON, **facts) as github, \
+                patch(HOSTED + "gh_environment", return_value={}), \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            code = native_cli.main(argv)
+        return code, stderr.getvalue(), github
+
+    def test_delegates_once_per_run_to_the_sole_policy_with_the_requested_auth_mode(self):
+        with patch(HOSTED + "gh_environment", return_value={"marker": "env"}) as auth, \
+                patch(HOSTED + "require_public_repository") as policy:
+            self.assertEqual(native_cli.main(self.ARGV), 0)
+            self.assertEqual(native_cli.main([*self.ARGV, "--github-auth", "local-config"]), 0)
+        self.assertEqual([call.kwargs for call in auth.call_args_list],
+                         [{"auth_mode": "environment"}, {"auth_mode": "local-config"}])
+        self.assertEqual(policy.call_count, 2)
+        client, repo = policy.call_args.args
+        self.assertEqual((client.receipt, client.environment, repo), ({"commands": []}, {"marker": "env"}, REPO))
+
+    def test_unknown_mode_or_missing_repo_exits_before_any_policy_or_github_read(self):
+        for argv in ([*self.ARGV, "--github-auth", "token"], ["public-prerequisite"]):
+            with self.subTest(argv=argv), patch(HOSTED + "require_public_repository") as policy, \
+                    patch("sys.stderr", new_callable=io.StringIO), \
+                    self.assertRaises(SystemExit) as caught:
+                native_cli.main(argv)
+            self.assertEqual(caught.exception.code, 2)
+            policy.assert_not_called()
+
+    def test_public_repository_passes_and_every_other_fact_is_refused_by_the_real_policy(self):
+        code, stderr, github = self.run_cli(self.ARGV, {"return_value": {"private": False, "visibility": "public"}})
+        self.assertEqual((code, stderr), (0, ""))
+        github.assert_called_once_with(f"repos/{REPO}")
+        guidance = "Make the repository public, then rerun this release workflow.\n"
+        for facts in ({"private": True, "visibility": "private"}, {"private": False, "visibility": "internal"},
+                      {"private": True, "visibility": "public"}, {"private": False}, {"visibility": "public"},
+                      {}, {"private": "false", "visibility": "public"}):
+            with self.subTest(facts=facts):
+                code, stderr, _ = self.run_cli(self.ARGV, {"return_value": facts})
+                self.assertEqual(code, 1)
+                self.assertEqual(stderr, f"{self.PREFIX}{self.POLICY_CODE} (public-release-precheck)\n{guidance}")
+
+    def test_api_and_malformed_failures_render_safe_codes_without_visibility_guidance(self):
+        for facts, expected in (
+                ({"return_value": []}, "github_object_invalid (public-release-precheck)"),
+                ({"side_effect": VerificationError("github_request_failed", "github-api")},
+                 "github_request_failed (github-api)")):
+            with self.subTest(expected=expected):
+                code, stderr, _ = self.run_cli(self.ARGV, facts)
+                self.assertEqual((code, stderr), (1, f"{self.PREFIX}{expected}\n"))
+
+    def test_environment_mode_needs_a_token_and_local_config_never_forwards_one(self):
+        secret = {"GH_TOKEN": "secret-one", "GITHUB_TOKEN": "secret-two"}
+        with patch.dict("os.environ", {}, clear=True), patch(HOSTED + "GitHubClient") as client, \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(native_cli.main(self.ARGV), 1)
+        self.assertEqual(stderr.getvalue(), f"{self.PREFIX}github_auth_unavailable (github-auth)\n")
+        client.assert_not_called()
+        for mode, forwarded in (("environment", True), ("local-config", False)):
+            with self.subTest(mode=mode), patch.dict("os.environ", secret, clear=True), \
+                    patch(HOSTED + "GitHubClient") as client, \
+                    patch(HOSTED + "require_public_repository"), \
+                    patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                self.assertEqual(native_cli.main([*self.ARGV, "--github-auth", mode]), 0)
+            environment = client.call_args.args[1]
+            self.assertEqual("GH_TOKEN" in environment, forwarded)
+            self.assertEqual(environment.get("GITHUB_TOKEN") == "secret-two", forwarded)
+            self.assertNotIn("secret", stderr.getvalue())
+
+    def test_existing_commands_keep_their_error_format_and_never_reach_the_new_policy(self):
+        error = VerificationError("native_example_failure", "example-stage")
+        for command, handler, argv in (("validate", "validate_submission", NativeReleaseCliAuthTests.VALIDATE),
+                                       ("promotion", "validate_promotion", NativeReleaseCliAuthTests.PROMOTION)):
+            with self.subTest(command=command), patch.object(native_cli, handler, side_effect=error), \
+                    patch(HOSTED + "require_public_repository") as policy, \
+                    patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                self.assertEqual(native_cli.main(argv), 1)
+            self.assertEqual(stderr.getvalue(), "Native proof validation failed: native_example_failure (example-stage)\n")
+            policy.assert_not_called()
+        with patch.object(native_cli, "validate_submission") as submission, \
+                patch.object(native_cli, "validate_promotion") as promotion, \
+                patch(HOSTED + "require_public_repository"), patch(HOSTED + "gh_environment", return_value={}):
+            self.assertEqual(native_cli.main(self.ARGV), 0)
+        submission.assert_not_called()
+        promotion.assert_not_called()
 
 
 if __name__ == "__main__":

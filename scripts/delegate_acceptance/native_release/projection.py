@@ -11,7 +11,7 @@ from scripts.delegate_acceptance.native_evidence.public_contract import (
 from scripts.delegate_acceptance.native_evidence.contract import EvidenceError
 from scripts.delegate_acceptance.native_evidence.public_projection import build_public_proof
 from scripts.delegate_acceptance.native_evidence.public_validation import (
-    inspect_public_proof, validate_public_identity, validate_public_proof,
+    expected_case_provider, inspect_public_proof, validate_public_identity, validate_public_proof,
 )
 from scripts.delegate_acceptance.native_evidence.staging import stage_evidence
 from .contract import ReleaseError, digest_value, integer, object_value, text_value
@@ -78,7 +78,27 @@ def read_public(receipt: Receipt) -> tuple[bytes, dict[str, object]]:
     }
     if stage.state == "complete" and stage.result != facts:
         raise ReleaseError("public_proof_readback_changed", incomplete=True)
+    _require_agy_model_bound(result, receipt.invocation.request.agy_model)
     return data, facts
+
+
+def _require_agy_model_bound(result: dict[str, object], requested: str | None) -> None:
+    """Bind a PASS verdict's AGY PASS cases to the maintainer's requested model.
+
+    The canonical validator already requires recorded options on every PASS
+    case; FAIL and neutral BLOCKED cases keep their own verdict path.
+    """
+    if result.get("case_results_verdict") != "PASS":
+        return
+    cases = result.get("cases")
+    if not isinstance(cases, list):
+        raise ReleaseError("agy_requested_model_unbound")
+    for value in cases:
+        case = object_value(value)
+        if expected_case_provider(case) != "antigravity" or case.get("status") != "PASS":
+            continue
+        if object_value(case.get("source_proof")).get("requested_model") != requested:
+            raise ReleaseError("agy_requested_model_unbound")
 
 
 def project(receipt: Receipt) -> None:

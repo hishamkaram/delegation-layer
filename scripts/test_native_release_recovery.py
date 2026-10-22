@@ -10,13 +10,13 @@ import unittest
 from scripts.delegate_acceptance.directories.journal import directory_identity_record
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.native_release import cleanup, cli, coordinator, submission, watching
-from scripts.delegate_acceptance.native_release.contract import ReleaseError
+from scripts.delegate_acceptance.native_release.contract import ReleaseError, ReleaseRequest
 from scripts.delegate_acceptance.native_release.receipt import Receipt
 from scripts.delegate_acceptance.native_release.submission import dispatch
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.native_history import ValidationObservation
 from scripts.delegate_acceptance.release_verification.native_remote_history import AttemptReport
-from scripts.test_native_release_support import PROOF_HASH, RELEASE, ReleaseFixture
+from scripts.test_native_release_support import PROOF_HASH, RELEASE, REPO, TAG, ReleaseFixture
 
 
 class CliRecoveryTests(ReleaseFixture):
@@ -30,7 +30,7 @@ class CliRecoveryTests(ReleaseFixture):
         self.receipt.intend("upload", intent)
         self.receipt.complete("upload", result)
 
-    def run_resume(self) -> tuple[int, dict[str, object]]:
+    def run_resume(self, read_error: ReleaseError | None = None) -> tuple[int, dict[str, object]]:
         output = io.StringIO()
         with patch.object(cli, "require_python"), \
                 patch.object(cli, "load_receipt", side_effect=lambda _path: Receipt.load(self.receipt.path)), \
@@ -38,7 +38,7 @@ class CliRecoveryTests(ReleaseFixture):
                 patch.object(cli, "acquire_exclusive_file_lock", return_value=41), \
                 patch.object(cli, "release_exclusive_file_lock"), \
                 patch.object(coordinator, "github_client", return_value=self.client), \
-                patch.object(coordinator, "read_public"), \
+                patch.object(coordinator, "read_public", side_effect=read_error), \
                 patch.object(submission, "read_public"), \
                 patch("sys.stdout", output), patch("sys.stderr", io.StringIO()):
             exit_code = cli.main(["resume", "--receipt", str(self.receipt.path)])
@@ -46,6 +46,18 @@ class CliRecoveryTests(ReleaseFixture):
         if not isinstance(report, dict):
             raise AssertionError("CLI report is not an object")
         return exit_code, report
+
+    def test_unbound_agy_model_on_completed_projection_blocks_before_submission(self) -> None:
+        self.seed_project()
+        with patch.object(coordinator, "native") as native:
+            exit_code, report = self.run_resume(ReleaseError("agy_requested_model_unbound"))
+        self.assertEqual((exit_code, report["status"], report["reason"]),
+                         (2, "BLOCKED", "agy_requested_model_unbound"))
+        loaded = Receipt.load(self.receipt.path)
+        for name in ("upload", "dispatch", "watch"):
+            self.assertEqual(loaded.stage(name).state, "pending")
+        self.assertEqual(self.client.calls, [])
+        native.assert_not_called()
 
     def test_unintended_upload_error_remains_blocked_without_effect(self) -> None:
         self.seed_project()
@@ -202,6 +214,56 @@ class CliRecoveryTests(ReleaseFixture):
         self.assertEqual(Receipt.load(self.receipt.path).stage("watch").state, "intended")
         self.assertEqual(self.client.posts, 1)
         native.assert_not_called()
+
+
+class ReleaseRequestEncodingTests(ReleaseFixture):
+    LEGACY_KEYS = {"repo", "tag", "opencode_model", "ccr_model", "no_submit"}
+
+    def test_legacy_request_parses_to_native_default_and_round_trips(self) -> None:
+        legacy = self.receipt.invocation.request.document()
+        self.assertEqual(set(legacy), self.LEGACY_KEYS)
+        parsed = ReleaseRequest.parse(legacy)
+        self.assertIsNone(parsed.agy_model)
+        self.assertEqual(parsed, self.receipt.invocation.request)
+        self.assertEqual(parsed.document(), legacy)
+        metadata = json.loads(self.receipt.path.read_bytes())["metadata"]
+        self.assertEqual(metadata["request"], legacy)
+        loaded = Receipt.load(self.receipt.path)
+        self.assertIsNone(loaded.invocation.request.agy_model)
+        loaded.report("INCOMPLETE", "legacy_request_reloaded")
+        self.assertEqual(json.loads(self.receipt.path.read_bytes())["metadata"], metadata)
+
+    def test_agy_model_has_one_non_null_encoding(self) -> None:
+        legacy = self.receipt.invocation.request.document()
+        requested = ReleaseRequest.parse({**legacy, "agy_model": "vendor/agy-exact"})
+        self.assertEqual(requested.agy_model, "vendor/agy-exact")
+        self.assertEqual(requested.document(), {**legacy, "agy_model": "vendor/agy-exact"})
+        for invalid in (None, "", "bad model", "-leading", "x" * 129, 7):
+            with self.subTest(agy_model=invalid), self.assertRaises(ReleaseError):
+                ReleaseRequest.parse({**legacy, "agy_model": invalid})
+        with self.assertRaisesRegex(ReleaseError, "release_request_invalid"):
+            ReleaseRequest.parse({**legacy, "agy_model": "vendor/agy-exact", "unknown": True})
+        with self.assertRaisesRegex(ReleaseError, "release_record_text_invalid"):
+            ReleaseRequest(repo=REPO, tag=TAG, opencode_model="vendor/exact-model",
+                           ccr_model=None, no_submit=False, agy_model="bad model")
+
+    def test_cli_passes_agy_model_into_the_created_request(self) -> None:
+        created: list[ReleaseRequest] = []
+
+        def capture(_checkout: object, request: ReleaseRequest, _argv: list[str]) -> Receipt:
+            created.append(request)
+            return self.receipt
+
+        argv = ["run", "--tag", TAG, "--opencode-model", "vendor/exact-model"]
+        with patch.object(cli, "state_base", return_value=self.base), \
+                patch.object(cli, "acquire_exclusive_file_lock", return_value=41), \
+                patch.object(cli, "release_exclusive_file_lock"), \
+                patch.object(cli, "create_receipt", side_effect=capture), \
+                patch.object(cli, "_execute"), patch.object(cli, "_report", return_value=0), \
+                patch("sys.stderr", io.StringIO()):
+            for options in ((), ("--agy-model", "vendor/agy-exact")):
+                cli._locked(cli.parser().parse_args([*argv, *options]), [*argv, *options])
+        self.assertEqual([request.agy_model for request in created], [None, "vendor/agy-exact"])
 
 
 class CleanupTests(ReleaseFixture):

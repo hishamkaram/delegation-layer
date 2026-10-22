@@ -158,6 +158,13 @@ def validate_promotion(args: argparse.Namespace) -> int:
     return 0
 
 
+def validate_public_prerequisite(args: argparse.Namespace) -> int:
+    """Refuse a repository that anonymous installation cannot read; the policy is the sole owner."""
+    client = GitHubClient({"commands": []}, gh_environment(auth_mode=args.github_auth))
+    require_public_repository(client, args.repo)
+    return 0
+
+
 def _revalidate_selected(client: GitHubClient, args: argparse.Namespace, report: dict) -> None:
     asset_id = positive_id(report.get("proof_asset_id"), "promotion-proof")
     identity, data = authenticate_submission(
