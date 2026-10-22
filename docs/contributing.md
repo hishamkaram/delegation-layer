@@ -376,6 +376,13 @@ Omit `--ccr-model` when no alias is available: those cases are explicitly
 prerequisite-blocked. A supplied alias must pass unchanged; a passing control
 never erases another submitted failure.
 
+Launch the command from an existing logged-in shell in which `command -v`
+resolves each selected provider executable, including `claude` for CCR cases.
+An explicit SSH or tmux launch command may inherit a different `PATH` from your
+interactive shell, so run the check in the exact launch context before paid
+work. A resolved executable does not prove authentication. Provider setup
+remains owned by the [provider guide](providers.md).
+
 `--agy-model configured-model-id` is optional. It passes that exact
 caller-selected AGY model ID to both AGY cases; when omitted, AGY uses its
 native default model. Projection refuses to upload a passing proof unless every
