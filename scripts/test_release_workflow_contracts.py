@@ -14,6 +14,7 @@ from scripts.test_published_install import PublishedBase, REVISION, TAG
 
 WORKFLOWS = Path(__file__).resolve().parent.parent / ".github/workflows"
 NATIVE_GATE = "Validate exact proof and public installation prerequisites"
+PUBLIC_PRECHECK = "Require a public repository for anonymous installation"
 
 
 def workflow_step(source: str, name: str) -> str:
@@ -21,7 +22,7 @@ def workflow_step(source: str, name: str) -> str:
 
 
 def workflow_job(source: str, name: str) -> str:
-    jobs = source.split("\njobs:\n", 1)[1]
+    jobs = "\n" + source.split("\njobs:\n", 1)[1]
     return re.split(r"\n  [a-z-]+:\n", jobs.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
 
 
@@ -74,6 +75,135 @@ def publication_gate_violations(source: str) -> list[str]:
             if re.search(r"(?m)^        continue-on-error:", step) or any(
                     STATUS_OVERRIDE.search(condition) for condition in conditions(step, 8)):
                 violations.append(f"{job}: {name}: step status override")
+    return violations
+
+
+RECOVERY = "Validate already published release"
+PRODUCER_COMMAND = 'python3 scripts/validate_native_release.py public-prerequisite --repo "${GITHUB_REPOSITORY}"'
+# Recovery runs the trusted main harness, never code from the release tag being recovered.
+RECOVERY_COMMAND = ('python3 .local/release-harness/scripts/validate_native_release.py '
+                    'public-prerequisite --repo "${GITHUB_REPOSITORY}"')
+PUBLIC_FACTS = '{"private": false, "visibility": "public"}'
+POLICY_CODE = "anonymous_installation_requires_public_repository"
+REFUSED_FACTS = ('{"private": true, "visibility": "private"}',
+                 '{"private": false, "visibility": "internal"}',
+                 '{"private": false, "visibility": "private"}',
+                 '{"private": true, "visibility": "public"}',
+                 '{"private": false}', '{"visibility": "public"}', '{}',
+                 '{"private": "false", "visibility": "public"}',
+                 '{"private": null, "visibility": "public"}')
+MALFORMED_FACTS = ("[]", "null", "not json")
+REPOSITORY_ENDPOINT = "repos/owner/repository"
+RECOVERY_ENDPOINTS = [REPOSITORY_ENDPOINT, f"{REPOSITORY_ENDPOINT}/releases/tags/{TAG}",
+                      f"{REPOSITORY_ENDPOINT}/releases/latest"]
+FAKE_GH = r"""#!/bin/sh
+printf '%s\n' "$*" >> "$GH_RECORD"
+[ "$GH_TOKEN" = ci-token ] || exit 3
+case "$*" in
+  *"/releases/latest"*) printf '%s\n' "$LATEST_RELEASE" ;;
+  *"/releases/tags/"*) printf '%s\n' "$PUBLISHED_READY" ;;
+  *) [ "$GH_EXIT" = 0 ] || exit "$GH_EXIT"; printf '%s' "$REPOSITORY_FACTS" ;;
+esac
+"""
+POISONED_TAG_SCRIPT = "import sys\nprint('POISONED TAG SCRIPT RAN')\nsys.exit(0)\n"
+
+
+def step_script(step: str) -> str:
+    inline = re.search(r"(?m)^        run: (?!\|)(.+)$", step)
+    if inline:
+        return inline.group(1).strip()
+    return textwrap.dedent(step.split("run: |\n", 1)[1])
+
+
+def run_release_step(name: str, *, facts: str = PUBLIC_FACTS, gh_exit: int = 0,
+                     token: str | None = "ci-token", latest: str = TAG, ready: str = "true",
+                     tag_side: str | None = None) -> tuple[int, str, list[str]]:
+    """Run one extracted workflow step over a fake `gh`; return exit code, output, gh endpoints.
+
+    The real CLI, transport and policy run. Recovery runs in a tag-checkout stand-in whose
+    `.local/release-harness` is this source tree; `tag_side` plants a poisoned tag script.
+    """
+    source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+    script = "exec 2>&1\n" + step_script(workflow_step(source, name))
+    repo_root = WORKFLOWS.parent.parent
+    with tempfile.TemporaryDirectory(prefix="release-step-") as directory:
+        root = Path(directory)
+        fake_bin, record, checkout = root / "bin", root / "gh-calls", root / "tag-checkout"
+        fake_bin.mkdir()
+        checkout.mkdir()
+        (fake_bin / "python3").symlink_to(sys.executable)
+        gh = fake_bin / "gh"
+        gh.write_text(FAKE_GH, encoding="utf-8")
+        gh.chmod(0o755)
+        if name == RECOVERY:
+            (checkout / ".local").mkdir()
+            (checkout / ".local" / "release-harness").symlink_to(repo_root, target_is_directory=True)
+            if tag_side == "poisoned":
+                (checkout / "scripts").mkdir()
+                (checkout / "scripts" / "validate_native_release.py").write_text(
+                    POISONED_TAG_SCRIPT, encoding="utf-8")
+        env = {"PATH": str(fake_bin) + os.pathsep + os.defpath, "GH_RECORD": str(record),
+               "GH_EXIT": str(gh_exit), "REPOSITORY_FACTS": facts, "TAG": TAG,
+               "LATEST_RELEASE": latest, "PUBLISHED_READY": ready,
+               "GITHUB_REPOSITORY": "owner/repository", "PYTHONDONTWRITEBYTECODE": "1"}
+        if token is not None:
+            env["GH_TOKEN"] = token
+        result = run_bounded_command(["/bin/bash", "-e", "-c", script], env, max_output=4096,
+                                     capture=True, timeout=30,
+                                     cwd=checkout if name == RECOVERY else repo_root)
+        calls = record.read_text(encoding="utf-8").splitlines() if record.exists() else []
+    output = result.output.decode()
+    endpoints = [next(word for word in call.split() if word.startswith("repos/")) for call in calls]
+    return result.exit_code, output, endpoints
+
+
+def public_precheck_violations(source: str) -> list[str]:
+    """Name every way the tag release could create a draft before the visibility check.
+
+    Only checkout and Python setup may run before the check; neither the check
+    nor its job may be skipped, conditioned, or allowed to fail.
+    """
+    body = workflow_job(source, "release")
+    steps = job_steps(body)
+    if PUBLIC_PRECHECK not in steps:
+        return ["release: public repository precheck missing"]
+    names = list(steps)
+    violations = []
+    for name in names[:names.index(PUBLIC_PRECHECK)]:
+        if not any(setup in steps[name] for setup in ("actions/checkout@", "actions/setup-python@")):
+            violations.append(f"release: {name} precedes the public repository precheck")
+    step, header = steps[PUBLIC_PRECHECK], body.split("\n    steps:\n", 1)[0]
+    if step_script(step) != PRODUCER_COMMAND:
+        violations.append("release: public repository precheck is not the canonical command")
+    if conditions(step, 8) or re.search(r"(?m)^        continue-on-error:", step):
+        violations.append("release: public repository precheck is conditional or tolerates failure")
+    if re.search(r"(?m)^    continue-on-error:", header) or any(
+            STATUS_OVERRIDE.search(condition) for condition in conditions(header, 4)):
+        violations.append("release: job status override")
+    return violations
+
+
+def recovery_public_violations(source: str) -> list[str]:
+    """Name every way recovery could skip, weaken, or reorder the public-repository check.
+
+    The step stays conditional on `inputs.resume_published`; that is its one allowed condition.
+    """
+    steps = job_steps(workflow_job(source, "promote"))
+    if RECOVERY not in steps:
+        return ["promote: recovery validation step missing"]
+    step, violations = steps[RECOVERY], []
+    script = step_script(step)
+    if script.splitlines()[0].strip() != RECOVERY_COMMAND:
+        violations.append("promote: recovery does not start with the trusted public prerequisite")
+    if ".private" in script:
+        violations.append("promote: recovery repeats the legacy private-flag check")
+    if [condition.strip() for condition in conditions(step, 8)] != ["${{ inputs.resume_published }}"]:
+        violations.append("promote: recovery condition is not exactly resume_published")
+    if re.search(r"(?m)^        continue-on-error:", step):
+        violations.append("promote: recovery tolerates failure")
+    names = list(steps)
+    if names.index(RECOVERY) > names.index("Validate release prerequisites"):
+        violations.append("promote: recovery follows the release prerequisites")
     return violations
 
 
@@ -177,6 +307,136 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
                     self.assertNotEqual(mutated, source)
                     self.assertIn(expected, publication_gate_violations(mutated))
 
+    def test_public_precheck_precedes_every_release_effect_and_cannot_be_bypassed(self):
+        source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertEqual(public_precheck_violations(source), [])
+        step = workflow_step(source, PUBLIC_PRECHECK)
+        self.assertIn("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}", step)
+        self.assertEqual(step_script(step), PRODUCER_COMMAND)
+        # The canonical CLI owns the visibility decision; no workflow shell or inline code repeats it.
+        self.assertNotIn(".private", source)
+        self.assertNotIn("visibility", source)
+        header = f"      - name: {PUBLIC_PRECHECK}\n"
+        block = f"{header}{step}\n"
+        self.assertIn(block, source)
+        without = source.replace(block, "")
+        node, tools = "      - name: Set up Node.js\n", "      - name: Run repository checks\n"
+        refused = {
+            "release: public repository precheck missing": [without],
+            "release: Set up Go precedes the public repository precheck": [
+                without.replace(node, block + node)],
+            "release: Install pinned tools precedes the public repository precheck": [
+                without.replace(tools, block + tools)],
+            "release: public repository precheck is not the canonical command": [
+                source.replace(PRODUCER_COMMAND, "echo skipped"),
+                source.replace(PRODUCER_COMMAND, PRODUCER_COMMAND + " || true"),
+                source.replace(PRODUCER_COMMAND, RECOVERY_COMMAND)],
+            "release: public repository precheck is conditional or tolerates failure": [
+                source.replace(header, header + "        continue-on-error: true\n"),
+                source.replace(header, header + "        if: ${{ always() }}\n"),
+                source.replace(header, header + "        if: ${{ github.ref_name != 'v0.0.0' }}\n")],
+            "release: job status override": [
+                source.replace("    timeout-minutes: 45\n",
+                               "    timeout-minutes: 45\n    continue-on-error: true\n", 1)],
+        }
+        for expected, variants in refused.items():
+            for index, mutated in enumerate(variants):
+                with self.subTest(expected=expected, variant=index):
+                    self.assertNotEqual(mutated, source)
+                    self.assertIn(expected, public_precheck_violations(mutated))
+
+    def test_recovery_runs_the_trusted_public_prerequisite_first_and_cannot_be_bypassed(self):
+        source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertEqual(recovery_public_violations(source), [])
+        step = workflow_step(source, RECOVERY)
+        for retained in ("releases/tags/", ".draft == false and .prerelease == false",
+                         "releases/latest", "Consumer recovery requires an already published stable release.",
+                         "Consumer recovery requires the latest stable release to prevent a tap downgrade."):
+            self.assertIn(retained, step)
+        command_line = f"          {RECOVERY_COMMAND}\n"
+        latest_guard = '          if [[ "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest"'
+        condition = "        if: ${{ inputs.resume_published }}\n"
+        legacy = ('          if [[ "$(gh api "repos/${GITHUB_REPOSITORY}" --jq .private)" != "false" ]]; then\n'
+                  "            exit 1\n          fi\n")
+        without = source.replace(command_line, "")
+        refused = {
+            "promote: recovery does not start with the trusted public prerequisite": [
+                without,
+                without.replace(latest_guard, command_line + latest_guard),
+                source.replace(RECOVERY_COMMAND, PRODUCER_COMMAND),
+                source.replace(RECOVERY_COMMAND, RECOVERY_COMMAND + " || true"),
+                source.replace(RECOVERY_COMMAND, "true")],
+            "promote: recovery repeats the legacy private-flag check": [
+                source.replace(command_line, legacy),
+                source.replace(command_line, command_line + legacy)],
+            "promote: recovery condition is not exactly resume_published": [
+                source.replace(condition, ""),
+                source.replace(condition, "        if: ${{ !inputs.resume_published }}\n"),
+                source.replace(condition, "        if: ${{ inputs.resume_published || always() }}\n")],
+            "promote: recovery tolerates failure": [
+                source.replace(condition, condition + "        continue-on-error: true\n")],
+        }
+        for expected, variants in refused.items():
+            for index, mutated in enumerate(variants):
+                with self.subTest(expected=expected, variant=index):
+                    self.assertNotEqual(mutated, source)
+                    self.assertIn(expected, recovery_public_violations(mutated))
+
+    def test_both_public_prerequisites_admit_only_public_facts_through_the_actual_cli(self):
+        for name, public_endpoints in ((PUBLIC_PRECHECK, [REPOSITORY_ENDPOINT]),
+                                       (RECOVERY, RECOVERY_ENDPOINTS)):
+            with self.subTest(name=name, facts=PUBLIC_FACTS):
+                exit_code, output, endpoints = run_release_step(name)
+                self.assertEqual(exit_code, 0, output)
+                self.assertEqual(endpoints, public_endpoints)
+            for facts in REFUSED_FACTS:
+                with self.subTest(name=name, facts=facts):
+                    exit_code, output, endpoints = run_release_step(name, facts=facts)
+                    self.assertEqual(exit_code, 1, output)
+                    self.assertIn(f"Public repository prerequisite failed: {POLICY_CODE} "
+                                  "(public-release-precheck)", output)
+                    self.assertIn("Make the repository public, then rerun this release workflow.", output)
+                    self.assertEqual(endpoints, [REPOSITORY_ENDPOINT])
+            for facts in MALFORMED_FACTS:
+                with self.subTest(name=name, malformed=facts):
+                    exit_code, output, endpoints = run_release_step(name, facts=facts)
+                    self.assertEqual(exit_code, 1, output)
+                    self.assertNotIn(POLICY_CODE, output)
+                    self.assertEqual(endpoints, [REPOSITORY_ENDPOINT])
+
+    def test_both_public_prerequisites_report_api_and_auth_failure_without_guessing(self):
+        for name in (PUBLIC_PRECHECK, RECOVERY):
+            with self.subTest(name=name, failure="api"):
+                exit_code, output, endpoints = run_release_step(name, gh_exit=1)
+                self.assertEqual(exit_code, 1, output)
+                self.assertIn("github_request_failed", output)
+                for guess in (POLICY_CODE, "Make the repository public"):
+                    self.assertNotIn(guess, output)
+                self.assertEqual(endpoints, [REPOSITORY_ENDPOINT])
+            with self.subTest(name=name, failure="no token"):
+                exit_code, output, endpoints = run_release_step(name, token=None)
+                self.assertEqual(exit_code, 1, output)
+                self.assertIn("github_auth_unavailable", output)
+                self.assertEqual(endpoints, [])
+            with self.subTest(name=name, failure="refusal output"):
+                _, output, _ = run_release_step(name, facts=REFUSED_FACTS[0])
+                self.assertNotIn("ci-token", output)
+
+    def test_recovery_uses_the_trusted_harness_even_when_the_tag_script_is_poisoned_or_missing(self):
+        for tag_side in (None, "poisoned"):
+            with self.subTest(tag_side=tag_side, facts="private"):
+                exit_code, output, endpoints = run_release_step(
+                    RECOVERY, facts=REFUSED_FACTS[0], tag_side=tag_side)
+                self.assertEqual(exit_code, 1, output)
+                self.assertIn(POLICY_CODE, output)
+                self.assertNotIn("POISONED", output)
+                self.assertEqual(endpoints, [REPOSITORY_ENDPOINT])
+            with self.subTest(tag_side=tag_side, facts="public"):
+                exit_code, output, endpoints = run_release_step(RECOVERY, tag_side=tag_side)
+                self.assertEqual(exit_code, 0, output)
+                self.assertNotIn("POISONED", output)
+                self.assertEqual(endpoints, RECOVERY_ENDPOINTS)
+
     def test_every_tag_uses_one_workflow_wide_publication_lock(self):
         source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
         concurrency = source.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
@@ -200,25 +460,15 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
 
 class ConsumerReceiptIntegrationTests(PublishedBase):
     def test_recovery_guard_requires_latest_public_stable_release(self):
-        source = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
-        code = textwrap.dedent(workflow_step(
-            source, "Validate already published release").split("run: |\n", 1)[1])
-        (self.fake_bin / "gh").write_text(
-            '#!/bin/sh\ncase "$*" in\n'
-            '  *"/releases/latest"*) printf "%s\\n" "$LATEST_RELEASE" ;;\n'
-            '  *"/releases/tags/"*) printf "%s\\n" "$PUBLISHED_READY" ;;\n'
-            '  *) printf "%s\\n" "$REPOSITORY_PRIVATE" ;;\nesac\n')
-        for changes, expected in (({}, 0), ({"REPOSITORY_PRIVATE": "true"}, 1),
-                                  ({"PUBLISHED_READY": "false"}, 1),
-                                  ({"LATEST_RELEASE": "v9.9.9"}, 1)):
+        for changes, expected, endpoints in (
+                ({}, 0, RECOVERY_ENDPOINTS),
+                ({"facts": REFUSED_FACTS[0]}, 1, RECOVERY_ENDPOINTS[:1]),
+                ({"ready": "false"}, 1, RECOVERY_ENDPOINTS[:2]),
+                ({"latest": "v9.9.9"}, 1, RECOVERY_ENDPOINTS)):
             with self.subTest(changes=changes):
-                env = {"PATH": str(self.fake_bin) + os.pathsep + os.defpath,
-                       "GITHUB_REPOSITORY": "owner/repository", "TAG": TAG,
-                       "LATEST_RELEASE": TAG, "PUBLISHED_READY": "true",
-                       "REPOSITORY_PRIVATE": "false", **changes}
-                result = run_bounded_command(["/bin/bash", "-euo", "pipefail", "-c", code], env,
-                                             max_output=4096, capture=True, timeout=10)
-                self.assertEqual(result.exit_code, expected, result.output.decode())
+                exit_code, output, called = run_release_step(RECOVERY, **changes)
+                self.assertEqual(exit_code, expected, output)
+                self.assertEqual(called, endpoints)
 
     def workflow_python(self, name: str) -> None:
         source = (WORKFLOWS / "release-consumer.yml").read_text(encoding="utf-8")

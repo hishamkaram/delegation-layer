@@ -48,16 +48,21 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Require a public repository for anonymous installation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/validate_native_release.py public-prerequisite --repo "${GITHUB_REPOSITORY}"
+
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version-file: '.go-version'
           cache: false
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: '3.12'
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -215,10 +220,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
-          if [[ "$(gh api "repos/${GITHUB_REPOSITORY}" --jq .private)" != "false" ]]; then
-            echo 'Consumer recovery requires a public repository.' >&2
-            exit 1
-          fi
+          python3 .local/release-harness/scripts/validate_native_release.py public-prerequisite --repo "${GITHUB_REPOSITORY}"
           ready="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
             --jq '.draft == false and .prerelease == false')"
           if [[ "${ready}" != "true" ]]; then

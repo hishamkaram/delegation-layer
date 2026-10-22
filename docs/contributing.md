@@ -288,7 +288,9 @@ profiles, including `codex:review`, AGY read-only, positive unattended writes,
 continuation, and replay. Set `CCR_LIVE_MODEL` to a configured CCR alias for
 the aggregate; without it, CCR is explicitly blocked. Set `OPENCODE_LIVE_MODEL`
 to an explicitly configured tool-capable OpenCode route; without it, OpenCode
-is explicitly blocked before dispatch. `make acceptance-agy`, `make acceptance-codex`,
+is explicitly blocked before dispatch. Set `AGY_LIVE_MODEL` to an exact AGY
+model ID to pass it to both AGY cases; leave it unset or empty to use AGY's
+native default model. `make acceptance-agy`, `make acceptance-codex`,
 `make acceptance-claude`, `make acceptance-pi`, and `make acceptance-opencode`
 select individual profiles. A live
 gate returns `0` for a pass, `1` for a real behavior or evidence failure, and
@@ -333,6 +335,34 @@ hosted Linux and macOS. Authenticated acceptance runs locally on a maintainer's
 existing host, using its existing provider logins. Do not register that host as
 a GitHub Actions runner or copy provider credentials into CI.
 
+Make the repository public before pushing a release tag. The tag workflow first
+applies the same public-repository policy that promotion uses, before it
+installs tools, runs repository checks or creates the draft release, and refuses
+a private repository. It never changes repository visibility or settings.
+A rerun reuses the original tag-push event payload, and changing visibility
+does not rewrite it. The public check reads current repository metadata, so
+after an authorized switch to public a normal rerun can pass it and persist
+attestations. `actions/attest` chooses its signing instance from the payload's
+visibility ([source](https://github.com/actions/attest/blob/508db95dd578ae2727ebd6217d5ba78e4fbda05d/src/main.ts#L54-L63)),
+so verify the actual attestation, signing and archive results rather than
+assuming public signing. A native proof that failed for an earlier candidate
+tag stays in that tag's history; a new candidate tag does not erase it.
+
+To check the prerequisite locally with your existing `gh` login, run:
+
+```sh
+python3 scripts/validate_native_release.py public-prerequisite \
+  --repo OWNER/REPO --github-auth local-config
+```
+
+The default, `--github-auth environment`, requires the CI `GH_TOKEN`. The
+command applies the shared `require_public_repository` policy, which requires
+`private: false` and `visibility: "public"`. The tag workflow runs it after
+checkout and Python setup. The `resume_published` recovery step runs it first
+from the trusted `main` harness at `.local/release-harness`, never from tag
+code, and keeps its stable and latest release checks. Recovery is covered by
+fixtures only; it has not yet run on GitHub Actions.
+
 From the current protected-main checkout, with Python 3.12 and an authenticated
 `gh` CLI, run:
 
@@ -344,9 +374,18 @@ python3 scripts/release_native.py run --tag v1.2.3 \
 The model arguments are exact configured values, not suggested model names.
 Omit `--ccr-model` when no alias is available: those cases are explicitly
 prerequisite-blocked. A supplied alias must pass unchanged; a passing control
-never erases another submitted failure. Provider authentication and prerequisite
-blocks remain neutral. Promotion requires at least one authenticated pass and
-no behavior or unresolved-evidence failures across the canonical case matrix.
+never erases another submitted failure.
+
+`--agy-model configured-model-id` is optional. It passes that exact
+caller-selected AGY model ID to both AGY cases; when omitted, AGY uses its
+native default model. Projection refuses to upload a passing proof unless every
+passing AGY case recorded the requested model, or no model when the option was
+omitted. A pass with an explicit model proves only that configuration. It is not
+evidence for AGY's native default model or for any other model ID.
+
+Provider authentication and prerequisite blocks remain neutral. Promotion
+requires at least one authenticated pass and no behavior or unresolved-evidence
+failures across the canonical case matrix.
 
 The command checks prerequisites before paid work, records a durable invocation
 outside the checkout, and uses the verified release binaries for the complete

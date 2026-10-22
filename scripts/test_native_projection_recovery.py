@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 import tempfile
 import unittest
@@ -20,11 +20,13 @@ from scripts.delegate_acceptance.native_evidence.stage_publication import StageP
 from scripts.delegate_acceptance.native_evidence.staging import _check_source_digests
 from scripts.delegate_acceptance.native_release import coordinator, projection
 from scripts.delegate_acceptance.native_release.contract import Invocation, ReleaseError, ReleaseRequest
-from scripts.delegate_acceptance.native_release.execution import file_sha
+from scripts.delegate_acceptance.native_release.execution import file_sha, read_object
 from scripts.delegate_acceptance.native_release.receipt import Receipt
 
 
 PAID_ENTRYPOINTS = ("download", "archive", "native", "finalize")
+# The canonical proof fixture records this model on every case, AGY included.
+FIXTURE_AGY_MODEL = "fixture-model"
 
 
 class StageCallback(Protocol):
@@ -37,7 +39,7 @@ class StageCallback(Protocol):
 class _StageSourceBoundary:
     """Load invocation summaries, then use the canonical digest gate and publisher."""
 
-    def __init__(self, case: ProjectionRecoveryTests, receipt: Receipt,
+    def __init__(self, case: ProjectionFixture, receipt: Receipt,
                  source: Path, interrupt: str | None):
         self.case = case
         self.receipt = receipt
@@ -84,7 +86,7 @@ class _StageSourceBoundary:
             raise KeyboardInterrupt
 
 
-class ProjectionRecoveryTests(unittest.TestCase):
+class ProjectionFixture(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="projection-source-", dir=Path.home())
@@ -106,17 +108,20 @@ class ProjectionRecoveryTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.assertEqual(stage_fixtures._snapshot(self.source), self.source_snapshot)
 
-    def _create_receipt(self) -> Receipt:
+    def _create_receipt(self, agy_model: str | None = FIXTURE_AGY_MODEL,
+                        label: str | None = None) -> Receipt:
         expected = self.expectation
         request = ReleaseRequest(expected.repo, expected.tag, expected.opencode_model,
-                                 expected.ccr_model, False)
+                                 expected.ccr_model, False, agy_model=agy_model)
         invocation_id = "a" * 32
-        root = self.area / f"{request.tag}-{invocation_id}"
-        checkout = self.area / "checkout"
+        area = self.area if label is None else self.area / label
+        area.mkdir(exist_ok=True)
+        root = area / f"{request.tag}-{invocation_id}"
+        checkout = area / "checkout"
         checkout.mkdir()
         owner = DirectoryOwner()
         try:
-            root_token = owner.create("projection invocation", root, self.area)
+            root_token = owner.create("projection invocation", root, area)
             root_identity = directory_identity_record(root_token)
             stage_token = owner.create("projection private stage", root / "private-stage", root)
             stage_identity = directory_identity_record(stage_token)
@@ -209,6 +214,8 @@ class ProjectionRecoveryTests(unittest.TestCase):
         ):
             self.assertEqual((self.source / name).read_bytes(), target.read_bytes())
 
+
+class ProjectionRecoveryTests(ProjectionFixture):
     def test_resume_after_project_intent_republishes_and_validates_public_proof(self) -> None:
         boundary = _StageSourceBoundary(
             self, self.receipt, self.source, interrupt="before-publish",
@@ -298,6 +305,167 @@ class ProjectionRecoveryTests(unittest.TestCase):
         self.assertTrue(self.receipt.invocation.proof.is_symlink())
         self.assertEqual(Receipt.load(self.receipt.path).stage("project").state, "intended")
 
+
+
+CaseChange = Callable[[dict[str, object]], None]
+
+
+def _integer_size(facts: Mapping[str, object]) -> int:
+    size = facts["size"]
+    if type(size) is not int:
+        raise AssertionError("projection facts size is not an integer")
+    return size
+
+
+class AgyModelBindingTests(ProjectionFixture):
+    """read_public binds a PASS verdict's AGY PASS cases to the requested model."""
+
+    public_zip: bytes | None = None
+
+    def setUp(self) -> None:
+        super().setUp()
+        cases = read_object(self.source / "aggregate-receipt.json")["cases"]
+        if not isinstance(cases, list):
+            raise AssertionError("fixture aggregate cases missing")
+        self.case_count = len(cases)
+        self.agy_case_ids = [proof_fixtures._object(case)["case_id"] for case in cases
+                             if proof_fixtures._object(case)["provider"] == "antigravity:print"]
+        self.assertEqual(len(self.agy_case_ids), 2)
+        if type(self).public_zip is None:
+            boundary = _StageSourceBoundary(self, self.receipt, self.source, interrupt=None)
+            with self.resume_ports(boundary):
+                projection.project(self.receipt)
+            type(self).public_zip = self.receipt.invocation.proof.read_bytes()
+
+    def base_proof(self) -> bytes:
+        if self.public_zip is None:
+            raise AssertionError("base public proof was not projected")
+        return self.public_zip
+
+    def proof_with(self, changes: Mapping[str, CaseChange],
+                   aggregate: Mapping[str, object] | None = None) -> bytes:
+        editor = object.__new__(proof_fixtures.PublicNativeProofTests)
+        editor.public_zip = self.base_proof()
+        for case_id, change in changes.items():
+            editor.public_zip = editor._change_case(f"cases/{case_id}.json", change)
+        if aggregate:
+            editor.public_zip = editor._change_case(
+                "proof.json", lambda proof: proof_fixtures._object(proof["aggregate"]).update(aggregate))
+        return editor.public_zip
+
+    def read_with(self, receipt: Receipt, data: bytes) -> dict[str, object]:
+        receipt.invocation.proof.write_bytes(data)
+        receipt.intend("project", {"expectation": asdict(self.expectation)})
+        return projection.read_public(receipt)[1]
+
+    def assert_unbound(self, receipt: Receipt, data: bytes) -> None:
+        with self.assertRaises(ReleaseError) as raised:
+            self.read_with(receipt, data)
+        self.assertEqual(raised.exception.code, "agy_requested_model_unbound")
+        self.assertFalse(raised.exception.incomplete)
+
+    @staticmethod
+    def recorded(model: str | None) -> CaseChange:
+        return lambda case: proof_fixtures._object(case["source_proof"]).__setitem__(
+            "requested_model", model)
+
+    def test_every_agy_pass_case_must_record_the_requested_model(self) -> None:
+        requested = self._create_receipt(label="requested")
+        facts = self.read_with(requested, self.base_proof())
+        self.assertEqual((facts["status"], facts["case_results_verdict"]), ("PASS", "PASS"))
+        for case_id in self.agy_case_ids:
+            for model in ("other-model", None):
+                with self.subTest(case_id=case_id, model=model):
+                    self.assert_unbound(requested, self.proof_with({case_id: self.recorded(model)}))
+
+    def test_default_request_binds_only_native_default_agy_proof(self) -> None:
+        default = self._create_receipt(agy_model=None, label="default")
+        self.assertNotIn("agy_model", default.invocation.request.document())
+        self.assert_unbound(default, self.base_proof())
+        native_default = self.proof_with({case_id: self.recorded(None)
+                                          for case_id in self.agy_case_ids})
+        facts = self.read_with(default, native_default)
+        self.assertEqual((facts["status"], facts["case_results_verdict"]), ("PASS", "PASS"))
+
+    def test_changed_completed_readback_precedes_agy_binding(self) -> None:
+        default = self._create_receipt(agy_model=None, label="changed")
+        facts = self.read_with(self._create_receipt(label="matching"), self.base_proof())
+        default.invocation.proof.write_bytes(self.base_proof())
+        default.intend("project", {"expectation": asdict(self.expectation)})
+        default.complete("project", {**facts, "size": _integer_size(facts) + 1})
+        with self.assertRaises(ReleaseError) as raised:
+            projection.read_public(default)
+        self.assertEqual(raised.exception.code, "public_proof_readback_changed")
+        self.assertTrue(raised.exception.incomplete)
+
+    def test_neutral_agy_block_and_fail_verdict_keep_their_existing_paths(self) -> None:
+        def blocked_before_admission(case: dict[str, object]) -> None:
+            case["status"], case["exit_code"] = "BLOCKED", 2
+            proof = proof_fixtures._object(case["source_proof"])
+            proof.update({
+                "state": "blocked-before-runtime", "final_status": "BLOCKED",
+                "source_status": "blocked", "requested_options_state": "missing",
+                "requested_model": None, "requested_effort": None,
+                "task_ids": [], "task_session_bindings": [], "diagnostic_task_ids": [],
+                "session_ids": {"state": "not-recorded", "values": [], "by_alias": {}},
+                "binary_identities": {"state": "unavailable", "sha256": {}, "task_ids": []},
+            })
+            proof_fixtures._object(proof["lifecycle_proof"])["state"] = "unresolved"
+
+        requested = self._create_receipt(label="requested")
+        blocked = self.proof_with(
+            {case_id: blocked_before_admission for case_id in self.agy_case_ids},
+            {"pass_count": self.case_count - len(self.agy_case_ids),
+             "blocked_count": len(self.agy_case_ids)},
+        )
+        facts = self.read_with(requested, blocked)
+        self.assertEqual((facts["status"], facts["case_results_verdict"]), ("PASS", "PASS"))
+        self.assertEqual(facts["pass_count"], self.case_count - len(self.agy_case_ids))
+
+        def submitted_fail(case: dict[str, object]) -> None:
+            case["status"], case["exit_code"] = "FAIL", 1
+            proof = proof_fixtures._object(case["source_proof"])
+            proof.update({"state": "unresolved", "final_status": "FAIL",
+                          "source_status": "fail", "requested_model": "other-model"})
+
+        failed = self.proof_with(
+            {self.agy_case_ids[0]: submitted_fail},
+            {"status": "FAIL", "exit_code": 1, "case_results_verdict": "FAIL",
+             "pass_count": self.case_count - 1, "failed_count": 1},
+        )
+        facts = self.read_with(self._create_receipt(agy_model=None, label="failed"), failed)
+        self.assertEqual(facts["case_results_verdict"], "FAIL")
+
+    def test_unbound_projection_and_completed_readback_stop_before_submission(self) -> None:
+        legacy = self._create_receipt(agy_model=None, label="legacy")
+        legacy_request = legacy.invocation.request.document()
+        self.assertNotIn("agy_model", legacy_request)
+        boundary = _StageSourceBoundary(self, legacy, self.source, interrupt=None)
+        with self.resume_ports(boundary) as ports:
+            with self.assertRaises(ReleaseError) as raised:
+                coordinator.resume(legacy)
+            self.assertEqual(raised.exception.code, "agy_requested_model_unbound")
+            self.assert_no_paid_entrypoints(ports)
+            ports["submit"].assert_not_called()
+        self.assertEqual(legacy.stage("project").state, "intended")
+        # A project completed before this binding existed: the same proof facts,
+        # read through a request that matches the recorded AGY model.
+        facts = self.read_with(self._create_receipt(label="matching"),
+                               legacy.invocation.proof.read_bytes())
+        legacy.complete("project", facts)
+        resumed = Receipt.load(legacy.path)
+        with self.resume_ports(boundary) as ports:
+            with self.assertRaises(ReleaseError) as raised:
+                coordinator.resume(resumed)
+            self.assertEqual(raised.exception.code, "agy_requested_model_unbound")
+            self.assert_no_paid_entrypoints(ports)
+            ports["observe_native"].assert_not_called()
+            ports["github_client"].assert_not_called()
+            ports["submit"].assert_not_called()
+        for name in ("upload", "dispatch", "watch"):
+            self.assertEqual(resumed.stage(name).state, "pending")
+        self.assertEqual(boundary.calls, 1)
+        self.assertEqual(Receipt.load(legacy.path).invocation.request.document(), legacy_request)
 
 if __name__ == "__main__":
     unittest.main()

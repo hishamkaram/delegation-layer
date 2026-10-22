@@ -67,32 +67,44 @@ class ReleaseRequest:
     opencode_model: str
     ccr_model: str | None
     no_submit: bool
+    # None selects AGY's native default model; stored requests omit the key.
+    agy_model: str | None = None
 
     def __post_init__(self) -> None:
         text_value(self.repo, r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
         text_value(self.tag, r"v[0-9]+\.[0-9]+\.[0-9]+")
-        for model in (self.opencode_model, self.ccr_model):
+        for model in (self.opencode_model, self.ccr_model, self.agy_model):
             if model is not None:
                 text_value(model, r"[A-Za-z0-9][A-Za-z0-9._:+/-]{0,127}")
         if type(self.no_submit) is not bool:
             raise ReleaseError("release_submission_option_invalid")
 
     def document(self) -> dict[str, object]:
-        return {"repo": self.repo, "tag": self.tag, "opencode_model": self.opencode_model,
-                "ccr_model": self.ccr_model, "no_submit": self.no_submit}
+        result: dict[str, object] = {
+            "repo": self.repo, "tag": self.tag, "opencode_model": self.opencode_model,
+            "ccr_model": self.ccr_model, "no_submit": self.no_submit,
+        }
+        if self.agy_model is not None:
+            result["agy_model"] = self.agy_model
+        return result
 
     @classmethod
     def parse(cls, value: object) -> ReleaseRequest:
         record = object_value(value)
         ccr = record.get("ccr_model")
         no_submit = record.get("no_submit")
-        if (set(record) != {"repo", "tag", "opencode_model", "ccr_model", "no_submit"}
+        agy = record.get("agy_model")
+        keys = {"repo", "tag", "opencode_model", "ccr_model", "no_submit"}
+        # One encoding per value: an omitted key is the only form of no AGY model.
+        if (set(record) not in (keys, keys | {"agy_model"})
+                or "agy_model" in record and not isinstance(agy, str)
                 or ccr is not None and not isinstance(ccr, str)
                 or type(no_submit) is not bool):
             raise ReleaseError("release_request_invalid")
         return cls(repo=text_value(record["repo"]), tag=text_value(record["tag"]),
                    opencode_model=text_value(record["opencode_model"]),
-                   ccr_model=ccr, no_submit=no_submit)
+                   ccr_model=ccr, no_submit=no_submit,
+                   agy_model=None if agy is None else text_value(agy))
 
 
 @dataclass(frozen=True)

@@ -103,6 +103,24 @@ class PreflightTests(ReleaseFixture):
             supplied = execution.child_environment(self.receipt.invocation)
             self.assertEqual(supplied["CCR_LIVE_MODEL"], "exact-alias")
 
+    def test_agy_model_overrides_inherited_alias_without_parent_mutation(self) -> None:
+        inherited = {"AGY_LIVE_MODEL": "wrong-inherited-agy", "PATH": "/usr/bin:/bin"}
+        with patch.dict(os.environ, inherited):
+            omitted = execution.child_environment(self.receipt.invocation)
+            self.assertIsNone(self.receipt.invocation.request.agy_model)
+            self.assertEqual(omitted["AGY_LIVE_MODEL"], "")
+            requested = replace(self.receipt.invocation,
+                                request=replace(self.receipt.invocation.request,
+                                                agy_model="vendor/agy-exact"))
+            supplied = execution.child_environment(requested)
+            self.assertEqual(supplied["AGY_LIVE_MODEL"], "vendor/agy-exact")
+            self.assertEqual({key: value for key, value in supplied.items() if key != "AGY_LIVE_MODEL"},
+                             {key: value for key, value in omitted.items() if key != "AGY_LIVE_MODEL"})
+            self.assertEqual(supplied["PATH"], str(self.receipt.invocation.assets / "extracted")
+                             + os.pathsep + "/usr/bin:/bin")
+            self.assertEqual(os.environ["AGY_LIVE_MODEL"], "wrong-inherited-agy")
+            self.assertEqual(os.environ["PATH"], "/usr/bin:/bin")
+
 
 class ExecutionTests(ReleaseFixture):
     def test_child_path_discovers_the_verified_supervisor_pair(self) -> None:

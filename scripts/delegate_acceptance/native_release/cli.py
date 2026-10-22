@@ -28,6 +28,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--tag", required=True)
     run.add_argument("--opencode-model", required=True)
     run.add_argument("--ccr-model")
+    run.add_argument("--agy-model")
     run.add_argument("--no-submit", action="store_true")
     run.add_argument("--repo", default=CANONICAL_REPOSITORY)
     recovery = commands.add_parser("resume")
@@ -54,7 +55,8 @@ def _locked(args: argparse.Namespace, argv: list[str]) -> int:
     else:
         checkout = Path(__file__).resolve().parents[3]
         request = ReleaseRequest(repo=args.repo, tag=args.tag, opencode_model=args.opencode_model,
-                                 ccr_model=args.ccr_model, no_submit=args.no_submit)
+                                 ccr_model=args.ccr_model, no_submit=args.no_submit,
+                                 agy_model=args.agy_model)
     base = state_base(checkout)
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock_fd = acquire_exclusive_file_lock(base / lock_name(request))
