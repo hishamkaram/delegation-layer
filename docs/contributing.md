@@ -514,7 +514,10 @@ authentication block is never a pass. An interrupted native phase remains
 incomplete; it is not an authentication block. Failed or unresolved native work
 retains its private evidence, and a failed attempt stays in the candidate's
 history: record its triage with `record_candidate.py triage`; a later attempt or
-candidate does not erase it. Keep the checkout unchanged while a native command
+candidate does not erase it. A `BLOCKED` case keeps the exact bytes of its
+`failure.json` as the private `native/receipts/<case-id>.failure.json` after raw
+cleanup; it is never staged or published, and it may hold provider error text,
+so do not print or upload it. Keep the checkout unchanged while a native command
 runs: changing its captured source closure invalidates the proof.
 
 ### Legacy tag-based native receipts

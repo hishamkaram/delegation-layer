@@ -12,12 +12,15 @@ import contextlib
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 import errno
+import hashlib
 import io
 import json
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import unittest
+import zipfile
 from unittest.mock import patch
 
 if __package__ in {None, ""}:
@@ -26,8 +29,11 @@ if __package__ in {None, ""}:
 from scripts.acceptance_tests.release_fixture import open_descriptors
 from scripts.delegate_acceptance.native_release import candidate, cleanup, cli, execution, projection, storage
 from scripts.delegate_acceptance.native_release.contract import ReleaseError
+from scripts.delegate_acceptance.native_evidence.contract import COMPACT_RECEIPT_ROOT_NAME, EXPECTED_CASES
 from scripts.delegate_acceptance.native_release.receipt import Receipt
+from scripts.delegate_acceptance.release_verification.candidate_attempts import BlockReason, CellStatus, Closure
 from scripts.delegate_acceptance.release_verification.candidate_manifest import encode_locator
+from scripts.delegate_acceptance.release_verification.candidate_readiness import evaluate_attempt
 from scripts.delegate_acceptance.release_verification.candidate_store_contract import TransitionKind
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.processes.contracts import (
@@ -819,6 +825,38 @@ class UnknownControlOutcomeTests(PublicCandidateCase):
             self.assertEqual(Receipt.load(self.receipt.path).stage("preflight").state, "intended")
             self.assertUnsaved(self.resume_public(), "INCOMPLETE", "candidate_pre_claim_incomplete_no_rerun")
         self.assertEqual((self.starts, self.github.writes("POST"), self.github.writes("PATCH")), (0, [], []))
+
+
+class BlockedFailureCopyCleanupTests(CandidateCase):
+    """Outer candidate cleanup removes runner scratch but never the private blocked failure copies."""
+
+    SENTINEL = b"do not copy this detail"
+
+    def test_candidate_cleanup_keeps_each_private_failure_copy_out_of_the_public_proof(self) -> None:
+        self.mode = "blocked"
+        receipt = self.execute()
+        self.assertEqual((receipt.stage("cleanup").state, (receipt.invocation.root / "runner").exists()),
+                         ("complete", False))
+        receipts = receipt.invocation.aggregate.parent / COMPACT_RECEIPT_ROOT_NAME
+        for case in EXPECTED_CASES:
+            copy = receipts / f"{case.case_id}.failure.json"
+            compact = json.loads((receipts / f"{case.case_id}.json").read_bytes())
+            self.assertEqual(hashlib.sha256(copy.read_bytes()).hexdigest(), compact["source_receipt_sha256"])
+            self.assertEqual(stat.S_IMODE(copy.lstat().st_mode), 0o600)
+            self.assertIn(self.SENTINEL, copy.read_bytes())
+        with zipfile.ZipFile(receipt.invocation.proof) as proof:
+            self.assertEqual([name for name in proof.namelist() if "failure" in name], [])
+            self.assertFalse(any(self.SENTINEL in proof.read(name) for name in proof.namelist()))
+        snapshot = self.snapshot()
+        platform_proof = snapshot.history.proofs[0]
+        self.assertEqual((platform_proof.closure, platform_proof.unresolved_resources), (Closure.COMPLETE, ()))
+        self.assertEqual({(cell.status, cell.block_reason) for cell in platform_proof.cells},
+                         {(CellStatus.BLOCKED, BlockReason.UNCLASSIFIED)})
+        verdict = evaluate_attempt(snapshot.candidate.manifest, snapshot.history, 1)
+        prefix = f"{platform_proof.os}/{platform_proof.arch}/"
+        self.assertEqual({finding.subject.removeprefix(prefix): finding.code for finding in verdict.findings
+                          if finding.subject.startswith(prefix)},
+                         {case.case_id: "cell_blocked" for case in EXPECTED_CASES})
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from enum import Enum
 import json
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,6 +12,7 @@ from scripts import acceptance_native as entry
 from scripts import native_acceptance_evidence as evidence
 # Import the module, not the TestCase, so its tests are discovered only once.
 from scripts import test_native_acceptance_evidence as evidence_tests
+from scripts.delegate_acceptance.directories import journal as cleanup_journal
 from scripts.delegate_acceptance.native import acceptance as gate
 from scripts.delegate_acceptance.native.errors import BlockedFailure
 from scripts.delegate_acceptance.native_evidence import aggregate as aggregate_operations
@@ -459,6 +461,285 @@ class ProducerValidatorTests(unittest.TestCase):
                     root, matrix, root / evidence.AGGREGATE_RECEIPT_NAME,
                     tag="v1.2.3", source_revision="a" * 40)
 
+
+class BlockedFailureRetentionTests(unittest.TestCase):
+    """Each BLOCKED case keeps its exact private failure bytes after canonical raw cleanup."""
+
+    SENTINEL = b"private-blocked-diagnostic-sentinel"
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="native-blocked-failure-copy-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve(strict=True)
+        self.fixture = object.__new__(evidence_tests.NativeAcceptanceEvidenceTests)
+        self.fixture.root = self.root
+        self.definition = evidence.EXPECTED_CASES[0]
+
+    def prepare(self, label, *, status="BLOCKED", failed_index=None, edit=None):
+        """Write a fixture matrix; return its root, matrix, case 0 directory and raw failure bytes."""
+        root = self.root / label
+        matrix = self.fixture.make_matrix(root, status=status, failed_index=failed_index)
+        directory = root / self.definition.case_output
+        source = directory / "failure.json"
+        if edit is not None:
+            receipt = json.loads(source.read_text(encoding="utf-8"))
+            edit(receipt)
+            source.write_text(json.dumps(receipt), encoding="utf-8")
+        # The producer, not the fixture, creates the private receipts directory.
+        (root / evidence.COMPACT_RECEIPT_ROOT_NAME).rmdir()
+        return root, matrix, directory, source.read_bytes() if source.exists() else None
+
+    @staticmethod
+    def aggregate(root, matrix):
+        return evidence.build_aggregate(
+            root, matrix, root / evidence.AGGREGATE_RECEIPT_NAME, tag="v1.2.3", source_revision="a" * 40)
+
+    def copy_path(self, root, definition=None):
+        case_id = (definition or self.definition).case_id
+        return root / evidence.COMPACT_RECEIPT_ROOT_NAME / f"{case_id}.failure.json"
+
+    def assert_exact_copy(self, root, case, original):
+        compact = json.loads(Path(case["receipt_path"]).read_text(encoding="utf-8"))
+        copy = self.copy_path(root)
+        self.assertEqual(copy.read_bytes(), original)
+        self.assertEqual(contract._digest_bytes(copy.read_bytes()), compact["source_receipt_sha256"])
+        self.assertEqual(stat.S_IMODE(copy.lstat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(copy.parent.lstat().st_mode), 0o700)
+
+    def assert_retained(self, root, directory, original, value, code, error):
+        self.assertEqual((code, value["status"]), (1, "FAIL"))
+        case = value["cases"][0]
+        compact = json.loads(Path(case["receipt_path"]).read_text(encoding="utf-8"))
+        self.assertEqual((case["evidence_status"], compact["evidence_error"], compact["terminal_state"]),
+                         ("UNRESOLVED", error, "published-unresolved"))
+        self.assertEqual((directory / "failure.json").read_bytes(), original)
+        compact_root = root / evidence.COMPACT_RECEIPT_ROOT_NAME
+        self.assertFalse((compact_root / f"{self.definition.case_id}.cleanup.json").exists())
+
+    def test_every_blocked_reason_keeps_an_exact_private_copy_after_raw_deletion(self):
+        discovery = {"status": "unavailable", "reason_code": "models_unavailable", "complete": False}
+        edits = {
+            "unclassified-discovery": lambda receipt: receipt.update(
+                model_discovery=discovery, error=self.SENTINEL.decode()),
+            "unclassified-other": lambda receipt: receipt.update(error=self.SENTINEL.decode()),
+            "neutral-auth": lambda receipt: receipt.update(
+                block_reason=BlockReason.AUTH_UNAVAILABLE.value, error=self.SENTINEL.decode()),
+        }
+        for label, edit in edits.items():
+            with self.subTest(label=label):
+                root, matrix, directory, original = self.prepare(label, edit=edit)
+                value, code = self.aggregate(root, matrix)
+                self.assertEqual((code, value["cases"][0]["evidence_status"]), (0, "RESOLVED"))
+                self.assertFalse(directory.exists())
+                self.assertIn(self.SENTINEL, original)
+                self.assert_exact_copy(root, value["cases"][0], original)
+                for definition in evidence.EXPECTED_CASES:
+                    self.assertTrue(self.copy_path(root, definition).is_file())
+                evidence.validate_aggregate_receipt(root / evidence.AGGREGATE_RECEIPT_NAME)
+
+    def test_a_failure_receipt_above_the_receipt_limit_is_copied_within_the_input_limit(self):
+        large = "x" * (contract.MAX_RECEIPT_BYTES + 1024)
+        root, matrix, directory, original = self.prepare("large", edit=lambda receipt: receipt.update(error=large))
+        self.assertTrue(contract.MAX_RECEIPT_BYTES < len(original) <= contract.MAX_INPUT_BYTES)
+        value, code = self.aggregate(root, matrix)
+        self.assertEqual(code, 0)
+        self.assertFalse(directory.exists())
+        self.assert_exact_copy(root, value["cases"][0], original)
+
+    def test_pass_and_fail_cases_keep_no_failure_copy(self):
+        for label, failed_index in (("pass", None), ("fail", 0)):
+            with self.subTest(label=label):
+                root, matrix, _directory, _original = self.prepare(label, status="PASS", failed_index=failed_index)
+                self.aggregate(root, matrix)
+                self.assertEqual(list((root / evidence.COMPACT_RECEIPT_ROOT_NAME).glob("*.failure.json")), [])
+
+    def test_a_conflicting_or_symlinked_copy_is_never_overwritten_and_retains_raw_evidence(self):
+        outside = self.root / "outside-target"
+        outside.write_bytes(b"outside bytes")
+        for label, error in (("conflict", "blocked_failure_copy_conflict"),
+                             ("symlink", "blocked_failure_copy_invalid")):
+            with self.subTest(label=label):
+                root, matrix, directory, original = self.prepare(label)
+                copy = self.copy_path(root)
+                copy.parent.mkdir(mode=0o700)
+                if label == "conflict":
+                    copy.write_bytes(b"conflicting bytes")
+                else:
+                    copy.symlink_to(outside)
+                value, code = self.aggregate(root, matrix)
+                self.assert_retained(root, directory, original, value, code, error)
+                if label == "conflict":
+                    self.assertEqual(copy.read_bytes(), b"conflicting bytes")
+                else:
+                    self.assertTrue(copy.is_symlink())
+                self.assertEqual(outside.read_bytes(), b"outside bytes")
+
+    def test_a_write_sync_or_readback_fault_retains_raw_evidence_with_its_code(self):
+        real = case_operations._write_bytes_atomic
+
+        def failing(path, data, limit, fault):
+            if path != self.copy_path(path.parent.parent):
+                return real(path, data, limit)
+            if fault == "write":
+                raise OSError("injected copy write failure")
+            if fault == "sync":
+                real(path, data, limit)
+                raise EvidenceError("evidence_directory_sync_failed")
+            return real(path, data + b" ", limit)
+
+        for fault, error in (("write", "blocked_failure_copy_write_failed"),
+                             ("sync", "blocked_failure_copy_write_failed"),
+                             ("readback", "blocked_failure_copy_readback_mismatch")):
+            with self.subTest(fault=fault):
+                root, matrix, directory, original = self.prepare(fault)
+                with patch.object(case_operations, "_write_bytes_atomic",
+                                  side_effect=lambda path, data, limit, f=fault: failing(path, data, limit, f)):
+                    value, code = self.aggregate(root, matrix)
+                self.assert_retained(root, directory, original, value, code, error)
+
+    def test_a_source_changed_after_observation_retains_raw_evidence(self):
+        root, matrix, directory, original = self.prepare("changed")
+        real = aggregate_operations._observe_case
+
+        def observe(row, aggregate_root):
+            observation = real(row, aggregate_root)
+            if row.definition == self.definition:
+                (directory / "failure.json").write_bytes(original + b"\n")
+            return observation
+
+        with patch.object(aggregate_operations, "_observe_case", side_effect=observe):
+            value, code = self.aggregate(root, matrix)
+        self.assert_retained(root, directory, original + b"\n", value, code, "blocked_failure_source_changed")
+        self.assertFalse(self.copy_path(root).exists())
+
+    def test_a_crash_between_copy_and_marker_reuses_the_matching_copy(self):
+        root, matrix, directory, original = self.prepare("before-marker")
+        with patch.object(aggregate_operations, "_prepare_case_cleanup", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.aggregate(root, matrix)
+        copy = self.copy_path(root)
+        identity = copy.lstat().st_ino
+        self.assertTrue(directory.is_dir())
+        with patch.object(case_operations, "_write_bytes_atomic", wraps=case_operations._write_bytes_atomic) as write:
+            value, code = self.aggregate(root, matrix)
+        self.assertNotIn(copy, [call.args[0] for call in write.call_args_list])
+        self.assertEqual((code, copy.lstat().st_ino), (0, identity))
+        self.assertFalse(directory.exists())
+        self.assert_exact_copy(root, value["cases"][0], original)
+
+    def crash_after_marker(self, label):
+        root, matrix, directory, original = self.prepare(label)
+        with patch.object(case_operations, "prepare_directory_cleanup", side_effect=RuntimeError("crash")):
+            with self.assertRaisesRegex(EvidenceError, "case_cleanup_prepare_failed"):
+                self.aggregate(root, matrix)
+        compact = root / evidence.COMPACT_RECEIPT_ROOT_NAME / f"{self.definition.case_id}.json"
+        self.assertEqual(json.loads(compact.read_bytes())["terminal_state"], "published-before-cleanup")
+        self.assertTrue(directory.is_dir())
+        return root, matrix, directory, original
+
+    def test_replay_after_the_marker_validates_the_copy_before_deletion(self):
+        root, matrix, directory, original = self.crash_after_marker("after-marker")
+        order = []
+        preserve, resume = case_operations._preserve_blocked_source, case_operations.resume_directory_cleanup
+
+        def preserving(*arguments):
+            order.append("preserve")
+            return preserve(*arguments)
+
+        def resuming(*arguments):
+            order.append("resume")
+            return resume(*arguments)
+
+        with patch.object(case_operations, "_preserve_blocked_source", side_effect=preserving), \
+                patch.object(case_operations, "resume_directory_cleanup", side_effect=resuming):
+            value, code = self.aggregate(root, matrix)
+        self.assertEqual((code, order[:2]), (0, ["preserve", "resume"]))
+        self.assertFalse(directory.exists())
+        self.assert_exact_copy(root, value["cases"][0], original)
+
+    def test_replay_with_a_conflicting_copy_stops_before_deletion(self):
+        root, matrix, directory, original = self.crash_after_marker("replay-conflict")
+        copy = self.copy_path(root)
+        copy.write_bytes(b"conflicting bytes")
+        with patch.object(case_operations, "resume_directory_cleanup") as resume:
+            with self.assertRaisesRegex(EvidenceError, "blocked_failure_copy_conflict"):
+                self.aggregate(root, matrix)
+        resume.assert_not_called()
+        self.assertEqual((copy.read_bytes(), (directory / "failure.json").read_bytes()),
+                         (b"conflicting bytes", original))
+
+    def test_a_legacy_marker_with_raw_present_creates_the_copy_before_deletion(self):
+        root, matrix, directory, original = self.crash_after_marker("legacy-present")
+        # A marker from a harness without the copy: only the copy is absent.
+        self.copy_path(root).unlink()
+        value, code = self.aggregate(root, matrix)
+        self.assertEqual(code, 0)
+        self.assertFalse(directory.exists())
+        self.assert_exact_copy(root, value["cases"][0], original)
+
+    def test_a_legacy_marker_whose_raw_is_gone_closes_its_journal_without_a_copy(self):
+        root, matrix, directory, _original = self.prepare("legacy-gone")
+        with patch.object(case_operations, "cleanup_journal_digest", side_effect=RuntimeError("crash")):
+            with self.assertRaisesRegex(EvidenceError, "case_cleanup_journal_invalid"):
+                self.aggregate(root, matrix)
+        self.assertFalse(directory.exists())
+        self.copy_path(root).unlink()
+        value, code = self.aggregate(root, matrix)
+        self.assertEqual((code, value["cases"][0]["evidence_status"]), (0, "RESOLVED"))
+        self.assertFalse(self.copy_path(root).exists())
+        evidence.validate_aggregate_receipt(root / evidence.AGGREGATE_RECEIPT_NAME)
+
+
+    def interrupt_cleanup(self, label, step):
+        """Stop the canonical cleanup after its ``step`` transition, then drop the copy as a legacy marker."""
+        root, matrix, directory, original = self.prepare(label)
+        real = getattr(cleanup_journal, step)
+
+        def interrupted(value):
+            if step != "_cleanup_isolate":
+                raise KeyboardInterrupt
+            real(value)
+            raise KeyboardInterrupt
+
+        with patch.object(cleanup_journal, step, side_effect=interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                self.aggregate(root, matrix)
+        self.assertFalse(directory.exists())
+        self.copy_path(root).unlink()
+        journal = root / evidence.COMPACT_RECEIPT_ROOT_NAME / f"{self.definition.case_id}.cleanup.json"
+        return root, matrix, original, journal
+
+    def test_a_legacy_marker_never_deletes_a_quarantined_failure_without_a_copy(self):
+        # A rename into quarantine leaves the original path absent while its contents remain.
+        for step, state in (("_cleanup_isolate", "prepared"), ("_cleanup_empty", "isolated")):
+            with self.subTest(state=state):
+                root, matrix, original, journal = self.interrupt_cleanup("quarantined-" + state, step)
+                record = json.loads(journal.read_bytes())
+                quarantined = Path(record["quarantine"]["path"]) / "failure.json"
+                self.assertEqual((record["state"], quarantined.read_bytes()), (state, original))
+                journal_bytes = journal.read_bytes()
+                with self.assertRaisesRegex(EvidenceError, "blocked_failure_source_unavailable"):
+                    self.aggregate(root, matrix)
+                self.assertEqual((journal.read_bytes(), quarantined.read_bytes()), (journal_bytes, original))
+                self.assertFalse(self.copy_path(root).exists())
+
+    def test_a_legacy_marker_whose_contents_were_removed_completes_without_a_copy(self):
+        root, matrix, _original, journal = self.interrupt_cleanup("contents-removed", "_cleanup_remove_empty")
+        self.assertEqual(json.loads(journal.read_bytes())["state"], "contents-removed")
+        marker = json.loads(journal.with_name(f"{self.definition.case_id}.json").read_bytes())
+        authorization, identity = marker["raw_deletion"]["authorization_sha256"], marker["creation_identity"]
+        removed = case_operations._cleanup_removed_contents
+        self.assertTrue(removed(journal, authorization, identity))
+        for label, arguments in (("identity", (journal, authorization, {**identity, "inode": 0})),
+                                 ("authorization", (journal, "0" * 64, identity)),
+                                 ("journal", (journal.with_name("absent.cleanup.json"), authorization, identity))):
+            with self.subTest(refused=label):
+                self.assertFalse(removed(*arguments))
+        value, code = self.aggregate(root, matrix)
+        self.assertEqual((code, value["cases"][0]["evidence_status"]), (0, "RESOLVED"))
+        self.assertEqual(json.loads(journal.read_bytes())["state"], "complete")
+        self.assertFalse(self.copy_path(root).exists())
+        evidence.validate_aggregate_receipt(root / evidence.AGGREGATE_RECEIPT_NAME)
 
 if __name__ == "__main__":
     unittest.main()

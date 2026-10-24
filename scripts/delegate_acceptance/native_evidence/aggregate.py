@@ -11,6 +11,7 @@ import time
 from .cases import (
     _case_reference,
     _prepare_case_cleanup,
+    _preserve_blocked_source,
     _read_case_source,
     _replay_prepared_case,
     _sanitize_case,
@@ -292,15 +293,19 @@ def _build_case(row: MatrixRow, aggregate_root: Path) -> dict[str, object]:
                 source_proof=proof, creation_identity=creation_identity, terminal_state="published-before-cleanup",
                 raw_deleted=False,
             )
-            _prepare_case_cleanup(
-                compact_path, prepared, cleanup_root, creation_identity,
-            )
-            resolved = _replay_prepared_case(
-                compact_path, case_directory, cases_root, cleanup_root, row,
-            )
-            if resolved is None:
-                raise EvidenceError("directory_owner_cleanup_failed")
-            return resolved
+            if row.status == "BLOCKED":
+                # The private failure copy must be durable before the marker authorizes deletion.
+                evidence_error = _preserve_blocked_source(case_directory, compact_path, source_digest)
+            if evidence_error is None:
+                _prepare_case_cleanup(
+                    compact_path, prepared, cleanup_root, creation_identity,
+                )
+                resolved = _replay_prepared_case(
+                    compact_path, case_directory, cases_root, cleanup_root, row,
+                )
+                if resolved is None:
+                    raise EvidenceError("directory_owner_cleanup_failed")
+                return resolved
 
     after = (_tree_summary(case_directory)
              if case_directory.exists() and not case_directory.is_symlink()

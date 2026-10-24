@@ -35,6 +35,7 @@
     "layer": "test",
     "imports": [
       "py:acceptance_native",
+      "py:delegate_acceptance.directories.journal",
       "py:delegate_acceptance.native.acceptance",
       "py:delegate_acceptance.native.errors",
       "py:delegate_acceptance.native_evidence.aggregate",
@@ -47,6 +48,7 @@
       "py:json",
       "py:native_acceptance_evidence",
       "py:pathlib",
+      "py:stat",
       "py:tempfile",
       "py:test_native_acceptance_evidence",
       "py:unittest",
