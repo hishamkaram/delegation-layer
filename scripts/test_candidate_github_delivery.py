@@ -22,7 +22,7 @@ from scripts.delegate_acceptance.release_verification.candidate_manifest import 
 from scripts.delegate_acceptance.release_verification.candidate_publication_contract import (
     VERIFICATION_SUMMARY, release_body, release_text,
 )
-from scripts.delegate_acceptance.release_verification.contract import VerificationError
+from scripts.delegate_acceptance.release_verification.contract import MAX_OUTPUT, VerificationError
 from scripts.test_candidate_artifact_support import REPOSITORY, VERSION, manifest_bytes, payload_files
 from scripts.test_candidate_github_delivery_support import (
     MERGED, NOTES, OTHER, PAYLOAD_DIRECTORY, TAG, DeliveryCase, Fault, artifact, promotion,
@@ -40,6 +40,8 @@ LIST = f"GET repos/{REPOSITORY}/releases?per_page=30&page=1"
 LATEST = f"GET repos/{REPOSITORY}/releases/latest"
 # The fixture's first created release.
 CREATED = 501
+# Generated notes whose release replies exceed the default output limit, far below the 1 MiB release page.
+LARGE_NOTES = NOTES + "".join(f"* Change {n} by @maintainer in #{n}\n" for n in range(2000))
 
 
 def by_id(release_id: int) -> str:
@@ -241,6 +243,16 @@ class ReleaseBodyTests(DeliveryCase):
         self.prepare()
         self.assertEqual(self.mutations()[4:], [*([UPLOAD] * len(NAMES))])
 
+    def test_large_draft_acknowledgement_is_read_within_the_release_page_limit(self):
+        self.edit(lambda state: state.update(notes=LARGE_NOTES))
+        body = release_text(LARGE_NOTES, self.promotion)
+        self.assertTrue(MAX_OUTPUT < len(body.encode()) < 2 * MAX_OUTPUT)
+        prepared = self.prepare()
+        self.assertEqual(self.mutations(), [GENERATE, CREATE, *([UPLOAD] * len(NAMES))])
+        create = next(entry for entry in self.log() if entry["key"] == CREATE)
+        self.assertEqual(create["body"]["body"], body)
+        self.assertEqual((prepared.observed.body, self.state()["releases"][0]["body"]), (body, body))
+
     def test_body_lost_after_an_exact_draft_acknowledgement_is_refused_not_prepared(self):
         self.edit(lambda state: state.update(rewrite_body=""))
         self.refused("candidate_release_body_mismatch", self.prepare)
@@ -300,6 +312,19 @@ class ReleaseBodyTests(DeliveryCase):
         for resume in (False, True):
             self.assertEqual(self.prepare(resume_published=resume).observed.body, composed)
         self.assertNotIn(GENERATE, [entry["key"] for entry in self.log()])
+        self.assertEqual(self.state()["releases"][0]["body"], composed)
+
+    def test_large_publication_acknowledgement_is_read_within_the_release_page_limit(self):
+        # A seeded complete draft, so a creation reply can never fail in place of the publication reply.
+        composed = release_text(LARGE_NOTES, self.promotion)
+        self.assertTrue(MAX_OUTPUT < len(composed.encode()) < 2 * MAX_OUTPUT)
+        self.seed_release(draft=True, names=NAMES, body=composed)
+        prepared = self.prepare()
+        self.assertEqual((self.mutations(), prepared.observed.body), ([], composed))
+        published = self.publish(prepared)
+        patch_key = f"PATCH repos/{REPOSITORY}/releases/{prepared.release_id}"
+        self.assertEqual(self.mutations(), [CREATE_REF, patch_key])
+        self.assertEqual((published.observed.draft, published.observed.body), (False, composed))
         self.assertEqual(self.state()["releases"][0]["body"], composed)
 
     def test_body_lost_after_an_exact_publication_acknowledgement_is_refused_not_published(self):

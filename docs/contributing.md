@@ -462,6 +462,12 @@ last. A release whose block differs, or with text after it, is refused and
 never rewritten. A release holding only the canonical text, as before notes
 existed, is still accepted. Existing drafts and releases are never regenerated.
 
+To edit the notes, use `gh release edit TAG --notes-file FILE`, where `FILE`
+holds the complete body: the edited human text, then the unchanged block as
+its last bytes, ending with the single newline after `</details>`. Change only
+the text before the block. Whether an edit in the GitHub web form keeps the
+block's line endings byte-exact is unverified, so such an edit may be refused.
+
 Exit `0` is `PUBLISHED`: the hosted report passed its validator with exact
 bindings and the local receipt is finalized. Exit `2` is `BLOCKED`: nothing was
 dispatched, or the hosted run failed before any mutation. Exit `3` is

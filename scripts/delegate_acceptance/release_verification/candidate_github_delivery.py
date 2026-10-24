@@ -160,7 +160,7 @@ def publish_prepared_release(promotion: CandidatePromotion, prepared: PreparedRe
         _create_tag(client, target, work_directory)
     _acknowledged(client.json_body(
         f"repos/{target.repo}/releases/{prepared.release_id}", {"draft": False, "make_latest": "true"},
-        method="PATCH", body_path=work_directory / "release-publish.json"),
+        method="PATCH", body_path=work_directory / "release-publish.json", limit=MAX_RELEASE_PAGE_BYTES),
         {"id": prepared.release_id, "tag_name": target.tag, "draft": False, "prerelease": False,
          "body": _prepared(remote).observed.body})
     final = _observe_known(client, target, prepared.release_id,
@@ -403,7 +403,7 @@ def _create_draft(client: GitHubClient, target: _Target, body: str, work_directo
     request: dict[str, object] = {"tag_name": target.tag, "target_commitish": target.merged_commit,
                                   "name": target.tag, "draft": True, "prerelease": False, "body": body}
     reply = client.json_body(f"repos/{target.repo}/releases", request, method="POST",
-                             body_path=work_directory / "release-draft.json")
+                             body_path=work_directory / "release-draft.json", limit=MAX_RELEASE_PAGE_BYTES)
     return _acknowledged(reply, request)
 
 
