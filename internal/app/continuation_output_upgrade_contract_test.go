@@ -219,14 +219,14 @@ func outputUpgradeSuccessorRequest(t *testing.T, testCase outputUpgradeCase) tas
 
 // outputUpgradeCandidateSource is the catalog operation that turns a stored
 // predecessor record into the candidate under test.
-type outputUpgradeCandidateSource func(commonprovider.Catalog, task.TaskRecord, task.MetaRecord) (commonprovider.ProfileCandidate, error)
+type outputUpgradeCandidateSource func(commonprovider.Catalog, task.TaskRecord, task.MetaRecord, []string) (commonprovider.ProfileCandidate, error)
 
 // outputUpgradeProductionPreparation prepares request from a record stored
 // under reference, through the unmodified production catalog.
 func outputUpgradeProductionPreparation(t *testing.T, testCase outputUpgradeCase, request task.TaskRecord, reference task.PredicateRef, prepare outputUpgradeCandidateSource) outputUpgradePreparation {
 	t.Helper()
 	catalog := NativeCatalog()
-	candidate, err := prepare(catalog, request, outputUpgradeStoredRecord(t, catalog, testCase, request, reference))
+	candidate, err := prepare(catalog, request, outputUpgradeStoredRecord(t, catalog, testCase, request, reference), os.Environ())
 	if err != nil {
 		t.Fatalf("stored-predicate candidate under %+v: %v", reference, err)
 	}
@@ -241,7 +241,7 @@ func outputUpgradeStoredRecord(t *testing.T, catalog commonprovider.Catalog, tes
 	if testCase.provider == openCodeProvider {
 		return tasklifecycle.NewMeta(request, openCodeHistoricalRunProfile(t, catalog, request, testCase.revision, reference), task.SupervisorRef{}, "/runner", task.RunnerOwnershipManaged, outputUpgradeBuild)
 	}
-	fresh, err := catalog.Candidate(request)
+	fresh, err := catalog.Candidate(request, os.Environ())
 	if err != nil {
 		t.Fatalf("current candidate: %v", err)
 	}
@@ -339,13 +339,13 @@ func requireCCRCapabilityDisagreementRefused(t *testing.T, testCase outputUpgrad
 	installOutputUpgradeProvider(t, testCase.executable())
 	request := outputUpgradeSuccessorRequest(t, testCase)
 	catalog := NativeCatalog()
-	fresh, err := catalog.Candidate(request)
+	fresh, err := catalog.Candidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
 	seed := tasklifecycle.NewMeta(request, outputUpgradeAdmit(t, testCase, fresh), task.SupervisorRef{}, "/runner", task.RunnerOwnershipManaged, outputUpgradeBuild)
 	seed.Predicate = reference
-	candidate, err := prepare(catalog, request, seed)
+	candidate, err := prepare(catalog, request, seed, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

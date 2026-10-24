@@ -263,7 +263,7 @@ func TestPrepareAdmissionSupervisorConfiguresContinuationScheduling(t *testing.T
 	parallelLog := filepath.Join(base, "parallel")
 	saved := original.Binding()
 
-	continuation, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
+	continuation, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	settleSupervisorProbeTestClient(t, continuation, err)
 	if err != nil || continuation == nil {
 		t.Fatalf("continuation admission did not configure private scheduling: client=%v err=%v", continuation, err)
@@ -284,7 +284,7 @@ func TestPrepareAdmissionSupervisorConfiguresContinuationScheduling(t *testing.T
 		t.Fatalf("continuation did not publish ordinary scheduling receipt: configured=%t err=%v", configured, err)
 	}
 
-	warm, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
+	warm, err := supervisorcore.PrepareAdmissionSupervisor(supervisorAdmissionSelection(Arguments{savedSupervisor: &saved}, deps.withCapturedEnvironment()), supervisorAdmissionOptions(deps, deps.SupervisorOptions), store, false, "", true)
 	settleSupervisorProbeTestClient(t, warm, err)
 	if err != nil || warm == nil {
 		t.Fatalf("warm continuation admission failed: client=%v err=%v", warm, err)

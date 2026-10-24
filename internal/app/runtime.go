@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"slices"
 
 	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 
@@ -97,19 +99,34 @@ type Dependencies struct {
 	RunnerExecutable            string
 	PublisherVersion            string
 	ExecutionHooks              execution.Hooks
-	useCatalogExisting          bool
+	// Environment is the caller's launch-context snapshot. Nil means it was
+	// not captured yet: the first command entrypoint captures os.Environ once
+	// and every later consumer reads that snapshot. A nonnil empty slice is an
+	// explicit empty environment and is kept.
+	Environment        []string
+	useCatalogExisting bool
+}
+
+// withCapturedEnvironment binds the caller's launch environment at a public
+// entrypoint. Composition reads that one snapshot afterward; it never reads
+// the process environment again.
+func (d Dependencies) withCapturedEnvironment() Dependencies {
+	if d.Environment == nil {
+		d.Environment = os.Environ()
+	}
+	return d
 }
 
 // storeDependencies is the narrow composition passed to read-only task-store
 // commands. Profile selection, runner resolution, and supervisor mutation
 // options remain outside this boundary.
 type storeDependencies struct {
-	predicateRegistry           func() predicate.Registry
-	catalog                     commonprovider.Catalog
-	supervisorOptions           pueue.Options
-	initialSupervisorExecutable string
-	runnerExecutable            string
-	observeSupervisor           bool
+	predicateRegistry func() predicate.Registry
+	catalog           commonprovider.Catalog
+	supervisorOptions pueue.Options
+	supervisorLookup  supervisorcore.ExecutableLookup
+	runnerExecutable  string
+	observeSupervisor bool
 }
 
 func (d Dependencies) storeDependencies() storeDependencies {
@@ -118,13 +135,29 @@ func (d Dependencies) storeDependencies() storeDependencies {
 		registry = d.Catalog.Registry
 	}
 	return storeDependencies{
-		predicateRegistry:           registry,
-		catalog:                     d.Catalog,
-		supervisorOptions:           d.SupervisorOptions,
-		initialSupervisorExecutable: d.InitialSupervisorExecutable,
-		runnerExecutable:            d.RunnerExecutable,
-		observeSupervisor:           true,
+		predicateRegistry: registry,
+		catalog:           d.Catalog,
+		supervisorOptions: d.supervisorControlScope(),
+		supervisorLookup:  d.supervisorLookup(),
+		runnerExecutable:  d.RunnerExecutable,
+		observeSupervisor: true,
 	}
+}
+
+// supervisorControlScope binds supervisor control for observation and stop
+// commands to this composition's captured launch scope. An uncaptured
+// composition keeps pueue's standalone per-invocation default.
+func (d Dependencies) supervisorControlScope() pueue.Options {
+	if d.Environment == nil {
+		return d.SupervisorOptions
+	}
+	return supervisorcore.OptionsForEnvironment(d.SupervisorOptions, d.Environment)
+}
+
+// supervisorLookup locates an unbound supervisor pair in this composition's
+// launch scope.
+func (d Dependencies) supervisorLookup() supervisorcore.ExecutableLookup {
+	return supervisorcore.ExecutableLookup{InitialExecutable: d.InitialSupervisorExecutable, Environment: slices.Clone(d.Environment)}
 }
 
 func (d Dependencies) normalized() Dependencies {
@@ -149,7 +182,7 @@ func (d Dependencies) normalized() Dependencies {
 		d.SupervisorOptions.ControlOwnerExecutable = supervisorcore.DiscoverControlOwnerExecutable()
 	}
 	if d.SupervisorOptions.PrivateMaintenanceLauncher == nil && d.SupervisorOptions.ControlOwnerExecutable != "" {
-		d.SupervisorOptions.PrivateMaintenanceLauncher = supervisorcore.LaunchQueueMaintenanceOwner
+		d.SupervisorOptions.PrivateMaintenanceLauncher = supervisorcore.LaunchQueueMaintenanceOwnerWithEnvironment
 	}
 	if d.SupervisorOptions.SuccessfulCleanupAuthorizer == nil {
 		d.SupervisorOptions.SuccessfulCleanupAuthorizer = authorizePrivateSuccessfulCleanup
@@ -165,6 +198,7 @@ func (d Dependencies) normalized() Dependencies {
 
 // Run parses and executes one public delegate command.
 func Run(args []string, stdout, stderr io.Writer, deps Dependencies) int {
+	deps = deps.withCapturedEnvironment()
 	parsed, err := ParseArguments(args)
 	if err != nil {
 		if _, writeErr := fmt.Fprintf(stderr, "error: %v\n\n%s", err, UsageText); writeErr != nil {
@@ -283,15 +317,15 @@ func openStoreContext(ctx context.Context, root string, deps storeDependencies, 
 }
 
 func resolveCurrentPrivateSupervisorExecutables(root string, deps Dependencies) (client, daemon string, resultErr error) {
-	return supervisorcore.ResolveCurrentPrivateSupervisorExecutables(root, deps.InitialSupervisorExecutable)
+	return supervisorcore.ResolveCurrentPrivateSupervisorExecutables(root, deps.supervisorLookup())
 }
 
 // newSupervisorControlClient proves the task's exact saved endpoint ready before
 // a mutating queue command. If that endpoint is unavailable, completed private
 // migration evidence may recover the current successor before the one control
 // command is sent. An uncertain probe and a failed control are never retried.
-func newSupervisorControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, initialSupervisorExecutable string) (*pueue.Client, error) {
-	return supervisorcore.NewControlClient(ctx, root, saved, options, initialSupervisorExecutable, openNativeSupervisorStore)
+func newSupervisorControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup supervisorcore.ExecutableLookup) (*pueue.Client, error) {
+	return supervisorcore.NewControlClient(ctx, root, saved, options, lookup, openNativeSupervisorStore)
 }
 
 func bindInitialForAdmission(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options, deferPrivateStart bool) (*pueue.Client, error) {
@@ -299,7 +333,7 @@ func bindInitialForAdmission(a Arguments, deps Dependencies, root string, superv
 }
 
 func bindInitialWithStart(a Arguments, deps Dependencies, root string, supervisorOptions pueue.Options, startPrivate bool) (*pueue.Client, error) {
-	return supervisorcore.BindInitialWithStart(supervisorAdmissionSelection(a), supervisorAdmissionOptions(deps, supervisorOptions), root, startPrivate)
+	return supervisorcore.BindInitialWithStart(supervisorAdmissionSelection(a, deps), supervisorAdmissionOptions(deps, supervisorOptions), root, startPrivate)
 }
 
 func continuationExpectation(req *task.TaskRecord) task.SessionExpectation {

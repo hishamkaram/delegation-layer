@@ -9,7 +9,11 @@ import (
 )
 
 func (profiles Profiles) Prepare(root string, req task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	candidate, err := profiles.candidates.Current(req)
+	environment, err := profiles.scopeEnvironment()
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	candidate, err := profiles.candidates.Current(req, environment)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -46,7 +50,11 @@ func (profiles Profiles) ForWorker(root string, req task.TaskRecord, meta *task.
 }
 
 func (profiles Profiles) candidateForTask(root string, req task.TaskRecord, meta *task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	candidate, historical, err := profiles.candidates.ForTask(req, meta)
+	environment, err := profiles.scopeEnvironment()
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	candidate, historical, err := profiles.candidates.ForTask(req, meta, environment)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}

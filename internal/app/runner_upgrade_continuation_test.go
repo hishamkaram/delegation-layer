@@ -18,7 +18,7 @@ func TestBuildContinuationArgumentsDoesNotGuessRemovedLegacyRunnerIsManaged(t *t
 	root := supervisorfixture.CanonicalTempDir(t)
 	missing := filepath.Join(root, "removed-install", "delegate-run")
 	meta := &task.MetaRecord{RunnerExecutable: missing}
-	if _, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}), root, &task.TaskRecord{}, meta, nil); !errors.Is(err, os.ErrNotExist) {
+	if _, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{}.withCapturedEnvironment()), root, &task.TaskRecord{}, meta, nil); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("ambiguous removed legacy runner error = %v, want not-exist", err)
 	}
 	if ownership := supervisor.PersistedRunnerOwnership(root, meta); ownership != task.RunnerOwnershipCustom {
@@ -26,7 +26,7 @@ func TestBuildContinuationArgumentsDoesNotGuessRemovedLegacyRunnerIsManaged(t *t
 	}
 
 	writeRunnerFixture(t, missing, "available runner")
-	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}), root, &task.TaskRecord{}, meta, nil)
+	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{}.withCapturedEnvironment()), root, &task.TaskRecord{}, meta, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,12 +42,12 @@ func TestBuildContinuationArgumentsFailsWhenCustomRunnerWasRemoved(t *testing.T)
 	root := supervisorfixture.CanonicalTempDir(t)
 	missing := filepath.Join(root, "removed-custom-runner", "delegate-run")
 	meta := &task.MetaRecord{RunnerExecutable: missing, RunnerOwnership: task.RunnerOwnershipCustom}
-	if _, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}), root, &task.TaskRecord{}, meta, nil); !errors.Is(err, os.ErrNotExist) {
+	if _, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{}.withCapturedEnvironment()), root, &task.TaskRecord{}, meta, nil); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("removed custom runner error = %v, want not-exist", err)
 	}
 
 	writeRunnerFixture(t, missing, "custom runner")
-	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}), root, &task.TaskRecord{}, meta, nil)
+	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{}.withCapturedEnvironment()), root, &task.TaskRecord{}, meta, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestBuildContinuationArgumentsRefreshesStateRootRunner(t *testing.T) {
 	runner := filepath.Join(root, ".supervisor", "delegate-run")
 	writeRunnerFixture(t, runner, "old state runner")
 	meta := &task.MetaRecord{RunnerExecutable: runner}
-	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}), root, &task.TaskRecord{}, meta, nil)
+	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{}.withCapturedEnvironment()), root, &task.TaskRecord{}, meta, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestBuildContinuationArgumentsRefreshesContentAddressedRunner(t *testing.T)
 		t.Fatal(err)
 	}
 	meta := &task.MetaRecord{RunnerExecutable: runner}
-	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}), root, &task.TaskRecord{}, meta, nil)
+	got, err := tasklifecycle.BuildContinuationRequest(dispatchRequest(Arguments{}, Dependencies{}.withCapturedEnvironment()), root, &task.TaskRecord{}, meta, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

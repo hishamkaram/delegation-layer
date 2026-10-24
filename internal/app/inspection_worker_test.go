@@ -27,7 +27,7 @@ import (
 func TestRunInspectionWorkerRejectsInvalidTaskBeforeOpeningState(t *testing.T) {
 	called := false
 	got := runInspectionWorkerMode(filepath.Join(testsupport.CanonicalTempDir(t), "missing"), "invalid", false, Dependencies{
-		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 			called = true
 			return commonprovider.ProfileCandidate{}, nil
 		},

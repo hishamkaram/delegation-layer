@@ -128,17 +128,33 @@ func TestRunRunnerRefreshesProfileAtProcessStartBoundary(t *testing.T) {
 }
 
 type runnerRefreshFixture struct {
-	base        string
-	store       *taskdir.Store
-	td          *taskdir.TaskDir
-	req         *task.TaskRecord
-	supervisor  *pueue.Client
-	environment []string
+	base               string
+	store              *taskdir.Store
+	td                 *taskdir.TaskDir
+	req                *task.TaskRecord
+	supervisor         *pueue.Client
+	environment        []string
+	providerExecutable string
+}
+
+// runnerRefreshOptions names the few admitted-record choices a runner fixture
+// may vary. ProviderScript, when set, becomes the admitted provider executable;
+// the zero value keeps /usr/bin/true. Environment and EnvironmentRecorded are
+// the task's saved launch scope.
+type runnerRefreshOptions struct {
+	ProviderScript      string
+	Environment         []string
+	EnvironmentRecorded bool
 }
 
 func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 	t.Helper()
-	rawBase, err := os.MkdirTemp("/tmp", "dl-runner-")
+	return newRunnerRefreshFixtureWith(t, runnerRefreshOptions{})
+}
+
+func newRunnerRefreshFixtureWith(t *testing.T, options runnerRefreshOptions) *runnerRefreshFixture {
+	t.Helper()
+	rawBase, err := os.MkdirTemp("", "dl-runner-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +193,13 @@ func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: providerExecutable, ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: supervisor.Binding(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	if options.ProviderScript != "" {
+		providerExecutable = filepath.Join(base, "provider")
+		if err = os.WriteFile(providerExecutable, []byte(options.ProviderScript), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	meta := &task.MetaRecord{SchemaVersion: task.SchemaVersion, RootID: store.RootID, TaskID: id, RequestedConfig: requested, EffectiveConfig: task.EffectiveConfig{Containment: "fixture-only", Approval: "never", Digest: digest}, Containment: "fixture-only", Approval: "never", ProviderExecutable: providerExecutable, ProviderVersion: "fixture-v2", PublisherBuild: "app-test", PublisherVersion: "app-test", Predicate: task.FixturePredicateRef(), SupervisorConfig: supervisor.Binding(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Environment: options.Environment, EnvironmentRecorded: options.EnvironmentRecorded}
 	td, err := store.CreateTask(id, req, brief, meta)
 	if err != nil {
 		t.Fatal(err)
@@ -190,14 +212,11 @@ func newRunnerRefreshFixture(t *testing.T) *runnerRefreshFixture {
 		t.Fatal(err)
 	}
 	writeRunnerStatus(t, statusPath, store.RootID, id, 7)
-	return &runnerRefreshFixture{base: base, store: store, td: td, req: req, supervisor: supervisor, environment: environment}
+	return &runnerRefreshFixture{base: base, store: store, td: td, req: req, supervisor: supervisor, environment: environment, providerExecutable: providerExecutable}
 }
 
 func (f *runnerRefreshFixture) profile() PreparedProfile {
-	providerExecutable, err := filepath.EvalSymlinks("/usr/bin/true")
-	if err != nil {
-		providerExecutable = "/usr/bin/true"
-	}
+	providerExecutable := f.providerExecutable
 	providerBytes, err := os.ReadFile(providerExecutable)
 	if err != nil {
 		providerBytes = nil

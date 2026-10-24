@@ -37,5 +37,4 @@ type ContinuationResult struct {
 	Dispatch                    *DispatchResult
 	Phase                       ContinuationPhase
 	Failure                     error
-	EnvironmentRestoreError     error
 }

@@ -3,7 +3,6 @@ package codex
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"slices"
 	"time"
 
@@ -14,39 +13,43 @@ import (
 
 // PrepareCandidate performs static preparation only. The shared inspection
 // worker owns the provider CLI capability probe before the finalizer receives
-// its nonsecret runtime facts.
-func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, candidateInputs{native: true, providerID: Provider, allowStaticAdmit: true, environment: os.Environ()})
+// its nonsecret runtime facts. environment is the caller's selected launch
+// environment.
+func PrepareCandidate(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	return prepareCandidate(request, candidateInputs{native: true, providerID: Provider, allowStaticAdmit: true, environment: environment, lookupScope: environment})
 }
 
 // PrepareReviewCandidate prepares the read-only native Codex review operation.
-func PrepareReviewCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, candidateInputs{native: true, providerID: ReviewProvider, review: true, allowStaticAdmit: true, environment: os.Environ()})
+func PrepareReviewCandidate(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	return prepareCandidate(request, candidateInputs{native: true, providerID: ReviewProvider, review: true, allowStaticAdmit: true, environment: environment, lookupScope: environment})
 }
 
 // PrepareExistingCandidate retains the launch and policy contract recorded by
 // an already admitted task. New native tasks use the native profile; older
-// records continue through the legacy isolated preparation path.
-func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+// records continue through the legacy isolated preparation path. The caller's
+// environment resolves the executable, and it is the launch environment only
+// for a legacy record that saved none.
+func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	native := commonprovider.HasNativeProfile(meta)
 	return prepareCandidate(request, candidateInputs{
 		native: native, storedPredicate: meta.Predicate, providerID: Provider,
-		allowStaticAdmit: meta.RuntimePreflightSHA256 != "" && native, environment: existingEnvironment(meta),
+		allowStaticAdmit: meta.RuntimePreflightSHA256 != "" && native, environment: existingEnvironment(meta, environment), lookupScope: environment,
 	})
 }
 
 // PrepareExistingReviewCandidate reconstructs a previously admitted review.
-func PrepareExistingReviewCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+func PrepareExistingReviewCandidate(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	return prepareCandidate(request, candidateInputs{
 		native: true, storedPredicate: meta.Predicate, providerID: ReviewProvider, review: true,
-		allowStaticAdmit: meta.RuntimePreflightSHA256 != "", environment: existingEnvironment(meta),
+		allowStaticAdmit: meta.RuntimePreflightSHA256 != "", environment: existingEnvironment(meta, environment), lookupScope: environment,
 	})
 }
 
 // candidateInputs names everything prepareCandidate needs besides the request.
-// environment is the explicit launch environment: ambient for a new task, the
-// saved one for an existing task, so reconstruction never depends on which
-// process environment the calling command happens to run under.
+// environment is the explicit launch environment: the caller's for a new task,
+// the saved one for an existing task, so reconstruction never depends on which
+// process environment the calling command happens to run under. lookupScope
+// is the caller's environment, which alone resolves the executable.
 type candidateInputs struct {
 	native           bool
 	storedPredicate  task.PredicateRef
@@ -54,15 +57,16 @@ type candidateInputs struct {
 	review           bool
 	allowStaticAdmit bool
 	environment      []string
+	lookupScope      []string
 }
 
 // existingEnvironment reads the saved launch environment. Only a legacy record
-// that never persisted one falls back to the ambient environment.
-func existingEnvironment(meta task.MetaRecord) []string {
+// that never persisted one falls back to the caller's selected environment.
+func existingEnvironment(meta task.MetaRecord, callerEnvironment []string) []string {
 	if values, recorded := commonprovider.RecordedEnvironment(meta); recorded {
 		return values
 	}
-	return os.Environ()
+	return callerEnvironment
 }
 
 func prepareCandidate(request task.TaskRecord, inputs candidateInputs) (commonprovider.ProfileCandidate, error) {
@@ -86,7 +90,7 @@ func prepareCandidate(request task.TaskRecord, inputs candidateInputs) (commonpr
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	cli, err := resolveExecutable()
+	cli, err := resolveExecutable(inputs.lookupScope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}

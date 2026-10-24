@@ -44,8 +44,9 @@ func TestPrepareExistingCandidateUsesCatalogHistoricalHook(t *testing.T) {
 	var prepareCalls, existingCalls int
 	catalog := newHistoricalInspectionCandidateCatalog(t, workspace, &prepareCalls, &existingCalls)
 	deps := (Dependencies{
-		Catalog: catalog,
-		PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		Environment: os.Environ(),
+		Catalog:     catalog,
+		PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 			prepareCalls++
 			profile := historicalInspectionCandidateProfile(workspace, task.FixturePredicateRef(), "portable")
 			return profile, nil
@@ -85,11 +86,11 @@ func newHistoricalInspectionCandidateCatalog(
 			Runtime:        commonprovider.RuntimeCapability{RequiredFlags: []string{"--fixture"}},
 			Discoverable:   true,
 		},
-		Prepare: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		Prepare: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 			(*prepareCalls)++
 			return profileCandidate("portable"), nil
 		},
-		PrepareExisting: func(task.TaskRecord, task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+		PrepareExisting: func(task.TaskRecord, task.MetaRecord, []string) (commonprovider.ProfileCandidate, error) {
 			(*existingCalls)++
 			return profileCandidate("legacy"), nil
 		},
@@ -132,7 +133,7 @@ func TestRefreshAdmissionCandidateUsesCurrentRuntimeDefinition(t *testing.T) {
 	request := newBareInspectionRequest(t, store)
 	admitted := runtimeAdmissionCandidate(t, request, "provider-old", "--run")
 	current := runtimeAdmissionCandidate(t, request, "provider-new", "--run")
-	refreshed, err := admissionProfiles(Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	refreshed, err := admissionProfiles(Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return current, nil
 	}}).Refresh(store.Root, request, admitted)
 	if err != nil {
@@ -148,7 +149,7 @@ func TestRefreshAdmissionCandidateRejectsCapabilityContractDrift(t *testing.T) {
 	request := newBareInspectionRequest(t, store)
 	admitted := runtimeAdmissionCandidate(t, request, "provider-old", "--run")
 	changed := runtimeAdmissionCandidate(t, request, "provider-new", "--changed")
-	_, err := admissionProfiles(Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	_, err := admissionProfiles(Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return changed, nil
 	}}).Refresh(store.Root, request, admitted)
 	if !errors.Is(err, task.ErrEvidenceFault) {
@@ -243,7 +244,7 @@ func runtimeAdmissionCandidate(t *testing.T, request task.TaskRecord, name, requ
 
 func TestPrepareMatchedProfileForRunnerRejectsChangedCustomInspectionWorker(t *testing.T) {
 	fixture := newAppInspectionProofFixture(t, true)
-	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return fixture.candidate, nil
 	}}
 	if _, err := prepareMatchedProfileForRunner(deps, fixture.store.Root, fixture.req, fixture.meta, fixture.store, fixture.workerPath, ""); err != nil {
@@ -262,7 +263,7 @@ func TestPrepareMatchedProfileForRunnerAcceptsStateRunnerAfterLegacyInspection(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return fixture.candidate, nil
 	}}
 	if _, err = prepareMatchedProfileForRunner(deps, fixture.store.Root, fixture.req, fixture.meta, fixture.store, stateRunner, ""); err != nil {
@@ -278,7 +279,7 @@ func TestPrepareMatchedProfileForRunnerRejectsStateRunnerSuccessorForCustomInspe
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return fixture.candidate, nil
 	}}
 	if _, err = prepareMatchedProfileForRunner(deps, fixture.store.Root, fixture.req, fixture.meta, fixture.store, stateRunner, task.RunnerOwnershipCustom); !errors.Is(err, task.ErrEvidenceFault) {
@@ -301,7 +302,7 @@ func TestPrepareMatchedProfileForRunnerRechecksManagedOrdinaryRunnerDigest(t *te
 			return profile, nil
 		},
 	}
-	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return candidate, nil
 	}}
 	meta := fixture.meta
@@ -603,7 +604,7 @@ func TestInspectionFinalizerCannotExpandDirectoryOrWritableRoots(t *testing.T) {
 
 func TestStoredInspectionProofBindsFullRequestAndProfileAndWorkerSuccess(t *testing.T) {
 	fixture := newAppInspectionProofFixture(t, true)
-	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return fixture.candidate, nil
 	}}
 	profile, err := prepareMatchedProfile(deps, fixture.store.Root, fixture.req, fixture.meta)
@@ -663,7 +664,7 @@ func TestStoredInspectionProofRejectsChangedBindingsBeforeFinalize(t *testing.T)
 			if err := test.mutate(fixture, &request, &meta, &candidate); err != nil {
 				t.Fatal(err)
 			}
-			deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+			deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 				return candidate, nil
 			}}
 			profile, err := prepareMatchedProfile(deps, fixture.store.Root, request, meta)
@@ -699,7 +700,7 @@ func TestStoredInspectionProofSurvivesWorkerUpgrade(t *testing.T) {
 			if err := test.mutate(fixture.workerPath); err != nil {
 				t.Fatal(err)
 			}
-			deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+			deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 				return fixture.candidate, nil
 			}}
 			profile, err := prepareMatchedProfile(deps, fixture.store.Root, fixture.req, fixture.meta)
@@ -722,7 +723,7 @@ func TestStoredInspectionProofAcceptsSupervisorInstallProvenanceUpgrade(t *testi
 	meta.SupervisorConfig.DaemonExecutable = "/new/install/libexec/pueued"
 	meta.SupervisorConfig.DaemonSHA256 = task.ComputeSHA256([]byte("new pueued daemon"))
 	meta.SupervisorConfig.ObservedVersion = "pueue 4.1.0"
-	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return fixture.candidate, nil
 	}}
 	profile, err := prepareMatchedProfile(deps, fixture.store.Root, fixture.req, meta)
@@ -736,7 +737,7 @@ func TestStoredInspectionProofAcceptsSupervisorInstallProvenanceUpgrade(t *testi
 
 func TestMissingInspectionProofRefusesBeforeNativeOrFinalize(t *testing.T) {
 	fixture := newAppInspectionProofFixture(t, false)
-	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return fixture.candidate, nil
 	}}
 	profile, err := prepareMatchedProfile(deps, fixture.store.Root, fixture.req, fixture.meta)
@@ -755,7 +756,7 @@ func TestBadInspectionProofRefusesBeforeNativeOrFinalize(t *testing.T) {
 	definition := *candidate.Inspection
 	definition.Revision = "refreshed-definition"
 	candidate.Inspection = &definition
-	deps := Dependencies{PrepareCandidate: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	deps := Dependencies{Environment: os.Environ(), PrepareCandidate: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return candidate, nil
 	}}
 	profile, err := prepareMatchedProfile(deps, fixture.store.Root, fixture.req, fixture.meta)

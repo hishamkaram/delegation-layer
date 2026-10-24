@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -41,11 +42,11 @@ func TestInteractiveContinuationUsesFreshCatalogCandidate(t *testing.T) {
 			Runtime:          commonprovider.RuntimeCapability{RequiredFlags: []string{"--fixture"}},
 			Discoverable:     true,
 		},
-		Prepare: func(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		Prepare: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 			freshCalls++
 			return candidate(request), nil
 		},
-		PrepareExisting: func(request task.TaskRecord, _ task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+		PrepareExisting: func(request task.TaskRecord, _ task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 			existingCalls++
 			return candidate(request), nil
 		},
@@ -54,7 +55,7 @@ func TestInteractiveContinuationUsesFreshCatalogCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := continuationDependencies(Dependencies{Catalog: catalog}, task.MetaRecord{})
+	deps := continuationDependencies(Dependencies{Environment: os.Environ(), Catalog: catalog}, task.MetaRecord{})
 	base := task.TaskRecord{
 		Provider: config.ProviderFixture, Mode: config.ModeReadOnly, CanonicalCwd: workspace,
 		TaskID: "0123456789abcdef0123456789abcdef", RootID: "fedcba9876543210fedcba9876543210",

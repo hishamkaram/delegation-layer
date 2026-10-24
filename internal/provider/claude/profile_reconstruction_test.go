@@ -44,7 +44,7 @@ func TestCurrentNativeProfileAdmitsWithoutRuntimeFacts(t *testing.T) {
 	t.Setenv("PATH", directory)
 	request := profileRequest()
 	request.CanonicalCwd = directory
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
 	t.Setenv("PATH", directory)
 	request := profileRequest()
 	request.CanonicalCwd = directory
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
 		Environment:            slices.Clone(admitted.Plan.Environment),
 		EnvironmentRecorded:    true,
 		Predicate:              admitted.Plan.Predicate,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func testPreUpgradeProfile(t *testing.T, mode string, interactive bool, referenc
 	request.RequestedConfig.Interactive = interactive
 	request.RequestedConfig.Model = "claude-sonnet-4"
 	request.RequestedConfig.Effort = "max"
-	freshCandidate, err := PrepareCandidate(request)
+	freshCandidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func testPreUpgradeProfile(t *testing.T, mode string, interactive bool, referenc
 		t.Fatal(err)
 	}
 	meta := task.MetaRecord{Predicate: reference, EffectiveConfig: current.Effective, Environment: current.Plan.Environment, EnvironmentRecorded: true}
-	existing, err := PrepareExistingCandidate(request, meta)
+	existing, err := PrepareExistingCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,6 +249,6 @@ func requireRebuiltHistoricalProfile(t *testing.T, reference task.PredicateRef, 
 }
 
 func historicalPermissionAccepted(request task.TaskRecord, meta task.MetaRecord) bool {
-	_, err := PrepareExistingCandidate(request, meta)
+	_, err := PrepareExistingCandidate(request, meta, os.Environ())
 	return err == nil
 }

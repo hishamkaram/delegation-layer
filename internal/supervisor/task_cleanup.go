@@ -51,7 +51,7 @@ func CleanupCompletedTask(ctx context.Context, root string, td *taskdir.TaskDir,
 	}
 }
 
-func CleanupCompletedTaskFromSaved(root string, td *taskdir.TaskDir, meta *task.MetaRecord, options pueue.Options, initialExecutable string) {
+func CleanupCompletedTaskFromSaved(root string, td *taskdir.TaskDir, meta *task.MetaRecord, options pueue.Options, lookup ExecutableLookup) {
 	if td == nil || meta == nil {
 		return
 	}
@@ -66,7 +66,7 @@ func CleanupCompletedTaskFromSaved(root string, td *taskdir.TaskDir, meta *task.
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pueue.PrivateControlTimeout(options))
 	defer cancel()
-	clientExecutable, daemonExecutable, resolveErr := ResolvePrivateSupervisorExecutables(root, initialExecutable)
+	clientExecutable, daemonExecutable, resolveErr := ResolvePrivateSupervisorExecutables(root, lookup)
 	if resolveErr != nil {
 		log.Printf("delegation-layer: cannot resolve private supervisor for completed task cleanup: %v", resolveErr)
 		return

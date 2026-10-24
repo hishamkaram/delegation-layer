@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -17,8 +16,10 @@ import (
 // PrepareCandidate resolves the native launch plan and describes the shared
 // runtime capability probe. Claude owns configuration, authentication, and
 // permission policy; the adapter retains only request and runtime checks.
-func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareNativeCandidate(request)
+// environment is the caller's selected launch environment; the adapter never
+// reads the process environment.
+func PrepareCandidate(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	return prepareNativeCandidate(request, environment)
 }
 
 type nativePreparationOptions struct {
@@ -26,11 +27,11 @@ type nativePreparationOptions struct {
 	predicateReference task.PredicateRef
 }
 
-func prepareNativeCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareNativeCandidateWithContract(request, nil, nil, nativePreparationOptions{}, true)
+func prepareNativeCandidate(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	return prepareNativeCandidateWithContract(request, environment, nil, nil, nativePreparationOptions{}, true)
 }
 
-func prepareExistingNativeCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+func prepareExistingNativeCandidate(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	var recordedRoots []string
 	if meta.EffectiveConfig.Policy != nil {
 		recordedRoots = meta.EffectiveConfig.Policy.WritableRoots
@@ -39,7 +40,7 @@ func prepareExistingNativeCandidate(request task.TaskRecord, meta task.MetaRecor
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	return prepareNativeCandidateWithContract(request, meta.Environment, recordedRoots, options, meta.RuntimePreflightSHA256 != "")
+	return prepareNativeCandidateWithContract(request, environment, meta.Environment, recordedRoots, options, meta.RuntimePreflightSHA256 != "")
 }
 
 func existingNativePreparationOptions(request task.TaskRecord, meta task.MetaRecord) (nativePreparationOptions, error) {
@@ -104,7 +105,10 @@ func nativeReferencesForRequest(request task.TaskRecord, permissionMode string) 
 	}
 }
 
-func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnvironment, recordedRoots []string, options nativePreparationOptions, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
+// prepareNativeCandidateWithContract launches with recordedEnvironment when the
+// task saved one, and otherwise with the caller's scope. The executable is
+// always resolved through scope, the environment the caller prepares under.
+func prepareNativeCandidateWithContract(request task.TaskRecord, scope, recordedEnvironment, recordedRoots []string, options nativePreparationOptions, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
 	options, err := normalizeNativePreparationOptions(request, options)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -113,7 +117,7 @@ func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnviron
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	environmentValues := os.Environ()
+	environmentValues := scope
 	if recordedEnvironment != nil {
 		environmentValues = recordedEnvironment
 	}
@@ -132,7 +136,7 @@ func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnviron
 	if len(recordedRoots) > 0 {
 		environment.WritableRoots = slices.Clone(recordedRoots)
 	}
-	cli, err := resolveExecutable()
+	cli, err := resolveExecutable(scope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -172,14 +176,16 @@ func prepareNativeCandidateWithContract(request task.TaskRecord, recordedEnviron
 // PrepareExistingCandidate selects the launch and policy contract recorded by
 // an already admitted task. Native tasks use the current provider-owned plan;
 // older portable and OAuth records retain their historical branches.
-func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+// The caller's environment resolves the executable, and it is the launch
+// environment only where the record saved none.
+func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	if commonprovider.HasNativeProfile(meta) {
-		return prepareExistingNativeCandidate(request, meta)
+		return prepareExistingNativeCandidate(request, meta, environment)
 	}
 	if !hasLegacyNativePolicy(meta) {
-		return preparePortableCandidate(request, meta.Predicate)
+		return preparePortableCandidate(request, meta.Predicate, environment)
 	}
-	return prepareLegacyCandidate(request, meta.Predicate, legacyPolicyProof(meta))
+	return prepareLegacyCandidate(request, meta.Predicate, environment, legacyPolicyProof(meta))
 }
 
 func hasLegacyNativePolicy(meta task.MetaRecord) bool {
@@ -207,16 +213,16 @@ func legacyPolicyProof(meta task.MetaRecord) *task.PolicySourceDigest {
 	return nil
 }
 
-func preparePortableCandidate(request task.TaskRecord, predicateReference task.PredicateRef) (commonprovider.ProfileCandidate, error) {
+func preparePortableCandidate(request task.TaskRecord, predicateReference task.PredicateRef, scope []string) (commonprovider.ProfileCandidate, error) {
 	arguments, inputs, err := legacyPrintArguments(request)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	environment, err := prepareEnvironment(os.Environ())
+	environment, err := prepareEnvironment(scope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	cli, err := resolveExecutable()
+	cli, err := resolveExecutable(scope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -247,16 +253,16 @@ func preparePortableCandidate(request task.TaskRecord, predicateReference task.P
 	}, nil
 }
 
-func prepareLegacyCandidate(request task.TaskRecord, predicateReference task.PredicateRef, historicalProof ...*task.PolicySourceDigest) (commonprovider.ProfileCandidate, error) {
+func prepareLegacyCandidate(request task.TaskRecord, predicateReference task.PredicateRef, scope []string, historicalProof ...*task.PolicySourceDigest) (commonprovider.ProfileCandidate, error) {
 	arguments, inputs, err := legacyPrintArguments(request)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	environment, err := prepareEnvironment(os.Environ())
+	environment, err := prepareEnvironment(scope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	cli, err := resolveExecutable()
+	cli, err := resolveExecutable(scope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}

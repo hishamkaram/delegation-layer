@@ -121,23 +121,23 @@ func newInteractivePiResumeDependencies(t *testing.T, fixture *interactivePiResu
 	}
 	return Dependencies{
 		Catalog: catalog,
-		PrepareProfile: func(request task.TaskRecord) (PreparedProfile, error) {
-			sessionRoot := os.Getenv("PI_CODING_AGENT_SESSION_DIR")
+		PrepareCandidate: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+			sessionRoot := appTestEnvironmentValue(environment, "PI_CODING_AGENT_SESSION_DIR")
 			fixture.candidateSessionRoots = append(fixture.candidateSessionRoots, sessionRoot)
 			if fixture.testCase.failAdmission && len(fixture.candidateSessionRoots) == 2 {
-				return PreparedProfile{}, fixture.prepareFailure
+				return commonprovider.ProfileCandidate{}, fixture.prepareFailure
 			}
 			profile := appTestExecutionProfile(&request, "/usr/bin/true", nil)
 			profile.Plan.Predicate = pi.Reference()
 			profile.Plan.Environment = []string{
-				"HOME=" + os.Getenv("HOME"),
-				"PATH=" + os.Getenv("PATH"),
+				"HOME=" + appTestEnvironmentValue(environment, "HOME"),
+				"PATH=" + appTestEnvironmentValue(environment, "PATH"),
 				"PI_CODING_AGENT_SESSION_DIR=" + sessionRoot,
 			}
 			profile.Interaction = func(task.SessionExpectation, func(task.SessionIdentity) error) (execution.InteractionProtocol, error) {
 				return nil, nil
 			}
-			return profile, nil
+			return commonprovider.ReadyCandidate(func(task.TaskRecord) (PreparedProfile, error) { return profile, nil })(request, environment)
 		},
 		SupervisorOptions:           fixture.options,
 		InitialSupervisorExecutable: fixture.supervisor.Binding().ClientExecutable,
@@ -357,4 +357,15 @@ func assertInteractivePiSuccessor(t *testing.T, root string, deps Dependencies, 
 	if request.RequestedConfig.Interactive != true {
 		t.Fatalf("successor lost interactive mode: %+v", request.RequestedConfig)
 	}
+}
+
+// appTestEnvironmentValue reads one key from an explicit launch scope the way
+// the process environment does: the first entry wins and absence is empty.
+func appTestEnvironmentValue(environment []string, key string) string {
+	for _, entry := range environment {
+		if name, value, ok := strings.Cut(entry, "="); ok && name == key {
+			return value
+		}
+	}
+	return ""
 }

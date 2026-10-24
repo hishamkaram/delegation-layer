@@ -55,24 +55,21 @@ func DispatchExisting(options ExistingTaskOptions, store *taskdir.Store, td *tas
 	return retryExistingTask(options, store, td, oldReq, oldMeta, inspection.StartExists, result)
 }
 
-func retryExistingTask(options ExistingTaskOptions, store *taskdir.Store, td *taskdir.TaskDir, oldReq *task.TaskRecord, oldMeta *task.MetaRecord, startExists bool, result ExistingTaskResult) (returned ExistingTaskResult) {
+// retryExistingTask resubmits an unstarted task in its own saved launch scope,
+// selected over the caller's scope. Supervisor control keeps the caller's
+// environment; maintenance started by the retry uses the selected scope.
+func retryExistingTask(options ExistingTaskOptions, store *taskdir.Store, td *taskdir.TaskDir, oldReq *task.TaskRecord, oldMeta *task.MetaRecord, startExists bool, result ExistingTaskResult) ExistingTaskResult {
 	if startExists {
 		return existingFailure(result, ExistingStarted, task.ErrAlreadyStarted)
 	}
-	supervisorOptions := supervisorcore.OptionsForCurrentEnvironment(options.Creation.Admission.Supervisor.Control)
-	if options.ApplyEnvironment == nil {
-		return existingFailure(result, ExistingEnvironment, task.ErrEvidenceFault)
+	caller := options.Creation.Admission.Profiles.Environment()
+	profiles, selectErr := options.Creation.Admission.Profiles.ForRecord(oldMeta.Environment, oldMeta.EnvironmentRecorded)
+	if selectErr != nil {
+		return existingFailure(result, ExistingEnvironment, selectErr)
 	}
-	restoreEnvironment, restoreErr := options.ApplyEnvironment(oldMeta.Environment, oldMeta.EnvironmentRecorded)
-	if restoreErr != nil {
-		return existingFailure(result, ExistingEnvironment, restoreErr)
-	}
-	defer func() {
-		if restoreEnvironment != nil {
-			returned.EnvironmentRestoreError = restoreEnvironment()
-		}
-	}()
-	profile, profileErr := options.Creation.Admission.Profiles.Match(store.Root, *oldReq, *oldMeta)
+	options.Creation.Admission.Supervisor = supervisorcore.AdmissionOptionsForScope(options.Creation.Admission.Supervisor, caller, profiles.Environment())
+	supervisorOptions := options.Creation.Admission.Supervisor.Control
+	profile, profileErr := profiles.Match(store.Root, *oldReq, *oldMeta)
 	if profileErr != nil {
 		return existingFailure(result, ExistingProfile, profileErr)
 	}

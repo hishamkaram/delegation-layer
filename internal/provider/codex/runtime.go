@@ -70,11 +70,11 @@ func legacyRuntimeRequirements() commonprovider.RuntimeCapability {
 	}
 }
 
-func resolveExecutable() (commonprovider.CLIInfo, error) {
+func resolveExecutable(environment []string) (commonprovider.CLIInfo, error) {
 	// Preparation only discovers and fingerprints the executable. The version,
 	// help output, and required flags are checked by the shared supervised
 	// runtime inspection after the candidate has been admitted.
-	info, err := commonprovider.LocateCLI("codex")
+	info, err := commonprovider.LocateCLI("codex", environment)
 	if err != nil {
 		return commonprovider.CLIInfo{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}

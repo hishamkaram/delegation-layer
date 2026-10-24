@@ -8,7 +8,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func PrepareTaskSupervisor(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, baseOptions pueue.Options, initialExecutable, runnerExecutable string) (*pueue.Client, error) {
+func PrepareTaskSupervisor(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, baseOptions pueue.Options, lookup ExecutableLookup, runnerExecutable string) (*pueue.Client, error) {
 	if store == nil || meta == nil || !pueue.IsPrivateConfig(store.Root, binding.ConfigPath) {
 		return nil, nil
 	}
@@ -18,7 +18,7 @@ func PrepareTaskSupervisor(ctx context.Context, store *taskdir.Store, binding ta
 	ctx, cancel := context.WithTimeout(ctx, pueue.RunnerCommandUpgradeTimeout)
 	defer cancel()
 	options := OptionsWithEnvironment(baseOptions, meta.Environment)
-	client, err := PreparePrivateAdmissionSupervisorContext(ctx, initialExecutable, store, options)
+	client, err := PreparePrivateAdmissionSupervisorContext(ctx, lookup, store, options)
 	if err != nil {
 		return nil, err
 	}

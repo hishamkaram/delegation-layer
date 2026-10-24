@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -243,7 +244,7 @@ func startControlOwnedCaptured(ctx context.Context, ownerExecutable string, cmd 
 	}
 	owner := exec.Command(ownerExecutable, controlOwnerMode, strconv.Itoa(controlOwnerSocketFD), strconv.Itoa(len(leases)), commandID)
 	owner.Dir = cmd.Dir
-	owner.Env = append([]string(nil), cmd.Env...)
+	owner.Env = slices.Clone(cmd.Env)
 	owner.ExtraFiles = append([]*os.File{child}, leases...)
 	if err = owner.Start(); err != nil {
 		return fail(errors.Join(err, parent.Close(), child.Close(), closeControlLeaseFiles(leases)))

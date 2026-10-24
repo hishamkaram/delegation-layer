@@ -23,4 +23,7 @@ type CommandRunner interface {
 type Git struct {
 	Runner     CommandRunner
 	Executable string
+	// Environment supplies the launch snapshot. Nil retains the standalone
+	// API's inherited environment; a nonnil empty slice inherits nothing.
+	Environment []string
 }

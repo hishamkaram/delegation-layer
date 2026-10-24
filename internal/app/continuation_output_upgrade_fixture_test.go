@@ -86,6 +86,7 @@ func initOutputUpgradeFixture(t *testing.T, testCase outputUpgradeCase) *outputU
 		SupervisorOptions:           options,
 		InitialSupervisorExecutable: fixture.supervisor.Binding().ClientExecutable,
 		RunnerExecutable:            fixture.runner,
+		Environment:                 os.Environ(),
 	}
 	return fixture
 }
@@ -303,8 +304,8 @@ func outputUpgradeCCRCatalog(t *testing.T, route bool) commonprovider.Catalog {
 	t.Helper()
 	registration := ccr.Registration()
 	prepare, prepareExisting, prepareSuccessor := registration.Prepare, registration.PrepareExisting, registration.PrepareSuccessor
-	registration.Prepare = func(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-		candidate, err := prepare(request)
+	registration.Prepare = func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+		candidate, err := prepare(request, environment)
 		return staticCCRAdmission(t, candidate, err, route)
 	}
 	registration.PrepareExisting = staticCCRExisting(t, prepareExisting, route)
@@ -320,8 +321,8 @@ func outputUpgradeCCRCatalog(t *testing.T, route bool) commonprovider.Catalog {
 
 func staticCCRExisting(t *testing.T, prepare commonprovider.PrepareExistingCandidate, route bool) commonprovider.PrepareExistingCandidate {
 	t.Helper()
-	return func(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-		candidate, err := prepare(request, meta)
+	return func(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+		candidate, err := prepare(request, meta, environment)
 		return staticCCRAdmission(t, candidate, err, route)
 	}
 }

@@ -13,9 +13,9 @@ import (
 // its successor is interpreted by the current native-outcome policy. Every
 // other record keeps its recorded predicate and launch. The predecessor
 // record is never modified.
-func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+func PrepareSuccessorCandidate(request task.TaskRecord, predecessor task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	if commonprovider.HasNativeProfile(predecessor) && predecessor.Predicate.Equal(priorReferenceForMode(request.Mode)) {
 		predecessor.Predicate = ReferenceForMode(request.Mode)
 	}
-	return PrepareExistingCandidate(request, predecessor)
+	return PrepareExistingCandidate(request, predecessor, environment)
 }

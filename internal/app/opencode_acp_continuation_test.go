@@ -366,7 +366,7 @@ func requireOpenCodeSuccessorOwnRecord(t *testing.T, testCase outputUpgradeCase)
 	request := outputUpgradeSuccessorRequest(t, testCase)
 	catalog := NativeCatalog()
 	predecessor := outputUpgradeStoredRecord(t, catalog, testCase, request, testCase.source)
-	candidate, err := catalog.SuccessorCandidate(request, predecessor)
+	candidate, err := catalog.SuccessorCandidate(request, predecessor, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func requireOpenCodeSuccessorOwnRecord(t *testing.T, testCase outputUpgradeCase)
 	}
 	successor := outputUpgradePreparationOf(t, candidate, profile)
 	own := tasklifecycle.NewMeta(request, profile, task.SupervisorRef{}, "/runner", task.RunnerOwnershipManaged, outputUpgradeBuild)
-	rebuilt, err := catalog.ExistingCandidate(request, own)
+	rebuilt, err := catalog.ExistingCandidate(request, own, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

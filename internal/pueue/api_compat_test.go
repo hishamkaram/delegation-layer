@@ -78,6 +78,7 @@ var (
 	_ = pueue.ClearPrivateRecoveryBinding
 	_ = pueue.ClearPrivateRecoveryBindingIfPresent
 	_ = pueue.DefaultEnvironment
+	_ = pueue.DefaultEnvironmentFrom
 	_ = pueue.EnsurePrivateTaskObservationWithBootstrapLock
 	_ = pueue.IsPrivateConfig
 	_ = pueue.PrivateBootstrapPending
@@ -212,7 +213,8 @@ var (
 )
 
 var _ = pueue.Options{
-	PrivateMaintenanceLauncher: func(context.Context, string, string) error { return nil },
+	PrivateMaintenanceLauncher:    func(context.Context, string, string, []string) error { return nil },
+	PrivateMaintenanceEnvironment: []string{},
 	SuccessfulCleanupAuthorizer: func(context.Context, string, task.SupervisorRef, []pueue.Job) (pueue.PrivateQueueCleanupPlan, error) {
 		return pueue.PrivateQueueCleanupPlan{}, nil
 	},

@@ -10,10 +10,12 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
+// ResolveInitialConfig selects the explicit configuration, else the launch
+// scope's DELEGATE_PUEUE_CONFIG value. It never reads the process environment.
 func ResolveInitialConfig(selection AdmissionSelection) (string, error) {
 	path := selection.ConfigPath
 	if path == "" {
-		path = os.Getenv("DELEGATE_PUEUE_CONFIG")
+		path = selection.EnvironmentConfigPath
 	}
 	if path == "" {
 		return "", nil
@@ -66,9 +68,9 @@ func AdmissionSupervisorExecutablePair(selection AdmissionSelection, root string
 		return selection.SavedSupervisor.ClientExecutable, selection.SavedSupervisor.DaemonExecutable, nil
 	}
 	if selection.SavedSupervisor != nil {
-		return ResolvePrivateSupervisorExecutables(root, runtime.InitialExecutable)
+		return ResolvePrivateSupervisorExecutables(root, runtime.Lookup())
 	}
 	// Fresh admission stages the active install as successor inventory. The
 	// completed publication remains the ordinary active-generation authority.
-	return ResolveCurrentPrivateSupervisorExecutables(root, runtime.InitialExecutable)
+	return ResolveCurrentPrivateSupervisorExecutables(root, runtime.Lookup())
 }

@@ -210,22 +210,72 @@ func TestPrepareAcceptsPrivateExistingRuntimeChildren(t *testing.T) {
 }
 
 func TestResolveRuntimeDirectoryRequiresExplicitCanonicalDirectory(t *testing.T) {
-	t.Setenv(contributorRuntimeEnvironment, "")
-	if _, err := resolveRuntimeDirectory(); !errors.Is(err, ErrUnsupportedProfile) {
+	if _, err := resolveRuntimeDirectory([]string{contributorRuntimeEnvironment + "="}); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("missing runtime was accepted: %v", err)
 	}
-	t.Setenv(contributorRuntimeEnvironment, filepath.Join(t.TempDir(), "missing"))
-	if _, err := resolveRuntimeDirectory(); !errors.Is(err, ErrUnsupportedProfile) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if _, err := resolveRuntimeDirectory([]string{contributorRuntimeEnvironment + "=" + missing}); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("missing runtime directory was accepted: %v", err)
 	}
 	privateRoot := t.TempDir()
 	if err := os.Chmod(privateRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(contributorRuntimeEnvironment, privateRoot)
-	if _, err := resolveRuntimeDirectory(); !errors.Is(err, ErrUnsupportedProfile) {
+	if _, err := resolveRuntimeDirectory([]string{contributorRuntimeEnvironment + "=" + privateRoot}); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("non-private runtime directory was accepted: %v", err)
 	}
+}
+
+func TestResolveRuntimeDirectoryUsesSelectedEnvironmentOverAmbient(t *testing.T) {
+	selected, ambient := privateDirectory(t, "selected"), privateDirectory(t, "ambient")
+	t.Setenv(contributorRuntimeEnvironment, ambient)
+	got, err := resolveRuntimeDirectory([]string{"HOME=/h", contributorRuntimeEnvironment + "=" + selected, contributorRuntimeEnvironment + "=" + ambient})
+	if err != nil || got != selected {
+		t.Fatalf("selected runtime directory = %q, %v; want %q", got, err, selected)
+	}
+	if _, err = resolveRuntimeDirectory([]string{contributorRuntimeEnvironment + "=" + filepath.Join(selected, "missing")}); !errors.Is(err, ErrUnsupportedProfile) {
+		t.Fatalf("invalid selected runtime fell back to the ambient value: %v", err)
+	}
+}
+
+func TestResolveRuntimeDirectoryIgnoresAmbientWhenSelectedValueIsAbsent(t *testing.T) {
+	t.Setenv(contributorRuntimeEnvironment, privateDirectory(t, "ambient"))
+	siblingRuntime := filepath.Join(filepath.Dir(filepath.Dir(mustExecutable(t))), "provider-runtime")
+	for name, environment := range map[string][]string{"nil": nil, "empty": {}, "empty value": {contributorRuntimeEnvironment + "="}} {
+		got, err := resolveRuntimeDirectory(environment)
+		if got == os.Getenv(contributorRuntimeEnvironment) {
+			t.Fatalf("%s environment used the ambient runtime override %q", name, got)
+		}
+		if err == nil && got != siblingRuntime {
+			t.Fatalf("%s environment resolved %q, want sibling runtime %q", name, got, siblingRuntime)
+		}
+	}
+}
+
+func privateDirectory(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := config.CanonicalizePath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
+}
+
+func mustExecutable(t *testing.T) string {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := config.CanonicalizePath(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return canonical
 }
 
 func separateDirectories(t *testing.T) (string, string) {

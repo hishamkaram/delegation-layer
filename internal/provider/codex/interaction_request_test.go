@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -87,7 +88,7 @@ func savedProfile(t *testing.T, request task.TaskRecord, now time.Time, fresh co
 	t.Helper()
 	meta := profileMeta(fresh)
 	meta.Predicate = revision.reference(request.Mode)
-	candidate, err := PrepareExistingCandidate(request, meta)
+	candidate, err := PrepareExistingCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -167,7 +167,7 @@ func TestProductionCatalogDoesNotExposeHistoricalFixtureLaunch(t *testing.T) {
 	if _, err := catalog.Lookup("fixture:test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := catalog.Prepare(taskRecordForProviderTest("fixture:test", "read-only")); !errors.Is(err, commonprovider.ErrProfileUnavailable) {
+	if _, err := catalog.Prepare(taskRecordForProviderTest("fixture:test", "read-only"), os.Environ()); !errors.Is(err, commonprovider.ErrProfileUnavailable) {
 		t.Fatalf("fixture acquired production launch authority: %v", err)
 	}
 }

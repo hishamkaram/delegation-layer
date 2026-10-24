@@ -355,7 +355,7 @@ func newPrivateMaintenanceLaunchProbe(t *testing.T) *privateMaintenanceLaunchPro
 	}
 }
 
-func newPrivateMaintenanceLaunchClient(t *testing.T, bound *pueue.Client, launcher func(context.Context, string, string) error) *pueue.Client {
+func newPrivateMaintenanceLaunchClient(t *testing.T, bound *pueue.Client, launcher func(context.Context, string, string, []string) error) *pueue.Client {
 	t.Helper()
 	client, err := pueue.NewClient(bound.Binding(), pueue.Options{
 		ObservationTimeout:          pueue.DefaultObservationTimeout,
@@ -374,7 +374,7 @@ func newPrivateMaintenanceLaunchClient(t *testing.T, bound *pueue.Client, launch
 	return client
 }
 
-func (probe *privateMaintenanceLaunchProbe) launch(launchContext context.Context, executable, root string) error {
+func (probe *privateMaintenanceLaunchProbe) launch(launchContext context.Context, executable, root string, _ []string) error {
 	requested, readErr := readPrivateMaintenanceRequested(root)
 	probe.cancelCaller()
 	probe.launched <- privateMaintenanceLaunchObservation{

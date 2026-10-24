@@ -18,6 +18,17 @@ func LaunchQueueMaintenanceOwner(ctx context.Context, executable, root string) e
 }
 
 func StartQueueMaintenanceOwner(ctx context.Context, executable, root string) (<-chan error, error) {
+	return StartQueueMaintenanceOwnerWithEnvironment(ctx, executable, root, pueue.DefaultEnvironment())
+}
+
+func LaunchQueueMaintenanceOwnerWithEnvironment(ctx context.Context, executable, root string, environment []string) error {
+	_, err := StartQueueMaintenanceOwnerWithEnvironment(ctx, executable, root, environment)
+	return err
+}
+
+// StartQueueMaintenanceOwnerWithEnvironment retains the selected bounded
+// environment through Start and the exact child's natural Wait.
+func StartQueueMaintenanceOwnerWithEnvironment(ctx context.Context, executable, root string, environment []string) (<-chan error, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -38,7 +49,7 @@ func StartQueueMaintenanceOwner(ctx context.Context, executable, root string) (<
 	}
 	command := exec.Command(executable, "--queue-maintenance", "--root", root)
 	command.Dir = filepath.Dir(executable)
-	command.Env = pueue.DefaultEnvironment()
+	command.Env = pueue.DefaultEnvironmentFrom(environment)
 	if err = lifetime.ConfigureIndependentSession(command); err != nil {
 		return nil, err
 	}

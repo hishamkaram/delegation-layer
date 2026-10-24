@@ -121,7 +121,7 @@ func TestDiscoveryCandidateDoesNotRequireDispatchFlagsOrFinalize(t *testing.T) {
 			Runtime:        commonprovider.RuntimeCapability{RequiredFlags: []string{"--dispatch-only"}},
 		},
 		Interpreters: []predicate.Interpreter{interpreter},
-		Prepare: func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+		Prepare: func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 			return commonprovider.ProfileCandidate{Directory: workspace, Inspection: &original, Finalize: func(json.RawMessage, time.Time) (commonprovider.PreparedProfile, error) {
 				t.Fatal("discovery finalized a task")
 				return commonprovider.PreparedProfile{}, nil
@@ -138,7 +138,7 @@ func TestDiscoveryCandidateDoesNotRequireDispatchFlagsOrFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := prepareModelsCandidate(Dependencies{Catalog: catalog}, root, task.TaskRecord{Provider: config.ProviderFixture, CanonicalCwd: workspace})
+	candidate, err := prepareModelsCandidate(Dependencies{Catalog: catalog, Environment: os.Environ()}, root, task.TaskRecord{Provider: config.ProviderFixture, CanonicalCwd: workspace})
 	if err != nil {
 		t.Fatal(err)
 	}

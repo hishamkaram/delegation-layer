@@ -8,15 +8,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 
 	"github.com/hishamkaram/delegation-layer/internal/execution"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/verifiedexec"
 	"github.com/hishamkaram/delegation-layer/internal/workspace"
 	workspacescore "github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
-func verifyManagedCheckout(scope execution.PreflightScope, store *taskdir.Store, resource *workspace.Resource, request workspace.OperationRequest) (exit *int, artifacts []workspace.Artifact, resultErr error) {
+// verifyManagedCheckout runs the verification command in the worker's captured
+// environment, with the native working directory entries of an inherited
+// environment.
+func verifyManagedCheckout(scope execution.PreflightScope, store *taskdir.Store, resource *workspace.Resource, request workspace.OperationRequest, environment []string) (exit *int, artifacts []workspace.Artifact, resultErr error) {
 	if len(request.Arguments) == 0 {
 		return nil, nil, task.ErrIdentityMismatch
 	}
@@ -36,9 +41,7 @@ func verifyManagedCheckout(scope execution.PreflightScope, store *taskdir.Store,
 	if err != nil {
 		return nil, nil, errors.Join(err, stdout.Close())
 	}
-	command := exec.Command(request.Arguments[0], request.Arguments[1:]...)
-	command.Dir = checkout.Workdir
-	command.Env = command.Environ()
+	command := verificationCommand(request.Arguments, checkout.Workdir, environment)
 	command.Stdout, command.Stderr = stdout, stderr
 	commandErr := execution.RunScopedCommand(scope, command, execution.CommandHooks{})
 	closeErr := errors.Join(stdout.Close(), stderr.Close())
@@ -57,6 +60,23 @@ func verifyManagedCheckout(scope execution.PreflightScope, store *taskdir.Store,
 		return nil, nil, closeErr
 	}
 	return &code, []workspace.Artifact{stdout.Artifact(), stderr.Artifact()}, nil
+}
+
+// verificationCommand builds the command as exec.Command does, except that a
+// bare program name is resolved only in the captured environment; exec.Command
+// would search the process PATH, including again for a bare candidate. As in
+// exec.Command, an explicit path is left for the kernel to resolve against the
+// checkout directory, and a lookup failure stays in Err for Start to report.
+func verificationCommand(arguments []string, directory string, environment []string) *exec.Cmd {
+	command := &exec.Cmd{Path: arguments[0], Args: slices.Clone(arguments), Dir: directory, Env: execution.InheritedCommandEnvironment(environment, directory)}
+	if filepath.Base(arguments[0]) == arguments[0] {
+		path, err := verifiedexec.LookPath(arguments[0], environment)
+		if path != "" {
+			command.Path = path
+		}
+		command.Err = err
+	}
+	return command
 }
 
 type workspaceJoinedError interface {

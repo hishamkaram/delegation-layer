@@ -23,7 +23,7 @@ func TestStatusExternalClientReplacementObservesPublishedDaemon(t *testing.T) {
 	})
 	before := snapshotObservationPhaseRecords(t, fixture)
 	commands := observePhaseStatusCommands(fixture)
-	client, err := supervisorcore.NewClient(t.Context(), fixture.root, fixture.predecessor, fixture.options, true, fixture.clientB, openNativeSupervisorStore)
+	client, err := supervisorcore.NewClient(t.Context(), fixture.root, fixture.predecessor, fixture.options, true, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientB}, openNativeSupervisorStore)
 	settleSupervisorProbeTestClient(t, client, err)
 	if err != nil || client == nil {
 		t.Fatalf("canonical compatible recovery failed: client=%v err=%v", client, err)

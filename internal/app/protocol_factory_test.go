@@ -69,6 +69,7 @@ func (p *protocolFactoryProbe) factory(identity task.SessionIdentity) func(task.
 // admitted plan; it cannot replace the admitted factory.
 func protocolFactoryDependencies(profile PreparedProfile, launches *launchCounter) Dependencies {
 	return Dependencies{
+		Environment:    os.Environ(),
 		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) { return profile, nil },
 		ExecutionHooks: launches.hooks(),
 	}
@@ -215,6 +216,7 @@ func TestRunRunnerRefusesInvalidProtocolSelectionBeforeAnyFactory(t *testing.T) 
 	interactionCalls := 0
 	launches := &launchCounter{}
 	deps := Dependencies{
+		Environment: os.Environ(),
 		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 			profile := fixture.profile()
 			profile.Protocol = probe.factory(task.SessionIdentity{})
@@ -246,7 +248,7 @@ func TestSealedRecoveryAndCollectInvokeNoProtocolFactory(t *testing.T) {
 	store, td, req := newAppTestTask(t, true)
 	defer closeAppTestTask(t, store, td)
 	probe := &protocolFactoryProbe{}
-	deps := Dependencies{PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
+	deps := Dependencies{Environment: os.Environ(), PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 		profile := appTestExecutionProfile(req, "/bin/sh", nil)
 		profile.Protocol = probe.factory(task.SessionIdentity{})
 		return profile, nil
@@ -273,6 +275,7 @@ func TestRecheckInvokesNoProtocolFactory(t *testing.T) {
 	root, taskID := appRejectedRecoveryTask(t, registry)
 	probe := &protocolFactoryProbe{}
 	deps := Dependencies{
+		Environment:       os.Environ(),
 		PredicateRegistry: func() predicate.Registry { return registry },
 		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) {
 			profile := appTestExecutionProfile(&task.TaskRecord{}, "/bin/sh", nil)

@@ -36,12 +36,21 @@ func (e *testModelExchange) Accept(line []byte) ([][]byte, bool, error) {
 	return nil, string(line) == "models", nil
 }
 
-func testModelDefinition(t *testing.T, outputLimit int64) provider.InspectionDefinition {
+// locateTestShell resolves the host shell once from the caller's environment.
+// Production lookup never reads the process environment; only this fixture
+// does, to find a shell for deterministic tests.
+func locateTestShell(t *testing.T) provider.CLIInfo {
 	t.Helper()
-	info, err := provider.LocateCLI("sh")
+	info, err := provider.LocateCLI("sh", os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
+	return info
+}
+
+func testModelDefinition(t *testing.T, outputLimit int64) provider.InspectionDefinition {
+	t.Helper()
+	info := locateTestShell(t)
 	return provider.InspectionDefinition{
 		Executable: info.Path, ExecutableSHA256: info.SHA256,
 		Directory: "/workspace", Environment: []string{}, OutputLimit: outputLimit,
@@ -176,6 +185,8 @@ func TestModelCommandPreservesVerifiedNodeScriptPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := runtimeDefinition(t, root, path, nil)
+	// The selected environment is the only interpreter search path.
+	definition.Environment = []string{"PATH=" + filepath.Dir(node)}
 	var captured modelCommandResult
 	workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: runtimeTestStopper{}}, func(scope execution.PreflightScope) error {
 		var err error
@@ -241,5 +252,58 @@ func TestModelDiscoveryRejectsExecutableReplacementBetweenCommands(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(directory, "unexpected-model-launch")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("replacement was executed: %v", err)
+	}
+}
+
+func TestModelDiscoveryLaunchesEveryCommandWithTheSelectedEmptyEnvironment(t *testing.T) {
+	const markerName = "DELEGATE_TEST_INHERITED_MARKER"
+	t.Setenv(markerName, "host-marker")
+	hostBefore := os.Environ()
+	directory, err := os.MkdirTemp("", "dl-mdl-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if removeErr := os.RemoveAll(directory); removeErr != nil {
+			t.Error(removeErr)
+		}
+	})
+	if directory, err = filepath.EvalSymlinks(directory); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(directory, "observed")
+	path := filepath.Join(directory, "provider-cli")
+	script := "#!/bin/sh\nset -eu\nprintf '%s:%s\\n' \"$1\" \"${" + markerName + "-unset}\" >> \"" + log + "\"\n" +
+		"case \"$1\" in\n  --version) printf 'provider 1.0\\n' ;;\n  --help) printf '%s\\n' '--list-models' ;;\n  --list-models) ;;\n  *) exit 64 ;;\nesac\n"
+	if err = os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	definition := runtimeDefinition(t, directory, path, nil)
+	definition.Runtime = nil
+	definition.Revision = provider.ModelsRevision
+	definition.Models = &provider.ModelDiscoveryDefinition{
+		Arguments:  []string{"--list-models"},
+		Source:     "fixture",
+		Capability: provider.RuntimeCapability{RequiredFlags: []string{"--list-models"}},
+		Project: func([]byte, []byte, []byte, bool) (provider.ModelCatalog, error) {
+			return provider.ModelCatalog{}, errors.New("fixture lists no models")
+		},
+	}
+	workErr, stopErr := execution.RunSupervised(time.Now().Add(time.Minute), execution.SupervisedOptions{Stopper: runtimeTestStopper{}}, func(scope execution.PreflightScope) error {
+		_, inspectErr := inspectModels(scope, definition)
+		return inspectErr
+	})
+	if workErr != nil || stopErr != nil {
+		t.Fatalf("model discovery failed: work=%v stop=%v", workErr, stopErr)
+	}
+	observed, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "--version:unset\n--help:unset\n--list-models:unset\n"; string(observed) != want {
+		t.Fatalf("commands observed %q, want %q", observed, want)
+	}
+	if os.Getenv(markerName) != "host-marker" || strings.Join(hostBefore, "\x00") != strings.Join(os.Environ(), "\x00") {
+		t.Fatal("model discovery changed the host environment")
 	}
 }

@@ -49,7 +49,7 @@ func RefreshManagedRetryRunner(selection AdmissionSelection, defaultRunner strin
 }
 
 func RepairQueueForTask(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, options AdmissionOptions) (resultErr error) {
-	client, err := PrepareTaskSupervisor(ctx, store, binding, meta, options.Control, options.InitialExecutable, options.RunnerExecutable)
+	client, err := PrepareTaskSupervisor(ctx, store, binding, meta, options.Control, options.Lookup(), options.RunnerExecutable)
 	if err != nil || client == nil {
 		return err
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 )
 
-func StopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervisorOptions pueue.Options, initialSupervisorExecutable string, openControl ControlClientOpener) (response StopOutcome, resultErr error) {
+func StopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervisorOptions pueue.Options, lookup supervisorcore.ExecutableLookup, openControl ControlClientOpener) (response StopOutcome, resultErr error) {
 	_, meta, err := td.PreparedRecords()
 	if err != nil {
 		return StopOutcome{}, err
@@ -56,7 +56,7 @@ func StopTask(root string, td *taskdir.TaskDir, requestID, cause string, supervi
 	if request.NumericTaskID == nil {
 		return stopTaskWithoutNumericTarget(td, permit, requestID, cause)
 	}
-	client, err := openControl(context.Background(), root, request.Supervisor, supervisorOptions, initialSupervisorExecutable)
+	client, err := openControl(context.Background(), root, request.Supervisor, supervisorOptions, lookup)
 	if err != nil {
 		return StopOutcome{}, errors.Join(err, permit.Release())
 	}

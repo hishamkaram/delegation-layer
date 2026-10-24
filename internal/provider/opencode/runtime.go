@@ -44,8 +44,8 @@ func legacyRuntimeRequirements() commonprovider.RuntimeCapability {
 	}
 }
 
-func resolveExecutable() (commonprovider.CLIInfo, error) {
-	info, err := commonprovider.LocateCLI("opencode")
+func resolveExecutable(environment []string) (commonprovider.CLIInfo, error) {
+	info, err := commonprovider.LocateCLI("opencode", environment)
 	if err != nil {
 		return commonprovider.CLIInfo{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}

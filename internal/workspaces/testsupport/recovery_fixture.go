@@ -56,7 +56,7 @@ func NewRecoveryFixture(t *testing.T) *RecoveryFixture {
 
 // RecoveryFixtureRoot is the store root of a recovery fixture under base.
 func RecoveryFixtureRoot(base string) string {
-	return filepath.Join(base, "workspace-recovery-state")
+	return filepath.Join(base, "state")
 }
 
 // NewRecoveryFixtureIn establishes a recovery fixture under base, which its

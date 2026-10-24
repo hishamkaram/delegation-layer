@@ -121,6 +121,7 @@ func prepareBaselineBudgetReceipt(t *testing.T, td *taskdir.TaskDir, supervisor 
 
 func (f *nativeBaselineTask) dependencies() Dependencies {
 	return Dependencies{
+		Environment:    os.Environ(),
 		PrepareProfile: func(task.TaskRecord) (PreparedProfile, error) { return f.profile, nil },
 		ExecutionHooks: execution.Hooks{Start: func(command *exec.Cmd) error {
 			f.starts.Add(1)

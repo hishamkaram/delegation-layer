@@ -11,10 +11,11 @@ import (
 
 // SupervisorOptions holds invocation configuration. The existing supervisor
 // StoreOpener is supplied by application composition for native recovery.
+// Lookup locates a supervisor pair that no binding records.
 type SupervisorOptions struct {
-	Options           pueue.Options
-	InitialExecutable string
-	OpenStore         supervisorcore.StoreOpener
+	Options   pueue.Options
+	Lookup    supervisorcore.ExecutableLookup
+	OpenStore supervisorcore.StoreOpener
 }
 
 type CollectionOptions struct {

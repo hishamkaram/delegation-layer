@@ -440,18 +440,18 @@ func validateRequestOptions(request task.TaskRecord, description Description) er
 
 // Candidate validates capabilities and obtains static preparation inputs. Its
 // finalizer retains artifact and effective-profile checks after inspection.
-func (c Catalog) Candidate(request task.TaskRecord) (ProfileCandidate, error) {
-	return c.candidate(request, func(registration Registration) (ProfileCandidate, error) {
-		return registration.Prepare(request)
+func (c Catalog) Candidate(request task.TaskRecord, environment []string) (ProfileCandidate, error) {
+	return c.candidate(request, environment, func(registration Registration, environment []string) (ProfileCandidate, error) {
+		return registration.Prepare(request, environment)
 	})
 }
 
 // ExistingCandidate reconstructs a profile for an already admitted task. A
 // provider may use this boundary to retain a historical preparation contract;
 // new admission remains on Candidate or SuccessorCandidate.
-func (c Catalog) ExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (ProfileCandidate, error) {
-	return c.candidate(request, func(registration Registration) (ProfileCandidate, error) {
-		return prepareRecorded(registration, request, meta)
+func (c Catalog) ExistingCandidate(request task.TaskRecord, meta task.MetaRecord, environment []string) (ProfileCandidate, error) {
+	return c.candidate(request, environment, func(registration Registration, environment []string) (ProfileCandidate, error) {
+		return prepareRecorded(registration, request, meta, environment)
 	})
 }
 
@@ -460,29 +460,37 @@ func (c Catalog) ExistingCandidate(request task.TaskRecord, meta task.MetaRecord
 // the current compatible output interpreter for the new task; without that
 // hook the predecessor's recorded contract is reconstructed as by
 // ExistingCandidate. The predecessor record is never modified.
-func (c Catalog) SuccessorCandidate(request task.TaskRecord, predecessorMeta task.MetaRecord) (ProfileCandidate, error) {
-	return c.candidate(request, func(registration Registration) (ProfileCandidate, error) {
+func (c Catalog) SuccessorCandidate(request task.TaskRecord, predecessorMeta task.MetaRecord, environment []string) (ProfileCandidate, error) {
+	return c.candidate(request, environment, func(registration Registration, environment []string) (ProfileCandidate, error) {
 		if registration.PrepareSuccessor != nil {
-			return registration.PrepareSuccessor(request, predecessorMeta)
+			return registration.PrepareSuccessor(request, predecessorMeta, environment)
 		}
-		return prepareRecorded(registration, request, predecessorMeta)
+		return prepareRecorded(registration, request, predecessorMeta, environment)
 	})
 }
 
 // prepareRecorded reconstructs the recorded preparation contract: the
 // provider's PrepareExisting hook, or its current Prepare when it has none.
-func prepareRecorded(registration Registration, request task.TaskRecord, meta task.MetaRecord) (ProfileCandidate, error) {
+func prepareRecorded(registration Registration, request task.TaskRecord, meta task.MetaRecord, environment []string) (ProfileCandidate, error) {
 	if registration.PrepareExisting != nil {
-		return registration.PrepareExisting(request, meta)
+		return registration.PrepareExisting(request, meta, environment)
 	}
-	return registration.Prepare(request)
+	return registration.Prepare(request, environment)
 }
 
 // candidatePreparer selects the provider preparation operation for one
 // registration. Every operation shares the validation and binding below.
-type candidatePreparer func(Registration) (ProfileCandidate, error)
+type candidatePreparer func(Registration, []string) (ProfileCandidate, error)
 
-func (c Catalog) candidate(request task.TaskRecord, prepare candidatePreparer) (ProfileCandidate, error) {
+// candidate requires the caller's captured launch environment. Nil means the
+// composition never captured one; it fails instead of reading the process
+// environment. A nonnil empty environment is an explicit selection. The
+// provider receives an independent copy, so its preparation cannot change the
+// caller's snapshot.
+func (c Catalog) candidate(request task.TaskRecord, environment []string, prepare candidatePreparer) (ProfileCandidate, error) {
+	if environment == nil {
+		return ProfileCandidate{}, fmt.Errorf("%w: provider preparation environment was not captured", task.ErrEvidenceFault)
+	}
 	if err := c.ValidateRequest(request); err != nil {
 		return ProfileCandidate{}, err
 	}
@@ -490,7 +498,7 @@ func (c Catalog) candidate(request task.TaskRecord, prepare candidatePreparer) (
 	if err != nil {
 		return ProfileCandidate{}, err
 	}
-	candidate, err := prepare(registration)
+	candidate, err := prepare(registration, slices.Clone(environment))
 	if err != nil {
 		return ProfileCandidate{}, fmt.Errorf("%w: %w", ErrProfileUnavailable, err)
 	}
@@ -558,8 +566,8 @@ func bindCatalogAdmission(request task.TaskRecord, candidate *ProfileCandidate, 
 
 // Prepare preserves the finite preparation path for providers without native
 // inspection. It cannot bypass an inspection-dependent candidate's proof.
-func (c Catalog) Prepare(request task.TaskRecord) (PreparedProfile, error) {
-	candidate, err := c.Candidate(request)
+func (c Catalog) Prepare(request task.TaskRecord, environment []string) (PreparedProfile, error) {
+	candidate, err := c.Candidate(request, environment)
 	if err != nil {
 		return PreparedProfile{}, err
 	}

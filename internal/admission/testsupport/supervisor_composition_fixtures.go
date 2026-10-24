@@ -29,12 +29,12 @@ func NewTerminalEventInspectionSupervisorWithEnvironment(t *testing.T, store *ta
 	return NewTerminalEventInspectionSupervisorWithLauncher(t, store, evidence, nil, extraEnvironment...)
 }
 
-func NewTerminalEventInspectionSupervisorWithLauncher(t *testing.T, store *taskdir.Store, evidence supervisorcore.InspectionEvidence, launcher func(context.Context, string, string) error, extraEnvironment ...string) (*pueue.Client, *atomic.Int32, *atomic.Int32) {
+func NewTerminalEventInspectionSupervisorWithLauncher(t *testing.T, store *taskdir.Store, evidence supervisorcore.InspectionEvidence, launcher func(context.Context, string, string, []string) error, extraEnvironment ...string) (*pueue.Client, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	return NewTerminalEventInspectionSupervisorWithObserver(t, store, evidence, launcher, nil, extraEnvironment...)
 }
 
-func NewTerminalEventInspectionSupervisorWithObserver(t *testing.T, store *taskdir.Store, evidence supervisorcore.InspectionEvidence, launcher func(context.Context, string, string) error, observer func(pueue.CommandEvent), extraEnvironment ...string) (*pueue.Client, *atomic.Int32, *atomic.Int32) {
+func NewTerminalEventInspectionSupervisorWithObserver(t *testing.T, store *taskdir.Store, evidence supervisorcore.InspectionEvidence, launcher func(context.Context, string, string, []string) error, observer func(pueue.CommandEvent), extraEnvironment ...string) (*pueue.Client, *atomic.Int32, *atomic.Int32) {
 	t.Helper()
 	cleanup := supervisorcore.NewCleanup(evidence, workspacescore.InspectPrivateOperation)
 	bundle := supervisorfixture.CanonicalTempDir(t)
@@ -66,7 +66,7 @@ func NewTerminalEventInspectionSupervisorWithObserver(t *testing.T, store *taskd
 		t.Fatal(err)
 	}
 	ListenSupervisorProbeTestEndpoint(t, bootstrap.Binding().Endpoint)
-	client, err := supervisorcore.PreparePrivateAdmissionSupervisor(clientPath, store, options)
+	client, err := supervisorcore.PreparePrivateAdmissionSupervisor(supervisorcore.ExecutableLookup{InitialExecutable: clientPath}, store, options)
 	SettleSupervisorProbeTestClient(t, client, err)
 	if closeErr := bootstrap.Close(); closeErr != nil {
 		t.Fatal(closeErr)

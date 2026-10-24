@@ -12,7 +12,7 @@ import (
 // ObserveTaskSupervisor keeps existing-task observation independent of fresh
 // admission. Complete generations retain the existing scheduling and runner
 // repair owners. A prepared generation can only use saved-binding recovery.
-func ObserveTaskSupervisor(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, baseOptions pueue.Options, initialExecutable, runnerExecutable string, openStore StoreOpener) (TaskSupervisorObservation, error) {
+func ObserveTaskSupervisor(ctx context.Context, store *taskdir.Store, binding task.SupervisorRef, meta *task.MetaRecord, baseOptions pueue.Options, lookup ExecutableLookup, runnerExecutable string, openStore StoreOpener) (TaskSupervisorObservation, error) {
 	if store == nil || meta == nil || !pueue.IsPrivateConfig(store.Root, binding.ConfigPath) {
 		return TaskSupervisorObservation{}, nil
 	}
@@ -29,7 +29,7 @@ func ObserveTaskSupervisor(ctx context.Context, store *taskdir.Store, binding ta
 	if client != nil {
 		client, err = prepareTaskSupervisorRunner(ctx, store, client, binding, runnerExecutable)
 	} else {
-		observed, complete, completeErr := recoverTaskObservationSupervisor(ctx, store.Root, binding, options, initialExecutable, openStore)
+		observed, complete, completeErr := recoverTaskObservationSupervisor(ctx, store.Root, binding, options, lookup, openStore)
 		if completeErr != nil {
 			return TaskSupervisorObservation{}, completeErr
 		}
@@ -39,7 +39,7 @@ func ObserveTaskSupervisor(ctx context.Context, store *taskdir.Store, binding ta
 		if closeErr := observed.Close(); closeErr != nil {
 			return TaskSupervisorObservation{}, closeErr
 		}
-		client, err = PrepareTaskSupervisor(ctx, store, binding, meta, baseOptions, initialExecutable, runnerExecutable)
+		client, err = PrepareTaskSupervisor(ctx, store, binding, meta, baseOptions, lookup, runnerExecutable)
 	}
 	if client != nil && err == nil {
 		return TaskSupervisorObservation{Client: client}, nil
@@ -50,15 +50,15 @@ func ObserveTaskSupervisor(ctx context.Context, store *taskdir.Store, binding ta
 	// A readiness result never authorizes the later repair. If migration won
 	// its EX lease first, recover the saved task afresh instead of accepting
 	// the old client or treating the refused repair as a successful mutation.
-	observed, observeErr := NewClient(ctx, store.Root, binding, options, true, initialExecutable, openStore)
+	observed, observeErr := NewClient(ctx, store.Root, binding, options, true, lookup, openStore)
 	if observeErr != nil {
 		return TaskSupervisorObservation{}, errors.Join(err, observeErr)
 	}
 	return TaskSupervisorObservation{Client: observed, MaintenanceDeferred: true, MaintenanceError: err}, nil
 }
 
-func recoverTaskObservationSupervisor(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, initialExecutable string, openStore StoreOpener) (*pueue.Client, bool, error) {
-	client, err := NewClient(ctx, root, saved, options, true, initialExecutable, openStore)
+func recoverTaskObservationSupervisor(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup, openStore StoreOpener) (*pueue.Client, bool, error) {
+	client, err := NewClient(ctx, root, saved, options, true, lookup, openStore)
 	if err != nil {
 		return nil, false, err
 	}

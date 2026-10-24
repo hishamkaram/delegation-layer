@@ -36,7 +36,7 @@ func Continue(request DispatchRequest, options ContinuationOptions) (result Cont
 	if options.Dispatch.ContinuationProfiles == nil {
 		return continuationFailure(result, ContinueValidation, "validate-continuation", task.ErrEvidenceFault)
 	}
-	options.Dispatch.Creation.Admission.Profiles = options.Dispatch.ContinuationProfiles(*meta)
+	options.Dispatch.Creation.Admission.Profiles = options.Dispatch.ContinuationProfiles(*meta, options.Dispatch.Creation.Admission.Profiles.Environment())
 	prior, source, err := loadContinuationPrior(root, predecessor.TaskID, options.Dispatch)
 	if err != nil {
 		return continuationFailure(result, ContinueSession, "load-continuation-session", err)
@@ -50,32 +50,35 @@ func Continue(request DispatchRequest, options ContinuationOptions) (result Cont
 	if err != nil {
 		return continuationFailure(result, ContinueValidation, "validate-continuation", err)
 	}
-	if _, err = admissioncore.ValidateContinuation(options.Dispatch.staticAdmission(), options.Dispatch.ApplyEnvironment, root, *predecessor, *meta, prior, successorRecord); err != nil {
+	if _, err = admissioncore.ValidateContinuation(options.Dispatch.staticAdmission(), root, *predecessor, *meta, prior, successorRecord); err != nil {
 		return continuationFailure(result, ContinueValidation, "validate-continuation", err)
 	}
 	successor.GeneratedTaskID = successorID
 	return continueAdmitted(successor, options, predecessor, meta, result)
 }
 
-func continueAdmitted(successor DispatchRequest, options ContinuationOptions, predecessor *task.TaskRecord, meta *task.MetaRecord, result ContinuationResult) (returned ContinuationResult) {
-	control := supervisorcore.OptionsForCurrentEnvironment(options.Dispatch.Creation.Admission.Supervisor.Control)
+// continueAdmitted dispatches the successor in the predecessor's saved launch
+// scope, selected over the caller's scope where the former process-level swap
+// applied it. Supervisor control keeps the caller's environment.
+func continueAdmitted(successor DispatchRequest, options ContinuationOptions, predecessor *task.TaskRecord, meta *task.MetaRecord, result ContinuationResult) ContinuationResult {
+	caller := options.Dispatch.Creation.Admission.Profiles.Environment()
+	control := supervisorcore.OptionsForEnvironment(options.Dispatch.Creation.Admission.Supervisor.Control, caller)
 	controlContext, cancelControl := supervisorcore.ControlContext(control)
 	defer cancelControl()
 	options.Dispatch.Creation.Admission.Supervisor.Control = control
 	options.Supervisor.Options = control
-	options.Dispatch.Workspace.Runtime = admissioncore.NewWorkspaceRuntime(options.Dispatch.Creation.Admission.Supervisor)
 	if err := supervisorcore.RecoverContinuationSelection(controlContext, result.Root, &successor.Selection, options.Supervisor); err != nil {
 		return continuationFailure(result, ContinueSupervisor, "resolve-continuation-supervisor", err)
 	}
-	restore, err := supervisorcore.ApplyContinuationEnvironment(result.Root, meta, options.Dispatch.ApplyEnvironment)
+	profiles, err := options.Dispatch.Creation.Admission.Profiles.ForRecord(meta.Environment, meta.EnvironmentRecorded)
 	if err != nil {
 		return continuationFailure(result, ContinueEnvironment, "restore-continuation-environment", err)
 	}
-	defer func() {
-		if restore != nil {
-			returned.EnvironmentRestoreError = restore()
-		}
-	}()
+	selected := profiles.Environment()
+	options.Dispatch.Creation.Admission.Profiles = profiles
+	options.Dispatch.Creation.Admission.Supervisor = supervisorcore.AdmissionOptionsForScope(options.Dispatch.Creation.Admission.Supervisor, caller, selected)
+	options.Dispatch.Workspace.Runtime = admissioncore.NewWorkspaceRuntime(options.Dispatch.Creation.Admission.Supervisor)
+	successor.Selection.EnvironmentConfigPath = supervisorcore.ContinuationConfigEnvironment(result.Root, *meta, selected)
 	dispatched := Dispatch(successor, options.Dispatch)
 	result.Dispatch = &dispatched
 	result.PredecessorID, result.Runner = predecessor.TaskID, successor.Selection.Runner

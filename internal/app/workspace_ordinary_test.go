@@ -32,7 +32,7 @@ func TestOrdinaryNonGitDispatchIgnoresPlainWorkspaceMarker(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", testsupportcore.CanonicalTempDir(t))
-			managed, actualCwd, err := workspaces.PrepareDispatch(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(Arguments{})), workspaceRuntimeOptions(Dependencies{}), store, resource.Request().TaskID, cwd, []byte("ordinary task"))
+			managed, actualCwd, err := workspaces.PrepareDispatch(tasklifecycle.WorkspaceDispatchRequest(dispatchRequest(Arguments{}, Dependencies{}.withCapturedEnvironment())), workspaceRuntimeOptions(Dependencies{}.withCapturedEnvironment()), store, resource.Request().TaskID, cwd, []byte("ordinary task"))
 			if err != nil || managed != nil || actualCwd != cwd {
 				t.Fatalf("optional workspace support rejected ordinary non-Git dispatch: cwd=%q err=%v", actualCwd, err)
 			}

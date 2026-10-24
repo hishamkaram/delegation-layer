@@ -17,6 +17,7 @@ const (
 )
 
 func preflight(a Arguments, deps Dependencies) commandResult {
+	deps = deps.withCapturedEnvironment()
 	response := newResponse("preflight")
 	root, err := tasklifecycle.ResolveRoot(a.Root)
 	if err != nil {

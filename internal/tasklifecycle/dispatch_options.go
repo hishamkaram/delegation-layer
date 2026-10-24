@@ -13,14 +13,16 @@ import (
 type TaskStoreOpener func(root string, create bool) (*taskdir.Store, error)
 
 // ContinuationProfiles binds the recorded provider contract to the configured
-// candidate factory. Injected Current hooks retain their existing semantics.
-type ContinuationProfiles func(task.MetaRecord) admissioncore.Profiles
+// candidate factory in the supplied launch scope. Injected Current hooks
+// retain their existing semantics.
+type ContinuationProfiles func(task.MetaRecord, []string) admissioncore.Profiles
 
+// DispatchOptions carries one launch scope: Creation.Admission.Profiles owns
+// it, and every workflow consumer derives its environment from that value.
 type DispatchOptions struct {
 	Creation             CreationOptions
 	Catalog              commonprovider.Catalog
 	Workspace            workspaces.OperationOptions
 	OpenStore            TaskStoreOpener
 	ContinuationProfiles ContinuationProfiles
-	ApplyEnvironment     EnvironmentApplicator
 }

@@ -3,7 +3,6 @@ package opencode
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"slices"
 	"time"
 
@@ -15,16 +14,19 @@ import (
 // PrepareCandidate performs static preparation for OpenCode's native ACP
 // profile. The provider owns configuration, extensions, authentication, and
 // permission resolution; the core still owns the supervised runtime
-// capability probe and the single stdio transport.
-func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepareCandidate(request, dialectACP, nil, acpReferenceForMode(request.Mode), true)
+// capability probe and the single stdio transport. environment is the caller's
+// selected launch environment.
+func PrepareCandidate(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	return prepareCandidate(request, environment, dialectACP, nil, acpReferenceForMode(request.Mode), true)
 }
 
 // PrepareExistingCandidate selects the preparation contract recorded by an
 // already admitted task. Its recorded profile revision selects the launch
 // dialect, so historical tasks retain the policy inspection, runtime
-// capability probe, launch flags, and predicate they recorded.
-func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+// capability probe, launch flags, and predicate they recorded. The caller's
+// environment resolves the executable, and it is the launch environment only
+// for a record that saved none.
+func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	dialect, err := dialectForRecord(meta)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -33,23 +35,24 @@ func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (co
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	return prepareCandidate(request, dialect, &meta, reference, meta.RuntimePreflightSHA256 != "" && dialect.native())
+	return prepareCandidate(request, environment, dialect, &meta, reference, meta.RuntimePreflightSHA256 != "" && dialect.native())
 }
 
 // prepareCandidate prepares dialect for request. meta, when present, supplies
-// the recorded environment and writable roots; predicateReference is the
-// output contract selected by the caller.
-func prepareCandidate(request task.TaskRecord, dialect launchDialect, meta *task.MetaRecord, predicateReference task.PredicateRef, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
+// the recorded environment and writable roots; scope resolves the executable
+// and is the launch environment only when meta saved none. predicateReference
+// is the output contract selected by the caller.
+func prepareCandidate(request task.TaskRecord, scope []string, dialect launchDialect, meta *task.MetaRecord, predicateReference task.PredicateRef, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
 	native := dialect.native()
 	arguments, err := runArguments(request, dialect)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	environment, err := candidateEnvironment(native, meta)
+	environment, err := candidateEnvironment(scope, native, meta)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	cli, err := resolveExecutable()
+	cli, err := resolveExecutable(scope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -88,8 +91,8 @@ func prepareCandidate(request task.TaskRecord, dialect launchDialect, meta *task
 	return candidate, nil
 }
 
-func candidateEnvironment(native bool, meta *task.MetaRecord) (profileEnvironment, error) {
-	values := os.Environ()
+func candidateEnvironment(callerEnvironment []string, native bool, meta *task.MetaRecord) (profileEnvironment, error) {
+	values := callerEnvironment
 	if meta != nil {
 		if recorded, ok := commonprovider.RecordedEnvironment(*meta); ok {
 			values = recorded

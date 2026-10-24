@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -25,8 +24,9 @@ const unattendedApproval = "always-proceed"
 // PrepareCandidate resolves only static task inputs and describes the
 // supervised runtime capability probe. The core owns every provider process;
 // the finalizer receives only the resulting nonsecret runtime facts.
-func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	candidate, err := prepareCandidate(request, true, true)
+// environment is the caller's selected launch environment.
+func PrepareCandidate(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	candidate, err := prepareCandidate(request, environment, true, true)
 	if err != nil {
 		return candidate, err
 	}
@@ -34,8 +34,10 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 }
 
 // PrepareExistingCandidate retains the exact predicate selected at admission.
-func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
-	candidate, err := prepareExistingCandidate(request, meta)
+// The caller's environment resolves the executable, and it is the launch
+// environment only where the record saved none.
+func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	candidate, err := prepareExistingCandidate(request, meta, environment)
 	if err != nil {
 		return candidate, err
 	}
@@ -67,9 +69,9 @@ func withPredicate(candidate commonprovider.ProfileCandidate, reference task.Pre
 	return candidate
 }
 
-func prepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+func prepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, callerEnvironment []string) (commonprovider.ProfileCandidate, error) {
 	if !commonprovider.HasNativeProfile(meta) {
-		return prepareCandidate(request, false, false)
+		return prepareCandidate(request, callerEnvironment, false, false)
 	}
 	approval := meta.EffectiveConfig.Approval
 	if request.Mode == ModeReadOnly {
@@ -83,15 +85,15 @@ func prepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (co
 	if meta.EffectiveConfig.Policy != nil {
 		recordedRoots = meta.EffectiveConfig.Policy.WritableRoots
 	}
-	return prepareCandidateWithEnvironment(request, true, approval, meta.Environment, recordedRoots, meta.RuntimePreflightSHA256 != "")
+	return prepareCandidateWithEnvironment(request, callerEnvironment, true, approval, meta.Environment, recordedRoots, meta.RuntimePreflightSHA256 != "")
 }
 
-func prepareCandidate(request task.TaskRecord, native, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
+func prepareCandidate(request task.TaskRecord, callerEnvironment []string, native, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
 	approval := unattendedApproval
 	if native {
 		approval = nativeApprovalForMode(request.Mode)
 	}
-	return prepareCandidateWithEnvironment(request, native, approval, nil, nil, allowStaticAdmit)
+	return prepareCandidateWithEnvironment(request, callerEnvironment, native, approval, nil, nil, allowStaticAdmit)
 }
 
 func nativeApprovalForMode(mode string) string {
@@ -101,7 +103,10 @@ func nativeApprovalForMode(mode string) string {
 	return unattendedApproval
 }
 
-func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, approval string, recordedEnvironment, recordedRoots []string, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
+// prepareCandidateWithEnvironment launches with recordedEnvironment when the
+// task saved one, and otherwise with scope. The executable is always resolved
+// through scope, the environment the caller prepares under.
+func prepareCandidateWithEnvironment(request task.TaskRecord, scope []string, native bool, approval string, recordedEnvironment, recordedRoots []string, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {
 	arguments, err := candidateArguments(request, native, approval)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -110,12 +115,12 @@ func prepareCandidateWithEnvironment(request task.TaskRecord, native bool, appro
 	if recordedEnvironment != nil || len(recordedRoots) > 0 {
 		prepareEnvironment = prepareHistoricalNativeEnvironment
 	}
-	environment, err := prepareEnvironment(candidateEnvironmentValues(recordedEnvironment), native)
+	environment, err := prepareEnvironment(candidateEnvironmentValues(scope, recordedEnvironment), native)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
 	environment.WritableRoots = recordedWritableRoots(environment.WritableRoots, recordedRoots)
-	located, err := commonprovider.LocateCLI("agy")
+	located, err := commonprovider.LocateCLI("agy", scope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: %w", ErrUnsupportedProfile, err)
 	}
@@ -204,11 +209,11 @@ func candidateArguments(request task.TaskRecord, native bool, approval string) (
 	return arguments, nil
 }
 
-func candidateEnvironmentValues(recorded []string) []string {
+func candidateEnvironmentValues(caller, recorded []string) []string {
 	if recorded != nil {
 		return recorded
 	}
-	return os.Environ()
+	return caller
 }
 
 func recordedWritableRoots(current, recorded []string) []string {

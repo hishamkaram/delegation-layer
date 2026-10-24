@@ -15,6 +15,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/config"
 	"github.com/hishamkaram/delegation-layer/internal/predicate"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/supervisor/testsupport"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
@@ -185,8 +186,8 @@ func TestCollectWithoutBudgetStopDoesNotRecoverPrivateSupervisor(t *testing.T) {
 	defer closeAppTestTask(t, store, td)
 
 	result := collect(Arguments{Root: store.Root, TaskID: req.TaskID}, storeDependencies{
-		observeSupervisor:           true,
-		initialSupervisorExecutable: filepath.Join(t.TempDir(), "missing-pueue"),
+		observeSupervisor: true,
+		supervisorLookup:  supervisorcore.ExecutableLookup{InitialExecutable: filepath.Join(t.TempDir(), "missing-pueue")},
 	})
 	if result.code != 3 || result.err != nil {
 		t.Fatalf("collect without budget-stop evidence tried supervisor recovery: %+v", result)

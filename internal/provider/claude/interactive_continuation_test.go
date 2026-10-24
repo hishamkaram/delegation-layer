@@ -48,7 +48,7 @@ func canonicalTempDir(t *testing.T) string {
 
 func finalizedInteractiveProfile(t *testing.T, request task.TaskRecord) commonprovider.PreparedProfile {
 	t.Helper()
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func assertNoninteractivePredecessorRejected(t *testing.T, request task.TaskReco
 		Predicate:       ReferenceForMode(Mode),
 		EffectiveConfig: task.EffectiveConfig{Policy: &task.PolicyDetails{ProfileRevision: commonprovider.NativeProfileRevision}},
 	}
-	if _, err := PrepareExistingCandidate(request, meta); !errors.Is(err, ErrUnsupportedProfile) {
+	if _, err := PrepareExistingCandidate(request, meta, os.Environ()); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("noninteractive predecessor predicate was reused: %v", err)
 	}
 }

@@ -7,7 +7,6 @@ func dispatchCommandResult(observed tasklifecycle.DispatchResult) commandResult 
 	response.RootID, response.TaskID = observed.RootID, observed.TaskID
 	response.TaskRecord = taskRecordPresence(observed.Record)
 	result := dispatchPrimaryResult(response, observed)
-	applyEnvironmentRestoreError(&result, observed.EnvironmentRestoreError)
 	if observed.Workspace != nil {
 		applyManagedAdmissionFinish(observed.Root, *observed.Workspace, &result)
 	}

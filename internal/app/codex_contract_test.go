@@ -47,7 +47,7 @@ func newCodexContractFixture(t *testing.T, mode, version string) codexContractFi
 	t.Cleanup(func() { testsupport.RequireAppTest(t, store.Close()) })
 	request := newBareInspectionRequest(t, store)
 	request.Provider, request.Mode, request.RequestedConfig.Permission = codex.Provider, mode, mode
-	candidate, err := catalog.Candidate(request)
+	candidate, err := catalog.Candidate(request, os.Environ())
 	testsupport.RequireAppTest(t, err)
 	profile, err := admission.ProfileForAdmission(candidate, request, true)
 	testsupport.RequireAppTest(t, err)
@@ -89,7 +89,7 @@ func TestCodexPendingRuntimeV3Reconstruction(t *testing.T) {
 			testsupport.RequireAppTest(t, err)
 			before, err := os.ReadFile(filepath.Join(td.Dir, "meta.json"))
 			testsupport.RequireAppTest(t, err)
-			profile, err := prepareMatchedProfile(Dependencies{Catalog: NativeCatalog()}, fixture.store.Root, *request, *meta)
+			profile, err := prepareMatchedProfile(Dependencies{Environment: os.Environ(), Catalog: NativeCatalog()}, fixture.store.Root, *request, *meta)
 			testsupport.RequireAppTest(t, err)
 			assertCodexRecordedProfile(t, fixture, profile, false)
 			if profile.Plan.RuntimePreflightSHA256 != meta.RuntimePreflightSHA256 {
@@ -118,7 +118,7 @@ func TestCodexContinuationPreservesRecordedContract(t *testing.T) {
 				prior, err := tasklifecycle.ContinuationPrior(td, &fixture.request)
 				testsupport.RequireAppTest(t, err)
 				testsupport.RequireAppTest(t, td.Close())
-				options, _, err := tasklifecycle.ContinuationOptionsForTask(fixture.store, dispatchOptions(Dependencies{Catalog: NativeCatalog()}, true), fixture.request.TaskID)
+				options, _, err := tasklifecycle.ContinuationOptionsForTask(fixture.store, dispatchOptions(Dependencies{Environment: os.Environ(), Catalog: NativeCatalog()}, true), fixture.request.TaskID)
 				testsupport.RequireAppTest(t, err)
 				next := fixture.request
 				next.TaskID, next.PriorSession = strings.Repeat("b", 32), prior
@@ -162,7 +162,7 @@ func TestCodexMissingNonGitCapabilityRejectsBeforeLaunch(t *testing.T) {
 	t.Cleanup(func() { testsupport.RequireAppTest(t, td.Close()) })
 	request, meta, err := td.PreparedRecords()
 	testsupport.RequireAppTest(t, err)
-	deps := Dependencies{Catalog: NativeCatalog()}
+	deps := Dependencies{Environment: os.Environ(), Catalog: NativeCatalog()}
 	profile, err := prepareMatchedProfile(deps, fixture.store.Root, *request, *meta)
 	testsupport.RequireAppTest(t, err)
 	permit, err := td.PrepareStart(0)

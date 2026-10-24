@@ -154,7 +154,7 @@ func newPiConsumerExecution(t *testing.T, mode, stream string) piConsumerExecuti
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := catalog.Candidate(request)
+	candidate, err := catalog.Candidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

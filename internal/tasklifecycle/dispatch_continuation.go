@@ -39,7 +39,7 @@ func prepareDispatchContinuation(store *taskdir.Store, options DispatchOptions, 
 	if err = ValidateContinuationEnvironment(meta); err != nil {
 		return options, nil, err
 	}
-	prior, err := ResolvePredecessor(store, PredecessorOptions{Admission: continuationOptions.staticAdmission(), Supervisor: continuationOptions.Creation.Admission.Supervisor, ApplyEnvironment: options.ApplyEnvironment}, *request, predecessorID)
+	prior, err := ResolvePredecessor(store, PredecessorOptions{Admission: continuationOptions.staticAdmission(), Supervisor: continuationOptions.Creation.Admission.Supervisor}, *request, predecessorID)
 	if err != nil {
 		return options, nil, err
 	}
@@ -64,13 +64,25 @@ func ContinuationOptionsForTask(store *taskdir.Store, options DispatchOptions, i
 	if options.ContinuationProfiles == nil {
 		return options, nil, task.ErrEvidenceFault
 	}
-	result.Creation.Admission.Profiles = options.ContinuationProfiles(*meta)
+	result.Creation.Admission.Profiles = options.ContinuationProfiles(*meta, options.Creation.Admission.Profiles.Environment())
 	return result, meta, nil
 }
 
-func dispatchContinuationEnvironment(apply EnvironmentApplicator, root string, meta *task.MetaRecord, interactive bool) (func() error, error) {
+// interactiveContinuationCreation selects the predecessor's saved launch scope
+// for an interactive successor's creation only. An ordinary --resume-task
+// successor keeps the caller's scope. The selection replaces the former
+// process-level swap at the same point and with the same failure stage.
+func interactiveContinuationCreation(options CreationOptions, selection supervisorcore.AdmissionSelection, root string, meta *task.MetaRecord, interactive bool) (CreationOptions, supervisorcore.AdmissionSelection, error) {
 	if meta == nil || !interactive {
-		return nil, nil
+		return options, selection, nil
 	}
-	return supervisorcore.ApplyContinuationEnvironment(root, meta, apply)
+	profiles, err := options.Admission.Profiles.ForRecord(meta.Environment, meta.EnvironmentRecorded)
+	if err != nil {
+		return options, selection, err
+	}
+	selected := profiles.Environment()
+	options.Admission.Profiles = profiles
+	options.Admission.Supervisor = supervisorcore.AdmissionOptionsForScope(options.Admission.Supervisor, selected, selected)
+	selection.EnvironmentConfigPath = supervisorcore.ContinuationConfigEnvironment(root, *meta, selected)
+	return options, selection, nil
 }

@@ -80,7 +80,7 @@ func reconcilePrivateContinuationBinding(root string, saved, current task.Superv
 }
 
 func resolveCurrentContinuationSupervisor(ctx context.Context, root string, options ContinuationOptions) (task.SupervisorRef, error) {
-	clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(root, options.InitialExecutable)
+	clientExecutable, daemonExecutable, err := ResolvePrivateSupervisorExecutables(root, options.Lookup())
 	if err != nil {
 		return task.SupervisorRef{}, err
 	}

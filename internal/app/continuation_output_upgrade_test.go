@@ -111,7 +111,7 @@ func (c outputUpgradeCase) predecessorProfile(t *testing.T, f *outputUpgradeFixt
 	if c.provider == openCodeProvider {
 		return openCodeHistoricalRunProfile(t, f.deps.Catalog, f.request, c.revision, c.source)
 	}
-	fresh, err := f.deps.Catalog.Candidate(f.request)
+	fresh, err := f.deps.Catalog.Candidate(f.request, os.Environ())
 	if err != nil {
 		t.Fatalf("current candidate: %v", err)
 	}
@@ -121,7 +121,7 @@ func (c outputUpgradeCase) predecessorProfile(t *testing.T, f *outputUpgradeFixt
 	}
 	seed := tasklifecycle.NewMeta(f.request, freshProfile, f.supervisor.Binding(), f.runner, task.RunnerOwnershipManaged, outputUpgradeBuild)
 	seed.Predicate = c.source
-	existing, err := f.deps.Catalog.ExistingCandidate(f.request, seed)
+	existing, err := f.deps.Catalog.ExistingCandidate(f.request, seed, os.Environ())
 	if err != nil {
 		t.Fatalf("stored-predicate candidate: %v", err)
 	}

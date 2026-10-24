@@ -462,7 +462,7 @@ func (fixture *refusedPairFixture) removePublishedPairBehindStatePair(t *testing
 func TestControlClientRepairsCleanRefusedEndpoint(t *testing.T) {
 	fixture := newRefusedPairFixture(t)
 	opened := 0
-	client, err := supervisorcore.NewControlClient(t.Context(), fixture.root, fixture.published, fixture.options, fixture.clientPath, countingStoreOpener(&opened, nil))
+	client, err := supervisorcore.NewControlClient(t.Context(), fixture.root, fixture.published, fixture.options, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientPath}, countingStoreOpener(&opened, nil))
 	settleSupervisorProbeTestClient(t, client, err)
 	if err != nil {
 		t.Fatalf("control client did not repair the clean refusal: %v", err)
@@ -489,10 +489,10 @@ func testSupervisorClientsNeverRecoverObservationFault(t *testing.T, output stri
 	t.Helper()
 	for name, open := range map[string]func(refusedPairFixture, supervisorcore.StoreOpener) (*pueue.Client, error){
 		"control client": func(fixture refusedPairFixture, opener supervisorcore.StoreOpener) (*pueue.Client, error) {
-			return supervisorcore.NewControlClient(t.Context(), fixture.root, fixture.published, fixture.options, fixture.clientPath, opener)
+			return supervisorcore.NewControlClient(t.Context(), fixture.root, fixture.published, fixture.options, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientPath}, opener)
 		},
 		"recovering client": func(fixture refusedPairFixture, opener supervisorcore.StoreOpener) (*pueue.Client, error) {
-			return supervisorcore.NewClient(t.Context(), fixture.root, fixture.published, fixture.options, true, fixture.clientPath, opener)
+			return supervisorcore.NewClient(t.Context(), fixture.root, fixture.published, fixture.options, true, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientPath}, opener)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -522,7 +522,7 @@ func TestRecoveringClientReconcileFailureKeepsPairCause(t *testing.T) {
 	fixture.removePublishedPairBehindStatePair(t)
 	openErr := errors.New("supervisor store unavailable")
 	opened := 0
-	client, err := supervisorcore.NewClient(t.Context(), fixture.root, fixture.published, fixture.options, true, fixture.clientPath, countingStoreOpener(&opened, openErr))
+	client, err := supervisorcore.NewClient(t.Context(), fixture.root, fixture.published, fixture.options, true, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientPath}, countingStoreOpener(&opened, openErr))
 	if client != nil || !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) || !errors.Is(err, openErr) {
 		t.Fatalf("failed reconciliation = client %v err %v, want both causes", client, err)
 	}
@@ -536,7 +536,7 @@ func TestRecoveringClientRecoversMissingPairAfterReconciliation(t *testing.T) {
 	fixture := newRefusedPairFixture(t)
 	stateClient, stateDaemon := fixture.removePublishedPairBehindStatePair(t)
 	opened := 0
-	client, err := supervisorcore.NewClient(t.Context(), fixture.root, fixture.published, fixture.options, true, fixture.clientPath, countingStoreOpener(&opened, nil))
+	client, err := supervisorcore.NewClient(t.Context(), fixture.root, fixture.published, fixture.options, true, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientPath}, countingStoreOpener(&opened, nil))
 	settleSupervisorProbeTestClient(t, client, err)
 	if err != nil || client == nil {
 		t.Fatalf("missing pair was not recovered after reconciliation: client %v err %v", client, err)
@@ -557,7 +557,7 @@ func TestRecoveringClientRefusesCorruptPresentPair(t *testing.T) {
 	fixture := newRefusedPairFixture(t)
 	appendPairFaultBytes(t, fixture.published.ClientExecutable)
 	opened := 0
-	client, err := supervisorcore.NewClient(t.Context(), fixture.root, fixture.published, fixture.options, true, fixture.clientPath, countingStoreOpener(&opened, nil))
+	client, err := supervisorcore.NewClient(t.Context(), fixture.root, fixture.published, fixture.options, true, supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientPath}, countingStoreOpener(&opened, nil))
 	if client != nil || !errors.Is(err, pueue.ErrBinding) {
 		t.Fatalf("corrupt present pair = client %v err %v, want an operational binding failure", client, err)
 	}

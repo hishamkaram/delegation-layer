@@ -7,7 +7,6 @@ import (
 )
 
 type PredecessorOptions struct {
-	Admission        admissioncore.StaticOptions
-	Supervisor       supervisorcore.AdmissionOptions
-	ApplyEnvironment EnvironmentApplicator
+	Admission  admissioncore.StaticOptions
+	Supervisor supervisorcore.AdmissionOptions
 }

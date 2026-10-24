@@ -318,7 +318,7 @@ func (d provisionDispatch) run(fixture checkpointRuntimeFixture) tasklifecycle.D
 	return tasklifecycle.Dispatch(dispatchRequest(Arguments{
 		Root: fixture.lineage.store.Root, Cwd: fixture.lineage.main, TaskID: d.taskID, Provider: "codex:exec", Isolation: "git-worktree", WorkspaceBudget: d.budget,
 		BriefBytes: []byte("bounded task"), Config: task.TaskConfig{Permission: config.ModeReadOnly, Budget: "1m"},
-	}), options)
+	}, fixture.deps.withCapturedEnvironment()), options)
 }
 
 // dispatchRefusedProvision dispatches an isolated workspace whose provision

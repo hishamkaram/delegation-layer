@@ -387,6 +387,16 @@ runs one local fixture task under a short private directory below `HOME`; if you
 home path is too long for the private supervisor socket, pass an existing short
 directory with `--bootstrap-parent`.
 
+To prove all six hosted legs without touching your own host, add
+`-f prove_candidate_installs=true` to the build dispatch. After the build, the
+`development-candidate-install` job reads the build job's locator and runs
+`prove_candidate_install.py` on `ubuntu-24.04` (amd64) and `macos-15` (arm64)
+for each channel; the Ubuntu Homebrew leg uses the runner's preinstalled
+Homebrew. Each leg uploads `receipt.json`, `install-proof.json` and
+`install-witness.json` as `candidate-install-OS-CHANNEL-RUN_ID-RUN_ATTEMPT`.
+Import a pair with `record_candidate.py install` only when the leg's receipt
+reports a passed, cleaned-up proof; an exported pair alone is not success.
+
 Before opening or updating the pull request, run the readiness check from a
 clean checkout of the reviewed head:
 

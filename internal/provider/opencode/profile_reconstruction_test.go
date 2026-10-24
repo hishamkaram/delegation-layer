@@ -44,7 +44,7 @@ func TestCurrentNativeProfileAdmitsWithoutRuntimeFacts(t *testing.T) {
 	t.Setenv("PATH", directory)
 	request := profileRequest(ModeReadOnly)
 	request.CanonicalCwd = directory
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
 	t.Setenv("PATH", directory)
 	request := profileRequest(ModeReadOnly)
 	request.CanonicalCwd = directory
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
 		Environment:            slices.Clone(admitted.Plan.Environment),
 		EnvironmentRecorded:    true,
 		Predicate:              admitted.Plan.Predicate,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func testPersistedProfile(t *testing.T, mode string, reference task.PredicateRef
 	request.CanonicalCwd = directory
 	meta, _ := historicalRunRecord(t, request, dialectNativeV2)
 	meta.Predicate = reference
-	existing, err := PrepareExistingCandidate(request, meta)
+	existing, err := PrepareExistingCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestCurrentACPProfileLaunchesInPlanDirectory(t *testing.T) {
 	request := profileRequest(ModeWorkspaceWrite)
 	request.CanonicalCwd = directory
 	request.RequestedConfig.Model, request.RequestedConfig.Effort = "anthropic/claude-sonnet", "high"
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestCurrentACPProfileLaunchesInPlanDirectory(t *testing.T) {
 	// ACP sets an explicit effort on the current model and refuses the turn
 	// when OpenCode does not acknowledge it, so no model is required here.
 	request.RequestedConfig.Model = ""
-	if _, err = PrepareCandidate(request); err != nil {
+	if _, err = PrepareCandidate(request, os.Environ()); err != nil {
 		t.Fatalf("explicit effort without a model: %v", err)
 	}
 }
@@ -252,7 +252,7 @@ func requireHistoricalRunReconstruction(t *testing.T, dialect launchDialect, mod
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := PrepareExistingCandidate(request, meta)
+	candidate, err := PrepareExistingCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func requireRecordedLaunch(t *testing.T, name string, rebuilt commonprovider.Pre
 // dialect admitted it, and that record's static runtime capability digest.
 func historicalRunRecord(t *testing.T, request task.TaskRecord, dialect launchDialect) (task.MetaRecord, string) {
 	t.Helper()
-	current, err := PrepareCandidate(request)
+	current, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

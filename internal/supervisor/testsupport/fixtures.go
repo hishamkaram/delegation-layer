@@ -22,9 +22,12 @@ func CanonicalPath(t *testing.T, path string) string {
 	return resolved
 }
 
+// CanonicalTempDir creates an owned directory below the native temporary
+// parent. The short prefix keeps supervisor endpoints under it within the
+// platform socket-path limit.
 func CanonicalTempDir(t *testing.T) string {
 	t.Helper()
-	directory, err := os.MkdirTemp("/tmp", "dla-")
+	directory, err := os.MkdirTemp("", "dla-")
 	if err != nil {
 		t.Fatal(err)
 	}

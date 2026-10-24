@@ -2,12 +2,15 @@ package workspaces
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"time"
 
 	"github.com/hishamkaram/delegation-layer/internal/inspection"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
+	"github.com/hishamkaram/delegation-layer/internal/workspace"
 )
 
 // OperationRuntime supplies application-composed runner and supervisor edges.
@@ -27,8 +30,30 @@ type InspectionRecovery func(context.Context, *inspection.Operation) error
 
 // OperationOptions carries immutable invocation configuration. The canonical
 // supervisor timeout policy interprets ObservationTimeout, including its default.
+// Environment is the launch scope captured by composition. Git admission
+// checks validate it and a verification job receives it; nil is a missing
+// capture and fails instead of reading the process environment.
 type OperationOptions struct {
 	Runtime            OperationRuntime
 	ObservationTimeout time.Duration
 	RecoverInspection  InspectionRecovery
+	Environment        []string
+}
+
+// ValidateGitEnvironment rejects inherited Git redirections in the captured
+// launch scope before a caller authorizes any Git operation.
+func (options OperationOptions) ValidateGitEnvironment() error {
+	environment, err := options.scopeEnvironment()
+	if err != nil {
+		return err
+	}
+	return (workspace.Git{Environment: environment}).ValidateEnvironment()
+}
+
+// scopeEnvironment returns a copy of the captured launch scope.
+func (options OperationOptions) scopeEnvironment() ([]string, error) {
+	if options.Environment == nil {
+		return nil, fmt.Errorf("%w: workspace launch environment was not captured", task.ErrEvidenceFault)
+	}
+	return slices.Clone(options.Environment), nil
 }

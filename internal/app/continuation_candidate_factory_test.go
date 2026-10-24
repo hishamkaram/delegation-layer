@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/hishamkaram/delegation-layer/internal/config"
@@ -14,19 +15,19 @@ func candidateFactoryCatalog(t *testing.T, faults map[string]error) commonprovid
 	t.Helper()
 	const id = "fixture:preflight"
 	hook := func(name string) commonprovider.PrepareExistingCandidate {
-		return func(task.TaskRecord, task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+		return func(task.TaskRecord, task.MetaRecord, []string) (commonprovider.ProfileCandidate, error) {
 			return commonprovider.ProfileCandidate{}, faults[name]
 		}
 	}
-	description := preflightFixtureCatalog(t, func(task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+	description := preflightFixtureCatalog(t, func(task.TaskRecord, []string) (commonprovider.ProfileCandidate, error) {
 		return commonprovider.ProfileCandidate{}, nil
 	}).Descriptions()[0]
 	description.SupportedOptions = append(description.SupportedOptions, commonprovider.OptionInteractive)
 	description.Interaction = task.InteractionCapabilities{Clarification: true, SupportedModes: []string{config.ModeReadOnly}}
 	catalog, err := commonprovider.NewCatalog(commonprovider.Registration{
 		Description: description,
-		Prepare: func(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-			return hook("fresh")(request, task.MetaRecord{})
+		Prepare: func(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+			return hook("fresh")(request, task.MetaRecord{}, environment)
 		},
 		PrepareExisting:  hook("existing"),
 		PrepareSuccessor: hook("successor"),
@@ -54,15 +55,15 @@ func TestContinuationFactoryAdmitsSuccessorsThroughOwnPreparation(t *testing.T) 
 		want    string
 	}{
 		{name: "normal continuation", prepare: func() error {
-			_, err := continuationDependencies(deps, task.MetaRecord{}).PrepareCandidate(request)
+			_, err := continuationDependencies(deps, task.MetaRecord{}).PrepareCandidate(request, os.Environ())
 			return err
 		}, want: "successor"},
 		{name: "interactive continuation", prepare: func() error {
-			_, err := continuationDependencies(deps, task.MetaRecord{}).PrepareCandidate(interactive)
+			_, err := continuationDependencies(deps, task.MetaRecord{}).PrepareCandidate(interactive, os.Environ())
 			return err
 		}, want: "fresh"},
 		{name: "immutable existing task", prepare: func() error {
-			_, _, err := admissionCandidateSource{dependencies: deps}.ForTask(request, &task.MetaRecord{})
+			_, _, err := admissionCandidateSource{dependencies: deps}.ForTask(request, &task.MetaRecord{}, os.Environ())
 			return err
 		}, want: "existing"},
 	}

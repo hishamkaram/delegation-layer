@@ -186,6 +186,9 @@ func normalizeOptions(options Options) (Options, error) {
 	if options.Environment != nil {
 		options.Environment = append([]string{}, options.Environment...)
 	}
+	if options.PrivateMaintenanceEnvironment != nil {
+		options.PrivateMaintenanceEnvironment = append([]string{}, options.PrivateMaintenanceEnvironment...)
+	}
 	return options, nil
 }
 

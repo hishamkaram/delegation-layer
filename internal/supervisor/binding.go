@@ -9,12 +9,12 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func NewClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, recoverPrivate bool, initialSupervisorExecutable string, openStore StoreOpener) (*pueue.Client, error) {
+func NewClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, recoverPrivate bool, lookup ExecutableLookup, openStore StoreOpener) (*pueue.Client, error) {
 	if recoverPrivate && pueue.IsPrivateConfig(root, saved.ConfigPath) {
 		if ctx == nil {
 			return nil, context.Canceled
 		}
-		return recoverPrivateClient(ctx, root, saved, options, initialSupervisorExecutable, openStore)
+		return recoverPrivateClient(ctx, root, saved, options, lookup, openStore)
 	}
 	return pueue.NewClient(saved, options)
 }
@@ -22,8 +22,8 @@ func NewClient(ctx context.Context, root string, saved task.SupervisorRef, optio
 // recoverPrivateClient reconciles the published pair once, and only for the
 // explicit PairUnavailable fact. An operational recovery error is returned
 // unchanged; a failed reconciliation or retry keeps the first cause.
-func recoverPrivateClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, initialSupervisorExecutable string, openStore StoreOpener) (*pueue.Client, error) {
-	recovery, err := attemptSavedPrivateRecovery(ctx, root, saved, options, initialSupervisorExecutable)
+func recoverPrivateClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup, openStore StoreOpener) (*pueue.Client, error) {
+	recovery, err := attemptSavedPrivateRecovery(ctx, root, saved, options, lookup)
 	if err != nil || !recovery.PairUnavailable() {
 		return recovery.Client(), err
 	}
@@ -31,7 +31,7 @@ func recoverPrivateClient(ctx context.Context, root string, saved task.Superviso
 	if reconcileErr := ReconcileSaved(ctx, root, options, openStore); reconcileErr != nil {
 		return nil, errors.Join(cause, reconcileErr)
 	}
-	retry, err := attemptSavedPrivateRecovery(ctx, root, saved, options, initialSupervisorExecutable)
+	retry, err := attemptSavedPrivateRecovery(ctx, root, saved, options, lookup)
 	if err != nil {
 		return nil, errors.Join(cause, err)
 	}
@@ -41,8 +41,8 @@ func recoverPrivateClient(ctx context.Context, root string, saved task.Superviso
 	return retry.Client(), nil
 }
 
-func attemptSavedPrivateRecovery(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, initialSupervisorExecutable string) (pueue.PrivateRecovery, error) {
-	clientExecutable, daemonExecutable, err := ResolveRecoveryPrivateSupervisorExecutables(root, saved, initialSupervisorExecutable)
+func attemptSavedPrivateRecovery(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup) (pueue.PrivateRecovery, error) {
+	clientExecutable, daemonExecutable, err := ResolveRecoveryPrivateSupervisorExecutables(root, saved, lookup)
 	if err != nil {
 		return pueue.PrivateRecovery{}, err
 	}
@@ -56,7 +56,7 @@ func attemptSavedPrivateRecovery(ctx context.Context, root string, saved task.Su
 // before the one control command is sent. A failed bind, an uncertain
 // observation, a close failure, and a failed control are never retried or
 // recovered.
-func NewControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, initialSupervisorExecutable string, openStore StoreOpener) (*pueue.Client, error) {
+func NewControlClient(ctx context.Context, root string, saved task.SupervisorRef, options pueue.Options, lookup ExecutableLookup, openStore StoreOpener) (*pueue.Client, error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -69,7 +69,7 @@ func NewControlClient(ctx context.Context, root string, saved task.SupervisorRef
 			return nil, err
 		}
 		if missing {
-			return NewClient(ctx, root, saved, options, true, initialSupervisorExecutable, openStore)
+			return NewClient(ctx, root, saved, options, true, lookup, openStore)
 		}
 	}
 	direct, err := pueue.BindSaved(ctx, saved, options)
@@ -92,7 +92,7 @@ func NewControlClient(ctx context.Context, root string, saved task.SupervisorRef
 	if state := observation.State(); state != pueue.PrivateEndpointAbsent && state != pueue.PrivateEndpointRefused {
 		return nil, fmt.Errorf("%w: private supervisor endpoint was not observed", pueue.ErrBinding)
 	}
-	recovered, err := NewClient(ctx, root, saved, options, true, initialSupervisorExecutable, openStore)
+	recovered, err := NewClient(ctx, root, saved, options, true, lookup, openStore)
 	if err != nil {
 		return nil, errors.Join(observation.Cause(), err)
 	}

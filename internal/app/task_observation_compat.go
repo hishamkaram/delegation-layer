@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -15,6 +16,6 @@ func fillInteraction(response *Response, td *taskdir.TaskDir) error {
 	return err
 }
 
-func observationSupervisorOptions(options pueue.Options, initialExecutable string) tasklifecycle.SupervisorOptions {
-	return tasklifecycle.SupervisorOptions{Options: options, InitialExecutable: initialExecutable, OpenStore: openNativeSupervisorStore}
+func observationSupervisorOptions(options pueue.Options, lookup supervisorcore.ExecutableLookup) tasklifecycle.SupervisorOptions {
+	return tasklifecycle.SupervisorOptions{Options: options, Lookup: lookup, OpenStore: openNativeSupervisorStore}
 }

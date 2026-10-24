@@ -9,5 +9,11 @@ import (
 type ContinuationOptions struct {
 	Options           pueue.Options
 	InitialExecutable string
+	Environment       []string
 	OpenStore         StoreOpener
+}
+
+// Lookup returns the supervisor executable lookup this configuration selects.
+func (options ContinuationOptions) Lookup() ExecutableLookup {
+	return ExecutableLookup{InitialExecutable: options.InitialExecutable, Environment: options.Environment}
 }

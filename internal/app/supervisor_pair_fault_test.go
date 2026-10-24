@@ -115,7 +115,7 @@ func TestAdmissionRefusesCorruptPresentPublishedPair(t *testing.T) {
 	appendPairFaultBytes(t, binding.ClientExecutable)
 	before := capturePairFaultWitness(t, base)
 	err := dispatchPairFault(t, "corrupt present", func(ctx context.Context) (*pueue.Client, error) {
-		return supervisor.PreparePrivateAdmissionTransition(ctx, deps.InitialSupervisorExecutable, store, deps.SupervisorOptions)
+		return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
 	}, store.Root)
 	if !errors.Is(err, pueue.ErrPrivateSupervisorMigrationRequired) {
 		t.Fatalf("corrupt present published pair was admitted: %v", err)
@@ -135,7 +135,7 @@ func TestAdmissionReportsUnreadablePairRecords(t *testing.T) {
 			}
 			before := capturePairFaultWitness(t, base)
 			err := dispatchPairFault(t, "unreadable "+record, func(ctx context.Context) (*pueue.Client, error) {
-				return supervisor.PreparePrivateAdmissionTransition(ctx, deps.InitialSupervisorExecutable, store, deps.SupervisorOptions)
+				return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
 			}, store.Root)
 			if pairFaultReason(err) != "state_unreadable" {
 				t.Fatalf("unreadable %s was not reported as state_unreadable: %v", record, err)
@@ -228,7 +228,7 @@ func TestLivePublishedPairWithMissingMemberKeepsConsumerPolicy(t *testing.T) {
 		removePublishedDaemonBehindRetainedPair(t, store.Root, current.Binding())
 		before := capturePairFaultWitness(t, base)
 		err := dispatchPairFault(t, "live missing member", func(ctx context.Context) (*pueue.Client, error) {
-			return supervisor.PreparePrivateAdmissionTransition(ctx, deps.InitialSupervisorExecutable, store, deps.SupervisorOptions)
+			return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
 		}, store.Root)
 		if pairFaultReason(err) != "published_pair_unavailable_live" {
 			t.Fatalf("live endpoint with a missing member was not reported: %v", err)
@@ -277,7 +277,7 @@ func TestPairIdentityConflictStopsEveryConsumer(t *testing.T) {
 		writeConflictingLaunchWitness(t, store.Root, current.Binding())
 		before := capturePairFaultWitness(t, base)
 		err := dispatchPairFault(t, "identity conflict", func(ctx context.Context) (*pueue.Client, error) {
-			return supervisor.PreparePrivateAdmissionTransition(ctx, deps.InitialSupervisorExecutable, store, deps.SupervisorOptions)
+			return supervisor.PreparePrivateAdmissionTransition(ctx, deps.supervisorLookup(), store, deps.SupervisorOptions)
 		}, store.Root)
 		if pairFaultReason(err) != "identity_conflict" {
 			t.Fatalf("identity conflict was not reported: %v", err)

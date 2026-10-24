@@ -47,7 +47,7 @@ func testRecordedNativeLaunch(t *testing.T, mode string, historical, resume bool
 	if resume {
 		request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: testThreadID, PredecessorTaskID: testTaskID}
 	}
-	candidate, err := PrepareExistingCandidate(request, meta)
+	candidate, err := PrepareExistingCandidate(request, meta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

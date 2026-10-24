@@ -3,7 +3,6 @@ package ccr
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -16,11 +15,15 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
-	return prepare(request, os.Environ(), nil, task.PredicateRef{})
+// PrepareCandidate prepares a fresh CCR task in the caller's selected environment.
+func PrepareCandidate(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
+	return prepare(request, environment, environment, nil, task.PredicateRef{})
 }
 
-func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (commonprovider.ProfileCandidate, error) {
+// PrepareExistingCandidate reconstructs a task from its recorded environment
+// only; a record without one is rejected and no caller environment substitutes.
+// The caller's scope only resolves the executable.
+func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, scope []string) (commonprovider.ProfileCandidate, error) {
 	if !meta.EnvironmentRecorded {
 		return commonprovider.ProfileCandidate{}, task.ErrIdentityMismatch
 	}
@@ -28,7 +31,7 @@ func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord) (co
 	if meta.EffectiveConfig.Policy != nil {
 		roots = meta.EffectiveConfig.Policy.WritableRoots
 	}
-	return prepare(request, meta.Environment, roots, meta.Predicate)
+	return prepare(request, scope, meta.Environment, roots, meta.Predicate)
 }
 
 func arguments(request task.TaskRecord) ([]string, string, error) {
@@ -108,7 +111,9 @@ func appendSessionArgument(request task.TaskRecord, args []string) ([]string, er
 	return append(args, "--session-id", session), nil
 }
 
-func prepare(request task.TaskRecord, values, recordedRoots []string, reference task.PredicateRef) (commonprovider.ProfileCandidate, error) {
+// prepare launches with values and resolves the executable through scope, the
+// environment the caller prepares under.
+func prepare(request task.TaskRecord, scope, values, recordedRoots []string, reference task.PredicateRef) (commonprovider.ProfileCandidate, error) {
 	environment, roots, err := nativeEnvironment(values)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
@@ -116,7 +121,7 @@ func prepare(request task.TaskRecord, values, recordedRoots []string, reference 
 	if recordedRoots != nil {
 		roots = slices.Clone(recordedRoots)
 	}
-	cli, err := commonprovider.LocateCLI("ccr")
+	cli, err := commonprovider.LocateCLI("ccr", scope)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}

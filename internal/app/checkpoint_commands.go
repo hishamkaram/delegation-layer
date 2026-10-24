@@ -17,6 +17,7 @@ import (
 // workspaces owner admits, schedules, qualifies, removes and lists, and this
 // command projects its acknowledgement and qualified descriptions.
 func checkpointCommand(a Arguments, deps Dependencies) commandResult {
+	deps = deps.withCapturedEnvironment()
 	return runCheckpointCommand(a, deps.storeDependencies(), workspaceRuntimeOptions(deps))
 }
 
@@ -36,7 +37,7 @@ func runCheckpointCommand(a Arguments, deps storeDependencies, options workspace
 		}
 	}
 	if a.CheckpointAction == checkpointCreateAction || a.CheckpointAction == checkpointRemoveAction {
-		if err = workspace.ValidateGitEnvironment(); err != nil {
+		if err = options.ValidateGitEnvironment(); err != nil {
 			return failed(response, err, 2)
 		}
 	}

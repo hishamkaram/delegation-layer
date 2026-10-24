@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -67,7 +68,7 @@ func workspaceVerificationRecoveryAuthorization(t *testing.T, fixture *workspace
 	if err = operation.Close(); err != nil {
 		t.Fatal(err)
 	}
-	deps := Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: pueue.Options{}}
+	deps := Dependencies{InitialSupervisorExecutable: supervisor.Binding().ClientExecutable, SupervisorOptions: pueue.Options{}, Environment: os.Environ()}
 	return request, subject, deps
 }
 

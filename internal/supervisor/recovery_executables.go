@@ -9,14 +9,14 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func ResolveRecoveryPrivateSupervisorExecutables(root string, saved task.SupervisorRef, initialSupervisorExecutable string) (client, daemon string, resultErr error) {
+func ResolveRecoveryPrivateSupervisorExecutables(root string, saved task.SupervisorRef, lookup ExecutableLookup) (client, daemon string, resultErr error) {
 	if PrivateSupervisorExecutablesAvailable(saved.ClientExecutable, saved.DaemonExecutable) {
 		if err := ValidateSavedStateSupervisorPair(root, saved); err != nil {
 			return "", "", fmt.Errorf("%w: saved private supervisor pair failed integrity validation: %w", pueue.ErrBinding, err)
 		}
 		return saved.ClientExecutable, saved.DaemonExecutable, nil
 	}
-	client, daemon, resolveErr := ResolvePrivateSupervisorExecutables(root, initialSupervisorExecutable)
+	client, daemon, resolveErr := ResolvePrivateSupervisorExecutables(root, lookup)
 	if resolveErr == nil {
 		return client, daemon, nil
 	}

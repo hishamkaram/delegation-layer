@@ -574,7 +574,11 @@ func (c *Client) ScheduleRequestedPrivateQueueMaintenance(ctx context.Context) b
 		// inspection poll deadline cannot revoke the maintenance handoff after
 		// publication succeeded.
 		launchContext, cancelLaunch := context.WithTimeout(context.WithoutCancel(ctx), DefaultObservationTimeout)
-		err := c.options.PrivateMaintenanceLauncher(launchContext, c.options.ControlOwnerExecutable, stateRoot)
+		environment := c.options.PrivateMaintenanceEnvironment
+		if environment == nil {
+			environment = defaultEnvironment()
+		}
+		err := c.options.PrivateMaintenanceLauncher(launchContext, c.options.ControlOwnerExecutable, stateRoot, append([]string{}, environment...))
 		cancelLaunch()
 		if err != nil {
 			log.Printf("delegate: terminal supervisor cleanup owner deferred: %v", err)

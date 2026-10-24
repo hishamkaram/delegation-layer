@@ -75,7 +75,7 @@ func TestPendingCurrentNativeProfileReconstructsStaticAdmission(t *testing.T) {
 		Environment:            slices.Clone(admitted.Plan.Environment),
 		EnvironmentRecorded:    true,
 		Predicate:              admitted.Plan.Predicate,
-	})
+	}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func testNativeProfileReconstruction(t *testing.T) {
 	requireNativeProfile(t, nativeProfile)
 
 	nativeMeta := profileMeta(nativeProfile)
-	nativeReplayCandidate, err := PrepareExistingCandidate(request, nativeMeta)
+	nativeReplayCandidate, err := PrepareExistingCandidate(request, nativeMeta, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func testHistoricalProfileReconstruction(t *testing.T, storedPredicate task.Pred
 	request, now := profileReconstructionFixture(t)
 	legacyCandidate, err := PrepareExistingCandidate(request, task.MetaRecord{EffectiveConfig: task.EffectiveConfig{
 		Policy: &task.PolicyDetails{ProfileRevision: ProfileRevision},
-	}, Predicate: storedPredicate})
+	}, Predicate: storedPredicate}, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func profileReconstructionFixture(t *testing.T) (task.TaskRecord, time.Time) {
 
 func mustPrepareCandidate(t *testing.T, request task.TaskRecord) commonprovider.ProfileCandidate {
 	t.Helper()
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

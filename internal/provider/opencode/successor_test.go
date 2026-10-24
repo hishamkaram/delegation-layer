@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -30,7 +31,7 @@ func newSuccessorFixture(t *testing.T, mode string, dialect launchDialect) succe
 	request := profileRequest(mode)
 	request.CanonicalCwd = directory
 	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: testSession, PredecessorTaskID: successorPredecessorTask}
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestSuccessorOfRunPredecessorContinuesThroughACP(t *testing.T) {
 					predecessor := fixture.run
 					predecessor.Predicate = source
 					requireACPSuccessor(t, fixture.request, predecessor)
-					reconstructed, err := PrepareExistingCandidate(fixture.request, predecessor)
+					reconstructed, err := PrepareExistingCandidate(fixture.request, predecessor, os.Environ())
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -73,7 +74,7 @@ func TestSuccessorOfRunPredecessorContinuesThroughACP(t *testing.T) {
 // whose protocol resumes exactly the recorded session.
 func requireACPSuccessor(t *testing.T, request task.TaskRecord, predecessor task.MetaRecord) {
 	t.Helper()
-	candidate, err := PrepareSuccessorCandidate(request, predecessor)
+	candidate, err := PrepareSuccessorCandidate(request, predecessor, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestSuccessorOfRunPredecessorNeverOpensANewSession(t *testing.T) {
 	fixture := newSuccessorFixture(t, ModeReadOnly, dialectNativeV1)
 	request := fixture.request
 	request.PriorSession = nil
-	if _, err := PrepareSuccessorCandidate(request, fixture.run); !errors.Is(err, ErrUnsupportedProfile) {
+	if _, err := PrepareSuccessorCandidate(request, fixture.run, os.Environ()); !errors.Is(err, ErrUnsupportedProfile) {
 		t.Fatalf("successor without the recorded session error=%v", err)
 	}
 }
@@ -117,7 +118,7 @@ func TestSuccessorCandidateDoesNotModifyThePredecessorRecord(t *testing.T) {
 		before.Environment = slices.Clone(fixture.run.Environment)
 		policy := *fixture.run.EffectiveConfig.Policy
 		before.EffectiveConfig.Policy = &policy
-		if _, err := PrepareSuccessorCandidate(fixture.request, fixture.run); err != nil {
+		if _, err := PrepareSuccessorCandidate(fixture.request, fixture.run, os.Environ()); err != nil {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(before, fixture.run) {
@@ -171,8 +172,8 @@ func otherMode(mode string) string {
 
 func requireSameCandidateOutcome(t *testing.T, request task.TaskRecord, meta task.MetaRecord) {
 	t.Helper()
-	reconstructed, existingErr := PrepareExistingCandidate(request, meta)
-	successor, successorErr := PrepareSuccessorCandidate(request, meta)
+	reconstructed, existingErr := PrepareExistingCandidate(request, meta, os.Environ())
+	successor, successorErr := PrepareSuccessorCandidate(request, meta, os.Environ())
 	if (existingErr == nil) != (successorErr == nil) || (existingErr != nil && existingErr.Error() != successorErr.Error()) {
 		t.Fatalf("successor error=%v, reconstruction error=%v", successorErr, existingErr)
 	}
@@ -219,7 +220,7 @@ func TestACPV1RecordReconstructsV1AndItsSuccessorUsesV2(t *testing.T) {
 				policy := *predecessor.EffectiveConfig.Policy
 				before.EffectiveConfig.Policy = &policy
 				requireACPSuccessor(t, fixture.request, predecessor)
-				reconstructed, err := PrepareExistingCandidate(fixture.request, predecessor)
+				reconstructed, err := PrepareExistingCandidate(fixture.request, predecessor, os.Environ())
 				if err != nil {
 					t.Fatal(err)
 				}

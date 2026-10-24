@@ -418,7 +418,7 @@ func privateSupervisorDaemonDrift(root string, deps Dependencies) (bool, error) 
 }
 
 func supervisorControlOptions(deps Dependencies) pueue.Options {
-	options := deps.SupervisorOptions
+	options := deps.supervisorControlScope()
 	if options.ObservationTimeout == 0 {
 		options.ObservationTimeout = pueue.DefaultObservationTimeout
 	}

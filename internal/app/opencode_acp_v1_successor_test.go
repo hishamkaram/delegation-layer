@@ -112,7 +112,7 @@ func createOpenCodeACPV1Predecessor(t *testing.T, f *outputUpgradeFixture) {
 // production catalog's stored-predicate preparation of a fresh ACP admission.
 func openCodeACPV1Profile(t *testing.T, f *outputUpgradeFixture) PreparedProfile {
 	t.Helper()
-	fresh, err := f.deps.Catalog.Candidate(f.request)
+	fresh, err := f.deps.Catalog.Candidate(f.request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func openCodeACPV1Profile(t *testing.T, f *outputUpgradeFixture) PreparedProfile
 	}
 	seed := tasklifecycle.NewMeta(f.request, current, f.supervisor.Binding(), f.runner, task.RunnerOwnershipManaged, outputUpgradeBuild)
 	seed.Predicate = f.testCase.source
-	existing, err := f.deps.Catalog.ExistingCandidate(f.request, seed)
+	existing, err := f.deps.Catalog.ExistingCandidate(f.request, seed, os.Environ())
 	if err != nil {
 		t.Fatalf("stored acp-v1 candidate: %v", err)
 	}
@@ -255,8 +255,8 @@ func TestOpenCodeACPSuccessorRefusesAnUnknownACPPredicate(t *testing.T) {
 			for name, reference := range map[string]task.PredicateRef{"altered acp-v1 digest": altered, "other mode acp-v1": openCodeACPV1Reference(t, other)} {
 				record := f.meta
 				record.Predicate = reference
-				_, existingErr := f.deps.Catalog.ExistingCandidate(f.request, record)
-				_, successorErr := f.deps.Catalog.SuccessorCandidate(f.request, record)
+				_, existingErr := f.deps.Catalog.ExistingCandidate(f.request, record, os.Environ())
+				_, successorErr := f.deps.Catalog.SuccessorCandidate(f.request, record, os.Environ())
 				if existingErr == nil || successorErr == nil || existingErr.Error() != successorErr.Error() {
 					t.Fatalf("%s: successor error=%v, reconstruction error=%v, want the same refusal", name, successorErr, existingErr)
 				}

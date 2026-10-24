@@ -45,7 +45,9 @@ func NewDependenciesForExecutable(executable string) app.Dependencies {
 	deps := main.Dependencies()
 	prepare := deps.PrepareProfile
 	inspectionPath := filepath.Join(filepath.Dir(main.ConfigPath()), ConfigName)
-	deps.PrepareCandidate = func(request task.TaskRecord) (provider.ProfileCandidate, error) {
+	// The fixture owns its launch environment through the ordinary finite
+	// profile; the caller's selected environment must not replace it.
+	deps.PrepareCandidate = func(request task.TaskRecord, _ []string) (provider.ProfileCandidate, error) {
 		if prepare == nil {
 			return provider.ProfileCandidate{}, provider.ErrProfileUnavailable
 		}

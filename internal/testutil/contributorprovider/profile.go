@@ -35,8 +35,9 @@ type prepareDependencies struct {
 // PrepareCandidate performs static fixture preparation and describes the
 // shared supervised capability check. The provider executable is discovered
 // and fingerprinted here; its version and help output are observed by the
-// inspection worker immediately before launch.
-func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate, error) {
+// inspection worker immediately before launch. environment is the caller's
+// selected environment; it alone names the optional runtime directory override.
+func PrepareCandidate(request task.TaskRecord, environment []string) (commonprovider.ProfileCandidate, error) {
 	if err := validatePreparationRequest(request); err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -47,7 +48,7 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 	if err = validateStaticIdentity(identity); err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
-	runtimeDir, err := resolveRuntimeDirectory()
+	runtimeDir, err := resolveRuntimeDirectory(environment)
 	if err != nil {
 		return commonprovider.ProfileCandidate{}, err
 	}
@@ -86,8 +87,9 @@ func PrepareCandidate(request task.TaskRecord) (commonprovider.ProfileCandidate,
 
 // Prepare resolves the fixture executable and the explicitly configured
 // private runtime directory. It performs no process, supervisor,
-// authentication, or native-provider probe.
-func Prepare(request task.TaskRecord) (commonprovider.PreparedProfile, error) {
+// authentication, or native-provider probe. environment is the caller's
+// selected environment.
+func Prepare(request task.TaskRecord, environment []string) (commonprovider.PreparedProfile, error) {
 	identity, err := resolveRuntime(request.CanonicalCwd)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
@@ -96,7 +98,7 @@ func Prepare(request task.TaskRecord) (commonprovider.PreparedProfile, error) {
 	// acceptance composition use PrepareCandidate, whose finalizer receives the
 	// supervised CLI-reported version.
 	identity.Version = fixture.RuntimeVersion
-	runtimeDir, err := resolveRuntimeDirectory()
+	runtimeDir, err := resolveRuntimeDirectory(environment)
 	if err != nil {
 		return commonprovider.PreparedProfile{}, err
 	}
@@ -120,8 +122,8 @@ func resolveRuntime(directory string) (runtimeIdentity, error) {
 	return runtimeIdentity{Executable: cli.Path, SHA256: cli.SHA256}, nil
 }
 
-func resolveRuntimeDirectory() (string, error) {
-	raw := os.Getenv(contributorRuntimeEnvironment)
+func resolveRuntimeDirectory(environment []string) (string, error) {
+	raw := environmentValue(environment, contributorRuntimeEnvironment)
 	if raw == "" {
 		// The acceptance supervisor intentionally strips unrelated environment
 		// variables from queued workers. Derive the fixture runtime beside the
@@ -143,6 +145,18 @@ func resolveRuntimeDirectory() (string, error) {
 		return "", err
 	}
 	return raw, nil
+}
+
+// environmentValue returns the first entry for key, matching the first-wins
+// lookup of the process environment. A missing key reads as empty; it never
+// falls back to the process environment.
+func environmentValue(environment []string, key string) string {
+	for _, entry := range environment {
+		if name, value, found := strings.Cut(entry, "="); found && name == key {
+			return value
+		}
+	}
+	return ""
 }
 
 func prepareWithDependencies(request task.TaskRecord, dependencies prepareDependencies) (commonprovider.PreparedProfile, error) {

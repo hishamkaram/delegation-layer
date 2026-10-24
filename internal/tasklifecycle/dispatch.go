@@ -28,7 +28,7 @@ func Dispatch(request DispatchRequest, options DispatchOptions) (result Dispatch
 		return dispatchFailure(result, DispatchGenerateID, "generate-task-id", err)
 	}
 	result.TaskID = id
-	managed, managedCwd, workspaceErr := workspaces.PrepareDispatch(WorkspaceDispatchRequest(request), options.Workspace, store, id, cwd, brief)
+	managed, managedCwd, workspaceErr := workspaces.PrepareDispatch(WorkspaceDispatchRequest(request), options.workspaceOptions(), store, id, cwd, brief)
 	if managed != nil {
 		defer func() {
 			finished := managed.Finish(store, result.Err(), result.RecordPresence() == RecordCreated, admissioncore.RecoverInspectionLifetime)
@@ -45,7 +45,7 @@ func Dispatch(request DispatchRequest, options DispatchOptions) (result Dispatch
 	return dispatchPrepared(request, options, store, cwd, brief, result)
 }
 
-func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *taskdir.Store, cwd string, brief []byte, result DispatchResult) (returned DispatchResult) {
+func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *taskdir.Store, cwd string, brief []byte, result DispatchResult) DispatchResult {
 	var err error
 	request, result, err = resolveDispatchProvider(request, options, store, cwd, brief, result)
 	if err != nil {
@@ -65,7 +65,7 @@ func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *t
 	td, openErr := store.OpenTask(result.TaskID)
 	if openErr == nil {
 		result.Record = RecordCreated
-		existing := DispatchExisting(ExistingTaskOptions{Creation: options.Creation, Selection: request.Selection, RequestedBudget: request.Config.Budget, BriefPath: request.BriefPath, ApplyEnvironment: options.ApplyEnvironment}, store, td, base)
+		existing := DispatchExisting(ExistingTaskOptions{Creation: options.Creation, Selection: request.Selection, RequestedBudget: request.Config.Budget, BriefPath: request.BriefPath}, store, td, base)
 		result.Existing = &existing
 		return result
 	}
@@ -74,16 +74,11 @@ func dispatchPrepared(request DispatchRequest, options DispatchOptions, store *t
 		return dispatchFailure(result, DispatchOpenTask, "open-task-record", openErr)
 	}
 	result.Record = DispatchRecordLookup(request.TaskID, false, nil)
-	restoreEnvironment, restoreErr := dispatchContinuationEnvironment(options.ApplyEnvironment, store.Root, predecessorMeta, base.RequestedConfig.Interactive)
-	if restoreErr != nil {
-		return dispatchFailure(result, DispatchEnvironment, "apply-continuation-environment", restoreErr)
+	creation, selection, err := interactiveContinuationCreation(options.Creation, request.Selection, store.Root, predecessorMeta, base.RequestedConfig.Interactive)
+	if err != nil {
+		return dispatchFailure(result, DispatchEnvironment, "apply-continuation-environment", err)
 	}
-	defer func() {
-		if restoreEnvironment != nil {
-			returned.EnvironmentRestoreError = restoreEnvironment()
-		}
-	}()
-	created := CreateTask(request.Selection, options.Creation, store, base, brief, request.BriefPath)
+	created := CreateTask(selection, creation, store, base, brief, request.BriefPath)
 	result.Creation = &created
 	return result
 }

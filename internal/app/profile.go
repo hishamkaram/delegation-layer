@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -16,7 +18,8 @@ type (
 var ErrProfileUnavailable = commonprovider.ErrProfileUnavailable
 
 // NativeProfile is the compatibility entry point for callers that need the
-// production provider profile without constructing the app dependencies manually.
+// production provider profile without constructing the app dependencies
+// manually. As an entrypoint, it captures the caller's environment once.
 func NativeProfile(request task.TaskRecord) (PreparedProfile, error) {
-	return NativeCatalog().Prepare(request)
+	return NativeCatalog().Prepare(request, os.Environ())
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/hishamkaram/delegation-layer/internal/admission"
 	"github.com/hishamkaram/delegation-layer/internal/pueue"
+	supervisorcore "github.com/hishamkaram/delegation-layer/internal/supervisor"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 	"github.com/hishamkaram/delegation-layer/internal/taskdir"
 	"github.com/hishamkaram/delegation-layer/internal/tasklifecycle"
@@ -376,11 +377,11 @@ func rebootContinuationAdmission(t *testing.T, fixture *rebootFixture) (task.Tas
 		t.Fatal(err)
 	}
 	deps := rebootDependencies(t, fixture).normalized()
-	return request, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions), ApplyEnvironment: applySavedEnvironment}
+	return request, tasklifecycle.PredecessorOptions{Admission: staticAdmissionOptions(deps.withCapturedEnvironment()), Supervisor: supervisorAdmissionOptions(deps, deps.SupervisorOptions)}
 }
 
 func rebootSupervisorOptions(fixture *rebootFixture) tasklifecycle.SupervisorOptions {
-	return tasklifecycle.SupervisorOptions{Options: fixture.options, InitialExecutable: fixture.clientA, OpenStore: openNativeSupervisorStore}
+	return tasklifecycle.SupervisorOptions{Options: fixture.options, Lookup: supervisorcore.ExecutableLookup{InitialExecutable: fixture.clientA}, OpenStore: openNativeSupervisorStore}
 }
 
 // requireRebootSuccessorBusy proves the predecessor session claim is retained.

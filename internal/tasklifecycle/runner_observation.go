@@ -17,7 +17,7 @@ func ReconcileRunner(ctx context.Context, root string, response *Observation, td
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}
-	client, err = supervisorcore.NewClient(ctx, root, submit.Supervisor, options.Options, true, options.InitialExecutable, options.OpenStore)
+	client, err = supervisorcore.NewClient(ctx, root, submit.Supervisor, options.Options, true, options.Lookup, options.OpenStore)
 	if err != nil {
 		return nil, pueue.Observation{}, err
 	}

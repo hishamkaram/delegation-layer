@@ -40,6 +40,10 @@ func DefaultEnvironment() []string {
 	return control.DefaultEnvironment()
 }
 
+func DefaultEnvironmentFrom(environment []string) []string {
+	return control.DefaultEnvironmentFrom(environment)
+}
+
 func ParseConfig(data []byte) (*Config, error) {
 	return control.ParseConfig(data)
 }

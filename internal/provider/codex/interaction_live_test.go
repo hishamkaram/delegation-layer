@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func interactiveRequest(t *testing.T, mode string) (task.TaskRecord, time.Time, 
 	request.Mode = mode
 	request.RequestedConfig.Permission = mode
 	request.RequestedConfig.Interactive = true
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,7 @@ func TestContinuationLiveCaptureResumesPriorThreadAndKeepsIdentityStrict(t *test
 	request, now := profileReconstructionFixture(t)
 	request.RequestedConfig.Interactive = true
 	request.PriorSession = &task.PriorSession{Provider: Provider, ConversationID: testThreadID, PredecessorTaskID: testTaskID}
-	candidate, err := PrepareCandidate(request)
+	candidate, err := PrepareCandidate(request, os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +228,7 @@ func TestSavedInteractiveTasksReconstructTheirOwnRevision(t *testing.T) {
 		for _, revision := range interactionRevisions {
 			meta := profileMeta(fresh)
 			meta.Predicate = revision.reference(mode)
-			candidate, err := PrepareExistingCandidate(request, meta)
+			candidate, err := PrepareExistingCandidate(request, meta, os.Environ())
 			if err != nil {
 				t.Fatalf("%s revision %d: %v", mode, revision, err)
 			}
@@ -246,7 +247,7 @@ func TestSavedInteractiveTasksReconstructTheirOwnRevision(t *testing.T) {
 		}
 		meta := profileMeta(fresh)
 		meta.Predicate = interactionReference(otherMode(mode))
-		if _, err := PrepareExistingCandidate(request, meta); !errors.Is(err, ErrUnsupportedProfile) {
+		if _, err := PrepareExistingCandidate(request, meta, os.Environ()); !errors.Is(err, ErrUnsupportedProfile) {
 			t.Fatalf("interactive predicate of another mode was reused: %v", err)
 		}
 	}

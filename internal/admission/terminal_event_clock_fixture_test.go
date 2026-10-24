@@ -104,7 +104,7 @@ func newTerminalEventClockSupervisor(t *testing.T) terminalEventClockSupervisor 
 	// The fixture's idempotent outside Close owns cleanup when setup fails
 	// before the bubble starts; afterwards it observes an already closed client.
 	client, statusCalls, unfilteredStatusCalls := admissionfixture.NewTerminalEventInspectionSupervisorWithObserver(
-		t, store, TerminalEvidence{}, func(context.Context, string, string) error {
+		t, store, TerminalEvidence{}, func(context.Context, string, string, []string) error {
 			launches.Add(1)
 			return nil
 		}, commands.observe,

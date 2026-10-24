@@ -22,6 +22,11 @@ on:
         required: false
         default: ''
         type: string
+      prove_candidate_installs:
+        description: 'With build_candidate, prove the candidate on disposable hosted runners through each install channel'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -352,6 +357,8 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
+    outputs:
+      candidate-locator: ${{ steps.locator.outputs.locator }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -407,6 +414,7 @@ jobs:
           overwrite: false
 
       - name: Encode the external candidate locator
+        id: locator
         env:
           ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}
           ARTIFACT_DIGEST: ${{ steps.candidate.outputs.artifact-digest }}
@@ -420,6 +428,7 @@ jobs:
             --artifact-digest "${ARTIFACT_DIGEST}" \
             --manifest "${RUNNER_TEMP}/candidate-payload/candidate-manifest.json" \
             --output "${RUNNER_TEMP}/candidate-locator/candidate-locator.json"
+          printf 'locator=%s\n' "$(cat "${RUNNER_TEMP}/candidate-locator/candidate-locator.json")" >> "${GITHUB_OUTPUT}"
           {
             echo '### Development candidate locator'
             echo '```json'
@@ -443,5 +452,108 @@ jobs:
           name: development-candidate-build-receipt-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/candidate-build-receipt.json
           if-no-files-found: ignore
+          retention-days: 90
+          overwrite: false
+
+  development-candidate-install:
+    name: Candidate install proof (${{ matrix.os }}, ${{ matrix.channel }})
+    needs: development-candidate
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' && inputs.build_candidate &&
+      inputs.prove_candidate_installs && github.ref_type == 'branch' &&
+      github.ref != 'refs/heads/main' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+        channel: [shell, npm, homebrew]
+        include:
+          - os: ubuntu-24.04
+            host_os: Linux
+            host_arch: amd64
+          - os: macos-15
+            host_os: Darwin
+            host_arch: arm64
+    steps:
+      - name: Checkout the source commit the candidate was built from
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.x'
+
+      - name: Require the intended native platform
+        env:
+          EXPECTED_OS: ${{ matrix.host_os }}
+          EXPECTED_ARCH: ${{ matrix.host_arch }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+
+          sys.path.insert(0, os.environ["GITHUB_WORKSPACE"])
+          from scripts.delegate_acceptance.release_verification.assets import platform_identity
+
+          observed = platform_identity()
+          print(f"observed {observed['os']} {observed['arch']} kernel {observed['kernel']}")
+          expected = (os.environ["EXPECTED_OS"], os.environ["EXPECTED_ARCH"])
+          if (observed["os"], observed["arch"]) != expected:
+              sys.exit(f"intended {expected[0]} {expected[1]}, observed {observed['os']} {observed['arch']}")
+          PY
+
+      - name: Expose the preinstalled Linux Homebrew
+        if: ${{ matrix.host_os == 'Linux' && matrix.channel == 'homebrew' }}
+        run: |
+          brew_bin=/home/linuxbrew/.linuxbrew/bin
+          test -x "${brew_bin}/brew"
+          echo "${brew_bin}" >> "${GITHUB_PATH}"
+
+      - name: Write the producer's candidate locator
+        env:
+          CANDIDATE_LOCATOR: ${{ needs.development-candidate.outputs.candidate-locator }}
+        run: |
+          if [ -z "${CANDIDATE_LOCATOR}" ]; then
+            echo '::error::the development-candidate job published no candidate locator'
+            exit 1
+          fi
+          mkdir "${RUNNER_TEMP}/candidate-install-input"
+          printf '%s\n' "${CANDIDATE_LOCATOR}" > "${RUNNER_TEMP}/candidate-install-input/candidate-locator.json"
+
+      - name: Prove the candidate install through the channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ matrix.channel }}
+        run: >-
+          python3 scripts/prove_candidate_install.py
+          --locator "${RUNNER_TEMP}/candidate-install-input/candidate-locator.json"
+          --channel "${CHANNEL}"
+          --output-dir "${RUNNER_TEMP}/candidate-install-proof"
+          --github-auth environment
+
+      - name: Retain the install proof evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: candidate-install-${{ matrix.os }}-${{ matrix.channel }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/candidate-install-proof/receipt.json
+            ${{ runner.temp }}/candidate-install-proof/install-proof.json
+            ${{ runner.temp }}/candidate-install-proof/install-witness.json
+          if-no-files-found: warn
           retention-days: 90
           overwrite: false

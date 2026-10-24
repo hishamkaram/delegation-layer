@@ -28,7 +28,7 @@ func cancel(a Arguments, deps Dependencies) (result commandResult) {
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
-	observed, err := tasklifecycle.Cancel(root, td, deps.SupervisorOptions, deps.InitialSupervisorExecutable, newSupervisorControlClient)
+	observed, err := tasklifecycle.Cancel(root, td, deps.supervisorControlScope(), deps.supervisorLookup(), newSupervisorControlClient)
 	fillInspection(&response, observed.Inspection)
 	if observed.Stop != nil {
 		stop := stopOutcomeResponse(*observed.Stop)
