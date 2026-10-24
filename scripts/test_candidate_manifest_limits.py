@@ -209,14 +209,19 @@ class ConsumerBoundaryTests(unittest.TestCase):
 
     def test_installer_refuses_a_candidate_file_past_its_kind_limit_before_any_effect(self):
         archive = sparse(self.root / "archive.tar.gz", 1)
+        sparse(self.root / "install.sh", 1)
         for role, kind in (("package", ArtifactKind.NPM_PACKAGE), ("checksums", ArtifactKind.CHECKSUMS),
                            ("formula", ArtifactKind.HOMEBREW_FORMULA)):
             with self.subTest(role=role):
                 path = sparse(self.root / f"{role}.bin", entry_limit(kind) + 1)
                 request = self.install_request(archive=archive, **{role: path})
-                error = refused_code(self, verify_candidate_install, request, ports=Mock(),
+                ports = Mock()
+                probe = Mock(side_effect=AssertionError("bootstrap must not run"))
+                error = refused_code(self, verify_candidate_install, request, ports=ports, probe=probe,
                                      receipt={}, layout=Mock(), info={}, channels=(CHANNEL_SHELL,))
                 self.assertEqual((error.code, error.stage), ("candidate_file_invalid", "bounded-read"))
+                probe.assert_not_called()
+                self.assertEqual(ports.mock_calls, [])
 
 
 if __name__ == "__main__":

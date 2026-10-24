@@ -1164,6 +1164,15 @@ component test results as supporting evidence. This sequencing preserves the
 full approved scope and never authorizes hiding gaps, weakening checks or
 deferring requirements without authorization.
 
+A change to a shared Python callable's signature or required options
+inventories its direct and indirect consumers, tests included, through imports,
+aliases, attribute references and callbacks passed to helpers, not only through
+the changed file paths; an unchanged test module that hands the callable to a
+helper is a consumer. Focused test groups selected by file name support
+iteration but never replace the integrated gate: before the next candidate
+build, Root runs the existing `make test-python` on the complete combined
+post-image.
+
 ### Evidence status is not approval
 
 These statuses are separate, and each needs its own evidence:
