@@ -12,6 +12,7 @@ from collections.abc import Iterator
 import contextlib
 from contextlib import contextmanager
 from dataclasses import replace
+import errno
 import io
 import json
 from pathlib import Path
@@ -27,7 +28,9 @@ from scripts.acceptance_tests.release_fixture import FixtureTree, open_descripto
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.processes import operations
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
-from scripts.delegate_acceptance.release_verification import candidate_build, candidate_build_finalize, commands
+from scripts.delegate_acceptance.release_verification import (
+    candidate_build, candidate_build_finalize, commands, filesystem,
+)
 from scripts.delegate_acceptance.release_verification.candidate_build import BuildPaths, build_candidate
 from scripts.delegate_acceptance.release_verification.candidate_build_plan import BuildRequest
 from scripts.delegate_acceptance.release_verification.candidate_manifest import expected_inventory
@@ -132,6 +135,21 @@ class InProcessCase(unittest.TestCase):
             return True
 
         return patch.object(DirectoryOwner, "rollback", autospec=True, side_effect=rollback)
+
+    @contextmanager
+    def fail_receipt_replace(self, paths: BuildPaths) -> Iterator[list[str]]:
+        """Fail the real terminal receipt's atomic replace with ENOSPC; every other replace runs."""
+        real = filesystem.os.replace
+        refused: list[str] = []
+
+        def replace_file(source, destination, *arguments, **keywords):
+            if Path(destination) == paths.receipt_path:
+                refused.append(Path(source).name)
+                raise OSError(errno.ENOSPC, "fixture receipt device full")
+            return real(source, destination, *arguments, **keywords)
+
+        with patch.object(filesystem.os, "replace", side_effect=replace_file):
+            yield refused
 
     def receipt_of(self, paths: BuildPaths) -> dict:
         return json.loads(paths.receipt_path.read_text())
@@ -284,6 +302,40 @@ class SettlementFaultTests(InProcessCase):
         self.assertEqual(caught.exception.code, "command_start_failed")
         self.assertEqual(caught.exception.__notes__, ["build receipt was not written: receipt_too_large"])
         self.assertFalse(paths.work_dir.exists())
+
+    def test_receipt_os_error_after_success_is_an_explicit_receipt_failure(self):
+        paths = self.attempt("receipt-os-fault")
+        before = open_descriptors()
+        with self.fail_receipt_replace(paths) as refused:
+            with self.assertRaises((VerificationError, OSError)) as caught:
+                self.build_in_process(paths)
+        self.assertIsInstance(caught.exception, VerificationError)
+        self.assertEqual(caught.exception.code, "build_receipt_unwritable")
+        self.assertEqual(caught.exception.__notes__,
+                         ["build receipt was not written: build_receipt_write_failed"])
+        self.assertEqual(len(refused), 1)
+        self.assertEqual(self.observed_codes(), [None, None])
+        self.assertEqual(open_descriptors(), before)
+        self.assertEqual(self.names(paths.receipt_path.parent), ["payload"])
+
+    def test_receipt_os_error_after_a_primary_failure_is_only_a_note(self):
+        paths = self.attempt("receipt-os-and-build-fault")
+        before = open_descriptors()
+        with self.stop_command(RENDERER, CommandFailure("command_timeout")):
+            with self.fail_receipt_replace(paths) as refused:
+                with self.assertRaises((VerificationError, OSError)) as caught:
+                    self.build_in_process(paths)
+        self.assertIsInstance(caught.exception, VerificationError)
+        self.assertEqual(caught.exception.code, "command_timeout")
+        self.assertEqual(caught.exception.__notes__,
+                         ["build receipt was not written: build_receipt_write_failed"])
+        self.assertEqual(len(refused), 1)
+        first = caught.exception
+        self.assertEqual((self.case.unresolved, self.outer.unresolved), (first, first))
+        self.assertEqual(open_descriptors(), before)
+        self.assertEqual(self.names(paths.receipt_path.parent), ["payload", "work"])
+        self.assertEqual(self.names(paths.output_dir), BEFORE_RENDER)
+        self.assertTrue((paths.work_dir / "clone" / ".git").is_dir())
 
     def test_aliasing_receipts_are_refused_before_any_directory_is_created(self):
         paths = self.attempt("alias")

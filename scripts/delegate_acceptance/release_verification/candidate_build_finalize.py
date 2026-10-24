@@ -22,6 +22,7 @@ from .published_contract import UNRESOLVED_OWNERSHIP_CODES
 
 
 UNEXPECTED_ERROR_CODE = "build_unexpected_error"
+RECEIPT_WRITE_FAILED_CODE = "build_receipt_write_failed"
 
 
 @dataclass(frozen=True)
@@ -63,10 +64,13 @@ def _record_outcome(receipt: dict, failure: BaseException | None, cleanup_failed
 
 
 def _write_terminal_receipt(receipt: dict, receipt_path: Path) -> VerificationError | None:
+    """Write the receipt once; a refusal keeps its code and a raw I/O failure becomes ours."""
     try:
         write_receipt(receipt_path, receipt)
     except VerificationError as error:
         return error
+    except OSError:
+        return VerificationError(RECEIPT_WRITE_FAILED_CODE, STAGE)
     return None
 
 
