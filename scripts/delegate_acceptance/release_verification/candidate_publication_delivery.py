@@ -57,7 +57,7 @@ from ..evidence.digests import sha
 from .assets import remember_directory
 from .candidate_artifact import CandidateArtifact, load_candidate_artifact
 from .candidate_build_source import child_environment
-from .candidate_github_delivery import prepare_release_assets, publish_prepared_release
+from .candidate_github_delivery import prepare_release_assets, publish_prepared_release, release_notes_endpoint
 from .candidate_merge_observation import observe_publication_source, observe_required_checks
 from .candidate_npm_delivery import deliver_npm
 from .candidate_publication_contract import CandidatePromotion, encode_promotion
@@ -115,6 +115,10 @@ NPM_USER_CONFIG = f"//{NPM_REGISTRY.removeprefix('https://')}:_authToken=${{{NPM
 
 # Request methods that change GitHub state; the transport records each request before it runs.
 MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+# The one POST that writes nothing: GitHub's release-notes generation for this repository.
+READ_ONLY_POST = release_notes_endpoint(PRODUCTION_STORE.repository)
 
 
 _DECIMAL_RE = re.compile(r"^[1-9][0-9]{0,17}$")
@@ -203,13 +207,16 @@ def first_mutation_started(receipt: dict) -> bool:
     """Whether any destination write was attempted, from the receipt's own command records.
 
     Both command owners append a record before the child runs, so a write that
-    failed or never acknowledged still counts as started.
+    failed or never acknowledged still counts as started. Only the exact
+    ``READ_ONLY_POST`` request is a read; its record keeps its real method.
     """
     for record in receipt["commands"]:
         if not isinstance(record, dict):
             raise VerificationError("receipt_commands_invalid", STAGE)
         argv = record.get("argv")
-        if record.get("name") == "github-api" and record.get("method") in MUTATING_METHODS:
+        method = record.get("method")
+        if (record.get("name") == "github-api" and method in MUTATING_METHODS
+                and (method, record.get("endpoint")) != ("POST", READ_ONLY_POST)):
             return True
         if isinstance(argv, list) and (argv[:3] == ["gh", "release", "upload"] or (
                 len(argv) > 1 and isinstance(argv[0], str) and Path(argv[0]).name == "npm"

@@ -34,6 +34,20 @@ def interrupted_user_stop_status(response):
     }
 
 
+def pending_user_stop_status(response):
+    """Return the exact `status --json` shape a macOS CI run reported before the queue ended.
+
+    Canonical closure is already proven, so the projection is interrupted, but
+    the exact user stop is not yet terminated and the queue is still running.
+    """
+    status = interrupted_user_stop_status(response)
+    return {
+        **status, "liveness": "running",
+        "supervisor": {"matched": True, "state": "running", "numeric_task_id": 0},
+        "stops": [{**status["stops"][0], "observed_state": "", "terminated": False}],
+    }
+
+
 class EndedTaskObservationTests(unittest.TestCase):
     def setUp(self):
         super().setUp()
@@ -258,3 +272,117 @@ class EndedTaskObservationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "expected user stop request"):
                     self.await_ended(self.response(), expected_user_stop=expected)
                 read.assert_not_called()
+
+    def test_pending_user_interruption_is_polled_until_its_documented_end(self):
+        response = self.response()
+        pending = pending_user_stop_status(response)
+        ended = interrupted_user_stop_status(response)
+        with patch.object(admission_impl, "read_created_task_status", side_effect=[pending, ended]) as read, \
+                patch.object(private_cli.time, "sleep") as sleep:
+            returned, evidence = self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+        self.assertIs(returned, ended)
+        self.assertEqual(evidence, {
+            "kind": "queue-ended-observation",
+            "final_receipt": "status-001.json",
+            "poll_receipts": ["status-000.json", "status-001.json"],
+            "poll_count": 2,
+        })
+        self.assertEqual(
+            [call.args[4].name for call in read.call_args_list],
+            ["status-000.json", "status-001.json"],
+        )
+        sleep.assert_called_once()
+
+        # A caller that did not request this exact user stop, including the
+        # budget proof, still treats the pending interruption as a failure.
+        with patch.object(admission_impl, "read_created_task_status", return_value=pending) as read, \
+                patch.object(private_cli.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "operational failure"):
+                self.await_ended(response)
+        read.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_persistent_pending_user_interruption_times_out_with_fake_clock(self):
+        response = self.response()
+        now = [0.0]
+
+        def monotonic():
+            return now[0]
+
+        def advance_to_deadline(_duration):
+            now[0] = 5.0
+
+        with patch.object(admission_impl, "read_created_task_status",
+                          return_value=pending_user_stop_status(response)) as read, \
+                patch.object(private_cli.time, "monotonic", side_effect=monotonic), \
+                patch.object(private_cli.time, "sleep", side_effect=advance_to_deadline) as sleep:
+            with self.assertRaisesRegex(TimeoutError, "queue status remained non-ended"):
+                self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+        read.assert_called_once()
+        sleep.assert_called_once()
+
+    def test_pending_user_interruption_fails_unless_the_queue_ends_as_documented(self):
+        response = self.response()
+        pending = pending_user_stop_status(response)
+        ended = interrupted_user_stop_status(response)
+        failure = ended["failure"]
+        cases = (
+            ("ended not terminated", {"stops": [{**ended["stops"][0], "terminated": False}]}),
+            ("budget raced", {"status": "timed_out", "failure": {**failure, "code": "task_cancelled"}}),
+            ("outcome", {"outcome": {"state": "committed"}}),
+            ("pending publication", {"pending": {"kind": "publication"}}),
+        )
+        for label, changes in cases:
+            with self.subTest(label=label), \
+                    patch.object(admission_impl, "read_created_task_status",
+                                 side_effect=[pending, {**ended, **changes}]) as read, \
+                    patch.object(private_cli.time, "sleep") as sleep:
+                with self.assertRaisesRegex(RuntimeError, "operational failure"):
+                    self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+                self.assertEqual(read.call_count, 2)
+                sleep.assert_called_once()
+
+    def test_user_interruption_binding_faults_fail_pending_and_ended_without_another_poll(self):
+        response = self.response()
+        for state, status in (
+            ("pending", pending_user_stop_status(response)),
+            ("ended", interrupted_user_stop_status(response)),
+        ):
+            row = status["stops"][0]
+            continuation = status["continuation"]
+            budget_row = {
+                "request_id": "budget", "cause": "budget", "requested": True,
+                "observed_state": row["observed_state"], "terminated": row["terminated"],
+            }
+            cases = (
+                ("checkpoint mode", {"continuation": {**continuation, "mode": "checkpoint"}}),
+                ("no mode", {"continuation": {k: v for k, v in continuation.items() if k != "mode"}}),
+                ("additional budget row", {"stops": [row, budget_row]}),
+                ("duplicate exact row", {"stops": [row, dict(row)]}),
+                ("malformed stop row", {"stops": [row, "stop"]}),
+                ("malformed stops", {"stops": {"0": row}}),
+                ("other predecessor", {"continuation": {**continuation, "predecessor_task_id": "b" * 32}}),
+                ("operational error", {"error": "supervisor unavailable"}),
+            )
+            for label, changes in cases:
+                with self.subTest(state=state, label=label), \
+                        patch.object(admission_impl, "read_created_task_status",
+                                     return_value={**status, **changes}) as read, \
+                        patch.object(private_cli.time, "sleep") as sleep:
+                    with self.assertRaisesRegex(RuntimeError, "operational failure"):
+                        self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+                    read.assert_called_once()
+                    sleep.assert_not_called()
+
+            identities = (
+                ("other root", "read_created_task_status", {**status, "root_id": "s" * 32}, "different root"),
+                ("other task", "run_json", {**status, "task_id": "b" * 32}, "different task"),
+            )
+            for label, target, observed, message in identities:
+                with self.subTest(state=state, label=label), \
+                        patch.object(admission_impl, target, return_value=observed) as read, \
+                        patch.object(private_cli.time, "sleep") as sleep:
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+                    read.assert_called_once()
+                    sleep.assert_not_called()

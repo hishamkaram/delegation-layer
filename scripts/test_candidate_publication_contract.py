@@ -21,8 +21,9 @@ from scripts.delegate_acceptance.release_verification.candidate_manifest import 
 )
 from scripts.delegate_acceptance.release_verification.candidate_publication_contract import (
     MAX_REFERENCE_BYTES, Absent, CandidatePromotion, CandidateReference, Delivery, ObservedRelease,
-    ReleaseAsset, TapFormula, decide_npm, decide_release, decide_tap, encode_promotion, encode_reference,
-    npm_package, parse_reference, release_body, require_latest_delivery,
+    VERIFICATION_SUMMARY, ReleaseAsset, TapFormula, decide_npm, decide_release, decide_tap, encode_promotion,
+    encode_reference, npm_package, parse_reference, release_body, release_body_matches, release_text,
+    require_latest_delivery, verification_block,
 )
 from scripts.delegate_acceptance.release_verification.candidate_readiness import (
     BoundCandidate, PublicationSource, publication_source,
@@ -99,6 +100,106 @@ def release(*names: str, draft: bool = True, digests: dict[str, str] | None = No
     return ObservedRelease(tag=tag, target_commit=target, draft=draft, prerelease=prerelease,
                            assets=tuple(ReleaseAsset(name=name, sha256=expected[name]) for name in names),
                            body=release_body(promotion_for(files)) if body is None else body)
+
+
+# The public v0.1.37 release body as published, then after its maintainers added readable notes;
+# their SHA-256 digests are the archived page readback's and the edit verification's ``notes_sha256``.
+V37_CANONICAL = (
+    "Development candidate promotion\n"
+    "\n"
+    "Promotion predicate (canonical JSON):\n"
+    "{\"candidate_id\":\"46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab70ca2fc6\",\"freeze\":{\"co"
+    "mmit\":\"374ecfa90f9e2e312f11901c635ae836c092e217\",\"record_sha256\":\"60a59852ca236f095f04569a25a737"
+    "d028fec6b4031f7b129300966c5206913c\"},\"kind\":\"delegation-layer-candidate-promotion\",\"locator\":{\"a"
+    "rtifact_archive_sha256\":\"3f526432ae337c2a73578c5f0175d12bb69b0935af0e954b0bba6d6c14319319\",\"arti"
+    "fact_id\":12556412583,\"manifest_sha256\":\"46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab"
+    "70ca2fc6\",\"repository\":\"hishamkaram/delegation-layer\",\"run_attempt\":1,\"run_id\":40084104373},\"mer"
+    "ged\":{\"commit\":\"2bf74534e51cee82cc8b6de6df03032e5eabbcce\",\"tree\":\"304b0f9a70e129703f5a7f4e486ec7"
+    "554860bcc6\"},\"original_build\":{\"base_commit\":\"95277e06024fce0135af6bb8b9d3e722837effb3\",\"commit\""
+    ":\"4391ad3dfbd9a33d1562ca8b0c358b487972ab85\",\"tree\":\"304b0f9a70e129703f5a7f4e486ec7554860bcc6\"},\""
+    "schema_version\":1}\n"
+    "\n"
+    "Payload SHA-256 digests:\n"
+    "46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab70ca2fc6  candidate-manifest.json\n"
+    "4b26d7e43b37f591a7b730fba81cd0636aec8648c216e652b9a90cb3fc8d2d47  checksums.txt\n"
+    "b490041f008ec5d0f0fb1f9a09cb38fb8d16eb6e936c43e46a0da2b863e97294  delegation-layer-0.1.37.tgz\n"
+    "f18ca9dfdef4cb322e52b75d59d2556a36df99145125415e9cb034f9935dfea6  delegation-layer.rb\n"
+    "f9ac83009d936c21d0af94fa57689e53dcd22ea1855d71bf3d075eed8ac49084  delegation-layer_0.1.37_Darwin"
+    "_amd64.tar.gz\n"
+    "6f3c9fea154bb8d7a4df2440b63fe5152ef6b01913572cad25d5928dbf79f9f2  delegation-layer_0.1.37_Darwin"
+    "_arm64.tar.gz\n"
+    "617e7733125b927a1d7f8151d72de49997c7baad24dce5deff01ae69e7a952f4  delegation-layer_0.1.37_Linux_"
+    "amd64.tar.gz\n"
+    "1ef5197aec80a21e143a42add23547d86bfa0170b3a9e6ca72d20884a7311e5d  delegation-layer_0.1.37_Linux_"
+    "arm64.tar.gz"
+)
+
+
+V37_PUBLIC = (
+    "This maintenance release improves release verification, installation checks, and agent guidance."
+    "\n"
+    "\n"
+    "## What changed\n"
+    "\n"
+    "- **Verify before publishing:** build an immutable candidate and test it during development, the"
+    "n publish those same verified files.\n"
+    "- **Test real installations:** shell, npm, and Homebrew checks now run a task through the instal"
+    "led CLI, runner, and bundled supervisor on Linux and macOS.\n"
+    "- **Require development readiness:** source-bound test, installation, and review evidence is che"
+    "cked before merging and publishing.\n"
+    "- **Recover partial publications safely:** confirm existing GitHub, npm, and Homebrew content an"
+    "d complete only the missing delivery steps.\n"
+    "- **Clearer agent and contributor guidance:** distinguish setup blockers, test results, evidence"
+    ", and review approval, with focused skill evaluation cases.\n"
+    "- **Read-only evidence checks:** verify handoff indexes against their recorded source and files "
+    "without rewriting them.\n"
+    "\n"
+    "Implemented in [#101](https://github.com/hishamkaram/delegation-layer/pull/101).\n"
+    "\n"
+    "**Full changelog:** [v0.1.36…v0.1.37](https://github.com/hishamkaram/delegation-layer/compare/v0"
+    ".1.36...v0.1.37)\n"
+    "\n"
+    "<details>\n"
+    "<summary>Build verification details</summary>\n"
+    "\n"
+    "```text\n"
+    "Development candidate promotion\n"
+    "\n"
+    "Promotion predicate (canonical JSON):\n"
+    "{\"candidate_id\":\"46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab70ca2fc6\",\"freeze\":{\"co"
+    "mmit\":\"374ecfa90f9e2e312f11901c635ae836c092e217\",\"record_sha256\":\"60a59852ca236f095f04569a25a737"
+    "d028fec6b4031f7b129300966c5206913c\"},\"kind\":\"delegation-layer-candidate-promotion\",\"locator\":{\"a"
+    "rtifact_archive_sha256\":\"3f526432ae337c2a73578c5f0175d12bb69b0935af0e954b0bba6d6c14319319\",\"arti"
+    "fact_id\":12556412583,\"manifest_sha256\":\"46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab"
+    "70ca2fc6\",\"repository\":\"hishamkaram/delegation-layer\",\"run_attempt\":1,\"run_id\":40084104373},\"mer"
+    "ged\":{\"commit\":\"2bf74534e51cee82cc8b6de6df03032e5eabbcce\",\"tree\":\"304b0f9a70e129703f5a7f4e486ec7"
+    "554860bcc6\"},\"original_build\":{\"base_commit\":\"95277e06024fce0135af6bb8b9d3e722837effb3\",\"commit\""
+    ":\"4391ad3dfbd9a33d1562ca8b0c358b487972ab85\",\"tree\":\"304b0f9a70e129703f5a7f4e486ec7554860bcc6\"},\""
+    "schema_version\":1}\n"
+    "\n"
+    "Payload SHA-256 digests:\n"
+    "46c6ef444a1a00ef03ee6a4979c8a6e05d01524f1c3004759d070eab70ca2fc6  candidate-manifest.json\n"
+    "4b26d7e43b37f591a7b730fba81cd0636aec8648c216e652b9a90cb3fc8d2d47  checksums.txt\n"
+    "b490041f008ec5d0f0fb1f9a09cb38fb8d16eb6e936c43e46a0da2b863e97294  delegation-layer-0.1.37.tgz\n"
+    "f18ca9dfdef4cb322e52b75d59d2556a36df99145125415e9cb034f9935dfea6  delegation-layer.rb\n"
+    "f9ac83009d936c21d0af94fa57689e53dcd22ea1855d71bf3d075eed8ac49084  delegation-layer_0.1.37_Darwin"
+    "_amd64.tar.gz\n"
+    "6f3c9fea154bb8d7a4df2440b63fe5152ef6b01913572cad25d5928dbf79f9f2  delegation-layer_0.1.37_Darwin"
+    "_arm64.tar.gz\n"
+    "617e7733125b927a1d7f8151d72de49997c7baad24dce5deff01ae69e7a952f4  delegation-layer_0.1.37_Linux_"
+    "amd64.tar.gz\n"
+    "1ef5197aec80a21e143a42add23547d86bfa0170b3a9e6ca72d20884a7311e5d  delegation-layer_0.1.37_Linux_"
+    "arm64.tar.gz\n"
+    "```\n"
+    "\n"
+    "</details>\n"
+)
+
+
+V37_CANONICAL_SHA256 = "c6d20f56976dc850947c2c036628447f5e42191bceb1e793667f19154c8dbae3"
+
+
+V37_PUBLIC_SHA256 = "dbe1b0211b25f11aaac6362fae02cf576ddeff9e64391d16fbc900f057e0f6b9"
 
 
 class ContractCase(unittest.TestCase):
@@ -248,6 +349,67 @@ class ReleaseBodyTests(ContractCase):
         self.assertNotEqual(release_body(changed), release_body(promotion_for()))
 
 
+class VerificationBlockTests(ContractCase):
+    CANONICAL = release_body(promotion_for())
+    BLOCK = verification_block(CANONICAL)
+    NOTES = "## What's Changed\n* Promote by @maintainer in #101\n"
+
+    def test_block_holds_the_exact_canonical_body_in_the_collapsed_wrapper(self):
+        self.assertEqual(self.BLOCK, "<details>\n<summary>Build verification details</summary>\n\n```text\n"
+                         + self.CANONICAL + "\n```\n\n</details>\n")
+        composed = release_text(self.NOTES, promotion_for())
+        self.assertEqual(composed, self.NOTES.rstrip() + "\n\n" + self.BLOCK)
+        self.assertTrue(release_body_matches(composed, self.CANONICAL))
+
+    def test_legacy_body_and_any_human_prefix_before_one_exact_block_match(self):
+        for body in (self.CANONICAL, "Notes\n" + self.BLOCK, "Edited\r\nnotes\r\n\r\n" + self.BLOCK,
+                     "  # Title\n\n- one\n\n" + self.BLOCK):
+            with self.subTest(body=body[:12]):
+                self.assertTrue(release_body_matches(body, self.CANONICAL))
+
+    def test_the_corrected_public_v0_1_37_page_matches_its_published_canonical_body(self):
+        self.assertEqual((sha(V37_CANONICAL.encode()), sha(V37_PUBLIC.encode())),
+                         (V37_CANONICAL_SHA256, V37_PUBLIC_SHA256))
+        self.assertTrue(release_body_matches(V37_CANONICAL, V37_CANONICAL))
+        self.assertTrue(release_body_matches(V37_PUBLIC, V37_CANONICAL))
+        self.assertFalse(release_body_matches(V37_PUBLIC, self.CANONICAL))
+        self.assertFalse(release_body_matches(V37_PUBLIC.replace("4b26d7e4", "4b26d7e5"), V37_CANONICAL))
+
+    def test_tampered_missing_truncated_duplicate_or_trailing_blocks_are_refused(self):
+        other = release_body(promotion_for(payload_files(**{TGZ: b"other\n"})))
+        digest = self.CANONICAL.split("\n")[6][:64]
+        prefix = "Notes\n\n"
+        bodies = {
+            "missing": prefix.rstrip(), "block_only": self.BLOCK, "blank_prefix": " \n\t\n" + self.BLOCK,
+            "other_candidate": prefix + verification_block(other),
+            "one_digest": prefix + self.BLOCK.replace(digest, "8" * 64),
+            "missing_final_newline": prefix + self.BLOCK.removesuffix("\n"),
+            "truncated_footer": prefix + self.BLOCK.removesuffix("</details>\n"),
+            "duplicate_opener": prefix + self.BLOCK + self.BLOCK,
+            "duplicate_crlf_opener": f"<details>\r\n{VERIFICATION_SUMMARY}\r\n\r\n" + prefix + self.BLOCK,
+            "text_after_footer": prefix + self.BLOCK + "more\n",
+            "newline_after_footer": prefix + self.BLOCK + "\n",
+            "bad_boundary": "Notes" + self.BLOCK,
+            "verification_crlf": prefix + self.BLOCK.replace("\n", "\r\n"),
+            "canonical_crlf": prefix + verification_block(self.CANONICAL.replace("\n", "\r\n")),
+            "legacy_newline": self.CANONICAL + "\n",
+            "other_summary": prefix + self.BLOCK.replace("Build verification", "Build Verification"),
+            "other_fence": prefix + self.BLOCK.replace("```text", "```json"),
+        }
+        for label, body in bodies.items():
+            with self.subTest(body=label):
+                self.assertFalse(release_body_matches(body, self.CANONICAL))
+                self.assertCode("candidate_release_body_mismatch", decide_release, promotion=promotion_for(),
+                                observed=release(*payload_paths(VERSION), body=body), resume_published=False)
+
+    def test_untrusted_notes_must_be_non_blank_text_without_the_reserved_summary(self):
+        for notes in (None, 7, b"notes", "", " \r\n\t", f"x\n{VERIFICATION_SUMMARY}\n"):
+            with self.subTest(notes=notes):
+                self.assertCode("candidate_release_notes_invalid", release_text, notes, promotion_for())
+        composed = release_text("Line\r\nnext\r\n\r\n", promotion_for())
+        self.assertEqual(composed, "Line\r\nnext\n\n" + self.BLOCK)
+
+
 class ReleaseDecisionTests(ContractCase):
     PROMOTION = promotion_for()
     ALL = payload_paths(VERSION)
@@ -321,6 +483,14 @@ class ReleaseDecisionTests(ContractCase):
                     with self.subTest(draft=draft, resume_published=resume, body=label):
                         self.assertCode("candidate_release_body_mismatch", self.decide,
                                         release(*self.ALL, draft=draft, body=body), resume_published=resume)
+
+    def test_composed_body_is_accepted_for_draft_and_published(self):
+        composed = release_text("Notes\r\n", self.PROMOTION)
+        self.assertEqual(self.decide(release(*self.ALL[1:], body=composed)).upload, self.ALL[:1])
+        for resume in (False, True):
+            with self.subTest(resume_published=resume):
+                self.assertTrue(self.decide(release(*self.ALL, draft=False, body=composed),
+                                            resume_published=resume).complete)
 
     def test_identity_and_target_refusals_precede_the_body_check(self):
         self.assertCode("candidate_release_identity_mismatch", self.decide,

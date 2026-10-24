@@ -91,8 +91,9 @@ def await_created_task_ended(
     """Poll one created task until the queue reports ended, without resubmitting it.
 
     `expected_user_stop` names the exact user stop request this caller made.
-    Only then is its documented ended interruption accepted as queue ended;
-    every other failure stays an operational failure.
+    Only then is its documented interruption recognized instead of failing:
+    a running interruption is polled again until the deadline, and only an
+    ended one returns. Every other failure stays an operational failure.
     """
     if expected_user_stop is not None and (not isinstance(expected_user_stop, str) or not expected_user_stop):
         raise ValueError("expected user stop request must be a non-empty string: %r" % (expected_user_stop,))
@@ -125,7 +126,6 @@ def await_created_task_ended(
         liveness = status.get("liveness")
         expected_interruption = (
             bool(failure)
-            and liveness == "ended"
             and expected_user_stop is not None
             and is_documented_user_interruption(status, task_id, root_id, expected_user_stop)
         )

@@ -452,6 +452,16 @@ write access to `hishamkaram/homebrew-tap`. The workflow's
 `release-promotion` concurrency group queues runs (`queue: max`) and never
 cancels one in progress, so publications across all tags are serialized.
 
+Only when it creates the draft does the job ask GitHub to generate release
+notes, a read-only request that saves nothing, for the merged commit since the
+latest release it just checked. The draft is titled with its tag. Its body is
+those notes followed by a collapsed **Build verification details** block that
+holds the exact canonical promotion text. The notes are presentation only:
+maintainers may edit them on GitHub, but the block must stay byte-exact and
+last. A release whose block differs, or with text after it, is refused and
+never rewritten. A release holding only the canonical text, as before notes
+existed, is still accepted. Existing drafts and releases are never regenerated.
+
 Exit `0` is `PUBLISHED`: the hosted report passed its validator with exact
 bindings and the local receipt is finalized. Exit `2` is `BLOCKED`: nothing was
 dispatched, or the hosted run failed before any mutation. Exit `3` is

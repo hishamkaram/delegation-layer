@@ -17,31 +17,44 @@ def default_stop_status_row(status, request_id):
 
 
 def is_documented_user_interruption(status, task_id, root_id, request_id):
-    """Report whether an ended status is the documented result of this exact user stop.
+    """Recognize a status observation as the documented interruption of this exact user stop.
 
     The documented user-stop projection is `interrupted`/`task_interrupted` with
-    `stop_and_report` guidance and no resume offer. `timed_out`/`task_cancelled`
-    means a budget stop also fired, which invalidates a user-only control. The
-    decision only ends queue observation; it never implies provider success.
+    `stop_and_report` guidance and no native resume offer. Canonical closure
+    can project it while the queue is still `running`, before the exact stop is
+    terminated; afterwards the queue is `ended` and the stop is terminated. No
+    other liveness/termination pair is recognized. `timed_out`/`task_cancelled`
+    or any budget stop row means a budget stop also fired, which invalidates a
+    user-only control. Recognition only lets queue observation proceed; it never
+    implies the queue ended, completion, or provider success.
     """
-    row = _exact_stop_row(status, request_id)
+    rows = status.get("stops")
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        return False
+    exact_rows = [row for row in rows if row.get("request_id") == request_id]
+    if len(exact_rows) != 1 or any(row.get("cause") == "budget" for row in rows):
+        return False
+    row = exact_rows[0]
+    liveness = status.get("liveness")
     continuation = status.get("continuation")
     failure = status.get("failure")
     pending = status.get("pending")
     return (
         status.get("task_id") == task_id
         and status.get("root_id") == root_id
-        and status.get("liveness") == "ended"
+        and (
+            (liveness == "running" and row.get("terminated") is False)
+            or (liveness == "ended" and row.get("terminated") is True)
+        )
         and status.get("status") == "interrupted"
         and status.get("publication") == "unknown"
         and "outcome" not in status
         and "error" not in status
         and (pending is None or (isinstance(pending, dict) and pending.get("kind") == "supervisor-command"))
-        and isinstance(row, dict)
         and row.get("cause") == "user"
         and row.get("requested") is True
-        and row.get("terminated") is True
         and isinstance(continuation, dict)
+        and continuation.get("mode") == "native"
         and continuation.get("predecessor_task_id") == task_id
         and continuation.get("resumable") is False
         and "continue_command" not in continuation

@@ -352,6 +352,17 @@ class RunBindingTests(unittest.TestCase):
         for argv in (["gh", "release", "upload", "v1", "x"], ["/opt/node/bin/npm", "publish", "x.tgz"]):
             self.assertTrue(delivery.first_mutation_started({"commands": [{"name": "c", "argv": argv}]}))
 
+    def test_only_the_exact_notes_generation_post_is_a_read(self):
+        notes = f"repos/{PRODUCTION_STORE.repository}/releases/generate-notes"
+        self.assertFalse(delivery.first_mutation_started(
+            {"commands": [{"name": "github-api", "endpoint": notes, "method": "POST"}]}))
+        for endpoint, method in ((notes, "PUT"), (notes, "PATCH"), (notes + "/x", "POST"),
+                                 (f"repos/{PRODUCTION_STORE.repository}/releases", "POST"),
+                                 ("repos/other/delegation-layer/releases/generate-notes", "POST"), (None, "POST")):
+            with self.subTest(endpoint=endpoint, method=method):
+                self.assertTrue(delivery.first_mutation_started(
+                    {"commands": [{"name": "github-api", "endpoint": endpoint, "method": method}]}))
+
 
 class CliTests(unittest.TestCase):
     def test_malformed_inputs_or_run_refuse_before_any_effect(self):
@@ -593,6 +604,20 @@ class ResumeEdgeTests(DeliveryCase):
         # The npm package installs the exact version from the public release, so npm never starts before it.
         self.assertTrue(self.github_at_npm)
         self.assertEqual(set(self.github_at_npm), {(False, True, True)})
+
+    def test_a_failed_notes_generation_is_not_a_started_mutation(self):
+        self.normal_over_older_latest()
+        self.edit(lambda state: state.update(notes=None))
+        self.assertEqual(self.run_resume(NPM_TOKEN=SECRETS["NPM_TOKEN"]), 1)
+        binding = ReportBinding.of(self.value, run_id=7001, run_attempt=1)
+        failure = require_failed(self.receipt_value(), binding=binding, promotion=self.promotion)
+        self.assertEqual((failure.code, failure.first_mutation_started), ("github_request_failed", False))
+        notes = f"repos/{REPOSITORY}/releases/generate-notes"
+        self.assertIn({"endpoint": notes, "method": "POST"},
+                      [{key: record.get(key) for key in ("endpoint", "method")}
+                       for record in self.receipt_value()["commands"]])
+        self.assertEqual((self.mutations(), self.uploads, self.npm_keys(), self.tap_calls),
+                         ([f"POST {notes}"], [], [], []))
 
     def test_a_failed_or_unknown_github_publication_stops_before_npm_or_tap(self):
         patch_key = f"PATCH repos/{REPOSITORY}/releases/"

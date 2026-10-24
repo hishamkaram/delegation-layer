@@ -19,16 +19,20 @@ from scripts.delegate_acceptance.release_verification.candidate_github_delivery 
     PreparedRelease, prepare_release_assets,
 )
 from scripts.delegate_acceptance.release_verification.candidate_manifest import MANIFEST_PATH, payload_paths
-from scripts.delegate_acceptance.release_verification.candidate_publication_contract import release_body
+from scripts.delegate_acceptance.release_verification.candidate_publication_contract import (
+    VERIFICATION_SUMMARY, release_body, release_text,
+)
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.test_candidate_artifact_support import REPOSITORY, VERSION, manifest_bytes, payload_files
 from scripts.test_candidate_github_delivery_support import (
-    MERGED, OTHER, PAYLOAD_DIRECTORY, TAG, DeliveryCase, Fault, artifact, promotion,
+    MERGED, NOTES, OTHER, PAYLOAD_DIRECTORY, TAG, DeliveryCase, Fault, artifact, promotion,
 )
 
 
 NAMES = payload_paths(VERSION)
 CREATE = f"POST repos/{REPOSITORY}/releases"
+# The read-only notes generation; it saves nothing on GitHub.
+GENERATE = f"POST repos/{REPOSITORY}/releases/generate-notes"
 TAG_REFS = f"GET repos/{REPOSITORY}/git/matching-refs/tags/{TAG}"
 CREATE_REF = f"POST repos/{REPOSITORY}/git/refs"
 UPLOAD = f"UPLOAD {TAG}"
@@ -46,11 +50,16 @@ class PreparationTests(DeliveryCase):
     def test_first_preparation_creates_one_exact_draft_and_uploads_each_basename(self):
         before = {path.name: path.read_bytes() for path in self.payload.iterdir()}
         prepared = self.prepare()
-        self.assertEqual(self.mutations(), [CREATE, *([UPLOAD] * len(NAMES))])
+        self.assertEqual(self.mutations(), [GENERATE, CREATE, *([UPLOAD] * len(NAMES))])
+        generate = next(entry for entry in self.log() if entry["key"] == GENERATE)
+        # With no published release there is no previous tag to pin.
+        self.assertEqual(generate["body"], {"tag_name": TAG, "target_commitish": MERGED})
         create = next(entry for entry in self.log() if entry["key"] == CREATE)
-        self.assertEqual(create["body"], {"tag_name": TAG, "target_commitish": MERGED, "draft": True,
-                                          "prerelease": False, "body": release_body(self.promotion)})
-        self.assertEqual(prepared.observed.body, release_body(self.promotion))
+        body = release_text(NOTES, self.promotion)
+        self.assertEqual(create["body"], {"tag_name": TAG, "target_commitish": MERGED, "name": TAG,
+                                          "draft": True, "prerelease": False, "body": body})
+        self.assertTrue(body.startswith(NOTES.rstrip() + "\n\n<details>\n"))
+        self.assertEqual(prepared.observed.body, body)
         self.assertEqual([argv for argv, _cwd in self.uploads],
                          [["gh", "release", "upload", TAG, name, "--repo", REPOSITORY] for name in NAMES])
         self.assertEqual({cwd for _argv, cwd in self.uploads}, {self.payload})
@@ -62,7 +71,8 @@ class PreparationTests(DeliveryCase):
         self.assertEqual({asset.name: asset.sha256 for asset in prepared.observed.assets},
                          {name: self.expected_digest(name) for name in NAMES})
         self.assertEqual({path.name: path.read_bytes() for path in self.payload.iterdir()}, before)
-        self.assertEqual(sorted(path.name for path in self.bodies.iterdir()), ["release-draft.json"])
+        self.assertEqual(sorted(path.name for path in self.bodies.iterdir()),
+                         ["release-draft.json", "release-notes.json"])
 
     def test_partial_draft_uploads_only_missing_files(self):
         present = NAMES[:3]
@@ -216,23 +226,30 @@ class ReleaseBodyTests(DeliveryCase):
         self.assertEqual(self.mutations(), [])
 
     def test_draft_acknowledgement_with_another_body_stops_without_retry(self):
-        self.fault(Fault(CREATE, output=self.ack(body="rewritten"), exit=0, apply=True))
-        self.refused("candidate_release_ack_invalid", self.prepare)
-        self.assertEqual(self.mutations(), [CREATE])
-        self.assertEqual(self.log()[-1]["key"], CREATE)
+        # The legacy machine-only body is not the composed body this draft was created with.
+        for body in ("rewritten", release_body(self.promotion)):
+            with self.subTest(body=body[:20]):
+                self.edit(lambda state: state["releases"].clear())
+                for path in self.bodies.iterdir():
+                    path.unlink()
+                calls = len(self.mutations())
+                self.fault(Fault(CREATE, output=self.ack(body=body), exit=0, apply=True))
+                self.refused("candidate_release_ack_invalid", self.prepare)
+                self.assertEqual(self.mutations()[calls:], [GENERATE, CREATE])
+                self.assertEqual(self.log()[-1]["key"], CREATE)
         (self.bodies / "release-draft.json").unlink()
         self.prepare()
-        self.assertEqual(self.mutations(), [CREATE, *([UPLOAD] * len(NAMES))])
+        self.assertEqual(self.mutations()[4:], [*([UPLOAD] * len(NAMES))])
 
     def test_body_lost_after_an_exact_draft_acknowledgement_is_refused_not_prepared(self):
         self.edit(lambda state: state.update(rewrite_body=""))
         self.refused("candidate_release_body_mismatch", self.prepare)
-        self.assertEqual(self.mutations(), [CREATE])
+        self.assertEqual(self.mutations(), [GENERATE, CREATE])
         self.assertEqual(self.state()["releases"][0]["body"], "")
         for body in self.bodies.iterdir():
             body.unlink()
         self.refused("candidate_release_body_mismatch", self.prepare)
-        self.assertEqual(self.mutations(), [CREATE])
+        self.assertEqual(self.mutations(), [GENERATE, CREATE])
 
     def test_publication_acknowledgement_with_another_body_stops_after_one_call(self):
         prepared = self.prepare()
@@ -242,6 +259,48 @@ class ReleaseBodyTests(DeliveryCase):
         self.refused("candidate_release_ack_invalid", self.publish, prepared)
         self.assertEqual(self.mutations()[-2:], [CREATE_REF, patch_key])
         self.assertEqual(self.log()[-1]["key"], patch_key)
+
+    def test_failed_or_malformed_notes_generation_stops_before_any_write(self):
+        def reply(**changes) -> str:
+            value = {"name": TAG, "body": NOTES, **changes}
+            return json.dumps({key: item for key, item in value.items() if item is not ...})
+
+        cases = (
+            ("github_request_failed", Fault(GENERATE)),
+            ("github_request_failed", Fault(GENERATE, output='{"message":"Not Found","status":"404"}')),
+            ("github_response_invalid", Fault(GENERATE, output="not json", exit=0)),
+            *(("candidate_release_notes_invalid", Fault(GENERATE, output=output, exit=0)) for output in (
+                "[]", reply(name=...), reply(name=7), reply(body=...), reply(body=None), reply(body=7),
+                reply(body=""), reply(body=" \r\n\t"), reply(body=f"x\n{VERIFICATION_SUMMARY}\n"))),
+        )
+        for code, fault in cases:
+            with self.subTest(code=code, output=fault.output):
+                for path in self.bodies.iterdir():
+                    path.unlink()
+                calls = len(self.mutations())
+                self.fault(fault)
+                self.refused(code, self.prepare)
+                self.assertEqual(self.mutations()[calls:], [GENERATE])
+                self.assertEqual((self.state()["releases"], self.state()["refs"], self.uploads), ([], {}, []))
+                self.assertFalse((self.bodies / "release-draft.json").exists())
+
+    def test_existing_composed_release_is_accepted_and_never_regenerated(self):
+        composed = "Edited notes\r\n\r\n" + release_text(NOTES, self.promotion).removeprefix(NOTES.rstrip())
+        self.seed_release(draft=True, names=NAMES[:2], body=composed)
+        prepared = self.prepare()
+        self.assertEqual((prepared.observed.body, self.mutations()), (composed, [UPLOAD] * (len(NAMES) - 2)))
+        patch_key = f"PATCH repos/{REPOSITORY}/releases/{prepared.release_id}"
+        # Publication acknowledges the body it read and accepted, never the recomputed legacy text.
+        self.fault(Fault(patch_key, output=self.ack(id=prepared.release_id, draft=False,
+                                                    body=release_body(self.promotion)), exit=0, apply=True))
+        self.refused("candidate_release_ack_invalid", self.publish, prepared)
+        (self.bodies / "release-publish.json").unlink()
+        published = self.publish(prepared)
+        self.assertEqual((published.observed.draft, published.observed.body), (False, composed))
+        for resume in (False, True):
+            self.assertEqual(self.prepare(resume_published=resume).observed.body, composed)
+        self.assertNotIn(GENERATE, [entry["key"] for entry in self.log()])
+        self.assertEqual(self.state()["releases"][0]["body"], composed)
 
     def test_body_lost_after_an_exact_publication_acknowledgement_is_refused_not_published(self):
         prepared = self.prepare()
@@ -312,7 +371,7 @@ class MutationAcknowledgementTests(DeliveryCase):
                 calls = len(self.log())
                 self.refused(code, self.prepare)
                 self.assertEqual([entry["key"] for entry in self.log()[calls:]][-1], CREATE)
-        self.assertEqual(self.mutations(), [CREATE, CREATE])
+        self.assertEqual(self.mutations(), [GENERATE, CREATE, GENERATE, CREATE])
         for body in self.bodies.iterdir():
             body.unlink()
         self.prepare()
@@ -331,7 +390,10 @@ class MutationAcknowledgementTests(DeliveryCase):
     def test_existing_draft_body_path_is_never_reused(self):
         (self.bodies / "release-draft.json").write_bytes(b"{}")
         self.refused("github_request_body_path_invalid", self.prepare)
-        self.assertEqual(self.mutations(), [])
+        self.assertEqual(self.mutations(), [GENERATE])
+        (self.bodies / "release-draft.json").unlink()
+        self.refused("github_request_body_path_invalid", self.prepare)
+        self.assertEqual((self.mutations(), self.state()["releases"]), ([GENERATE], []))
 
     def test_unknown_tag_or_publish_acknowledgement_stops_after_one_call(self):
         prepared = self.prepare()
@@ -413,7 +475,7 @@ class LatestGuardTests(DeliveryCase):
 
     def assertDelivered(self, *, latest_reads: int) -> None:
         self.publish(self.prepare())
-        self.assertEqual(self.writes(), [CREATE, *([UPLOAD] * len(NAMES)), CREATE_REF, self.patch_key])
+        self.assertEqual(self.writes(), [GENERATE, CREATE, *([UPLOAD] * len(NAMES)), CREATE_REF, self.patch_key])
         self.assertEqual((self.state()["latest"], self.latest_reads()), (CREATED, latest_reads))
 
     def test_without_a_published_release_the_complete_listing_is_absence(self):
@@ -435,11 +497,15 @@ class LatestGuardTests(DeliveryCase):
                                      self.seed_other("v0.1.36", latest=True)),
             "numeric order": lambda: self.seed_other("v0.1.9", latest=True),
         }
-        for name, arrange in arrangements.items():
+        for (name, arrange), previous in zip(arrangements.items(), ("v0.1.36", "v0.1.9")):
             with self.subTest(name=name):
                 self.fresh()
                 arrange()
                 self.assertDelivered(latest_reads=2)
+                # The notes range starts at the latest tag the guard checked, pinned explicitly.
+                generate = next(entry for entry in self.log()[self.since:] if entry["key"] == GENERATE)
+                self.assertEqual(generate["body"], {"tag_name": TAG, "target_commitish": MERGED,
+                                                    "previous_tag_name": previous})
 
     def test_a_partial_draft_under_an_older_latest_uploads_only_missing_files(self):
         self.seed_other("v0.1.36", latest=True)
@@ -575,8 +641,8 @@ class KnownReleaseTests(DeliveryCase):
         prepared = self.prepare()
         observe = [TAG_REFS, LIST, by_id(CREATED), f"{by_id(CREATED)}/assets?per_page=100&page=1"]
         # The second listing is the latest guard's own complete inventory, which holds no published release.
-        self.assertEqual(self.keys(), [TAG_REFS, LIST, LIST, CREATE, *observe, *([UPLOAD] * len(NAMES)),
-                                       *observe])
+        self.assertEqual(self.keys(), [TAG_REFS, LIST, LIST, GENERATE, CREATE, *observe,
+                                       *([UPLOAD] * len(NAMES)), *observe])
         self.assertEqual(prepared.release_id, CREATED)
         self.assertEqual({asset.name: asset.sha256 for asset in prepared.observed.assets},
                          {name: self.expected_digest(name) for name in NAMES})
@@ -588,7 +654,7 @@ class KnownReleaseTests(DeliveryCase):
 
         prepared = self.prepare(before_upload=hide)
         self.assertEqual(prepared.release_id, CREATED)
-        self.assertEqual(self.mutations(), [CREATE, *([UPLOAD] * len(NAMES))])
+        self.assertEqual(self.mutations(), [GENERATE, CREATE, *([UPLOAD] * len(NAMES))])
         self.assertEqual(len(prepared.observed.assets), len(NAMES))
 
     def test_listing_lag_around_publication_is_confirmed_by_id(self):
@@ -638,7 +704,7 @@ class KnownReleaseTests(DeliveryCase):
                 self.refused(code, self.prepare)
                 keys = self.keys(calls)
                 self.assertIn(by_id(CREATED), keys)
-                self.assertEqual([key for key in keys if key.startswith(("POST", "UPLOAD"))], [CREATE])
+                self.assertEqual([key for key in keys if key.startswith(("POST", "UPLOAD"))], [GENERATE, CREATE])
 
     def test_failed_read_by_id_never_adopts_the_listed_release(self):
         original = self.state()
@@ -651,7 +717,7 @@ class KnownReleaseTests(DeliveryCase):
                 keys = self.keys(calls)
                 # Discovery, the latest guard's inventory and the confirmation each list once.
                 self.assertEqual((keys[-1], keys.count(LIST)), (by_id(CREATED), 3))
-                self.assertEqual([key for key in keys if key.startswith(("POST", "UPLOAD"))], [CREATE])
+                self.assertEqual([key for key in keys if key.startswith(("POST", "UPLOAD"))], [GENERATE, CREATE])
 
     def test_failed_read_by_id_stops_publication_before_any_write(self):
         prepared = self.prepare()
@@ -683,7 +749,7 @@ class KnownReleaseTests(DeliveryCase):
                 self.refused(code, self.prepare)
                 keys = self.keys(calls)
                 self.assertNotIn(by_id(CREATED), keys)
-                self.assertEqual([key for key in keys if key.startswith(("POST", "UPLOAD"))], [CREATE])
+                self.assertEqual([key for key in keys if key.startswith(("POST", "UPLOAD"))], [GENERATE, CREATE])
 
 
 class UnprovenClosureRetentionTests(DeliveryCase):
@@ -697,7 +763,7 @@ class UnprovenClosureRetentionTests(DeliveryCase):
 
         raised = self.refused("command_timeout", self.prepare, before_upload=fail)
         self.assertEqual(len(self.uploads), 1)
-        self.assert_retained(raised, injected, [CREATE])
+        self.assert_retained(raised, injected, [GENERATE, CREATE])
 
     def test_unproven_tag_resolution_in_preparation_retains_the_tree(self):
         self.edit(lambda state: state["refs"].update({f"refs/tags/{TAG}": {"type": "commit", "sha": MERGED}}))
@@ -719,7 +785,7 @@ class UnprovenClosureRetentionTests(DeliveryCase):
         with patch.object(support, "command", upload_fault), self.assertRaises(BoundedCommandError) as caught:
             self.prepare()
         self.assertEqual(len(self.uploads), 1)
-        self.assert_retained(caught.exception, injected, [CREATE])
+        self.assert_retained(caught.exception, injected, [GENERATE, CREATE])
 
     def test_unproven_tag_resolution_after_ref_creation_retains_the_tree(self):
         prepared = self.prepare()
@@ -760,7 +826,7 @@ class LocalPayloadTests(DeliveryCase):
                     sink.write(b"!")
 
         self.refused("candidate_delivery_payload_mismatch", self.prepare, before_upload=change_next)
-        self.assertEqual(self.mutations(), [CREATE, UPLOAD])
+        self.assertEqual(self.mutations(), [GENERATE, CREATE, UPLOAD])
 
     def test_noncanonical_overlapping_or_foreign_directories_refuse_before_any_request(self):
         link = self.tree.root / "linked"

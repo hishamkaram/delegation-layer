@@ -14,9 +14,17 @@ the release is read by that ID: a complete listing may not show it yet, but a
 listing naming another release with the tag still stops. A mutation whose
 command fails or whose acknowledgement is not the exact expected reply stops
 the invocation: nothing is retried and no success is inferred from a later
-read. A later explicit invocation observes again from the start. The release
-body is the canonical ``release_body`` text; it is written only when the draft
-is created, and a release holding any other body is refused, never rewritten.
+read. A later explicit invocation observes again from the start.
+
+The release text is presentation, never authorization. Only when it creates an
+absent draft does this edge ask GitHub to generate human release notes: a
+read-only request that saves nothing, sent after every guard and before any
+write, for the exact merged commit since the latest release that guard just
+checked. The draft, titled with its tag, holds those notes and then the exact
+``verification_block``. An existing draft or release keeps its text: it is
+never regenerated or rewritten, and ``decide_release`` refuses any body that
+``release_body_matches`` does not accept. Publication must acknowledge the
+body just read and accepted.
 
 This edge owns GitHub's latest-release observation; ``require_latest_delivery``
 owns the version order. Right after each ``decide_release`` before the first
@@ -41,7 +49,7 @@ from .assets import resolve_release_identity
 from .candidate_artifact import CandidateArtifact
 from .candidate_manifest import MANIFEST_PATH, PAYLOAD_MEMBER_COUNT, encode_manifest
 from .candidate_publication_contract import (
-    Absent, CandidatePromotion, ObservedRelease, ReleaseAsset, decide_release, release_body,
+    Absent, CandidatePromotion, ObservedRelease, ReleaseAsset, decide_release, release_text,
     require_latest_delivery,
 )
 from .contract import HEX_SHA256, VerificationError
@@ -91,7 +99,6 @@ class _Target:
     tag: str
     merged_commit: str
     files: Mapping[str, tuple[int, str]]
-    body: str
 
 
 @dataclass(frozen=True)
@@ -111,11 +118,12 @@ def prepare_release_assets(promotion: CandidatePromotion, artifact: CandidateArt
     _require_artifact(promotion, artifact, target, work_directory)
     remote = _observe(client, target)
     plan = decide_release(promotion=promotion, observed=remote.release, resume_published=resume_published)
-    _require_latest(client, target, published=plan.complete)
+    latest = _require_latest(client, target, published=plan.complete)
     if plan.complete:
         return _prepared(remote)
     if plan.create_draft:
-        created = _create_draft(client, target, work_directory)
+        body = release_text(_release_notes(client, target, latest, work_directory), promotion)
+        created = _create_draft(client, target, body, work_directory)
         remote = _observe_known(client, target, created, conflict="candidate_release_draft_unconfirmed")
         plan = decide_release(promotion=promotion, observed=remote.release,
                               resume_published=resume_published)
@@ -154,7 +162,7 @@ def publish_prepared_release(promotion: CandidatePromotion, prepared: PreparedRe
         f"repos/{target.repo}/releases/{prepared.release_id}", {"draft": False, "make_latest": "true"},
         method="PATCH", body_path=work_directory / "release-publish.json"),
         {"id": prepared.release_id, "tag_name": target.tag, "draft": False, "prerelease": False,
-         "body": target.body})
+         "body": _prepared(remote).observed.body})
     final = _observe_known(client, target, prepared.release_id,
                            conflict="candidate_release_publish_unconfirmed")
     plan = decide_release(promotion=promotion, observed=final.release, resume_published=resume_published)
@@ -170,8 +178,7 @@ def _target(promotion: CandidatePromotion) -> _Target:
     files = {entry.path: (entry.size, entry.sha256) for entry in candidate.manifest.artifacts}
     files[MANIFEST_PATH] = (len(encode_manifest(candidate.manifest)), candidate.locator.manifest_sha256)
     return _Target(repo=candidate.locator.repository, version=candidate.manifest.version,
-                   tag=candidate.manifest.build_tag, merged_commit=promotion.source.merged_commit, files=files,
-                   body=release_body(promotion))
+                   tag=candidate.manifest.build_tag, merged_commit=promotion.source.merged_commit, files=files)
 
 
 def _canonical_directory(path: Path) -> None:
@@ -254,11 +261,12 @@ def _observe_known(client: GitHubClient, target: _Target, release_id: int, *, co
     return _observed(client, target, row, tag_commit)
 
 
-def _require_latest(client: GitHubClient, target: _Target, *, published: bool) -> None:
+def _require_latest(client: GitHubClient, target: _Target, *, published: bool) -> str | Absent:
     """Refuse unless the target advances GitHub's latest release, or, ``published``, already is it.
 
     ``published`` is ``decide_release``'s complete matching published release. The
     whole listing is read before any decision, so a late page fault still refuses.
+    Return the checked latest tag, or ``Absent.ABSENT`` when no release is published.
     """
     stable = False
     for value in iter_releases(client, target.repo):
@@ -268,6 +276,7 @@ def _require_latest(client: GitHubClient, target: _Target, *, published: bool) -
             raise VerificationError("candidate_github_latest_invalid", STAGE)
         stable = stable or not (draft or prerelease)
     latest: str | Absent = Absent.ABSENT
+    latest_tag: str | Absent = Absent.ABSENT
     if stable:
         row = object_value(client.json(f"repos/{target.repo}/releases/latest", limit=MAX_RELEASE_PAGE_BYTES),
                            STAGE)
@@ -275,8 +284,9 @@ def _require_latest(client: GitHubClient, target: _Target, *, published: bool) -
         if (row.get("draft") is not False or row.get("prerelease") is not False or type(tag) is not str
                 or not tag.startswith("v")):
             raise VerificationError("candidate_github_latest_invalid", STAGE)
-        latest = tag[1:]
+        latest_tag, latest = tag, tag[1:]
     require_latest_delivery(version=target.version, latest_version=latest, resume_published=published)
+    return latest_tag
 
 
 def _release_not_found(error: VerificationError) -> bool:
@@ -368,9 +378,30 @@ def _acknowledged(reply: object, expected: Mapping[str, object]) -> int:
     return identifier
 
 
-def _create_draft(client: GitHubClient, target: _Target, work_directory: Path) -> int:
+def release_notes_endpoint(repo: str) -> str:
+    """GitHub's generate-notes endpoint: a POST that only returns generated text and saves nothing."""
+    return f"repos/{repo}/releases/generate-notes"
+
+
+def _release_notes(client: GitHubClient, target: _Target, previous: str | Absent, work_directory: Path) -> object:
+    """Generate notes for the merged commit since ``previous``, the latest tag the guard just checked.
+
+    The range is pinned explicitly; it is left to GitHub only when no release is
+    published. The reply is untrusted; ``release_text`` validates its body.
+    """
+    request: dict[str, object] = {"tag_name": target.tag, "target_commitish": target.merged_commit}
+    if previous is not Absent.ABSENT:
+        request["previous_tag_name"] = previous
+    reply = client.json_body(release_notes_endpoint(target.repo), request, method="POST",
+                             body_path=work_directory / "release-notes.json", limit=MAX_RELEASE_PAGE_BYTES)
+    if not isinstance(reply, dict) or type(reply.get("name")) is not str:
+        raise VerificationError("candidate_release_notes_invalid", STAGE)
+    return reply.get("body")
+
+
+def _create_draft(client: GitHubClient, target: _Target, body: str, work_directory: Path) -> int:
     request: dict[str, object] = {"tag_name": target.tag, "target_commitish": target.merged_commit,
-                                  "draft": True, "prerelease": False, "body": target.body}
+                                  "name": target.tag, "draft": True, "prerelease": False, "body": body}
     reply = client.json_body(f"repos/{target.repo}/releases", request, method="POST",
                              body_path=work_directory / "release-draft.json")
     return _acknowledged(reply, request)
