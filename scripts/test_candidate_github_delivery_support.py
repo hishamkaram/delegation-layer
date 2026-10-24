@@ -13,7 +13,9 @@ to model a listing that lags behind a created draft; a set ``release_fill``
 fills every listing page with other tags once any release exists. GitHub's
 latest release is the explicit ``latest`` ID, never derived from the listing or
 from versions: ``releases/latest`` answers that row, or not found when unset, and
-only a release write with ``make_latest`` ``"true"`` moves it.
+only a release write with ``make_latest`` ``"true"`` moves it. The read-only
+``generate-notes`` request answers ``notes`` as the body for the requested tag
+and changes no state; a ``None`` ``notes`` answers not found.
 Nothing touches the network or a provider.
 """
 
@@ -58,6 +60,8 @@ from scripts.test_release_github_transport import ObservedGitHubClient
 
 
 TAG = "v" + VERSION
+# GitHub-generated release notes as the fixture answers them; trailing whitespace is presentation.
+NOTES = "## What's Changed\r\n* Promote the candidate by @maintainer in #101\r\n\n"
 MERGED = "e5" * 20
 OTHER = "d4" * 20
 # Parent components a shell or ``gh``'s ``file#label`` syntax would misread.
@@ -137,6 +141,9 @@ def get(endpoint):
 
 def write(method, endpoint, body):
     base = "repos/" + repo + "/"
+    if method == "POST" and endpoint == base + "releases/generate-notes":
+        notes = state["notes"]
+        return None if notes is None else {"name": body["tag_name"], "body": notes}
     if method == "POST" and endpoint == base + "releases":
         state["next_id"] += 1
         row = {"id": state["next_id"], "assets": [], **body}
@@ -191,7 +198,8 @@ else:
     else:
         act = lambda: get(endpoint)
 log["key"] = key
-fault = next((item for item in state["faults"] if key.startswith(item["key"])), None)
+fault = next((item for item in state["faults"]
+              if key.startswith(item["key"]) and key[len(item["key"]):][:1] != "/"), None)
 if fault is not None:
     state["faults"].remove(fault)
     if fault["apply"]:
@@ -239,7 +247,11 @@ def artifact(target: CandidatePromotion, payload: Path) -> CandidateArtifact:
 
 @dataclass(frozen=True)
 class Fault:
-    """Replace the reply of the first request whose key starts with ``key``, once."""
+    """Replace the reply of the first request whose key starts with ``key``, once.
+
+    The rest of the request key may not begin a further path segment, so a
+    fault for an endpoint never answers a request for one of its subpaths.
+    """
 
     key: str
     output: str | None = None
@@ -276,7 +288,8 @@ class DeliveryCase(unittest.TestCase):
         self.receipt: dict = {"commands": []}
         self.save({"repo": REPOSITORY, "releases": [], "refs": {}, "tag_objects": {}, "next_id": 500,
                    "faults": [], "asset_pages": {}, "asset_fill": False, "extra_tag_refs": [],
-                   "rewrite_body": None, "unlisted": [], "release_fill": False, "latest": None})
+                   "rewrite_body": None, "unlisted": [], "release_fill": False, "latest": None,
+                   "notes": NOTES})
 
     def state(self) -> dict:
         return json.loads(self.state_path.read_text())
@@ -354,16 +367,21 @@ class DeliveryCase(unittest.TestCase):
         return [json.loads(line) for line in self.log_path.read_text().splitlines()]
 
     def mutations(self) -> list[str]:
-        """Every logged request that could change remote state, in order."""
+        """Every logged request sent with a write method, in order.
+
+        The read-only notes generation is a POST; it stays listed so its place
+        before the draft creation is checked.
+        """
         return [entry["key"] for entry in self.log()
                 if entry["key"].startswith(("POST", "PATCH", "PUT", "DELETE", "UPLOAD"))]
 
     def seed_release(self, *, draft: bool, names: tuple[str, ...] = (), target: str = MERGED,
                      tag_commit: str | None = None, digests: dict[str, str] | None = None,
-                     latest: bool = False) -> int:
-        """Store one release with the named assets and the exact body; ``tag_commit`` also creates its tag.
+                     latest: bool = False, body: str | None = None) -> int:
+        """Store one release with the named assets and ``body``; ``tag_commit`` also creates its tag.
 
-        ``latest`` makes it GitHub's latest release explicitly.
+        The body defaults to the exact legacy ``release_body``. ``latest`` makes
+        it GitHub's latest release explicitly.
         """
         payload = {**self.files, MANIFEST_PATH: self.manifest}
         assets = [{"id": 600 + index, "name": name, "size": len(payload[name]), "state": "uploaded",
@@ -373,7 +391,7 @@ class DeliveryCase(unittest.TestCase):
         def change(state: dict) -> None:
             state["releases"].append({"id": 51, "tag_name": TAG, "target_commitish": target, "draft": draft,
                                       "prerelease": False, "assets": assets,
-                                      "body": release_body(self.promotion)})
+                                      "body": release_body(self.promotion) if body is None else body})
             if tag_commit is not None:
                 state["refs"][f"refs/tags/{TAG}"] = {"type": "commit", "sha": tag_commit}
             if latest:

@@ -8,7 +8,11 @@ job did nothing, and nothing here dispatches, retries or writes.
 The run is bound by ``bind_dispatched_run`` to the exact title, H, main,
 ``workflow_dispatch`` and the trusted ``release.yml`` path. Only attempt 1 is
 observed: a rerun replaces the run's current attempt, so any other attempt
-number refuses instead of substituting. The report is the artifact
+number refuses instead of substituting. The acknowledged run was once read
+with only its title unbound and later read with the exact title, so a
+nonterminal attempt 1 whose title alone is unbound is read again within the
+same deadline. That read grants nothing: a completed run binds exactly, and a
+title still unbound at the deadline refuses as unbound. The report is the artifact
 ``candidate-publication-{run_id}-{run_attempt}`` holding exactly one plain flat
 ``receipt.json``; its listed size and digest must equal the downloaded bytes,
 and the archive is decoded in memory through EOF so each CRC is checked.
@@ -42,6 +46,7 @@ MAX_REPORT_ARCHIVE_BYTES = 2 * MAX_RECEIPT
 POLL_SECONDS = 10
 OBSERVE_TIMEOUT = 90 * 60
 _CONCLUSION = r"[a-z_]{1,32}"
+_UNBOUND = "publication_run_unbound"
 # The shared artifact mechanisms' refusals under this report's own codes.
 _ARTIFACT_CODES = {
     actions_artifacts.LISTING_INVALID: "publication_report_listing_invalid",
@@ -64,7 +69,7 @@ def report_artifact_name(run_id: int, run_attempt: int) -> str:
 def _bind(value: object, dispatch: PublicationDispatch, expected_id: int | None) -> dict[str, object]:
     return bind_dispatched_run(value, repository=dispatch.request.repository, title=dispatch.title,
                                revision=dispatch.harness, paths=PUBLICATION_RUN_PATHS, expected_id=expected_id,
-                               code="publication_run_unbound")
+                               code=_UNBOUND)
 
 
 def find_dispatched_run(client: GitHubClient, dispatch: PublicationDispatch) -> dict[str, object] | None:
@@ -108,11 +113,23 @@ def find_dispatched_run(client: GitHubClient, dispatch: PublicationDispatch) -> 
 
 def observe_run(client: GitHubClient, dispatch: PublicationDispatch, run_id: int, *,
                 timeout: float = OBSERVE_TIMEOUT) -> dict[str, object]:
-    """Wait, within ``timeout``, for attempt 1 of the bound run to complete; return its conclusion."""
+    """Wait, within ``timeout``, for attempt 1 of the bound run to complete; return its conclusion.
+
+    A run that is not completed and whose title alone is unbound is read again
+    once attempt 1 is checked; that unbound refusal is raised at the deadline.
+    """
     deadline = time.monotonic() + timeout
     while True:
-        run = _bind(client.json(f"repos/{dispatch.request.repository}/actions/runs/{run_id}",
-                                limit=MAX_RUN_BYTES), dispatch, run_id)
+        run = object_value(client.json(f"repos/{dispatch.request.repository}/actions/runs/{run_id}",
+                                       limit=MAX_RUN_BYTES))
+        unbound: ReleaseError | None = None
+        try:
+            _bind(run, dispatch, run_id)
+        except ReleaseError as error:
+            if (error.code != _UNBOUND or error.mismatched != ("display_title",)
+                    or run.get("status") == "completed"):
+                raise
+            unbound = error
         if integer(run.get("run_attempt"), minimum=1) != OBSERVED_ATTEMPT:
             raise _refuse("publication_run_attempt_substituted")
         if run.get("status") == "completed":
@@ -120,7 +137,7 @@ def observe_run(client: GitHubClient, dispatch: PublicationDispatch, run_id: int
                     "conclusion": text_value(run.get("conclusion"), _CONCLUSION)}
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise _refuse("publication_observation_expired")
+            raise unbound if unbound is not None else _refuse("publication_observation_expired")
         time.sleep(min(POLL_SECONDS, remaining))
 
 

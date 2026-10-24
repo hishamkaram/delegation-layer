@@ -25,7 +25,7 @@ from scripts.delegate_acceptance.native_release.publication_contract import (
 )
 from scripts.delegate_acceptance.release_verification.candidate_manifest import payload_paths
 from scripts.delegate_acceptance.release_verification.candidate_publication_contract import (
-    CandidateReference, encode_promotion,
+    CandidateReference, encode_promotion, release_text,
 )
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.published_contract import PackageIdentity, registry_tarball_url
@@ -323,13 +323,25 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(require_published(gate(report, cleanup=recovered), binding=BINDING, promotion=PROMOTION),
                          report)
 
+    def test_a_presentation_wrapper_around_the_exact_canonical_body_is_the_same_delivery(self):
+        composed = release_text("## What's Changed\r\n* Promote by @maintainer in #101\r\n", PROMOTION)
+        published = release(*payload_paths(VERSION), draft=False, body=composed)
+        report = publication_report(BINDING, first_mutation_started=True, promotion=PROMOTION,
+                                    delivery=delivery(release=published))
+        self.assertEqual(report, success())
+        self.assertEqual(require_published(gate(report), binding=BINDING, promotion=PROMOTION), report)
+
     def test_the_writer_records_delivery_only_for_a_complete_published_release(self):
         with self.assertRaisesRegex(ReleaseError, "publication_report_release_incomplete"):
             publication_report(BINDING, first_mutation_started=True, promotion=PROMOTION,
                                delivery=delivery(release=release(*payload_paths(VERSION), draft=True)))
+        composed = release_text("Readable notes\n", PROMOTION)
+        tampered = composed.replace(SUBJECTS[0]["sha256"], "8" * 64)
         for published, code in ((release(*payload_paths(VERSION)[1:], draft=False),
                                  "candidate_release_published_incomplete"),
                                 (release(*payload_paths(VERSION), draft=False, body="other"),
+                                 "candidate_release_body_mismatch"),
+                                (release(*payload_paths(VERSION), draft=False, body=tampered),
                                  "candidate_release_body_mismatch")):
             with self.subTest(code=code), self.assertRaises(VerificationError) as caught:
                 publication_report(BINDING, first_mutation_started=True, promotion=PROMOTION,

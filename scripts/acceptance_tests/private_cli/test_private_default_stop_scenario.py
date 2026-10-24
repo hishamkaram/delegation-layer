@@ -25,7 +25,9 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
         user = {"continuation": {"resumable": True}}
         records = _run_stop_scenario(self, error="operational failure", ended_changes={"user": user})
         self.assertEqual([command[2] for command in records["calls"]], ["dispatch", "cancel", "status", "status"])
-        self.assertEqual(records["lifecycle"], ["enter", "cancel", "closure", "status", "status", "exit"])
+        self.assertEqual(records["lifecycle"], [
+            "enter", "cancel", "closure", "interrupted:running", "interrupted:ended", "exit",
+        ])
         self.assertEqual(records["lease_cleanup_calls"], [])
         self.assertEqual(len(records["dispatches"]), 1)
 
@@ -188,26 +190,26 @@ def _stop_command_callback(calls, dispatches, ended_changes, lifecycle, self, st
                 },
             }
         self.assertEqual(command, "status")
-        lifecycle.append("status")
         task_id = args[3]
         status_reads[task_id] = status_reads.get(task_id, 0) + 1
         identity = {"root_id": "r" * 32, "task_id": task_id}
         if task_id == dispatches[0][0]:
             if status_reads[task_id] > 1:
-                return {**_user_interrupted_status(identity, user_request_id), **ended_changes.get("user", {})}
-            stop = {
-                "request_id": user_request_id, "cause": "user",
-                "requested": True, "terminated": False, "observed_state": "running",
-            }
+                observed = {**_user_interrupted_status(identity, user_request_id), **ended_changes.get("user", {})}
+            else:
+                observed = _user_pending_interruption_status(identity, user_request_id)
         else:
             self.assertEqual(task_id, dispatches[1][0])
             if status_reads[task_id] > 1:
-                return {**_budget_timed_out_status(identity), **ended_changes.get("budget", {})}
-            stop = {
-                "request_id": "budget", "cause": "budget",
-                "requested": True, "terminated": False, "observed_state": "running",
-            }
-        return {**identity, "liveness": "running", "stops": [stop]}
+                observed = {**_budget_timed_out_status(identity), **ended_changes.get("budget", {})}
+            else:
+                observed = {**identity, "liveness": "running", "stops": [{
+                    "request_id": "budget", "cause": "budget",
+                    "requested": True, "terminated": False, "observed_state": "running",
+                }]}
+        label = "interrupted" if observed.get("status") == "interrupted" else "status"
+        lifecycle.append(label + ":" + observed["liveness"])
+        return observed
     return run_json
 
 
@@ -225,6 +227,16 @@ def _user_interrupted_status(identity, request_id):
         "continuation": {"resumable": False, "mode": "native", "predecessor_task_id": identity["task_id"],
                          "reason": "task was cancelled by the user"},
         "failure": {"code": "task_interrupted", "stage": "status", "next_action": "stop_and_report"},
+    }
+
+
+def _user_pending_interruption_status(identity, request_id):
+    """Mirror the `status --json` envelope a native user stop reports after closure, before the queue ends."""
+    status = _user_interrupted_status(identity, request_id)
+    return {
+        **status, "liveness": "running",
+        "supervisor": {"matched": True, "state": "running", "numeric_task_id": 0},
+        "stops": [{**status["stops"][0], "observed_state": "", "terminated": False}],
     }
 
 
@@ -250,8 +262,8 @@ def _assert_stop_expectations(*, attempted, calls, dispatches, evidence, lease_c
     self.assertEqual(set(evidence["tasks"]), {"user_stop", "budget_stop"})
     self.assertEqual(lease_cleanup_calls, [True, True])
     self.assertEqual(lifecycle, [
-        "enter", "cancel", "closure", "status", "status", "remove", "exit",
-        "enter", "closure", "status", "status", "remove", "exit",
+        "enter", "cancel", "closure", "interrupted:running", "interrupted:ended", "remove", "exit",
+        "enter", "closure", "status:running", "status:ended", "remove", "exit",
     ])
     self.assertEqual(
         evidence["tasks"]["user_stop"]["status"]["queue_ended_observation"],

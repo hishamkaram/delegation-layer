@@ -50,6 +50,10 @@ ARGV = ["publish-candidate", "--candidate-id", REFERENCE.candidate_id, "--freeze
 DISPATCHES = f"repos/{REPOSITORY}/actions/workflows/release.yml/dispatches"
 RUNS = f"repos/{REPOSITORY}/actions/workflows/release.yml/runs?"
 ARTIFACTS = f"repos/{REPOSITORY}/actions/runs/{RUN_ID}/artifacts?"
+RUN = f"repos/{REPOSITORY}/actions/runs/{RUN_ID}"
+POLL_SECONDS, OBSERVE_TIMEOUT = publication_observation.POLL_SECONDS, publication_observation.OBSERVE_TIMEOUT
+# The acknowledged run before its title is exact: same ID and every other binding, not completed.
+PENDING_TITLE: dict[str, object] = {"display_title": "Release", "status": "queued", "conclusion": None}
 # Every attribute ``PublicationCase`` patches, with its unpatched value.
 PATCHED = ((storage, "state_base"), (cli, "state_base"), (cli, "github_client"), (publication, "preflight"),
            (publication, "observe_publication_source"), (publication, "observe_required_checks"),
@@ -84,6 +88,8 @@ class FakeGitHub:
         self.calls: list[tuple[str, str]] = []
         self.ack: object = "exact"
         self.run: dict[str, object] = {"run_attempt": 1, "status": "completed", "conclusion": "success"}
+        # Per-read changes to the acknowledged run's row, consumed in order before ``run`` alone applies.
+        self.run_reads: list[dict[str, object] | Exception] = []
         self.listed: int = 1
         self.report: str = "success"
         self.members: dict[str, bytes] | None = None
@@ -135,7 +141,10 @@ class FakeGitHub:
             rows = [self.run_row(RUN_ID + offset) for offset in range(self.listed)]
             return {"total_count": len(rows), "workflow_runs": rows}
         if endpoint == f"repos/{REPOSITORY}/actions/runs/{RUN_ID}":
-            return self.run_row()
+            change = self.run_reads.pop(0) if self.run_reads else {}
+            if isinstance(change, Exception):
+                raise change
+            return {**self.run_row(), **change}
         if endpoint.startswith(ARTIFACTS):
             if self.artifact_pages is not None:
                 return self.artifact_pages()[int(endpoint.rsplit("&page=", 1)[1]) - 1]
@@ -156,6 +165,21 @@ class FakeGitHub:
 
     def posts(self) -> int:
         return sum(1 for method, _ in self.calls if method == "POST")
+
+
+class FakeClock:
+    """The observer's ``time`` alias only: ``sleep`` advances ``monotonic`` and is recorded, so nothing waits."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
 
 
 class PublicationCase(unittest.TestCase):
@@ -450,6 +474,71 @@ class PublishTests(PublicationCase):
         self.assertOutcome(self.resume(), 0, "PUBLISHED", "hosted_delivery_verified_and_receipt_finalized")
         self.assertEqual(self.client.posts(), 1)
         self.assertEqual(self.preflight.call_count, 2)
+
+
+class PendingTitleTests(PublicationCase):
+    """Only a nonterminal attempt 1 whose title alone is unbound is read again; nothing else waits or retries."""
+
+    def observe(self) -> tuple[tuple[int, dict[str, object]], FakeClock]:
+        clock = FakeClock()
+        with patch.object(publication_observation, "time", clock):
+            result = self.publish()
+        return result, clock
+
+    def run_requests(self) -> list[tuple[str, str]]:
+        """Every request for a run other than its artifacts, including any inventory listing."""
+        return [call for call in self.client.calls
+                if "/actions/runs" in call[1] and not call[1].startswith(ARTIFACTS)]
+
+    def test_a_pending_title_rereads_the_same_run_until_it_binds_and_completes(self):
+        self.client.run_reads = [PENDING_TITLE, {**PENDING_TITLE, "status": "in_progress"}]
+        result, clock = self.observe()
+        self.assertOutcome(result, 0, "PUBLISHED", "hosted_delivery_verified_and_receipt_finalized")
+        self.assertEqual((self.run_requests(), clock.sleeps), ([("GET", RUN)] * 3, [POLL_SECONDS] * 2))
+        self.assertEqual(self.client.posts(), 1)
+        observed = storage.load_receipt(self.receipt_path()).stage("observe")
+        self.assertEqual((observed.state, observed.result),
+                         ("complete", {"run_id": RUN_ID, "run_attempt": 1, "conclusion": "success"}))
+
+    def test_a_title_still_unbound_at_the_deadline_refuses_with_it_and_never_redispatches(self):
+        self.client.run.update(display_title="Release", status="in_progress", conclusion=None)
+        result, clock = self.observe()
+        self.assertOutcome(result, 3, "INCOMPLETE", "publication_run_unbound:mismatch=display_title")
+        requests = self.run_requests()
+        self.assertEqual((len(requests), set(requests)), (OBSERVE_TIMEOUT // POLL_SECONDS + 1, {("GET", RUN)}))
+        self.assertEqual((sum(clock.sleeps), set(clock.sleeps)), (OBSERVE_TIMEOUT, {POLL_SECONDS}))
+        self.assertEqual(self.client.posts(), 1)
+        self.assertEqual(storage.load_receipt(self.receipt_path()).stage("observe").state, "intended")
+        self.assertFalse([call for call in self.client.calls if call[1].startswith(ARTIFACTS)])
+
+    def test_every_other_unbound_or_substituted_read_refuses_at_once(self):
+        cases = {
+            "completed wrong title": ({"display_title": "Release"}, "publication_run_unbound:mismatch=display_title"),
+            "pending title on attempt 2": ({**PENDING_TITLE, "run_attempt": 2}, "publication_run_attempt_substituted"),
+            "pending title, malformed attempt": ({**PENDING_TITLE, "run_attempt": "1"},
+                                                 "release_record_integer_invalid"),
+            "pending title and head": ({**PENDING_TITLE, "head_sha": "7" * 40},
+                                       "publication_run_unbound:mismatch=display_title,head_sha"),
+            "pending title and event": ({**PENDING_TITLE, "event": "push"},
+                                        "publication_run_unbound:mismatch=display_title,event"),
+            "pending title and other ID": ({**PENDING_TITLE, "id": RUN_ID + 1},
+                                           "publication_run_unbound:mismatch=id,display_title,html_url"),
+        }
+        for label, (change, reason) in cases.items():
+            with self.subTest(label):
+                self.reset()
+                # A later read would bind and complete, so any wait would publish instead of refusing.
+                self.client.run_reads = [change]
+                result, clock = self.observe()
+                self.assertOutcome(result, 3, "INCOMPLETE", reason)
+                self.assertEqual((self.run_requests(), clock.sleeps, self.client.posts()), ([("GET", RUN)], [], 1))
+
+    def test_a_read_fault_after_a_pending_title_is_reported_not_masked(self):
+        self.client.run_reads = [PENDING_TITLE, VerificationError("github_api_failed", "github-api")]
+        result, clock = self.observe()
+        self.assertOutcome(result, 3, "INCOMPLETE", "github_api_failed")
+        self.assertEqual((self.run_requests(), clock.sleeps, self.client.posts()),
+                         ([("GET", RUN)] * 2, [POLL_SECONDS], 1))
 
 
 class ResumeTests(PublicationCase):

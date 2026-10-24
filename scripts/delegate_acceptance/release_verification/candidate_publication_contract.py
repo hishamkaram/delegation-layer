@@ -5,10 +5,11 @@ The canonical manifest and locator own the artifact inventory;
 ``candidate_readiness`` owns readiness, the freeze authorization and
 source-tree equality; ``candidate_history`` owns the freeze record. This module
 owns only the external publication reference encoding, the truthful promotion
-statement and its release body, the monotonic delivery version rule, and the
+statement and its release body, the exact verification block that carries that
+body under human release notes, the monotonic delivery version rule, and the
 decision whether one delivery step acts, skips or refuses given a positive
-destination observation. No value here grants launch or
-publication authority. A transport or command failure is an I/O error and is
+destination observation. Release notes are presentation: no value here grants
+launch or publication authority. A transport or command failure is an I/O error and is
 never represented as absence.
 """
 
@@ -159,16 +160,58 @@ RELEASE_BODY_TITLE = "Development candidate promotion"
 
 
 def release_body(promotion: CandidatePromotion) -> str:
-    """Return the only accepted release text: the canonical predicate and every subject digest.
+    """Return the canonical release text: the predicate and every subject digest.
 
     The body restates ``encode_promotion`` and ``subjects`` verbatim and adds no
-    fact of its own. It grants no authority; readers still validate the freeze
-    and the merge.
+    fact of its own. It is the whole legacy release body and the exact content
+    of ``verification_block``. It grants no authority; readers still validate
+    the freeze and the merge.
     """
     predicate = encode_promotion(promotion).decode("utf-8").removesuffix("\n")
     digests = tuple(f"{subject.sha256}  {subject.name}" for subject in promotion.subjects)
     return "\n".join((RELEASE_BODY_TITLE, "", "Promotion predicate (canonical JSON):", predicate, "",
                       "Payload SHA-256 digests:", *digests))
+
+
+# The verification block's reserved summary; it appears exactly once in an accepted composed body.
+VERIFICATION_SUMMARY = "<summary>Build verification details</summary>"
+
+
+_VERIFICATION_OPENER = f"<details>\n{VERIFICATION_SUMMARY}\n\n```text\n"
+
+
+_VERIFICATION_CLOSER = "\n```\n\n</details>\n"
+
+
+def verification_block(canonical: str) -> str:
+    """Return the ``release_body`` text ``canonical`` byte for byte inside the block that ends a composed body."""
+    return _VERIFICATION_OPENER + canonical + _VERIFICATION_CLOSER
+
+
+def release_text(notes: object, promotion: CandidatePromotion) -> str:
+    """Compose untrusted human ``notes`` first and the exact verification block last.
+
+    The notes are presentation only. They must be non-blank text that does not
+    contain the reserved summary, so the composed body has exactly one block.
+    """
+    if type(notes) is not str or not notes.strip() or VERIFICATION_SUMMARY in notes:
+        raise VerificationError("candidate_release_notes_invalid", STAGE)
+    return notes.rstrip() + "\n\n" + verification_block(release_body(promotion))
+
+
+def release_body_matches(body: str, canonical: str) -> bool:
+    """Whether ``body`` is exactly the ``release_body`` text ``canonical`` or human text ending in its block.
+
+    The block must close the body, start on a new line after non-blank text,
+    and hold the only reserved summary. The human text before it may differ in
+    any way, including its line endings; the block may not differ by one byte.
+    """
+    if body == canonical:
+        return True
+    block = verification_block(canonical)
+    prefix = body.removesuffix(block)
+    return (len(prefix) < len(body) and prefix.endswith("\n") and bool(prefix.strip())
+            and body.count(VERIFICATION_SUMMARY) == 1)
 
 
 class Absent(Enum):
@@ -251,8 +294,8 @@ def decide_release(*, promotion: CandidatePromotion, observed: ObservedRelease |
                    resume_published: bool) -> ReleasePlan:
     """Complete only missing assets of a matching release; refuse any other difference.
 
-    A release whose body is not exactly ``release_body(promotion)`` is a
-    different release, whether draft or published; it is never rewritten.
+    A release whose body ``release_body_matches`` refuses is a different
+    release, whether draft or published; it is never rewritten.
     """
     expected = {subject.name: subject.sha256 for subject in promotion.subjects}
     if observed is Absent.ABSENT:
@@ -262,7 +305,7 @@ def decide_release(*, promotion: CandidatePromotion, observed: ObservedRelease |
         raise VerificationError("candidate_release_identity_mismatch", STAGE)
     if observed.target_commit != promotion.source.merged_commit:
         raise VerificationError("candidate_release_target_mismatch", STAGE)
-    if observed.body != release_body(promotion):
+    if not release_body_matches(observed.body, release_body(promotion)):
         raise VerificationError("candidate_release_body_mismatch", STAGE)
     present = {asset.name: asset.sha256 for asset in observed.assets}
     if not set(present) <= set(expected):
