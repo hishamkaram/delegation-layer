@@ -11,7 +11,7 @@ from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _
 from scripts.delegate_acceptance.inspections.binding import INSPECTION_GROUP_PREFIX
 from scripts.delegate_acceptance.native.binding_policy import _validate_bound_provider_record
 from scripts.delegate_acceptance.native.diagnostics import _rejection_diagnostic_summary
-from scripts.delegate_acceptance.native.errors import BlockedFailure
+from scripts.delegate_acceptance.native.errors import BlockedFailure, BlockReason
 from scripts.delegate_acceptance.native.fixtures import marker_answer, verify_interactive_answer, verify_read_only_answer, verify_review_answer, verify_write_fixture
 from scripts.delegate_acceptance.native.acceptance_diagnostics import authentication_unavailable
 from scripts.delegate_acceptance.native.production_acp import OPENCODE_PROVIDER, production_acp_marker
@@ -170,7 +170,8 @@ def collect(owner, name: str, task_id: str) -> dict[str, object]:
             response.get("evidence_sha256") == outcome.get("evidence_sha256"),
             f"{name} collection receipt descriptors are inconsistent")
     if authentication_unavailable(directory):
-        raise BlockedFailure(f"{acceptance.provider} authentication is unavailable")
+        raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",
+                             reason=BlockReason.AUTH_UNAVAILABLE)
     if rejected:
         raise AcceptanceFailure(
             f"{name} provider result rejected: {_rejection_diagnostic_summary(outcome)}")

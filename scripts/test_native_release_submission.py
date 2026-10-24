@@ -6,10 +6,13 @@ from unittest.mock import patch
 import unittest
 
 from scripts.delegate_acceptance.native_release import watching
-from scripts.delegate_acceptance.native_release.contract import ReleaseError, WORKFLOW
+from scripts.delegate_acceptance.native_release.contract import (
+    DispatchAck, ReleaseError, WORKFLOW, WORKFLOW_RUN_PATHS, parse_workflow_dispatch_ack,
+    trusted_main_workflow_paths,
+)
 from scripts.delegate_acceptance.native_release.receipt import Receipt
 from scripts.delegate_acceptance.native_release.submission import (
-    dispatch, reconcile_asset, upload, validate_run,
+    bind_dispatched_run, dispatch, reconcile_asset, upload, validate_run,
 )
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.test_native_release_support import (
@@ -66,6 +69,41 @@ class SubmissionTests(ReleaseFixture):
         with self.assertRaisesRegex(ReleaseError, "proof_asset_digest_mismatch"):
             reconcile_asset(self.receipt, self.client)
 
+    def test_shared_asset_listing_keeps_legacy_resumable_identities(self) -> None:
+        self.seed_project()
+        full = {page: [{"name": f"other-{page}-{n}"} for n in range(100)] for page in range(1, 101)}
+        cases = (
+            ({1: {"rows": []}}, "release_assets_invalid", "github_release_assets_invalid"),
+            ({1: [{"name": "other"}] * 101}, "release_assets_invalid", "github_release_assets_invalid"),
+            (full, "release_assets_pagination_incomplete", "github_release_assets_pagination_incomplete"),
+        )
+        for pages, code, cause in cases:
+            with self.subTest(code=code):
+                self.client.asset_pages = pages
+                with self.assertRaises(ReleaseError) as raised:
+                    reconcile_asset(self.receipt, self.client)
+                self.assertEqual((raised.exception.code, raised.exception.incomplete), (code, True))
+                self.assertIsInstance(raised.exception.__cause__, VerificationError)
+                self.assertEqual((raised.exception.__cause__.code, raised.exception.__cause__.stage),
+                                 (cause, "github-release-assets"))
+        full[100] = [*full[100][:99], self.client.asset()]
+        full[100].pop(0)
+        self.client.asset_pages = full
+        self.assertEqual(reconcile_asset(self.receipt, self.client)["asset_id"], 71)
+        self.client.asset_pages = {1: ["row"]}
+        with self.assertRaisesRegex(ReleaseError, "release_record_object_invalid"):
+            reconcile_asset(self.receipt, self.client)
+
+    def test_unrelated_asset_listing_errors_keep_their_identity(self) -> None:
+        self.seed_project()
+        for error in (VerificationError("github_request_failed", "github-api"),
+                      VerificationError("github_release_assets_invalid", "github-api")):
+            with self.subTest(code=error.code, stage=error.stage), \
+                    patch.object(self.client, "json", side_effect=error):
+                with self.assertRaises(VerificationError) as raised:
+                    reconcile_asset(self.receipt, self.client)
+                self.assertIs(raised.exception, error)
+
     def test_asset_uploader_must_match_original_local_actor(self) -> None:
         self.seed_project()
         self.client.assets = [{**self.client.asset(), "uploader": {"id": 999}}]
@@ -87,6 +125,49 @@ class SubmissionTests(ReleaseFixture):
             "inputs[proof_sha256]": PROOF_HASH, "inputs[invocation_id]": "1" * 32,
             "inputs[opencode_model]": "vendor/exact-model", "inputs[ccr_model]": "exact-alias",
         })
+
+    def test_exact_dispatch_ack_completes_without_reconciliation(self) -> None:
+        self.seed_upload()
+        with patch("scripts.delegate_acceptance.native_release.preflight.resolve_release_identity",
+                   return_value={"commit_sha": RELEASE}):
+            dispatch(self.receipt, self.client)
+        title = self.client.run()["display_title"]
+        self.assertEqual(self.receipt.stage("dispatch").result, {
+            "run_id": 81, "html_url": f"https://github.com/{REPO}/actions/runs/81", "title": title})
+        endpoints = [(method, endpoint) for method, endpoint, _ in self.client.calls]
+        post = endpoints.index(("POST", f"repos/{REPO}/actions/workflows/{WORKFLOW}/dispatches"))
+        self.assertEqual([call for call in endpoints[post + 1:] if "/runs?" in call[1]], [],
+                         "an exact ACK settles the dispatch without a run listing")
+
+    def test_malformed_dispatch_ack_still_reconciles_the_one_created_run(self) -> None:
+        url = f"https://github.com/{REPO}/actions/runs/81"
+        api = f"https://api.github.com/repos/{REPO}/actions/runs/81"
+        replies = ([], {"workflow_run_id": True, "html_url": url, "run_url": api},
+                   {"workflow_run_id": 0, "html_url": url, "run_url": api},
+                   {"workflow_run_id": "81", "html_url": url, "run_url": api},
+                   {"workflow_run_id": 81, "html_url": "https://github.com/other/repo/actions/runs/81",
+                    "run_url": api},
+                   {"workflow_run_id": 81, "html_url": url,
+                    "run_url": "https://api.github.com/repos/other/repo/actions/runs/81"},
+                   {"workflow_run_id": 82, "html_url": url, "run_url": api})
+        for reply in replies:
+            with self.subTest(reply=reply):
+                self.setUp()
+                self.seed_upload()
+                original = self.client.json
+                def malformed(*args, **kwargs):
+                    value = original(*args, **kwargs)
+                    return reply if kwargs.get("method") == "POST" else value
+                with patch("scripts.delegate_acceptance.native_release.preflight.resolve_release_identity",
+                           return_value={"commit_sha": RELEASE}), \
+                        patch.object(self.client, "json", side_effect=malformed):
+                    dispatch(self.receipt, self.client)
+                self.assertEqual(self.client.posts, 1)
+                self.assertEqual((self.receipt.stage("dispatch").result["run_id"],
+                                  self.receipt.stage("dispatch").result["html_url"]), (81, url))
+                endpoints = [endpoint for method, endpoint, _ in self.client.calls]
+                post = endpoints.index(f"repos/{REPO}/actions/workflows/{WORKFLOW}/dispatches")
+                self.assertTrue(any("/runs?" in endpoint for endpoint in endpoints[post + 1:]))
 
     def test_crash_after_dispatch_intent_only_observes(self) -> None:
         self.seed_upload()
@@ -152,7 +233,8 @@ class SubmissionTests(ReleaseFixture):
             ("head_sha", {"head_sha": "f" * len(HEAD)}, 81), ("event", {"event": "push"}, 81),
             ("path", {"path": ".github/workflows/release.yml@main"}, 81),
             ("path", {"path": f"{bare}@refs/heads/main"}, 81),
-            ("path", {"path": f"{bare}@secret-ref"}, 81),
+            ("path", {"path": f"{bare}@secret-ref"}, 81), ("path", {"path": f"{bare}@main/x"}, 81),
+            ("path", {"path": f"{bare}@main "}, 81), ("path", {"path": f"{bare}@main@main"}, 81),
             ("path", {"path": f"secret/{bare}"}, 81), ("path", {"path": [bare]}, 81),
             ("html_url", {"html_url": "https://github.com/secret/fork/actions/runs/81"}, 81),
         )
@@ -169,6 +251,108 @@ class SubmissionTests(ReleaseFixture):
             validate_run(self.receipt, {**self.client.run(), "event": "push", "path": "secret"},
                          expected_id=81, expected_title=title)
         self.assertEqual(raised.exception.mismatched, ("event", "path"))
+
+
+class BoundDispatchedRunTests(unittest.TestCase):
+    """The canonical run binding with another workflow's trusted paths, title and refusal code."""
+
+    PATHS = trusted_main_workflow_paths("release.yml")
+    TITLE = f"Candidate publication {'5' * 32} {'a' * 64}"
+    URL = f"https://github.com/{REPO}/actions/runs/81"
+
+    def row(self, **changes: object) -> dict[str, object]:
+        return {"id": 81, "display_title": self.TITLE, "head_sha": HEAD, "head_branch": "main",
+                "event": "workflow_dispatch", "path": self.PATHS[0], "html_url": self.URL, **changes}
+
+    def bind(self, row: object, **changes: object) -> dict[str, object]:
+        expectations: dict[str, object] = {"repository": REPO, "title": self.TITLE, "revision": HEAD,
+                                           "paths": self.PATHS, "expected_id": 81, "code": "publication_run_unbound"}
+        return bind_dispatched_run(row, **{**expectations, **changes})
+
+    def test_an_exact_run_on_either_trusted_path_is_returned_unchanged(self) -> None:
+        for path in self.PATHS:
+            with self.subTest(path=path):
+                row = self.row(path=path, status="queued")
+                self.assertEqual(self.bind(row), row)
+        self.assertEqual(self.bind(self.row(id=82, html_url=f"https://github.com/{REPO}/actions/runs/82"),
+                                   expected_id=None)["id"], 82)
+
+    def test_each_wrong_binding_refuses_with_the_callers_code_and_fixed_field_names(self) -> None:
+        cases = (
+            ("id", {"id": 82, "html_url": f"https://github.com/{REPO}/actions/runs/82"}),
+            ("display_title", {"display_title": "Native proof v1.2.3"}),
+            ("head_sha", {"head_sha": "f" * len(HEAD)}), ("head_branch", {"head_branch": "release"}),
+            ("event", {"event": "push"}),
+            ("path", {"path": f".github/workflows/{WORKFLOW}"}), ("path", {"path": f"{self.PATHS[0]}@other"}),
+            ("html_url", {"html_url": "https://github.com/other/repo/actions/runs/81"}),
+        )
+        for field, change in cases:
+            with self.subTest(field=field, change=change), self.assertRaises(ReleaseError) as raised:
+                self.bind(self.row(**change))
+            self.assertEqual((raised.exception.code, raised.exception.incomplete, raised.exception.mismatched),
+                             ("publication_run_unbound", True, (field,)))
+
+    def test_a_missing_expectation_binds_nothing(self) -> None:
+        for field, expectation in (("display_title", "title"), ("head_sha", "revision")):
+            with self.subTest(field=field), self.assertRaises(ReleaseError) as raised:
+                self.bind(self.row(**{field: None}), **{expectation: None})
+            self.assertEqual(raised.exception.mismatched, (field,))
+
+    def test_a_malformed_row_refuses_before_any_binding(self) -> None:
+        for row, code in (([], "release_record_object_invalid"), (self.row(id="81"), "release_record_integer_invalid"),
+                          (self.row(id=True), "release_record_integer_invalid")):
+            with self.subTest(row=row), self.assertRaises(ReleaseError) as raised:
+                self.bind(row)
+            self.assertEqual(raised.exception.code, code)
+
+
+class DispatchAckContractTests(unittest.TestCase):
+    URL = f"https://github.com/{REPO}/actions/runs/81"
+    API = f"https://api.github.com/repos/{REPO}/actions/runs/81"
+
+    def ack(self, **changes: object) -> dict[str, object]:
+        return {"workflow_run_id": 81, "html_url": self.URL, "run_url": self.API, **changes}
+
+    def test_an_exact_ack_is_one_frozen_run_identity(self) -> None:
+        ack = parse_workflow_dispatch_ack(self.ack(extra="ignored"), REPO)
+        self.assertEqual(ack, DispatchAck(run_id=81, html_url=self.URL, run_url=self.API))
+        with self.assertRaises(AttributeError):  # dataclasses.FrozenInstanceError
+            setattr(ack, "run_id", 82)
+
+    def test_refusals_keep_their_known_codes_and_completeness_in_validation_order(self) -> None:
+        other = "other/repo"
+        cases = (
+            ([], "release_record_object_invalid", False),
+            ({1: 81}, "release_record_object_invalid", False),
+            (self.ack(workflow_run_id=None), "release_record_integer_invalid", False),
+            ({"html_url": self.URL, "run_url": self.API}, "release_record_integer_invalid", False),
+            (self.ack(workflow_run_id=True), "release_record_integer_invalid", False),
+            (self.ack(workflow_run_id=0), "release_record_integer_invalid", False),
+            (self.ack(workflow_run_id="81"), "release_record_integer_invalid", False),
+            (self.ack(workflow_run_id=81.0), "release_record_integer_invalid", False),
+            (self.ack(workflow_run_id=0, html_url=None), "release_record_integer_invalid", False),
+            (self.ack(workflow_run_id=82), "dispatch_response_identity_invalid", True),
+            (self.ack(html_url=f"https://github.com/{other}/actions/runs/81"),
+             "dispatch_response_identity_invalid", True),
+            (self.ack(run_url=f"https://api.github.com/repos/{other}/actions/runs/81"),
+             "dispatch_response_identity_invalid", True),
+            (self.ack(html_url=f"{self.URL}/"), "dispatch_response_identity_invalid", True),
+            (self.ack(run_url=None), "dispatch_response_identity_invalid", True),
+            ({"workflow_run_id": 81, "html_url": self.URL}, "dispatch_response_identity_invalid", True),
+        )
+        for response, code, incomplete in cases:
+            with self.subTest(response=response), self.assertRaises(ReleaseError) as raised:
+                parse_workflow_dispatch_ack(response, REPO)
+            self.assertEqual((raised.exception.code, raised.exception.incomplete), (code, incomplete))
+        with self.assertRaisesRegex(ReleaseError, "dispatch_response_identity_invalid"):
+            parse_workflow_dispatch_ack(self.ack(), other)
+
+
+class TrustedMainWorkflowPathTests(unittest.TestCase):
+    def test_a_maintained_file_has_only_its_bare_and_main_qualified_paths(self) -> None:
+        self.assertEqual(trusted_main_workflow_paths("development-readiness.yml"), (
+            ".github/workflows/development-readiness.yml", ".github/workflows/development-readiness.yml@main"))
+        self.assertEqual(WORKFLOW_RUN_PATHS, (f".github/workflows/{WORKFLOW}", f".github/workflows/{WORKFLOW}@main"))
 
 
 if __name__ == "__main__":

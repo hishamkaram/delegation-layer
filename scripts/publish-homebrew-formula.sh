@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The renderer owns tag and repository validation, archive names, checksum
+# parsing, and the formula template.
+# shellcheck source=render-homebrew-formula.sh
+source "${SCRIPT_DIR}/render-homebrew-formula.sh"
+
 tag=${1:?usage: publish-homebrew-formula.sh vX.Y.Z}
 tap_repository=${TAP_REPOSITORY:-hishamkaram/homebrew-tap}
 formula_path=${FORMULA_PATH:-Formula/delegation-layer.rb}
-owner_repo=${DELEGATION_LAYER_REPOSITORY:-hishamkaram/delegation-layer}
 
-if [[ ! "${tag}" =~ ^v[0-9]+(\.[0-9]+){2}$ ]]; then
-    printf 'stable semantic version tag required, got %q\n' "${tag}" >&2
-    exit 1
-fi
+validate_tag "${tag}"
+owner_repo=$(resolve_repository)
 if [[ -z ${HOMEBREW_TAP_TOKEN:-} ]]; then
     printf 'HOMEBREW_TAP_TOKEN is required\n' >&2
     exit 1
 fi
-for command in awk base64 curl gh grep mktemp; do
+for command in awk base64 curl gh grep mktemp tr; do
     if ! command -v "${command}" >/dev/null 2>&1; then
         printf '%s is required\n' "${command}" >&2
         exit 1
@@ -25,7 +28,6 @@ if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1
     exit 1
 fi
 
-version=${tag#v}
 temp_dir=$(mktemp -d)
 trap 'rm -rf "${temp_dir}"' EXIT
 checksums="${temp_dir}/checksums.txt"
@@ -43,17 +45,6 @@ fi
 curl --fail --location --retry 3 --silent --show-error \
     "https://github.com/${owner_repo}/releases/download/${tag}/checksums.txt" \
     --output "${checksums}"
-
-checksum_for() {
-    local archive="$1"
-    local digest
-    digest=$(awk -v archive="${archive}" '$2 == archive { print $1; exit }' "${checksums}")
-    if [[ ! "${digest}" =~ ^[[:xdigit:]]{64}$ ]]; then
-        printf 'missing or invalid checksum for %s\n' "${archive}" >&2
-        exit 1
-    fi
-    printf '%s' "${digest}"
-}
 
 sha256_file() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -84,60 +75,12 @@ verify_archive() {
         >/dev/null
 }
 
-darwin_amd64="delegation-layer_${version}_Darwin_amd64.tar.gz"
-darwin_arm64="delegation-layer_${version}_Darwin_arm64.tar.gz"
-linux_amd64="delegation-layer_${version}_Linux_amd64.tar.gz"
-linux_arm64="delegation-layer_${version}_Linux_arm64.tar.gz"
-darwin_amd64_sha256="$(checksum_for "${darwin_amd64}")"
-darwin_arm64_sha256="$(checksum_for "${darwin_arm64}")"
-linux_amd64_sha256="$(checksum_for "${linux_amd64}")"
-linux_arm64_sha256="$(checksum_for "${linux_arm64}")"
-verify_archive "${darwin_amd64}" "${darwin_amd64_sha256}"
-verify_archive "${darwin_arm64}" "${darwin_arm64_sha256}"
-verify_archive "${linux_amd64}" "${linux_amd64_sha256}"
-verify_archive "${linux_arm64}" "${linux_arm64_sha256}"
+digests=$(release_digests "${tag}" "${checksums}")
+while read -r archive digest; do
+    verify_archive "${archive}" "${digest}"
+done <<<"${digests}"
 
-cat >"${formula}" <<EOF
-class DelegationLayer < Formula
-  desc "Durable supervised delegation for supported AI CLIs"
-  homepage "https://github.com/${owner_repo}"
-  version "${version}"
-  license "MIT"
-
-  on_macos do
-    if Hardware::CPU.arm?
-      url "https://github.com/${owner_repo}/releases/download/${tag}/${darwin_arm64}"
-      sha256 "${darwin_arm64_sha256}"
-    else
-      url "https://github.com/${owner_repo}/releases/download/${tag}/${darwin_amd64}"
-      sha256 "${darwin_amd64_sha256}"
-    end
-  end
-
-  on_linux do
-    if Hardware::CPU.arm?
-      url "https://github.com/${owner_repo}/releases/download/${tag}/${linux_arm64}"
-      sha256 "${linux_arm64_sha256}"
-    else
-      url "https://github.com/${owner_repo}/releases/download/${tag}/${linux_amd64}"
-      sha256 "${linux_amd64_sha256}"
-    end
-  end
-
-  def install
-    bin.install "delegate"
-    bin.install "delegate-run"
-    libexec.install "pueue", "pueued"
-  end
-
-  test do
-    assert_match "delegate #{version}", shell_output("#{bin}/delegate version")
-    system bin/"delegate", "providers", "--json"
-    assert_match "pueue ", shell_output("#{libexec}/pueue --version")
-    assert_match "pueued ", shell_output("#{libexec}/pueued --version")
-  end
-end
-EOF
+render_formula "${tag}" "${checksums}" >"${formula}"
 
 encoded=$(base64 <"${formula}" | tr -d '\n')
 current_sha=$(GH_TOKEN="${HOMEBREW_TAP_TOKEN}" gh api \

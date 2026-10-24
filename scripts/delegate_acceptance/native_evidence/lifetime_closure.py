@@ -123,3 +123,20 @@ def lifetime_closure_error(
         return ordinary_error
     # Model discovery owns one separate root with exactly its one inspection.
     return _root_error(discovery, task_ids=frozenset(), budget_ids=frozenset(), inspection_count=1)
+
+
+def case_lifetime_closed(*, status: object, cleanup_method: object, proof_state: object,
+                         lifecycle_state: object, supervisor_shutdown_observed: object) -> bool:
+    """Return whether one compact case's owned lifetime is positively closed.
+
+    The producer binds every admitted task's managed lifetime, including model
+    discovery, into a complete lifecycle state with ``lifetime_closure_error``;
+    a reader that sees only the compact case consumes that result here. A PASS
+    needs that complete lifecycle, and every case needs observed supervisor
+    shutdown unless it was blocked before any runtime started.
+    """
+    if status == "PASS" and lifecycle_state != "complete":
+        return False
+    blocked_before_runtime = (status == "BLOCKED" and cleanup_method == "blocked-before-runtime-cleanup"
+                              and proof_state == "blocked-before-runtime")
+    return supervisor_shutdown_observed is True or blocked_before_runtime

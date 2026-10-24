@@ -15,8 +15,12 @@ GOLANGCI_BIN := $(BIN_DIR)/golangci-lint
 GOFUMPT_BIN := $(BIN_DIR)/gofumpt
 GOVULN_BIN := $(BIN_DIR)/govulncheck
 GORELEASER_BIN := $(BIN_DIR)/goreleaser
+# Repository validators; their focused targets add their own tests, while check runs
+# only these because test-python already runs every Python test.
+VERIFY_SKILLS := python3 scripts/verify_skills.py
+VERIFY_ACCEPTANCE_OWNERSHIP := python3 scripts/verify_acceptance_ownership.py
 
-.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-maintainability verify-maintainability-strict verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-workspaces acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
+.PHONY: tools tool-versions fmt fmt-check config-check vet lint verify-gates verify-tooling-regressions verify-maintainability verify-maintainability-strict verify-skills verify-diagram-checksums verify-acceptance-ownership skill-package-check plugin-package-check test-race test-python test-native-harness test-evidence-tools build smoke-cli vuln check acceptance-protocol supervisor-fixtures acceptance-supervisor acceptance-private-cli acceptance-private-cli-default-stop acceptance-supervisor-handoff acceptance-supervisor-upgrade-recovery acceptance-workspaces acceptance-agy codex-acceptance-tools acceptance-codex acceptance-codex-timeout-resume acceptance-codex-review claude-acceptance-tools acceptance-claude acceptance-claude-interactive acceptance-pi acceptance-opencode acceptance-native acceptance-native-lifetime
 
 tools:
 	./scripts/install-tools.sh
@@ -58,7 +62,7 @@ verify-gates: tool-versions
 	./scripts/verify-tooling-regressions.sh
 
 verify-skills:
-	python3 scripts/verify_skills.py
+	$(VERIFY_SKILLS)
 	python3 -m unittest discover -s scripts -p 'test_verify_skills.py' -v
 	python3 -m unittest discover -s scripts -p 'test_skill_examples.py' -v
 
@@ -73,7 +77,7 @@ verify-diagram-checksums:
 	fi
 
 verify-acceptance-ownership:
-	python3 scripts/verify_acceptance_ownership.py
+	$(VERIFY_ACCEPTANCE_OWNERSHIP)
 	python3 -m unittest discover -s scripts -p 'test_verify_acceptance_ownership.py' -v
 
 verify-maintainability: tool-versions
@@ -95,6 +99,11 @@ plugin-package-check:
 test-race: tool-versions
 	go test -race -count=1 -timeout=30m ./...
 
+# The one standard discovery of every Python test below scripts; check runs Python tests only here.
+# The focused targets below stay for direct contributor and acceptance use.
+test-python:
+	python3 -m unittest discover -s scripts -t scripts -p 'test_*.py' -v
+
 test-native-harness:
 	python3 -m unittest discover -s scripts -p 'test_acceptance_*.py' -v
 	python3 -m unittest discover -s scripts/acceptance_tests -t scripts -p 'test_*.py' -v
@@ -105,6 +114,7 @@ test-evidence-tools:
 	python3 -m unittest discover -s scripts -p 'test_verify_release_archive.py' -v
 	python3 -m unittest discover -s scripts -p 'test_public_native_*.py' -v
 	python3 -m unittest discover -s scripts -p 'test_native_release*.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_*request.py' -v
 	python3 -m unittest discover -s scripts -p 'test_native_*history.py' -v
 	python3 -m unittest discover -s scripts -p 'test_native_submission.py' -v
 	python3 -m unittest discover -s scripts -p 'test_native_hosted_validation.py' -v
@@ -113,6 +123,12 @@ test-evidence-tools:
 	python3 -m unittest discover -s scripts -p 'test_stage_publication.py' -v
 	python3 -m unittest discover -s scripts -p 'test_release_*.py' -v
 	python3 -m unittest discover -s scripts -p 'test_published_install*.py' -v
+	python3 -m unittest discover -s scripts -p 'test_candidate_*.py' -v
+	python3 -m unittest discover -s scripts -p 'test_homebrew_formula_render.py' -v
+	python3 -m unittest discover -s scripts -p 'test_actions_artifacts.py' -v
+	python3 -m unittest discover -s scripts -p 'test_development_readiness_workflow.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_publication_contract.py' -v
+	python3 -m unittest discover -s scripts -p 'test_native_publication_root.py' -v
 
 build: tool-versions
 	@mkdir -p bin dist/delegate-darwin-amd64 dist/delegate-darwin-arm64 dist/delegate-linux-amd64 dist/delegate-linux-arm64
@@ -159,6 +175,19 @@ acceptance-private-cli: build
 		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
 		--parallel-tasks 200 \
 		--dispatch-workers 4 \
+		--output "$$receipt_dir/receipt.json"
+
+acceptance-private-cli-default-stop: build
+	@receipt_dir=$$(mktemp -d "$(BIN_DIR)/private-cli-acceptance.XXXXXX"); \
+	echo "Default stop acceptance evidence: $$receipt_dir/receipt.json"; \
+	python3 scripts/acceptance_private_cli.py \
+		--delegate "$(BIN_DIR)/delegate" \
+		--runner "$(BIN_DIR)/delegate-run" \
+		--pueue "$${DELEGATE_TEST_PUEUE:-$(BIN_DIR)/test-supervisor/pueue}" \
+		--pueued "$${DELEGATE_TEST_PUEUED:-$(BIN_DIR)/test-supervisor/pueued}" \
+		--scenario default-stop \
+		--parallel-tasks 2 \
+		--runtime-only \
 		--output "$$receipt_dir/receipt.json"
 
 acceptance-supervisor-handoff: build
@@ -251,9 +280,9 @@ vuln: tool-versions
 check:
 	$(MAKE) tool-versions
 	$(MAKE) verify-maintainability-strict
-	$(MAKE) verify-skills
+	$(VERIFY_SKILLS)
 	$(MAKE) verify-diagram-checksums
-	$(MAKE) verify-acceptance-ownership
+	$(VERIFY_ACCEPTANCE_OWNERSHIP)
 	$(MAKE) plugin-package-check
 	$(MAKE) skill-package-check
 	$(MAKE) fmt-check
@@ -262,8 +291,7 @@ check:
 	$(MAKE) lint
 	$(MAKE) verify-gates
 	$(MAKE) test-race
-	$(MAKE) test-native-harness
-	$(MAKE) test-evidence-tools
+	$(MAKE) test-python
 	$(MAKE) build
 	$(MAKE) smoke-cli
 	$(MAKE) vuln

@@ -187,7 +187,7 @@ def _default_stop_task_operations(*, capture_root, delegate, env, receipts, run_
         run_receipt.increment("admitted_task_count")
         return response
 
-    def close_task(response, cause, status_receipt):
+    def close_task(response, cause, status_receipt, expected_user_stop=None):
         task_id = response["task_id"]
         closure = await_managed_lifetime_closure(state, (task_id,), timeout=30)
         task_closure = closure.get("tasks", {}).get(task_id)
@@ -200,6 +200,7 @@ def _default_stop_task_operations(*, capture_root, delegate, env, receipts, run_
             receipts / status_receipt,
             phase="default-stop-observation",
             capture_root=capture_root,
+            expected_user_stop=expected_user_stop,
         )
         return status, closure_evidence, queue_observation
 
@@ -253,11 +254,12 @@ def _prove_default_user_stop(
         ):
             raise RuntimeError("default-stop cancel did not record a live user stop request")
         user_status, user_closure, user_queue_observation = close_task(
-            user_dispatch, "requested", "status-default-stop-user.json"
+            user_dispatch, "requested", "status-default-stop-user.json", expected_user_stop=user_stop["request_id"]
         )
         user_row = default_stop_status_row(user_status, user_stop["request_id"])
         if user_row.get("cause") != "user" or user_row.get("terminated") is not True:
             raise RuntimeError("default-stop status did not retain the completed user stop")
+        user_failure = user_status.get("failure") or {}
         task_evidence["user_stop"] = {
             "budget": DEFAULT_STOP_TASK_BUDGET,
             "dispatch": default_stop_dispatch_evidence(user_dispatch),
@@ -271,6 +273,8 @@ def _prove_default_user_stop(
             "status": {
                 "receipt": user_queue_observation["final_receipt"],
                 "liveness": user_status.get("liveness"),
+                "status": user_status.get("status"),
+                "failure": {key: user_failure.get(key) for key in ("code", "next_action")},
                 "stop": default_stop_stop_evidence(user_row),
                 "queue_ended_observation": user_queue_observation,
             },

@@ -16,11 +16,11 @@ from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.evidence.files import digest, read_json, write_json
 from scripts.delegate_acceptance.processes.contracts import (
-    BoundedCommandError, BoundedCommandResult, CommandFailure, OutputCapture,
+    BoundedCommandError, BoundedCommandResult, CommandFailure, OutputCapture, OutputSink,
 )
 from scripts.delegate_acceptance.processes.observation import inherited_environment
 from pathlib import Path
-from typing import Callable, NoReturn
+from typing import IO, Callable, NoReturn
 
 
 class Process:
@@ -507,6 +507,9 @@ def _observed_result(process: Process, code: int) -> dict[str, object]:
     return result
 
 
+_BOUNDED_COMMAND_READ_SIZE = 64 * 1024
+
+
 def _kill_wait_bounded_command(process: subprocess.Popen[bytes]) -> None:
     try:
         process.kill()
@@ -526,15 +529,13 @@ def _terminate_bounded_command(process: subprocess.Popen[bytes]) -> None:
             raise BoundedCommandError(CommandFailure.TERMINATION_TIMEOUT) from None
 
 
-def _bounded_command_pending_bytes(process: subprocess.Popen[bytes]) -> int | None:
+def _bounded_command_pending_bytes(pipe: IO[bytes]) -> int | None:
     """Inspect a pipe without adding bytes beyond the capture bound."""
-    if process.stdout is None:
-        return None
     try:
         import fcntl
         import termios
 
-        result = fcntl.ioctl(process.stdout.fileno(), termios.FIONREAD, struct.pack("I", 0))
+        result = fcntl.ioctl(pipe.fileno(), termios.FIONREAD, struct.pack("I", 0))
         return struct.unpack("I", result)[0]
     except (ImportError, OSError, struct.error, AttributeError):
         return None
@@ -551,18 +552,54 @@ def _close_bounded_command_selector(
             raise
 
 
+def _read_bounded_command_chunk(
+        process: subprocess.Popen[bytes], pipe: IO[bytes], room: int) -> bytes:
+    """Read one ready chunk of at most ``room`` bytes; ``b""`` is this pipe's EOF.
+
+    With no room left, any pending or further byte is an overflow.
+    """
+    if room == 0:
+        pending = _bounded_command_pending_bytes(pipe)
+        if pending is not None:
+            if pending > 0:
+                raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
+            chunk = b""
+            if process.poll() is None:
+                chunk = os.read(pipe.fileno(), 1)
+            if chunk:
+                raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
+            return b""
+        read_size = 1
+    else:
+        read_size = min(_BOUNDED_COMMAND_READ_SIZE, room)
+    chunk = os.read(pipe.fileno(), read_size)
+    if len(chunk) > room:
+        raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
+    return chunk
+
+
 def _bounded_command_bytes(
-        process: subprocess.Popen[bytes], max_output: int, timeout: float) -> BoundedCommandResult:
-    if process.stdout is None:
+        process: subprocess.Popen[bytes], max_output: int, timeout: float,
+        sink: OutputSink | None = None, *, capture_stderr: bool = False) -> BoundedCommandResult:
+    """Drain every captured pipe to its EOF under one shared bound and deadline, then Wait."""
+    stdout, stderr = process.stdout, (process.stderr if capture_stderr else None)
+    if stdout is None or (capture_stderr and stderr is None):
         raise BoundedCommandError(CommandFailure.CAPTURE_UNAVAILABLE)
+    captured, errors = bytearray(), bytearray()
+    # Each still-open pipe and its receiver; a pipe leaves at its own EOF.
+    receivers: dict[IO[bytes], Callable[[bytes], None]] = {
+        stdout: captured.extend if sink is None else sink}
+    if stderr is not None:
+        receivers[stderr] = errors.extend
     selector = None
     failure = None
     try:
         selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        captured = bytearray()
+        for pipe in receivers:
+            selector.register(pipe, selectors.EVENT_READ)
+        total = 0
         deadline = time.monotonic() + timeout
-        while True:
+        while receivers:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise BoundedCommandError(CommandFailure.TIMEOUT)
@@ -571,26 +608,14 @@ def _bounded_command_bytes(
                 if process.poll() is None:
                     raise BoundedCommandError(CommandFailure.TIMEOUT)
                 continue
-            if len(captured) == max_output:
-                pending = _bounded_command_pending_bytes(process)
-                if pending is not None:
-                    if pending > 0:
-                        raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
-                    chunk = b""
-                    if process.poll() is None:
-                        chunk = os.read(process.stdout.fileno(), 1)
-                    if chunk:
-                        raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
-                    break
-                read_size = 1
-            else:
-                read_size = min(8192, max_output - len(captured))
-            chunk = os.read(process.stdout.fileno(), read_size)
-            if not chunk:
-                break
-            if len(captured) + len(chunk) > max_output:
-                raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
-            captured.extend(chunk)
+            for key, _mask in events:
+                chunk = _read_bounded_command_chunk(process, key.fileobj, max_output - total)
+                if chunk:
+                    receivers[key.fileobj](chunk)
+                    total += len(chunk)
+                else:
+                    selector.unregister(key.fileobj)
+                    del receivers[key.fileobj]
     except BaseException as error:
         failure = error
         raise
@@ -600,7 +625,7 @@ def _bounded_command_bytes(
         code = process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         raise BoundedCommandError(CommandFailure.TIMEOUT) from None
-    return BoundedCommandResult(code, bytes(captured))
+    return BoundedCommandResult(code, bytes(captured), bytes(errors))
 
 
 def _bounded_command_error(error: BaseException, code: int | None, capture: bool) -> BaseException:
@@ -629,15 +654,29 @@ def _abort_bounded_command(process: subprocess.Popen[bytes], primary: BaseExcept
     raise error
 
 
-def _close_bounded_command_pipe(process: subprocess.Popen[bytes], failure: BaseException | None) -> None:
-    if process.stdout is not None:
-        try:
-            process.stdout.close()
-        except BaseException as close_error:
-            error = _bounded_command_error(close_error, process.returncode, True)
-            if failure is not None:
-                raise error from failure
-            raise error
+def _close_bounded_command_pipes(
+        process: subprocess.Popen[bytes], failure: BaseException | None, *, capture_stderr: bool) -> None:
+    """Attempt every owned pipe close; report the first fault and note any later one."""
+    pipes = (("stdout", process.stdout),)
+    if capture_stderr:
+        pipes += (("stderr", process.stderr),)
+    faults: list[tuple[str, BaseException]] = []
+    for label, pipe in pipes:
+        if pipe is not None:
+            try:
+                pipe.close()
+            except BaseException as close_error:
+                faults.append((f"{label} pipe close", close_error))
+    if not faults:
+        return
+    (_label, first), *later = faults
+    error = _bounded_command_error(first, process.returncode, True)
+    _note_cleanup_failures(error, later)
+    if failure is not None:
+        raise error from failure
+    if error is not first:
+        raise error from first
+    raise error
 
 
 def _validate_bounded_command_bounds(timeout: float, max_output: int) -> float:
@@ -656,21 +695,30 @@ def _validate_bounded_command_bounds(timeout: float, max_output: int) -> float:
 
 def run_bounded_command(
         argv: list[str], environment: dict[str, str], *, max_output: int,
-        capture: bool = False, timeout: float = 30,
-        cwd: Path | None = None) -> BoundedCommandResult:
+        capture: bool = False, capture_stderr: bool = False, timeout: float = 30,
+        cwd: Path | None = None, sink: OutputSink | None = None) -> BoundedCommandResult:
     """Own one finite direct control child through capture, failure cleanup and Wait.
 
     This operation alone may terminate its direct release-control child. The
     Process/Processes natural-only policy and provider/native scopes are separate.
     Cleanup failures retain the primary exception through ordinary chaining;
     unavailable Wait proof reports a typed closure failure with no exit code.
+    A ``sink`` receives the bounded stdout stream instead of an in-memory copy
+    and requires ``capture``; the bound is still enforced before delivery.
+    ``capture_stderr`` also requires ``capture`` and returns stderr separately in
+    ``BoundedCommandResult.stderr``; the streams are never merged and share the
+    one ``max_output`` bound (sink-delivered bytes included) and one deadline.
     """
     timeout = _validate_bounded_command_bounds(timeout, max_output)
+    if sink is not None and not capture:
+        raise ValueError("bounded command sink requires capture")
+    if capture_stderr and not capture:
+        raise ValueError("bounded command stderr capture requires capture")
     try:
         process = subprocess.Popen(
             argv, env=environment, cwd=cwd, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         raise BoundedCommandError(CommandFailure.TIMEOUT) from None
@@ -679,7 +727,7 @@ def run_bounded_command(
     failure = None
     try:
         if capture:
-            return _bounded_command_bytes(process, max_output, timeout)
+            return _bounded_command_bytes(process, max_output, timeout, sink, capture_stderr=capture_stderr)
         try:
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -692,4 +740,4 @@ def run_bounded_command(
             failure = final_error
             raise
     finally:
-        _close_bounded_command_pipe(process, failure)
+        _close_bounded_command_pipes(process, failure, capture_stderr=capture_stderr)

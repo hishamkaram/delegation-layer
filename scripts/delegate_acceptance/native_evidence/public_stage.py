@@ -1,4 +1,10 @@
-"""Bounded reader for the existing private native-evidence stage."""
+"""Bounded reader for the two closed private native-evidence stage formats.
+
+The release stage carries the archive and native receipts with their cleanup
+journals. The candidate stage replaces them with the sanitized native
+completion. The caller selects the expected kind from its trusted context; the
+reader never infers it from the stage's own ``kind`` field.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +24,9 @@ from .public_contract import (
 _CASE_RECEIPT = re.compile(r"^case-receipts/(case-[0-9]{2}-[A-Za-z0-9-]+)\.json$")
 _CASE_CLEANUP = re.compile(r"^cleanup-journals/(case-[0-9]{2}-[A-Za-z0-9-]+)\.json$")
 _RETENTION_VICTIM = re.compile(r"^retention/victim-[0-9]{2}\.json$")
+LEGACY_STAGE_KIND = "native-acceptance-sanitized-evidence"
+CANDIDATE_STAGE_KIND = "native-acceptance-candidate-evidence"
+NATIVE_COMPLETION_NAME = "native-completion.json"
 _RELEASE_CLEANUP = {
     "archive-receipt.json": ("archive", "release-cleanup/archive-receipt-cleanup.json"),
     "native-acceptance-receipt.json": ("native", "release-cleanup/native-acceptance-receipt-cleanup.json"),
@@ -25,6 +34,11 @@ _RELEASE_CLEANUP = {
 _REQUIRED_STAGE_FILES = {
     AGGREGATE_RECEIPT_NAME, "archive-receipt.json", "native-acceptance-receipt.json",
 }
+_COMMON_MANIFEST_KEYS = frozenset({
+    "schema_version", "kind", "aggregate_receipt", "case_count", "case_receipts",
+    "cleanup_journals", "retention", "file_count", "files", "credentials_in_receipt",
+})
+_COMMON_DIRECTORIES = frozenset({"case-receipts", "cleanup-journals", "retention"})
 _STAGE_READ_ERRORS = {
     "evidence_file_invalid": "public_stage_file_invalid",
     "evidence_file_too_large": "public_stage_file_too_large",
@@ -37,7 +51,33 @@ _STAGE_READ_ERRORS = {
 
 
 @dataclass(frozen=True)
+class _StageFormat:
+    """The closed inventory of one stage kind."""
+
+    manifest_keys: frozenset[str]
+    required_files: frozenset[str]
+    fixed_paths: frozenset[str]
+    directories: frozenset[str]
+
+
+def _stage_format(kind: str) -> _StageFormat:
+    if kind == LEGACY_STAGE_KIND:
+        return _StageFormat(
+            manifest_keys=_COMMON_MANIFEST_KEYS | {"release_cleanup_journals"},
+            required_files=frozenset(_REQUIRED_STAGE_FILES),
+            fixed_paths=frozenset(_REQUIRED_STAGE_FILES | {item[1] for item in _RELEASE_CLEANUP.values()}),
+            directories=_COMMON_DIRECTORIES | {"release-cleanup"})
+    if kind == CANDIDATE_STAGE_KIND:
+        required = frozenset({AGGREGATE_RECEIPT_NAME, NATIVE_COMPLETION_NAME})
+        return _StageFormat(manifest_keys=_COMMON_MANIFEST_KEYS | {"native_completion"},
+                            required_files=required, fixed_paths=required, directories=_COMMON_DIRECTORIES)
+    raise PublicProofError("public_stage_kind_invalid")
+
+
+@dataclass(frozen=True)
 class StageSnapshot:
+    """A loaded stage of the trusted ``kind`` its caller selected."""
+
     root: Path
     manifest_bytes: bytes
     manifest: dict[str, object]
@@ -46,6 +86,7 @@ class StageSnapshot:
     cases: dict[str, dict[str, object]]
     cleanup: dict[str, dict[str, str]]
     release_cleanup: dict[str, dict[str, str]]
+    kind: str
 
 
 def _reject_link_components(path: Path) -> Path:
@@ -64,10 +105,9 @@ def _reject_link_components(path: Path) -> Path:
     return current.resolve(strict=True)
 
 
-def _stage_inventory(root: Path) -> set[str]:
+def _stage_inventory(root: Path, allowed_directories: frozenset[str]) -> set[str]:
     files: set[str] = set()
     pending = [root]
-    allowed_directories = {"case-receipts", "cleanup-journals", "retention", "release-cleanup"}
     max_entries = MAX_STAGE_FILES + 1 + len(allowed_directories)
     entries_seen = 0
     while pending:
@@ -118,43 +158,42 @@ def _read_stage_file(root: Path, relative: str, limit: int) -> bytes:
         raise PublicProofError(code) from error
 
 
-def _allow_stage_path(value: object) -> str:
+def _allow_stage_path(value: object, fixed_paths: frozenset[str]) -> str:
     if not isinstance(value, str) or "\\" in value or value.startswith("/"):
         raise PublicProofError("public_stage_path_invalid")
-    if (value in _REQUIRED_STAGE_FILES or value == "aggregate-receipt.json"
+    if (value in fixed_paths
             or _CASE_RECEIPT.fullmatch(value) is not None
             or _CASE_CLEANUP.fullmatch(value) is not None
-            or value == "retention/plan.json" or _RETENTION_VICTIM.fullmatch(value) is not None
-            or value in {item[1] for item in _RELEASE_CLEANUP.values()}):
+            or value == "retention/plan.json" or _RETENTION_VICTIM.fullmatch(value) is not None):
         return value
     raise PublicProofError("public_stage_path_unexpected")
 
 
-def _manifest_files(value: object) -> dict[str, str]:
+def _manifest_files(value: object, stage_format: _StageFormat) -> dict[str, str]:
     if not isinstance(value, list) or len(value) > MAX_STAGE_FILES:
         raise PublicProofError("public_stage_manifest_files_invalid")
     result: dict[str, str] = {}
     for row in value:
         item = require_object(row, {"path", "sha256"}, "public_stage_manifest_entry_invalid")
-        path = _allow_stage_path(item.get("path"))
+        path = _allow_stage_path(item.get("path"), stage_format.fixed_paths)
         digest = require_sha256(item.get("sha256"))
         if path in result:
             raise PublicProofError("public_stage_manifest_duplicate")
         result[path] = digest
-    if not _REQUIRED_STAGE_FILES.issubset(result):
+    if not stage_format.required_files.issubset(result):
         raise PublicProofError("public_stage_required_file_missing")
     return result
 
 
 def _entry_records(value: object, files: dict[str, str], key: str,
-                   expected_paths: set[str]) -> dict[str, str]:
+                   expected_paths: set[str], fixed_paths: frozenset[str]) -> dict[str, str]:
     rows = value.get(key) if isinstance(value, dict) else None
     if not isinstance(rows, list):
         raise PublicProofError("public_stage_manifest_entries_invalid")
     observed: dict[str, str] = {}
     for row in rows:
         item = require_object(row, {"path", "sha256"}, "public_stage_manifest_entry_invalid")
-        path = _allow_stage_path(item.get("path"))
+        path = _allow_stage_path(item.get("path"), fixed_paths)
         digest = require_sha256(item.get("sha256"))
         if path in observed or files.get(path) != digest:
             raise PublicProofError("public_stage_manifest_digest_mismatch")
@@ -164,7 +203,8 @@ def _entry_records(value: object, files: dict[str, str], key: str,
     return observed
 
 
-def _case_records(value: dict[str, object], files: dict[str, str]) -> dict[str, dict[str, str]]:
+def _case_records(value: dict[str, object], files: dict[str, str],
+                  fixed_paths: frozenset[str]) -> dict[str, dict[str, str]]:
     rows = value.get("case_receipts")
     expected_paths = {f"case-receipts/{case_id}.json" for case_id in CASE_IDS}
     if not isinstance(rows, list) or len(rows) != len(CASE_IDS):
@@ -172,7 +212,7 @@ def _case_records(value: dict[str, object], files: dict[str, str]) -> dict[str, 
     by_path: dict[str, dict[str, str]] = {}
     for row in rows:
         item = require_object(row, {"path", "sha256"}, "public_stage_case_receipt_invalid")
-        path = _allow_stage_path(item.get("path"))
+        path = _allow_stage_path(item.get("path"), fixed_paths)
         digest = require_sha256(item.get("sha256"))
         if path in by_path or files.get(path) != digest:
             raise PublicProofError("public_stage_case_receipt_digest_mismatch")
@@ -183,7 +223,8 @@ def _case_records(value: dict[str, object], files: dict[str, str]) -> dict[str, 
             for path, item in by_path.items()}
 
 
-def _cleanup_records(value: dict[str, object], files: dict[str, str]) -> dict[str, dict[str, str]]:
+def _cleanup_records(value: dict[str, object], files: dict[str, str],
+                     fixed_paths: frozenset[str]) -> dict[str, dict[str, str]]:
     rows = value.get("cleanup_journals")
     if not isinstance(rows, list):
         raise PublicProofError("public_stage_cleanup_records_invalid")
@@ -192,7 +233,7 @@ def _cleanup_records(value: dict[str, object], files: dict[str, str]) -> dict[st
         item = require_object(row, {"case_id", "path", "sha256", "authorization_sha256"},
                               "public_stage_cleanup_record_invalid")
         case_id = item.get("case_id")
-        path = _allow_stage_path(item.get("path"))
+        path = _allow_stage_path(item.get("path"), fixed_paths)
         digest = require_sha256(item.get("sha256"))
         authorization = require_sha256(item.get("authorization_sha256"))
         match = _CASE_CLEANUP.fullmatch(path)
@@ -203,7 +244,8 @@ def _cleanup_records(value: dict[str, object], files: dict[str, str]) -> dict[st
     return result
 
 
-def _release_cleanup_records(value: dict[str, object], files: dict[str, str]) -> dict[str, dict[str, str]]:
+def _release_cleanup_records(value: dict[str, object], files: dict[str, str],
+                             fixed_paths: frozenset[str]) -> dict[str, dict[str, str]]:
     rows = value.get("release_cleanup_journals")
     if not isinstance(rows, list):
         raise PublicProofError("public_stage_release_cleanup_invalid")
@@ -212,7 +254,7 @@ def _release_cleanup_records(value: dict[str, object], files: dict[str, str]) ->
         item = require_object(row, {"receipt", "path", "sha256", "authorization_sha256"},
                               "public_stage_release_cleanup_invalid")
         receipt = item.get("receipt")
-        path = _allow_stage_path(item.get("path"))
+        path = _allow_stage_path(item.get("path"), fixed_paths)
         digest = require_sha256(item.get("sha256"))
         authorization = require_sha256(item.get("authorization_sha256"))
         facts = _RELEASE_CLEANUP.get(receipt) if isinstance(receipt, str) else None
@@ -225,22 +267,29 @@ def _release_cleanup_records(value: dict[str, object], files: dict[str, str]) ->
     return result
 
 
-def load_stage(stage_dir: Path) -> StageSnapshot:
+def _native_completion_record(manifest: dict[str, object], files: dict[str, str]) -> None:
+    record = require_object(manifest.get("native_completion"), {"path", "sha256"},
+                            "public_stage_native_completion_invalid")
+    if (record["path"] != NATIVE_COMPLETION_NAME
+            or files.get(NATIVE_COMPLETION_NAME) != require_sha256(record["sha256"])):
+        raise PublicProofError("public_stage_native_completion_invalid")
+
+
+def load_stage(stage_dir: Path, *, expected_kind: str = LEGACY_STAGE_KIND) -> StageSnapshot:
+    """Load a stage of the kind the caller expects; any other stage is refused."""
+    stage_format = _stage_format(expected_kind)
     root = _reject_link_components(stage_dir)
     manifest_bytes = _read_stage_file(root, "manifest.json", MAX_STAGE_FILE_BYTES)
     manifest = parse_json(manifest_bytes, "public_stage_manifest_invalid")
-    if not isinstance(manifest, dict) or set(manifest) != {
-            "schema_version", "kind", "aggregate_receipt", "case_count", "case_receipts",
-            "cleanup_journals", "retention", "release_cleanup_journals", "file_count", "files",
-            "credentials_in_receipt",
-    }:
+    if not isinstance(manifest, dict) or set(manifest) != stage_format.manifest_keys:
         raise PublicProofError("public_stage_manifest_invalid")
-    if (manifest.get("schema_version") != 1 or manifest.get("kind") != "native-acceptance-sanitized-evidence"
+    if (type(manifest.get("schema_version")) is not int or manifest["schema_version"] != 1
+            or manifest.get("kind") != expected_kind
             or manifest.get("case_count") != len(CASE_IDS)
             or manifest.get("credentials_in_receipt") is not False):
         raise PublicProofError("public_stage_manifest_invalid")
-    files = _manifest_files(manifest.get("files"))
-    actual = _stage_inventory(root)
+    files = _manifest_files(manifest.get("files"), stage_format)
+    actual = _stage_inventory(root, stage_format.directories)
     if actual != set(files) | {"manifest.json"}:
         raise PublicProofError("public_stage_unexpected_file")
     if type(manifest.get("file_count")) is not int or manifest["file_count"] != len(files):
@@ -251,10 +300,15 @@ def load_stage(stage_dir: Path) -> StageSnapshot:
     if (aggregate_record["path"] != AGGREGATE_RECEIPT_NAME
             or files.get(AGGREGATE_RECEIPT_NAME) != aggregate_record["sha256"]):
         raise PublicProofError("public_stage_aggregate_invalid")
-    case_rows = _case_records(manifest, files)
-    cleanup_rows = _cleanup_records(manifest, files)
-    release_rows = _release_cleanup_records(manifest, files)
-    _entry_records(manifest, files, "case_receipts", {row["path"] for row in case_rows.values()})
+    fixed = stage_format.fixed_paths
+    case_rows = _case_records(manifest, files, fixed)
+    cleanup_rows = _cleanup_records(manifest, files, fixed)
+    if expected_kind == LEGACY_STAGE_KIND:
+        release_rows = _release_cleanup_records(manifest, files, fixed)
+    else:
+        _native_completion_record(manifest, files)
+        release_rows = {}
+    _entry_records(manifest, files, "case_receipts", {row["path"] for row in case_rows.values()}, fixed)
     data: dict[str, bytes] = {}
     total = len(manifest_bytes)
     for path, digest in files.items():
@@ -269,4 +323,5 @@ def load_stage(stage_dir: Path) -> StageSnapshot:
     return StageSnapshot(
         root=root, manifest_bytes=manifest_bytes, manifest=manifest, data=data,
         digests=files, cases=case_rows, cleanup=cleanup_rows, release_cleanup=release_rows,
+        kind=expected_kind,
     )

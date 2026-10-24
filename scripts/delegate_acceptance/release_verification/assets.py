@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from pathlib import PurePosixPath
+from typing import Protocol
 import json
 import os
 import platform
@@ -12,8 +14,9 @@ import stat
 import tarfile
 from ..directories.operations import DirectoryOwner
 from .commands import (command)
-from .contract import (BINARIES, CHECKSUM_RE, MAX_ARCHIVE, MAX_BINARY, MAX_OUTPUT, REVISION_RE, VerificationError, binary_version)
+from .contract import (BINARIES, CHECKSUM_RE, EXPECTED_DEFAULT_STATE, MAX_ARCHIVE, MAX_BINARY, MAX_OUTPUT, REVISION_RE, VerificationError, binary_version)
 from .filesystem import (_bounded_children, _bounded_file_bytes, _reject_parent_components, _reject_symlink_components, bounded_digest)
+from .published_ports import SYSTEM_PATH
 
 
 def platform_identity() -> dict[str, str]:
@@ -199,53 +202,86 @@ def inspect_binaries(directory: Path, receipt: dict) -> dict[str, Path]:
     return paths
 
 
-def exercise_default_path(paths: dict[str, Path], directory: Path, receipt: dict,
-                          package_version: str, info: dict[str, str], home: Path, *,
-                          cwd: Path | None = None) -> None:
+class IdentityRun(Protocol):
+    """One bounded child in the caller's fixed environment and working directory."""
+
+    def __call__(self, name: str, argv: list[str], *, capture: bool = False) -> bytes: ...
+
+
+def isolated_default_environment(*, directory: Path, home: Path,
+                                 info: dict[str, str]) -> tuple[dict[str, str], Path]:
+    """Create the isolated configuration directories; return the allowlisted env and state root.
+
+    PATH is ``directory`` then the canonical system directories, so commands resolve by name.
+    """
     config = home / ".config"
     config.mkdir()
     if info["os"] == "Darwin":
         (home / "Library" / "Application Support").mkdir(parents=True)
-    search_path = os.pathsep.join((str(directory), "/usr/bin", "/bin", "/usr/sbin", "/sbin"))
-    env = {"PATH": search_path, "HOME": str(home), "XDG_CONFIG_HOME": str(config),
-           "TMPDIR": str(home), "LANG": "C", "LC_ALL": "C"}
-    for name in ("delegate", "pueue", "pueued"):
-        found = shutil.which(name, path=search_path)
-        if found is None or Path(found).resolve() != paths[name]:
-            raise VerificationError("binary_path_mismatch", f"resolve-{name}")
+    env = {"PATH": os.pathsep.join((str(directory), *SYSTEM_PATH)), "HOME": str(home),
+           "XDG_CONFIG_HOME": str(config), "TMPDIR": str(home), "LANG": "C", "LC_ALL": "C"}
+    base = home / "Library" / "Application Support" if info["os"] == "Darwin" else config
+    return env, base / "delegation-layer"
 
-    actual = binary_version(command(receipt, "delegate-version", ["delegate", "version"], env,
-                                    capture=True, cwd=cwd), "delegate")
+
+def exercise_binary_identity(*, run: IdentityRun, executables: Mapping[str, str],
+                             package_version: str, receipt: dict) -> str:
+    """Record and check the delegate version, record supervisor versions, run the catalogs.
+
+    ``executables`` maps delegate, pueue and pueued to a command name or verified absolute path.
+    """
+    delegate = executables["delegate"]
+    actual = binary_version(run("delegate-version", [delegate, "version"], capture=True), "delegate")
     receipt["delegate_build_identity"] = {"version": actual}
     if actual != package_version:
         raise VerificationError("delegate_version_mismatch", "verify-delegate-version")
     for name in ("pueue", "pueued"):
         receipt["binaries"][name]["version"] = binary_version(
-            command(receipt, f"{name}-version", [name, "--version"], env, capture=True, cwd=cwd), name
-        )
-    for label, argv in (
-        ("delegate-providers", ["delegate", "providers", "--json"]),
-        ("delegate-capabilities", ["delegate", "capabilities", "--provider", "pi:json", "--json"]),
-    ):
-        command(receipt, label, argv, env, cwd=cwd)
+            run(f"{name}-version", [executables[name], "--version"], capture=True), name)
+    run("delegate-providers", [delegate, "providers", "--json"])
+    run("delegate-capabilities", [delegate, "capabilities", "--provider", "pi:json", "--json"])
+    return actual
 
-    base = home / "Library" / "Application Support" if info["os"] == "Darwin" else config
-    state = base / "delegation-layer"
-    before = "present" if state.exists() else "absent"
+
+def observe_default_state(*, run: IdentityRun, state_root: Path, home: Path,
+                          receipt: dict) -> tuple[str, str, str]:
+    """Observe by-name ``delegate supervisor status --json`` against the default state root.
+
+    A fresh status returns before any supervisor backend is selected, so the tuple proves only
+    the default root and that the command created nothing there.
+    """
+    before = "present" if state_root.exists() else "absent"
     argv = ["delegate", "supervisor", "status", "--json"]
     try:
-        status = json.loads(command(receipt, "delegate-default-supervisor-status", argv, env,
-                                    capture=True, cwd=cwd))
+        status = json.loads(run("delegate-default-supervisor-status", argv, capture=True))
         observed = status["supervisor_control"]["state"]
     except (UnicodeError, json.JSONDecodeError, KeyError, TypeError):
         raise VerificationError("default_path_observation_invalid", "observe-default-state") from None
-    after = "present" if state.exists() else "absent"
+    after = "present" if state_root.exists() else "absent"
     receipt["default_path_observation"] = {
         "path_source": "PATH", "command_name": "delegate-default-supervisor-status",
         "explicit_path_overrides": [],
-        "isolated_home": str(home), "default_state_root": str(state),
+        "isolated_home": str(home), "default_state_root": str(state_root),
         "state_before": before, "observed_state": observed, "state_after": after,
         "delegate_pueue_config_override": "unset",
     }
-    if status.get("command") != "supervisor" or (before, observed, after) != ("absent", "not_initialized", "absent"):
+    if status.get("command") != "supervisor" or (before, observed, after) != EXPECTED_DEFAULT_STATE:
         raise VerificationError("default_path_observation_mismatch", "observe-default-state")
+    return before, observed, after
+
+
+def exercise_default_path(paths: dict[str, Path], directory: Path, receipt: dict,
+                          package_version: str, info: dict[str, str], home: Path, *,
+                          cwd: Path | None = None) -> None:
+    env, state_root = isolated_default_environment(directory=directory, home=home, info=info)
+    for name in ("delegate", "pueue", "pueued"):
+        found = shutil.which(name, path=env["PATH"])
+        if found is None or Path(found).resolve() != paths[name]:
+            raise VerificationError("binary_path_mismatch", f"resolve-{name}")
+
+    def run(name: str, argv: list[str], *, capture: bool = False) -> bytes:
+        return command(receipt, name, argv, env, capture=capture, cwd=cwd)
+
+    exercise_binary_identity(run=run, executables={name: name for name in ("delegate", "pueue", "pueued")},
+                             package_version=package_version, receipt=receipt)
+    observe_default_state(run=run, state_root=state_root, home=home, receipt=receipt)

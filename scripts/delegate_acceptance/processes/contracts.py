@@ -24,10 +24,30 @@ class OutputCapture(Protocol):
         ...
 
 
+class OutputSink(Protocol):
+    """Consumer-owned receiver of a bounded command's stdout, in arrival order.
+
+    The command owner never retains delivered bytes. A sink refuses output by
+    raising ``OSError``: the owner then terminates and waits for its child and
+    reports ``command_capture_unavailable`` with the exact exit code. Any other
+    exception propagates unchanged after the same closure.
+    """
+
+    def __call__(self, chunk: bytes, /) -> None:
+        ...
+
+
 @dataclass(frozen=True)
 class BoundedCommandResult:
+    """``output`` is empty when a sink received the stdout bytes instead.
+
+    ``stderr`` is the separately captured error stream; it stays empty unless the
+    command was run with ``capture_stderr``. A sink never receives it.
+    """
+
     exit_code: int
     output: bytes
+    stderr: bytes = b""
 
 
 class CommandFailure(Enum):

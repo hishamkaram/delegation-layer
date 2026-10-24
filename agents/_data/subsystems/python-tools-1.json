@@ -6,16 +6,42 @@
     "imports": [
       "py:__future__",
       "py:argparse",
-      "py:hashlib",
+      "py:handoff_index",
+      "py:handoff_verify",
       "py:json",
       "py:os",
       "py:pathlib",
-      "py:re",
-      "py:stat",
-      "py:subprocess",
       "py:sys",
-      "py:tempfile",
+      "py:tempfile"
+    ]
+  },
+  {
+    "name": "py:handoff_index",
+    "owner": "py:handoff_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.bounded_files",
+      "py:errno",
+      "py:os",
+      "py:pathlib",
+      "py:re",
+      "py:subprocess",
       "py:unicodedata"
+    ]
+  },
+  {
+    "name": "py:handoff_verify",
+    "owner": "py:handoff_evidence",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:delegate_acceptance.evidence.bounded_files",
+      "py:handoff_index",
+      "py:json",
+      "py:pathlib",
+      "py:typing"
     ]
   },
   {
@@ -162,8 +188,20 @@
       "py:dataclasses",
       "py:pathlib",
       "py:re",
+      "py:skill_eval_cases",
       "py:sys",
       "py:typing"
+    ]
+  },
+  {
+    "name": "py:skill_eval_cases",
+    "owner": "py:verify_skills",
+    "layer": "runtime",
+    "imports": [
+      "py:__future__",
+      "py:json",
+      "py:pathlib",
+      "py:re"
     ]
   },
   {

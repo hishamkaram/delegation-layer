@@ -615,6 +615,20 @@ predecessor is durably stopped, finish its recorded successor before choosing
 a later installation. Publication and cleanup use the same implementation in
 normal execution and recovery.
 
+Python acceptance tests run each test-owned child operation through the
+canonical [`FixtureTree.observe_operation`](../../scripts/acceptance_tests/release_fixture.py)
+before any test boundary converts or sanitizes the original I/O error. The tree
+alone classifies closure and retains its contents while closure is unknown; only
+the test's independent proof that no child can still write permits
+`remove_retained`. The same original failure reaches every tree that owns the
+child's inputs, outputs, or containing directories: the operation's own tree and
+each other owner the caller passes explicitly as `dependencies`. Each tree keeps
+its own first unresolved fact; owners are never discovered automatically. While
+closure is unknown, never clear that fact, and never reset, reuse, or restore
+the files of any such tree, including a shared class fixture. Fault doubles must
+keep the real directory owner's identity-token checks and the descriptor
+consumption described below; a double that bypasses them leaks pins.
+
 For provider lifetime, the required order is: acquire the owner lease; persist
 the deterministic scope intent; create that exact native scope; persist its
 registration; start the managed worker; if it starts, persist its exact identity
@@ -873,14 +887,6 @@ behavior from Linux, infer Linux behavior from Darwin, or use a cross-compiled
 binary, container, fixture on another kernel, or dependency claim as native
 runtime evidence.
 
-macOS temporary directories can be exposed through logical `/var` or `/tmp`
-aliases whose physical paths live under `/private`. A test that exercises a
-strict no-symlink path boundary must canonicalize its test-owned temporary root
-and executable path, including a path returned by `os.Executable`, before
-constructing evidence. It must separately prove that a deliberate
-symlinked parent is rejected. Do not weaken the production path check to accept
-the platform alias.
-
 Validate every generated Unix-domain endpoint against the target OS byte limit
 before publishing its config. The config remains the sole endpoint authority;
 when the ordinary state-rooted name is too long, select a shorter path inside
@@ -901,6 +907,44 @@ already available to Delegate and starts in an independent Unix session. Native
 Linux and macOS tests must prove descriptor inheritance and caller-process-group
 interruption. Cross-compilation proves only that the platform implementation
 builds.
+
+#### Portable paths and temporary files
+
+Linux and macOS are the proven supported hosts; the matrix below is their
+canonical inventory. Keep shared data and behavior OS-neutral so another host
+can be added behind the existing boundaries without a rewrite. Windows is not
+implemented or claimed, and the unsupported target has no gate of its own.
+
+- **Temporary files.** Allocate scratch files and directories with the language's
+  native APIs: Go `t.TempDir`, `os.MkdirTemp`, and `os.CreateTemp`, and Python
+  `tempfile`. Use the returned path and native path joins; do not hard-code a
+  shared temporary root or a literal host separator. A parent the caller owns is
+  valid, as are a stable user-supplied state root and an observed absolute
+  artifact path. Absolute paths are not banned. A shared parent is never
+  disposable.
+- **Filesystem identity.** Where an owner records filesystem identity,
+  canonicalize once and carry that form to every comparison. macOS exposes
+  temporary directories through logical `/var` or `/tmp` aliases whose physical
+  paths live under `/private`. A test of a strict no-symlink boundary derives its
+  expected identities from its canonical, test-owned root, including a path
+  returned by `os.Executable`, and uses a test-created symlink alias rather than
+  an OS temporary literal. It must separately prove that a deliberate symlinked
+  parent is rejected. Do not weaken a production symlink or path check to accept
+  a platform alias.
+- **Wire formats.** Repository-relative POSIX path strings in Git output and
+  manifests are wire formats validated at the boundary, not host filesystem
+  paths. Preserve their wire-format path semantics; convert to host paths with
+  native path APIs at the filesystem boundary.
+- **Primitives.** The existing process and filesystem owners own OS primitives,
+  signals, locks, sockets, file modes, and device flags. A platform-specific test
+  probe lives at one isolated adapter point, not in a new framework. Use
+  `os.devnull` where the host null device is needed. If an optional primitive
+  flag is missing, keep the guarantee through the owned implementation or return
+  a stable unsupported failure; never raise `AttributeError` or silently weaken
+  the guarantee.
+- **Evidence.** A changed path on a supported host needs native proof on that
+  host under [native portability proof](#native-portability-proof). Cross-builds
+  and containers on another kernel do not prove it.
 
 #### Native backend and assurance matrix
 
@@ -1074,6 +1118,100 @@ receipts, but must not transfer those responsibilities or install global
 skills/configuration. A review record is incomplete when its output is
 inconclusive or when actionable findings remain unresolved.
 
+### Worker check levels
+
+A worker report keeps these levels apart and never promotes one to another:
+
+- **Worker-local result**: a check the worker ran in its own checkout on its own
+  post-images, reported with command, exit code, and tool identity. A new
+  regression test that fails on its intended assertion before the fix is
+  *expected red*: report the failing assertion as proof the test detects the
+  defect. A failure for any other reason (a compile error outside the change, a
+  missing tool, an unrelated test) is not expected red.
+- **Setup failure**: a required tool, toolchain, cache, credential, or path is
+  missing or unusable before the behavior under test runs, for example a wrong
+  `GOROOT` or a command that is not found. Every check that depends on it is
+  `BLOCKED`; the failure is not a test result. The worker reports it and does not
+  repair a global cache, toolchain, or configuration to obtain a pass.
+- **Integrated gate**: the project gate Root runs on the combined snapshot after
+  every owned change is applied. Worker-local success does not satisfy it.
+- **Review**: independent examination of the exact snapshot after the relevant
+  gates pass on it (see [evidence status](#evidence-status-is-not-approval)).
+
+Root names the base revision, the owned files, and the interface prerequisites
+when it assigns work. A prerequisite counts when its post-image is applied and
+verified in the worker's checkout; it need not be merged. When Root provides a
+usable environment, the worker confirms in its own launch context that the tools
+it relies on run, and needs only the tools its assignment uses: a documentation
+or read-only review assignment is not blocked by an unusable Go toolchain, while
+a Go change with an unusable toolchain is `BLOCKED` and its checks stay
+unverified. A handoff lists the changed post-images (paths and digests), not
+just the owned files. An explicitly requested patch proposal is a valid
+deliverable, labeled as a proposal; it is not an implementation and does not
+complete an implementation assignment.
+
+Once required OS/provider primitives and interface prerequisites are proven,
+complete the smallest end-to-end path that demonstrates the requested outcome
+before expanding supporting tooling. Agree owner interfaces before dependent
+work starts, then run independent file owners in parallel. Use focused checks
+during edits, satisfy all applicable gates before peer review, and run required
+full gates on the final combined snapshot; reuse earlier evidence only where its
+source, binary, environment and claim bindings remain applicable, without
+replacing required native or final checks. Reopen an agreed architecture when a
+concrete finding or changed requirement invalidates it. Report progress by
+acceptance milestones, remaining gaps and the next blocking dependency, with
+component test results as supporting evidence. This sequencing preserves the
+full approved scope and never authorizes hiding gaps, weakening checks or
+deferring requirements without authorization.
+
+### Evidence status is not approval
+
+These statuses are separate, and each needs its own evidence:
+
+- **source captured**: the exact files exist in a snapshot;
+- **index complete**: the handoff index declares every input it was asked to
+  require and no unresolved item. This is declared input completeness only;
+- **receipt validated**: the owning validator accepted a bound receipt for its
+  claim class; and
+- **review approved**: an independent reviewer examined the exact snapshot and
+  recorded no actionable finding.
+
+None implies another. A complete index can carry a failed native receipt, a
+captured source can have a stale index, and a validated receipt can describe a
+different binary even when the version string is the same. Report the weakest
+status that was actually established.
+
+A memory note, earlier summary, or other dated reference is a pointer, not
+authority. Before relying on one for a current fact (a pin, version, path, or
+decision), read the current source or the accepted decision record and cite
+that. When they disagree the current source wins; report the disagreement and
+which record superseded which. Historical failures and proposals stay
+identifiable as historical. The repository does not control external memory or
+autosave tools, so treat anything they return as a dated pointer.
+
+### Verifying a handoff index
+
+`python3 scripts/handoff_evidence.py --root <repo> --verify <index>` checks that
+an index still matches the inputs it declares. It is read-only: it writes no
+index and no output file, and it refuses generation options. It regenerates the
+document through the same canonical source and fingerprint policy that wrote the
+index, from the baseline, binaries, receipts, requirements, transition rows, and
+unresolved items recorded in it, then compares: head and baseline revisions, the
+complete changed, untracked, and deleted source inventory with SHA-256 values,
+binary and receipt paths and digests, and the declared verdict. The checkout
+path and branch name are informational.
+
+A stale, missing, conflicting, symlinked, or oversized input fails, as does an
+index that is malformed, has duplicate keys, declares failure, or uses an
+unsupported version. A binary or receipt with the same identity but different
+bytes is stale. The command prints one bounded JSON report on stdout. Exit codes
+mirror generation: `0` verified and declared complete, `2` verified and declared
+incomplete, `1` anything else.
+
+Verification proves the index still matches its inputs. It does not read
+receipts for outcomes, classify native results, or judge readiness: those remain
+receipt validation and review decisions.
+
 ## Repository skill format
 
 The repository skills under `skills/` intentionally use a small, documented
@@ -1113,3 +1251,33 @@ or `(planned)` on the same line; that marker is accepted only when the line has
 one unambiguous command. Unfinished scaffolding uses explicit uppercase tokens
 such as `TODO`, `FIXME`, `TBD`, `PLACEHOLDER`, `<YOUR_NAME>`, or
 `{{REPLACE_ME}}`; ordinary prose such as “todo list” is not a marker.
+
+### Skill evaluation cases
+
+A skill may ship unprimed evaluation data at `skills/<name>/evals/cases.json`,
+owned by that skill. `make verify-skills` checks structure only: it never runs a
+model and never reads a prompt, rationale, or expected outcome for meaning. Root
+runs evaluations privately; a worker does not run paid model evaluations.
+
+The file is an object with `schema_version` (`1`), `skill` (the directory name),
+and non-empty `cases`. A case and its `control` share one shape: `id` (lowercase
+hyphenated, unique in the file), `visible` (`prompt` and `inputs`, a list of
+`{path, content}` fixture files with safe relative paths), and `hidden`
+(`expected` and `rationale`). A runner shows an agent only `visible`, and visible
+text must not contain either scenario ID. The control is a valid counterpart
+where the opposite behavior is correct, so its `expected` differs from the case's.
+Fixtures are synthetic. A case about a bounded judgment, such as byte binding or
+whether trusted claim results support approval, states that scope in its visible
+assignment and takes the other facts as given by their owners; it is not
+canonical receipt acceptance or real native proof. Both sides of a pair must be
+correct under that same assignment and differ only in the discriminating fact.
+
+`expected` grades actions and artifacts, not keywords: an `outcome`,
+`required_actions` and `forbidden_actions` (`{type, target}`), and
+`required_artifacts` (`{path, check, locator, value}`). At least one required
+action or artifact is needed, and no action is both required and forbidden. An
+action `target` is an exact path for file actions, a command prefix for
+`run-command`, a status label for `report-status`, and a topic for
+`request-clarification`. An artifact check compares a JSON field's exact scalar
+value, or a whole line, never a keyword. The closed vocabularies live in
+`scripts/skill_eval_cases.py`.

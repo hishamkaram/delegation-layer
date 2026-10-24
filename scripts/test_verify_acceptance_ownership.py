@@ -151,13 +151,15 @@ class AcceptanceOwnershipVerifierTests(unittest.TestCase):
         violations = self.violations(
             "import subprocess as process\n"
             "process.run(['/bin/rm', '-rf', str(root)])\n")
-        self.assertEqual([item.kind for item in violations], ["subprocess-removal"])
+        self.assertEqual(
+            [item.kind for item in violations], ["direct-process-owner", "subprocess-removal"])
 
     def test_literal_recursive_rm_options_are_rejected(self):
         violations = self.violations(
             "from subprocess import check_call as execute\n"
             "execute(('rm', '-r', '-f', target))\n")
-        self.assertEqual([item.kind for item in violations], ["subprocess-removal"])
+        self.assertEqual(
+            [item.kind for item in violations], ["direct-process-owner", "subprocess-removal"])
 
     def test_dynamic_or_shell_removal_is_left_unclassified(self):
         violations = self.violations(
@@ -167,7 +169,24 @@ class AcceptanceOwnershipVerifierTests(unittest.TestCase):
             "subprocess.run('rm -rf ' + str(root), shell=True)\n"
             "program = 'rm'\n"
             "subprocess.run([program, '-rf', str(root)])\n")
-        self.assertEqual(violations, ())
+        # Removal stays unclassified; every raw child still needs the shared owner.
+        self.assertEqual([item.kind for item in violations], ["direct-process-owner"] * 3)
+
+    def test_every_canonical_subprocess_api_and_its_aliases_are_rejected(self):
+        for api in sorted(verifier.SUBPROCESS_APIS):
+            with self.subTest(api=api):
+                violations = self.violations(f"import subprocess\nsubprocess.{api}(argv)\n")
+                self.assertEqual([item.kind for item in violations], ["direct-process-owner"])
+        for source in (
+            "import subprocess as sp\nsp.run(argv)\n",
+            "from subprocess import run\nrun(argv)\n",
+            "from subprocess import run as execute\nexecute(argv)\n",
+            "import subprocess\nexecute = subprocess.run\nagain = execute\nagain(argv)\n",
+            "from subprocess import check_output as read\nalias = read\nalias(argv)\n",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(
+                    [item.kind for item in self.violations(source)], ["direct-process-owner"])
 
     def test_qualified_common_owner_calls_are_allowed(self):
         violations = self.violations(
@@ -197,6 +216,7 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
         self.scripts = alias.resolve() / "scripts"
         self.scripts.mkdir()
         self.enterContext(patch.object(verifier, "SCRIPT_DIRECTORY", self.scripts))
+        self.governed = self.write_source("test_homebrew_formula_render.py")
 
     def write_source(self, relative: str, source: str = "") -> Path:
         path = self.scripts / relative
@@ -212,6 +232,7 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
             self.write_source("delegate_acceptance/nested/__init__.py"),
             self.write_source("delegate_acceptance/nested/neutral.py"),
             self.write_source("delegate_acceptance/nested/test_helpers.py"),
+            self.governed,
         }
         self.write_source("unrelated.py")
         self.write_source("acceptance_tests/test_helpers.py")
@@ -221,13 +242,15 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
 
     def test_missing_package_keeps_legacy_discovery(self):
         expected = self.write_source("acceptance_existing.py")
-        self.assertEqual(verifier.production_paths(), (expected,))
+        self.assertEqual(verifier.production_paths(), tuple(sorted({expected, self.governed})))
 
     def test_default_gate_rejects_nested_renamed_modules_and_aliases(self):
         cases = (
             ("import shutil as fs\nremove = fs.rmtree\nremove(root)\n",
              "recursive-removal"),
             ("import subprocess as sp\nspawn = sp.Popen\nspawn(argv)\n",
+             "direct-process-owner"),
+            ("import subprocess as sp\nexecute = sp.run\nexecute(argv)\n",
              "direct-process-owner"),
             ("from acceptance_supervisor_common import Processes as P\n"
              "Factory = P\nFactory(path)\n", "process-capture-owner"),
@@ -265,10 +288,27 @@ class AcceptanceOwnershipDiscoveryTests(unittest.TestCase):
             "OwnedFactory(path)\n"
             "remove = common.remove_owned_directory\n"
             "remove(token)\n")
-        self.assertEqual(verifier.production_paths(), (path,))
+        self.assertEqual(verifier.production_paths(), tuple(sorted({path, self.governed})))
         with patch.object(verifier.sys, "stderr", io.StringIO()) as errors:
             self.assertEqual(verifier.main(), 0)
         self.assertEqual(errors.getvalue(), "")
+
+    def test_default_gate_rejects_raw_children_in_the_governed_test(self):
+        for source in ("import subprocess\nsubprocess.run(argv, check=False)\n",
+                       "from subprocess import run as execute\nexecute(argv)\n"):
+            with self.subTest(source=source):
+                self.governed.write_text(source, encoding="utf-8")
+                violations = verifier.find_violations(verifier.production_paths())
+                self.assertEqual([(item.path, item.kind) for item in violations],
+                                 [(self.governed, "direct-process-owner")])
+                with patch.object(verifier.sys, "stderr", io.StringIO()) as errors:
+                    self.assertEqual(verifier.main(), 1)
+                self.assertIn(f"{self.governed}:", errors.getvalue())
+
+    def test_missing_governed_test_fails_the_default_gate(self):
+        self.governed.unlink()
+        violations = verifier.find_violations(verifier.production_paths())
+        self.assertEqual([(item.path, item.kind) for item in violations], [(self.governed, "source")])
 
     def test_nested_copies_of_owner_and_fixture_filenames_are_not_exempt(self):
         common = self.write_source(
@@ -306,6 +346,20 @@ class AcceptanceOwnershipExceptionTests(unittest.TestCase):
         self.assertEqual(
             {(item.path, item.kind) for item in violations},
             {(path, "direct-process-owner") for path in paths[1:]})
+
+    def test_canonical_owners_may_call_every_subprocess_api(self):
+        scripts = Path(verifier.__file__).resolve().parent
+        source = "import subprocess\n" + "".join(
+            f"subprocess.{api}(argv)\n" for api in sorted(verifier.SUBPROCESS_APIS))
+        for path in (verifier.PROCESS_OWNER,
+                     scripts / "delegate_acceptance" / "private_cli" / "capture.py"):
+            with self.subTest(path=path), patch.object(Path, "read_text", return_value=source):
+                self.assertEqual(verifier.find_violations((path,)), ())
+
+    def test_real_homebrew_test_is_governed_and_uses_the_shared_owner(self):
+        path = Path(verifier.__file__).resolve().parent / "test_homebrew_formula_render.py"
+        self.assertIn(path, verifier.production_paths())
+        self.assertEqual(verifier.find_violations((path,)), ())
 
     def test_fixture_exception_does_not_allow_directory_or_process_ownership(self):
         scripts = Path(verifier.__file__).resolve().parent
@@ -349,12 +403,16 @@ class CanonicalPackageOwnershipTests(unittest.TestCase):
         source = (
             "import subprocess\nsubprocess.run(['rm', '-rf', root])\n"
             "from acceptance_supervisor_common import Processes\nProcesses(path)\n")
-        for path in (verifier.PROCESS_OWNER, verifier.DIRECTORY_OWNER,
-                     verifier.DIRECTORY_JOURNAL):
+        cases = (
+            (verifier.PROCESS_OWNER, {"subprocess-removal", "process-capture-owner"}),
+            (verifier.DIRECTORY_OWNER,
+             {"subprocess-removal", "process-capture-owner", "direct-process-owner"}),
+            (verifier.DIRECTORY_JOURNAL,
+             {"subprocess-removal", "process-capture-owner", "direct-process-owner"}),
+        )
+        for path, expected in cases:
             with self.subTest(path=path):
-                self.assertEqual(
-                    {item.kind for item in self.violations(path, source)},
-                    {"subprocess-removal", "process-capture-owner"})
+                self.assertEqual({item.kind for item in self.violations(path, source)}, expected)
 
     def test_neutral_nested_operations_filename_is_not_an_owner(self):
         source = "class DirectoryOwner:\n    pass\nimport os\nos.rmdir(root)\n"

@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
-import hashlib
+from collections.abc import Mapping
 from pathlib import Path
 import sys
 
-from scripts.delegate_acceptance.evidence.bounded_files import read_bounded_regular_file
 from scripts.delegate_acceptance.release_verification.assets import resolve_release_identity
-from scripts.delegate_acceptance.release_verification.commands import command
+from scripts.delegate_acceptance.release_verification.candidate_build_source import child_environment, git
+from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.github import GitHubClient
-from scripts.delegate_acceptance.release_verification.source import source_fingerprint
-from .contract import Invocation, ReleaseError, digest_value, integer, object_value, revision_value, text_value
+from scripts.delegate_acceptance.release_verification.source import observe_harness, source_seeds
+from .contract import (
+    Invocation, ReleaseError, integer, object_value, release_request, revision_value, text_value,
+)
+
+
+# The source owner's refusals as the native release reports them; any other error keeps its identity.
+SOURCE_REFUSALS = {
+    "source_fingerprint_invalid": "native_source_fingerprint_invalid",
+    "source_path_invalid": "native_source_path_invalid",
+    "source_changed_during_observation": "native_source_changed_during_preflight",
+}
 
 
 def require_python() -> None:
@@ -19,41 +29,36 @@ def require_python() -> None:
         raise ReleaseError("python_3_12_required")
 
 
-def git_bytes(checkout: Path, env: dict[str, str], argv: list[str]) -> bytes:
-    return command({"commands": []}, "native-release-git", ["git", *argv], env,
-                   cwd=checkout, capture=True, timeout=30)
+def _harness(receipt: dict, environment: Mapping[str, str], checkout: Path) -> tuple[str, str, bool]:
+    """The native-acceptance harness of ``checkout``: HEAD commit, fingerprint and committed match."""
+    try:
+        return observe_harness(receipt, environment, checkout=checkout, seeds=source_seeds("native-acceptance"))
+    except VerificationError as error:
+        code = SOURCE_REFUSALS.get(error.code)
+        if code is None:
+            raise
+        raise ReleaseError(code) from error
 
 
-def _source(checkout: Path, env: dict[str, str], revision: str) -> tuple[str, bool]:
-    fingerprint = object_value(source_fingerprint("native-acceptance"))
-    files = fingerprint.get("files")
-    if not isinstance(files, list) or not files:
-        raise ReleaseError("native_source_fingerprint_invalid")
-    names = [text_value(object_value(row).get("path")) for row in files]
-    tracked = set(git_bytes(checkout, env, ["ls-tree", "-r", "--name-only", revision, "--", *names])
-                  .decode("utf-8").splitlines())
-    matches = True
-    for row in files:
-        item = object_value(row)
-        path = item.get("path")
-        if not isinstance(path, str) or path.startswith("/") or ".." in Path(path).parts:
-            raise ReleaseError("native_source_path_invalid")
-        data = read_bounded_regular_file(checkout / path, 8 << 20)
-        if hashlib.sha256(data).hexdigest() != digest_value(item.get("sha256")):
-            raise ReleaseError("native_source_changed_during_preflight")
-        if path not in tracked:
-            matches = False
-        else:
-            committed = git_bytes(checkout, env, ["show", f"{revision}:{path}"])
-            matches = matches and hashlib.sha256(committed).hexdigest() == item["sha256"]
-    return digest_value(fingerprint.get("sha256")), matches
+def observe_executing_harness(receipt: dict, environment: Mapping[str, str], *,
+                              checkout: Path) -> dict[str, str]:
+    """The revision and fingerprint of the native harness this checkout executes.
+
+    This is the harness that runs the native cases, never the build harness a
+    candidate manifest records. Every fingerprinted file must equal its bytes at
+    the checkout's HEAD, so the revision alone names what runs.
+    """
+    head, source_sha, committed = _harness(receipt, environment, checkout)
+    if not committed:
+        raise ReleaseError("candidate_native_harness_not_committed")
+    return {"harness_revision": head, "harness_sha256": source_sha}
 
 
 def preflight(invocation: Invocation, client: GitHubClient) -> dict[str, object]:
     require_python()
-    request, checkout = invocation.request, invocation.checkout
+    request, checkout = release_request(invocation), invocation.checkout
     env = client.environment
-    head = revision_value(git_bytes(checkout, env, ["rev-parse", "HEAD"]).decode("ascii").strip())
+    head, source_sha, committed_source = _harness(client.receipt, env, checkout)
     repository = object_value(client.json(f"repos/{request.repo}"))
     branch = object_value(client.json(f"repos/{request.repo}/branches/main"))
     commit = object_value(branch.get("commit"))
@@ -68,8 +73,8 @@ def preflight(invocation: Invocation, client: GitHubClient) -> dict[str, object]
     identity = object_value(resolve_release_identity(request.repo, request.tag,
                                                    {"commands": []}, env))
     release_revision = revision_value(identity.get("commit_sha"))
-    source_sha, committed_source = _source(checkout, env, head)
-    dirty = bool(git_bytes(checkout, env, ["status", "--porcelain", "--untracked-files=all"]))
+    dirty = bool(git(client.receipt, child_environment(env), "native-release-git-status",
+                     ["status", "--porcelain", "--untracked-files=all"], cwd=checkout))
     candidate = head != main or not committed_source or dirty
     if candidate and not request.no_submit:
         raise ReleaseError("submission_requires_clean_current_main_harness")
@@ -93,7 +98,8 @@ def preflight(invocation: Invocation, client: GitHubClient) -> dict[str, object]
 
 def recheck_submission(invocation: Invocation, client: GitHubClient,
                        facts: dict[str, object]) -> None:
-    repo, tag = invocation.request.repo, invocation.request.tag
+    request = release_request(invocation)
+    repo, tag = request.repo, request.tag
     branch = object_value(client.json(f"repos/{repo}/branches/main"))
     release = client.release(repo, tag)
     identity = object_value(resolve_release_identity(repo, tag, {"commands": []}, client.environment))

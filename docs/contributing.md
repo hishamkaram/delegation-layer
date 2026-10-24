@@ -330,122 +330,210 @@ account availability; keep authenticated acceptance receipts separate.
 
 ## Release promotion
 
-The tag workflow builds a draft release and exercises its attested archives on
-hosted Linux and macOS. Authenticated acceptance runs locally on a maintainer's
-existing host, using its existing provider logins. Do not register that host as
-a GitHub Actions runner or copy provider credentials into CI.
+A release publishes one immutable, unpublished development candidate. The bytes
+that the native, installation and review proofs exercised are the bytes that
+reach GitHub, npm and the Homebrew tap. No tag push builds anything, and nothing
+is rebuilt, repacked, reinstalled or provider-tested after publication.
 
-Make the repository public before pushing a release tag. The tag workflow first
-applies the same public-repository policy that promotion uses, before it
-installs tools, runs repository checks or creates the draft release, and refuses
-a private repository. It never changes repository visibility or settings.
-A rerun reuses the original tag-push event payload, and changing visibility
-does not rewrite it. The public check reads current repository metadata, so
-after an authorized switch to public a normal rerun can pass it and persist
-attestations. `actions/attest` chooses its signing instance from the payload's
-visibility ([source](https://github.com/actions/attest/blob/508db95dd578ae2727ebd6217d5ba78e4fbda05d/src/main.ts#L54-L63)),
-so verify the actual attestation, signing and archive results rather than
-assuming public signing. A native proof that failed for an earlier candidate
-tag stays in that tag's history; a new candidate tag does not erase it.
+Authenticated provider acceptance runs locally on a maintainer's existing host,
+using its existing provider logins. Do not register that host as a GitHub
+Actions runner or copy provider credentials into CI. Provider setup remains
+owned by the [provider guide](providers.md).
 
-To check the prerequisite locally with your existing `gh` login, run:
+### Candidate pipeline
+
+Each step uses an existing entry point; `--help` lists its exact options. The
+candidate store is the `development-proof/evidence` branch, defined by
+`PRODUCTION_STORE` in
+[`native_release/contract.py`](../scripts/delegate_acceptance/native_release/contract.py).
+The record commands take its four `--store-*` values; `run-candidate` takes the
+branch, genesis and marker values and reads the repository from the locator.
+
+| Step | Entry point | Result |
+|---|---|---|
+| 1. Build | [`ci.yml`](../.github/workflows/ci.yml) `development-candidate` job, dispatched on the task branch | Payload and locator artifacts |
+| 2. Register | `scripts/record_candidate.py register` | Locator and manifest in the store |
+| 3. Native proof | `scripts/record_candidate.py intent`, then `scripts/release_native.py run-candidate` | Native attempt on each planned Linux and macOS platform |
+| 4. Install proof | `scripts/prove_candidate_install.py`, then `scripts/record_candidate.py install` | Shell, npm and Homebrew proof on each planned platform |
+| 5. Review | `scripts/record_candidate_review.py` | Source review of the candidate's change scope |
+| 6. Readiness check | `scripts/record_candidate.py check` | Local canonical verdict; appends nothing |
+| 7. Freeze | `scripts/record_candidate.py freeze` | Freeze commit F in the store |
+| 8. Trusted readiness | [`development-readiness.yml`](../.github/workflows/development-readiness.yml) | `Development readiness` status on the pull request head |
+| 9. Merge | Required CI, then squash merge | Merge commit M on `main` |
+| 10. Publish | `scripts/release_native.py publish-candidate` | GitHub release, npm package, tap formula |
+
+Build the candidate from the task branch. The version must equal the
+`package.json` version, and the base is the exact `main` commit the branch
+builds on:
 
 ```sh
-python3 scripts/validate_native_release.py public-prerequisite \
-  --repo OWNER/REPO --github-auth local-config
+gh workflow run ci.yml --ref TASK_BRANCH -f build_candidate=true \
+  -f candidate_version=1.2.3 -f candidate_base_commit=BASE_COMMIT
 ```
 
-The default, `--github-auth environment`, requires the CI `GH_TOKEN`. The
-command applies the shared `require_public_repository` policy, which requires
-`private: false` and `visibility: "public"`. The tag workflow runs it after
-checkout and Python setup. The `resume_published` recovery step runs it first
-from the trusted `main` harness at `.local/release-harness`, never from tag
-code, and keeps its stable and latest release checks. Recovery is covered by
-fixtures only; it has not yet run on GitHub Actions.
+The job retains the payload (four platform archives, checksums, the npm TGZ,
+the Homebrew formula and `candidate-manifest.json`) and, separately, the
+locator for 90 days. The manifest binds those eight subjects by digest; the
+locator binds the manifest. Every later step reads that payload through the
+locator.
 
-From the current protected-main checkout, with Python 3.12 and an authenticated
-`gh` CLI, run:
+`run-candidate` takes the locator, the store values, the recorded attempt and
+the model options described under [Provider models](#provider-models). Use
+`resume --receipt PATH` to recover an interrupted attempt; it never reruns
+provider cases. `prove_candidate_install.py` proves exactly one channel
+(`shell`, `npm` or `homebrew`) on the host that runs it. Run Homebrew proof only
+on a fresh, disposable Homebrew host: that installation is retained.
+
+Before opening or updating the pull request, run the readiness check from a
+clean checkout of the reviewed head:
+
+```sh
+python3 scripts/record_candidate.py check \
+  --store-repository hishamkaram/delegation-layer \
+  --store-branch development-proof/evidence \
+  --store-genesis-commit d3582a5613e0194899170b5034833d1b88ddaa09 \
+  --store-marker-blob 8b5bcb36f5acbed53dcef51220d7056643ed70b9 \
+  --candidate-id CANDIDATE_ID --review-sha256 REVIEW_SHA256 \
+  --repository-root "$PWD" --receipt /absolute/path/to/new-receipt.json
+```
+
+Exit `0` means ready, `1` refused or not ready, `2` usage error and `3`
+ambiguous. A ready verdict is an observation, not a freeze, merge or
+publication grant. Freeze uses the same review and checkout.
+
+After the freeze, dispatch the trusted readiness observation from `main`. It
+reads the production store and posts the status on the pull request's current
+head:
+
+```sh
+gh workflow run development-readiness.yml --ref main \
+  -f pull_request=PR_NUMBER -f candidate_id=CANDIDATE_ID -f freeze_commit=F
+```
+
+Merge only after required CI passes. Publication rechecks the required checks,
+the readiness run and the merged tree: M's tree must equal the tree the
+candidate was built from.
+
+**First installation.** The readiness workflow runs only from `main`, so it
+cannot observe the pull request that adds it until that pull request merges.
+Complete every affected development, native, installation and review proof, and
+a ready `check`, before that first merge. A readiness run after the merge is an
+after-merge observation; it is not retroactive pre-merge proof and does not
+waive a missing proof.
+
+### Publication
+
+Readiness may run while the repository is private. Actual publication requires
+a confirmed public repository before any destination write; no command or
+workflow changes visibility.
+
+From a clean checkout of the current protected `main` commit, with Python 3.12
+and an authenticated `gh` CLI, run:
+
+```sh
+python3 scripts/release_native.py publish-candidate \
+  --candidate-id CANDIDATE_ID --freeze-commit F --merged-commit M \
+  --readiness-run-id RUN_ID --readiness-run-attempt RUN_ATTEMPT \
+  --resume-published false
+```
+
+The command prints its receipt path. It runs the shared preflight, records the
+dispatch intent, dispatches [`release.yml`](../.github/workflows/release.yml)
+once and observes that exact run. The trusted-main job alone writes
+destinations, in order: draft release and assets, the exact npm TGZ, the tag
+and public GitHub release, then the exact tap formula. The job uses the
+repository secrets `NPM_TOKEN` and `HOMEBREW_TAP_TOKEN`; the tap token needs
+write access to `hishamkaram/homebrew-tap`. The workflow's
+`release-promotion` concurrency group queues runs (`queue: max`) and never
+cancels one in progress, so publications across all tags are serialized.
+
+Exit `0` is `PUBLISHED`: the hosted report passed its validator with exact
+bindings and the local receipt is finalized. Exit `2` is `BLOCKED`: nothing was
+dispatched, or the hosted run failed before any mutation. Exit `3` is
+`INCOMPLETE`: the outcome is unresolved or a mutation may have started.
+
+The publication code revision (the `main` checkout running the command) is
+separate from the readiness run's own harness revision and from the store head.
+The store head may advance only while the candidate, freeze, review,
+publication-source and scope bindings, and fresh canonical readiness, stay
+valid. The preflight owns those rules.
+
+To recover after an interruption, observe the same invocation:
+
+```sh
+python3 scripts/release_native.py resume-publication --receipt /absolute/path/to/receipt.json
+```
+
+Recovery only observes the run uniquely bound to that invocation. It never
+dispatches again, including after an unknown dispatch acknowledgement. Only the
+first run attempt counts; do not rerun the hosted job. If nothing was ever
+dispatched, recovery reports `BLOCKED`; start a new `publish-candidate`.
+
+If npm and the GitHub release already match the candidate but the tap did not
+finish, start a new `publish-candidate` with `--resume-published true`. It
+mutates neither npm nor GitHub; it verifies them and may finish the tap.
+
+After publication, checks cover delivery, integrity and provenance only. The
+validated delivery report records the original pull request head and tree and
+the merged commit M. The hosted job publishes the candidate's existing bytes;
+it neither builds them nor creates new attestations.
+
+### Provider models
+
+The model options are exact configured values, not suggested model names.
+`--opencode-model` is required. Omit `--ccr-model` when no alias is available:
+those cases are explicitly prerequisite-blocked. A supplied alias must pass
+unchanged; a passing control never erases another submitted failure.
+
+Launch native commands from an existing logged-in shell in which `command -v`
+resolves each selected provider executable, including `claude` for CCR cases.
+An explicit SSH or tmux launch command may inherit a different `PATH` from your
+interactive shell, so run the check in the exact launch context before paid
+work. A resolved executable does not prove authentication.
+
+`--agy-model configured-model-id` is optional. It passes that exact
+caller-selected AGY model ID to both AGY cases; when omitted, AGY uses its
+native default model. A pass with an explicit model proves only that
+configuration. It is not evidence for AGY's native default model or for any
+other model ID.
+
+For a candidate, only an unavailable credential or executable is neutral, and
+only in a full-matrix scope for a provider the change did not affect. An
+authentication block is never a pass. An interrupted native phase remains
+incomplete; it is not an authentication block. Failed or unresolved native work
+retains its private evidence, and a failed attempt stays in the candidate's
+history: record its triage with `record_candidate.py triage`; a later attempt or
+candidate does not erase it. Keep the checkout unchanged while a native command
+runs: changing its captured source closure invalidates the proof.
+
+### Legacy tag-based native receipts
+
+`release_native.py run --tag` and its `resume`, `release-native-acceptance.yml`
+and `validate_native_release.py` remain supported for existing tag-based native
+receipts and historical releases. They do not authorize the candidate pipeline.
+The current `Release` workflow no longer builds a draft on tag push or accepts a
+tag and `native_validation_run_id`. Archive attestations and their readers
+belong to those historical releases; they are not provenance of a candidate.
 
 ```sh
 python3 scripts/release_native.py run --tag v1.2.3 \
   --opencode-model provider/model --ccr-model configured-alias
-```
-
-The model arguments are exact configured values, not suggested model names.
-Omit `--ccr-model` when no alias is available: those cases are explicitly
-prerequisite-blocked. A supplied alias must pass unchanged; a passing control
-never erases another submitted failure.
-
-Launch the command from an existing logged-in shell in which `command -v`
-resolves each selected provider executable, including `claude` for CCR cases.
-An explicit SSH or tmux launch command may inherit a different `PATH` from your
-interactive shell, so run the check in the exact launch context before paid
-work. A resolved executable does not prove authentication. Provider setup
-remains owned by the [provider guide](providers.md).
-
-`--agy-model configured-model-id` is optional. It passes that exact
-caller-selected AGY model ID to both AGY cases; when omitted, AGY uses its
-native default model. Projection refuses to upload a passing proof unless every
-passing AGY case recorded the requested model, or no model when the option was
-omitted. A pass with an explicit model proves only that configuration. It is not
-evidence for AGY's native default model or for any other model ID.
-
-Provider authentication and prerequisite blocks remain neutral. Promotion
-requires at least one authenticated pass and no behavior or unresolved-evidence
-failures across the canonical case matrix.
-
-The command checks prerequisites before paid work, records a durable invocation
-outside the checkout, and uses the verified release binaries for the complete
-native matrix. `--no-submit` permits local candidate-harness testing; its proof
-does not authorize promotion. Keep the checkout unchanged until the command
-finishes: changing its captured source closure invalidates the proof. To recover submission or observation after an
-interruption, use the printed receipt path:
-
-```sh
 python3 scripts/release_native.py resume --receipt /absolute/path/to/receipt.json
 ```
 
-Resume never reruns provider cases. An interrupted native phase remains
-incomplete; it is not an authentication block. Failed or unresolved native
-work retains its private evidence. Cleanup uses the existing identity-pinned
-journal only after resource lifetimes and consumers have closed.
-Projection resumes from the saved source digests and stage-directory identity.
-It reconciles identical staged bytes and interrupted file publication before
-sealing the public ZIP; it does not rerun providers or rewrite source receipts.
-
+Run from the current protected-main checkout with an authenticated `gh` CLI.
+`--no-submit` permits local harness testing; its proof authorizes nothing.
+Resume never reruns provider cases. Projection resumes from the saved source
+digests and stage-directory identity, and does not rewrite source receipts.
 Only the versioned public proof ZIP is submitted. It contains bounded case,
-option, session, lifetime, cleanup and artifact facts, with fresh digests and
-original receipt digests as provenance. It excludes host paths, raw command
-arguments, environment values and provider output. Private source receipts are
-not rewritten or uploaded. CI validates the uploader's numeric identity and
-permissions, asset ID and bytes, tag/release revision, current protected-main
-harness, source fingerprint, archive attestation and all four binary hashes.
-This is **maintainer-attested native execution validated by CI**; hosted CI
-does not execute the authenticated provider cases. It cannot detect local runs
-that the maintainer never submits, or preserve runs deleted by an authorized
-maintainer or GitHub's retention policy. Repository write access and available
-GitHub history remain trust boundaries.
+option, session, lifetime, cleanup and artifact facts; it excludes host paths,
+raw command arguments, environment values and provider output.
+`release-native-acceptance.yml` validates it as **maintainer-attested native
+execution validated by CI**; hosted CI does not execute the authenticated
+provider cases. An admitted failure for a tag stays in that tag's history; a
+passing rerun or a new tag does not hide it. Attempt reports request 90-day retention ([GitHub retention limits](https://docs.github.com/en/organizations/managing-organization-settings/configuring-the-retention-period-for-github-actions-artifacts-and-logs-in-your-organization)).
 
-`release-native-acceptance.yml` runs only on hosted infrastructure. Its attempt
-report is published even when setup or validation fails. Promotion takes an
-explicit `native_validation_run_id`, verifies that exact report, re-downloads
-the asset by ID, and checks its SHA256 again. The shared policy examines all
-relevant runs and attempts for the tag/current-main pair. An admitted failure
-blocks promotion; a passing rerun cannot hide it. Reported rejection before
-admission is correctable. Missing reports block unless later resolved for the
-same proof. History queries fail closed if their bounded pagination cannot
-establish completeness; the GitHub run-query bound is 1,000.
-Model inputs are bound before admission; a mistyped workflow input is rejected.
-An inconsistent model inside an otherwise admitted case remains a failure.
-Attempt reports request 90-day retention, the public-repository maximum; the
-repository and organization retention settings must allow it
-([GitHub retention limits](https://docs.github.com/en/organizations/managing-organization-settings/configuring-the-retention-period-for-github-actions-artifacts-and-logs-in-your-organization)). Complete promotion
-while all scoped runs and reports remain available. Expired or missing reports
-for listed runs retain their uncertainty and can block promotion; a fresh
-control is not evidence of an expired attempt's result.
-
-Before dispatching promotion, a maintainer can run the same native gate locally
-with their existing `gh` login. Use a clean checkout of the exact current
+To check a legacy proof locally, use a clean checkout of the current
 protected-`main` commit and a new, empty absolute work directory:
 
 ```sh
@@ -456,54 +544,10 @@ python3 scripts/validate_native_release.py promotion --tag v1.2.3 \
   --github-auth local-config
 ```
 
-`--github-auth local-config` removes `GH_TOKEN`, `GITHUB_TOKEN` and the
-enterprise token variables from the `gh` environment and lets `gh` use its own
-stored login. The command never reads or forwards a stored token. The default,
-`environment`, keeps the token-only authentication used by the hosted `Release`
-workflow. The command reads repository, history, release and attestation data
-from GitHub, and writes the downloaded release assets and extracted binaries
-under the work directory. It changes nothing on GitHub. A `--source-revision`
-other than the current protected-`main` commit fails the protected-main check,
-and changes to the fingerprinted harness source fail the source-fingerprint
-check. Other local changes are not necessarily detected, so use a clean
-checkout.
-
-This covers only the native validation, history and provenance gate. It does
-not check npm, Homebrew tap or other publication prerequisites. A passing result
-is advisory, not a cached authorization: promotion rechecks protected `main`,
-the complete validation history and every gate. Keep `main` and the checkout
-unchanged from native submission through promotion; a new `main` commit no
-longer matches the proof's harness revision.
-
-Dispatch the `Release` workflow from protected `main` with the exact tag and
-validation run ID. Public anonymous installation is a prerequisite: promotion
-refuses a private repository before npm publication and never changes its
-visibility automatically. The sequence is npm publication or matching-integrity
-verification, public GitHub release, then fresh anonymous npm CLI/skill installs
-on Linux and macOS. Checks compare the installed binaries with the extracted
-attested archive and the entire installed skill with the tag commit. The
-unversioned path is also checked when npm and GitHub latest both name the target.
-
-If npm and GitHub publication succeeded but installation verification or the tap
-update failed, dispatch `Release` again from `main` with the latest stable tag and
-`resume_published: true`. This verifies the existing public release and resumes
-the consumer checks and optional Homebrew publication. It does not republish npm
-or GitHub, require a native validation run ID, or run provider acceptance.
-Normal promotion still requires the exact successful native validation run ID.
-
-Keep `publish_homebrew` enabled for normal releases and configure
-`HOMEBREW_TAP_TOKEN` with write access to `hishamkaram/homebrew-tap`. Only after
-both npm consumers pass does CI publish the formula and prove a fresh macOS
-Brew install, including its `libexec` supervisor binaries. Disabling
-`publish_homebrew` skips only the tap and Brew checks. The workflow concurrency
-lock covers the complete promotion across all tags, including npm/GitHub latest
-and the shared Homebrew formula. It queues up to 100 pending runs in the order
-they enter GitHub's concurrency queue; arrivals beyond that limit are canceled.
-This uses GitHub's documented [`queue: max` setting](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency#example-queueing-multiple-pending-runs).
-A consumer failure after publication leaves
-a red workflow and partial publication; retry the same exact release after the
-cause is fixed. Matching existing publications are verified rather than
-replaced, and no provider work is rerun.
+`--github-auth local-config` removes the token variables from the `gh`
+environment and uses `gh`'s own stored login; it never reads or forwards a
+stored token. The command changes nothing on GitHub. Its result is legacy
+native validation only, not a publication preflight.
 
 ## Documentation changes
 

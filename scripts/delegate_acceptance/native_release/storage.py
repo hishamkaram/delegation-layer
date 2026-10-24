@@ -11,7 +11,7 @@ import tempfile
 from scripts.delegate_acceptance.directories.journal import directory_identity_record
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
 from scripts.delegate_acceptance.release_verification.assets import platform_identity
-from .contract import Invocation, ReleaseError, ReleaseRequest, integer, text_value
+from .contract import Invocation, ReleaseError, Request, integer, invocation_name, text_value
 from .receipt import Receipt
 
 
@@ -52,12 +52,12 @@ def validate_identity(identity: dict[str, object], path: Path) -> None:
         raise ReleaseError("release_directory_identity_changed", incomplete=True)
 
 
-def create_receipt(checkout: Path, request: ReleaseRequest, argv: list[str]) -> Receipt:
+def create_receipt(checkout: Path, request: Request, argv: list[str]) -> Receipt:
     base = state_base(checkout)
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
     safe_path(base)
     invocation_id = secrets.token_hex(16)
-    root = base / f"{request.tag}-{invocation_id}"
+    root = base / invocation_name(request, invocation_id)
     platform = platform_identity()
     owner = DirectoryOwner()
     try:

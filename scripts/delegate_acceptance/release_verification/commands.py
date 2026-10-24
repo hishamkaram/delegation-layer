@@ -8,7 +8,8 @@ from .contract import MAX_OUTPUT, VerificationError
 
 
 def command(receipt: dict, name: str, argv: list[str], env: dict[str, str], *,
-            capture=False, timeout=30, cwd: Path | None = None) -> bytes:
+            capture=False, timeout=30, cwd: Path | None = None, max_output: int = MAX_OUTPUT) -> bytes:
+    """Run one recorded release control child; ``max_output`` bounds its captured output."""
     record = {"name": name, "argv": argv, "exit_code": None}
     if cwd is not None:
         record["cwd"] = str(cwd)
@@ -18,7 +19,7 @@ def command(receipt: dict, name: str, argv: list[str], env: dict[str, str], *,
     commands.append(record)
     try:
         result = run_bounded_command(
-            argv, env, capture=capture, timeout=timeout, max_output=MAX_OUTPUT, cwd=cwd,
+            argv, env, capture=capture, timeout=timeout, max_output=max_output, cwd=cwd,
         )
     except BoundedCommandError as error:
         if capture:

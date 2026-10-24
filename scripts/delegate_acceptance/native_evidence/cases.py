@@ -7,13 +7,14 @@ from ..directories.journal import cleanup_journal_digest
 from ..directories.journal import prepare_directory_cleanup
 from ..directories.journal import read_directory_cleanup
 from ..directories.journal import resume_directory_cleanup
+from .block_reason import encode_block_reason, source_block_reason
 from .contract import (
+    COMPACT_CASE_SCHEMA_VERSION,
     EvidenceError,
     HEX_DIGEST,
     MAX_INPUT_BYTES,
     MAX_RECEIPT_BYTES,
     MatrixRow,
-    SCHEMA_VERSION,
     _case_cleanup_authorization,
     _compact_provider_versions,
     _digest_bytes,
@@ -44,8 +45,11 @@ def _sanitize_case(
         creation_identity: dict[str, object] | None,
         terminal_state: str,
         raw_deleted: bool) -> dict[str, object]:
+    reason, reason_error = source_block_reason(source, row.status)
+    if reason_error is not None and evidence_status == "RESOLVED":
+        raise EvidenceError(reason_error)
     result: dict[str, object] = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": COMPACT_CASE_SCHEMA_VERSION,
         "kind": "native-acceptance-case",
         "gate": "acceptance-native",
         "scope": "provider-permission-scenario-case-result",
@@ -56,6 +60,7 @@ def _sanitize_case(
         "status": row.status,
         "exit_code": row.exit_code,
         "evidence_status": evidence_status,
+        "block_reason": encode_block_reason(row.status, reason),
         "credentials_in_receipt": False,
         "source_receipt_sha256": source_digest,
         "cleanup": {"observation": cleanup, "raw_before": before, "raw_after": after,
@@ -119,7 +124,7 @@ def _read_case_source(case_directory: Path, status: str) -> tuple[dict[str, obje
         return None, _digest_bytes(data), "source_receipt_malformed"
     if not _source_status_matches(value, status):
         return value, _digest_bytes(data), "source_status_mismatch"
-    return value, _digest_bytes(data), None
+    return value, _digest_bytes(data), source_block_reason(value, status)[1]
 
 
 def _case_cleanup_journal(compact_path: Path) -> Path:

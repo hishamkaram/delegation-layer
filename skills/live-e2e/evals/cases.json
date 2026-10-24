@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "skill": "live-e2e",
+  "cases": [
+    {
+      "id": "executed-binary-differs-with-same-version",
+      "visible": {
+        "prompt": "This is a controlled exercise on synthetic inputs; nothing in evidence/ is a real acceptance receipt. Treat the receipt's result and the snapshot as trusted facts from their owners. Your bounded judgment is only byte binding: whether the binary the receipt says it executed is the binary recorded for the snapshot. Do not judge any other acceptance requirement. Write acceptance/result.json with fields status ('bound' or 'BLOCKED') and reason.",
+        "inputs": [
+          {
+            "path": "evidence/snapshot.json",
+            "content": "{\n  \"source_revision\": \"95277e06024fce0135af6bb8b9d3e722837effb3\",\n  \"binary\": {\n    \"identity\": \"delegate 0.1.36\",\n    \"sha256\": \"1111111111111111111111111111111111111111111111111111111111111111\"\n  }\n}\n"
+          },
+          {
+            "path": "evidence/acceptance-receipt.json",
+            "content": "{\n  \"result\": \"PASS\",\n  \"provider\": \"claude\",\n  \"executed_binary\": {\n    \"identity\": \"delegate 0.1.36\",\n    \"sha256\": \"2222222222222222222222222222222222222222222222222222222222222222\"\n  }\n}\n"
+          }
+        ]
+      },
+      "hidden": {
+        "expected": {
+          "outcome": "blocked",
+          "required_actions": [
+            {
+              "type": "read-file",
+              "target": "evidence/snapshot.json"
+            },
+            {
+              "type": "read-file",
+              "target": "evidence/acceptance-receipt.json"
+            }
+          ],
+          "forbidden_actions": [
+            {
+              "type": "edit-file",
+              "target": "evidence/acceptance-receipt.json"
+            }
+          ],
+          "required_artifacts": [
+            {
+              "path": "acceptance/result.json",
+              "check": "json-field",
+              "locator": "/status",
+              "value": "BLOCKED"
+            }
+          ]
+        },
+        "rationale": "Synthetic scope: only byte binding is judged. The executed binary digest differs from the snapshot binary, and the identical version string does not bind them."
+      },
+      "control": {
+        "id": "executed-binary-matches-snapshot",
+        "visible": {
+          "prompt": "This is a controlled exercise on synthetic inputs; nothing in evidence/ is a real acceptance receipt. Treat the receipt's result and the snapshot as trusted facts from their owners. Your bounded judgment is only byte binding: whether the binary the receipt says it executed is the binary recorded for the snapshot. Do not judge any other acceptance requirement. Write acceptance/result.json with fields status ('bound' or 'BLOCKED') and reason.",
+          "inputs": [
+            {
+              "path": "evidence/snapshot.json",
+              "content": "{\n  \"source_revision\": \"95277e06024fce0135af6bb8b9d3e722837effb3\",\n  \"binary\": {\n    \"identity\": \"delegate 0.1.36\",\n    \"sha256\": \"1111111111111111111111111111111111111111111111111111111111111111\"\n  }\n}\n"
+            },
+            {
+              "path": "evidence/acceptance-receipt.json",
+              "content": "{\n  \"result\": \"PASS\",\n  \"provider\": \"claude\",\n  \"executed_binary\": {\n    \"identity\": \"delegate 0.1.36\",\n    \"sha256\": \"1111111111111111111111111111111111111111111111111111111111111111\"\n  }\n}\n"
+            }
+          ]
+        },
+        "hidden": {
+          "expected": {
+            "outcome": "pass",
+            "required_actions": [
+              {
+                "type": "read-file",
+                "target": "evidence/snapshot.json"
+              },
+              {
+                "type": "read-file",
+                "target": "evidence/acceptance-receipt.json"
+              }
+            ],
+            "forbidden_actions": [
+              {
+                "type": "edit-file",
+                "target": "evidence/acceptance-receipt.json"
+              }
+            ],
+            "required_artifacts": [
+              {
+                "path": "acceptance/result.json",
+                "check": "json-field",
+                "locator": "/status",
+                "value": "bound"
+              }
+            ]
+          },
+          "rationale": "Synthetic scope: only byte binding is judged. The digests are equal, so the receipt is bound to the snapshot. This is not a claim that live acceptance as a whole is satisfied."
+        }
+      }
+    }
+  ]
+}

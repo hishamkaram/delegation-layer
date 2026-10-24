@@ -72,37 +72,66 @@ machine-checked boundaries and budgets.
    an immutable record only when it represents an actual cohesive domain value.
 5. Verify an OS primitive or provider protocol on the real supported OS/provider
    before implementing work that depends on it. Missing evidence blocks that
-   work and its dependents; independent proven work may continue.
+   work and its dependents; independent proven work may continue. Keep shared
+   data and decisions OS-neutral; the
+   [portable paths and temporary files](agents/_data/maintainability-contract.md#portable-paths-and-temporary-files)
+   rules own native temporary-path, identity, and platform-adapter requirements.
 6. Treat copying policy, exposing private mutable state, or changing unrelated
    modules to make an ordinary change as a design finding. Stop the dependent
    change, trace the cause, and resolve ownership before adding another patch.
 7. Run all maintainability gates and applicable tests before peer review. Tests,
    fixtures, acceptance tools, installers, and contributor tools are maintained
    code. A passing size check alone does not prove cohesion or correct ownership.
+   Keep four levels apart: a worker-local result, a setup failure (a required
+   tool is unusable, so dependent checks are blocked, not failed), the integrated
+   gate Root runs on the combined snapshot, and independent review. A regression
+   test that fails on its intended assertion before the fix is expected red, not
+   a setup failure; any other failure is not. The
+   [worker check levels](agents/_data/maintainability-contract.md#worker-check-levels)
+   own the details.
 8. Never weaken assertions, suppress a meaningful check, relabel handwritten
    code as generated, or add an exception to make a change pass. The refactor's
    baseline inventory permits only unchanged, owned findings; completion requires
    an empty inventory and zero size exceptions.
-9. Give each worker exact file ownership and interface prerequisites. One
-   writer owns each module; consumers wait for their dependencies. Root owns
+9. Give each worker the exact base revision, owned files, and interface
+   prerequisites. One writer owns each module; consumers wait for their
+   dependencies. A prerequisite counts once its post-image is applied and
+   verified in the worker's checkout; it need not be merged. The worker confirms
+   that the tools Root provided run in its own launch context, and needs only
+   the tools its assignment uses: documentation and read-only review work is not
+   blocked by an unusable Go toolchain. Never repair a global cache, toolchain,
+   or configuration to obtain a pass; report the setup failure. Root owns
    integration and Git operations. Independent reviewers verify the final result.
+   The [worker check levels](agents/_data/maintainability-contract.md#worker-check-levels)
+   also govern delivery sequencing and evidence reuse.
 10. Bind claims to source and binary fingerprints, commands, exit codes, native
-    receipts, and unresolved facts. Preserve owned resources until cleanup is
+    receipts, and unresolved facts. Source captured, index complete, receipt
+    validated, and review approved are four separate statuses; none implies
+    another, and a complete index only declares input completeness. A memory
+    note or other dated reference is a pointer: verify it against current source
+    before relying on it. The
+    [status rules](agents/_data/maintainability-contract.md#evidence-status-is-not-approval)
+    own the details. Preserve owned resources until cleanup is
     authorized by lifetime closure; tests clean their own resources automatically.
     Never dump inherited environments or enable diagnostics such as
     `NODE_DEBUG=child_process` that print them. Keep credentials out of transcripts
     and evidence; report only sanitized facts needed for the task.
 
-## Orchestrator and Reviewer: Root Codex
-Root Codex owns task orchestration, code review, branch commits, PR lifecycle, waiting for CI, and squash merges. No other agent may commit, push, create PRs, or squash merge unless explicitly requested.
-
-## Implementation and testing
-Root Codex implements directly or assigns bounded work to the session-authorized
-native models. Use Luna for bounded Go implementation, Sol for tooling, and
-Astra for architecture and independent review. Other explicitly requested
-models remain available. External workers use Delegate with the exact requested
-model, effort, and permission mode. Delegated agents have explicit file
-ownership and must not modify git history or remote repositories.
+## Roles and responsibilities
+- **Root Codex** orchestrates, may implement directly, integrates, reviews, and owns every Git mutation:
+  branch commits, pull requests, waiting for CI, squash merges, and releases. No
+  other agent commits, pushes, creates PRs, merges, or releases unless explicitly
+  requested.
+- **Implementers** are the models the session user selects for bounded work with
+  exact file ownership (currently Claude Opus or Sonnet 5.5). Repository policy
+  does not pin a model ID for future users. External workers run through Delegate
+  with the exact requested model, effort, and permission mode.
+- **Independent review** is Astra plus Root on the exact final snapshot.
+- **Model effort** follows the user's explicit instruction: Astra runs at high
+  effort for architecture and consequential review and at medium for routine
+  bounded work; Claude models run at high. Astra never runs at max.
+- Workers may read Git state. They never change history or remote repositories,
+  and they leave their changes uncommitted for Root to capture.
 
 The installed Antigravity CLI (`agy`) is used only to test its provider integration and live acceptance. Do not use agy to implement code or fix review findings. Native tests retain the required finite inputs, isolated supervision, and recorded evidence.
 
@@ -143,8 +172,8 @@ the focused repository skill that matches the work:
 
 Skills are repository instructions and are read explicitly by the working CLI;
 they require no global installation or configuration. Run `make verify-skills`
-after changing a skill or its local links. Root retains ownership of
-integration, review, commits, PRs, CI, and merges.
+after changing a skill or its local links. Root's responsibilities are listed
+under Roles and responsibilities.
 
 Supervisor lifecycle changes must use the supervisor architect skill and the
 shared contract's [durable transition matrix and composed-test
@@ -153,8 +182,7 @@ rules](agents/_data/maintainability-contract.md#durable-transition-matrix-and-co
 the [native backend proof](agents/_data/maintainability-contract.md#native-portability-proof),
 and the [live acceptance proof](agents/_data/maintainability-contract.md#live-acceptance-proof).
 Every handoff follows the contract's [source, binary, receipt, and unresolved
-evidence requirements](agents/_data/maintainability-contract.md#handoff-evidence);
-root retains integration and release decisions.
+evidence requirements](agents/_data/maintainability-contract.md#handoff-evidence).
 
 For changes involving process identity, signals, sessions/groups, waiting,
 supervisor endpoints, descriptors, or cleanup, apply the maintainability

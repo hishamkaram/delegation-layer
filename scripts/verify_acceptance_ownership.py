@@ -25,13 +25,16 @@ PROCESS_LIFECYCLE_TYPES = frozenset({"Process", "Processes", "OwnedProcess", "Pr
 DIRECTORY_LIFECYCLE_TYPES = frozenset({"DirectoryOwner", "OwnedDirectory"})
 PROCESS_FACTORY_MODULE = "functools"
 PROCESS_FACTORY_NAME = "partial"
-SUBPROCESS_LIFECYCLE_APIS = frozenset({"Popen"})
 
 # Only the identity-pinned fixture capture primitive may directly start its
 # controlled subprocess. Acceptance entrypoints use the shared process owner.
 DIRECT_FIXTURE_SUBPROCESS_FILES = frozenset({
     (PACKAGE_DIRECTORY / "private_cli" / "capture.py").resolve(),
 })
+
+# Release fixture tests outside the acceptance package whose children must also
+# run through the shared process owner. Listed exactly; a missing file fails.
+GOVERNED_TEST_FILES = ("test_homebrew_formula_render.py",)
 
 DIRECTORY_REMOVAL_REFERENCES = frozenset({
     ("shutil", "rmtree"),
@@ -81,6 +84,7 @@ class Violation:
 def production_paths() -> tuple[Path, ...]:
     paths = set(SCRIPT_DIRECTORY.glob("acceptance_*.py"))
     paths.update((SCRIPT_DIRECTORY / "delegate_acceptance").rglob("*.py"))
+    paths.update(SCRIPT_DIRECTORY / name for name in GOVERNED_TEST_FILES)
     return tuple(sorted(paths))
 
 
@@ -340,12 +344,13 @@ def _call_violations(
                     path, node, "process-capture-owner",
                     "partial Processes factories require exactly one owner or capture_root binding"))
         references = _references(node.func, aliases)
-        if (any(module == "subprocess" and symbol in SUBPROCESS_LIFECYCLE_APIS
+        if (any(module == "subprocess" and symbol in SUBPROCESS_APIS
                 for module, symbol in references) and
                 path != PROCESS_OWNER and path not in DIRECT_FIXTURE_SUBPROCESS_FILES):
             violations.append(_violation(
                 path, node, "direct-process-owner",
-                "acceptance process lifecycle must use the shared Process/Processes owner"))
+                "acceptance children must use the shared process owner "
+                "(Process/Processes or run_bounded_command)"))
         if _is_directory_removal(node, aliases) and path not in DIRECTORY_REMOVAL_FILES:
             violations.append(_violation(
                 path, node, "recursive-removal",

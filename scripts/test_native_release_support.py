@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-import tempfile
 import unittest
 
+from scripts.acceptance_tests.release_fixture import FixtureTree
 from scripts.delegate_acceptance.directories.journal import directory_identity_record
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from scripts.delegate_acceptance.native_release.contract import Invocation, ReleaseRequest, WORKFLOW
+from scripts.delegate_acceptance.native_release import execution
+from scripts.delegate_acceptance.native_release.contract import (
+    Invocation, ReleaseError, ReleaseRequest, WORKFLOW,
+)
 from scripts.delegate_acceptance.native_release.receipt import Receipt
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.github import GitHubClient
@@ -27,9 +30,10 @@ PROOF_HASH = hashlib.sha256(PAYLOAD).hexdigest()
 
 class ReleaseFixture(unittest.TestCase):
     def setUp(self) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="native-release-test-", dir=Path.home())
-        self.addCleanup(temporary.cleanup)
-        self.base = Path(temporary.name).resolve()
+        self.tree = FixtureTree.open(Path.home(), prefix="native-release-test",
+                                     label="native release fixture")
+        self.addCleanup(self.tree.dispose)
+        self.base = self.tree.root
         self.checkout = self.base / "checkout"
         self.checkout.mkdir()
         self.root = self.base / f"{TAG}-{'1' * 32}"
@@ -44,6 +48,32 @@ class ReleaseFixture(unittest.TestCase):
         self.receipt = Receipt.create(invocation, ["run", "--tag", TAG])
         owner.release()
         self.client = FakeGitHub(self.receipt)
+
+    def create_runner(self) -> None:
+        owner = DirectoryOwner()
+        token = owner.create("test runner", self.root / "runner", self.root)
+        self.complete("download", {"runner_identity": directory_identity_record(token)})
+        owner.release()
+
+    def run_finite_child(self, name: str, argv: list[str], *, timeout: int = 15) -> dict[str, object]:
+        """Run one finite child through the canonical owner; report unproven closure to the tree.
+
+        The in-memory receipt is the observation input, never a reload. The original
+        exception always propagates unchanged.
+        """
+        try:
+            return execution.run_child(
+                self.receipt, name, argv, execution.child_environment(self.receipt.invocation),
+                timeout=timeout)
+        except BaseException as error:
+            if isinstance(error, ReleaseError) and error.incomplete:
+                self.tree.observe(error)
+            else:
+                try:
+                    execution.observe_child_completion(self.receipt, name)
+                except ReleaseError as unproven:
+                    self.tree.observe(unproven)
+            raise
 
     def complete(self, name: str, result: dict[str, object],
                  intent: dict[str, object] | None = None) -> None:

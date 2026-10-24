@@ -1,12 +1,55 @@
 """Private CLI stop policy boundary."""
 
 
-def default_stop_status_row(status, request_id):
+def _exact_stop_row(status, request_id):
     rows = status.get("stops") or []
     for row in rows:
         if isinstance(row, dict) and row.get("request_id") == request_id:
             return row
-    raise RuntimeError("status did not retain the exact stop request: " + request_id)
+    return None
+
+
+def default_stop_status_row(status, request_id):
+    row = _exact_stop_row(status, request_id)
+    if row is None:
+        raise RuntimeError("status did not retain the exact stop request: " + request_id)
+    return row
+
+
+def is_documented_user_interruption(status, task_id, root_id, request_id):
+    """Report whether an ended status is the documented result of this exact user stop.
+
+    The documented user-stop projection is `interrupted`/`task_interrupted` with
+    `stop_and_report` guidance and no resume offer. `timed_out`/`task_cancelled`
+    means a budget stop also fired, which invalidates a user-only control. The
+    decision only ends queue observation; it never implies provider success.
+    """
+    row = _exact_stop_row(status, request_id)
+    continuation = status.get("continuation")
+    failure = status.get("failure")
+    pending = status.get("pending")
+    return (
+        status.get("task_id") == task_id
+        and status.get("root_id") == root_id
+        and status.get("liveness") == "ended"
+        and status.get("status") == "interrupted"
+        and status.get("publication") == "unknown"
+        and "outcome" not in status
+        and "error" not in status
+        and (pending is None or (isinstance(pending, dict) and pending.get("kind") == "supervisor-command"))
+        and isinstance(row, dict)
+        and row.get("cause") == "user"
+        and row.get("requested") is True
+        and row.get("terminated") is True
+        and isinstance(continuation, dict)
+        and continuation.get("predecessor_task_id") == task_id
+        and continuation.get("resumable") is False
+        and "continue_command" not in continuation
+        and isinstance(failure, dict)
+        and failure.get("code") == "task_interrupted"
+        and failure.get("stage") == "status"
+        and failure.get("next_action") == "stop_and_report"
+    )
 
 
 def default_stop_dispatch_evidence(response):

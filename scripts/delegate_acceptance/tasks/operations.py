@@ -51,6 +51,7 @@ from scripts.delegate_acceptance.supervisor.queue_policy import (
 )
 from scripts.delegate_acceptance.tasks.admission import durable_ordinary_admission
 from scripts.delegate_acceptance.tasks.publication import snapshot, verify_collected_outcome
+from scripts.delegate_acceptance.tasks import request_intent as intents
 from scripts.delegate_acceptance.tasks.refusal_policy import (
     empty_private_queue,
     is_static_refusal_observation,
@@ -106,6 +107,8 @@ class NativeTaskOps:
         self.expected_results: dict[str, str] = {}
         self.dispatch_attempts: set[str] = set()
         self.dispatch_observations: list[dict[str, object]] = []
+        self.request_intents: list[intents.TaskRequestIntent] = []
+        self.continuation_successors: dict[int, str] = {}
         self.inspection_attempts: set[str] = set()
         self.inspection_bindings: dict[str, dict[str, object]] = {}
         self.queue_before_replay: dict[str, object] | None = None
@@ -219,10 +222,12 @@ class NativeTaskOps:
         return self.direct(name, pueue_command(self.pueue, self.pueue_config, *operation),
                            expected, timeout)
 
-    def dispatch(self, name: str, task: str, argv: list[object]) -> dict[str, object]:
+    def dispatch(self, name: str, task: str, argv: list[object], *,
+                 request: intents.TaskRequest | None = None) -> dict[str, object]:
         """Admit one exact delegate task and bind its supervisor identity."""
         require(not self.closed, "acceptance supervisor is closed")
         require(task not in self.dispatch_attempts, "duplicate dispatch attempt")
+        self._declare_request(intents.DISPATCH, task, request)
         self.dispatch_attempts.add(task)
         process = self.processes.run(name, argv, self.state_parent,
                                      expected=None, timeout=45)
@@ -292,9 +297,24 @@ class NativeTaskOps:
         write_json(self.output / (name + "-" + command + ".json"), response)
         return response
 
-    def continue_task(self, name: str, argv: list[object]) -> tuple[str, dict[str, object]]:
+    def _declare_request(self, command: str, task: str | None,
+                         request: intents.TaskRequest | None) -> int | None:
+        """Retain the caller's known inputs before the fallible launch; legacy callers bind none."""
+        if request is not None:
+            self.request_intents.append(intents.TaskRequestIntent(
+                len(self.request_intents), command, str(self.state), self.root_id, task, request))
+        return None if request is None else len(self.request_intents) - 1
+
+    def bind_continuation_successor(self, ordinal: int, task: str) -> None:
+        """Bind one declared continuation to its Delegate-assigned successor at most once."""
+        intents.require_successor_binding(self.request_intents, self.continuation_successors, ordinal, task)
+        self.continuation_successors[ordinal] = task
+
+    def continue_task(self, name: str, argv: list[object], *,
+                      request: intents.TaskRequest | None = None) -> tuple[str, dict[str, object]]:
         """Admit one public continuation after Delegate assigns its successor ID."""
         require(not self.closed, "acceptance supervisor is closed")
+        ordinal = self._declare_request(intents.CONTINUE, None, request)
         process = self.processes.run(name, argv, self.state_parent,
                                      expected=None, timeout=45)
         response = parse_json_output(process, name)
@@ -304,6 +324,8 @@ class NativeTaskOps:
         require(task not in self.dispatch_attempts,
                 "continuation reused an existing task identity")
         self.dispatch_attempts.add(task)
+        if ordinal is not None:
+            self.bind_continuation_successor(ordinal, task)
         if response.get("admission") == "admitted":
             try:
                 admitted = self.record_admission(name, task, response, command="continue")

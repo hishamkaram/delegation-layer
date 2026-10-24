@@ -16,7 +16,7 @@ from scripts.delegate_acceptance.native_evidence.lifetime_closure import (
     TASK_FACT_KEYS,
     lifetime_closure_error,
 )
-from scripts.delegate_acceptance.native_evidence.public_validation import _DENIED_KEYS
+from scripts.delegate_acceptance.native_evidence.public_contract import DENIED_KEYS
 
 
 def acceptance_for(fixture: InspectionFixture, tasks: dict[str, str], *,
@@ -74,7 +74,7 @@ class ManagedClosureProducerTests(unittest.TestCase):
         self.assertEqual(inspection["request_sha256"],
                          digest(fixture.state / "inspections" / TASK / "request.json"))
         self.assertIsNone(proof["model_discovery"])
-        self.assertFalse(walk_keys(proof) & ({"pid", "boot_id", "argv", "env"} | _DENIED_KEYS))
+        self.assertFalse(walk_keys(proof) & ({"pid", "boot_id", "argv", "env"} | DENIED_KEYS))
         self.assertNotIn(str(fixture.base), json.dumps(proof))
         self.assertIsNone(lifetime_closure_error(proof, task_ids=[TASK]))
 

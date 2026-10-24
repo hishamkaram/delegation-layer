@@ -32,27 +32,31 @@ lifecycle or Git-subprocess execution policy in an adapter or a second layer.
 
 ## Workflow
 
-1. Map the consumer that needs each operation and assign the interface to that
+1. Treat the accepted decision record as the authority for a boundary. Memory
+   notes, earlier plans, and prior receipts are dated history: verify one
+   against current source before building on it, and record which decision
+   superseded which.
+2. Map the consumer that needs each operation and assign the interface to that
    consumer. Keep preparation and interpretation provider-owned while shared
    execution and publication stay in the core.
-2. Trace data and resource lifetimes through admission, launch, evidence
+3. Trace data and resource lifetimes through admission, launch, evidence
    sealing, collection, and publication. Record every affected state change in
    the [canonical durable transition
    matrix](../../agents/_data/maintainability-contract.md#durable-transition-matrix-and-composed-tests),
    including ownership transfer, commit point, recovery, consumer verdict, and
    named composed test.
-3. Compare the proposed abstraction with existing task, execution, predicate,
+4. Compare the proposed abstraction with existing task, execution, predicate,
    usage, lifecycle, catalog, and harness types. Reuse a type when it already
    expresses the contract; add a new one only with a concrete consumer.
-4. Compare keeping the current boundary or making the smallest refactor with
+5. Compare keeping the current boundary or making the smallest refactor with
    the proposed design and any relevant alternative. Choose the option with
    the clearest ownership and lowest supported maintenance cost, then record
    why the alternatives were rejected.
-5. Check duplicate registration, historical interpretation, unsupported
+6. Check duplicate registration, historical interpretation, unsupported
    options, identity/session compatibility, the no-launch collection rule, and
    the invariants' [create-once ambiguity
    classifications](../../agents/_data/delegation-invariants.md#ambiguous-create-once-writes).
-6. Write the bounded [evidence
+7. Write the bounded [evidence
    handoff](../../agents/_data/maintainability-contract.md#handoff-evidence) for
    the affected matrix rows. Record a reason for each new dependency or
    abstraction.

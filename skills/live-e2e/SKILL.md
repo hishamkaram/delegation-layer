@@ -56,7 +56,12 @@ owner.
    requirements](../../agents/_data/maintainability-contract.md#native-portability-proof).
    Keep fixture, provider, and native lifecycle claims separate; when credentials
    exist only in an interactive login context, launch the rebuilt Delegate
-   inside that context rather than calling the provider directly.
+   inside that exact login context rather than calling the provider directly.
+   Run this during development, before the pull request, with the exact package
+   or binary under test: record its resolved path, SHA-256, and build identity,
+   and bind them to the source snapshot. A binary whose digest differs from the
+   one recorded, or that does not match the snapshot, is `BLOCKED` even when the
+   version string is the same.
 2. Launch through the shipped dispatcher/runner with its isolated private
    supervisor and finite stdin followed by EOF for ordinary tasks, or the
    explicit interactive profile with core-owned protocol stdin until native
@@ -116,12 +121,14 @@ and observational replay. Do not require outside-workspace denial from a mode
 that delegates its access policy to the provider. Keep historical denial
 fixtures as tests of their original contracts.
 
-For release acceptance, use the local maintainer entrypoint in
-[release promotion](../../docs/contributing.md#release-promotion). Keep provider
-credentials on the authenticated host; submit only the versioned public proof
-for hosted validation. Submission recovery never reruns paid native cases.
-Record maintainer-attested native execution and hosted proof validation as
-separate claims, and retain any visibility or GitHub-access prerequisite block.
+For release acceptance, prove the development candidate during development,
+before its pull request, through the
+[candidate pipeline](../../docs/contributing.md#candidate-pipeline). Record the
+attempt intent before native work, and let the canonical record commands write
+the candidate store. Keep provider credentials on the authenticated local host.
+Recovery never reruns paid native cases. Retain any visibility or GitHub-access
+prerequisite block. Tag-based public proof ZIP submission applies only to
+[legacy receipts](../../docs/contributing.md#legacy-tag-based-native-receipts).
 
 ## Deliverables
 

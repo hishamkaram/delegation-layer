@@ -7,34 +7,43 @@ import hashlib
 from scripts.delegate_acceptance.native_evidence.public_contract import MAX_PUBLIC_ZIP_BYTES
 from scripts.delegate_acceptance.release_verification.commands import command
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
-from scripts.delegate_acceptance.release_verification.github import GitHubClient
+from scripts.delegate_acceptance.release_verification.github import (
+    ASSETS_STAGE, GitHubClient, iter_release_assets,
+)
 from scripts.delegate_acceptance.release_verification.native_history import proof_title
 from scripts.delegate_acceptance.release_verification.native_remote_history import matching_runs
 from scripts.delegate_acceptance.release_verification.native_reports import ReportScope
 from .contract import (
-    ReleaseError, WORKFLOW, WORKFLOW_RUN_PATHS, digest_value, integer, object_value, text_value,
+    ReleaseError, WORKFLOW, WORKFLOW_RUN_PATHS, digest_value, integer, object_value,
+    parse_workflow_dispatch_ack, text_value,
 )
 from .preflight import recheck_submission
 from .projection import read_public
 from .receipt import Receipt
 
 
+# The shared listing's own refusals keep this receipt's legacy resumable identities.
+_LEGACY_ASSET_CODES = {
+    ("github_release_assets_invalid", ASSETS_STAGE): "release_assets_invalid",
+    ("github_release_assets_pagination_incomplete", ASSETS_STAGE): "release_assets_pagination_incomplete",
+}
+
+
 def _asset_matches(receipt: Receipt, client: GitHubClient) -> list[dict[str, object]]:
     invocation = receipt.invocation
-    repo = invocation.request.repo
     release_id = integer(receipt.stage("preflight").result.get("release_id"), minimum=1)
     found: list[dict[str, object]] = []
-    for page in range(1, 101):
-        rows = client.json(f"repos/{repo}/releases/{release_id}/assets?per_page=100&page={page}", limit=1 << 20)
-        if not isinstance(rows, list) or len(rows) > 100:
-            raise ReleaseError("release_assets_invalid", incomplete=True)
-        for value in rows:
+    try:
+        for value in iter_release_assets(client, invocation.request.repo, release_id):
             item = object_value(value)
             if item.get("name") == invocation.proof_name:
                 found.append(item)
-        if len(rows) < 100:
-            return found
-    raise ReleaseError("release_assets_pagination_incomplete", incomplete=True)
+    except VerificationError as error:
+        legacy = _LEGACY_ASSET_CODES.get((error.code, error.stage))
+        if legacy is None:
+            raise
+        raise ReleaseError(legacy, incomplete=True) from error
+    return found
 
 
 def reconcile_asset(receipt: Receipt, client: GitHubClient) -> dict[str, object] | None:
@@ -97,27 +106,40 @@ def _scope(receipt: Receipt) -> ReportScope:
                        receipt.invocation.request.tag, text_value(facts.get("harness_revision")))
 
 
-def validate_run(receipt: Receipt, value: object, *, expected_id: int | None = None,
-                 expected_title: str | None = None) -> dict[str, object]:
+def bind_dispatched_run(value: object, *, repository: str, title: object, revision: object,
+                        paths: tuple[str, ...], expected_id: int | None, code: str) -> dict[str, object]:
+    """Bind one listed or read run to the exact dispatch: its ID, title, head, main, event, path and URL.
+
+    The caller supplies the trusted expectations and its own refusal ``code``.
+    A title or revision that is not text binds nothing. A mismatch names only
+    the fixed fields that failed, never observed values.
+    """
     row = object_value(value)
     run_id = integer(row.get("id"), minimum=1)
-    title = (receipt.stage("dispatch").intent.get("title")
-             if expected_title is None else expected_title)
-    revision = receipt.stage("preflight").result.get("harness_revision")
-    repo = receipt.invocation.request.repo
     bindings = (
         ("id", expected_id is None or run_id == expected_id),
-        ("display_title", row.get("display_title") == title),
-        ("head_sha", row.get("head_sha") == revision),
+        ("display_title", isinstance(title, str) and row.get("display_title") == title),
+        ("head_sha", isinstance(revision, str) and row.get("head_sha") == revision),
         ("head_branch", row.get("head_branch") == "main"),
         ("event", row.get("event") == "workflow_dispatch"),
-        ("path", any(row.get("path") == path for path in WORKFLOW_RUN_PATHS)),
-        ("html_url", row.get("html_url") == f"https://github.com/{repo}/actions/runs/{run_id}"),
+        ("path", any(row.get("path") == path for path in paths)),
+        ("html_url", row.get("html_url") == f"https://github.com/{repository}/actions/runs/{run_id}"),
     )
     mismatched = tuple(name for name, bound in bindings if not bound)
     if mismatched:
-        raise ReleaseError("native_validation_run_unbound", incomplete=True, mismatched=mismatched)
+        raise ReleaseError(code, incomplete=True, mismatched=mismatched)
     return row
+
+
+def validate_run(receipt: Receipt, value: object, *, expected_id: int | None = None,
+                 expected_title: str | None = None) -> dict[str, object]:
+    """The native validation run of a legacy release receipt, bound by ``bind_dispatched_run``."""
+    title = (receipt.stage("dispatch").intent.get("title")
+             if expected_title is None else expected_title)
+    return bind_dispatched_run(value, repository=receipt.invocation.request.repo, title=title,
+                               revision=receipt.stage("preflight").result.get("harness_revision"),
+                               paths=WORKFLOW_RUN_PATHS, expected_id=expected_id,
+                               code="native_validation_run_unbound")
 
 
 def reconcile_dispatch(receipt: Receipt, client: GitHubClient, *,
@@ -154,14 +176,10 @@ def dispatch(receipt: Receipt, client: GitHubClient) -> None:
     if observed is None and fresh:
         fields = {"ref": "main", **{f"inputs[{key}]": value for key, value in inputs.items()}}
         try:
-            response = object_value(client.json(
+            ack = parse_workflow_dispatch_ack(client.json(
                 f"repos/{request.repo}/actions/workflows/{WORKFLOW}/dispatches", method="POST", fields=fields,
-            ))
-            run_id = integer(response.get("workflow_run_id"), minimum=1)
-            if (response.get("html_url") != f"https://github.com/{request.repo}/actions/runs/{run_id}"
-                    or response.get("run_url") != f"https://api.github.com/repos/{request.repo}/actions/runs/{run_id}"):
-                raise ReleaseError("dispatch_response_identity_invalid", incomplete=True)
-            receipt.complete("dispatch", {"run_id": run_id, "html_url": response["html_url"], "title": title})
+            ), request.repo)
+            receipt.complete("dispatch", {"run_id": ack.run_id, "html_url": ack.html_url, "title": title})
             return
         except (VerificationError, ReleaseError):
             observed = reconcile_dispatch(receipt, client)

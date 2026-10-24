@@ -1,7 +1,15 @@
-"""Staging for native acceptance evidence."""
+"""Staging for native acceptance evidence.
+
+Both stage kinds share the source lease, aggregate validation, the case,
+cleanup and retention plan, the publication transaction with its manifest-last
+commit and recovery, and the published-tree verification. Only their finishers
+differ: the release stage adds the archive and native receipts, the candidate
+stage adds the sanitized native completion.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable
 from ..directories.journal import acquire_exclusive_file_lock
@@ -29,10 +37,32 @@ from .filesystem import (
     _reject_path_components,
     _write_bytes_atomic,
 )
+from .candidate_proof import completion_record, require_completion_binding, require_harness_revision
+from .public_contract import (
+    CandidateProofExpectation, NativeCompletion, PublicProofError,
+    canonical_json as public_canonical_json,
+)
+from .public_stage import CANDIDATE_STAGE_KIND, LEGACY_STAGE_KIND, NATIVE_COMPLETION_NAME
 from .stage_publication import StagePlan, publish_stage
 from .validation import (
     validate_aggregate_receipt,
 )
+
+
+_LEGACY_SOURCE_NAMES = frozenset({AGGREGATE_RECEIPT_NAME, "archive-receipt.json", "native-acceptance-receipt.json"})
+_CANDIDATE_SOURCE_NAMES = frozenset({AGGREGATE_RECEIPT_NAME, NATIVE_COMPLETION_NAME})
+
+
+def _with_source_lease(aggregate_path: Path, stage: Callable[[], dict[str, object]]) -> dict[str, object]:
+    """Run ``stage`` while holding the source aggregate's ownership lease."""
+    source_root = aggregate_path.absolute().parent
+    lock_fd = acquire_exclusive_file_lock(
+        source_root.parent / ("." + source_root.name + ".lock"),
+    )
+    try:
+        return stage()
+    finally:
+        release_exclusive_file_lock(lock_fd)
 
 
 def stage_evidence(
@@ -45,24 +75,39 @@ def stage_evidence(
         expected_source_revision: str | None = None,
         directory_identity: dict[str, object] | None = None,
         expected_source_digests: dict[str, str] | None = None) -> dict[str, object]:
-    """Stage evidence while retaining the source aggregate's ownership lease."""
-    source_root = aggregate_path.absolute().parent
-    lock_fd = acquire_exclusive_file_lock(
-        source_root.parent / ("." + source_root.name + ".lock"),
-    )
-    try:
-        return _stage_evidence_locked(
-            aggregate_path,
-            output,
-            archive_receipt=archive_receipt,
-            native_receipt=native_receipt,
-            expected_tag=expected_tag,
-            expected_source_revision=expected_source_revision,
-            directory_identity=directory_identity,
-            expected_source_digests=expected_source_digests,
-        )
-    finally:
-        release_exclusive_file_lock(lock_fd)
+    """Stage release evidence while retaining the source aggregate's ownership lease."""
+    return _with_source_lease(aggregate_path, lambda: _stage_evidence_locked(
+        aggregate_path,
+        output,
+        archive_receipt=archive_receipt,
+        native_receipt=native_receipt,
+        expected_tag=expected_tag,
+        expected_source_revision=expected_source_revision,
+        directory_identity=directory_identity,
+        expected_source_digests=expected_source_digests,
+    ))
+
+
+def stage_candidate_evidence(
+        aggregate_path: Path,
+        output: Path,
+        *,
+        completion: NativeCompletion,
+        expectation: CandidateProofExpectation,
+        directory_identity: dict[str, object] | None = None,
+        expected_source_digests: dict[str, str] | None = None) -> dict[str, object]:
+    """Stage candidate evidence for one observed native completion of the expected invocation.
+
+    The completion must be the natural Wait of the expected invocation, and the
+    aggregate must carry its exit code and the expected native harness revision.
+    A natural Wait alone proves no case or invocation closure.
+    """
+    if not isinstance(completion, NativeCompletion) or not isinstance(expectation, CandidateProofExpectation):
+        raise EvidenceError("stage_candidate_input_invalid")
+    return _with_source_lease(aggregate_path, lambda: _stage_candidate_locked(
+        aggregate_path, output, completion=completion, expectation=expectation,
+        directory_identity=directory_identity, expected_source_digests=expected_source_digests,
+    ))
 
 
 def _stage_cases(
@@ -245,6 +290,27 @@ def _verify_staged_manifest(output: Path, files: list[dict[str, str]]) -> None:
             raise EvidenceError("stage_manifest_digest_mismatch")
 
 
+def _validated_source(
+        aggregate_path: Path, output: Path, extra_sources: tuple[Path | None, ...], *,
+        expected_tag: str | None, expected_source_revision: str | None,
+) -> tuple[Path, Path, dict[str, object], str]:
+    aggregate_path = aggregate_path.absolute()
+    output = output.absolute()
+    _reject_path_components(aggregate_path)
+    _reject_path_components(output)
+    for source in extra_sources:
+        if source is not None:
+            _reject_path_components(source)
+    if output.name.startswith("."):
+        raise EvidenceError("stage_output_hidden_or_parent")
+    aggregate, aggregate_digest = validate_aggregate_receipt(
+        aggregate_path,
+        expected_tag=expected_tag,
+        expected_source_revision=expected_source_revision,
+    )
+    return aggregate_path, output, aggregate, aggregate_digest
+
+
 def _stage_evidence_locked(
         aggregate_path: Path,
         output: Path,
@@ -255,33 +321,59 @@ def _stage_evidence_locked(
         expected_source_revision: str | None = None,
         directory_identity: dict[str, object] | None = None,
         expected_source_digests: dict[str, str] | None = None) -> dict[str, object]:
-    aggregate_path = aggregate_path.absolute()
-    output = output.absolute()
-    _reject_path_components(aggregate_path)
-    _reject_path_components(output)
-    for source in (archive_receipt, native_receipt):
-        if source is not None:
-            _reject_path_components(source)
-    if output.name.startswith("."):
-        raise EvidenceError("stage_output_hidden_or_parent")
-    aggregate, aggregate_digest = validate_aggregate_receipt(
-        aggregate_path,
-        expected_tag=expected_tag,
-        expected_source_revision=expected_source_revision,
-    )
+    aggregate_path, output, aggregate, aggregate_digest = _validated_source(
+        aggregate_path, output, (archive_receipt, native_receipt),
+        expected_tag=expected_tag, expected_source_revision=expected_source_revision)
     plan = StagePlan(output)
-    manifest, files = _build_stage_plan(aggregate_path, aggregate, aggregate_digest,
-                                       archive_receipt, native_receipt, plan)
-    _check_source_digests(plan, expected_source_digests)
-    publish_stage(plan, directory_identity)
-    _verify_staged_manifest(output, files)
-    return manifest
+    common = _plan_common(aggregate_path, aggregate, aggregate_digest, plan)
+    release_cleanup_journals = _stage_release_receipts(
+        output, archive_receipt, native_receipt, common.files, plan.put,
+    )
+    manifest = _finish_manifest(plan, common, LEGACY_STAGE_KIND,
+                                {"release_cleanup_journals": release_cleanup_journals})
+    return _publish(plan, common.files, manifest, directory_identity,
+                    expected_source_digests, _LEGACY_SOURCE_NAMES)
 
 
-def _build_stage_plan(
-        aggregate_path: Path, aggregate: dict[str, object], aggregate_digest: str,
-        archive_receipt: Path | None, native_receipt: Path | None,
-        plan: StagePlan) -> tuple[dict[str, object], list[dict[str, str]]]:
+def _stage_candidate_locked(
+        aggregate_path: Path, output: Path, *, completion: NativeCompletion,
+        expectation: CandidateProofExpectation, directory_identity: dict[str, object] | None,
+        expected_source_digests: dict[str, str] | None) -> dict[str, object]:
+    aggregate_path, output, aggregate, aggregate_digest = _validated_source(
+        aggregate_path, output, (), expected_tag=None,
+        expected_source_revision=expectation.harness_revision)
+    try:
+        require_completion_binding(completion, expectation, exit_code=aggregate.get("exit_code"))
+        require_harness_revision(aggregate, expectation)
+    except PublicProofError as error:
+        raise EvidenceError(str(error)) from error
+    plan = StagePlan(output)
+    common = _plan_common(aggregate_path, aggregate, aggregate_digest, plan)
+    completion_bytes = public_canonical_json(completion_record(completion))
+    plan.put(output / NATIVE_COMPLETION_NAME, completion_bytes, MAX_RECEIPT_BYTES)
+    record = {"path": NATIVE_COMPLETION_NAME, "sha256": _digest_bytes(completion_bytes)}
+    common.files.append(record)
+    manifest = _finish_manifest(plan, common, CANDIDATE_STAGE_KIND, {"native_completion": record})
+    return _publish(plan, common.files, manifest, directory_identity,
+                    expected_source_digests, _CANDIDATE_SOURCE_NAMES)
+
+
+@dataclass(frozen=True)
+class _CommonPlan:
+    """The planned aggregate, case, cleanup and retention entries both stage kinds share.
+
+    ``files`` records every planned file in plan order; a finisher appends its own.
+    """
+
+    aggregate_digest: str
+    files: list[dict[str, str]]
+    case_receipts: list[dict[str, str]]
+    cleanup_journals: list[dict[str, str]]
+    retention: dict[str, object]
+
+
+def _plan_common(aggregate_path: Path, aggregate: dict[str, object], aggregate_digest: str,
+                 plan: StagePlan) -> _CommonPlan:
     output = plan.output
     plan.put(output / AGGREGATE_RECEIPT_NAME, _bounded_file_bytes(
         aggregate_path, MAX_AGGREGATE_BYTES,
@@ -289,34 +381,46 @@ def _build_stage_plan(
     files: list[dict[str, str]] = [{"path": AGGREGATE_RECEIPT_NAME, "sha256": aggregate_digest}]
     case_receipts, cleanup_journals = _stage_cases(aggregate_path, output, aggregate, files, plan.put)
     retention = _stage_retention(aggregate_path, output, aggregate, files, plan.put)
-    release_cleanup_journals = _stage_release_receipts(
-        output, archive_receipt, native_receipt, files, plan.put,
-    )
+    return _CommonPlan(aggregate_digest, files, case_receipts, cleanup_journals, retention)
+
+
+def _finish_manifest(plan: StagePlan, common: _CommonPlan, kind: str,
+                     kind_fields: dict[str, object]) -> dict[str, object]:
+    """Seal the plan with the manifest of ``kind``; the manifest is written last."""
     planned_files = [{"path": item.name, "sha256": _digest_bytes(item.data)}
                      for item in plan.files()]
-    if files != planned_files:
+    if common.files != planned_files:
         raise EvidenceError("stage_manifest_plan_mismatch")
     manifest: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
-        "kind": "native-acceptance-sanitized-evidence",
-        "aggregate_receipt": {"path": AGGREGATE_RECEIPT_NAME, "sha256": aggregate_digest},
+        "kind": kind,
+        "aggregate_receipt": {"path": AGGREGATE_RECEIPT_NAME, "sha256": common.aggregate_digest},
         "case_count": len(EXPECTED_CASES),
-        "case_receipts": case_receipts,
-        "cleanup_journals": cleanup_journals,
-        "retention": retention,
-        "release_cleanup_journals": release_cleanup_journals,
-        "file_count": len(files),
+        "case_receipts": common.case_receipts,
+        "cleanup_journals": common.cleanup_journals,
+        "retention": common.retention,
+        **kind_fields,
+        "file_count": len(common.files),
         "files": planned_files,
         "credentials_in_receipt": False,
     }
-    plan.put(output / "manifest.json", canonical_json(manifest), MAX_RECEIPT_BYTES)
-    return manifest, files
+    plan.put(plan.output / "manifest.json", canonical_json(manifest), MAX_RECEIPT_BYTES)
+    return manifest
 
 
-def _check_source_digests(plan: StagePlan, expected: dict[str, str] | None) -> None:
+def _publish(plan: StagePlan, files: list[dict[str, str]], manifest: dict[str, object],
+             directory_identity: dict[str, object] | None, expected_source_digests: dict[str, str] | None,
+             source_names: frozenset[str]) -> dict[str, object]:
+    _check_source_digests(plan, expected_source_digests, names=source_names)
+    publish_stage(plan, directory_identity)
+    _verify_staged_manifest(plan.output, files)
+    return manifest
+
+
+def _check_source_digests(plan: StagePlan, expected: dict[str, str] | None, *,
+                          names: frozenset[str] = _LEGACY_SOURCE_NAMES) -> None:
     if expected is None:
         return
-    names = {AGGREGATE_RECEIPT_NAME, "archive-receipt.json", "native-acceptance-receipt.json"}
     if set(expected) != names:
         raise EvidenceError("stage_source_digest_set_invalid")
     observed = {item.name: _digest_bytes(item.data) for item in plan.files() if item.name in names}

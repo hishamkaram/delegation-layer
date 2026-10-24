@@ -53,7 +53,8 @@ class BoundedCommandFailureTests(unittest.TestCase):
         self.child.poll.return_value = None
         self.child.wait.side_effect = self.wait_child
         self.selector = Mock(spec=selectors.BaseSelector)
-        self.selector.select.return_value = [(None, selectors.EVENT_READ)]
+        ready = selectors.SelectorKey(self.child.stdout, 10, selectors.EVENT_READ, None)
+        self.selector.select.return_value = [(ready, selectors.EVENT_READ)]
         self.order = Mock()
         self.order.attach_mock(self.child.kill, "kill")
         self.order.attach_mock(self.child.wait, "wait")
@@ -319,6 +320,74 @@ class BoundedCommandFiniteChildFailureTests(unittest.TestCase):
                     child.wait(timeout=5)
                 finally:
                     child.stdout.close()
+
+
+class BoundedCommandSinkTests(unittest.TestCase):
+    """A sink receives the stream chunk by chunk; the owner keeps no copy."""
+
+    EMIT = "import sys; sys.stdout.buffer.write(b'x' * {size})"
+
+    def run_sink(self, source: str, sink, *, maximum: int, timeout: float = 5):
+        return run_bounded_command(
+            [sys.executable, "-c", source], dict(os.environ), capture=True,
+            timeout=timeout, max_output=maximum, sink=sink,
+        )
+
+    def test_multi_megabyte_stream_is_delivered_in_bounded_chunks_without_a_copy(self):
+        size, chunks = 8 * 1024 * 1024, []
+        result = self.run_sink(self.EMIT.format(size=size), chunks.append, maximum=size)
+        self.assertEqual((result.exit_code, result.output), (0, b""))
+        self.assertEqual(sum(map(len, chunks)), size)
+        self.assertLessEqual(max(map(len, chunks)), 64 * 1024)
+        self.assertEqual(b"".join(chunks), b"x" * size)
+
+    def test_limit_is_enforced_before_delivery(self):
+        chunks = []
+        with self.assertRaises(BoundedCommandError) as captured:
+            self.run_sink(self.EMIT.format(size=129), chunks.append, maximum=128)
+        self.assertIs(captured.exception.reason, CommandFailure.OUTPUT_EXCEEDED)
+        self.assertIsInstance(captured.exception.exit_code, int)
+        self.assertEqual(sum(map(len, chunks)), 128)
+
+    def test_refusing_sink_closes_the_child_and_reports_unavailable_capture(self):
+        def refuse(_chunk: bytes) -> None:
+            raise OSError("private-sink-detail")
+
+        with self.assertRaises(BoundedCommandError) as captured:
+            self.run_sink("import signal, sys; sys.stdout.buffer.write(b'x'); sys.stdout.flush();"
+                          " signal.pause()", refuse, maximum=128)
+        self.assertIs(captured.exception.reason, CommandFailure.CAPTURE_UNAVAILABLE)
+        self.assertLess(captured.exception.exit_code, 0)
+        self.assertNotIn("private-sink-detail", str(captured.exception))
+
+    def test_other_sink_failures_propagate_unchanged_after_the_child_is_closed(self):
+        failure, pids = RuntimeError("sink failure"), []
+
+        def fail(chunk: bytes) -> None:
+            pids.append(int(chunk))
+            raise failure
+
+        source = "import os, signal, sys; print(os.getpid(), flush=True); signal.pause()"
+        with self.assertRaises(RuntimeError) as captured:
+            self.run_sink(source, fail, maximum=128)
+        self.assertIs(captured.exception, failure)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pids[0], 0)
+
+    def test_timeout_with_a_sink_waits_for_the_owned_child(self):
+        chunks = []
+        with self.assertRaises(BoundedCommandError) as captured:
+            self.run_sink("import signal; signal.pause()", chunks.append, maximum=128, timeout=1)
+        self.assertIs(captured.exception.reason, CommandFailure.TIMEOUT)
+        self.assertLess(captured.exception.exit_code, 0)
+        self.assertEqual(chunks, [])
+
+    def test_sink_requires_capture_and_starts_no_child(self):
+        with patch.object(operations.subprocess, "Popen") as spawn:
+            with self.assertRaises(ValueError):
+                run_bounded_command(["finite-control-fixture"], {}, max_output=0,
+                                    sink=lambda _chunk: None)
+        spawn.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,11 @@
-"""Build a bounded, privacy-filtered public proof from staged evidence."""
+"""Build bounded, privacy-filtered public proofs from staged evidence.
+
+The release builder projects a release stage into the release envelope. The
+candidate builder projects a candidate stage into the candidate envelope from
+the caller's trusted expectation; it never reads release receipts or invents
+release identity. Both share the case projector, the public aggregate and the
+create-once output policy, and both validate their ZIP before writing it.
+"""
 
 from __future__ import annotations
 
@@ -13,10 +20,16 @@ from ..release_verification.contract import (
     _validate_archived_default_path,
     expected_archive,
 )
+from .block_reason import compact_block_reason, encode_block_reason
+from .candidate_proof import (
+    candidate_manifest_document, candidate_proof_document, completion_record, parse_completion,
+    require_completion_binding, require_harness_revision, validate_candidate_proof,
+)
 from .contract import (
     AGGREGATE_RECEIPT_NAME,
 )
 from .contract import (
+    BLOCK_REASON_KEY,
     CaseDefinition,
     EvidenceError,
     MatrixRow,
@@ -33,6 +46,7 @@ from .contract import (
     expected_cases,
 )
 from .public_contract import (
+    CANDIDATE_CASE_SCHEMA_VERSION,
     CASE_IDS,
     MAX_SOURCE_FINGERPRINT_FILES,
     PUBLIC_MANIFEST_KIND,
@@ -40,19 +54,25 @@ from .public_contract import (
     PUBLIC_SCHEMA_VERSION,
     OPAQUE_TEXT,
     TASK_ID,
+    CandidateProofExpectation,
+    NativeCompletion,
     ProofExpectation,
     PublicProofError,
     canonical_public_zip,
     canonical_json,
     parse_json,
+    require_case_schema_version,
     require_object,
     require_public_text,
     require_sha256,
     safe_repo_path,
     sha256,
+    ValidatedCandidateProof,
     validate_expectation,
 )
-from .public_stage import StageSnapshot, load_stage
+from .public_stage import (
+    CANDIDATE_STAGE_KIND, LEGACY_STAGE_KIND, NATIVE_COMPLETION_NAME, StageSnapshot, load_stage,
+)
 from .public_validation import inspect_public_proof, validate_public_proof
 
 
@@ -153,7 +173,13 @@ def _public_summary(value: object) -> dict[str, object]:
 
 def _project_case(
         definition: CaseDefinition, reference: dict[str, object], compact_bytes: bytes,
-        snapshot: StageSnapshot) -> dict[str, object]:
+        snapshot: StageSnapshot, *, case_schema_version: int = PUBLIC_SCHEMA_VERSION) -> dict[str, object]:
+    """Project one compact case receipt into the given public case format.
+
+    The release format is version 1; the candidate format is version 2 and adds
+    the compact receipt's typed block reason. Both read the same validated source.
+    """
+    require_case_schema_version(case_schema_version)
     compact = _object(compact_bytes, "public_case_receipt_invalid")
     compact_digest = snapshot.digests[f"case-receipts/{definition.case_id}.json"]
     if reference.get("receipt_sha256") != compact_digest:
@@ -165,6 +191,7 @@ def _project_case(
         binaries, binary_ids = _validate_case_binaries(reference, proof)
         _validate_case_completion(reference, proof, sessions, (binaries, binary_ids))
         journal_digest, authorization = _case_cleanup_source(compact, definition.case_id, snapshot)
+        block_reason = encode_block_reason(str(reference["status"]), compact_block_reason(compact))
     except EvidenceError as error:
         raise PublicProofError("public_case_source_invalid") from error
     original_cleanup = compact["cleanup"]
@@ -180,7 +207,7 @@ def _project_case(
         if name in source_binary_hashes
     }
     public_proof = {
-        "schema_version": PUBLIC_SCHEMA_VERSION, "kind": "public-native-acceptance-case",
+        "schema_version": case_schema_version, "kind": "public-native-acceptance-case",
         "case_id": definition.case_id, "provider": definition.provider,
         "permission": definition.permission, "scenario": definition.scenario,
         "status": reference["status"], "exit_code": reference["exit_code"],
@@ -190,6 +217,8 @@ def _project_case(
         "natural_daemon_shutdown": compact.get("natural_daemon_shutdown")
         if type(compact.get("natural_daemon_shutdown")) is bool else None,
     }
+    if case_schema_version == CANDIDATE_CASE_SCHEMA_VERSION:
+        public_proof[BLOCK_REASON_KEY] = block_reason
     return public_proof
 
 
@@ -556,11 +585,9 @@ def _public_aggregate(value: dict[str, object], cases: list[dict[str, object]]) 
     }
 
 
-def _public_zip(snapshot: StageSnapshot, expected: ProofExpectation) -> bytes:
-    aggregate = _object(snapshot.data[AGGREGATE_RECEIPT_NAME], "public_aggregate_receipt_invalid")
-    cases_value = aggregate.get("cases")
-    if not isinstance(cases_value, list) or len(cases_value) != len(CASE_IDS):
-        raise PublicProofError("public_aggregate_cases_invalid")
+def _project_cases(snapshot: StageSnapshot, cases_value: list[object], *,
+                   case_schema_version: int) -> dict[str, bytes]:
+    """Project every aggregate case reference into public case members of one format."""
     references: dict[str, dict[str, object]] = {}
     for reference in cases_value:
         if not isinstance(reference, dict) or not isinstance(reference.get("case_id"), str):
@@ -572,16 +599,40 @@ def _public_zip(snapshot: StageSnapshot, expected: ProofExpectation) -> bytes:
     definitions = expected_cases()
     if set(references) != {item.case_id for item in definitions}:
         raise PublicProofError("public_aggregate_case_matrix_invalid")
-    public_cases = {
+    return {
         f"cases/{definition.case_id}.json": canonical_json(_project_case(
             definition, references[definition.case_id],
             snapshot.data[f"case-receipts/{definition.case_id}.json"], snapshot,
+            case_schema_version=case_schema_version,
         )) for definition in definitions
     }
+
+
+def _require_stage_kind(snapshot: StageSnapshot, kind: str) -> None:
+    if snapshot.kind != kind:
+        raise PublicProofError("public_stage_kind_mismatch")
+
+
+def _stage_aggregate(snapshot: StageSnapshot) -> tuple[dict[str, object], list[object]]:
+    aggregate = _object(snapshot.data[AGGREGATE_RECEIPT_NAME], "public_aggregate_receipt_invalid")
+    cases_value = aggregate.get("cases")
+    if not isinstance(cases_value, list) or len(cases_value) != len(CASE_IDS):
+        raise PublicProofError("public_aggregate_cases_invalid")
+    return aggregate, cases_value
+
+
+def _require_aggregate_result(aggregate: dict[str, object], cases_value: list[object]) -> None:
     try:
         _validate_aggregate_result(aggregate, cases_value)
     except EvidenceError as error:
         raise PublicProofError("public_aggregate_source_invalid") from error
+
+
+def _public_zip(snapshot: StageSnapshot, expected: ProofExpectation) -> bytes:
+    _require_stage_kind(snapshot, LEGACY_STAGE_KIND)
+    aggregate, cases_value = _stage_aggregate(snapshot)
+    public_cases = _project_cases(snapshot, cases_value, case_schema_version=PUBLIC_SCHEMA_VERSION)
+    _require_aggregate_result(aggregate, cases_value)
     identity = _release_identity(snapshot, expected, aggregate)
     proof = {
         "schema_version": PUBLIC_SCHEMA_VERSION, "kind": PUBLIC_PROOF_KIND,
@@ -608,17 +659,43 @@ def _public_zip(snapshot: StageSnapshot, expected: ProofExpectation) -> bytes:
     return canonical_public_zip({"manifest.json": canonical_json(manifest), **payloads})
 
 
-def build_public_proof(
-        stage_dir: Path, output_zip: Path, expectation: ProofExpectation) -> dict[str, object]:
-    """Project local staged evidence without modifying its private originals."""
-    validate_expectation(expectation)
-    snapshot = load_stage(stage_dir)
+def _stage_completion(snapshot: StageSnapshot) -> NativeCompletion:
+    """Read the staged sanitized completion, which must be its own canonical record."""
+    data = snapshot.data[NATIVE_COMPLETION_NAME]
+    completion = parse_completion(parse_json(data, "public_stage_native_completion_invalid"))
+    if canonical_json(completion_record(completion)) != data:
+        raise PublicProofError("public_stage_native_completion_invalid")
+    return completion
+
+
+def _candidate_zip(snapshot: StageSnapshot, expectation: CandidateProofExpectation) -> bytes:
+    _require_stage_kind(snapshot, CANDIDATE_STAGE_KIND)
+    aggregate, cases_value = _stage_aggregate(snapshot)
+    completion = _stage_completion(snapshot)
+    require_completion_binding(completion, expectation, exit_code=aggregate.get("exit_code"))
+    require_harness_revision(aggregate, expectation)
+    public_cases = _project_cases(snapshot, cases_value, case_schema_version=CANDIDATE_CASE_SCHEMA_VERSION)
+    _require_aggregate_result(aggregate, cases_value)
+    proof_bytes = candidate_proof_document(expectation, completion, _public_aggregate(aggregate, cases_value))
+    source_sha = {
+        "stage_manifest": sha256(snapshot.manifest_bytes),
+        "aggregate_receipt": snapshot.digests[AGGREGATE_RECEIPT_NAME],
+        "native_completion": snapshot.digests[NATIVE_COMPLETION_NAME],
+        "case_receipts": {case_id: snapshot.cases[case_id]["sha256"] for case_id in CASE_IDS},
+        "cleanup_journals": {case_id: item["sha256"] for case_id, item in snapshot.cleanup.items()},
+    }
+    entries = {"proof.json": proof_bytes, **public_cases}
+    return canonical_public_zip({"manifest.json": candidate_manifest_document(source_sha, entries), **entries})
+
+
+def _destination_outside(snapshot: StageSnapshot, output_zip: Path) -> Path:
     destination = output_zip.absolute()
     if destination.resolve(strict=False).is_relative_to(snapshot.root):
         raise PublicProofError("public_output_inside_private_stage")
-    zip_data = _public_zip(snapshot, expectation)
-    inspect_public_proof(zip_data)
-    result = validate_public_proof(zip_data, expectation)
+    return destination
+
+
+def _write_once(destination: Path, zip_data: bytes) -> None:
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         write_bytes(destination, zip_data)
@@ -626,4 +703,32 @@ def build_public_proof(
         raise PublicProofError("public_output_already_exists") from error
     except OSError as error:
         raise PublicProofError("public_output_write_failed") from error
+
+
+def build_public_proof(
+        stage_dir: Path, output_zip: Path, expectation: ProofExpectation) -> dict[str, object]:
+    """Project local staged evidence without modifying its private originals."""
+    validate_expectation(expectation)
+    snapshot = load_stage(stage_dir)
+    destination = _destination_outside(snapshot, output_zip)
+    zip_data = _public_zip(snapshot, expectation)
+    inspect_public_proof(zip_data)
+    result = validate_public_proof(zip_data, expectation)
+    _write_once(destination, zip_data)
+    return result
+
+
+def build_candidate_proof(
+        stage_dir: Path, output_zip: Path, expectation: CandidateProofExpectation) -> ValidatedCandidateProof:
+    """Project a staged candidate run into its candidate proof, validated before it is written.
+
+    ``expectation`` is the caller's trusted intent, never read from the stage.
+    """
+    if not isinstance(expectation, CandidateProofExpectation):
+        raise PublicProofError("candidate_expectation_invalid")
+    snapshot = load_stage(stage_dir, expected_kind=CANDIDATE_STAGE_KIND)
+    destination = _destination_outside(snapshot, output_zip)
+    zip_data = _candidate_zip(snapshot, expectation)
+    result = validate_candidate_proof(zip_data, expectation)
+    _write_once(destination, zip_data)
     return result

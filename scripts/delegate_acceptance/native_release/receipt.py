@@ -1,4 +1,4 @@
-"""The repo/tag lock holder is the sole writer of invocation stage facts.
+"""The invocation lock holder is the sole writer of invocation stage facts.
 
 Each intent is durable before its effect. Original inputs and completed outputs
 are immutable; observation may complete an intent using independently read facts.
@@ -15,8 +15,9 @@ from scripts.delegate_acceptance.evidence.bounded_files import read_bounded_regu
 from scripts.delegate_acceptance.evidence.files import write_json
 from scripts.delegate_acceptance.native_evidence.public_contract import parse_json
 from .contract import (
-    Invocation, MAX_RECEIPT, ReleaseError, ReleaseRequest, STAGES, object_value,
-    text_value,
+    CANDIDATE_RECEIPT_KIND, PUBLICATION_RECEIPT_KIND, CandidateRequest, Invocation, MAX_RECEIPT,
+    PublicationRequest, ReleaseError, Request, invocation_name, object_value, receipt_kind, receipt_stages,
+    request_parser, status_value, text_value,
 )
 
 
@@ -59,7 +60,8 @@ class Receipt:
             "platform_os": invocation.platform_os, "platform_arch": invocation.platform_arch,
             "directory_identity": invocation.directory_identity, "argv": argv,
         }
-        receipt = cls(invocation, metadata, {name: Stage("pending", {}, {}) for name in STAGES})
+        stages = {name: Stage("pending", {}, {}) for name in receipt_stages(invocation.request)}
+        receipt = cls(invocation, metadata, stages)
         receipt.save(create=True)
         return receipt
 
@@ -67,10 +69,11 @@ class Receipt:
     def load(cls, path: Path) -> Receipt:
         value = object_value(parse_json(read_bounded_regular_file(path, MAX_RECEIPT)))
         if (set(value) != {"schema_version", "kind", "metadata", "stages", "status", "reason"}
-                or value["schema_version"] != 1 or value["kind"] != "local-native-release"):
+                or type(value["schema_version"]) is not int or value["schema_version"] != 1):
             raise ReleaseError("release_receipt_invalid")
+        parse = request_parser(value["kind"])
         metadata = object_value(value["metadata"])
-        request = ReleaseRequest.parse(metadata.get("request"))
+        request = parse(metadata.get("request"))
         invocation = Invocation(
             invocation_id=text_value(metadata.get("invocation_id"), "[0-9a-f]{32}"),
             request=request, checkout=Path(text_value(metadata.get("checkout"))),
@@ -81,14 +84,13 @@ class Receipt:
         )
         if (not invocation.checkout.is_absolute() or not invocation.root.is_absolute()
                 or path != invocation.root / "receipt.json"
-                or invocation.root.name != f"{request.tag}-{invocation.invocation_id}"):
+                or invocation.root.name != invocation_name(request, invocation.invocation_id)):
             raise ReleaseError("release_receipt_location_mismatch")
         rows = object_value(value["stages"])
-        if set(rows) != set(STAGES):
+        if set(rows) != set(receipt_stages(request)):
             raise ReleaseError("release_receipt_stages_invalid")
         receipt = cls(invocation, metadata, {name: Stage.parse(row) for name, row in rows.items()})
-        receipt.status = text_value(value["status"], "INCOMPLETE|BLOCKED|FAIL|LOCAL_ONLY|PROMOTABLE")
-        receipt.reason = text_value(value["reason"])
+        receipt.status, receipt.reason = _outcome(request, value["status"], value["reason"])
         return receipt
 
     def stage(self, name: str) -> Stage:
@@ -112,18 +114,40 @@ class Receipt:
         self.save()
 
     def report(self, status: str, reason: str) -> None:
-        self.status, self.reason = status, reason
+        """Validate before any assignment, so a refused outcome leaves this object and its file unchanged."""
+        self.status, self.reason = _outcome(self.invocation.request, status, reason)
         self.save()
 
     def save(self, *, create: bool = False) -> None:
         value: dict[str, object] = {
-            "schema_version": 1, "kind": "local-native-release", "metadata": self._metadata,
+            "schema_version": 1, "kind": receipt_kind(self.invocation.request), "metadata": self._metadata,
             "stages": {name: row.document() for name, row in self._stages.items()},
             "status": self.status, "reason": self.reason,
         }
         write_json(self.path, value, replace=not create)
 
 
-def lock_name(request: ReleaseRequest) -> str:
-    identity = f"{request.repo}\n{request.tag}".encode("utf-8")
-    return "." + hashlib.sha256(identity).hexdigest() + ".lock"
+def _outcome(request: Request, status: object, reason: object) -> tuple[str, str]:
+    """The status and reason every load accepts; ``report`` writes nothing else."""
+    return status_value(request, status), text_value(reason)
+
+
+def lock_name(request: Request) -> str:
+    """One lock per release tag, candidate attempt or publication reference, each in its own namespace.
+
+    A repository always holds a slash, so no release identity starts with a
+    candidate or publication kind's line. A publication lock binds the
+    repository and exact frozen reference only; the selected readiness run and
+    resume choice never select another lock. It is this host's owner lock, not
+    a distributed publication lock: hosted release-wide concurrency serializes
+    remote delivery.
+    """
+    if isinstance(request, CandidateRequest):
+        identity = "\n".join((CANDIDATE_RECEIPT_KIND, request.repository, request.candidate_id, str(request.attempt)))
+    elif isinstance(request, PublicationRequest):
+        reference = request.reference
+        identity = "\n".join((PUBLICATION_RECEIPT_KIND, request.repository, reference.candidate_id,
+                              reference.freeze_commit, reference.merged_commit))
+    else:
+        identity = f"{request.repo}\n{request.tag}"
+    return "." + hashlib.sha256(identity.encode("utf-8")).hexdigest() + ".lock"

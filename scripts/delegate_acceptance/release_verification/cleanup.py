@@ -5,6 +5,7 @@ from __future__ import annotations
 from . import filesystem
 
 from pathlib import Path
+import errno
 import json
 import os
 import sys
@@ -236,6 +237,30 @@ def _finish_retained_gate(
     return 0
 
 
+def _fault_label(fault: BaseException) -> str:
+    """A secret-free label: an OSError's errno name, a verifier code, or the fault's type name."""
+    if isinstance(fault, OSError):
+        return errno.errorcode.get(fault.errno or 0, "unknown")
+    if isinstance(fault, VerificationError):
+        return fault.code
+    return type(fault).__name__
+
+
+def _retain_interrupted_gate(path: Path, receipt: dict, owner: DirectoryOwner,
+                             interrupted: BaseException, locations: dict[str, Path]) -> None:
+    """Retain every owned resource and record the failure of an interrupted action; never remove.
+
+    The caller re-raises ``interrupted`` unchanged. A fault while retaining is only
+    noted on it, so a retention cut short (for example inside the owner's release)
+    is reported as incomplete rather than presented as finished.
+    """
+    try:
+        _finish_retained_gate(path, receipt, owner, VerificationError("verification_interrupted", receipt["stage"]),
+                              "fail", [], locations)
+    except BaseException as secondary:
+        interrupted.add_note("interrupted gate retention incomplete: " + _fault_label(secondary))
+
+
 def finish_gate(path: Path, receipt: dict, owner: DirectoryOwner, action,
                 cleanup_mode: str, locations: dict[str, Path]) -> int:
     error = None
@@ -245,6 +270,9 @@ def finish_gate(path: Path, receipt: dict, owner: DirectoryOwner, action,
         error = caught
     except Exception:
         error = VerificationError("verification_internal_error", receipt["stage"])
+    except BaseException as interrupted:
+        _retain_interrupted_gate(path, receipt, owner, interrupted, locations)
+        raise
 
     identities = receipt["cleanup"]["directory_identities"]
     temporary = locations.get("isolated_home")

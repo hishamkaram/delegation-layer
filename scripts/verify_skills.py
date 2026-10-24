@@ -17,6 +17,8 @@ from pathlib import Path
 import sys
 from typing import Iterable, Iterator, Sequence
 
+import skill_eval_cases
+
 
 REQUIRED_SKILLS: tuple[str, ...] = (
     "delegation-architect",
@@ -559,6 +561,7 @@ def verify(root: Path, required_skills: Sequence[str] = REQUIRED_SKILLS) -> list
         errors.extend(_validate_links(document, root))
         errors.extend(_validate_required_authority_links(document, root))
         errors.extend(_validate_body(document, make_targets))
+        errors.extend(skill_eval_cases.check_skill(document.path.parent))
     return sorted(set(errors))
 
 

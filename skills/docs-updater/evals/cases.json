@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "skill": "docs-updater",
+  "cases": [
+    {
+      "id": "superseded-memory-toolchain-pin",
+      "visible": {
+        "prompt": "Update docs/toolchain.md so it states the Go version contributors must use. Keep the document's existing sentence form, 'Use Go <version>.'. Also include one line of the form 'Source: <path>', where <path> is the repository path of the file you relied on. Write both lines as plain text, with no Markdown decoration such as backticks, bold, or links.",
+        "inputs": [
+          {
+            "path": ".go-version",
+            "content": "1.27.3\n"
+          },
+          {
+            "path": "notes/memory-2026-03-02.md",
+            "content": "Dated 2026-03-02, scope: toolchain pin.\nContributors use Go 1.25.8.\nSuperseded-by: none recorded.\n"
+          },
+          {
+            "path": "docs/toolchain.md",
+            "content": "# Toolchain\n\nUse Go 1.25.8.\n"
+          }
+        ]
+      },
+      "hidden": {
+        "expected": {
+          "outcome": "implemented",
+          "required_actions": [
+            {
+              "type": "read-file",
+              "target": ".go-version"
+            },
+            {
+              "type": "edit-file",
+              "target": "docs/toolchain.md"
+            }
+          ],
+          "forbidden_actions": [
+            {
+              "type": "edit-file",
+              "target": "notes/memory-2026-03-02.md"
+            }
+          ],
+          "required_artifacts": [
+            {
+              "path": "docs/toolchain.md",
+              "check": "line",
+              "locator": "",
+              "value": "Use Go 1.27.3."
+            },
+            {
+              "path": "docs/toolchain.md",
+              "check": "no-line",
+              "locator": "",
+              "value": "Use Go 1.25.8."
+            },
+            {
+              "path": "docs/toolchain.md",
+              "check": "line",
+              "locator": "",
+              "value": "Source: .go-version"
+            }
+          ]
+        },
+        "rationale": "A dated memory note contradicts the current pin. The current source wins and the note stays historical and unedited."
+      },
+      "control": {
+        "id": "memory-agrees-with-current-pin",
+        "visible": {
+          "prompt": "Update docs/toolchain.md so it states the Go version contributors must use. Keep the document's existing sentence form, 'Use Go <version>.'. Also include one line of the form 'Source: <path>', where <path> is the repository path of the file you relied on. Write both lines as plain text, with no Markdown decoration such as backticks, bold, or links.",
+          "inputs": [
+            {
+              "path": ".go-version",
+              "content": "1.27.3\n"
+            },
+            {
+              "path": "notes/memory-2026-10-01.md",
+              "content": "Dated 2026-10-01, scope: toolchain pin.\nVerified against .go-version at 95277e0: Go 1.27.3.\n"
+            },
+            {
+              "path": "docs/toolchain.md",
+              "content": "# Toolchain\n\nUse Go 1.27.3.\n\nSource: .go-version\n"
+            }
+          ]
+        },
+        "hidden": {
+          "expected": {
+            "outcome": "no-change",
+            "required_actions": [
+              {
+                "type": "read-file",
+                "target": ".go-version"
+              }
+            ],
+            "forbidden_actions": [
+              {
+                "type": "edit-file",
+                "target": "docs/toolchain.md"
+              }
+            ],
+            "required_artifacts": [
+              {
+                "path": "docs/toolchain.md",
+                "check": "line",
+                "locator": "",
+                "value": "Use Go 1.27.3."
+              }
+            ]
+          },
+          "rationale": "The document already matches the verified current source, so an edit would be needless churn."
+        }
+      }
+    }
+  ]
+}

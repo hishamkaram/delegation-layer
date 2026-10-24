@@ -18,58 +18,93 @@ class PrivateDefaultStopScenarioTests(unittest.TestCase):
         set_up_private_capture_root(self)
 
     def test_orchestration_requires_live_leases_and_canonical_closure(self):
-        with tempfile.TemporaryDirectory(prefix="delegate-default-stop-") as directory:
-            root = Path(directory)
-            state = root / "state"
-            workspace = root / "workspace"
-            workspace.mkdir()
-            brief = root / "brief.md"
-            brief.write_text("bounded stop fixture\n")
-            gate_path = root / "gate"
-            waiters = root / "waiters"
-            waiters.mkdir()
-            responses = root / "responses"
-            responses.mkdir()
-            provider = root / "pi"
-            provider.write_text("#!/bin/sh\n")
-            provider.chmod(0o700)
-            receipt = private_cli.AcceptanceReceipt(
-                root / "receipt.json", private_cli.DEFAULT_STOP_TASK_COUNT, 2,
-                {"delegate": provider, "runner": provider,
-                 "pueue": provider, "pueued": provider},
+        records = _run_stop_scenario(self)
+        _assert_stop_expectations(self=self, **records)
+
+    def test_user_stop_observation_refuses_undocumented_interruptions(self):
+        user = {"continuation": {"resumable": True}}
+        records = _run_stop_scenario(self, error="operational failure", ended_changes={"user": user})
+        self.assertEqual([command[2] for command in records["calls"]], ["dispatch", "cancel", "status", "status"])
+        self.assertEqual(records["lifecycle"], ["enter", "cancel", "closure", "status", "status", "exit"])
+        self.assertEqual(records["lease_cleanup_calls"], [])
+        self.assertEqual(len(records["dispatches"]), 1)
+
+        budget = {"failure": {"code": "task_interrupted", "stage": "status", "next_action": "stop_and_report"}}
+        records = _run_stop_scenario(self, error="operational failure", ended_changes={"budget": budget})
+        self.assertEqual([command[2] for command in records["calls"]], [
+            "dispatch", "cancel", "status", "status", "dispatch", "status", "status",
+        ])
+        self.assertEqual(records["lease_cleanup_calls"], [True])
+        self.assertEqual(records["shutdown"], [])
+
+    def test_wrong_user_closure_cause_precedes_status_observation(self):
+        records = _run_stop_scenario(self, error="wrong termination cause", user_closure_cause="budget")
+        self.assertEqual([command[2] for command in records["calls"]], ["dispatch", "cancel"])
+        self.assertEqual(records["lifecycle"], ["enter", "cancel", "closure", "exit"])
+        self.assertEqual(records["lease_cleanup_calls"], [])
+        self.assertEqual(len(records["dispatches"]), 1)
+
+
+def _run_stop_scenario(self, *, error=None, ended_changes=None, user_closure_cause="requested"):
+    """Run the real stop orchestration over fixture commands and return its recorded effects."""
+    with tempfile.TemporaryDirectory(prefix="delegate-default-stop-") as directory:
+        root = Path(directory)
+        state = root / "state"
+        workspace = root / "workspace"
+        workspace.mkdir()
+        brief = root / "brief.md"
+        brief.write_text("bounded stop fixture\n")
+        gate_path = root / "gate"
+        waiters = root / "waiters"
+        waiters.mkdir()
+        responses = root / "responses"
+        responses.mkdir()
+        provider = root / "pi"
+        provider.write_text("#!/bin/sh\n")
+        provider.chmod(0o700)
+        receipt = private_cli.AcceptanceReceipt(
+            root / "receipt.json", private_cli.DEFAULT_STOP_TASK_COUNT, 2,
+            {"delegate": provider, "runner": provider,
+             "pueue": provider, "pueued": provider},
+        )
+        records = {"attempted": [], "calls": [], "lease_cleanup_calls": [], "dispatches": [],
+                   "lifecycle": [], "receipt": receipt}
+        status_reads = {}
+        user_request_id = "u" * 32
+
+        gate, run_json, live_lease, closure, shutdown, shutdown_private = _stop_scenario_callbacks(
+            calls=records["calls"], dispatches=records["dispatches"], ended_changes=ended_changes or {},
+            gate_path=gate_path, lease_cleanup_calls=records["lease_cleanup_calls"],
+            lifecycle=records["lifecycle"], root=root, self=self, status_reads=status_reads,
+            user_closure_cause=user_closure_cause, user_request_id=user_request_id)
+        records["shutdown"] = shutdown
+
+        def run():
+            return private_cli.run_default_stop_acceptance(
+                delegate=provider, client=provider, state=state, workspace=workspace, brief=brief,
+                gate=gate_path, waiter_directory=waiters,
+                config=root / "pueue.yml", env={}, response_directory=responses, provider_fixture=provider,
+                lease_nonce="e" * 32,
+                run_receipt=receipt, attempted_task_ids=records["attempted"], capture_root=self.capture_root,
             )
-            attempted = []
-            calls = []
-            lease_cleanup_calls = []
-            dispatches = []
-            status_reads = {}
-            lifecycle = []
-            user_request_id = "u" * 32
 
-            gate, run_json, live_lease, closure, shutdown, shutdown_private = _stop_scenario_callbacks(calls=calls,
-                dispatches=dispatches, gate_path=gate_path, lease_cleanup_calls=lease_cleanup_calls,
-                lifecycle=lifecycle, root=root, self=self, status_reads=status_reads, user_request_id=user_request_id)
-            with patch.object(private_cli.LockedReleaseGate, "acquire", return_value=gate), \
-                    patch.object(stop_impl, "run_json", side_effect=run_json), \
-                    patch.object(admission_impl, "run_json", side_effect=run_json), \
-                    patch.object(private_cli.time, "sleep"), \
-                    patch.object(stop_impl, "default_stop_live_lease", side_effect=live_lease), \
-                    patch.object(stop_impl, "await_managed_lifetime_closure", side_effect=closure), \
-                    patch.object(stop_impl, "shutdown_private_supervisor", side_effect=shutdown_private):
-                evidence = private_cli.run_default_stop_acceptance(
-                    delegate=provider, client=provider, state=state, workspace=workspace, brief=brief,
-                    gate=gate_path, waiter_directory=waiters,
-                    config=root / "pueue.yml", env={}, response_directory=responses, provider_fixture=provider,
-                    lease_nonce="e" * 32,
-                    run_receipt=receipt, attempted_task_ids=attempted, capture_root=self.capture_root,
-                )
-
-            _assert_stop_expectations(attempted=attempted, calls=calls, dispatches=dispatches, evidence=evidence,
-                lease_cleanup_calls=lease_cleanup_calls, lifecycle=lifecycle, receipt=receipt, self=self,
-                shutdown=shutdown)
+        with patch.object(private_cli.LockedReleaseGate, "acquire", return_value=gate), \
+                patch.object(stop_impl, "run_json", side_effect=run_json), \
+                patch.object(admission_impl, "run_json", side_effect=run_json), \
+                patch.object(private_cli.time, "sleep"), \
+                patch.object(stop_impl, "default_stop_live_lease", side_effect=live_lease), \
+                patch.object(stop_impl, "await_managed_lifetime_closure", side_effect=closure), \
+                patch.object(stop_impl, "shutdown_private_supervisor", side_effect=shutdown_private):
+            if error is None:
+                records["evidence"] = run()
+            else:
+                with self.assertRaisesRegex(RuntimeError, error):
+                    run()
+        return records
 
 
-def _stop_scenario_callbacks(*, calls, dispatches, gate_path, lease_cleanup_calls, lifecycle, root, self, status_reads, user_request_id):
+def _stop_scenario_callbacks(*, calls, dispatches, ended_changes, gate_path, lease_cleanup_calls, lifecycle, root, self,
+                             status_reads, user_closure_cause, user_request_id):
     class Gate:
         def __init__(self, path):
             self.path = path
@@ -95,7 +130,7 @@ def _stop_scenario_callbacks(*, calls, dispatches, gate_path, lease_cleanup_call
             lease_cleanup_calls.append(True)
             return [{"state": "removed"}]
 
-    run_json = _stop_command_callback(calls, dispatches, lifecycle, self, status_reads, user_request_id)
+    run_json = _stop_command_callback(calls, dispatches, ended_changes, lifecycle, self, status_reads, user_request_id)
     def live_lease(_client, _config, _env, _state, response, _waiters, _nonce,
                   **_options):
         return ({
@@ -110,7 +145,7 @@ def _stop_scenario_callbacks(*, calls, dispatches, gate_path, lease_cleanup_call
     def closure(_state, task_ids, timeout=30):
         lifecycle.append("closure")
         task_id = tuple(task_ids)[0]
-        cause = "requested" if task_id == dispatches[0][0] else "budget"
+        cause = user_closure_cause if task_id == dispatches[0][0] else "budget"
         return {"tasks": {task_id: {
             "intent": {"deadline": "2026-10-14T00:00:01Z",
                         "created_at": "2026-10-14T00:00:00Z"},
@@ -130,7 +165,7 @@ def _stop_scenario_callbacks(*, calls, dispatches, gate_path, lease_cleanup_call
     return gate, run_json, live_lease, closure, shutdown, shutdown_private
 
 
-def _stop_command_callback(calls, dispatches, lifecycle, self, status_reads, user_request_id):
+def _stop_command_callback(calls, dispatches, ended_changes, lifecycle, self, status_reads, user_request_id):
     def run_json(_delegate, _env, args, **_options):
         command = args[2]
         calls.append(args)
@@ -156,28 +191,53 @@ def _stop_command_callback(calls, dispatches, lifecycle, self, status_reads, use
         lifecycle.append("status")
         task_id = args[3]
         status_reads[task_id] = status_reads.get(task_id, 0) + 1
-        ended = status_reads[task_id] > 1
+        identity = {"root_id": "r" * 32, "task_id": task_id}
         if task_id == dispatches[0][0]:
+            if status_reads[task_id] > 1:
+                return {**_user_interrupted_status(identity, user_request_id), **ended_changes.get("user", {})}
             stop = {
                 "request_id": user_request_id, "cause": "user",
-                "requested": True, "terminated": ended,
-                "observed_state": "ended" if ended else "running",
+                "requested": True, "terminated": False, "observed_state": "running",
             }
         else:
             self.assertEqual(task_id, dispatches[1][0])
+            if status_reads[task_id] > 1:
+                return {**_budget_timed_out_status(identity), **ended_changes.get("budget", {})}
             stop = {
                 "request_id": "budget", "cause": "budget",
-                "requested": True, "terminated": ended,
-                "observed_state": "ended" if ended else "running",
+                "requested": True, "terminated": False, "observed_state": "running",
             }
-        return {
-            "root_id": "r" * 32, "task_id": task_id,
-            "liveness": "ended" if ended else "running", "stops": [stop],
-        }
+        return {**identity, "liveness": "running", "stops": [stop]}
     return run_json
 
 
-def _assert_stop_expectations(*, attempted, calls, dispatches, evidence, lease_cleanup_calls, lifecycle, receipt, self, shutdown):
+def _user_interrupted_status(identity, request_id):
+    """Mirror the documented `status --json` envelope after a native default user stop."""
+    return {
+        "schema_version": 1, "command": "status", **identity,
+        "status": "interrupted", "admission": "admitted", "liveness": "ended", "publication": "unknown",
+        "supervisor": {"matched": True, "state": "ended", "numeric_task_id": 0},
+        "stops": [{
+            "request_id": request_id, "cause": "user", "requested": True, "matched": False,
+            "attempted": False, "numeric_task_id": 0, "in_flight": False,
+            "observed_state": "ended", "terminated": True,
+        }],
+        "continuation": {"resumable": False, "mode": "native", "predecessor_task_id": identity["task_id"],
+                         "reason": "task was cancelled by the user"},
+        "failure": {"code": "task_interrupted", "stage": "status", "next_action": "stop_and_report"},
+    }
+
+
+def _budget_timed_out_status(identity):
+    return {
+        **identity, "status": "timed_out", "liveness": "ended",
+        "stops": [{"request_id": "budget", "cause": "budget", "requested": True,
+                   "terminated": True, "observed_state": "ended"}],
+    }
+
+
+def _assert_stop_expectations(*, attempted, calls, dispatches, evidence, lease_cleanup_calls, lifecycle, receipt, self,
+                              shutdown):
     self.assertEqual([command[2] for command in calls], [
         "dispatch", "cancel", "status", "status", "dispatch", "status", "status",
     ])
@@ -221,6 +281,13 @@ def _assert_stop_expectations(*, attempted, calls, dispatches, evidence, lease_c
         evidence["tasks"]["user_stop"]["fixture_lease_cleanup"],
         [{"state": "removed"}],
     )
+    self.assertEqual(evidence["tasks"]["user_stop"]["status"]["status"], "interrupted")
+    self.assertEqual(
+        evidence["tasks"]["user_stop"]["status"]["failure"],
+        {"code": "task_interrupted", "next_action": "stop_and_report"},
+    )
+    self.assertNotIn("failure", evidence["tasks"]["budget_stop"]["status"])
+    self.assertEqual(calls[3][2:], ["status", dispatches[0][0], "--json"])
     self.assertFalse(evidence["stop_poll_policy"]["override"])
     self.assertEqual(evidence["cleanup"]["fixture_waiter_entries"], 0)
     self.assertEqual(receipt.counts["dispatch_completed_count"], 2)

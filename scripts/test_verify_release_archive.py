@@ -1,5 +1,6 @@
 """Deterministic tests for exact release archive verification and receipts."""
 
+import contextlib
 import hashlib
 import json
 import os
@@ -9,7 +10,6 @@ import shutil
 import stat
 import sys
 import tarfile
-import tempfile
 import threading
 import unittest
 from argparse import Namespace
@@ -20,7 +20,11 @@ if __package__ in {None, ""}:
 
 from scripts import verify_release_archive as verifier
 from scripts import native_acceptance_evidence as evidence
+from scripts.acceptance_tests.fixture_cleanup import closing_preserving_primary
+from scripts.acceptance_tests.release_fixture import FixtureTree
 from scripts.acceptance_tests.native.support import lifetime_closure_source, production_acp_source
+from scripts.delegate_acceptance.processes.contracts import CommandFailure
+from scripts.delegate_acceptance.release_verification import commands as release_commands
 from scripts.delegate_acceptance.release_verification import filesystem as receipt_files
 from scripts.delegate_acceptance.release_verification.contract import MAX_RELEASE_RECEIPT_BYTES
 from scripts.delegate_acceptance.directories import journal as cleanup_module
@@ -33,9 +37,27 @@ SECRET = "release-test-secret-must-not-be-recorded"
 
 
 class ReleaseArchiveVerificationTests(unittest.TestCase):
+    def __init__(self, methodName="runTest", *, parent: Path | None = None,
+                 containing: tuple[FixtureTree, ...] = ()):
+        """``parent`` places the fixture; each ``containing`` tree also observes its child failures."""
+        super().__init__(methodName)
+        self.parent = parent
+        self.containing = containing
+
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="release-archive-test-")
-        self.root = Path(self.temporary.name).resolve(strict=True)
+        # The one stack runs every fixture cleanup; unittest only backstops it after a failed setUp.
+        self.cleanup = contextlib.ExitStack()
+        self.addCleanup(self.cleanup.close)
+        self.tree = FixtureTree.open(self.parent, prefix="release-archive-test", label="release archive fixture")
+        self.cleanup.callback(self.tree.dispose)
+        self.root = self.tree.root
+        # Each verifier child's original failure reaches the trees before the verifier converts it.
+        runner = release_commands.run_bounded_command
+
+        def observed(argv, env, **options):
+            return self.tree.observe_operation(lambda: runner(argv, env, **options), dependencies=self.containing)
+
+        self.cleanup.enter_context(patch.object(release_commands, "run_bounded_command", observed))
         self.runner_temp = self.root / "runner-temp"
         self.runner_temp.mkdir()
         self.assets = self.runner_temp / "delegation-layer-release"
@@ -54,12 +76,21 @@ class ReleaseArchiveVerificationTests(unittest.TestCase):
             "RUNNER_TEMP": str(self.runner_temp),
             "FAKE_DELEGATE_VERSION": "1.2.3",
         }
-        self.env_patcher = patch.dict(os.environ, self.environment, clear=False)
-        self.env_patcher.start()
+        self.cleanup.enter_context(patch.dict(os.environ, self.environment, clear=False))
 
     def tearDown(self):
-        self.env_patcher.stop()
-        self.temporary.cleanup()
+        self.cleanup.close()
+
+    @contextlib.contextmanager
+    def prepared(self):
+        """Run this fixture outside a test run: setUp, then tearDown, which closes every cleanup.
+
+        A failed setUp still closes them; ``closing_preserving_primary`` keeps any primary failure.
+        """
+        with closing_preserving_primary(lambda: self.cleanup.close()):
+            self.setUp()
+            with closing_preserving_primary(self.tearDown):
+                yield self
 
     def write_archive(self, *, version="1.2.3", missing=(), extra_secret=False):
         archive = self.assets / self.archive_name
@@ -590,19 +621,34 @@ esac
                 if done is not None:
                     done.set()
 
+        def close_threads():
+            release_first.set()
+            faults = []
+            for thread in started:
+                try:
+                    thread.join(10)
+                except BaseException as fault:  # Every started writer still gets its own join attempt.
+                    faults.append(fault)
+            if faults:
+                raise faults[0] if len(faults) == 1 else BaseExceptionGroup("release writer joins failed", faults)
+            if any(thread.is_alive() for thread in started):
+                raise verifier.VerificationError(CommandFailure.TIMEOUT.value, "release-fixture-thread-join")
+
+        started = []
         with patch.object(receipt_files, "write_receipt", side_effect=pause_first_writer):
             first = threading.Thread(target=run, args=("first",), name="release-first")
             second = threading.Thread(
                 target=run, args=("second", second_started, second_done), name="release-second",
             )
-            first.start()
-            self.assertTrue(first_entered.wait(5))
-            second.start()
-            self.assertTrue(second_started.wait(5))
-            self.assertFalse(second_done.wait(0.2))
-            release_first.set()
-            first.join(10)
-            second.join(10)
+            with closing_preserving_primary(lambda: self.tree.observe_operation(
+                    close_threads, dependencies=self.containing, closure_required=True)):
+                first.start()
+                started.append(first)
+                self.assertTrue(first_entered.wait(5))
+                second.start()
+                started.append(second)
+                self.assertTrue(second_started.wait(5))
+                self.assertFalse(second_done.wait(0.2))
 
         self.assertEqual(errors, [])
         self.assertEqual(sorted(results), [("first", 0), ("second", 0)])
