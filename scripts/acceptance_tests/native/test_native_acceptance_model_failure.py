@@ -173,6 +173,10 @@ class DiscoveryExitConsumerTests(unittest.TestCase):
         operation.ops = SimpleNamespace(managed_runner=True)
         operation.base, operation.output, operation.workspace = directory, output, workspace
         operation.models_state = directory / "models-state"
+        # Discovery binds its owned root and helper before launch; the constructor provides both.
+        operation.models_state.mkdir()
+        operation.provider_executable = directory / "provider"
+        operation.provider_executable.write_bytes(b"provider fixture\n")
         operation.processes = SimpleNamespace(run=Mock(return_value=SimpleNamespace(
             directory=directory, result={"exit_code": exit_code})))
         operation.setup = Mock()

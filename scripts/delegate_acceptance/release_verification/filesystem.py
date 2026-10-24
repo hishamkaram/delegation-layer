@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import errno
 import hashlib
 import json
 import os
@@ -11,7 +12,7 @@ import stat
 import tempfile
 from ..evidence.bounded_files import BoundedReadError
 from ..directories.journal import acquire_exclusive_file_lock
-from ..evidence.bounded_files import read_bounded_regular_file
+from ..evidence.bounded_files import FileFingerprint, fingerprint_bounded_regular_file, read_bounded_regular_file
 from .contract import MAX_RECEIPT as MAX_RECEIPT
 from .contract import (MAX_RELEASE_RECEIPT_BYTES, MAX_TREE_ENTRIES, VerificationError)
 
@@ -36,8 +37,23 @@ def _bounded_file_bytes(path: Path, limit: int, code: str) -> bytes:
         raise VerificationError(code, "bounded-read") from None
 
 
+def bounded_fingerprint(path: Path, limit: int, code: str) -> FileFingerprint:
+    """Return the size and SHA-256 of one bounded regular file without holding its bytes.
+
+    The path guards and the pinned read are those of ``_bounded_file_bytes``; only
+    the read's sink differs, so memory is bounded by the read chunk size, O(chunk), never the
+    file's size, and every refusal keeps its identity.
+    """
+    _reject_parent_components(path, code)
+    _reject_symlink_components(path, code)
+    try:
+        return fingerprint_bounded_regular_file(path, limit)
+    except BoundedReadError:
+        raise VerificationError(code, "bounded-read") from None
+
+
 def bounded_digest(path: Path, limit: int, code: str = "file_too_large") -> str:
-    return hashlib.sha256(_bounded_file_bytes(path, limit, code)).hexdigest()
+    return bounded_fingerprint(path, limit, code).sha256
 
 
 def _reject_parent_components(path: Path, code: str) -> None:
@@ -58,6 +74,64 @@ def _reject_symlink_components(path: Path, code: str) -> None:
             raise VerificationError(code, "validate-paths") from error
         if stat.S_ISLNK(metadata.st_mode):
             raise VerificationError(code, "validate-paths")
+
+
+def create_new_file(path: Path, code: str, *, stage: str) -> int:
+    """Create one owner-only regular file and return its open descriptor; the caller closes it.
+
+    Links and existing paths are never reused. A path-guard refusal reports the
+    ``validate-paths`` stage; a failure to create the leaf reports the caller's ``stage``.
+    """
+    _reject_parent_components(path, code)
+    _reject_symlink_components(path, code)
+    try:
+        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                       0o600)
+    except OSError:
+        raise VerificationError(code, stage) from None
+
+
+def write_all(descriptor: int, data: bytes) -> None:
+    """Write every byte of ``data`` to ``descriptor``; the caller maps the raw ``OSError``.
+
+    A partial write continues with the rest. A write that reports no progress
+    raises ``OSError(EIO)`` instead of looping forever.
+    """
+    view = memoryview(data)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError(errno.EIO, "write made no progress")
+        view = view[written:]
+
+
+def write_new_file(path: Path, data: bytes, *, path_code: str, write_code: str, stage: str) -> None:
+    """Create ``path`` owner-only, write and sync exactly ``data``, and close it exactly once.
+
+    A path refusal is ``create_new_file``'s. A write or sync ``OSError`` becomes
+    ``write_code``. Any primary exception, including an interrupt, closes the
+    descriptor once and is re-raised as the same object; a close failure on that
+    path only adds the errno note ``file close failed: <ERRNO>``. A close-only
+    failure becomes ``write_code``. Nothing is retried or removed: the file stays
+    with the caller on every outcome.
+    """
+    descriptor = create_new_file(path, path_code, stage=stage)
+    try:
+        try:
+            write_all(descriptor, data)
+            os.fsync(descriptor)
+        except OSError:
+            raise VerificationError(write_code, stage) from None
+    except BaseException as primary:
+        try:
+            os.close(descriptor)
+        except OSError as close_error:
+            primary.add_note("file close failed: " + errno.errorcode.get(close_error.errno or 0, "unknown"))
+        raise
+    try:
+        os.close(descriptor)
+    except OSError:
+        raise VerificationError(write_code, stage) from None
 
 
 def _bounded_children(path: Path, limit: int = MAX_TREE_ENTRIES) -> list[Path]:

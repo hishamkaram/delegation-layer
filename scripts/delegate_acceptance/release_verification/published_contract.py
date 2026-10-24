@@ -23,7 +23,11 @@ NPM_REGISTRY = "https://registry.npmjs.org/"
 HOMEBREW_FORMULA = "delegation-layer"
 
 
-HOMEBREW_PREFIXES = ("/opt/homebrew", "/usr/local")
+# The supported Homebrew prefixes of each host OS; no other OS has one.
+_HOMEBREW_PREFIXES = (
+    ("Darwin", ("/opt/homebrew", "/usr/local")),
+    ("Linux", ("/home/linuxbrew/.linuxbrew",)),
+)
 
 
 SKILL_SOURCE_PREFIX = "skills/agent-integration/"
@@ -142,6 +146,11 @@ class LatestDecision:
     github_latest: str
     run_default: bool
     reason: str
+
+
+def homebrew_prefixes(os_name: str) -> tuple[str, ...]:
+    """The supported Homebrew prefixes of the host OS ``os_name``; empty when it has none."""
+    return dict(_HOMEBREW_PREFIXES).get(os_name, ())
 
 
 def record_fact(receipt: dict, key: str, value: object) -> None:
@@ -283,6 +292,21 @@ def skill_file(entry: TreeEntry, content: bytes) -> SkillFile:
     if len(content) != entry.size or git_blob_sha(content) != entry.blob_sha:
         raise VerificationError("skill_blob_mismatch", "skill-manifest")
     return SkillFile(entry.path, entry.blob_sha, hashlib.sha256(content).hexdigest())
+
+
+def parse_single_line(raw: bytes, *, code: str, stage: str) -> str:
+    """Return the one non-blank UTF-8 line of a command's output; anything else fails with ``code``.
+
+    Empty or blank output, undecodable bytes and any second line are refused, so a caller never
+    takes the first line of a reply it did not fully accept.
+    """
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeError:
+        raise VerificationError(code, stage) from None
+    if len(lines) != 1 or not lines[0].strip():
+        raise VerificationError(code, stage)
+    return lines[0]
 
 
 def compare_hashes(expected: dict[str, str], observed: dict[str, str], code: str, stage: str) -> None:

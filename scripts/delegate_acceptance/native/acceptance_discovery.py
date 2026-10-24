@@ -9,12 +9,17 @@ import shutil
 import stat
 import time
 from pathlib import Path
-from scripts.delegate_acceptance.evidence.files import read_json, write_json
+from scripts.delegate_acceptance.evidence.files import digest, read_json, write_json
 from scripts.delegate_acceptance.evidence.records import parse_json_output, status_jobs
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, _hex_digest, _task_identity, require
 from scripts.delegate_acceptance.native.constants import NATIVE_DISCOVERY_ENVIRONMENT
-from scripts.delegate_acceptance.native.errors import BlockedFailure
+from scripts.delegate_acceptance.native.errors import BlockedFailure, BlockReason
 from scripts.delegate_acceptance.native.fixtures import bounded_text
+from scripts.delegate_acceptance.native.model_discovery_intent import (
+    MODEL_DISCOVERY_BRIEF,
+    MODEL_DISCOVERY_DEFINITION_REVISION,
+    ModelDiscoveryIntent,
+)
 from scripts.delegate_acceptance.native.provider_policy import model_discovery_allowed_exit_codes, validate_model_discovery_response
 from scripts.delegate_acceptance.processes.observation import inherited_environment
 from scripts.delegate_acceptance.native.task_ops import ModelDiscoveryCleanupOps
@@ -149,11 +154,25 @@ def _prepare_codex_workspace(owner) -> None:
             stream.flush()
             os.fsync(stream.fileno())
 
+def model_discovery_intent(owner) -> ModelDiscoveryIntent:
+    """Read the one request's known input bindings; an unreadable input refuses the launch."""
+    acceptance = owner
+    return ModelDiscoveryIntent(
+        models_root=str(acceptance.models_state),
+        initial_entries=tuple(sorted(entry.name for entry in acceptance.models_state.iterdir())),
+        provider=acceptance.provider, permission=PROFILES[acceptance.provider]["modes"][0],
+        cwd=str(acceptance.workspace), definition_revision=MODEL_DISCOVERY_DEFINITION_REVISION,
+        budget=MODEL_DISCOVERY_TASK_BUDGET, budget_nanos=MODEL_DISCOVERY_TASK_BUDGET_NANOS,
+        brief_sha256=hashlib.sha256(MODEL_DISCOVERY_BRIEF).hexdigest(),
+        helper_executable=str(acceptance.provider_executable),
+        helper_sha256=digest(acceptance.provider_executable))
+
 def discover_models(owner) -> None:
     """Record advisory model facts through the already-running supervisor."""
     acceptance = owner
     before = workspace_snapshot(acceptance.workspace)
     argv = acceptance.model_discovery_argv()
+    acceptance._discovery_state().record_intent(model_discovery_intent(acceptance))
     process = acceptance.processes.run(
         "model-discovery", argv, acceptance.base,
         expected={0, 1, 2}, timeout=MODEL_DISCOVERY_TIMEOUT_SECONDS)
@@ -227,7 +246,7 @@ def _validate_model_discovery_evidence(owner, status: dict[str, object],
     request = journal["request"]
     binding = request["binding"]
     helper_executable = binding.get("helper_executable")
-    require(binding.get("definition_revision") == "model-discovery-v1" and
+    require(binding.get("definition_revision") == MODEL_DISCOVERY_DEFINITION_REVISION and
             helper_executable == str(acceptance.provider_executable) and
             _hex_digest(binding.get("helper_sha256")),
             "model discovery provider binding changed")
@@ -238,8 +257,8 @@ def _validate_model_discovery_evidence(owner, status: dict[str, object],
             task.get("canonical_cwd") == str(acceptance.workspace) and
             task.get("requested_config") == {"permission": discovery_mode, "budget": MODEL_DISCOVERY_TASK_BUDGET} and
             task.get("budget_nanos") == MODEL_DISCOVERY_TASK_BUDGET_NANOS and
-            task.get("brief_length") == len(b"model discovery") and
-            task.get("brief_sha256") == hashlib.sha256(b"model discovery").hexdigest(),
+            task.get("brief_length") == len(MODEL_DISCOVERY_BRIEF) and
+            task.get("brief_sha256") == hashlib.sha256(MODEL_DISCOVERY_BRIEF).hexdigest(),
             "model discovery request is not the bounded metadata operation")
     result = journal["result"]
     require(isinstance(result, dict), "model discovery has no completed result")
@@ -315,9 +334,17 @@ def require_authentication_prerequisite(owner) -> None:
     require(type(logged_in) is bool,
             f"{acceptance.provider} authentication status has no loggedIn boolean")
     if not logged_in:
-        raise BlockedFailure(f"{acceptance.provider} authentication is unavailable")
+        raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",
+                             reason=BlockReason.AUTH_UNAVAILABLE)
     require(process.result.get("exit_code") == 0,
             f"{acceptance.provider} authenticated status exited unsuccessfully")
+
+def model_discovery_block_reason(response: object) -> BlockReason:
+    """Classify a negative model catalog from its typed status and reason code only."""
+    if (isinstance(response, dict) and response.get("status") == "blocked"
+            and response.get("reason_code") == "authentication_unavailable"):
+        return BlockReason.AUTH_UNAVAILABLE
+    return BlockReason.UNCLASSIFIED
 
 def require_default_model_prerequisite(owner) -> None:
     """Gate Pi's default control on its native locally available catalog."""
@@ -329,10 +356,12 @@ def require_default_model_prerequisite(owner) -> None:
     require(isinstance(response, dict), "Pi model discovery response is unavailable")
     status, reason = response.get("status"), response.get("reason_code")
     if status == "blocked":
-        if reason == "authentication_unavailable":
-            raise BlockedFailure("Pi model discovery authentication is unavailable")
+        if model_discovery_block_reason(response) is BlockReason.AUTH_UNAVAILABLE:
+            raise BlockedFailure("Pi model discovery authentication is unavailable",
+                                 reason=BlockReason.AUTH_UNAVAILABLE)
         raise AcceptanceFailure(f"Pi default-model discovery is blocked: {reason}")
     if status == "unavailable" and reason == "models_unavailable":
+        # An empty local catalog is a model-configuration gap, not credential unavailability.
         raise BlockedFailure("Pi has no locally available model after native authentication and filtering")
     require(status != "failed", f"Pi default-model discovery failed: {reason}")
     # The response was validated on receipt; its typed failure is operational, not advisory.

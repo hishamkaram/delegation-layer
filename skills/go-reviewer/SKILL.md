@@ -41,8 +41,17 @@ Git-subprocess lifecycle policy in the review skill.
 ## Workflow
 
 1. Validate the [handoff evidence
-   manifest](../../agents/_data/maintainability-contract.md#handoff-evidence),
-   including a passing `make verify-maintainability-strict` for the exact
+   manifest](../../agents/_data/maintainability-contract.md#handoff-evidence).
+   When the handoff supplies an index, run
+   `python3 scripts/handoff_evidence.py --root <repo> --verify <index>` so the
+   index matches the current source, binary, and receipt bindings; without one,
+   check those bindings directly against the exact snapshot. A missing,
+   incomplete, or stale binding blocks the claims it supports. Then
+   interpret each receipt through its own validator and claim class. A verified
+   complete index declares input completeness only; source captured, index
+   complete, receipt validated, and review approved are [separate
+   statuses](../../agents/_data/maintainability-contract.md#evidence-status-is-not-approval).
+   Require a passing `make verify-maintainability-strict` for the exact
    snapshot before peer review. Missing, failed, or stale gate evidence leaves
    review incomplete. Then read the full changed surface and relevant consumers. Verify that each
    claimed contract follows from that exact source and binary snapshot or an

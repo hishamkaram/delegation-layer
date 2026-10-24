@@ -33,33 +33,45 @@ For process, supervisor, endpoint, or cleanup changes, also apply its
 
 ## Workflow
 
-1. Read the named contracts and inspect the relevant consumers before editing.
+1. Confirm the base revision, owned files, and interface prerequisites. Each
+   prerequisite needs its post-image applied in your checkout with evidence
+   there; it need not be merged. Confirm in your own launch context that the
+   tools you rely on run, and keep a setup failure apart from an expected-red
+   test (see the contract's [worker check
+   levels](../../agents/_data/maintainability-contract.md#worker-check-levels)).
+   If the assignment explicitly requests a patch proposal, deliver the proposal
+   and label it as one: it leaves owned files unchanged and is not
+   implementation-complete.
+2. Read the named contracts and inspect the relevant consumers before editing.
    Preserve unrelated worktree changes and keep the change inside its assigned
    boundary.
-2. Implement the smallest consumer-owned interface that carries the required
+3. Implement the smallest consumer-owned interface that carries the required
    data. Keep provider argument/configuration/identity interpretation local to
    the provider and shared process/evidence/publication mechanics in the core.
-3. Preserve context propagation within each execution lifetime, wrapped error
+4. Preserve context propagation within each execution lifetime, wrapped error
    identity, durable record semantics, nullable usage values, and explicit
    unsupported-option failures. For every create-once record, apply the
    invariants' [ambiguous-write
    classifications](../../agents/_data/delegation-invariants.md#ambiguous-create-once-writes).
-4. Update the [canonical transition
+5. Update the [canonical transition
    rows](../../agents/_data/maintainability-contract.md#durable-transition-matrix-and-composed-tests)
    and add their named composed tests through each affected production store and
    real consumer. Use fakes only for isolated protocol ordering; avoid tests
    that merely mirror implementation branches.
    Keep shared lifecycle policy OS-neutral and isolate only primitives whose
    semantics differ; do not emulate one supported kernel to claim another.
-5. Run `make fmt-check`, the affected focused tests, and `make verify-skills`;
+6. Run `make fmt-check`, the affected focused tests, and `make verify-skills`;
    require `make verify-maintainability-strict` and the applicable project gate
-   before peer review. A staged checkpoint names any blocked shared gate and
-   remains incomplete. Do not suppress a linter or weaken an assertion to
-   obtain a pass.
+   before peer review. A documentation-only assignment needs only the checks it
+   touches, not the Go toolchain. A staged checkpoint names any blocked shared
+   gate and remains incomplete. Do not suppress a linter or weaken an assertion
+   to obtain a pass.
 
 ## Deliverables
 
-- the bounded Go implementation and any necessary fixtures;
+- the bounded Go implementation and any necessary fixtures, or the requested
+  patch proposal;
+- the exact changed post-images (paths and digests), not only the owned files;
 - tests that prove the changed behavior and important failure paths; and
 - the contract's [evidence
   handoff](../../agents/_data/maintainability-contract.md#handoff-evidence),

@@ -2,24 +2,60 @@
 
 from __future__ import annotations
 
+import errno
 import io
 import json
+from pathlib import Path
+import sys
 from unittest.mock import patch
 import unittest
 
 from scripts.delegate_acceptance.directories.journal import directory_identity_record
 from scripts.delegate_acceptance.directories.operations import DirectoryOwner
-from scripts.delegate_acceptance.native_release import cleanup, cli, coordinator, submission, watching
-from scripts.delegate_acceptance.native_release.contract import ReleaseError, ReleaseRequest
-from scripts.delegate_acceptance.native_release.receipt import Receipt
+from scripts.delegate_acceptance.native_release import (
+    cleanup, cli, coordinator, execution, preflight, submission, watching,
+)
+from scripts.delegate_acceptance.native_release.contract import (
+    STAGES, ReleaseError, ReleaseRequest, invocation_name,
+)
+from scripts.delegate_acceptance.native_release.receipt import Receipt, lock_name
 from scripts.delegate_acceptance.native_release.submission import dispatch
+from scripts.delegate_acceptance.processes import operations
+from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
+from scripts.delegate_acceptance.release_verification import commands
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.native_history import ValidationObservation
 from scripts.delegate_acceptance.release_verification.native_remote_history import AttemptReport
-from scripts.test_native_release_support import PROOF_HASH, RELEASE, REPO, TAG, ReleaseFixture
+from scripts.test_native_release_support import HEAD, PROOF_HASH, RELEASE, REPO, SOURCE, TAG, ReleaseFixture
 
 
-class CliRecoveryTests(ReleaseFixture):
+class ResumeFixture(ReleaseFixture):
+    """The composed `resume` command over a fixture receipt; defines no tests of its own."""
+
+    def run_resume(self, read_error: ReleaseError | None = None) -> tuple[int, dict[str, object]]:
+        return self.run_cli(["resume", "--receipt", str(self.receipt.path)], read_error)
+
+    def run_cli(self, argv: list[str], read_error: ReleaseError | None = None) -> tuple[int, dict[str, object]]:
+        """``cli.main`` with this fixture's receipt as the loaded or created one."""
+        output = io.StringIO()
+        with patch.object(cli, "require_python"), \
+                patch.object(cli, "load_receipt", side_effect=lambda _path: Receipt.load(self.receipt.path)), \
+                patch.object(cli, "create_receipt", side_effect=lambda *_arguments: self.receipt), \
+                patch.object(cli, "state_base", return_value=self.base), \
+                patch.object(cli, "acquire_exclusive_file_lock", return_value=41), \
+                patch.object(cli, "release_exclusive_file_lock"), \
+                patch.object(coordinator, "github_client", return_value=self.client), \
+                patch.object(coordinator, "read_public", side_effect=read_error), \
+                patch.object(submission, "read_public"), \
+                patch("sys.stdout", output), patch("sys.stderr", io.StringIO()):
+            exit_code = cli.main(argv)
+        report = json.loads(output.getvalue())
+        if not isinstance(report, dict):
+            raise AssertionError("CLI report is not an object")
+        return exit_code, report
+
+
+class CliRecoveryTests(ResumeFixture):
     def seed_upload_with_intent(self) -> None:
         self.seed_project()
         self.client.assets = [self.client.asset()]
@@ -29,23 +65,6 @@ class CliRecoveryTests(ReleaseFixture):
                   "size": project["size"], "name": self.receipt.invocation.proof_name}
         self.receipt.intend("upload", intent)
         self.receipt.complete("upload", result)
-
-    def run_resume(self, read_error: ReleaseError | None = None) -> tuple[int, dict[str, object]]:
-        output = io.StringIO()
-        with patch.object(cli, "require_python"), \
-                patch.object(cli, "load_receipt", side_effect=lambda _path: Receipt.load(self.receipt.path)), \
-                patch.object(cli, "state_base", return_value=self.base), \
-                patch.object(cli, "acquire_exclusive_file_lock", return_value=41), \
-                patch.object(cli, "release_exclusive_file_lock"), \
-                patch.object(coordinator, "github_client", return_value=self.client), \
-                patch.object(coordinator, "read_public", side_effect=read_error), \
-                patch.object(submission, "read_public"), \
-                patch("sys.stdout", output), patch("sys.stderr", io.StringIO()):
-            exit_code = cli.main(["resume", "--receipt", str(self.receipt.path)])
-        report = json.loads(output.getvalue())
-        if not isinstance(report, dict):
-            raise AssertionError("CLI report is not an object")
-        return exit_code, report
 
     def test_unbound_agy_model_on_completed_projection_blocks_before_submission(self) -> None:
         self.seed_project()
@@ -92,6 +111,49 @@ class CliRecoveryTests(ReleaseFixture):
                                  "submission_intent_unresolved_resume_required:github_request_failed")
                 self.assertEqual(report["native_status"], "FAIL")
         self.assertEqual(Receipt.load(self.receipt.path).stage("upload").state, "intended")
+        self.assertEqual(self.client.posts, 0)
+        command.assert_not_called()
+        native.assert_not_called()
+
+    def run_resume_unsaved(self) -> tuple[int, dict[str, object]]:
+        """Resume while every receipt save fails; the file must keep its seeded bytes."""
+        durable = self.receipt.path.read_bytes()
+        with patch.object(Receipt, "save", side_effect=OSError(errno.ENOSPC, "fixture receipt volume is full")):
+            outcome = self.run_resume()
+        self.assertEqual(self.receipt.path.read_bytes(), durable)
+        return outcome
+
+    def unsaved_report(self, status: str, fault: str) -> dict[str, object]:
+        return {"status": status, "reason": "release_receipt_unavailable", "fault": fault,
+                "receipt": str(self.receipt.path), "receipt_persisted": False, "invocation_id": "1" * 32}
+
+    def test_an_unsaved_upload_reconciliation_fault_stays_incomplete_with_its_reason(self) -> None:
+        self.seed_project()
+        self.receipt.intend("upload", {
+            "name": self.receipt.invocation.proof_name, **self.receipt.stage("project").result,
+        })
+        with patch.object(submission, "recheck_submission"), \
+                patch.object(submission, "_asset_matches",
+                             side_effect=VerificationError("github_request_failed", "github-api")), \
+                patch.object(submission, "command") as command, \
+                patch.object(coordinator, "native") as native:
+            exit_code, report = self.run_resume_unsaved()
+        self.assertEqual((exit_code, report), (3, self.unsaved_report(
+            "INCOMPLETE", "submission_intent_unresolved_resume_required:github_request_failed")))
+        self.assertEqual(Receipt.load(self.receipt.path).stage("upload").state, "intended")
+        self.assertEqual(self.client.posts, 0)
+        command.assert_not_called()
+        native.assert_not_called()
+
+    def test_an_unsaved_unintended_upload_error_stays_blocked_with_its_reason(self) -> None:
+        self.seed_project()
+        with patch.object(submission, "recheck_submission",
+                          side_effect=VerificationError("github_request_failed", "github-api")), \
+                patch.object(submission, "command") as command, \
+                patch.object(coordinator, "native") as native:
+            exit_code, report = self.run_resume_unsaved()
+        self.assertEqual((exit_code, report), (2, self.unsaved_report("BLOCKED", "github_request_failed")))
+        self.assertEqual(Receipt.load(self.receipt.path).stage("upload").state, "pending")
         self.assertEqual(self.client.posts, 0)
         command.assert_not_called()
         native.assert_not_called()
@@ -216,6 +278,105 @@ class CliRecoveryTests(ReleaseFixture):
         native.assert_not_called()
 
 
+class UnknownControlTests(ResumeFixture):
+    """A control child whose closure the canonical runner could not prove is never a definite refusal.
+
+    Before native work the first harness Git command fails inside a fake bounded-command
+    owner while the canonical Popen entry refuses and records every launch, so no real
+    child exists. Only the canonical unproven-ownership codes are INCOMPLETE; a closed
+    start, a GitHub refusal and a known failure after the projection keep their outcomes.
+    """
+
+    RUN = ["run", "--tag", TAG, "--opencode-model", "vendor/exact-model", "--ccr-model", "exact-alias"]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.launches: list[tuple[object, ...]] = []
+
+    def refuse_launch(self, *arguments: object, **_options: object) -> None:
+        self.launches.append(arguments)
+        raise AssertionError("a real child must not launch in a control-closure test")
+
+    def run_with_first_command_failing(self, failure: CommandFailure, argv: list[str]) -> tuple[int, dict[str, object]]:
+        with patch.object(commands, "run_bounded_command", side_effect=BoundedCommandError(failure)), \
+                patch.object(operations.subprocess, "Popen", side_effect=self.refuse_launch), \
+                patch.object(coordinator, "native") as native:
+            outcome = self.run_cli(argv)
+        native.assert_not_called()
+        self.assertEqual((self.launches, self.client.calls), ([], []))
+        return outcome
+
+    def assertBeforeNative(self, outcome: tuple[int, dict[str, object]], status: str, reason: str) -> None:
+        exit_code, report = outcome
+        self.assertEqual((exit_code, report["status"], report["reason"]),
+                         ({"BLOCKED": 2, "INCOMPLETE": 3}[status], status, reason))
+        stored = Receipt.load(self.receipt.path)
+        self.assertEqual((stored.status, stored.reason), (status, reason))
+        self.assertEqual((stored.stage("preflight").state, stored.stage("native").state), ("intended", "pending"))
+
+    def assert_unknown_control_is_incomplete(self, failure: CommandFailure) -> None:
+        self.assertBeforeNative(self.run_with_first_command_failing(failure, self.RUN), "INCOMPLETE", failure.value)
+        resumed = self.run_with_first_command_failing(failure, ["resume", "--receipt", str(self.receipt.path)])
+        self.assertEqual((resumed[0], resumed[1]["status"], resumed[1]["reason"]),
+                         (3, "INCOMPLETE", "pre_native_invocation_incomplete_no_rerun"))
+
+    def test_a_timed_out_harness_command_is_incomplete_and_never_reruns(self) -> None:
+        self.assert_unknown_control_is_incomplete(CommandFailure.TIMEOUT)
+
+    def test_a_harness_command_whose_termination_timed_out_is_incomplete(self) -> None:
+        self.assert_unknown_control_is_incomplete(CommandFailure.TERMINATION_TIMEOUT)
+
+    def test_a_harness_command_whose_termination_failed_is_incomplete(self) -> None:
+        self.assert_unknown_control_is_incomplete(CommandFailure.TERMINATION_FAILED)
+
+    def test_a_harness_command_without_its_capture_is_incomplete(self) -> None:
+        self.assert_unknown_control_is_incomplete(CommandFailure.CAPTURE_UNAVAILABLE)
+
+    def test_a_harness_command_that_never_started_stays_blocked(self) -> None:
+        self.assertBeforeNative(self.run_with_first_command_failing(CommandFailure.START_FAILED, self.RUN),
+                                "BLOCKED", "command_start_failed")
+
+    def test_a_github_404_before_native_stays_blocked(self) -> None:
+        self.client.repo_inaccessible = True
+        with patch.object(preflight, "observe_harness", return_value=(HEAD, SOURCE, True)), \
+                patch.object(coordinator, "native") as native:
+            outcome = self.run_cli(self.RUN)
+        self.assertBeforeNative(outcome, "BLOCKED", "github_request_failed")
+        native.assert_not_called()
+
+    def test_an_unsaved_unknown_control_outcome_is_incomplete_and_keeps_the_durable_intent(self) -> None:
+        save = Receipt.save
+        durable: list[bytes] = []
+
+        def full_after_the_preflight_intent(receipt: Receipt, *, create: bool = False) -> None:
+            if durable:
+                raise OSError(errno.ENOSPC, "fixture receipt volume is full")
+            save(receipt, create=create)
+            if receipt.stage("preflight").state == "intended":
+                durable.append(receipt.path.read_bytes())
+
+        with patch.object(Receipt, "save", full_after_the_preflight_intent):
+            exit_code, report = self.run_with_first_command_failing(CommandFailure.TIMEOUT, self.RUN)
+        self.assertEqual((exit_code, report), (3, {
+            "status": "INCOMPLETE", "reason": "release_receipt_unavailable", "fault": "command_timeout",
+            "receipt": str(self.receipt.path), "receipt_persisted": False, "invocation_id": "1" * 32}))
+        self.assertEqual([self.receipt.path.read_bytes()], durable)
+        self.assertEqual(Receipt.load(self.receipt.path).stage("preflight").state, "intended")
+
+    def test_an_unknown_control_after_the_projection_is_incomplete_without_any_effect(self) -> None:
+        self.seed_project()
+        with patch.object(submission, "recheck_submission",
+                          side_effect=VerificationError("command_timeout", "github-api")), \
+                patch.object(submission, "command") as command, \
+                patch.object(coordinator, "native") as native:
+            exit_code, report = self.run_resume()
+        self.assertEqual((exit_code, report["status"], report["reason"]), (3, "INCOMPLETE", "command_timeout"))
+        self.assertEqual(Receipt.load(self.receipt.path).stage("upload").state, "pending")
+        self.assertEqual(self.client.posts, 0)
+        command.assert_not_called()
+        native.assert_not_called()
+
+
 class ReleaseRequestEncodingTests(ReleaseFixture):
     LEGACY_KEYS = {"repo", "tag", "opencode_model", "ccr_model", "no_submit"}
 
@@ -247,6 +408,29 @@ class ReleaseRequestEncodingTests(ReleaseFixture):
             ReleaseRequest(repo=REPO, tag=TAG, opencode_model="vendor/exact-model",
                            ccr_model=None, no_submit=False, agy_model="bad model")
 
+    def test_the_required_opencode_model_refuses_at_construction_as_its_parser_does(self) -> None:
+        legacy = self.receipt.invocation.request.document()
+        with self.assertRaisesRegex(ReleaseError, "release_record_text_invalid"):
+            ReleaseRequest.parse({**legacy, "opencode_model": None})
+        with self.assertRaisesRegex(ReleaseError, "release_record_text_invalid"):
+            ReleaseRequest(repo=REPO, tag=TAG, opencode_model=None, ccr_model=None, no_submit=True)
+        for ccr, agy in ((None, None), ("exact-alias", None), (None, "vendor/agy-exact"),
+                         ("exact-alias", "vendor/agy-exact")):
+            with self.subTest(ccr=ccr, agy=agy):
+                request = ReleaseRequest(repo=REPO, tag=TAG, opencode_model="vendor/exact-model",
+                                         ccr_model=ccr, no_submit=True, agy_model=agy)
+                self.assertEqual(ReleaseRequest.parse(request.document()), request)
+
+    def test_release_kind_stages_placement_and_lock_bytes_are_unchanged(self) -> None:
+        stored = json.loads(self.receipt.path.read_bytes())
+        legacy_stages = ["preflight", "download", "archive", "native", "finalize", "project",
+                         "upload", "dispatch", "watch", "cleanup"]
+        self.assertEqual((stored["kind"], set(stored["stages"]), list(STAGES)),
+                         ("local-native-release", set(legacy_stages), legacy_stages))
+        request = self.receipt.invocation.request
+        self.assertEqual(invocation_name(request, "1" * 32), f"{TAG}-{'1' * 32}")
+        self.assertEqual(lock_name(request), ".8f4a340fb6f75423d11c7cad2f1a5fc24dc231339f0bf32edd32edcdf1a8869f.lock")
+
     def test_cli_passes_agy_model_into_the_created_request(self) -> None:
         created: list[ReleaseRequest] = []
 
@@ -259,7 +443,7 @@ class ReleaseRequestEncodingTests(ReleaseFixture):
                 patch.object(cli, "acquire_exclusive_file_lock", return_value=41), \
                 patch.object(cli, "release_exclusive_file_lock"), \
                 patch.object(cli, "create_receipt", side_effect=capture), \
-                patch.object(cli, "_execute"), patch.object(cli, "_report", return_value=0), \
+                patch.object(cli, "_execute", return_value=None), patch.object(cli, "_report", return_value=0), \
                 patch("sys.stderr", io.StringIO()):
             for options in ((), ("--agy-model", "vendor/agy-exact")):
                 cli._locked(cli.parser().parse_args([*argv, *options]), [*argv, *options])
@@ -415,6 +599,83 @@ class WatchingTests(ReleaseFixture):
         self.assertEqual(report["status"], "LOCAL_ONLY")
         self.assertEqual(report["native_status"], "BLOCKED")
         self.assertIn("native_proof", report)
+
+
+class ChildCompletionDispositionTests(ResumeFixture):
+    """The resume command over real finite children: unproven completion is never a plain block."""
+
+    CHILDREN = ("archive", "native", "finalize")
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.script = self.checkout / "finite.py"
+        self.script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+    def run_children(self, names: tuple[str, ...]) -> None:
+        self.create_runner()
+        for name in names:
+            result = self.run_finite_child(name, [str(Path(sys.executable).resolve()), str(self.script)])
+            self.receipt.complete(name, {**result, "lifetime_closed": True} if name == "native" else result)
+
+    def seed_after_project(self) -> None:
+        self.seed_project()
+        self.run_children(self.CHILDREN)
+        self.client.assets = [self.client.asset()]
+        for name, result in (("upload", {"asset_id": 71}), ("dispatch", {"run_id": 81}),
+                             ("watch", {"promotable": True})):
+            self.complete(name, result)
+
+    def resume(self) -> tuple[int, dict[str, object]]:
+        with patch.object(execution, "Processes", side_effect=AssertionError("resume launched a child")), \
+                patch.object(coordinator, "upload"):
+            return self.run_resume()
+
+    def cleanup_state(self) -> str:
+        return Receipt.load(self.receipt.path).stage("cleanup").state
+
+    def test_after_projection_valid_children_complete_cleanup(self) -> None:
+        self.seed_after_project()
+        exit_code, report = self.resume()
+        self.assertEqual((exit_code, report["status"]), (0, "PROMOTABLE"))
+        self.assertEqual(self.cleanup_state(), "complete")
+        self.assertFalse((self.root / "runner").exists())
+
+    def assert_after_projection_incomplete(self, record: str, change, reason: str) -> None:
+        self.seed_after_project()
+        change(self.root / "runner" / "native-processes" / "001-native" / f"{record}.json")
+        exit_code, report = self.resume()
+        self.assertEqual((exit_code, report["status"], report["reason"]), (3, "INCOMPLETE", reason))
+        self.assertEqual(self.cleanup_state(), "pending")
+        self.assertTrue((self.root / "runner" / "native-processes" / "001-native").is_dir())
+
+    def test_after_projection_null_completed_record_is_incomplete_and_retains_the_runner(self) -> None:
+        self.assert_after_projection_incomplete(
+            "completed", lambda path: path.write_text("null", encoding="utf-8"),
+            "release_record_object_invalid")
+
+    def test_after_projection_boolean_pid_is_incomplete_and_retains_the_runner(self) -> None:
+        def boolean_pid(path: Path) -> None:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["pid"] = True
+            path.write_text(json.dumps(value), encoding="utf-8")
+
+        self.assert_after_projection_incomplete("completed", boolean_pid, "release_record_integer_invalid")
+
+    def test_after_projection_missing_started_record_is_incomplete_and_retains_the_runner(self) -> None:
+        self.assert_after_projection_incomplete(
+            "started", lambda path: path.unlink(), "child_natural_completion_unproven")
+
+    def test_before_projection_unproven_native_completion_stays_incomplete(self) -> None:
+        self.complete("preflight", self.preflight_facts())
+        self.run_children(("archive",))
+        self.run_finite_child("native", [str(Path(sys.executable).resolve()), str(self.script)])
+        record = self.root / "runner" / "native-processes" / "001-native" / "completed.json"
+        record.write_text("null", encoding="utf-8")
+        exit_code, report = self.resume()
+        self.assertEqual((exit_code, report["status"]), (3, "INCOMPLETE"))
+        self.assertEqual(Receipt.load(self.receipt.path).stage("project").state, "pending")
+        self.assertEqual(self.receipt.stage("native").state, "intended")
+        self.assertTrue(record.is_file())
 
 
 if __name__ == "__main__":

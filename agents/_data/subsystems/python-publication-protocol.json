@@ -1,0 +1,44 @@
+[
+  {
+    "name": "py:delegate_acceptance.native_release.publication_contract",
+    "owner": "py:delegate_acceptance.native_release",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:copy",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.digests",
+      "py:delegate_acceptance.native_release.contract",
+      "py:delegate_acceptance.release_verification.candidate_codec",
+      "py:delegate_acceptance.release_verification.candidate_publication_contract",
+      "py:delegate_acceptance.release_verification.candidate_store_contract",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.published_contract",
+      "py:json",
+      "py:re"
+    ]
+  },
+  {
+    "name": "py:test_native_publication_contract",
+    "owner": "py:delegate_acceptance.native_release",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:copy",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.digests",
+      "py:delegate_acceptance.native_release.contract",
+      "py:delegate_acceptance.native_release.publication_contract",
+      "py:delegate_acceptance.release_verification.candidate_manifest",
+      "py:delegate_acceptance.release_verification.candidate_publication_contract",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.published_contract",
+      "py:hashlib",
+      "py:json",
+      "py:pathlib",
+      "py:sys",
+      "py:test_candidate_publication_contract",
+      "py:unittest"
+    ]
+  }
+]

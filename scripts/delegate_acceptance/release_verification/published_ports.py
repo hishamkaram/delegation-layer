@@ -27,7 +27,11 @@ class ConsumerPorts:
     """Everything the channel verifiers may touch outside the private workspace.
 
     run is release_verification.commands.command (receipt-recording, bounded,
-    keyword cwd); tests replace it, production never constructs another child owner.
+    keyword cwd); tests replace it, production never constructs another child owner
+    for these ports. The candidate install observers also call the caller's
+    BootstrapProbe, whose fixture children run through the private CLI's
+    identity-pinned file capture instead; that capture is neither this run port
+    nor bounded-output.
     """
 
     run: ConsumerRun

@@ -10,6 +10,30 @@ from scripts.acceptance_tests.private_cli.fixtures import (
 )
 
 
+USER_STOP_REQUEST = "ad2fb080d387694ece599c62defded6e"
+
+
+def interrupted_user_stop_status(response):
+    """Return the exact shape `status --json` reported after a native default user stop."""
+    return {
+        "schema_version": 1, "command": "status", **response,
+        "status": "interrupted", "admission": "admitted", "liveness": "ended",
+        "publication": "unknown",
+        "supervisor": {"matched": True, "state": "ended", "numeric_task_id": 0},
+        "stops": [{
+            "request_id": USER_STOP_REQUEST, "cause": "user", "requested": True,
+            "matched": False, "attempted": False, "numeric_task_id": 0,
+            "in_flight": False, "observed_state": "ended", "terminated": True,
+        }],
+        "continuation": {
+            "resumable": False, "mode": "native",
+            "predecessor_task_id": response["task_id"],
+            "reason": "task was cancelled by the user",
+        },
+        "failure": {"code": "task_interrupted", "stage": "status", "next_action": "stop_and_report"},
+    }
+
+
 class EndedTaskObservationTests(unittest.TestCase):
     def setUp(self):
         super().setUp()
@@ -129,3 +153,108 @@ class EndedTaskObservationTests(unittest.TestCase):
                 )
         read.assert_called_once()
         sleep.assert_not_called()
+
+    def await_ended(self, response, **options):
+        return private_cli.await_created_task_ended(
+            Path("/fixture/delegate"), Path("/fixture/state"), {}, response,
+            Path("/fixture/status.json"), timeout=5, capture_root=self.capture_root, **options,
+        )
+
+    def test_documented_user_interruption_ends_observation_only_when_expected(self):
+        response = self.response()
+        status = interrupted_user_stop_status(response)
+        pending = {**status, "pending": {"kind": "supervisor-command"}}
+        for label, observed in (("documented envelope", status), ("supervisor command pending", pending)):
+            with self.subTest(label=label), \
+                    patch.object(admission_impl, "read_created_task_status", return_value=observed) as read, \
+                    patch.object(private_cli.time, "sleep") as sleep:
+                returned, evidence = self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+                self.assertIs(returned, observed)
+                self.assertEqual(evidence, {
+                    "kind": "queue-ended-observation",
+                    "final_receipt": "status-000.json",
+                    "poll_receipts": ["status-000.json"],
+                    "poll_count": 1,
+                })
+                read.assert_called_once()
+                sleep.assert_not_called()
+
+        # The same observed state stays an operational failure for every caller
+        # that did not request this exact user stop, including the budget proof.
+        with patch.object(admission_impl, "read_created_task_status", return_value=status) as read, \
+                patch.object(private_cli.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "operational failure"):
+                self.await_ended(response)
+        read.assert_called_once()
+        sleep.assert_not_called()
+
+        ended = {**response, "liveness": "ended", "stops": []}
+        with patch.object(admission_impl, "read_created_task_status", return_value=ended):
+            returned, evidence = self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+        self.assertIs(returned, ended)
+        self.assertEqual(evidence["poll_count"], 1)
+
+    def test_user_interruption_mismatches_fail_without_another_poll(self):
+        response = self.response()
+        status = interrupted_user_stop_status(response)
+        row = status["stops"][0]
+        continuation = status["continuation"]
+        failure = status["failure"]
+        cases = (
+            ("other request", {"stops": [{**row, "request_id": "f" * 32}]}),
+            ("budget cause", {"stops": [{**row, "cause": "budget"}]}),
+            ("not terminated", {"stops": [{**row, "terminated": False}]}),
+            ("not requested", {"stops": [{**row, "requested": False}]}),
+            ("resumable", {"continuation": {**continuation, "resumable": True}}),
+            ("continue command", {"continuation": {**continuation, "continue_command": "delegate continue"}}),
+            ("other predecessor", {"continuation": {**continuation, "predecessor_task_id": "b" * 32}}),
+            ("no continuation", {"continuation": None}),
+            ("budget raced", {"status": "timed_out", "failure": {**failure, "code": "task_cancelled"}}),
+            ("timed out status", {"status": "timed_out"}),
+            ("cancelled code", {"failure": {**failure, "code": "task_cancelled"}}),
+            ("continue guidance", {"failure": {**failure, "next_action": "continue_task"}}),
+            ("other stage", {"failure": {**failure, "stage": "collect"}}),
+            ("committed publication", {"publication": "committed"}),
+            ("outcome", {"outcome": {"state": "committed"}}),
+            ("pending publication", {"pending": {"kind": "publication"}}),
+            ("operational error", {"error": "supervisor unavailable"}),
+            ("running", {"liveness": "running"}),
+        )
+        for label, changes in cases:
+            observed = {**status, **changes}
+            with self.subTest(label=label), \
+                    patch.object(admission_impl, "read_created_task_status", return_value=observed) as read, \
+                    patch.object(private_cli.time, "sleep") as sleep:
+                with self.assertRaisesRegex(RuntimeError, "operational failure"):
+                    self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+                read.assert_called_once()
+                sleep.assert_not_called()
+
+        identities = (
+            ("other root", "read_created_task_status", {**status, "root_id": "s" * 32}, "different root"),
+            ("other task", "run_json", {**status, "task_id": "b" * 32}, "different task"),
+        )
+        for label, target, observed, message in identities:
+            with self.subTest(label=label), \
+                    patch.object(admission_impl, target, return_value=observed) as read, \
+                    patch.object(private_cli.time, "sleep") as sleep:
+                with self.assertRaisesRegex(RuntimeError, message):
+                    self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+                read.assert_called_once()
+                sleep.assert_not_called()
+
+        with patch.object(admission_impl, "read_created_task_status",
+                          side_effect=RuntimeError("delegate command failed: exit=1")) as read, \
+                patch.object(private_cli.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "exit=1"):
+                self.await_ended(response, expected_user_stop=USER_STOP_REQUEST)
+        read.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_invalid_user_stop_expectation_is_rejected_before_observation(self):
+        for expected in ("", 7, b"request"):
+            with self.subTest(expected=expected), \
+                    patch.object(admission_impl, "read_created_task_status") as read:
+                with self.assertRaisesRegex(ValueError, "expected user stop request"):
+                    self.await_ended(self.response(), expected_user_stop=expected)
+                read.assert_not_called()

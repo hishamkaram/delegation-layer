@@ -55,7 +55,10 @@
     "owner": "py:delegate_acceptance.evidence",
     "layer": "runtime",
     "imports": [
+      "py:collections.abc",
+      "py:dataclasses",
       "py:enum",
+      "py:hashlib",
       "py:os",
       "py:pathlib",
       "py:stat"
@@ -325,6 +328,7 @@
       "py:delegate_acceptance.tasks.admission",
       "py:delegate_acceptance.tasks.publication",
       "py:delegate_acceptance.tasks.refusal_policy",
+      "py:delegate_acceptance.tasks.request_intent",
       "py:delegate_acceptance.workspaces.admission_evidence",
       "py:os",
       "py:pathlib",

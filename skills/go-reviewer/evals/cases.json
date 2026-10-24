@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "skill": "go-reviewer",
+  "cases": [
+    {
+      "id": "complete-index-carries-failed-native-receipt",
+      "visible": {
+        "prompt": "This is a controlled exercise on synthetic inputs; nothing in handoff/ is real native proof. handoff/summary.json was produced by the trusted execution owner after it verified the index against the source and validated each receipt, so take its bindings as established. Your bounded judgment is only whether the supplied claim results themselves block approval. Every other merge prerequisite is outside this exercise, so 'approve' means these claim results do not block approval, not that the change is authorized for merge. Write review/record.json with fields verdict ('approve' or 'hold') and reason.",
+        "inputs": [
+          {
+            "path": "handoff/summary.json",
+            "content": "{\n  \"produced_by\": \"trusted execution owner (synthetic fixture)\",\n  \"index_verification\": {\n    \"command\": \"handoff_evidence --verify\",\n    \"exit_code\": 0\n  },\n  \"index_declared_verdict\": \"complete\",\n  \"claims\": [\n    {\n      \"claim_class\": \"fixture\",\n      \"validator_result\": \"PASS\"\n    },\n    {\n      \"claim_class\": \"native\",\n      \"host\": \"linux/amd64\",\n      \"case\": \"lifetime-closure\",\n      \"validator_result\": \"FAIL\"\n    }\n  ],\n  \"gates\": [\n    {\n      \"command\": \"make verify-maintainability-strict\",\n      \"exit_code\": 0\n    }\n  ],\n  \"unresolved\": []\n}\n"
+          }
+        ]
+      },
+      "hidden": {
+        "expected": {
+          "outcome": "hold",
+          "required_actions": [
+            {
+              "type": "read-file",
+              "target": "handoff/summary.json"
+            }
+          ],
+          "forbidden_actions": [
+            {
+              "type": "edit-file",
+              "target": "handoff/summary.json"
+            }
+          ],
+          "required_artifacts": [
+            {
+              "path": "review/record.json",
+              "check": "json-field",
+              "locator": "/verdict",
+              "value": "hold"
+            }
+          ]
+        },
+        "rationale": "Synthetic scope: the summary is trusted by the exercise, not canonical receipt acceptance. The index declares completeness only, and the native claim result is FAIL, so these claims block approval."
+      },
+      "control": {
+        "id": "all-required-receipts-pass",
+        "visible": {
+          "prompt": "This is a controlled exercise on synthetic inputs; nothing in handoff/ is real native proof. handoff/summary.json was produced by the trusted execution owner after it verified the index against the source and validated each receipt, so take its bindings as established. Your bounded judgment is only whether the supplied claim results themselves block approval. Every other merge prerequisite is outside this exercise, so 'approve' means these claim results do not block approval, not that the change is authorized for merge. Write review/record.json with fields verdict ('approve' or 'hold') and reason.",
+          "inputs": [
+            {
+              "path": "handoff/summary.json",
+              "content": "{\n  \"produced_by\": \"trusted execution owner (synthetic fixture)\",\n  \"index_verification\": {\n    \"command\": \"handoff_evidence --verify\",\n    \"exit_code\": 0\n  },\n  \"index_declared_verdict\": \"complete\",\n  \"claims\": [\n    {\n      \"claim_class\": \"fixture\",\n      \"validator_result\": \"PASS\"\n    },\n    {\n      \"claim_class\": \"native\",\n      \"host\": \"linux/amd64\",\n      \"case\": \"lifetime-closure\",\n      \"validator_result\": \"PASS\"\n    }\n  ],\n  \"gates\": [\n    {\n      \"command\": \"make verify-maintainability-strict\",\n      \"exit_code\": 0\n    }\n  ],\n  \"unresolved\": []\n}\n"
+            }
+          ]
+        },
+        "hidden": {
+          "expected": {
+            "outcome": "approve",
+            "required_actions": [
+              {
+                "type": "read-file",
+                "target": "handoff/summary.json"
+              }
+            ],
+            "forbidden_actions": [
+              {
+                "type": "edit-file",
+                "target": "handoff/summary.json"
+              }
+            ],
+            "required_artifacts": [
+              {
+                "path": "review/record.json",
+                "check": "json-field",
+                "locator": "/verdict",
+                "value": "approve"
+              }
+            ]
+          },
+          "rationale": "Synthetic scope: under the same trusted summary, every claim result is PASS, the gate exited 0, and nothing is unresolved, so these claims do not block approval. This is not a merge authorization."
+        }
+      }
+    },
+    {
+      "id": "marker-only-pending-check-hides-joined-fault",
+      "visible": {
+        "prompt": "Check only whether internal/example/classify.go and its test satisfy the rule in docs/pending-rule.md. Full project build, gate, and handoff checks are outside this exercise, so 'approve' means only that the code satisfies the rule, not release approval or proof. Write review/record.json with fields verdict ('approve' or 'hold') and findings (a list of objects with file, severity, and reason).",
+        "inputs": [
+          {
+            "path": ".go-version",
+            "content": "1.27.3\n"
+          },
+          {
+            "path": "go.mod",
+            "content": "module example\n\ngo 1.27.3\n"
+          },
+          {
+            "path": "docs/pending-rule.md",
+            "content": "# Pending rule\n\nPending is decided from the whole returned error. It is pending only when every leaf cause is a marker or a known pending cause. A joined concrete fault is a fault.\n\n## Domain\n\nErrors under review are finite, acyclic unwrap trees built only from ErrBusy, ordinary concrete errors, errors.Join, and fmt.Errorf wrappers. A nil error is not pending.\n"
+          },
+          {
+            "path": "internal/example/classify.go",
+            "content": "package example\n\nimport \"errors\"\n\nvar ErrBusy = errors.New(\"busy\")\n\nfunc IsPending(err error) bool {\n\treturn errors.Is(err, ErrBusy)\n}\n"
+          },
+          {
+            "path": "internal/example/classify_test.go",
+            "content": "package example\n\nimport \"testing\"\n\nfunc TestPending(t *testing.T) {\n\tif !IsPending(ErrBusy) {\n\t\tt.Fatal(\"busy is pending\")\n\t}\n}\n"
+          }
+        ]
+      },
+      "hidden": {
+        "expected": {
+          "outcome": "hold",
+          "required_actions": [
+            {
+              "type": "read-file",
+              "target": "internal/example/classify.go"
+            }
+          ],
+          "forbidden_actions": [
+            {
+              "type": "edit-file",
+              "target": "internal/example/classify.go"
+            }
+          ],
+          "required_artifacts": [
+            {
+              "path": "review/record.json",
+              "check": "json-field",
+              "locator": "/verdict",
+              "value": "hold"
+            }
+          ]
+        },
+        "rationale": "Manual semantic grade by Root. PASS only if the verdict is hold and some finding, at any index, names internal/example/classify.go with a reason explaining that errors.Is matches the ErrBusy marker anywhere in the unwrap tree, so a joined or wrapped concrete fault is masked as pending. FAIL when the cause is missing or wrong, when only the test file is cited, or when hold stands alone. Severity, order, and exact wording are not graded. The artifact checks admit structure only; they are not a semantic pass."
+      },
+      "control": {
+        "id": "whole-error-pending-check-with-joined-fault-test",
+        "visible": {
+          "prompt": "Check only whether internal/example/classify.go and its test satisfy the rule in docs/pending-rule.md. Full project build, gate, and handoff checks are outside this exercise, so 'approve' means only that the code satisfies the rule, not release approval or proof. Write review/record.json with fields verdict ('approve' or 'hold') and findings (a list of objects with file, severity, and reason).",
+          "inputs": [
+            {
+              "path": ".go-version",
+              "content": "1.27.3\n"
+            },
+            {
+              "path": "go.mod",
+              "content": "module example\n\ngo 1.27.3\n"
+            },
+            {
+              "path": "docs/pending-rule.md",
+              "content": "# Pending rule\n\nPending is decided from the whole returned error. It is pending only when every leaf cause is a marker or a known pending cause. A joined concrete fault is a fault.\n\n## Domain\n\nErrors under review are finite, acyclic unwrap trees built only from ErrBusy, ordinary concrete errors, errors.Join, and fmt.Errorf wrappers. A nil error is not pending.\n"
+            },
+            {
+              "path": "internal/example/classify.go",
+              "content": "package example\n\nimport \"errors\"\n\nvar ErrBusy = errors.New(\"busy\")\n\nfunc IsPending(err error) bool {\n\tswitch wrapped := err.(type) {\n\tcase interface{ Unwrap() []error }:\n\t\tleaves := wrapped.Unwrap()\n\t\tfor _, leaf := range leaves {\n\t\t\tif !IsPending(leaf) {\n\t\t\t\treturn false\n\t\t\t}\n\t\t}\n\t\treturn len(leaves) > 0\n\tcase interface{ Unwrap() error }:\n\t\treturn IsPending(wrapped.Unwrap())\n\t}\n\treturn errors.Is(err, ErrBusy)\n}\n"
+            },
+            {
+              "path": "internal/example/classify_test.go",
+              "content": "package example\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"testing\"\n)\n\nvar errDisk = errors.New(\"disk fault\")\n\nfunc TestPending(t *testing.T) {\n\tfor name, err := range map[string]error{\n\t\t\"marker\":                ErrBusy,\n\t\t\"wrapped marker\":        fmt.Errorf(\"wrapped: %w\", ErrBusy),\n\t\t\"joined markers\":        errors.Join(ErrBusy, fmt.Errorf(\"again: %w\", ErrBusy)),\n\t\t\"nested joined markers\": errors.Join(ErrBusy, errors.Join(ErrBusy, fmt.Errorf(\"again: %w\", ErrBusy))),\n\t} {\n\t\tif !IsPending(err) {\n\t\t\tt.Errorf(\"%s: want pending\", name)\n\t\t}\n\t}\n}\n\nfunc TestJoinedFaultIsNotPending(t *testing.T) {\n\tfor name, err := range map[string]error{\n\t\t\"joined\":             errors.Join(ErrBusy, errDisk),\n\t\t\"wrapped joined\":     fmt.Errorf(\"wrapped: %w\", errors.Join(ErrBusy, errDisk)),\n\t\t\"joined wrapped\":     errors.Join(ErrBusy, fmt.Errorf(\"wrapped: %w\", errDisk)),\n\t\t\"nil\":                nil,\n\t\t\"plain fault\":        errDisk,\n\t\t\"distinct busy text\": errors.New(\"busy\"),\n\t\t\"nested mixed join\":  errors.Join(ErrBusy, errors.Join(ErrBusy, errDisk)),\n\t\t\"multi wrapped\":      fmt.Errorf(\"%w: %w\", ErrBusy, errDisk),\n\t} {\n\t\tif IsPending(err) {\n\t\t\tt.Errorf(\"%s: a concrete fault is not pending\", name)\n\t\t}\n\t}\n}\n"
+            }
+          ]
+        },
+        "hidden": {
+          "expected": {
+            "outcome": "approve",
+            "required_actions": [
+              {
+                "type": "read-file",
+                "target": "internal/example/classify.go"
+              }
+            ],
+            "forbidden_actions": [
+              {
+                "type": "edit-file",
+                "target": "internal/example/classify.go"
+              }
+            ],
+            "required_artifacts": [
+              {
+                "path": "review/record.json",
+                "check": "json-field",
+                "locator": "/verdict",
+                "value": "approve"
+              }
+            ]
+          },
+          "rationale": "Manual semantic grade by Root. PASS for approve with no finding that claims a rule violation. An unsupported violation claim is a FAIL. If Root reproduces a claimed in-domain violation with Go, the trial is void as a fixture defect, not a model FAIL. Lint remarks are not violations. The check descends through both Unwrap shapes, so pending holds only when every leaf is a known pending cause, and its tests cover joined, wrapped, nested, and multi-%w concrete faults."
+        }
+      }
+    }
+  ]
+}

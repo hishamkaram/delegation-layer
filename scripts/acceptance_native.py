@@ -18,9 +18,11 @@ from scripts.delegate_acceptance.native.acceptance import (
     PROFILES,
     TASK_BUDGET,
     BlockedFailure,
+    BlockReason,
     NativeAcceptance,
 )
 from scripts.delegate_acceptance.native.acceptance_discovery import (
+    model_discovery_block_reason,
     require_discovery,
     resolve_executable,
 )
@@ -105,6 +107,18 @@ def _sanitized_model_discovery_summary(run: NativeAcceptance | None) -> dict[str
     return sanitized or None
 
 
+def _blocked_exit_reason(args: argparse.Namespace, run: NativeAcceptance | None) -> BlockReason:
+    """Reason for a blocked exit code that raised nothing; only model discovery returns one."""
+    if args.discover_models:
+        return model_discovery_block_reason(getattr(run, "model_discovery_summary", None))
+    return BlockReason.UNCLASSIFIED
+
+
+def _exit_reason_field(
+        code: int, args: argparse.Namespace, run: NativeAcceptance | None) -> dict[str, str]:
+    return {"block_reason": _blocked_exit_reason(args, run).value} if code == 2 else {}
+
+
 def _model_discovery_failure_receipt(
         args: argparse.Namespace, run: NativeAcceptance, code: int) -> dict[str, object]:
     observed = run.model_discovery_exit_code
@@ -122,6 +136,7 @@ def _model_discovery_failure_receipt(
         "model_discovery": _sanitized_model_discovery_summary(run),
         "no_retry": True,
         "credentials_in_receipt": False,
+        **_exit_reason_field(code, args, run),
     }
 
 
@@ -150,7 +165,8 @@ def main(argv: list[str] | None = None) -> int:
                     "task_budget": TASK_BUDGET, "requested_model": args.model,
                     "requested_effort": args.effort,
                     "model_discovery": _sanitized_model_discovery_summary(run),
-                    "no_retry": True, "credentials_in_receipt": False}):
+                    "no_retry": True, "credentials_in_receipt": False,
+                    **_exit_reason_field(code, args, run)}):
                 return 1
         else:
             run.publish_success()
@@ -165,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             "requested_model": args.model, "requested_effort": args.effort,
             "discover_models": args.discover_models,
             "model_discovery": _sanitized_model_discovery_summary(run), "error": str(error),
+            "block_reason": error.reason.value,
             "no_retry": True, "credentials_in_receipt": False})
         cleanup_ok = _finalize_run(run, False, blocked=True)
         if not receipt_ok or not cleanup_ok:

@@ -42,7 +42,13 @@ create a duplicate Git-subprocess lifecycle harness.
 1. Turn each affected [canonical transition
    row](../../agents/_data/maintainability-contract.md#durable-transition-matrix-and-composed-tests)
    into observable assertions for its durable facts, lease, commit point,
-   recovery result, and real consumer verdict.
+   recovery result, and real consumer verdict. Keep the row's existing
+   regression tests passing, add tests only for the changed behavior, and
+   assert at the actual consumer boundary the row names rather than through a
+   helper that mirrors it. A new regression test must fail on its intended
+   assertion before the fix (expected red); a failure from setup, a missing
+   tool, or an unrelated fault is not expected red. Report it as [blocked
+   setup](../../agents/_data/maintainability-contract.md#worker-check-levels).
 2. Add a compact test-case set covering positive behavior and meaningful
    negative branches, including blank answers, nonzero exits, duplicate critical
    fields, unsealed evidence, EEXIST conflicts, missing usage values, and all

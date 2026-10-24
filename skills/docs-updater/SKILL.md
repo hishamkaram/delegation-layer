@@ -28,7 +28,10 @@ Read the [maintainability contract](../../agents/_data/maintainability-contract.
 
 1. Read the authoritative source and the changed code/receipts before writing.
    Preserve useful history in the local archive and label current behavior from
-   actual evidence only.
+   actual evidence only. When a document cites a decision, memory note, or
+   earlier receipt, link the resolved or accepted record and name what it
+   supersedes; verify a dated reference against current source before presenting
+   it as current, and keep the historical record identifiable as historical.
 2. Update the smallest applicable section. Reconcile commands, links, provider
    metadata, task/session identities, digests, and platform limits. Mark work
    that has no implementation or receipt as deferred rather than presenting it

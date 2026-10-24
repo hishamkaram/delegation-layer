@@ -41,6 +41,47 @@ class DirectoryPinFixtureTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     os.fstat(descriptor)
 
+    def test_created_tokens_are_closed_without_a_transfer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            case = unittest.TestCase()
+            owner = DirectoryPinOwner(case)
+            token = owner.create("fixture", root / "fixture", root)
+            # Retaining the token here lets a red helper still close its pins.
+            track_directory_pins(self, (token,))
+            descriptors = (token.parent_fd, token.directory_fd)
+            self.assertTrue(case.doCleanups())
+            self.assertTrue(token.directory.is_dir())
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    def test_created_tokens_are_closed_when_a_test_assertion_fails_before_transfer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            created, descriptors = [], []
+
+            class FailingFixture(unittest.TestCase):
+                def test_fails_before_transfer(inner):
+                    owner = DirectoryPinOwner(inner)
+                    token = owner.create("fixture", root / "fixture", root)
+                    created.append(token)
+                    descriptors.extend((token.parent_fd, token.directory_fd))
+                    inner.fail("injected assertion failure")
+
+            result = unittest.TestResult()
+            FailingFixture("test_fails_before_transfer").run(result)
+            track_directory_pins(self, created)
+            self.assertEqual(len(result.failures), 1)
+            self.assertEqual(result.errors, [])
+            (token,) = created
+            self.assertTrue(token.consumed)
+            self.assertTrue(token.directory.is_dir())
+            self.assertEqual(len(descriptors), 2)
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
     def test_closes_pins_after_assertions_without_removing_the_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

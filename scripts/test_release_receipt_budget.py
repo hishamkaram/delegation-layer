@@ -5,11 +5,11 @@ from __future__ import annotations
 from argparse import Namespace
 import json
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import patch
 
 from scripts import native_acceptance_evidence as evidence
+from scripts.acceptance_tests.release_fixture import FixtureTree
 from scripts.delegate_acceptance.native_evidence.contract import (
     MAX_AGGREGATE_BYTES,
     MAX_RECEIPT_BYTES,
@@ -48,39 +48,32 @@ def _long_private_root(base: Path) -> Path:
     return root.resolve(strict=True)
 
 
-def _redirect_release_fixture_tempdirs(inner_parent: Path, roots: list[Path]):
-    original = tempfile.TemporaryDirectory
-
-    def create_tempdir(*args, **kwargs):
-        is_release_fixture = kwargs.get("prefix") == "release-archive-test-"
-        if is_release_fixture:
-            kwargs["dir"] = str(inner_parent)
-        temporary = original(*args, **kwargs)
-        if is_release_fixture:
-            roots.append(Path(temporary.name).resolve(strict=True))
-        return temporary
-
-    return patch.object(tempfile, "TemporaryDirectory", side_effect=create_tempdir)
-
-
 class ReleaseReceiptBudgetTests(unittest.TestCase):
+    def _containing_tree(self, prefix: str) -> FixtureTree:
+        """The owner of the long private root; it observes each release fixture child placed below it."""
+        tree = FixtureTree.open(prefix=prefix, label=f"{prefix} tree")
+        self.addCleanup(tree.dispose)
+        return tree
+
     def test_long_paths_project_real_large_native_receipts_with_all_bindings(self) -> None:
         from scripts.test_public_native_proof import _PublicNativeFixture
 
-        with tempfile.TemporaryDirectory(prefix="release-receipt-budget-") as temporary:
-            private_root = _long_private_root(Path(temporary))
-            inner_parent = private_root / "release-fixtures"
-            inner_parent.mkdir()
-            outer_root = private_root / "outer-aggregate-root"
-            outer_root.mkdir()
-            fixture_roots: list[Path] = []
-            with _redirect_release_fixture_tempdirs(inner_parent, fixture_roots):
-                producer = _PublicNativeFixture(outer_root.resolve(strict=True))
-                stage = producer.build_stage()
-            self.assertEqual(len(fixture_roots), 1)
-            self.assertGreaterEqual(len(str(outer_root / "aggregate")), 512)
-            self.assertGreaterEqual(len(str(fixture_roots[0])), 512)
-            self._assert_large_public_proof(stage, outer_root, fixture_roots, producer.expectation)
+        outer = self._containing_tree("release-receipt-budget")
+        private_root = _long_private_root(outer.root)
+        inner_parent = private_root / "release-fixtures"
+        inner_parent.mkdir()
+        outer_root = private_root / "outer-aggregate-root"
+        outer_root.mkdir()
+        producer = _PublicNativeFixture(outer_root.resolve(strict=True), release_parent=inner_parent,
+                                        containing=(outer,))
+        stage = producer.build_stage()
+        fixture_root = producer.release_root
+        if fixture_root is None:
+            raise AssertionError("release fixture root missing")
+        self.assertEqual(fixture_root.parent, inner_parent)
+        self.assertGreaterEqual(len(str(outer_root / "aggregate")), 512)
+        self.assertGreaterEqual(len(str(fixture_root)), 512)
+        self._assert_large_public_proof(stage, outer_root, [fixture_root], producer.expectation)
 
     def _assert_large_public_proof(
             self, stage: Path, root: Path, fixture_roots: list[Path],
@@ -198,22 +191,15 @@ class ReleaseReceiptBudgetTests(unittest.TestCase):
             ReleaseArchiveVerificationTests,
         )
 
-        with tempfile.TemporaryDirectory(prefix="release-receipt-replay-") as temporary:
-            private_root = _long_private_root(Path(temporary))
-            inner_parent = private_root / "release-fixtures"
-            inner_parent.mkdir()
-            fixture_roots: list[Path] = []
-            with _redirect_release_fixture_tempdirs(inner_parent, fixture_roots):
-                fixture = ReleaseArchiveVerificationTests(
-                    "test_success_binds_exact_archive_binaries_and_default_path",
-                )
-                fixture.setUp()
-                try:
-                    self._assert_large_replay(fixture, verifier, TAG, REVISION)
-                finally:
-                    fixture.tearDown()
-            self.assertEqual(len(fixture_roots), 1)
-            self.assertGreaterEqual(len(str(fixture_roots[0] / "native-aggregate-fixture")), 512)
+        outer = self._containing_tree("release-receipt-replay")
+        private_root = _long_private_root(outer.root)
+        inner_parent = private_root / "release-fixtures"
+        inner_parent.mkdir()
+        fixture = ReleaseArchiveVerificationTests(parent=inner_parent, containing=(outer,))
+        with fixture.prepared():
+            self._assert_large_replay(fixture, verifier, TAG, REVISION)
+        self.assertEqual(fixture.root.parent, inner_parent)
+        self.assertGreaterEqual(len(str(fixture.root / "native-aggregate-fixture")), 512)
 
     def _assert_large_replay(self, fixture, verifier, tag: str, revision: str) -> None:
         self.assertEqual(fixture.verify(), 0)

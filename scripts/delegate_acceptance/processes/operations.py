@@ -16,11 +16,11 @@ from scripts.delegate_acceptance.directories.policy import require
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.evidence.files import digest, read_json, write_json
 from scripts.delegate_acceptance.processes.contracts import (
-    BoundedCommandError, BoundedCommandResult, CommandFailure, OutputCapture,
+    BoundedCommandError, BoundedCommandResult, CommandFailure, OutputCapture, OutputSink,
 )
 from scripts.delegate_acceptance.processes.observation import inherited_environment
 from pathlib import Path
-from typing import Callable, NoReturn
+from typing import IO, Callable, NoReturn
 
 
 class Process:
@@ -30,13 +30,19 @@ class Process:
     successful Start, before any fallible setup.  A direct construction without
     it names no registry: a post-Start setup failure still retains the capture
     directory and output streams, but the raised error is the only report.
+
+    Popen may create the child and still raise before returning its handle.
+    Such an uncertain launch keeps its invocation and capture as the durable
+    record and is handed to ``on_start_uncertain``; only faults before Popen is
+    entered prove that no child exists and roll the capture back.
     """
 
     def __init__(self, directory, argv, cwd, environment, capture_root,
                  on_started=None, *,
                  stdin=None, stdout_capture: OutputCapture | None = None,
                  environment_keys_only=False, return_result=False,
-                 failure_type=RuntimeError):
+                 failure_type=RuntimeError,
+                 on_start_uncertain: Callable[[Process], None] | None = None):
         self.directory = Path(directory)
         self.argv = [str(arg) for arg in argv]
         self.cwd = Path(cwd)
@@ -66,18 +72,28 @@ class Process:
             _record_process_invocation(cwd=cwd, environment_keys_only=environment_keys_only, process=self, stdin=stdin)
             self.stdout = self.stdout_path.open("xb")
             self.stderr = self.stderr_path.open("xb")
+            child_stdout = self._stdout_capture.writer if self._stdout_capture is not None else self.stdout
+        except BaseException as error:
+            _rollback_unstarted_process(ownership=ownership, process=self, error=error)
+            _raise_process_failure(error, self._failure_type)
+        try:
             self.process = subprocess.Popen(
                 self.argv,
                 cwd=str(cwd),
                 env=self.environment,
                 stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
-                stdout=self._stdout_capture.writer if self._stdout_capture is not None else self.stdout,
+                stdout=child_stdout,
                 stderr=self.stderr,
                 shell=False,
                 close_fds=True,
             )
         except BaseException as error:
-            _rollback_unstarted_process(ownership=ownership, process=self, error=error)
+            try:
+                if on_start_uncertain is not None:
+                    on_start_uncertain(self)
+            except BaseException as registration_error:
+                _note_cleanup_failures(error, [("uncertain start registration", registration_error)])
+            _retain_uncertain_process(ownership=ownership, process=self, error=error)
             _raise_process_failure(error, self._failure_type)
         try:
             if on_started is not None:
@@ -264,11 +280,16 @@ class Processes:
         self.environment_keys_only = environment_keys_only
         self.return_result = return_result
         self.entries = []
+        # (argv, directory) of each start whose Popen raised without a handle
+        # (see Process).  Each stays unresolved in every closure gate, keeps its
+        # sequence number, and is read only as detached observation records.
+        self._uncertain_starts = []
 
     def start(self, name, argv, cwd, stdin=None, on_spawned=None):
         if callable(stdin) and on_spawned is None:
             on_spawned, stdin = stdin, None
-        directory = self.directory / ("%03d-%s" % (len(self.entries) + 1, name))
+        sequence = len(self.entries) + len(self._uncertain_starts) + 1
+        directory = self.directory / ("%03d-%s" % (sequence, name))
         capture = self.stdout_capture_factory([str(arg) for arg in argv]) \
             if self.stdout_capture_factory is not None else None
 
@@ -279,12 +300,16 @@ class Processes:
             self.entries.append(process)
             if on_spawned is not None:
                 on_spawned(process)
+
+        def register_uncertain(process):
+            self._uncertain_starts.append((tuple(process.argv), str(process.directory)))
         process = Process(directory, argv, cwd, self.environment, self.capture_root,
                           stdin=stdin, stdout_capture=capture,
                           environment_keys_only=self.environment_keys_only,
                           return_result=self.return_result,
                           failure_type=self.failure_type,
-                          on_started=register_started)
+                          on_started=register_started,
+                          on_start_uncertain=register_uncertain)
         write_json(directory / "started.json", {
             "pid": process.pid, "started_ns": time.time_ns()})
         return process
@@ -304,7 +329,8 @@ class Processes:
             if observed is None or observed.get("natural_wait") is not True:
                 result.append({"pid": process.pid, "argv": process.argv,
                                "directory": str(process.directory)})
-        return result
+        return result + [{"pid": None, "argv": list(argv), "directory": directory}
+                         for argv, directory in self._uncertain_starts]
 
     def drain(self, timeout=70, exclude=()):
         """Observe finite owned processes after a failed assertion; never signal."""
@@ -322,7 +348,9 @@ class Processes:
                 break
             time.sleep(0.1)
             active = unresolved()
-        return [{"pid": p.pid, "argv": p.argv, "directory": str(p.directory)} for p in active]
+        return ([{"pid": p.pid, "argv": p.argv, "directory": str(p.directory)} for p in active] +
+                [{"pid": None, "argv": list(argv), "directory": directory}
+                 for argv, directory in self._uncertain_starts])
 
     def finished_naturally(self, exclude=()):
         """Require positive natural exit evidence for every owned process."""
@@ -333,7 +361,7 @@ class Processes:
             result = process.poll()
             if result is None or result.get("natural_wait") is not True:
                 return False
-        return True
+        return not self._uncertain_starts
 
 
 def _record_process_invocation(
@@ -386,16 +414,8 @@ def _note_cleanup_failures(error: BaseException, failures: list[tuple[str, BaseE
         error.add_note("%s failed: %s: %s" % (label, type(failure).__name__, failure))
 
 
-def _rollback_unstarted_process(
-        *, ownership: DirectoryOwner,
-        process: Process,
-        error: BaseException,
-) -> None:
-    """Before Start nothing escaped: close every handle and remove the capture.
-
-    A failed rollback leaves the path uncertain, so the same owner releases its
-    remaining authority: the directory is retained and its pins are closed.
-    """
+def _close_parent_handles(process: Process) -> list[tuple[str, BaseException]]:
+    """Close the parent's capture and stream handles; return each close fault."""
     failures = []
     resources = (("stdout capture close", process._stdout_capture),
                  ("stdout close", process.stdout), ("stderr close", process.stderr))
@@ -406,6 +426,20 @@ def _rollback_unstarted_process(
             resource.close()
         except (OSError, ValueError) as close_error:
             failures.append((label, close_error))
+    return failures
+
+
+def _rollback_unstarted_process(
+        *, ownership: DirectoryOwner,
+        process: Process,
+        error: BaseException,
+) -> None:
+    """Before Start nothing escaped: close every handle and remove the capture.
+
+    A failed rollback leaves the path uncertain, so the same owner releases its
+    remaining authority: the directory is retained and its pins are closed.
+    """
+    failures = _close_parent_handles(process)
     try:
         ownership.rollback()
     except (OSError, RuntimeError) as rollback_error:
@@ -415,6 +449,28 @@ def _rollback_unstarted_process(
         except (OSError, RuntimeError) as release_error:
             failures.append(("capture directory release", release_error))
     _note_cleanup_failures(error, failures)
+
+
+def _retain_uncertain_process(
+        *, ownership: DirectoryOwner,
+        process: Process,
+        error: BaseException,
+) -> None:
+    """Popen raised after entry: a child may exist, but no handle was returned.
+
+    CPython can create the child and then fail reading its error pipe or closing
+    parent pipe ends.  Like Popen's own failure cleanup, only parent handles
+    close; the invocation and capture stay as the durable record and the pins
+    are released without rollback.  No PID is guessed, signalled, or waited: the
+    missing started and completed receipts are the recorded uncertainty.
+    """
+    failures = _close_parent_handles(process)
+    try:
+        ownership.release()
+    except (OSError, RuntimeError) as release_error:
+        failures.append(("capture directory release", release_error))
+    _note_cleanup_failures(error, failures)
+    error.add_note("process launch outcome uncertain; capture retained: " + str(process.directory))
 
 
 def _retain_started_process(
@@ -507,6 +563,9 @@ def _observed_result(process: Process, code: int) -> dict[str, object]:
     return result
 
 
+_BOUNDED_COMMAND_READ_SIZE = 64 * 1024
+
+
 def _kill_wait_bounded_command(process: subprocess.Popen[bytes]) -> None:
     try:
         process.kill()
@@ -526,15 +585,13 @@ def _terminate_bounded_command(process: subprocess.Popen[bytes]) -> None:
             raise BoundedCommandError(CommandFailure.TERMINATION_TIMEOUT) from None
 
 
-def _bounded_command_pending_bytes(process: subprocess.Popen[bytes]) -> int | None:
+def _bounded_command_pending_bytes(pipe: IO[bytes]) -> int | None:
     """Inspect a pipe without adding bytes beyond the capture bound."""
-    if process.stdout is None:
-        return None
     try:
         import fcntl
         import termios
 
-        result = fcntl.ioctl(process.stdout.fileno(), termios.FIONREAD, struct.pack("I", 0))
+        result = fcntl.ioctl(pipe.fileno(), termios.FIONREAD, struct.pack("I", 0))
         return struct.unpack("I", result)[0]
     except (ImportError, OSError, struct.error, AttributeError):
         return None
@@ -551,18 +608,54 @@ def _close_bounded_command_selector(
             raise
 
 
+def _read_bounded_command_chunk(
+        process: subprocess.Popen[bytes], pipe: IO[bytes], room: int) -> bytes:
+    """Read one ready chunk of at most ``room`` bytes; ``b""`` is this pipe's EOF.
+
+    With no room left, any pending or further byte is an overflow.
+    """
+    if room == 0:
+        pending = _bounded_command_pending_bytes(pipe)
+        if pending is not None:
+            if pending > 0:
+                raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
+            chunk = b""
+            if process.poll() is None:
+                chunk = os.read(pipe.fileno(), 1)
+            if chunk:
+                raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
+            return b""
+        read_size = 1
+    else:
+        read_size = min(_BOUNDED_COMMAND_READ_SIZE, room)
+    chunk = os.read(pipe.fileno(), read_size)
+    if len(chunk) > room:
+        raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
+    return chunk
+
+
 def _bounded_command_bytes(
-        process: subprocess.Popen[bytes], max_output: int, timeout: float) -> BoundedCommandResult:
-    if process.stdout is None:
+        process: subprocess.Popen[bytes], max_output: int, timeout: float,
+        sink: OutputSink | None = None, *, capture_stderr: bool = False) -> BoundedCommandResult:
+    """Drain every captured pipe to its EOF under one shared bound and deadline, then Wait."""
+    stdout, stderr = process.stdout, (process.stderr if capture_stderr else None)
+    if stdout is None or (capture_stderr and stderr is None):
         raise BoundedCommandError(CommandFailure.CAPTURE_UNAVAILABLE)
+    captured, errors = bytearray(), bytearray()
+    # Each still-open pipe and its receiver; a pipe leaves at its own EOF.
+    receivers: dict[IO[bytes], Callable[[bytes], None]] = {
+        stdout: captured.extend if sink is None else sink}
+    if stderr is not None:
+        receivers[stderr] = errors.extend
     selector = None
     failure = None
     try:
         selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        captured = bytearray()
+        for pipe in receivers:
+            selector.register(pipe, selectors.EVENT_READ)
+        total = 0
         deadline = time.monotonic() + timeout
-        while True:
+        while receivers:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise BoundedCommandError(CommandFailure.TIMEOUT)
@@ -571,26 +664,14 @@ def _bounded_command_bytes(
                 if process.poll() is None:
                     raise BoundedCommandError(CommandFailure.TIMEOUT)
                 continue
-            if len(captured) == max_output:
-                pending = _bounded_command_pending_bytes(process)
-                if pending is not None:
-                    if pending > 0:
-                        raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
-                    chunk = b""
-                    if process.poll() is None:
-                        chunk = os.read(process.stdout.fileno(), 1)
-                    if chunk:
-                        raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
-                    break
-                read_size = 1
-            else:
-                read_size = min(8192, max_output - len(captured))
-            chunk = os.read(process.stdout.fileno(), read_size)
-            if not chunk:
-                break
-            if len(captured) + len(chunk) > max_output:
-                raise BoundedCommandError(CommandFailure.OUTPUT_EXCEEDED)
-            captured.extend(chunk)
+            for key, _mask in events:
+                chunk = _read_bounded_command_chunk(process, key.fileobj, max_output - total)
+                if chunk:
+                    receivers[key.fileobj](chunk)
+                    total += len(chunk)
+                else:
+                    selector.unregister(key.fileobj)
+                    del receivers[key.fileobj]
     except BaseException as error:
         failure = error
         raise
@@ -600,7 +681,7 @@ def _bounded_command_bytes(
         code = process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         raise BoundedCommandError(CommandFailure.TIMEOUT) from None
-    return BoundedCommandResult(code, bytes(captured))
+    return BoundedCommandResult(code, bytes(captured), bytes(errors))
 
 
 def _bounded_command_error(error: BaseException, code: int | None, capture: bool) -> BaseException:
@@ -629,15 +710,29 @@ def _abort_bounded_command(process: subprocess.Popen[bytes], primary: BaseExcept
     raise error
 
 
-def _close_bounded_command_pipe(process: subprocess.Popen[bytes], failure: BaseException | None) -> None:
-    if process.stdout is not None:
-        try:
-            process.stdout.close()
-        except BaseException as close_error:
-            error = _bounded_command_error(close_error, process.returncode, True)
-            if failure is not None:
-                raise error from failure
-            raise error
+def _close_bounded_command_pipes(
+        process: subprocess.Popen[bytes], failure: BaseException | None, *, capture_stderr: bool) -> None:
+    """Attempt every owned pipe close; report the first fault and note any later one."""
+    pipes = (("stdout", process.stdout),)
+    if capture_stderr:
+        pipes += (("stderr", process.stderr),)
+    faults: list[tuple[str, BaseException]] = []
+    for label, pipe in pipes:
+        if pipe is not None:
+            try:
+                pipe.close()
+            except BaseException as close_error:
+                faults.append((f"{label} pipe close", close_error))
+    if not faults:
+        return
+    (_label, first), *later = faults
+    error = _bounded_command_error(first, process.returncode, True)
+    _note_cleanup_failures(error, later)
+    if failure is not None:
+        raise error from failure
+    if error is not first:
+        raise error from first
+    raise error
 
 
 def _validate_bounded_command_bounds(timeout: float, max_output: int) -> float:
@@ -656,21 +751,30 @@ def _validate_bounded_command_bounds(timeout: float, max_output: int) -> float:
 
 def run_bounded_command(
         argv: list[str], environment: dict[str, str], *, max_output: int,
-        capture: bool = False, timeout: float = 30,
-        cwd: Path | None = None) -> BoundedCommandResult:
+        capture: bool = False, capture_stderr: bool = False, timeout: float = 30,
+        cwd: Path | None = None, sink: OutputSink | None = None) -> BoundedCommandResult:
     """Own one finite direct control child through capture, failure cleanup and Wait.
 
     This operation alone may terminate its direct release-control child. The
     Process/Processes natural-only policy and provider/native scopes are separate.
     Cleanup failures retain the primary exception through ordinary chaining;
     unavailable Wait proof reports a typed closure failure with no exit code.
+    A ``sink`` receives the bounded stdout stream instead of an in-memory copy
+    and requires ``capture``; the bound is still enforced before delivery.
+    ``capture_stderr`` also requires ``capture`` and returns stderr separately in
+    ``BoundedCommandResult.stderr``; the streams are never merged and share the
+    one ``max_output`` bound (sink-delivered bytes included) and one deadline.
     """
     timeout = _validate_bounded_command_bounds(timeout, max_output)
+    if sink is not None and not capture:
+        raise ValueError("bounded command sink requires capture")
+    if capture_stderr and not capture:
+        raise ValueError("bounded command stderr capture requires capture")
     try:
         process = subprocess.Popen(
             argv, env=environment, cwd=cwd, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE if capture_stderr else subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         raise BoundedCommandError(CommandFailure.TIMEOUT) from None
@@ -679,7 +783,7 @@ def run_bounded_command(
     failure = None
     try:
         if capture:
-            return _bounded_command_bytes(process, max_output, timeout)
+            return _bounded_command_bytes(process, max_output, timeout, sink, capture_stderr=capture_stderr)
         try:
             code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -692,4 +796,4 @@ def run_bounded_command(
             failure = final_error
             raise
     finally:
-        _close_bounded_command_pipe(process, failure)
+        _close_bounded_command_pipes(process, failure, capture_stderr=capture_stderr)

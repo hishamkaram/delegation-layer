@@ -6,6 +6,22 @@ on:
   pull_request:
     branches: ["**"]
   workflow_dispatch:
+    inputs:
+      build_candidate:
+        description: 'Build the immutable development candidate from this task branch'
+        required: false
+        default: false
+        type: boolean
+      candidate_version:
+        description: 'Expected package version of the candidate, for example 1.2.3'
+        required: false
+        default: ''
+        type: string
+      candidate_base_commit:
+        description: 'Exact full commit the task branch is built against'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -127,12 +143,20 @@ jobs:
       - name: Prove private supervisor upgrade recovery through delegate CLI
         run: make acceptance-supervisor-upgrade-recovery
 
+      - name: Prove default user and budget stops through delegate CLI
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-private-cli-default-stop
+
       - name: Retain allowlisted private CLI acceptance receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: private-cli-receipts-${{ runner.os }}-${{ github.run_attempt }}
-          path: bin/private-cli-acceptance.*/receipt.json
+          path: |
+            bin/private-cli-acceptance.*/receipt.json
+            bin/private-cli-acceptance.*/receipt.json.responses/status-default-stop-*.json
           retention-days: 7
           if-no-files-found: ignore
 
@@ -263,12 +287,20 @@ jobs:
       - name: Prove private supervisor upgrade recovery through delegate CLI
         run: make acceptance-supervisor-upgrade-recovery
 
+      - name: Prove default user and budget stops through delegate CLI
+        env:
+          DELEGATE_TEST_PUEUE: ${{ github.workspace }}/bin/test-supervisor/pueue
+          DELEGATE_TEST_PUEUED: ${{ github.workspace }}/bin/test-supervisor/pueued
+        run: make acceptance-private-cli-default-stop
+
       - name: Retain allowlisted private CLI acceptance receipts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: private-cli-receipts-${{ runner.os }}-${{ github.run_attempt }}
-          path: bin/private-cli-acceptance.*/receipt.json
+          path: |
+            bin/private-cli-acceptance.*/receipt.json
+            bin/private-cli-acceptance.*/receipt.json.responses/status-default-stop-*.json
           retention-days: 7
           if-no-files-found: ignore
 
@@ -310,3 +342,106 @@ jobs:
           path: ${{ runner.temp }}/supervisor-failure-evidence.tar.gz
           retention-days: 7
           if-no-files-found: error
+
+  development-candidate:
+    name: Development candidate (manual task-branch build)
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' && inputs.build_candidate &&
+      github.ref_type == 'branch' && github.ref != 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: '.go-version'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.x'
+
+      - name: Install pinned tools
+        run: make tools
+
+      - name: Verify pinned tool versions
+        run: make tool-versions
+
+      - name: Build the candidate from the clean committed checkout
+        env:
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          CANDIDATE_BASE_COMMIT: ${{ inputs.candidate_base_commit }}
+        run: >-
+          python3 scripts/build_development_candidate.py build
+          --version "${CANDIDATE_VERSION}"
+          --commit "${GITHUB_SHA}"
+          --base-commit "${CANDIDATE_BASE_COMMIT}"
+          --repository "${GITHUB_REPOSITORY}"
+          --goreleaser "${GITHUB_WORKSPACE}/bin/goreleaser"
+          --work-dir "${RUNNER_TEMP}/candidate-work"
+          --output-dir "${RUNNER_TEMP}/candidate-payload"
+          --receipt "${RUNNER_TEMP}/candidate-build-receipt.json"
+
+      - name: Upload the immutable candidate payload
+        id: candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: development-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-payload/
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+
+      - name: Encode the external candidate locator
+        env:
+          ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}
+          ARTIFACT_DIGEST: ${{ steps.candidate.outputs.artifact-digest }}
+        run: |
+          mkdir "${RUNNER_TEMP}/candidate-locator"
+          python3 scripts/build_development_candidate.py locator \
+            --repository "${GITHUB_REPOSITORY}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --artifact-id "${ARTIFACT_ID}" \
+            --artifact-digest "${ARTIFACT_DIGEST}" \
+            --manifest "${RUNNER_TEMP}/candidate-payload/candidate-manifest.json" \
+            --output "${RUNNER_TEMP}/candidate-locator/candidate-locator.json"
+          {
+            echo '### Development candidate locator'
+            echo '```json'
+            cat "${RUNNER_TEMP}/candidate-locator/candidate-locator.json"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Retain the candidate locator outside the payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: development-candidate-locator-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-locator/candidate-locator.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: false
+
+      - name: Retain the sanitized build receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: development-candidate-build-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-build-receipt.json
+          if-no-files-found: ignore
+          retention-days: 90
+          overwrite: false

@@ -1,6 +1,7 @@
 """Deterministic tests for npm published-consumer verification over mock ports."""
 
 import base64
+import contextlib
 import hashlib
 import io
 import json
@@ -9,7 +10,6 @@ from argparse import Namespace
 from pathlib import Path
 import sys
 import tarfile
-import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -17,11 +17,13 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import verify_release_archive as verifier
-from scripts.delegate_acceptance.release_verification import published
+from scripts.acceptance_tests.release_fixture import FixtureTree
+from scripts.delegate_acceptance.release_verification import commands, published
 from scripts.delegate_acceptance.release_verification import published_contract as rules
 from scripts.delegate_acceptance.release_verification.commands import command
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.published_ports import ConsumerPorts
+from scripts.test_candidate_source_support import ChildFault
 
 
 TAG = "v1.2.3"
@@ -79,8 +81,12 @@ class FakeWorld:
     def which(self, name):
         return {"npm": "/fake/bin/npm", "node": "/fake/bin/node"}.get(name)
 
-    def ports(self, inherited=None):
-        return ConsumerPorts(run=self.run, which=self.which, inherited=inherited or {})
+    def ports(self, tree, inherited=None):
+        """The simulated run port; ``tree`` observes each original failure before the verifier converts it."""
+        def run(*args, **options):
+            return tree.observe_operation(lambda: self.run(*args, **options))
+
+        return ConsumerPorts(run=run, which=self.which, inherited=inherited or {})
 
     def view_document(self):
         document = {
@@ -187,8 +193,22 @@ class PublishedBase(unittest.TestCase):
     channel = "npm"
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="published-test-")
-        self.root = Path(self.temporary.name).resolve(strict=True)
+        self.open_fixture()
+        self.prepare_archive()
+        self.assertEqual(self.verify_archive(), 0)
+        self.world = FakeWorld(self.extract)
+
+    def open_fixture(self):
+        """Open the one test-owned tree, then route every real fixture child through it."""
+        self.tree = FixtureTree.open(prefix="published-test", label="published consumer test tree")
+        self.addCleanup(self.tree.dispose)
+        self.root = self.tree.root
+        # Each real child is counted and reports its original failure to the tree before ``command``
+        # converts it; a case replaces the counter to inject one fault that launches nothing.
+        self.children = ChildFault(lambda argv: False)
+        runner = patch.object(commands, "run_bounded_command", self.run_child)
+        runner.start()
+        self.addCleanup(runner.stop)
         self.runner_temp = self.root / "runner"
         self.assets = self.runner_temp / "delegation-layer-release"
         self.extract = self.assets / "extracted"
@@ -202,11 +222,26 @@ class PublishedBase(unittest.TestCase):
         })
         self.env_patcher.start()
         self.addCleanup(self.env_patcher.stop)
-        self.addCleanup(self.temporary.cleanup)
         self.archive_receipt = self.root / "archive-receipt.json"
         self.receipt_path = self.root / "published-receipt.json"
-        self.prepare_archive()
-        self.world = FakeWorld(self.extract)
+
+    def run_child(self, argv, environment, **options):
+        return self.tree.observe_operation(lambda: self.children(argv, environment, **options))
+
+    def reset(self):
+        """Close this case's tree and restore every patch, then open a fresh fixture."""
+        self.doCleanups()
+        self.setUp()
+
+    def settle_port_fault(self, injected):
+        """A simulated port fault launched nothing; remove the retained tree once every real child closed."""
+        self.assertIs(self.tree.unresolved, injected)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.doCleanups()
+        self.assertTrue(self.tree.root.is_dir())
+        self.assertEqual((self.children.faulted, self.children.unclosed), ([], 0))
+        self.tree.remove_retained()
+        self.assertFalse(self.tree.root.exists())
 
     def install_fake_gh(self):
         gh = self.fake_bin / "gh"
@@ -228,10 +263,9 @@ class PublishedBase(unittest.TestCase):
                 bundle.addfile(member, io.BytesIO(data))
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         (self.assets / "checksums.txt").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
-        self.write_archive_receipt()
 
-    def write_archive_receipt(self):
-        """Drive the real native-acceptance verifier to a retained, passing archive receipt."""
+    def verify_archive(self):
+        """Drive the real native-acceptance verifier; a passing run retains the archive receipt."""
         args = Namespace(
             receipt=str(self.archive_receipt), assets_dir=str(self.assets),
             extract_dir=str(self.extract), mode="native-acceptance", tag=TAG,
@@ -239,7 +273,7 @@ class PublishedBase(unittest.TestCase):
         stub = {"sha256": "0" * 64, "files": []}
         with patch("scripts.delegate_acceptance.release_verification.verification.source_fingerprint",
                    return_value=stub):
-            self.assertEqual(verifier.verify(args), 0)
+            return verifier.verify(args)
 
     def request(self, **changes):
         values = {
@@ -251,7 +285,7 @@ class PublishedBase(unittest.TestCase):
         return rules.PublishedRequest(**values)
 
     def publish(self, **changes):
-        return published.verify_published(self.request(**changes), ports=self.world.ports())
+        return published.verify_published(self.request(**changes), ports=self.world.ports(self.tree))
 
     def receipt(self):
         return json.loads(self.receipt_path.read_text(encoding="utf-8"))
@@ -293,7 +327,7 @@ class PublishedNpmTests(PublishedBase):
     def test_registry_children_are_private_token_free_and_outside_checkout(self):
         inherited = {"GH_TOKEN": SECRET, "NPM_TOKEN": SECRET, "NODE_AUTH_TOKEN": SECRET,
                      "GITHUB_TOKEN": SECRET, "SSL_CERT_FILE": "/etc/ssl/cert.pem", "HOME": "/real/home"}
-        ports = self.world.ports(inherited)
+        ports = self.world.ports(self.tree, inherited)
         self.assertEqual(published.verify_published(self.request(), ports=ports), 0)
         checkout = Path(__file__).resolve().parent.parent
         npm_calls = [call for call in self.world.calls if call["argv"][0].endswith("/npm")]
@@ -332,7 +366,7 @@ class PublishedNpmTests(PublishedBase):
                 ("npm_latest", "1.2.4", "npm_latest_differs_from_target"),
                 ("github_latest", "v1.2.4", "github_latest_differs_from_target")):
             with self.subTest(attribute):
-                self.setUp()
+                self.reset()
                 setattr(self.world, attribute, value)
                 self.assertEqual(self.publish(), 0)
                 latest = self.receipt()["published"]["verified"]["latest"]
@@ -356,7 +390,7 @@ class PublishedNpmTests(PublishedBase):
         }
         for label, override in bad.items():
             with self.subTest(label):
-                self.setUp()
+                self.reset()
                 self.world.view_overrides = override
                 self.assertEqual(self.publish(), 1)
                 self.assertIn(self.receipt()["failure"]["code"],
@@ -385,14 +419,14 @@ class PublishedNpmTests(PublishedBase):
         }
         for label, files in drifts.items():
             with self.subTest(label):
-                self.setUp()
+                self.reset()
                 self.world.installed_skill = files
                 self.assertFailed("installed_skill_mismatch")
 
     def test_skill_file_set_is_derived_not_counted(self):
         for skill in ({"SKILL.md": b"only\n"}, {**SKILL_SOURCE, "evals/x.json": b"{}", "examples/y.md": b"y"}):
             with self.subTest(len(skill)):
-                self.setUp()
+                self.reset()
                 self.world = FakeWorld(self.extract, skill)
                 self.assertEqual(self.publish(), 0)
                 files = self.receipt()["published"]["verified"]["skill_source"]["files"]
@@ -409,8 +443,8 @@ class PublishedNpmTests(PublishedBase):
         self.assertFalse([call for call in self.world.calls if call["argv"][0].endswith("/npm")])
 
     def test_child_timeout_retains_workspace_with_unresolved_ownership_and_never_cleans(self):
-        self.world.raise_on = {"npm-exec-explicit-install-cli": VerificationError(
-            "command_timeout", "npm-exec-explicit-install-cli")}
+        injected = VerificationError("command_timeout", "npm-exec-explicit-install-cli")
+        self.world.raise_on = {"npm-exec-explicit-install-cli": injected}
         receipt = self.assertFailed("command_timeout")
         ownership = receipt["published"]["unresolved_ownership"]
         workspace = self.workspaces()[0]
@@ -423,6 +457,7 @@ class PublishedNpmTests(PublishedBase):
         self.assertEqual(self.receipt_path.read_bytes(), before)
         self.assertEqual(len(self.world.calls), calls)
         self.assertTrue(workspace.is_dir())
+        self.settle_port_fault(injected)
 
     def test_other_failures_do_not_claim_unresolved_ownership(self):
         self.world.binary_override = {"delegate": b"#!/bin/sh\nexit 0\n"}

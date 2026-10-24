@@ -1,6 +1,7 @@
 """Private CLI admission boundary."""
 
 from scripts.delegate_acceptance.private_cli.commands import run_json
+from scripts.delegate_acceptance.private_cli.stop_policy import is_documented_user_interruption
 import time
 
 
@@ -76,9 +77,25 @@ def read_created_task_status(
 
 
 def await_created_task_ended(
-    delegate, state, env, response, receipt, timeout=30, phase="task-observation", *, capture_root
+    delegate,
+    state,
+    env,
+    response,
+    receipt,
+    timeout=30,
+    phase="task-observation",
+    *,
+    capture_root,
+    expected_user_stop=None,
 ):
-    """Poll one created task until the queue reports ended, without resubmitting it."""
+    """Poll one created task until the queue reports ended, without resubmitting it.
+
+    `expected_user_stop` names the exact user stop request this caller made.
+    Only then is its documented ended interruption accepted as queue ended;
+    every other failure stays an operational failure.
+    """
+    if expected_user_stop is not None and (not isinstance(expected_user_stop, str) or not expected_user_stop):
+        raise ValueError("expected user stop request must be a non-empty string: %r" % (expected_user_stop,))
     task_id = response.get("task_id")
     root_id = response.get("root_id")
     if not isinstance(task_id, str) or not isinstance(root_id, str) or not root_id:
@@ -105,9 +122,15 @@ def await_created_task_ended(
         if status.get("root_id") != root_id:
             raise RuntimeError("task observation returned a different root")
         failure = status.get("failure")
-        if status.get("error") or failure:
-            raise RuntimeError("task status reported an operational failure: %r" % status)
         liveness = status.get("liveness")
+        expected_interruption = (
+            bool(failure)
+            and liveness == "ended"
+            and expected_user_stop is not None
+            and is_documented_user_interruption(status, task_id, root_id, expected_user_stop)
+        )
+        if status.get("error") or (failure and not expected_interruption):
+            raise RuntimeError("task status reported an operational failure: %r" % status)
         if liveness == "ended":
             return status, {
                 "kind": "queue-ended-observation",

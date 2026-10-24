@@ -6,15 +6,16 @@ from __future__ import annotations
 import secrets
 import time
 from pathlib import Path
-from scripts.delegate_acceptance.evidence.files import write_json
+from scripts.delegate_acceptance.evidence.files import digest, write_json
 from scripts.delegate_acceptance.evidence.records import parse_json_output
 from scripts.delegate_acceptance.evidence.validation import AcceptanceFailure, require
 from scripts.delegate_acceptance.native.binding_policy import dispatch_binding
 from scripts.delegate_acceptance.native.diagnostics import _delegate_status_summary
-from scripts.delegate_acceptance.native.errors import BlockedFailure
+from scripts.delegate_acceptance.native.errors import BlockedFailure, BlockReason
 from scripts.delegate_acceptance.native.acceptance_diagnostics import authentication_unavailable
 from scripts.delegate_acceptance.native.provider_policy import authentication_blocked
 from scripts.delegate_acceptance.native.constants import TASK_BUDGET, WATCH_SECONDS
+from scripts.delegate_acceptance.tasks.request_intent import TaskRequest
 
 
 def task_command_prefix(owner) -> list[object]:
@@ -50,14 +51,25 @@ def dispatch_argv(owner, task_id: str, brief: Path,
         argv.extend(["--resume-task", predecessor])
     return argv
 
+def dispatch_request(owner, name: str, brief: Path, predecessor: str | None,
+                     budget: str) -> TaskRequest:
+    """Bind the role, brief and the owner inputs dispatch_argv reads, before any launch."""
+    acceptance = owner
+    return TaskRequest(
+        role=name, brief_sha256=digest(brief), budget=budget, predecessor_task_id=predecessor,
+        provider=acceptance.provider, permission=acceptance.mode,
+        scenario=getattr(acceptance, "scenario", None), model=getattr(acceptance.args, "model", None),
+        effort=getattr(acceptance.args, "effort", None), cwd=str(acceptance.workspace))
+
 def dispatch(owner, name: str, brief: Path, predecessor: str | None = None,
              budget: str = TASK_BUDGET) -> str:
     acceptance = owner
     task_id = secrets.token_hex(16)
     argv = acceptance.dispatch_argv(task_id, brief, predecessor, budget)
+    request = dispatch_request(acceptance, name, brief, predecessor, budget)
     acceptance.ops.root_id = acceptance.root_id
     try:
-        response = acceptance.ops.dispatch(name, task_id, argv)
+        response = acceptance.ops.dispatch(name, task_id, argv, request=request)
         root_id, numeric_id = dispatch_binding(response, task_id, name)
         if acceptance.root_id is None:
             acceptance.root_id = root_id
@@ -72,7 +84,8 @@ def dispatch(owner, name: str, brief: Path, predecessor: str | None = None,
         refused = observation.get("response") if isinstance(observation, dict) else None
         message = str(refused.get("error", "")) if isinstance(refused, dict) else ""
         if authentication_blocked(refused, message):
-            raise BlockedFailure(f"{acceptance.provider} authentication is unavailable")
+            raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",
+                                 reason=BlockReason.AUTH_UNAVAILABLE)
         raise
 
 def continue_task(owner, name: str, brief: Path, predecessor: str) -> str:
@@ -84,9 +97,12 @@ def continue_timed_out_task(owner, name: str, brief: Path, predecessor: str) -> 
     argv = acceptance.task_command_prefix()
     argv.extend(["continue", "--task", predecessor,
                  "--brief", brief, "--budget", TASK_BUDGET, "--json"])
+    # The continuation inherits provider configuration from its predecessor.
+    request = TaskRequest(role=name, brief_sha256=digest(brief), budget=TASK_BUDGET,
+                          predecessor_task_id=predecessor)
     acceptance.ops.root_id = acceptance.root_id
     try:
-        task_id, response = acceptance.ops.continue_task(name, argv)
+        task_id, response = acceptance.ops.continue_task(name, argv, request=request)
         root_id, numeric_id = dispatch_binding(response, task_id, name)
         require(response.get("command") == "continue" and
                 response.get("parent_task_id") == predecessor,
@@ -102,7 +118,8 @@ def continue_timed_out_task(owner, name: str, brief: Path, predecessor: str) -> 
         refused = observation.get("response") if isinstance(observation, dict) else None
         message = str(refused.get("error", "")) if isinstance(refused, dict) else ""
         if authentication_blocked(refused, message):
-            raise BlockedFailure(f"{acceptance.provider} authentication is unavailable")
+            raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",
+                                 reason=BlockReason.AUTH_UNAVAILABLE)
         raise
 
 def wait_done(owner, name: str, task_id: str,
@@ -122,7 +139,8 @@ def wait_done(owner, name: str, task_id: str,
         except (AcceptanceFailure, RuntimeError, OSError, ValueError) as status_error:
             status_detail = f"status=unavailable ({type(status_error).__name__})"
         if authentication_unavailable(directory):
-            raise BlockedFailure(f"{acceptance.provider} authentication is unavailable") from error
+            raise BlockedFailure(f"{acceptance.provider} authentication is unavailable",
+                                 reason=BlockReason.AUTH_UNAVAILABLE) from error
         raise AcceptanceFailure(
             f"{name} runner completion failed: {error}; Delegate {status_detail}") from error
 

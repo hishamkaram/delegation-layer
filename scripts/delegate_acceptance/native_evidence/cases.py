@@ -7,13 +7,14 @@ from ..directories.journal import cleanup_journal_digest
 from ..directories.journal import prepare_directory_cleanup
 from ..directories.journal import read_directory_cleanup
 from ..directories.journal import resume_directory_cleanup
+from .block_reason import encode_block_reason, source_block_reason
 from .contract import (
+    COMPACT_CASE_SCHEMA_VERSION,
     EvidenceError,
     HEX_DIGEST,
     MAX_INPUT_BYTES,
     MAX_RECEIPT_BYTES,
     MatrixRow,
-    SCHEMA_VERSION,
     _case_cleanup_authorization,
     _compact_provider_versions,
     _digest_bytes,
@@ -21,10 +22,13 @@ from .contract import (
     _source_status_matches,
 )
 from .filesystem import (
+    _bounded_file_bytes,
+    _identity_matches,
     _identity_shape,
     _inside,
     _read_json,
     _write_atomic,
+    _write_bytes_atomic,
 )
 from .validation import (
     _validate_case_receipt,
@@ -44,8 +48,11 @@ def _sanitize_case(
         creation_identity: dict[str, object] | None,
         terminal_state: str,
         raw_deleted: bool) -> dict[str, object]:
+    reason, reason_error = source_block_reason(source, row.status)
+    if reason_error is not None and evidence_status == "RESOLVED":
+        raise EvidenceError(reason_error)
     result: dict[str, object] = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": COMPACT_CASE_SCHEMA_VERSION,
         "kind": "native-acceptance-case",
         "gate": "acceptance-native",
         "scope": "provider-permission-scenario-case-result",
@@ -56,6 +63,7 @@ def _sanitize_case(
         "status": row.status,
         "exit_code": row.exit_code,
         "evidence_status": evidence_status,
+        "block_reason": encode_block_reason(row.status, reason),
         "credentials_in_receipt": False,
         "source_receipt_sha256": source_digest,
         "cleanup": {"observation": cleanup, "raw_before": before, "raw_after": after,
@@ -119,11 +127,77 @@ def _read_case_source(case_directory: Path, status: str) -> tuple[dict[str, obje
         return None, _digest_bytes(data), "source_receipt_malformed"
     if not _source_status_matches(value, status):
         return value, _digest_bytes(data), "source_status_mismatch"
-    return value, _digest_bytes(data), None
+    return value, _digest_bytes(data), source_block_reason(value, status)[1]
 
 
 def _case_cleanup_journal(compact_path: Path) -> Path:
     return compact_path.with_name(compact_path.stem + ".cleanup.json")
+
+
+def _blocked_failure_copy(compact_path: Path) -> Path:
+    return compact_path.with_name(compact_path.stem + ".failure.json")
+
+
+def _preserve_blocked_source(case_directory: Path, compact_path: Path, source_digest: object) -> str | None:
+    """Keep the exact private failure bytes pinned to ``source_digest`` before raw cleanup.
+
+    An existing copy is reused only when its bytes match; it is never
+    overwritten. The copy is private and is never staged or published.
+    Returns an evidence error code, or None once a matching copy is durable.
+    """
+    if not isinstance(source_digest, str) or HEX_DIGEST.fullmatch(source_digest) is None:
+        return "blocked_failure_digest_invalid"
+    copy = _blocked_failure_copy(compact_path)
+    if copy.exists() or copy.is_symlink():
+        try:
+            existing = _bounded_file_bytes(copy, MAX_INPUT_BYTES)
+        except EvidenceError:
+            return "blocked_failure_copy_invalid"
+        return None if _digest_bytes(existing) == source_digest else "blocked_failure_copy_conflict"
+    try:
+        data = _bounded_file_bytes(case_directory / "failure.json", MAX_INPUT_BYTES)
+    except EvidenceError:
+        return "blocked_failure_source_unavailable"
+    if _digest_bytes(data) != source_digest:
+        return "blocked_failure_source_changed"
+    try:
+        _write_bytes_atomic(copy, data, MAX_INPUT_BYTES)
+        written = _bounded_file_bytes(copy, MAX_INPUT_BYTES)
+    except (OSError, EvidenceError):
+        return "blocked_failure_copy_write_failed"
+    return None if _digest_bytes(written) == source_digest else "blocked_failure_copy_readback_mismatch"
+
+
+def _cleanup_removed_contents(journal: Path, authorization: str, identity: object) -> bool:
+    """Whether the canonical journal of this exact target already removed its contents."""
+    try:
+        record = read_directory_cleanup(journal, authorization)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return record.get("target") == identity and record.get("state") in {"contents-removed", "complete"}
+
+
+def _replay_blocked_source(
+        compact_path: Path, case_directory: Path, *, identity: object, source_digest: object,
+        journal: Path, authorization: str) -> None:
+    """Refuse a replayed raw deletion until the blocked failure bytes are preserved.
+
+    An absent original path is not proof of removal: isolation first moves the
+    case into quarantine. Without a copy, replay continues only once the
+    canonical journal shows this target's contents already removed, and never
+    fabricates a copy.
+    """
+    copy = _blocked_failure_copy(compact_path)
+    if not copy.exists() and not copy.is_symlink():
+        if not case_directory.exists() and not case_directory.is_symlink():
+            if not _cleanup_removed_contents(journal, authorization, identity):
+                raise EvidenceError("blocked_failure_source_unavailable")
+            return
+        if not _identity_matches(case_directory, identity):
+            raise EvidenceError("blocked_failure_source_unavailable")
+    error = _preserve_blocked_source(case_directory, compact_path, source_digest)
+    if error is not None:
+        raise EvidenceError(error)
 
 
 def _prepare_case_cleanup(
@@ -189,6 +263,9 @@ def _replay_prepared_case(
     cleanup = value.get("cleanup")
     if not isinstance(cleanup, dict):
         return None
+    if row.status == "BLOCKED":
+        _replay_blocked_source(compact_path, case_directory, identity=identity, journal=journal,
+                               authorization=authorization, source_digest=value.get("source_receipt_sha256"))
     try:
         if not journal.exists() and not journal.is_symlink():
             prepare_directory_cleanup(

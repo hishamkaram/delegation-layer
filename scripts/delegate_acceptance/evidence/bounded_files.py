@@ -1,6 +1,9 @@
 """One identity-checked, bounded regular-file reader for acceptance evidence."""
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
+import hashlib
 import os
 from pathlib import Path
 import stat
@@ -19,8 +22,17 @@ class BoundedReadError(Exception):
         self.reason = reason
 
 
-def read_bounded_regular_file(path: Path, limit: int) -> bytes:
-    """Pin the opened file to its observed identity and reject growth past limit."""
+@dataclass(frozen=True)
+class FileFingerprint:
+    size: int
+    sha256: str
+
+
+def _read_pinned(path: Path, limit: int, sink: Callable[[bytes], None]) -> int:
+    """Pin the opened file to its observed identity, feed sink chunks and return the byte count.
+
+    The pin covers the opened inode only, not the ancestors and not later writes to it.
+    """
     try:
         metadata = path.lstat()
         if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
@@ -33,20 +45,35 @@ def read_bounded_regular_file(path: Path, limit: int) -> bytes:
             if (not stat.S_ISREG(opened.st_mode) or opened.st_size > limit
                     or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)):
                 raise BoundedReadError(ReadFailure.CHANGED)
-            chunks: list[bytes] = []
+            total = 0
             remaining = limit
             while remaining:
                 chunk = os.read(descriptor, min(1024 * 1024, remaining))
                 if not chunk:
                     break
-                chunks.append(chunk)
+                sink(chunk)
+                total += len(chunk)
                 remaining -= len(chunk)
             if os.read(descriptor, 1):
                 raise BoundedReadError(ReadFailure.TOO_LARGE)
-            return b"".join(chunks)
+            return total
         finally:
             os.close(descriptor)
     except BoundedReadError:
         raise
     except (OSError, UnicodeError) as error:
         raise BoundedReadError(ReadFailure.UNREADABLE) from error
+
+
+def read_bounded_regular_file(path: Path, limit: int) -> bytes:
+    """Pin the opened file to its observed identity and reject growth past limit."""
+    chunks: list[bytes] = []
+    _read_pinned(path, limit, chunks.append)
+    return b"".join(chunks)
+
+
+def fingerprint_bounded_regular_file(path: Path, limit: int) -> FileFingerprint:
+    """Stream the same pinned read into a SHA-256 digest; memory stays O(chunk size)."""
+    digest = hashlib.sha256()
+    size = _read_pinned(path, limit, digest.update)
+    return FileFingerprint(size, digest.hexdigest())

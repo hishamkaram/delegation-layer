@@ -1,0 +1,72 @@
+[
+  {
+    "name": "py:delegate_acceptance.tasks.request_intent",
+    "owner": "py:delegate_acceptance.tasks",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:collections.abc",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.validation"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.model_discovery_intent",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "pure",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.validation"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.inspection.test_task_request_intents",
+    "owner": "py:acceptance_tests.inspection.test_task_request_intents",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:acceptance_supervisor_common",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.tasks.operations",
+      "py:delegate_acceptance.tasks.request_intent",
+      "py:hashlib",
+      "py:pathlib",
+      "py:tempfile",
+      "py:types",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.native.test_native_request_intents",
+    "owner": "py:acceptance_tests.native.test_native_request_intents",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.acceptance",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native.model_discovery",
+      "py:delegate_acceptance.native.model_discovery_intent",
+      "py:delegate_acceptance.tasks.operations",
+      "py:hashlib",
+      "py:pathlib",
+      "py:tempfile",
+      "py:types",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native.model_discovery",
+    "owner": "py:delegate_acceptance.native",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.model_discovery_intent"
+    ]
+  }
+]

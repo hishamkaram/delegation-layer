@@ -7,7 +7,7 @@ from . import filesystem
 from pathlib import Path
 import argparse
 import re
-import tempfile
+import secrets
 from ..directories.operations import DirectoryOwner
 from ..native_evidence.contract import EvidenceError
 from ..directories.journal import release_exclusive_file_lock
@@ -81,13 +81,37 @@ def _verify_locked(args: argparse.Namespace, receipt_path: Path) -> int:
         receipt["stage"] = "extract-archive"
         extract_archive(archive, extracted, owner, receipt)
         paths = inspect_binaries(extracted, receipt)
-        with tempfile.TemporaryDirectory(prefix="delegate-release-home-", dir=assets) as home:
-            locations["isolated_home"] = Path(home)
-            receipt["stage"] = "exercise-packaged-cli"
-            exercise_default_path(paths, extracted, receipt, receipt["package_version"], info, Path(home))
+        _exercise_in_owned_home(paths, extracted=extracted, receipt=receipt, info=info, assets=assets,
+                                locations=locations)
 
     return finish_gate(receipt_path, receipt, owner, action,
                        "remove" if args.mode == "archive-smoke" else "retain", locations)
+
+
+def _exercise_in_owned_home(paths: dict[str, Path], *, extracted: Path, receipt: dict, info: dict[str, str],
+                            assets: Path, locations: dict[str, Path]) -> None:
+    """Exercise the packaged CLI under a private HOME that only a completed exercise removes.
+
+    A failed or interrupted exercise may leave a child whose closure is unproven, so its
+    HOME is retained with the assets for ``finish_gate`` to report, never deleted on unwind.
+    """
+    home = assets / f"delegate-release-home-{secrets.token_hex(6)}"
+    home_owner = DirectoryOwner()
+    home_owner.create("isolated release home", home, assets)
+    locations["isolated_home"] = home
+    receipt["stage"] = "exercise-packaged-cli"
+    try:
+        exercise_default_path(paths, extracted, receipt, receipt["package_version"], info, home)
+    except BaseException:
+        try:
+            home_owner.release()
+        except (OSError, RuntimeError):
+            receipt["cleanup"]["errors"].append("owned_directory_identity_check_failed")
+        raise
+    try:
+        home_owner.rollback()
+    except (OSError, RuntimeError):
+        raise VerificationError("release_cleanup_failed", "cleanup-isolated-home") from None
 
 
 def finalize_native(args: argparse.Namespace) -> int:

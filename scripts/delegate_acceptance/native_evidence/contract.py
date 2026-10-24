@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from ..evidence.digests import sha as _digest_bytes
 from .lifetime_closure import lifetime_closure_error
@@ -87,6 +88,22 @@ MATRIX_HEADER = (
 
 class EvidenceError(Exception):
     """A bounded, caller-actionable evidence error."""
+
+
+class BlockReason(Enum):
+    """Why a native case was blocked; only real unavailability can be neutral."""
+
+    AUTH_UNAVAILABLE = "auth-unavailable"
+    EXECUTABLE_UNAVAILABLE = "executable-unavailable"
+    UNCLASSIFIED = "unclassified"
+
+
+# The compact case receipt is versioned apart from the aggregate and release
+# schemas. Version 1 predates the reason; version 2 carries it as one exact
+# field, non-null exactly for a BLOCKED case.
+COMPACT_CASE_LEGACY_SCHEMA_VERSION = 1
+COMPACT_CASE_SCHEMA_VERSION = 2
+BLOCK_REASON_KEY = "block_reason"
 
 
 @dataclass(frozen=True)
@@ -349,6 +366,8 @@ def _case_cleanup_authorization(value: dict[str, object]) -> str:
         )
     }
     payload["cleanup"] = immutable_cleanup
+    if value.get("schema_version") == COMPACT_CASE_SCHEMA_VERSION:
+        payload[BLOCK_REASON_KEY] = value.get(BLOCK_REASON_KEY)
     return _digest_bytes(canonical_json(payload))
 
 

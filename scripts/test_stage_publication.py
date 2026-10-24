@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
-import tempfile
 import unittest
 from unittest.mock import patch
 
 from scripts import test_public_native_proof as fixtures
+from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
 from scripts.delegate_acceptance.directories.journal import directory_identity_record
 from scripts.delegate_acceptance.directories.operations import (
     DIRECTORY_CREATION_PREFIX, DirectoryOwner, is_creation_temporary_name,
@@ -25,6 +28,7 @@ from scripts.delegate_acceptance.native_evidence.public_projection import build_
 from scripts.delegate_acceptance.native_evidence.public_validation import validate_public_proof
 from scripts.delegate_acceptance.native_evidence.stage_publication import StagePlan, publish_stage
 from scripts.delegate_acceptance.native_evidence.staging import _check_source_digests, stage_evidence
+from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
 from scripts.delegate_acceptance.processes.operations import run_bounded_command
 
 
@@ -50,18 +54,19 @@ def _snapshot(root: Path) -> dict[str, str]:
 class StagePublicationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source_temporary = tempfile.TemporaryDirectory(prefix="stage-source-")
-        cls.addClassCleanup(cls.source_temporary.cleanup)
-        cls.source_root = Path(cls.source_temporary.name).resolve(strict=True)
+        cls.source_tree = FixtureTree.open(prefix="stage-source", label="stage source fixture")
+        cls.addClassCleanup(cls.source_tree.dispose)
+        cls.source_root = cls.source_tree.root
         producer = fixtures._PublicNativeFixture(cls.source_root)
         cls.source = producer.build_stage()
         cls.expectation = producer.expectation
         cls.original = _snapshot(cls.source)
 
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="stage-replay-")
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name).resolve(strict=True)
+        self.baseline = open_descriptors()
+        self.tree = FixtureTree.open(prefix="stage-replay", label="stage replay fixture")
+        self.addCleanup(self.tree.dispose)
+        self.root = self.tree.root
         self.parent = self.root / "owned-parent"
         self.parent.mkdir()
         self.output = self.parent / "stage"
@@ -142,14 +147,7 @@ class StagePublicationTests(unittest.TestCase):
             with self.subTest(phase=phase):
                 if phase != "partial":
                     self.setUp()
-                identity_file = self.root / "identity.json"
-                identity_file.write_text(json.dumps(self.identity))
-                script = self.crashing_child_source(phase)
-                result = run_bounded_command(
-                    [sys.executable, "-c", script, str(self.source), str(self.output), str(identity_file)],
-                    dict(os.environ), max_output=4096, timeout=15, capture=True,
-                )
-                self.assertEqual(result.exit_code, 17)
+                self.assertEqual(self.run_crashing_child(phase, self.source_tree, self.source), 17)
                 remnants = [path for path in self.output.rglob("*")
                             if path.name.endswith(".staging") or is_creation_temporary_name(path.name)]
                 self.assertTrue(remnants)
@@ -158,6 +156,43 @@ class StagePublicationTests(unittest.TestCase):
                 self.assertFalse([path for path in self.output.rglob("*")
                                   if is_creation_temporary_name(path.name)])
                 self.prove_public_consumer()
+
+    def test_unknown_crash_child_wait_retains_its_input_and_output_owners(self):
+        source = FixtureTree.open(prefix="stage-fault-source", label="stage fault source")
+        self.addCleanup(source.dispose)
+        refused = []
+
+        def refuse(argv, **options):
+            refused.append(argv)
+            raise subprocess.TimeoutExpired(argv, 0)
+
+        with patch.object(subprocess, "Popen", side_effect=refuse), \
+                self.assertRaises(BoundedCommandError) as raised:
+            self.run_crashing_child("partial", source, source.root)
+        self.assertIs(raised.exception.reason, CommandFailure.TIMEOUT)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertTrue(self.doCleanups())
+        self.assertTrue(self.output.is_dir(), "an unknown crash child Wait must retain its output owner")
+        self.assertTrue(source.root.is_dir(), "an unknown crash child Wait must retain its input owner")
+        for tree in (self.tree, source):
+            self.assertIs(tree.unresolved, raised.exception)
+        self.assertEqual(open_descriptors(), self.baseline)
+        # The proof: the one child start was refused, so no child can still write to either owner.
+        self.assertEqual(len(refused), 1)
+        for tree in (self.tree, source):
+            tree.remove_retained()
+            self.assertFalse(tree.root.exists())
+
+    def run_crashing_child(self, phase: str, source: FixtureTree, stage: Path) -> int:
+        """Run one real publisher that crashes; its ``stage`` input owner and output owner observe a failure."""
+        identity_file = self.root / "identity.json"
+        identity_file.write_text(json.dumps(self.identity))
+        argv = [sys.executable, "-c", self.crashing_child_source(phase), str(stage), str(self.output),
+                str(identity_file)]
+        result = self.tree.observe_operation(
+            lambda: run_bounded_command(argv, dict(os.environ), max_output=4096, timeout=15, capture=True),
+            dependencies=(source,))
+        return result.exit_code
 
     def crashing_child_source(self, phase):
         common = (

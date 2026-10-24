@@ -19,6 +19,7 @@ from unittest.mock import patch
 import zipfile
 
 from scripts import native_acceptance_evidence as evidence
+from scripts.acceptance_tests.release_fixture import FixtureTree, open_descriptors
 from scripts.delegate_acceptance.native_evidence.public_contract import (
     CASE_DEFINITIONS,
     MAX_PUBLIC_MEMBER_BYTES,
@@ -71,18 +72,29 @@ def _pack_unchecked_rows(rows: list[tuple[str, bytes]]) -> bytes:
 
 
 class _PublicNativeFixture:
-    def __init__(self, root: Path, *, failed_index: int | None = None) -> None:
+    """Produces a real private stage under ``root`` through the canonical archive fixture.
+
+    The archive fixture is created below ``release_parent`` (default: the system temporary
+    directory); each ``containing`` tree also observes the fixture's verifier child failures.
+    """
+
+    def __init__(self, root: Path, *, failed_index: int | None = None,
+                 release_parent: Path | None = None, containing: tuple[FixtureTree, ...] = ()) -> None:
         self.root = root
         self.failed_index = failed_index
+        self.release_parent = release_parent
+        self.containing = containing
         self.expectation: ProofExpectation | None = None
+        self.release_root: Path | None = None
 
     def build_stage(self) -> Path:
         from scripts import verify_release_archive as verifier
         from scripts.test_verify_release_archive import ReleaseArchiveVerificationTests, REVISION, TAG
 
-        release_fixture = object.__new__(ReleaseArchiveVerificationTests)
-        release_fixture.setUp()
-        try:
+        release_fixture = ReleaseArchiveVerificationTests(
+            parent=self.release_parent, containing=self.containing)
+        with release_fixture.prepared():
+            self.release_root = release_fixture.root
             if release_fixture.verify() != 0:
                 raise AssertionError("canonical archive verifier did not pass")
             archive_receipt_path = release_fixture.receipt_path
@@ -123,8 +135,6 @@ class _PublicNativeFixture:
                 archive_receipt, native_receipt,
             )
             return stage
-        finally:
-            release_fixture.tearDown()
 
     def _inject_private_canaries(self, receipt_path: Path) -> None:
         receipt = _object(json.loads(receipt_path.read_bytes()))
@@ -682,3 +692,23 @@ class PublicNativeProofTests(unittest.TestCase):
                 with self.assertRaisesRegex(PublicProofError, "public_stage_file_too_large"):
                     _read_stage_file(root, "receipt.json", 4)
             self.assertTrue(grew)
+
+
+class PublicNativeFixtureOwnershipTests(unittest.TestCase):
+    def test_failed_release_setup_still_disposes_the_release_fixture(self) -> None:
+        from scripts import verify_release_archive as verifier
+
+        before = open_descriptors()
+        tree = FixtureTree.open(prefix="public-native-fixture", label="public native fixture")
+        self.addCleanup(tree.dispose)
+        producer = _PublicNativeFixture(tree.root, release_parent=tree.root, containing=(tree,))
+        fault = RuntimeError("release fixture setUp fault")
+        with patch.object(verifier, "expected_archive", side_effect=fault), \
+                self.assertRaises(RuntimeError) as raised:
+            producer.build_stage()
+        self.assertIs(raised.exception, fault)
+        self.assertEqual(list(tree.root.iterdir()), [], "a failed setUp must still dispose the release fixture")
+        self.assertIsNone(tree.unresolved)
+        self.assertTrue(tree.dispose())
+        self.assertEqual(open_descriptors(), before)
+

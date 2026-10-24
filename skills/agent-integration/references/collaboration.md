@@ -8,6 +8,16 @@ cap or TTL eviction. A read-only review may attach a retained workspace with
 release rules live in [managed workspace guidance](workspaces.md); do not
 restate them in each collaboration brief.
 
+Give each participant a bounded deliverable, explicit write ownership, and the
+inputs it depends on. Run independent assignments in parallel; dependent work
+begins only after the required results are collected and any prerequisite
+changes are applied and verified in the consuming worker's workspace, without
+requiring a merge. Combine the relevant completed results in the verification
+workspace before running checks that depend on their interaction. A worker's
+terminal outcome establishes that assignment's result, not completion of the
+user's full objective; keep remaining integration, verification and unresolved
+work explicit.
+
 When a participant must start from the Lead's current uncommitted work, the
 Lead checkpoints that content first and forks each worker from the qualified
 checkpoint commit with `--base`. Follow

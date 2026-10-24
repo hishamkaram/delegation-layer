@@ -916,24 +916,41 @@ class DirectoryOwnershipTests(unittest.TestCase):
             owner = common.DirectoryOwner()
             raw = owner.create("raw process captures", root / "processes", root)
             child = raw.directory / "001-failing"
-            for failure in ("write", "open", "start"):
+            for failure in ("write", "open"):
                 with self.subTest(failure=failure):
                     if child.exists():
                         child.rmdir()
                     if failure == "write":
                         operation = patch.object(process_operations, "write_json",
                                                  side_effect=OSError("setup write"))
-                    elif failure == "open":
+                    else:
                         operation = patch.object(process_operations.Path, "open",
                                                  side_effect=OSError("setup open"))
-                    else:
-                        operation = patch.object(process_operations.subprocess, "Popen",
-                                                 side_effect=OSError("setup start"))
-                    with operation, self.assertRaises(OSError):
+                    with operation, patch.object(process_operations.subprocess, "Popen") as popen, \
+                            self.assertRaises(OSError):
                         common.Process(child, [sys.executable, "-c", "pass"], root, {}, raw)
+                    popen.assert_not_called()
                     self.assertFalse(child.exists())
                     self.assertTrue(raw.directory.is_dir())
             owner.rollback()
+
+    def test_uncertain_popen_failure_refuses_finalization_and_retains_capture(self):
+        with tempfile.TemporaryDirectory(prefix="acceptance-uncertain-start-") as directory:
+            output = Path(directory) / "evidence"
+            output.mkdir()
+            owner = common.DirectoryOwner()
+            raw = owner.create("raw process captures", output / "processes", output)
+            track_directory_pins(self, (raw,))
+            processes = common.Processes(raw.directory, {}, capture_root=raw)
+            # The fake raises from inside Popen and creates no child.
+            with patch.object(process_operations.subprocess, "Popen", side_effect=OSError("errpipe")), \
+                    self.assertRaisesRegex(OSError, "errpipe"):
+                processes.start("uncertain", [sys.executable, "-c", "pass"], Path(directory))
+            closed = not processes.drain(timeout=0) and processes.finished_naturally()
+            self.assertFalse(closed)
+            self.assertFalse(common.finalize_acceptance_artifacts(
+                output, closed, owner.transfer(), True, raw_process_captures_token=raw))
+            self.assertTrue((raw.directory / "001-uncertain" / "invocation.json").is_file())
 
     def test_agy_start_receipt_failure_leaves_registry_owned_child(self):
         with tempfile.TemporaryDirectory(prefix="acceptance-agy-start-") as directory:

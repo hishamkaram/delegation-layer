@@ -1,5 +1,13 @@
-"""Private CLI packaged defaults workflow."""
+"""Private CLI packaged defaults workflow.
 
+The installed-default core runs one finite fixture task through an installed
+delegate reached only by public defaults: dispatch, status, collect, the task's
+own managed lifetime closure and a verified daemon and endpoint shutdown. The
+adjacent-package scenario and the candidate install bootstrap probe both use it;
+their callers own every directory, the supervisor ledger and the capture root.
+"""
+
+from dataclasses import dataclass
 from scripts.delegate_acceptance.private_cli.errors import AcceptanceBlocked
 from scripts.delegate_acceptance.private_cli.configuration import COLLECT_TIMEOUT_SECONDS
 from scripts.delegate_acceptance.private_cli.configuration import COLLECT_WATCH
@@ -10,6 +18,7 @@ from scripts.delegate_acceptance.private_cli.fingerprints import file_fingerprin
 from scripts.delegate_acceptance.private_cli.installation import install_adjacent_package
 import json
 import platform
+from scripts.delegate_acceptance.private_cli.supervisor import await_managed_lifetime_closure
 from scripts.delegate_acceptance.private_cli.supervisor import private_shutdown_evidence
 from scripts.delegate_acceptance.private_cli.supervisor import pueue_snapshot
 from scripts.delegate_acceptance.private_cli.queue_policy import pueue_state
@@ -18,6 +27,68 @@ from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_
 from scripts.delegate_acceptance.supervisor.runner_layout import managed_state_runner
 import shutil
 import uuid
+
+
+INSTALLED_BINARIES = ("delegate", "delegate-run", "pueue", "pueued")
+
+
+@dataclass(frozen=True)
+class InstalledDefaults:
+    """One installation driven only through public defaults.
+
+    ``delegate`` is the installed entry the caller resolved and executes;
+    ``supervisor_directory`` holds the supervisor pair the installation ships;
+    ``digests`` are the expected (name, SHA-256) of the four installed binaries.
+    The isolated ``env`` HOME selects ``state``; ``workspace`` is the task cwd.
+    """
+
+    delegate: Path
+    supervisor_directory: Path
+    digests: tuple[tuple[str, str], ...]
+    env: dict[str, str]
+    state: Path
+    workspace: Path
+    brief: Path
+    response_directory: Path
+
+    @property
+    def config(self):
+        return self.state / ".supervisor" / "pueue.yml"
+
+    def digest(self, name):
+        return dict(self.digests)[name]
+
+
+@dataclass(frozen=True)
+class AdmittedTask:
+    """The one fixture task an installed default dispatch durably admitted."""
+
+    root_id: str
+    task_id: str
+    commands: dict[str, list[str]]
+    pair: Path
+
+
+@dataclass(frozen=True)
+class InstalledBootstrap:
+    """The committed and closed fixture turn of one installed default, by observed identity.
+
+    The digests are those of the executed delegate, the runner the task recorded and
+    the supervisor pair its state root selected; ``worker_result``,
+    ``termination_cause`` and ``scope_empty`` come from the task's own lifetime closure.
+    The core returns this only after the daemon exited and its endpoint closed.
+    """
+
+    root_id: str
+    task_id: str
+    delegate_sha256: str
+    runner_sha256: str
+    client_sha256: str
+    daemon_sha256: str
+    outcome: str
+    worker_result: str
+    termination_cause: str
+    scope_empty: bool
 
 
 def packaged_default_commands(brief, workspace, task_id):
@@ -52,6 +123,150 @@ def isolated_default_state_path(home):
     raise AcceptanceBlocked("unsupported-native-platform")
 
 
+def register_installed_default(installed, supervisor_cleanups, managed_state_roots=None):
+    """Refuse a non-fresh state root, then add its supervisor ledger entry before any dispatch."""
+    if installed.state.exists() or installed.config.exists():
+        raise RuntimeError("packaged default state was not fresh")
+    cleanup = {
+        "client": installed.supervisor_directory / "pueue",
+        "config": installed.config,
+        "env": installed.env,
+        "state": installed.state,
+        "task_ids": [],
+    }
+    supervisor_cleanups.append(cleanup)
+    if managed_state_roots is not None:
+        managed_state_roots.append((installed.state, cleanup["task_ids"]))
+    return cleanup
+
+
+def dispatch_installed_default(installed, cleanup, *, capture_root, run_receipt=None):
+    """Dispatch one task; require durable admission and the expected state-root supervisor pair."""
+    task_id = uuid.uuid4().hex
+    cleanup["task_ids"].append(task_id)
+    commands = packaged_default_commands(installed.brief, installed.workspace, task_id)
+    if run_receipt is not None:
+        run_receipt.phase("packaged_default_dispatch")
+    dispatched = run_json(
+        installed.delegate,
+        installed.env,
+        commands["dispatch"],
+        receipt=Path(installed.response_directory) / "packaged-dispatch.json",
+        phase="packaged-default-dispatch",
+        capture_root=capture_root,
+    )
+    if (
+        dispatched.get("task_id") != task_id
+        or dispatched.get("task_record") != "created"
+        or dispatched.get("admission") != "admitted"
+    ):
+        raise RuntimeError("packaged default dispatch was not durably admitted")
+    root_id = dispatched.get("root_id")
+    if not isinstance(root_id, str) or not root_id:
+        raise RuntimeError("packaged default dispatch did not report its root identity")
+    if not installed.config.is_file():
+        raise RuntimeError("packaged default dispatch did not create its private config")
+    pair = assert_state_supervisor_pair(installed.state, installed.supervisor_directory)
+    for name in ("pueue", "pueued"):
+        if file_fingerprint(pair / name).get("sha256") != installed.digest(name):
+            raise RuntimeError("packaged default state root selected an unexpected supervisor member " + name)
+    return AdmittedTask(root_id=root_id, task_id=task_id, commands=commands, pair=pair)
+
+
+def _require_task_identity(response, admitted, message):
+    if response.get("task_id") != admitted.task_id or response.get("root_id") != admitted.root_id:
+        raise RuntimeError(message)
+
+
+def require_task_closure(closure, admitted):
+    """Return the dispatched task's own closure; an empty or other-root closure proves nothing about it."""
+    tasks = closure.get("tasks") if closure.get("root_id") == admitted.root_id else None
+    task = tasks.get(admitted.task_id) if isinstance(tasks, dict) else None
+    if not isinstance(task, dict):
+        raise RuntimeError("managed lifetime closure does not include the dispatched task")
+    return task
+
+
+def collect_installed_default(installed, admitted, *, capture_root, run_receipt=None):
+    """Observe and collect the admitted task, check its runner, then await its own closure.
+
+    Returns the observed runner digest after the collected verdict was committed.
+    """
+    if run_receipt is not None:
+        run_receipt.phase("packaged_default_observation")
+    observed = run_json(
+        installed.delegate,
+        installed.env,
+        admitted.commands["status"],
+        receipt=Path(installed.response_directory) / "packaged-status.json",
+        phase="packaged-default-observation",
+        capture_root=capture_root,
+    )
+    _require_task_identity(observed, admitted, "packaged default status observed a different task")
+    collected = run_json(
+        installed.delegate,
+        installed.env,
+        admitted.commands["collect"],
+        timeout=COLLECT_TIMEOUT_SECONDS,
+        receipt=Path(installed.response_directory) / "packaged-collect.json",
+        phase="packaged-default-collection",
+        capture_root=capture_root,
+    )
+    outcome = collected.get("outcome", {})
+    if outcome.get("verdict") != "committed":
+        raise RuntimeError("packaged default collect did not publish success")
+    _require_task_identity(outcome, admitted, "packaged default collect published a different task")
+    meta = json.loads((installed.state / "tasks" / admitted.task_id / "meta.json").read_text())
+    runner_digest = installed.digest("delegate-run")
+    expected_runner = managed_state_runner(installed.state, runner_digest)
+    if meta.get("runner_executable") != str(expected_runner):
+        raise RuntimeError("packaged default dispatch did not resolve its adjacent runner")
+    if file_fingerprint(expected_runner).get("sha256") != runner_digest:
+        raise RuntimeError("packaged default managed runner changed identity")
+    require_task_closure(await_managed_lifetime_closure(installed.state, (admitted.task_id,)), admitted)
+    return runner_digest
+
+
+def shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, *, capture_root):
+    """Shut down through the selected pair, drop the ledger entry, and return the task's revalidated closure."""
+    closure = shutdown_private_supervisor(
+        admitted.pair / "pueue",
+        installed.config,
+        installed.env,
+        state=installed.state,
+        task_ids=(admitted.task_id,),
+        capture_root=capture_root,
+    )
+    supervisor_cleanups.remove(cleanup)
+    return require_task_closure(closure, admitted)
+
+
+def prove_installed_default_bootstrap(installed, *, supervisor_cleanups, capture_root):
+    """Run one finite fixture turn through ``installed`` and return its closed bootstrap facts.
+
+    The ledger entry is registered before dispatch and stays in ``supervisor_cleanups``
+    on any failure for the caller's cleanup; success removes it after verified shutdown.
+    """
+    cleanup = register_installed_default(installed, supervisor_cleanups)
+    admitted = dispatch_installed_default(installed, cleanup, capture_root=capture_root)
+    runner_digest = collect_installed_default(installed, admitted, capture_root=capture_root)
+    task = shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, capture_root=capture_root)
+    wait = task.get("worker_wait") or {}
+    termination = task.get("termination") or {}
+    return InstalledBootstrap(
+        root_id=admitted.root_id,
+        task_id=admitted.task_id,
+        delegate_sha256=file_fingerprint(installed.delegate).get("sha256", ""),
+        runner_sha256=runner_digest,
+        client_sha256=file_fingerprint(admitted.pair / "pueue").get("sha256", ""),
+        daemon_sha256=file_fingerprint(admitted.pair / "pueued").get("sha256", ""),
+        outcome="committed",
+        worker_result=wait.get("result", ""),
+        termination_cause=termination.get("cause", ""),
+        scope_empty=termination.get("scope_empty") is True,
+    )
+
+
 def verify_packaged_default_path(
     owner,
     base,
@@ -69,35 +284,33 @@ def verify_packaged_default_path(
     capture_root,
 ):
     """Prove an adjacent release bundle bootstraps through only public defaults."""
-    package, workspace, default_state, config, env, cleanup = prepare_packaged_default(
-        base, managed_state_roots, owner, provider_bin, run_receipt, sources, supervisor_cleanups
+    if run_receipt is not None:
+        run_receipt.phase("packaged_default_setup")
+    package, installed = prepare_packaged_default(
+        base=base, brief=brief, owner=owner, provider_bin=provider_bin,
+        response_directory=response_directory, sources=sources,
     )
-    task_id, commands, pair, primary_metrics = _prove_packaged_bootstrap(
-        brief=brief,
+    cleanup = register_installed_default(installed, supervisor_cleanups, managed_state_roots)
+    primary_pid, primary_endpoint, _ = private_shutdown_evidence(primary_config)
+    admitted = dispatch_installed_default(installed, cleanup, capture_root=capture_root, run_receipt=run_receipt)
+    packaged_pid, packaged_endpoint, _ = private_shutdown_evidence(installed.config)
+    if packaged_pid == primary_pid or packaged_endpoint == primary_endpoint:
+        raise RuntimeError("packaged default root did not own a distinct private daemon")
+    primary_metrics = {}
+    pueue_snapshot(
+        primary_client,
+        primary_config,
+        primary_env,
+        primary_metrics,
+        phase="packaged-coexistence-observation",
         capture_root=capture_root,
-        cleanup=cleanup,
-        config=config,
-        default_state=default_state,
-        env=env,
-        package=package,
-        primary_client=primary_client,
-        primary_config=primary_config,
-        primary_env=primary_env,
-        response_directory=response_directory,
-        run_receipt=run_receipt,
-        workspace=workspace,
     )
-    observe_packaged_task(
-        capture_root=capture_root, commands=commands, default_state=default_state, env=env, package=package,
-        response_directory=response_directory, run_receipt=run_receipt, sources=sources, task_id=task_id
-    )
+    _observe_packaged_queue(installed, admitted, capture_root=capture_root, run_receipt=run_receipt)
+    collect_installed_default(installed, admitted, capture_root=capture_root, run_receipt=run_receipt)
     if run_receipt is not None:
         run_receipt.increment("collected_task_count")
         run_receipt.phase("packaged_default_shutdown")
-    shutdown_private_supervisor(
-        pair / "pueue", config, env, state=default_state, task_ids=(task_id,), capture_root=capture_root
-    )
-    supervisor_cleanups.remove(cleanup)
+    shutdown_installed_default(installed, admitted, cleanup, supervisor_cleanups, capture_root=capture_root)
     pueue_snapshot(
         primary_client,
         primary_config,
@@ -111,61 +324,12 @@ def verify_packaged_default_path(
     return _packaged_default_evidence(package)
 
 
-def _prove_packaged_bootstrap(
-    *, brief,
-    capture_root,
-    cleanup,
-    config,
-    default_state,
-    env,
-    package,
-    primary_client,
-    primary_config,
-    primary_env,
-    response_directory,
-    run_receipt,
-    workspace,
-):
-    primary_pid, primary_endpoint, _ = private_shutdown_evidence(primary_config)
-    task_id = uuid.uuid4().hex
-    cleanup["task_ids"].append(task_id)
-    commands = packaged_default_commands(brief, workspace, task_id)
-    if run_receipt is not None:
-        run_receipt.phase("packaged_default_dispatch")
-    dispatched = run_json(
-        package / "delegate",
-        env,
-        commands["dispatch"],
-        receipt=Path(response_directory) / "packaged-dispatch.json",
-        phase="packaged-default-dispatch",
-        capture_root=capture_root,
-    )
-    if (
-        dispatched.get("task_id") != task_id
-        or dispatched.get("task_record") != "created"
-        or dispatched.get("admission") != "admitted"
-    ):
-        raise RuntimeError("packaged default dispatch was not durably admitted")
-    if not config.is_file():
-        raise RuntimeError("packaged default dispatch did not create its private config")
-    pair = assert_state_supervisor_pair(default_state, package)
-    packaged_pid, packaged_endpoint, _ = private_shutdown_evidence(config)
-    if packaged_pid == primary_pid or packaged_endpoint == primary_endpoint:
-        raise RuntimeError("packaged default root did not own a distinct private daemon")
-    primary_metrics = {}
-    pueue_snapshot(
-        primary_client,
-        primary_config,
-        primary_env,
-        primary_metrics,
-        phase="packaged-coexistence-observation",
-        capture_root=capture_root,
-    )
+def _observe_packaged_queue(installed, admitted, *, capture_root, run_receipt):
     packaged_metrics = {}
     packaged_snapshot = pueue_snapshot(
-        pair / "pueue",
-        config,
-        env,
+        admitted.pair / "pueue",
+        installed.config,
+        installed.env,
         packaged_metrics,
         phase="packaged-coexistence-observation",
         capture_root=capture_root,
@@ -177,7 +341,6 @@ def _prove_packaged_bootstrap(
             running_count=sum(1 for row in packaged_rows.values() if pueue_state(row) == "Running"),
             status_bytes=packaged_metrics.get("status_bytes"),
         )
-    return task_id, commands, pair, primary_metrics
 
 
 def _packaged_default_evidence(package):
@@ -206,54 +369,22 @@ def _packaged_default_evidence(package):
     }
 
 
-def prepare_packaged_default(base, managed_state_roots, owner, provider_bin, run_receipt, sources, supervisor_cleanups):
-    if run_receipt is not None:
-        run_receipt.phase("packaged_default_setup")
+def prepare_packaged_default(*, base, brief, owner, provider_bin, response_directory, sources):
+    """Copy the adjacent package and create its isolated HOME and workspace; PATH holds no pueue."""
     package = install_adjacent_package(owner, sources, base / "packaged-default")
     private_home = owner.create("packaged default home", base / "h", base).directory
     workspace = owner.create("packaged default workspace", base / "packaged-workspace", base).directory
-    default_state = isolated_default_state_path(private_home)
-    config = default_state / ".supervisor" / "pueue.yml"
     env = {"HOME": str(private_home), "PATH": str(provider_bin), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
     if shutil.which("pueue", path=env["PATH"]) is not None:
         raise RuntimeError("packaged default PATH unexpectedly contains pueue")
-    if default_state.exists() or config.exists():
-        raise RuntimeError("packaged default state was not fresh")
-    cleanup = {"client": package / "pueue", "config": config, "env": env, "state": default_state, "task_ids": []}
-    supervisor_cleanups.append(cleanup)
-    if managed_state_roots is not None:
-        managed_state_roots.append((default_state, cleanup["task_ids"]))
-    return package, workspace, default_state, config, env, cleanup
-
-
-def observe_packaged_task(
-    *, capture_root, commands, default_state, env, package, response_directory, run_receipt, sources, task_id
-):
-    if run_receipt is not None:
-        run_receipt.phase("packaged_default_observation")
-    observed = run_json(
-        package / "delegate",
-        env,
-        commands["status"],
-        receipt=Path(response_directory) / "packaged-status.json",
-        phase="packaged-default-observation",
-        capture_root=capture_root,
+    installed = InstalledDefaults(
+        delegate=package / "delegate",
+        supervisor_directory=package,
+        digests=tuple((name, file_fingerprint(sources[name]).get("sha256", "")) for name in INSTALLED_BINARIES),
+        env=env,
+        state=isolated_default_state_path(private_home),
+        workspace=workspace,
+        brief=brief,
+        response_directory=Path(response_directory),
     )
-    if observed.get("task_id") != task_id:
-        raise RuntimeError("packaged default status observed a different task")
-    collected = run_json(
-        package / "delegate",
-        env,
-        commands["collect"],
-        timeout=COLLECT_TIMEOUT_SECONDS,
-        receipt=Path(response_directory) / "packaged-collect.json",
-        phase="packaged-default-collection",
-        capture_root=capture_root,
-    )
-    if collected.get("outcome", {}).get("verdict") != "committed":
-        raise RuntimeError("packaged default collect did not publish success")
-    meta = json.loads((default_state / "tasks" / task_id / "meta.json").read_text())
-    runner_digest = file_fingerprint(sources["delegate-run"])["sha256"]
-    expected_runner = str(managed_state_runner(default_state, runner_digest))
-    if meta.get("runner_executable") != expected_runner:
-        raise RuntimeError("packaged default dispatch did not resolve its adjacent runner")
+    return package, installed

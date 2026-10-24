@@ -47,14 +47,35 @@
     ]
   },
   {
+    "name": "py:acceptance_tests.evidence.test_bounded_command_stderr",
+    "owner": "py:delegate_acceptance.evidence",
+    "layer": "test",
+    "imports": [
+      "py:acceptance_tests.release_fixture",
+      "py:delegate_acceptance.processes.contracts",
+      "py:delegate_acceptance.processes.operations",
+      "py:io",
+      "py:os",
+      "py:selectors",
+      "py:subprocess",
+      "py:sys",
+      "py:unittest",
+      "py:unittest.mock"
+    ]
+  },
+  {
     "name": "py:acceptance_tests.evidence.test_bounded_files",
     "owner": "py:delegate_acceptance.evidence",
     "layer": "test",
     "imports": [
+      "py:acceptance_tests.release_fixture",
+      "py:contextlib",
       "py:delegate_acceptance.evidence.bounded_files",
+      "py:hashlib",
       "py:os",
       "py:pathlib",
       "py:tempfile",
+      "py:tracemalloc",
       "py:unittest",
       "py:unittest.mock"
     ]

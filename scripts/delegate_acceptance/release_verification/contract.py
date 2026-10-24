@@ -36,6 +36,37 @@ MAX_TREE_ENTRIES = 4096
 BINARIES = ("delegate", "delegate-run", "pueue", "pueued")
 
 
+HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True)
+class BinaryDigests:
+    """The SHA-256 of each bundled binary, one field per name in ``BINARIES``."""
+
+    delegate: str
+    delegate_run: str
+    pueue: str
+    pueued: str
+
+    def __post_init__(self) -> None:
+        if not all(isinstance(value, str) and HEX_SHA256.fullmatch(value) is not None
+                   for value in self.as_mapping().values()):
+            raise VerificationError("binary_digests_invalid", "validate-binaries")
+
+    def as_mapping(self) -> dict[str, str]:
+        return dict(zip(BINARIES, (self.delegate, self.delegate_run, self.pueue, self.pueued)))
+
+
+def parse_binary_digests(value: object, stage: str) -> BinaryDigests:
+    """Read the exact binary-name to digest object; no name may be missing or extra."""
+    if not isinstance(value, dict) or set(value) != set(BINARIES):
+        raise VerificationError("binary_digests_invalid", stage)
+    try:
+        return BinaryDigests(*(value[name] for name in BINARIES))
+    except VerificationError:
+        raise VerificationError("binary_digests_invalid", stage) from None
+
+
 TAG_RE = re.compile(r"^v([0-9]+\.[0-9]+\.[0-9]+)$")
 
 
@@ -43,6 +74,10 @@ CHECKSUM_RE = re.compile(r"^([0-9a-fA-F]{64})  ([^/\\\r\n]+)$")
 
 
 REVISION_RE = re.compile(r"^[0-9a-f]{40,64}$")
+
+
+# A fresh install leaves no default state behind: (before, observed, after).
+EXPECTED_DEFAULT_STATE = ("absent", "not_initialized", "absent")
 
 
 SOURCE_FILES = {

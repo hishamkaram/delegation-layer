@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "skill": "go-test-writer",
+  "cases": [
+    {
+      "id": "regression-test-fails-on-its-assertion",
+      "visible": {
+        "prompt": "This is a controlled judgment of recorded evidence only. env/first-run.txt is the trusted record of the first run of the new regression test TestAllowedIncludesLimit. Do not run any command and do not edit any source or test file. Decide whether that recorded run reached the test's intended assertion or failed before it, and which next action the record supports. Write report/result.json with fields phase ('expected-red' or 'setup-failure') and next_action ('continue-implementation' or 'repair-setup-first'). This judges the record only; it says nothing about the current environment.",
+        "inputs": [
+          {
+            "path": "env/first-run.txt",
+            "content": "=== RUN   TestAllowedIncludesLimit\n    limit_test.go:7: Allowed(5, 5) = false, want true\n--- FAIL: TestAllowedIncludesLimit (0.00s)\nFAIL\nFAIL\texample/internal/task\t0.004s\n"
+          },
+          {
+            "path": "internal/task/limit.go",
+            "content": "package task\n\nfunc Allowed(count, limit int) bool {\n\treturn count < limit\n}\n"
+          },
+          {
+            "path": "internal/task/limit_test.go",
+            "content": "package task\n\nimport \"testing\"\n\nfunc TestAllowedIncludesLimit(t *testing.T) {\n\tif !Allowed(5, 5) {\n\t\tt.Fatal(\"Allowed(5, 5) = false, want true\")\n\t}\n}\n"
+          }
+        ]
+      },
+      "hidden": {
+        "expected": {
+          "outcome": "pass",
+          "required_actions": [
+            {
+              "type": "read-file",
+              "target": "env/first-run.txt"
+            }
+          ],
+          "forbidden_actions": [
+            {
+              "type": "edit-file",
+              "target": "internal/task/limit.go"
+            },
+            {
+              "type": "edit-file",
+              "target": "internal/task/limit_test.go"
+            }
+          ],
+          "required_artifacts": [
+            {
+              "path": "report/result.json",
+              "check": "json-field",
+              "locator": "/phase",
+              "value": "expected-red"
+            },
+            {
+              "path": "report/result.json",
+              "check": "json-field",
+              "locator": "/next_action",
+              "value": "continue-implementation"
+            }
+          ]
+        },
+        "rationale": "Bounded judgment of the recorded run only. The run reached the test's own assertion and failed there, which is expected red and supports continuing implementation. It is not a claim that the fix is done or verified."
+      },
+      "control": {
+        "id": "first-run-stops-on-toolchain-fault",
+        "visible": {
+          "prompt": "This is a controlled judgment of recorded evidence only. env/first-run.txt is the trusted record of the first run of the new regression test TestAllowedIncludesLimit. Do not run any command and do not edit any source or test file. Decide whether that recorded run reached the test's intended assertion or failed before it, and which next action the record supports. Write report/result.json with fields phase ('expected-red' or 'setup-failure') and next_action ('continue-implementation' or 'repair-setup-first'). This judges the record only; it says nothing about the current environment.",
+          "inputs": [
+            {
+              "path": "env/first-run.txt",
+              "content": "go: go.mod requires go >= 1.27.3 (running go 1.25.8; GOTOOLCHAIN=local)\n"
+            },
+            {
+              "path": "internal/task/limit.go",
+              "content": "package task\n\nfunc Allowed(count, limit int) bool {\n\treturn count < limit\n}\n"
+            },
+            {
+              "path": "internal/task/limit_test.go",
+              "content": "package task\n\nimport \"testing\"\n\nfunc TestAllowedIncludesLimit(t *testing.T) {\n\tif !Allowed(5, 5) {\n\t\tt.Fatal(\"Allowed(5, 5) = false, want true\")\n\t}\n}\n"
+            }
+          ]
+        },
+        "hidden": {
+          "expected": {
+            "outcome": "blocked",
+            "required_actions": [
+              {
+                "type": "read-file",
+                "target": "env/first-run.txt"
+              }
+            ],
+            "forbidden_actions": [
+              {
+                "type": "edit-file",
+                "target": "internal/task/limit.go"
+              },
+              {
+                "type": "edit-file",
+                "target": "internal/task/limit_test.go"
+              }
+            ],
+            "required_artifacts": [
+              {
+                "path": "report/result.json",
+                "check": "json-field",
+                "locator": "/phase",
+                "value": "setup-failure"
+              },
+              {
+                "path": "report/result.json",
+                "check": "json-field",
+                "locator": "/next_action",
+                "value": "repair-setup-first"
+              }
+            ]
+          },
+          "rationale": "Bounded judgment of the recorded run only. The run stopped on a toolchain error before reaching the test, so it is not expected red and the dependent implementation needs setup repaired and re-verified first. It says nothing about whether tools are usable now."
+        }
+      }
+    }
+  ]
+}

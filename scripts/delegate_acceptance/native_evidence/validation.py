@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from ..directories.journal import cleanup_journal_digest
 from ..directories.journal import read_directory_cleanup
+from .block_reason import compact_block_reason
 from .contract import _validate_aggregate_result, _validate_aggregate_evidence, _validate_case_fields, _validate_case_proof_identity, _validate_case_sessions, _validate_case_binaries, _validate_case_completion, AGGREGATE_KIND, CASE_ROOT_NAME, COMPACT_RECEIPT_ROOT_NAME, EXPECTED_CASES, EvidenceError, HEX_DIGEST, MAX_AGGREGATE_BYTES, MAX_RECEIPT_BYTES, MAX_RETENTION_COUNT, RETENTION_CLEANUP_ROOT_NAME, SCHEMA_VERSION, _case_cleanup_authorization, _digest_bytes, _empty_summary, _validate_summary
 from .contract import _case_cleanup_journal_present, _validate_case_retention
 from .filesystem import (
@@ -33,6 +34,7 @@ def _validate_case_receipt(root: Path, case: dict[str, object]) -> None:
             raise EvidenceError("aggregate_case_receipt_mismatch")
     if value.get("evidence_status") != case["evidence_status"]:
         raise EvidenceError("aggregate_case_receipt_mismatch")
+    compact_block_reason(value)
     proof = _validate_case_proof_identity(case, value)
     sessions = _validate_case_sessions(proof)
     binaries = _validate_case_binaries(case, proof)
@@ -190,7 +192,8 @@ def validate_aggregate_receipt(
         expected_tag: str | None = None,
         expected_source_revision: str | None = None) -> tuple[dict[str, object], str]:
     value, data = _read_json(path, MAX_AGGREGATE_BYTES)
-    if not isinstance(value, dict) or value.get("schema_version") != SCHEMA_VERSION:
+    if (not isinstance(value, dict) or type(value.get("schema_version")) is not int
+            or value["schema_version"] != SCHEMA_VERSION):
         raise EvidenceError("aggregate_receipt_invalid")
     if value.get("kind") != AGGREGATE_KIND or value.get("claim") != "native-acceptance-case-results":
         raise EvidenceError("aggregate_receipt_claim_invalid")

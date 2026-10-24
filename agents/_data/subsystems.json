@@ -26,7 +26,21 @@
     "agents/_data/subsystems/python-tests-2.json",
     "agents/_data/subsystems/python-tests-3.json",
     "agents/_data/subsystems/python-native-release-2.json",
-    "agents/_data/subsystems/python-tests-4.json"
+    "agents/_data/subsystems/python-tests-4.json",
+    "agents/_data/subsystems/python-development-readiness.json",
+    "agents/_data/subsystems/python-development-readiness-tests.json",
+    "agents/_data/subsystems/python-development-build.json",
+    "agents/_data/subsystems/python-development-build-tests.json",
+    "agents/_data/subsystems/python-development-install.json",
+    "agents/_data/subsystems/python-development-install-tests.json",
+    "agents/_data/subsystems/python-development-store.json",
+    "agents/_data/subsystems/python-native-candidate-proof.json",
+    "agents/_data/subsystems/python-block-reasons-1.json",
+    "agents/_data/subsystems/python-development-artifact.json",
+    "agents/_data/subsystems/python-development-delivery.json",
+    "agents/_data/subsystems/python-development-source.json",
+    "agents/_data/subsystems/python-native-request-intents.json",
+    "agents/_data/subsystems/python-publication-protocol.json"
   ],
   "migration": "agents/_data/maintainability-migration.jsonl",
   "generated": [

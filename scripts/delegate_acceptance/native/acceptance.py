@@ -32,7 +32,7 @@ from scripts.delegate_acceptance.inspections.binding import (
     INSPECTION_GROUP_PREFIX as INSPECTION_GROUP_PREFIX,
 )
 from scripts.delegate_acceptance.native.bindings import ProviderRuntimeBindings
-from scripts.delegate_acceptance.native.errors import BlockedFailure
+from scripts.delegate_acceptance.native.errors import BlockedFailure, BlockReason
 from scripts.delegate_acceptance.native.interactions import InteractionObserver
 from scripts.delegate_acceptance.native.production_acp import ProductionAcpEvidence
 from scripts.delegate_acceptance.native.model_discovery import ModelDiscoveryState
@@ -122,6 +122,18 @@ from scripts.delegate_acceptance.tasks.operations import (
 TIMEOUT_RESUME_PROVIDERS = frozenset({"codex:exec", "opencode:run"})
 
 
+def _resolve_provider_executable(args: argparse.Namespace, profile: dict[str, object],
+                                 environment: dict[str, str]) -> Path:
+    """Resolve the provider CLI; its absence is the one typed executable block."""
+    discovered = shutil.which(profile["executable"], path=environment.get("PATH"))
+    try:
+        return resolve_executable(
+            args.provider_executable, Path(discovered or profile["executable"]), profile["executable"])
+    except BlockedFailure as error:
+        # resolve_executable blocks only on an absent or non-executable file.
+        raise BlockedFailure(str(error), reason=BlockReason.EXECUTABLE_UNAVAILABLE) from error
+
+
 class NativeAcceptance:
     def __init__(self, args: argparse.Namespace, *, managed_runner: bool = True):
         if args.provider not in PROFILES:
@@ -165,9 +177,7 @@ class NativeAcceptance:
         self.pueue = resolve_executable(args.pueue, Path(shutil.which("pueue", path=self.environment.get("PATH")) or "pueue"), "pueue")
         require_discovery("pueue", self.pueue, self.environment)
         self.pueued = resolve_executable(args.pueued, Path(shutil.which("pueued", path=self.environment.get("PATH")) or "pueued"), "pueued")
-        discovered_provider = shutil.which(profile["executable"], path=self.environment.get("PATH"))
-        self.provider_executable = resolve_executable(
-            args.provider_executable, Path(discovered_provider or profile["executable"]), profile["executable"])
+        self.provider_executable = _resolve_provider_executable(args, profile, self.environment)
         require_discovery(profile["executable"], self.provider_executable, self.environment)
         self.git: Path | None = None
         if self.provider in {"codex:exec", "codex:review"}:
