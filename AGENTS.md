@@ -40,11 +40,25 @@ ALWAYS prefer MCP graph tools over grep/glob/file-search for code discovery.
 
 ## Golden engineering rules
 
-Maintainability and clear state ownership are acceptance conditions for every
+Maintainability and clear state ownership are acceptance conditions for every repository
 change. Delivery speed does not waive them. The shared
 [maintainability contract](agents/_data/maintainability-contract.md) owns the
 detailed rules; the [subsystem registry](agents/_data/subsystems.json) owns
 machine-checked boundaries and budgets.
+
+Do the simplest work that reaches the requested outcome. For a routine
+operation that only changes local state, such as removing worktrees, branches,
+or workspaces, inspect the requested scope and a bounded inventory of where the
+project creates those resources; ask only when a material destructive ambiguity
+remains or unique work lacks deletion authorization. Use each resource’s
+supported command. Preserve unique work and data, including ignored files, that
+Git, a remote, or a rebuild cannot verifiably restore. One controller owns each
+overlapping resource set and may parallelize independent targets; to replace
+it, stop it and have the successor observe its accepted pending operations
+without reissuing them. Add tooling or evidence only for an observed
+correctness or safety blocker or a missing operation. Claim only the end state
+you verified. Repository changes, including maintained tests, fixtures,
+tooling, CI, and behavior-bearing rules or docs, keep every applicable gate.
 
 1. Name the authoritative owner, writers, readers, and invariant before changing
    state, a journal, a lease, a cache, or an interface.
@@ -184,7 +198,7 @@ and the [live acceptance proof](agents/_data/maintainability-contract.md#live-ac
 Every handoff follows the contract's [source, binary, receipt, and unresolved
 evidence requirements](agents/_data/maintainability-contract.md#handoff-evidence).
 
-For changes involving process identity, signals, sessions/groups, waiting,
+For repository changes involving process identity, signals, sessions/groups, waiting,
 supervisor endpoints, descriptors, or cleanup, apply the maintainability
 contract's native portability proof. Cross-compilation and upstream
 cross-platform support are not native runtime evidence. Root may claim Linux or
