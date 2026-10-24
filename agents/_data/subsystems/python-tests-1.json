@@ -534,6 +534,7 @@
     "imports": [
       "py:acceptance_provider_common",
       "py:acceptance_skill_routing",
+      "py:acceptance_tests.resources",
       "py:contextlib",
       "py:io",
       "py:json",

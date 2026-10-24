@@ -125,6 +125,32 @@ def lifetime_closure_error(
     return _root_error(discovery, task_ids=frozenset(), budget_ids=frozenset(), inspection_count=1)
 
 
+def resource_closure_error(proof: object, *, task_ids: Iterable[object],
+                           discovery_inspection_id: object | None) -> str | None:
+    """Return why a compact closure cannot prove one case's owned resources closed, or None.
+
+    This is not a PASS rule and leaves the case verdict unchanged: any of the
+    exact known ordinary ``task_ids`` may have closed by its own budget.
+    ``discovery_inspection_id`` is the case's one model discovery inspection,
+    or None when the case admitted no discovery. Every other guard is the
+    canonical ``lifetime_closure_error``. Requested, recovered or
+    previous-boot terminations and budget-terminated inspections stay
+    unproven.
+    """
+    expected = tuple(task_ids)
+    if discovery_inspection_id is not None and not _identity(discovery_inspection_id):
+        return "lifetime_closure_identity_invalid"
+    error = lifetime_closure_error(proof, task_ids=expected, budget_task_ids=expected,
+                                   model_discovery_required=discovery_inspection_id is not None)
+    if error is not None or discovery_inspection_id is None:
+        return error
+    discovery = proof.get("model_discovery") if isinstance(proof, dict) else None
+    inspections = discovery.get("inspections") if isinstance(discovery, dict) else None
+    if not isinstance(inspections, dict) or set(inspections) != {discovery_inspection_id}:
+        return "lifetime_closure_incomplete"
+    return None
+
+
 def case_lifetime_closed(*, status: object, cleanup_method: object, proof_state: object,
                          lifecycle_state: object, supervisor_shutdown_observed: object) -> bool:
     """Return whether one compact case's owned lifetime is positively closed.

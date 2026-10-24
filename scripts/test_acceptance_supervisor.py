@@ -146,12 +146,46 @@ class SupervisorDiagnosticsTests(unittest.TestCase):
             root = Path(temporary)
             processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
             track_directory_pins(self, (processes.capture_root,))
-            with patch.object(process_operations.subprocess, "Popen",
-                              side_effect=OSError("injected spawn failure")):
-                with self.assertRaisesRegex(OSError, "spawn failure"):
+            with patch.object(process_operations, "write_json",
+                              side_effect=OSError("injected setup failure")), \
+                    patch.object(process_operations.subprocess, "Popen") as popen:
+                with self.assertRaisesRegex(OSError, "setup failure"):
                     processes.start("failed", ["/bin/sh"], root)
+            popen.assert_not_called()
             self.assertEqual(processes.entries, [])
             self.assertEqual(list(processes.directory.iterdir()), [])
+
+    def test_uncertain_popen_failure_fails_case_finish_and_retains_descriptor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            processes = supervisor_common.Processes(root / "processes", {"PATH": "/usr/bin"})
+            track_directory_pins(self, (processes.capture_root,))
+            # The fake raises from inside Popen and creates no child.
+            with patch.object(process_operations.subprocess, "Popen",
+                              side_effect=OSError("injected errpipe failure")):
+                with self.assertRaisesRegex(OSError, "errpipe failure"):
+                    processes.start("uncertain", ["/bin/sh"], root)
+            capture = processes.directory / "001-uncertain"
+            self.assertTrue((capture / "invocation.json").is_file())
+            descriptor = {"pid": None, "argv": ["/bin/sh"], "directory": str(capture)}
+            case = object.__new__(Case)
+            case.base = root / "private-base"
+            case.base.mkdir()
+            case.case_id = "uncertain-start"
+            case.suite = SimpleNamespace(output=root / "evidence")
+            case.processes = processes
+            destination = case.suite.output / "cases" / case.case_id
+            with patch.object(hermetic_case, "rollback_owned_directories") as rollback, \
+                    self.assertRaisesRegex(hermetic_case.HarnessFailure, "remained active"):
+                case.finish()
+            rollback.assert_not_called()
+            self.assertFalse((destination / "receipt.json").exists())
+            case.retain_failure(RuntimeError("injected failure"))
+            failure = json.loads((destination / "failure.json").read_text())
+            self.assertEqual(failure["unresolved_owned_processes"], [descriptor])
+            self.assertEqual(sorted(path.name for path in capture.iterdir()),
+                             ["invocation.json", "stderr", "stdout"])
+            self.assertFalse(processes.finished_naturally())
 
     def test_process_constructor_collision_keeps_preexisting_capture(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -9,7 +9,7 @@ import unittest
 from scripts.acceptance_tests import candidate_fixtures as fx
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.native_evidence.public_contract import (
-    CASE_IDS, CaseOutcome, NativeCompletion, ValidatedCandidateProof,
+    CASE_IDS, CaseClosureAnchor, CaseOutcome, NativeCompletion, ValidatedCandidateProof,
 )
 from scripts.delegate_acceptance.release_verification.candidate_attempts import (
     BlockReason, CellStatus, Closure, candidate_proof_expectation, claim_sha256, encode_claim, parse_claim,
@@ -133,7 +133,11 @@ class ProofMappingTests(unittest.TestCase):
             status="PASS", case_results_verdict="PASS",
             cases=tuple(CaseOutcome(case_id, "BLOCKED", reason) if case_id == blocked
                         else CaseOutcome(case_id, "PASS", None) for case_id in CASE_IDS),
-            unresolved_case_ids=unresolved)
+            unresolved_case_ids=unresolved,
+            closure_anchors=tuple(CaseClosureAnchor(
+                case_id=case_id, source_compact_sha256="6" * 64, source_receipt_sha256=None,
+                cleanup_receipt_sha256=None, failure_diagnostics_sha256=None, task_ids=(), task_session_bindings=(),
+                diagnostic_task_ids=()) for case_id in unresolved))
 
     def test_expectation_comes_from_the_manifest_locator_and_claim(self):
         facts = self.expectation()

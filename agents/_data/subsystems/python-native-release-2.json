@@ -228,6 +228,7 @@
     "layer": "application",
     "imports": [
       "py:__future__",
+      "py:dataclasses",
       "py:delegate_acceptance.directories.journal",
       "py:delegate_acceptance.directories.operations",
       "py:delegate_acceptance.evidence.bounded_files",
@@ -245,6 +246,52 @@
       "py:os",
       "py:pathlib",
       "py:sys"
+    ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_release.closure_observation",
+    "owner": "py:delegate_acceptance.native_release",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:delegate_acceptance.evidence.bounded_files",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.evidence.validation",
+      "py:delegate_acceptance.native.acceptance_lifecycle",
+      "py:delegate_acceptance.native_evidence.candidate_proof",
+      "py:delegate_acceptance.native_evidence.lifetime_closure",
+      "py:delegate_acceptance.native_evidence.public_contract",
+      "py:delegate_acceptance.native_release.candidate",
+      "py:delegate_acceptance.native_release.contract",
+      "py:delegate_acceptance.native_release.execution",
+      "py:delegate_acceptance.native_release.storage",
+      "py:delegate_acceptance.release_verification.candidate_proof_closure",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:hashlib",
+      "py:json",
+      "py:pathlib",
+      "py:sys"
+    ]
+  },
+  {
+    "name": "py:test_native_closure_observation",
+    "owner": "py:test_native_closure_observation",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:contextlib",
+      "py:delegate_acceptance.native_evidence.lifetime_closure",
+      "py:delegate_acceptance.native_evidence.public_contract",
+      "py:delegate_acceptance.native_release.closure_observation",
+      "py:delegate_acceptance.native_release.contract",
+      "py:hashlib",
+      "py:io",
+      "py:json",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:unittest"
     ]
   },
   {

@@ -27,6 +27,11 @@ class DirectoryPinOwner(DirectoryOwner):
         super().__init__()
         self._test_case = test_case
 
+    def create(self, label, directory, parent, mode=0o700, parents=False) -> OwnedDirectory:
+        entry = super().create(label, directory, parent, mode=mode, parents=parents)
+        track_directory_pins(self._test_case, (entry,))
+        return entry
+
     def adopt_created(self, label, directory, parent) -> OwnedDirectory:
         entry = super().adopt_created(label, directory, parent)
         track_directory_pins(self._test_case, (entry,))

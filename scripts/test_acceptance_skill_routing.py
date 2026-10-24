@@ -10,6 +10,7 @@ from unittest.mock import patch, Mock
 
 import acceptance_skill_routing as gate
 import acceptance_provider_common as provider_common
+from scripts.acceptance_tests.resources import DirectoryPinOwner
 
 
 class RoutingTests(unittest.TestCase):
@@ -437,13 +438,14 @@ class RoutingTests(unittest.TestCase):
 
     def test_recoverable_synthetic_fixture_binds_one_dispatch_and_one_recheck(self):
         scenario = "recoverable-rejection"
-        normal = lambda command: Mock(
-            returncode=2,
-            stdout=json.dumps({"command": command, "failure": {
-                "code": "provider_preparation_failed",
-                "stage": "prepare-provider",
-                "next_action": "stop_and_report"}}),
-            stderr="")
+        def normal(command):
+            return Mock(
+                returncode=2,
+                stdout=json.dumps({"command": command, "failure": {
+                    "code": "provider_preparation_failed",
+                    "stage": "prepare-provider",
+                    "next_action": "stop_and_report"}}),
+                stderr="")
         code, dispatch, stderr, _ = self.synthetic_fixture(
             scenario, self.synthetic_dispatch_argv(), normal("dispatch"))
         self.assertEqual(code, 0)
@@ -497,7 +499,8 @@ class RoutingTests(unittest.TestCase):
 
     def test_still_rejected_synthetic_fixture_uses_rejection_exit_and_no_answer(self):
         scenario = "still-rejected-recheck"
-        normal = lambda command: Mock(returncode=2, stdout=json.dumps({"command": command}), stderr="")
+        def normal(command):
+            return Mock(returncode=2, stdout=json.dumps({"command": command}), stderr="")
         self.synthetic_fixture(scenario, self.synthetic_dispatch_argv(), normal("dispatch"))
         task_id = self.synthetic_task_id()
         self.synthetic_fixture(scenario, self.synthetic_task_argv("collect", task_id), normal("collect"))
@@ -531,7 +534,8 @@ class RoutingTests(unittest.TestCase):
 
     def test_synthetic_fixture_rejects_a_different_root_or_task(self):
         scenario = "recoverable-rejection"
-        normal = lambda command: Mock(returncode=2, stdout=json.dumps({"command": command}), stderr="")
+        def normal(command):
+            return Mock(returncode=2, stdout=json.dumps({"command": command}), stderr="")
         self.synthetic_fixture(scenario, self.synthetic_dispatch_argv(), normal("dispatch"))
         task_id = self.synthetic_task_id()
         different_root = self.root / "different-state"
@@ -670,6 +674,37 @@ class RoutingTests(unittest.TestCase):
         self.assertNotIn(("shutdown",), [call.args for call in owner.control.call_args_list])
         self.assertTrue(state.exists())
         self.assertTrue((owner.run / "nested-lifetime-closure.json").is_file())
+
+    def test_uncertain_daemon_start_keeps_attempt_unclosed_and_state_retained(self):
+        tool = self.root / "bin" / "tool"
+        tool.parent.mkdir()
+        tool.write_bytes(b"recorded executable; the fake Popen never runs it\n")
+        queue = self.root / "queue"
+        queue.mkdir()
+        run = self.root / "run"
+        run.mkdir()
+        ownership = DirectoryPinOwner(self)
+        with patch.object(gate.tempfile, "mkdtemp", return_value=str(queue)), \
+                patch.object(gate.shutil, "which", return_value=str(tool)):
+            owner = gate.AttemptSupervisor(run, {}, ownership)
+        # The fake raises from inside Popen and creates no child.
+        with patch("subprocess.Popen", side_effect=OSError("errpipe read failed")), \
+                self.assertRaisesRegex(OSError, "errpipe read failed"):
+            owner.start()
+        capture = run / "processes" / "001-daemon"
+        self.assertTrue((capture / "invocation.json").is_file())
+        receipt = {"status": "unreviewed"}
+        gate._finalize_routing_attempt(run, owner, ownership, receipt)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["reason"], "supervisor_cleanup_unproven")
+        self.assertEqual(gate.read_json(run / "receipt.json"), receipt)
+        self.assertFalse(gate.read_json(run / "cleanup.json")["supervisor_shutdown_observed"])
+        self.assertEqual(owner.processes.pending(), [{
+            "pid": None, "argv": [str(tool), "-c", str(owner.config)], "directory": str(capture)}])
+        self.assertEqual(sorted(path.name for path in capture.iterdir()),
+                         ["invocation.json", "stderr", "stdout"])
+        self.assertTrue((queue / "state").is_dir() and owner.config.is_file())
+        self.assertFalse((run / "nested-lifetime-closure.json").exists())
 
     def test_unobserved_control_retains_ownership(self):
         owner = object.__new__(gate.AttemptSupervisor)

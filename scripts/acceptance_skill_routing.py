@@ -202,6 +202,10 @@ class AttemptSupervisor:
         for process in self.processes.entries:
             if process is not self.daemon and process.poll() is None:
                 process.wait(1)  # An unobservable control retains ownership; stop the suite.
+        # The registry also owns starts whose launch is uncertain; closure needs its verdict.
+        excluded = () if self.daemon is None else (self.daemon,)
+        if not self.processes.finished_naturally(exclude=excluded):
+            raise RuntimeError("owned process closure not observed; ownership retained")
         if self.daemon is None:
             self.authorize_nested_lifetime_closure()
             return

@@ -12,7 +12,7 @@ candidate public case format, which carries the typed block reason. Every case
 passes the shared case predicates; nothing falls back to BLOCKED, so any
 invalid shape, binding, reason or predicate refuses. A case whose evidence or
 owned lifetime closure stayed unproven is reported unresolved, never closed by
-default.
+default; its anchor carries the validated facts a later closure must match.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from .public_contract import (
     PUBLIC_MEMBER_NAMES,
     PUBLIC_SCHEMA_VERSION,
     CandidateProofExpectation,
+    CaseClosureAnchor,
     CaseOutcome,
     NativeCompletion,
     PublicProofError,
@@ -190,9 +191,38 @@ def _case_closed(case: dict[str, object]) -> bool:
         supervisor_shutdown_observed=lifecycle.get("supervisor_shutdown_observed"))
 
 
-def _validated_cases(entries: dict[str, bytes], source: dict[str, object],
-                     expectation: CandidateProofExpectation,
-                     aggregate: dict[str, object]) -> tuple[tuple[CaseOutcome, ...], tuple[str, ...]]:
+def _optional_digest(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def _identities(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise PublicProofError("public_case_proof_invalid")
+    return tuple(str(item) for item in value)
+
+
+def _closure_anchor(case: dict[str, object]) -> CaseClosureAnchor:
+    """The already validated digests and identities that a later closure of ``case`` must match."""
+    proof = _record(case.get("source_proof"), "public_case_proof_invalid")
+    lifecycle = _record(proof.get("lifecycle_proof"), "public_case_lifecycle_invalid")
+    observation = _record(_record(case.get("cleanup"), "public_cleanup_invalid").get("observation"),
+                          "public_cleanup_observation_invalid")
+    bindings = proof.get("task_session_bindings")
+    if not isinstance(bindings, list) or not all(isinstance(item, dict) for item in bindings):
+        raise PublicProofError("public_case_proof_invalid")
+    return CaseClosureAnchor(
+        case_id=str(case["case_id"]), source_compact_sha256=str(case["source_compact_sha256"]),
+        source_receipt_sha256=_optional_digest(proof.get("source_receipt_sha256")),
+        cleanup_receipt_sha256=_optional_digest(observation.get("cleanup_receipt_sha256")),
+        failure_diagnostics_sha256=_optional_digest(lifecycle.get("failure_diagnostics_sha256")),
+        task_ids=_identities(proof.get("task_ids")),
+        task_session_bindings=tuple((str(item["alias"]), str(item["task_id"])) for item in bindings),
+        diagnostic_task_ids=_identities(proof.get("diagnostic_task_ids")))
+
+
+def _validated_cases(
+        entries: dict[str, bytes], source: dict[str, object], expectation: CandidateProofExpectation,
+        aggregate: dict[str, object]) -> tuple[tuple[CaseOutcome, ...], tuple[CaseClosureAnchor, ...]]:
     for name in CASE_IDS:
         case_privacy_keys(parse_json(entries[f"cases/{name}.json"], "public_case_json_invalid"),
                           case_schema_version=CANDIDATE_CASE_SCHEMA_VERSION)
@@ -217,7 +247,10 @@ def _validated_cases(entries: dict[str, bytes], source: dict[str, object],
     unclosed = {str(case["case_id"]) for case in results.cases if not _case_closed(case)}
     if results.outcomes is None:
         raise PublicProofError("candidate_case_predicate_invalid")
-    return results.outcomes, tuple(sorted(set(results.unresolved_case_ids) | unclosed))
+    unresolved = set(results.unresolved_case_ids) | unclosed
+    anchors = tuple(_closure_anchor(case) for case in sorted(results.cases, key=lambda item: str(item["case_id"]))
+                    if case["case_id"] in unresolved)
+    return results.outcomes, anchors
 
 
 def validate_candidate_proof(zip_bytes: bytes,
@@ -239,7 +272,7 @@ def validate_candidate_proof(zip_bytes: bytes,
     aggregate = validate_aggregate_shape(proof["aggregate"])
     require_completion_binding(completion, expectation, exit_code=aggregate["exit_code"])
     privacy_walk(proof)
-    cases, unresolved = _validated_cases(entries, source, expectation, aggregate)
+    cases, anchors = _validated_cases(entries, source, expectation, aggregate)
     return ValidatedCandidateProof(
         public_zip_sha256=sha256(zip_bytes), aggregate_sha256=str(source["aggregate_receipt"]),
         candidate_id=expectation.candidate_id, claim_sha256=expectation.claim_sha256,
@@ -247,5 +280,5 @@ def validate_candidate_proof(zip_bytes: bytes,
         platform_arch=expectation.platform_arch, archive_sha256=expectation.archive_sha256,
         binaries=expectation.binaries, completion=completion, status=str(aggregate["status"]),
         case_results_verdict=str(aggregate["case_results_verdict"]), cases=cases,
-        unresolved_case_ids=unresolved,
+        unresolved_case_ids=tuple(anchor.case_id for anchor in anchors), closure_anchors=anchors,
     )

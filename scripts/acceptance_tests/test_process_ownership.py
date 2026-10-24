@@ -214,10 +214,17 @@ class ProcessOwnershipTests(unittest.TestCase):
         capture = RecordingCapture()
         book = self.book("unstarted", capture)
         adopted = []
-        with patch.object(processes.subprocess, "Popen", side_effect=OSError("start fault")), \
-                self.assertRaisesRegex(OSError, "start fault"):
+        stderr_fault = fail_once(Path.open, lambda path, *rest: path.name == "stderr",
+                                 OSError("setup fault"))
+        with patch.object(processes.Path, "open", new=stderr_fault), \
+                patch.object(processes.subprocess, "Popen") as popen, \
+                self.assertRaisesRegex(OSError, "setup fault"):
             book.start("unstarted", [PYTHON, "-c", "pass"], self.root, on_spawned=adopted.append)
+        popen.assert_not_called()
         self.assertEqual(book.entries, [])
+        self.assertEqual(book.pending(), [])
+        self.assertEqual(book.drain(timeout=0), [])
+        self.assertTrue(book.finished_naturally())
         self.assertEqual(adopted, [])
         self.assertTrue(capture.writer.closed and capture.reader.closed)
         self.assertEqual(list(book.directory.iterdir()), [])
@@ -229,10 +236,8 @@ class ProcessOwnershipTests(unittest.TestCase):
         popen.assert_not_called()
         self.assertFalse(child.exists())
 
-    def start_unstarted(self, name, fault):
-        """Fail Spawn under one cleanup fault; return the error and the capture pins."""
-        book = self.book(name)
-        pins = []
+    def record_capture_pins(self, pins):
+        """Patch capture creation to collect each new token's two pinned descriptors."""
         original = DirectoryOwner.create
 
         def record_pins(owner, *args, **kwargs):
@@ -241,11 +246,22 @@ class ProcessOwnershipTests(unittest.TestCase):
             self.addCleanup(consume_if_live, token)
             pins.extend((token.parent_fd, token.directory_fd))
             return token
-        with patch.object(processes.DirectoryOwner, "create", autospec=True,
-                          side_effect=record_pins), \
-                patch.object(processes.subprocess, "Popen", side_effect=OSError("spawn fault")), \
-                fault, self.assertRaisesRegex(OSError, "spawn fault") as raised:
+        return patch.object(processes.DirectoryOwner, "create", autospec=True,
+                            side_effect=record_pins)
+
+    def start_unstarted(self, name, fault):
+        """Fail pre-Start setup under one cleanup fault; return the error and the capture pins."""
+        book = self.book(name)
+        pins = []
+        invocation_fault = fail_once(
+            processes.write_json, lambda path, *rest: Path(path).name == "invocation.json",
+            OSError("invocation fault"))
+        with self.record_capture_pins(pins), \
+                patch.object(processes, "write_json", side_effect=invocation_fault), \
+                patch.object(processes.subprocess, "Popen") as popen, \
+                fault, self.assertRaisesRegex(OSError, "invocation fault") as raised:
             book.start(name, [PYTHON, "-c", "pass"], self.root)
+        popen.assert_not_called()
         return book, pins, raised.exception
 
     def test_pre_start_rollback_failure_releases_pins_and_retains_capture(self):
@@ -274,6 +290,116 @@ class ProcessOwnershipTests(unittest.TestCase):
                          "directory ownership release failed: process capture: .*already consumed")
         self.assertEqual(book.entries, [])
         self.assertTrue((book.directory / "001-removal-fault").is_dir())
+
+    def start_uncertain(self, name, error, capture=None):
+        """Raise inside Popen as if CPython created a child and lost its handle.
+
+        No child exists: the fake records the parent handles it was given and
+        raises, as an errpipe read or parent pipe cleanup fault would.
+        """
+        book = self.book(name, capture)
+        handed, pins, adopted = {}, [], []
+
+        def native_start_then_raise(argv, **kwargs):
+            handed.update(kwargs)
+            raise error
+        with self.record_capture_pins(pins), \
+                patch.object(processes.subprocess, "Popen", side_effect=native_start_then_raise), \
+                self.assertRaises(type(error)) as raised:
+            book.start(name, [PYTHON, "-c", "pass"], self.root, on_spawned=adopted.append)
+        self.assertEqual(adopted, [])
+        return book, handed, pins, raised.exception
+
+    def test_popen_entry_failure_retains_uncertain_capture_without_closure(self):
+        for make_error in (lambda: OSError("errpipe fault"), KeyboardInterrupt):
+            for captured in (False, True):
+                name = "%s-%d" % (type(make_error()).__name__.lower(), captured)
+                with self.subTest(case=name):
+                    error = make_error()
+                    capture = RecordingCapture() if captured else None
+                    book, handed, pins, raised = self.start_uncertain(name, error, capture)
+                    directory = book.directory / ("001-" + name)
+                    record = {"pid": None, "argv": [PYTHON, "-c", "pass"],
+                              "directory": str(directory)}
+                    # Causal pre-fix failure: rollback deleted this durable invocation.
+                    self.assertTrue(directory.is_dir())
+                    self.assertEqual(sorted(path.name for path in directory.iterdir()),
+                                     ["invocation.json", "stderr", "stdout"])
+                    self.assertEqual(read_json(directory / "invocation.json")["argv"],
+                                     record["argv"])
+                    self.assertIs(raised, error)
+                    self.assertEqual(raised.__notes__, [
+                        "process launch outcome uncertain; capture retained: " + str(directory)])
+                    self.assertEqual(book.entries, [])
+                    self.assertEqual(book.pending(), [record])
+                    self.assertEqual(book.drain(timeout=0), [record])
+                    self.assertFalse(book.finished_naturally())
+                    self.assertEqual([descriptor_errno(pin) for pin in pins], [BAD_DESCRIPTOR] * 2)
+                    self.assertTrue(handed["stdout"].closed and handed["stderr"].closed)
+                    if capture is not None:
+                        self.assertIs(handed["stdout"], capture.writer)
+                        self.assertTrue(capture.reader.closed)
+
+    def test_next_start_after_uncertain_attempt_cannot_reuse_or_erase_its_capture(self):
+        book, _handed, _pins, _raised = self.start_uncertain("probe", OSError("errpipe fault"))
+        uncertain = book.directory / "001-probe"
+        invocation = (uncertain / "invocation.json").read_bytes()
+        process = book.run("probe", [PYTHON, "-c", "pass"], self.root)
+        self.assertEqual(process.directory, book.directory / "002-probe")
+        self.assertTrue(process.result["natural_wait"])
+        self.assertEqual(book.entries, [process])
+        self.assertEqual((uncertain / "invocation.json").read_bytes(), invocation)
+        self.assertEqual(sorted(path.name for path in uncertain.iterdir()),
+                         ["invocation.json", "stderr", "stdout"])
+        self.assertEqual(book.pending(), [{"pid": None, "argv": [PYTHON, "-c", "pass"],
+                                           "directory": str(uncertain)}])
+        self.assertFalse(book.finished_naturally())
+
+    def test_uncertain_observations_are_detached_from_registry_facts(self):
+        book, _handed, _pins, _raised = self.start_uncertain("detached", OSError("errpipe fault"))
+        directory = book.directory / "001-detached"
+        self.assertTrue((directory / "invocation.json").is_file())
+        expected = {"pid": None, "argv": [PYTHON, "-c", "pass"], "directory": str(directory)}
+        for observe in (book.pending, lambda: book.drain(timeout=0)):
+            observed = observe()
+            observed[0]["argv"].append("--reader-mutation")
+            observed[0]["directory"] = "elsewhere"
+            observed.clear()
+        self.assertEqual(book.pending(), [expected])
+        self.assertEqual(book.drain(timeout=0), [expected])
+        self.assertFalse(book.finished_naturally())
+
+    def test_uncertain_start_keeps_primary_error_and_reports_cleanup_faults(self):
+        capture = RecordingCapture(close_failures=1)
+        with patch.object(processes.DirectoryOwner, "release", side_effect=OSError("release fault")):
+            book, _handed, _pins, raised = self.start_uncertain(
+                "faults", OSError("errpipe fault"), capture)
+        directory = book.directory / "001-faults"
+        self.assertTrue((directory / "invocation.json").is_file())
+        self.assertEqual(str(raised), "errpipe fault")
+        self.assertEqual(raised.__notes__, [
+            "stdout capture close failed: OSError: capture close fault",
+            "capture directory release failed: OSError: release fault",
+            "process launch outcome uncertain; capture retained: " + str(directory)])
+        self.assertEqual(len(book.pending()), 1)
+        self.assertFalse(book.finished_naturally())
+
+    def test_uncertain_start_registration_fault_keeps_primary_error_and_capture(self):
+        book = self.book("registration")
+        child = book.directory / "001-registration"
+        primary = OSError("errpipe fault")
+
+        def refuse(process):
+            raise RuntimeError("registration fault")
+        with patch.object(processes.subprocess, "Popen", side_effect=primary), \
+                self.assertRaises(OSError) as raised:
+            processes.Process(child, [PYTHON, "-c", "pass"], self.root, {}, book.capture_root,
+                              failure_type=ValueError, on_start_uncertain=refuse)
+        self.assertTrue((child / "invocation.json").is_file())
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(primary.__notes__, [
+            "uncertain start registration failed: RuntimeError: registration fault",
+            "process launch outcome uncertain; capture retained: " + str(child)])
 
     def test_invalid_capture_roots_refuse_before_spawn_or_capture(self):
         book = self.book("roots")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import os
 from pathlib import Path
@@ -95,31 +96,51 @@ def observe_child_completion(receipt: Receipt, name: str) -> NativeCompletion:
         raise ReleaseError("child_natural_completion_unproven", incomplete=True) from error
 
 
+@dataclass(frozen=True)
+class NaturalCapture:
+    """One retained process capture whose own records prove a natural Wait."""
+
+    exit_code: int
+    invocation: dict[str, object]
+    started_sha256: str
+    invocation_sha256: str
+    completed_sha256: str
+
+
+def read_natural_capture(directory: Path) -> NaturalCapture:
+    """Read one capture's started, invocation and completed records once and prove its natural Wait."""
+    completed_bytes = read_bounded_regular_file(directory / "completed.json", 1 << 20)
+    started_bytes = read_bounded_regular_file(directory / "started.json", 1 << 20)
+    invocation_bytes = read_bounded_regular_file(directory / "invocation.json", 1 << 20)
+    result = object_value(parse_json(completed_bytes))
+    started = object_value(parse_json(started_bytes))
+    exit_code = result.get("exit_code")
+    if (result.get("natural_wait") is not True or type(exit_code) is not int
+            or not 0 <= exit_code <= 255
+            or integer(result.get("pid"), minimum=1) != integer(started.get("pid"), minimum=1)
+            or integer(result.get("ended_ns")) < integer(started.get("started_ns"))):
+        raise ReleaseError("child_natural_completion_unproven", incomplete=True)
+    return NaturalCapture(
+        exit_code=exit_code, invocation=object_value(parse_json(invocation_bytes)),
+        started_sha256=hashlib.sha256(started_bytes).hexdigest(),
+        invocation_sha256=hashlib.sha256(invocation_bytes).hexdigest(),
+        completed_sha256=hashlib.sha256(completed_bytes).hexdigest())
+
+
 def _validated_completion(receipt: Receipt, name: str) -> NativeCompletion:
     intent = receipt.stage(name).intent
     completed = Path(text_value(intent.get("completion")))
     expected = receipt.invocation.root / "runner" / f"{name}-processes" / f"001-{name}"
     if completed != expected / "completed.json":
         raise ReleaseError("child_completion_location_invalid", incomplete=True)
-    completed_bytes = read_bounded_regular_file(completed, 1 << 20)
-    started_bytes = read_bounded_regular_file(expected / "started.json", 1 << 20)
-    invocation_bytes = read_bounded_regular_file(expected / "invocation.json", 1 << 20)
-    result = object_value(parse_json(completed_bytes))
-    started = object_value(parse_json(started_bytes))
-    invocation = object_value(parse_json(invocation_bytes))
-    exit_code = result.get("exit_code")
-    if (result.get("natural_wait") is not True or type(exit_code) is not int
-            or not 0 <= exit_code <= 255
-            or integer(result.get("pid"), minimum=1) != integer(started.get("pid"), minimum=1)
-            or integer(result.get("ended_ns")) < integer(started.get("started_ns"))
-            or invocation.get("argv") != intent.get("argv")
-            or invocation.get("cwd") != intent.get("cwd")):
+    capture = read_natural_capture(expected)
+    if (capture.invocation.get("argv") != intent.get("argv")
+            or capture.invocation.get("cwd") != intent.get("cwd")):
         raise ReleaseError("child_natural_completion_unproven", incomplete=True)
     return NativeCompletion(
-        invocation_id=receipt.invocation.invocation_id, natural_wait=True, exit_code=exit_code,
-        started_sha256=hashlib.sha256(started_bytes).hexdigest(),
-        invocation_sha256=hashlib.sha256(invocation_bytes).hexdigest(),
-        completed_sha256=hashlib.sha256(completed_bytes).hexdigest())
+        invocation_id=receipt.invocation.invocation_id, natural_wait=True, exit_code=capture.exit_code,
+        started_sha256=capture.started_sha256, invocation_sha256=capture.invocation_sha256,
+        completed_sha256=capture.completed_sha256)
 
 
 def observe_child(receipt: Receipt, name: str) -> dict[str, object]:

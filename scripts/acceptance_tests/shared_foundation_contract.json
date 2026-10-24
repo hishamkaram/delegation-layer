@@ -130,7 +130,7 @@
           "rollback": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])"
         },
         "Process": {
-          "__init__": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='directory'), arg(arg='argv'), arg(arg='cwd'), arg(arg='environment'), arg(arg='capture_root'), arg(arg='on_started')], kwonlyargs=[arg(arg='stdin'), arg(arg='stdout_capture', annotation=BinOp(left=Name(id='OutputCapture', ctx=Load()), op=BitOr(), right=Constant(value=None))), arg(arg='environment_keys_only'), arg(arg='return_result'), arg(arg='failure_type')], kw_defaults=[Constant(value=None), Constant(value=None), Constant(value=False), Constant(value=False), Name(id='RuntimeError', ctx=Load())], defaults=[Constant(value=None)])",
+          "__init__": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='directory'), arg(arg='argv'), arg(arg='cwd'), arg(arg='environment'), arg(arg='capture_root'), arg(arg='on_started')], kwonlyargs=[arg(arg='stdin'), arg(arg='stdout_capture', annotation=BinOp(left=Name(id='OutputCapture', ctx=Load()), op=BitOr(), right=Constant(value=None))), arg(arg='environment_keys_only'), arg(arg='return_result'), arg(arg='failure_type'), arg(arg='on_start_uncertain', annotation=BinOp(left=Subscript(value=Name(id='Callable', ctx=Load()), slice=Tuple(elts=[List(elts=[Name(id='Process', ctx=Load())], ctx=Load()), Constant(value=None)], ctx=Load()), ctx=Load()), op=BitOr(), right=Constant(value=None)))], kw_defaults=[Constant(value=None), Constant(value=None), Constant(value=False), Constant(value=False), Name(id='RuntimeError', ctx=Load()), Constant(value=None)], defaults=[Constant(value=None)])",
           "pid": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
           "_close_stdin": "arguments(posonlyargs=[], args=[arg(arg='self')], kwonlyargs=[], kw_defaults=[], defaults=[])",
           "_write_stdin": "arguments(posonlyargs=[], args=[arg(arg='self'), arg(arg='deadline')], kwonlyargs=[], kw_defaults=[], defaults=[Constant(value=None)])",
@@ -170,12 +170,12 @@
           "json": "8aa9cfc8f31c2803f7903f7ddc501accefbcd2d8b47b3cc7a2fbc578b21f0ebd"
         },
         "Processes": {
-          "__init__": "ab61dafb38f6747bc798c389e5a3c6c1272ba92311a3a1d3245d8e551c088221",
-          "start": "8602fde95f6f5bde36b47d57ca90748a247cccf8cc17b1576ca899fe25d2f208",
+          "__init__": "16664bfcdf0afa6cd2d9665e3c250c26b6656acac519efa85e0709d82f8ba0c7",
+          "start": "11be3b84831dabd09ba4ee811ca68b78c541e912ef09e2286defbccb6a7fbd61",
           "run": "5dfb6f0330fbf2482a90ee809bf367b527a43606f442904110db8d2f4d5f5f9f",
-          "pending": "ed0792786e302630727d7dc32e01eb207a7e979ce5ed55a2d1fa2827c4fef039",
-          "drain": "9415fac2afe186a12ef0895e1433fcf31421df9e6a1d1d37727676560f68c16a",
-          "finished_naturally": "126d6176e8fe6b37913f3e58b21472d6e5e225ab8715405c635d8ba6383880ea"
+          "pending": "3c01748a462d92457befedeb825a59476089e18476db0802ed30bdd1556ab8cd",
+          "drain": "3ff13ffc61617d7ddece458ff7208e6495fa8d67662908c8ddb68852763b0642",
+          "finished_naturally": "9113d9e52c9ad569a3ba3a9c049995771b9ab58bece9ad548498984860f9c1ac"
         }
       }
     },

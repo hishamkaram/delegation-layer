@@ -418,12 +418,57 @@ class CaseOutcome:
 
 
 @dataclass(frozen=True)
+class CaseClosureAnchor:
+    """The validated public facts a later closure of one unresolved case must match.
+
+    The digests name the private compact case receipt, source failure
+    receipt, cleanup receipt and failure diagnostics the case bound; None is
+    a digest the case did not bind. ``task_ids``, ``task_session_bindings``
+    (alias, task id) and ``diagnostic_task_ids`` are the case proof's
+    validated identities. A diagnostic identity may name a model discovery
+    inspection, so none of them is classified here.
+    """
+
+    case_id: str
+    source_compact_sha256: str
+    source_receipt_sha256: str | None
+    cleanup_receipt_sha256: str | None
+    failure_diagnostics_sha256: str | None
+    task_ids: tuple[str, ...]
+    task_session_bindings: tuple[tuple[str, str], ...]
+    diagnostic_task_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        bindings = self.task_session_bindings
+        identities = (self.task_ids, self.diagnostic_task_ids)
+        if (not isinstance(self.case_id, str) or self.case_id not in CASE_IDS
+                or not isinstance(bindings, tuple)
+                or not all(isinstance(item, tuple) and len(item) == 2 and _matches(PUBLIC_TEXT, item[0])
+                           and _matches(TASK_ID, item[1]) for item in bindings)
+                or len({alias for alias, _ in bindings}) != len(bindings)
+                or not all(isinstance(ids, tuple) and all(_matches(TASK_ID, item) for item in ids)
+                           for ids in identities)):
+            raise PublicProofError("candidate_closure_anchor_invalid")
+        require_sha256(self.source_compact_sha256, "candidate_closure_anchor_invalid")
+        for digest in (self.source_receipt_sha256, self.cleanup_receipt_sha256, self.failure_diagnostics_sha256):
+            if digest is not None:
+                require_sha256(digest, "candidate_closure_anchor_invalid")
+
+    @property
+    def bound_task_ids(self) -> frozenset[str]:
+        """Every identity the case proof bound, ordinary or inspection."""
+        return frozenset((*self.task_ids, *(task for _, task in self.task_session_bindings),
+                          *self.diagnostic_task_ids))
+
+
+@dataclass(frozen=True)
 class ValidatedCandidateProof:
     """Digest-bound facts of one candidate proof ZIP that passed every check.
 
     ``cases`` holds every canonical case in order. ``unresolved_case_ids``
     are the cases whose evidence or owned lifetime closure stayed unproven;
-    nothing marks a case closed by default.
+    nothing marks a case closed by default. ``closure_anchors`` holds exactly
+    one anchor per unresolved case, in the same order.
     """
 
     public_zip_sha256: str
@@ -440,6 +485,7 @@ class ValidatedCandidateProof:
     case_results_verdict: str
     cases: tuple[CaseOutcome, ...]
     unresolved_case_ids: tuple[str, ...]
+    closure_anchors: tuple[CaseClosureAnchor, ...]
 
     def __post_init__(self) -> None:
         for digest in (self.public_zip_sha256, self.aggregate_sha256, self.candidate_id,
@@ -454,5 +500,8 @@ class ValidatedCandidateProof:
                 or tuple(case.case_id for case in self.cases) != CASE_IDS
                 or not isinstance(self.unresolved_case_ids, tuple)
                 or list(self.unresolved_case_ids) != sorted(set(self.unresolved_case_ids))
-                or not set(self.unresolved_case_ids) <= set(CASE_IDS)):
+                or not set(self.unresolved_case_ids) <= set(CASE_IDS)
+                or not isinstance(self.closure_anchors, tuple)
+                or not all(isinstance(anchor, CaseClosureAnchor) for anchor in self.closure_anchors)
+                or tuple(anchor.case_id for anchor in self.closure_anchors) != self.unresolved_case_ids):
             raise PublicProofError("candidate_proof_result_invalid")

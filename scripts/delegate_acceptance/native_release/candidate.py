@@ -235,7 +235,7 @@ def _require_confirmed(receipt: Receipt, stage: str, outcome: AppendOutcome, *, 
     receipt.complete(stage, {"disposition": "confirmed", "commit": outcome.commit, "parent": outcome.parent})
 
 
-def _expectation(receipt: Receipt, request: CandidateRequest) -> CandidateProofExpectation:
+def candidate_expectation(receipt: Receipt, request: CandidateRequest) -> CandidateProofExpectation:
     """Rebuild the proof expectation from persisted manifest and claim bytes, never from scratch files."""
     intent = receipt.stage("claim").intent
     data = text_value(intent.get("claim")).encode("utf-8")
@@ -246,7 +246,7 @@ def _expectation(receipt: Receipt, request: CandidateRequest) -> CandidateProofE
 
 
 def _finish(receipt: Receipt, client: GitHubClient, request: CandidateRequest) -> None:
-    expected = _expectation(receipt, request)
+    expected = candidate_expectation(receipt, request)
     project_candidate(receipt, expected)
     _record(receipt, client, request, expected)
     cleanup_candidate(receipt)

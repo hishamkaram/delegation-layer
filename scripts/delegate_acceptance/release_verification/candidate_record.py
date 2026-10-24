@@ -9,8 +9,10 @@ the one group of its family from them unchanged and hands it to one append:
   downloads nothing and claims no artifact availability or execution.
 - ``intent`` records an ``AttemptIntent`` as written. It numbers no attempt
   and copies no scope, platform or replacement.
-- ``triage`` records a ``TriageRecord`` as written. It infers no closure,
-  diagnosis or approval.
+- ``triage`` records a ``TriageRecord`` as written, with any existing
+  closure supplement files in the same group. It infers no closure,
+  diagnosis or approval; replay's semantic reader alone decides whether a
+  supplement resolves anything.
 - ``install`` imports one existing install proof and its witness. It runs no
   installation; admission reads the bound installer source itself.
 - ``freeze`` selects one stored review by digest, observes the checkout's
@@ -22,7 +24,7 @@ the one group of its family from them unchanged and hands it to one append:
   them. It appends nothing, needs no pull request or work directory and is
   an observation, never a freeze, merge or publication grant.
 
-Every command supplies no closure facts. Nothing here retries, recomputes
+Every command supplies no trusted closure facts. Nothing here retries, recomputes
 or reads back: a head that moved before admission refuses canonically, and
 a ref update that may not have landed stays ambiguous. Only an
 ``AppendConfirmed`` names the stored commit, the freeze F included. The
@@ -97,12 +99,17 @@ def attempt_intent(data: bytes) -> RecordGroup:
         record_blob(EntryName(EntryFamily.INTENT, attempt=intent.attempt), encode_intent(intent)),))
 
 
-def triage(data: bytes) -> RecordGroup:
-    """The triage alone, named by its digest; no closure fact accompanies it."""
+def triage(data: bytes, supplements: tuple[bytes, ...] = ()) -> RecordGroup:
+    """The triage named by its digest, with each closure supplement unchanged under its own digest.
+
+    No trusted closure fact accompanies them; admission reads each supplement
+    with the one semantic reader.
+    """
     record = parse_triage(data)
     encoded = encode_triage(record)
+    closures = tuple(record_blob(EntryName(EntryFamily.CLOSURE, digest=sha(item)), item) for item in supplements)
     return RecordGroup(record.candidate_id, (
-        record_blob(EntryName(EntryFamily.TRIAGE, digest=sha(encoded)), encoded),))
+        record_blob(EntryName(EntryFamily.TRIAGE, digest=sha(encoded)), encoded), *closures))
 
 
 def install(proof_data: bytes, witness_data: bytes) -> RecordGroup:
@@ -114,12 +121,17 @@ def install(proof_data: bytes, witness_data: bytes) -> RecordGroup:
         record_blob(EntryName(EntryFamily.INSTALL_WITNESS, **role), witness_data)))
 
 
-def _read(path: Path, family: EntryFamily, label: str, inputs: dict[str, object]) -> bytes:
-    """Read one input within its family's bound; only bytes actually read get a digest."""
+def _read_input(path: Path, family: EntryFamily, label: str) -> bytes:
+    """Read one input within its family's bound."""
     try:
-        data = read_bounded_regular_file(path, FAMILY_MAX_BYTES[family])
+        return read_bounded_regular_file(path, FAMILY_MAX_BYTES[family])
     except BoundedReadError:
         raise VerificationError(f"{label}_input_unreadable", STAGE) from None
+
+
+def _read(path: Path, family: EntryFamily, label: str, inputs: dict[str, object]) -> bytes:
+    """Read one input within its family's bound; only bytes actually read get a digest."""
+    data = _read_input(path, family, label)
     inputs[f"{label}_sha256"] = sha(data)
     return data
 
@@ -131,7 +143,10 @@ def _file_group(arguments: argparse.Namespace, inputs: dict[str, object]) -> Rec
     if arguments.command == "intent":
         return attempt_intent(_read(arguments.intent, EntryFamily.INTENT, "intent", inputs))
     if arguments.command == "triage":
-        return triage(_read(arguments.triage, EntryFamily.TRIAGE, "triage", inputs))
+        supplements = tuple(_read_input(path, EntryFamily.CLOSURE, "closure")
+                            for path in arguments.closure)
+        inputs["closure_sha256s"] = [sha(item) for item in supplements]
+        return triage(_read(arguments.triage, EntryFamily.TRIAGE, "triage", inputs), supplements)
     return install(_read(arguments.proof, EntryFamily.INSTALL_PROOF, "proof", inputs),
                    _read(arguments.witness, EntryFamily.INSTALL_WITNESS, "witness", inputs))
 
@@ -248,8 +263,10 @@ def _parser() -> argparse.ArgumentParser:
     register.add_argument("--manifest", type=Path, required=True)
     commands.add_parser("intent", parents=[common], help="an existing attempt intent").add_argument(
         "--intent", type=Path, required=True)
-    commands.add_parser("triage", parents=[common], help="an existing attempt triage").add_argument(
-        "--triage", type=Path, required=True)
+    triaged = commands.add_parser("triage", parents=[common], help="an existing attempt triage")
+    triaged.add_argument("--triage", type=Path, required=True)
+    triaged.add_argument("--closure", type=Path, action="append", default=[],
+                         help="an existing proof closure supplement; repeatable")
     paired = commands.add_parser("install", parents=[common], help="an existing install proof and its witness")
     paired.add_argument("--proof", type=Path, required=True)
     paired.add_argument("--witness", type=Path, required=True)

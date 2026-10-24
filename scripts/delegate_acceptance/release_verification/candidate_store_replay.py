@@ -19,7 +19,10 @@ installer source bytes at the candidate's source commit; the native lifetime
 owner produces the closure resolutions. A reviewer is an unauthenticated
 label that provenance binds, not an account. Replay never builds these facts
 from labels, authors or parsed records, and it refuses a missing, foreign or
-unused fact.
+unused fact. The one exception is a stored proof closure supplement: its
+semantic reader derives the resolution from the supplement bytes and the
+validated proof this history already holds, so every caller replays it the
+same way without a trusted fact.
 
 A snapshot is a set of facts. It grants no launch, readiness or publication
 authority; a fresh readiness verdict still needs a current source
@@ -33,7 +36,7 @@ from dataclasses import dataclass, replace
 
 from ..evidence.digests import sha
 from ..native_evidence.candidate_proof import validate_candidate_proof
-from ..native_evidence.public_contract import PublicProofError
+from ..native_evidence.public_contract import PublicProofError, ValidatedCandidateProof
 from .candidate_attempts import (
     ReviewedSource, ReviewProvenance, SourceReview, candidate_proof_expectation, encode_claim, encode_intent,
     encode_review, parse_claim, parse_intent, parse_review, platform_proof,
@@ -47,6 +50,7 @@ from .candidate_install_contract import (
     SourceFileBinding, encode_install_proof, parse_install_proof, read_install_proof,
 )
 from .candidate_manifest import bind_manifest, encode_locator, encode_manifest, parse_locator
+from .candidate_proof_closure import is_proof_closure, read_proof_closure
 from .candidate_readiness import (
     BoundCandidate, LaunchDecision, SourceObservation, authorize_publication, decide_launch,
     decide_platform_claim,
@@ -139,13 +143,20 @@ def _trusted_facts(review_provenance: object, closure_resolutions: object,
 
 @dataclass(frozen=True)
 class _Replay:
-    """The facts replayed so far; each transition returns a new value."""
+    """The facts replayed so far; each transition returns a new value.
+
+    ``closures`` are the trusted closure facts consumed so far and
+    ``derived_closures`` the resolutions read from stored supplements;
+    ``proofs`` are the validated proofs the supplements bind to.
+    """
 
     candidate: BoundCandidate
     history: CandidateHistory
     reviews: tuple[ReviewedSource, ...]
     closures: tuple[ClosureResolution, ...]
     installer_bindings: tuple[SourceFileBinding, ...]
+    derived_closures: tuple[ClosureResolution, ...] = ()
+    proofs: tuple[ValidatedCandidateProof, ...] = ()
 
 
 def _require_exact(data: bytes, encoded: bytes) -> None:
@@ -192,7 +203,8 @@ class _Admitted:
     (a source review or a triage) is not in it yet: only an actual introducing
     transaction can supply its provenance. ``resolutions`` are a triage's
     stored closure facts; ``closures`` and ``installer_binding`` are the
-    trusted facts this group consumed.
+    trusted facts this group consumed. ``derived_closures`` are the
+    resolutions its supplements established and ``proof`` its validated proof.
     """
 
     candidate: BoundCandidate
@@ -201,6 +213,8 @@ class _Admitted:
     resolutions: tuple[ClosureResolution, ...] = ()
     closures: tuple[ClosureResolution, ...] = ()
     installer_binding: SourceFileBinding | None = None
+    derived_closures: tuple[ClosureResolution, ...] = ()
+    proof: ValidatedCandidateProof | None = None
 
 
 def _register(blobs: _Blobs, raw: _History) -> _Admitted:
@@ -259,7 +273,8 @@ def _proof(state: _Replay, blobs: _Blobs) -> _Admitted:
     except PublicProofError as error:
         raise VerificationError("store_proof_invalid", STAGE) from error
     proof = platform_proof(validated, claim)
-    return _Admitted(candidate=candidate, history=replace(state.history, proofs=state.history.proofs + (proof,)))
+    return _Admitted(candidate=candidate, history=replace(state.history, proofs=state.history.proofs + (proof,)),
+                     proof=validated)
 
 
 def _install(state: _Replay, blobs: _Blobs, facts: _TrustedFacts) -> _Admitted:
@@ -291,16 +306,25 @@ def _review(state: _Replay, blobs: _Blobs) -> _Admitted:
     return _Admitted(candidate=state.candidate, history=state.history, artifact=record)
 
 
-def _added_closures(blobs: _Blobs, facts: _TrustedFacts) -> tuple[ClosureResolution, ...]:
-    """Bind each added closure file to the native owner's fact with exactly those canonical bytes."""
-    added = []
+def _added_closures(state: _Replay, blobs: _Blobs,
+                    facts: _TrustedFacts) -> tuple[tuple[ClosureResolution, ...], tuple[ClosureResolution, ...]]:
+    """Return the trusted and the supplement-derived resolutions of each added closure file.
+
+    A supplement resolves only through its semantic reader on this history's
+    validated proofs; any other closure file needs the native owner's fact
+    with exactly its canonical bytes.
+    """
+    trusted, derived = [], []
     for name, blob in _named(blobs, EntryFamily.CLOSURE):
         _require_digest_name(name, blob)
+        if is_proof_closure(blob.data):
+            derived.append(read_proof_closure(blob.data, state.proofs))
+            continue
         fact = facts.closures.get(blob.sha256)
         if fact is None or encode_closure_evidence(fact) != blob.data:
             raise VerificationError("store_closure_unverified", STAGE)
-        added.append(fact)
-    return tuple(added)
+        trusted.append(fact)
+    return tuple(trusted), tuple(derived)
 
 
 def _triage(state: _Replay, blobs: _Blobs, facts: _TrustedFacts) -> _Admitted:
@@ -317,14 +341,15 @@ def _triage(state: _Replay, blobs: _Blobs, facts: _TrustedFacts) -> _Admitted:
     history = state.history
     require_triage_inventory(state.candidate.candidate_id, len(history.intents),
                              tuple(triage.record for triage in history.triages) + (record,))
-    added = _added_closures(blobs, facts)
+    added, derived = _added_closures(state, blobs, facts)
     referenced = {ref.evidence_sha256 for ref in record.closure_resolutions}
-    if not {fact.evidence_sha256 for fact in added} <= referenced:
+    if not {fact.evidence_sha256 for fact in added + derived} <= referenced:
         raise VerificationError("store_closure_unreferenced", STAGE)
-    resolutions = tuple(sorted((fact for fact in state.closures + added if fact.evidence_sha256 in referenced),
+    known = state.closures + state.derived_closures + added + derived
+    resolutions = tuple(sorted((fact for fact in known if fact.evidence_sha256 in referenced),
                                key=lambda fact: fact.evidence_sha256))
     return _Admitted(candidate=state.candidate, history=history, artifact=record, resolutions=resolutions,
-                     closures=added)
+                     closures=added, derived_closures=derived)
 
 
 def _freeze(state: _Replay, blobs: _Blobs, *, evidence_parent: str) -> _Admitted:
@@ -417,8 +442,12 @@ def _materialize(state: _Replay | None, admitted: _Admitted, transaction: RawTra
         triage = ReviewedTriage(record=artifact, provenance=provenance, resolutions=admitted.resolutions)
         history = replace(history, triages=history.triages + (triage,))
     closures, installer_bindings = _consumed(state, admitted)
+    derived = admitted.derived_closures if state is None else state.derived_closures + admitted.derived_closures
+    proofs = () if state is None else state.proofs
+    if admitted.proof is not None:
+        proofs = proofs + (admitted.proof,)
     return _Replay(candidate=admitted.candidate, history=history, reviews=reviews, closures=closures,
-                   installer_bindings=installer_bindings)
+                   installer_bindings=installer_bindings, derived_closures=derived, proofs=proofs)
 
 
 def _replayed(raw: _History, facts: _TrustedFacts) -> _Replay | None:

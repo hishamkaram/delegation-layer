@@ -66,11 +66,33 @@ class CanonicalOwnerTests(unittest.TestCase):
         owner = directories.DirectoryOwner()
         captures = owner.create("captures", self.root / "processes", self.root)
         child = captures.directory / "child"
-        with patch.object(processes.subprocess, "Popen", side_effect=OSError("start failed")):
-            with self.assertRaisesRegex(OSError, "start failed"):
+        with patch.object(processes, "write_json", side_effect=OSError("setup failed")), \
+                patch.object(processes.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(OSError, "setup failed"):
                 processes.Process(child, [sys.executable, "-c", "pass"], self.root, {}, captures)
+        popen.assert_not_called()
         self.assertFalse(child.exists())
         self.assertTrue(captures.directory.is_dir())
+        owner.rollback()
+
+    def test_popen_failure_retains_its_capture_as_unresolved_in_the_registry(self):
+        owner = directories.DirectoryOwner()
+        self.addCleanup(owner.release)
+        book = processes.Processes(self.root / "processes", owner=owner)
+        argv = [sys.executable, "-c", "pass"]
+        # The fake raises from inside Popen and creates no child.
+        with patch.object(processes.subprocess, "Popen", side_effect=OSError("errpipe read failed")):
+            with self.assertRaisesRegex(OSError, "errpipe read failed"):
+                book.start("uncertain", argv, self.root)
+        child = book.directory / "001-uncertain"
+        self.assertEqual(sorted(path.name for path in child.iterdir()),
+                         ["invocation.json", "stderr", "stdout"])
+        self.assertEqual(read_json(child / "invocation.json")["argv"], argv)
+        self.assertEqual(book.entries, [])
+        unresolved = [{"pid": None, "argv": argv, "directory": str(child)}]
+        self.assertEqual(book.pending(), unresolved)
+        self.assertEqual(book.drain(timeout=0), unresolved)
+        self.assertFalse(book.finished_naturally())
         owner.rollback()
 
     def test_started_receipt_failure_keeps_the_child_in_the_single_registry(self):

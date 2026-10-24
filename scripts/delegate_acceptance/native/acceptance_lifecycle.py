@@ -166,8 +166,12 @@ def _lifetime_facts(directory: Path, owner_kind: str, record: object) -> dict[st
     }
 
 
-def _root_closure(state: Path, task_ids: set[str]) -> dict[str, object]:
-    """Project one state root's canonical managed-lifetime closure."""
+def managed_root_closure(state: Path, task_ids: set[str]) -> dict[str, object]:
+    """Project one state root's canonical managed-lifetime closure.
+
+    The success shutdown and the retained closure observation share this one
+    projection.
+    """
     closure = validate_managed_lifetime_closure(state, task_ids)
     tasks, inspections = closure.get("tasks"), closure.get("inspections")
     require(isinstance(tasks, dict) and isinstance(inspections, dict),
@@ -213,8 +217,8 @@ def record_lifetime_closure(owner) -> None:
     proof: dict[str, object] = {
         "schema_version": LIFETIME_CLOSURE_SCHEMA_VERSION, "kind": LIFETIME_CLOSURE_KIND,
         "ordinary": ({"root_id": None, "launch": "none", "tasks": {}, "inspections": {}}
-                     if _known_no_launch(acceptance) else _root_closure(acceptance.state, task_ids)),
-        "model_discovery": (_root_closure(acceptance.models_state, set())
+                     if _known_no_launch(acceptance) else managed_root_closure(acceptance.state, task_ids)),
+        "model_discovery": (managed_root_closure(acceptance.models_state, set())
                             if discovery_required else None),
     }
     # Only the timeout source is expected to close by its own budget.

@@ -30,13 +30,19 @@ class Process:
     successful Start, before any fallible setup.  A direct construction without
     it names no registry: a post-Start setup failure still retains the capture
     directory and output streams, but the raised error is the only report.
+
+    Popen may create the child and still raise before returning its handle.
+    Such an uncertain launch keeps its invocation and capture as the durable
+    record and is handed to ``on_start_uncertain``; only faults before Popen is
+    entered prove that no child exists and roll the capture back.
     """
 
     def __init__(self, directory, argv, cwd, environment, capture_root,
                  on_started=None, *,
                  stdin=None, stdout_capture: OutputCapture | None = None,
                  environment_keys_only=False, return_result=False,
-                 failure_type=RuntimeError):
+                 failure_type=RuntimeError,
+                 on_start_uncertain: Callable[[Process], None] | None = None):
         self.directory = Path(directory)
         self.argv = [str(arg) for arg in argv]
         self.cwd = Path(cwd)
@@ -66,18 +72,28 @@ class Process:
             _record_process_invocation(cwd=cwd, environment_keys_only=environment_keys_only, process=self, stdin=stdin)
             self.stdout = self.stdout_path.open("xb")
             self.stderr = self.stderr_path.open("xb")
+            child_stdout = self._stdout_capture.writer if self._stdout_capture is not None else self.stdout
+        except BaseException as error:
+            _rollback_unstarted_process(ownership=ownership, process=self, error=error)
+            _raise_process_failure(error, self._failure_type)
+        try:
             self.process = subprocess.Popen(
                 self.argv,
                 cwd=str(cwd),
                 env=self.environment,
                 stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
-                stdout=self._stdout_capture.writer if self._stdout_capture is not None else self.stdout,
+                stdout=child_stdout,
                 stderr=self.stderr,
                 shell=False,
                 close_fds=True,
             )
         except BaseException as error:
-            _rollback_unstarted_process(ownership=ownership, process=self, error=error)
+            try:
+                if on_start_uncertain is not None:
+                    on_start_uncertain(self)
+            except BaseException as registration_error:
+                _note_cleanup_failures(error, [("uncertain start registration", registration_error)])
+            _retain_uncertain_process(ownership=ownership, process=self, error=error)
             _raise_process_failure(error, self._failure_type)
         try:
             if on_started is not None:
@@ -264,11 +280,16 @@ class Processes:
         self.environment_keys_only = environment_keys_only
         self.return_result = return_result
         self.entries = []
+        # (argv, directory) of each start whose Popen raised without a handle
+        # (see Process).  Each stays unresolved in every closure gate, keeps its
+        # sequence number, and is read only as detached observation records.
+        self._uncertain_starts = []
 
     def start(self, name, argv, cwd, stdin=None, on_spawned=None):
         if callable(stdin) and on_spawned is None:
             on_spawned, stdin = stdin, None
-        directory = self.directory / ("%03d-%s" % (len(self.entries) + 1, name))
+        sequence = len(self.entries) + len(self._uncertain_starts) + 1
+        directory = self.directory / ("%03d-%s" % (sequence, name))
         capture = self.stdout_capture_factory([str(arg) for arg in argv]) \
             if self.stdout_capture_factory is not None else None
 
@@ -279,12 +300,16 @@ class Processes:
             self.entries.append(process)
             if on_spawned is not None:
                 on_spawned(process)
+
+        def register_uncertain(process):
+            self._uncertain_starts.append((tuple(process.argv), str(process.directory)))
         process = Process(directory, argv, cwd, self.environment, self.capture_root,
                           stdin=stdin, stdout_capture=capture,
                           environment_keys_only=self.environment_keys_only,
                           return_result=self.return_result,
                           failure_type=self.failure_type,
-                          on_started=register_started)
+                          on_started=register_started,
+                          on_start_uncertain=register_uncertain)
         write_json(directory / "started.json", {
             "pid": process.pid, "started_ns": time.time_ns()})
         return process
@@ -304,7 +329,8 @@ class Processes:
             if observed is None or observed.get("natural_wait") is not True:
                 result.append({"pid": process.pid, "argv": process.argv,
                                "directory": str(process.directory)})
-        return result
+        return result + [{"pid": None, "argv": list(argv), "directory": directory}
+                         for argv, directory in self._uncertain_starts]
 
     def drain(self, timeout=70, exclude=()):
         """Observe finite owned processes after a failed assertion; never signal."""
@@ -322,7 +348,9 @@ class Processes:
                 break
             time.sleep(0.1)
             active = unresolved()
-        return [{"pid": p.pid, "argv": p.argv, "directory": str(p.directory)} for p in active]
+        return ([{"pid": p.pid, "argv": p.argv, "directory": str(p.directory)} for p in active] +
+                [{"pid": None, "argv": list(argv), "directory": directory}
+                 for argv, directory in self._uncertain_starts])
 
     def finished_naturally(self, exclude=()):
         """Require positive natural exit evidence for every owned process."""
@@ -333,7 +361,7 @@ class Processes:
             result = process.poll()
             if result is None or result.get("natural_wait") is not True:
                 return False
-        return True
+        return not self._uncertain_starts
 
 
 def _record_process_invocation(
@@ -386,16 +414,8 @@ def _note_cleanup_failures(error: BaseException, failures: list[tuple[str, BaseE
         error.add_note("%s failed: %s: %s" % (label, type(failure).__name__, failure))
 
 
-def _rollback_unstarted_process(
-        *, ownership: DirectoryOwner,
-        process: Process,
-        error: BaseException,
-) -> None:
-    """Before Start nothing escaped: close every handle and remove the capture.
-
-    A failed rollback leaves the path uncertain, so the same owner releases its
-    remaining authority: the directory is retained and its pins are closed.
-    """
+def _close_parent_handles(process: Process) -> list[tuple[str, BaseException]]:
+    """Close the parent's capture and stream handles; return each close fault."""
     failures = []
     resources = (("stdout capture close", process._stdout_capture),
                  ("stdout close", process.stdout), ("stderr close", process.stderr))
@@ -406,6 +426,20 @@ def _rollback_unstarted_process(
             resource.close()
         except (OSError, ValueError) as close_error:
             failures.append((label, close_error))
+    return failures
+
+
+def _rollback_unstarted_process(
+        *, ownership: DirectoryOwner,
+        process: Process,
+        error: BaseException,
+) -> None:
+    """Before Start nothing escaped: close every handle and remove the capture.
+
+    A failed rollback leaves the path uncertain, so the same owner releases its
+    remaining authority: the directory is retained and its pins are closed.
+    """
+    failures = _close_parent_handles(process)
     try:
         ownership.rollback()
     except (OSError, RuntimeError) as rollback_error:
@@ -415,6 +449,28 @@ def _rollback_unstarted_process(
         except (OSError, RuntimeError) as release_error:
             failures.append(("capture directory release", release_error))
     _note_cleanup_failures(error, failures)
+
+
+def _retain_uncertain_process(
+        *, ownership: DirectoryOwner,
+        process: Process,
+        error: BaseException,
+) -> None:
+    """Popen raised after entry: a child may exist, but no handle was returned.
+
+    CPython can create the child and then fail reading its error pipe or closing
+    parent pipe ends.  Like Popen's own failure cleanup, only parent handles
+    close; the invocation and capture stay as the durable record and the pins
+    are released without rollback.  No PID is guessed, signalled, or waited: the
+    missing started and completed receipts are the recorded uncertainty.
+    """
+    failures = _close_parent_handles(process)
+    try:
+        ownership.release()
+    except (OSError, RuntimeError) as release_error:
+        failures.append(("capture directory release", release_error))
+    _note_cleanup_failures(error, failures)
+    error.add_note("process launch outcome uncertain; capture retained: " + str(process.directory))
 
 
 def _retain_started_process(
