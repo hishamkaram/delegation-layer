@@ -2,8 +2,9 @@
 
 The manifest owns the formula's size and digest; GitHub owns the tap branch and
 its formula file; ``decide_tap`` owns act or skip and the compare-and-swap base.
-The caller owns the latest-version guard, publication authority, delivery
-order, the trusted tap credentials and the request-body directory lifetime.
+The caller owns publication authority, delivery order, the trusted tap
+credentials and the request-body directory lifetime; the GitHub release and npm
+edges own their latest-version guards.
 This module performs only the tap I/O the decision calls for and stores nothing.
 
 Only a successful, complete tree listing of the branch without the exact

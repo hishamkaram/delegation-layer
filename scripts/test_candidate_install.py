@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
+import contextlib
+import io
 import json
 import shutil
 import sys
@@ -13,11 +16,13 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts import test_candidate_install_support as support
+from scripts.acceptance_tests import candidate_fixtures as fx
+from scripts.delegate_acceptance.release_verification.candidate_install_bootstrap import InstalledBootstrapProbe
 from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
-    CHANNEL_NPM, CHANNEL_SHELL, RequestRecord,
+    CHANNEL_NPM, CHANNEL_SHELL, BootstrapTarget, RequestRecord,
 )
 from scripts.delegate_acceptance.release_verification import published_contract
-from scripts.delegate_acceptance.release_verification.contract import BINARIES, VerificationError
+from scripts.delegate_acceptance.release_verification.contract import BINARIES, VerificationError, parse_binary_digests
 
 
 SHELL = (CHANNEL_SHELL,)
@@ -106,6 +111,86 @@ class ShellInstallTests(support.CandidateCase):
         self.assertEqual(self.recording.calls, [])
 
 
+class ShellBootstrapGateTests(support.CandidateCase):
+    """The installed fixture turn gates acceptance after the version, catalog, hash and fresh-status checks."""
+
+    def assertRefused(self, code, request):
+        with self.assertRaises(VerificationError) as caught:
+            self.verify(request, channels=SHELL)
+        self.assertEqual(caught.exception.code, code)
+
+    def default_path_children(self):
+        """The by-name default-path children; they run through the receipt-recording command runner."""
+        return [record["name"] for record in self.receipt["commands"]]
+
+    def test_the_probe_runs_once_on_the_installed_layout_after_every_default_path_check(self):
+        request = self.request()
+        seen = []
+
+        def observe(target):
+            seen.append(self.default_path_children())
+            return support.accepted_bootstrap(target)
+
+        self.probe = support.RecordingProbe(observe)
+        facts = self.verify(request, channels=SHELL)
+        bin_dir = self.layout.root / "shell" / "bin"
+        expected = parse_binary_digests(request.binary_hashes(), "test")
+        self.assertEqual(self.probe.targets, [BootstrapTarget(
+            command_directory=bin_dir, delegate=(bin_dir / "delegate").resolve(), supervisor_directory=bin_dir,
+            binaries=expected)])
+        self.assertEqual(seen, [self.default_path_children()])
+        self.assertEqual(seen[0][-1], "delegate-default-supervisor-status")
+        self.assertEqual(facts.installs[0].bootstrap, fx.bootstrap(expected))
+        self.assertEqual(facts.to_record()["installs"][0]["bootstrap"], fx.bootstrap(expected).to_record())
+        self.finish_workspace()
+
+    def test_a_hash_mismatch_refuses_before_the_probe(self):
+        changed = {**self.binaries, "pueued": b"#!/bin/sh\nprintf 'pueued 9.9.9\\n'\n"}
+        self.assertRefused("installed_binary_hash_mismatch", self.request(binaries=changed))
+        self.assertEqual(self.probe.targets, [])
+
+    def test_a_decoy_pair_turn_fails_although_version_catalog_hashes_and_fresh_status_pass(self):
+        self.probe = support.RecordingProbe(lambda target: fx.bootstrap(
+            replace(target.binaries, pueue="0" * 64, pueued="1" * 64)))
+        self.assertRefused("install_bootstrap_mismatch", self.request())
+        self.assertEqual(len(self.probe.targets), 1)
+        self.assertTrue(self.default_path_children())
+
+    def test_an_uncommitted_unclosed_or_foreign_runner_turn_fails(self):
+        for field, value in (("outcome", "rejected"), ("worker_result", "wait-error"),
+                             ("termination_cause", "budget"), ("scope_empty", False), ("shutdown", "pid-absent")):
+            with self.subTest(field=field):
+                self.probe = support.RecordingProbe(
+                    lambda target, field=field, value=value: replace(fx.bootstrap(target.binaries), **{field: value}))
+                self.assertRefused("install_bootstrap_mismatch", self.request())
+        self.probe = support.RecordingProbe(lambda target: fx.bootstrap(replace(target.binaries, delegate_run="0" * 64)))
+        self.assertRefused("install_bootstrap_mismatch", self.request())
+
+    def test_the_real_probe_refuses_the_version_only_delegate_and_retains_its_root(self):
+        self.receipt["candidate_install"] = {}
+        locations = {}
+        real = InstalledBootstrapProbe(receipt=self.receipt, locations=locations, parent=self.root)
+        self.probe = support.RecordingProbe(
+            lambda target: self.tree.observe_operation(lambda: real(target), closure_required=True))
+        self.assertRefused("candidate_bootstrap_unresolved", self.request())
+        facts = self.receipt["candidate_install"]["bootstrap"]
+        root = locations["bootstrap_root"]
+        self.assertEqual((facts["status"], facts["root"], facts["failure"]["type"]), ("failed", str(root), "RuntimeError"))
+        self.assertIn("exit=8", facts["failure"]["message"])
+        (pending,) = facts["unresolved_ownership"]
+        self.assertEqual(len(pending["task_ids"]), 1)
+        self.assertFalse(Path(pending["config"]).exists())
+        self.assertTrue(root.is_dir())
+        # The test's own proof: the shell stand-in exited 8 without a child and no supervisor config exists.
+        dispatch = json.loads((root / "r" / "packaged-dispatch.json").read_text(encoding="utf-8"))
+        self.assertEqual(dispatch["exit_code"], 8)
+        self.assertEqual(self.binaries["delegate"], (self.layout.root / "shell" / "bin" / "delegate").read_bytes())
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertFalse(self.tree.dispose())
+        self.tree.remove_retained()
+        self.assertFalse(self.root.exists())
+
+
 @unittest.skipUnless(shutil.which("npm") and shutil.which("node"), "npm and node are required for the npm candidate channel")
 class NpmInstallTests(support.PackedCandidateCase):
     def test_exact_tgz_installs_binaries_and_skill_through_the_shell_installer(self):
@@ -126,6 +211,12 @@ class NpmInstallTests(support.PackedCandidateCase):
             self.assertNotIn(support.SECRET, json.dumps(call.env))
             self.assertTrue(call.cwd.is_relative_to(self.layout.root))
             self.assertFalse(call.cwd.is_relative_to(support.REPO_ROOT))
+        self.finish_workspace()
+
+    def test_each_archive_channel_probes_its_own_installed_directory(self):
+        self.verify(self.request(), channels=support.install.CHANNELS)
+        self.assertEqual([(target.command_directory, target.supervisor_directory) for target in self.probe.targets],
+                         [(self.layout.root / name / "bin",) * 2 for name in support.install.CHANNELS])
         self.finish_workspace()
 
     def test_install_needs_no_registry(self):

@@ -1,9 +1,11 @@
 """Immutable facts and pure rules for pre-publication candidate install proof.
 
 The witness types record what one install run observed. An ``InstallProof``
-binds one channel's success on one platform to exact candidate artifacts and
-to the installer bytes actually executed; ``read_install_proof`` is the only
-reader that grants it authority, after cross-checking the witness bytes.
+binds one channel's success on one platform to exact candidate artifacts, to
+the installer bytes actually executed and to one closed fixture task the
+installed delegate ran through its default runner and supervisor pair;
+``read_install_proof`` is the only reader that grants it authority, after
+cross-checking the witness bytes.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 import re
+from typing import Protocol
 from ..evidence.digests import sha
 from .candidate_codec import (
     VERSION_RE, encode_record, exact_fields, load_record, non_negative_int, object_list,
@@ -119,12 +122,108 @@ class RequestRecord:
     url: str
 
 
+# The only facts of one installed bootstrap turn that install acceptance admits.
+BOOTSTRAP_OUTCOME = "committed"
+
+
+BOOTSTRAP_WORKER_RESULT = "success"
+
+
+BOOTSTRAP_TERMINATION_CAUSE = "completed"
+
+
+BOOTSTRAP_SHUTDOWN = "daemon-exited-endpoint-closed"
+
+
+# Root and task identities are opaque to this contract; only their shape is checked.
+_BOOTSTRAP_ID_RE = re.compile(r"[0-9a-f]{32}")
+
+
+@dataclass(frozen=True)
+class BootstrapTarget:
+    """The installed layout one bootstrap probe exercises, after the channel's hashes matched.
+
+    ``command_directory`` is the only installed directory on the probe's PATH and
+    ``delegate`` the installed entry that ``delegate`` must resolve to there.
+    ``supervisor_directory`` holds the supervisor pair the installation ships: the
+    command directory itself for an archive install, the keg's libexec for Homebrew,
+    which never joins PATH. ``binaries`` are the candidate's expected digests.
+    """
+
+    command_directory: Path
+    delegate: Path
+    supervisor_directory: Path
+    binaries: BinaryDigests
+
+
+@dataclass(frozen=True)
+class BootstrapObservation:
+    """Compact, path-free facts of one fixture task run through an installed default path.
+
+    ``root_id`` and ``task_id`` are the identities that admission, status, collection
+    and the task's own managed lifetime closure all reported. ``binaries`` are the
+    observed digests of the executed delegate, the runner the task recorded and the
+    supervisor pair its state root selected; a content digest cannot distinguish a
+    byte-identical copy from another origin. The remaining fields are the collected
+    verdict, the task's worker Wait result, its termination cause and empty scope, and
+    the verified daemon exit with endpoint closure.
+    """
+
+    root_id: str
+    task_id: str
+    binaries: BinaryDigests
+    outcome: str
+    worker_result: str
+    termination_cause: str
+    scope_empty: bool
+    shutdown: str
+
+    def __post_init__(self) -> None:
+        if (not isinstance(self.binaries, BinaryDigests) or type(self.scope_empty) is not bool
+                or not all(isinstance(value, str) for value in (
+                    self.outcome, self.worker_result, self.termination_cause, self.shutdown))):
+            raise VerificationError("install_bootstrap_invalid", PROOF_STAGE)
+        text(self.root_id, _BOOTSTRAP_ID_RE, PROOF_STAGE)
+        text(self.task_id, _BOOTSTRAP_ID_RE, PROOF_STAGE)
+
+    def to_record(self) -> dict[str, object]:
+        return {
+            "root_id": self.root_id, "task_id": self.task_id, "binaries": self.binaries.as_mapping(),
+            "outcome": self.outcome, "worker_result": self.worker_result,
+            "termination_cause": self.termination_cause, "scope_empty": self.scope_empty,
+            "shutdown": self.shutdown,
+        }
+
+
+class BootstrapProbe(Protocol):
+    """The consumer-owned port that runs one installed default fixture turn.
+
+    It returns only after the task's closure and the daemon's shutdown were verified
+    and raises VerificationError otherwise. The supplier owns every resource it
+    creates and decides their retention; the consumer only supplies the target.
+    """
+
+    def __call__(self, target: BootstrapTarget) -> BootstrapObservation: ...
+
+
+def require_bootstrap(observation: object, binaries: BinaryDigests) -> BootstrapObservation:
+    """Accept only a committed, closed and shut-down turn of exactly ``binaries``."""
+    if (not isinstance(observation, BootstrapObservation) or observation.binaries != binaries
+            or (observation.outcome, observation.worker_result, observation.termination_cause,
+                observation.scope_empty, observation.shutdown) != (
+                    BOOTSTRAP_OUTCOME, BOOTSTRAP_WORKER_RESULT, BOOTSTRAP_TERMINATION_CAUSE, True,
+                    BOOTSTRAP_SHUTDOWN)):
+        raise VerificationError("install_bootstrap_mismatch", PROOF_STAGE)
+    return observation
+
+
 @dataclass(frozen=True)
 class InstallObservation:
     """Compact, secret-free facts of one installation channel.
 
     ``installer_sha256`` is the digest of the installer bytes this channel
     executed; channels of one run may execute different installers.
+    ``bootstrap`` is the channel's installed default fixture turn.
     """
 
     channel: str
@@ -133,6 +232,7 @@ class InstallObservation:
     skill_files: int
     delegate_version: str
     default_state: tuple[str, str, str]
+    bootstrap: BootstrapObservation
     installer_sha256: str | None = None
 
 
@@ -159,6 +259,7 @@ class CandidateInstallFacts:
                     "skill_files": item.skill_files,
                     "delegate_version": item.delegate_version,
                     "default_state": list(item.default_state),
+                    "bootstrap": item.bootstrap.to_record(),
                 }
                 for item in self.installs
             ],
@@ -232,7 +333,8 @@ def package_command_args(package: Path, extra: list[str]) -> list[str]:
 PROOF_STAGE = "validate-candidate-install-proof"
 
 
-INSTALL_PROOF_SCHEMA_VERSION = 1
+# Version 2 binds the installed bootstrap turn; no version 1 proof was ever stored.
+INSTALL_PROOF_SCHEMA_VERSION = 2
 
 
 INSTALL_PROOF_KIND = "delegation-layer-candidate-install-proof"
@@ -348,7 +450,8 @@ class InstallProof:
     """One successful candidate install on one platform through one channel.
 
     ``consumed`` is sorted by path and holds exactly the channel's artifact
-    kinds; ``witness_sha256`` is the digest of the exact witness bytes.
+    kinds; ``bootstrap`` is the closed fixture turn of exactly ``binaries``;
+    ``witness_sha256`` is the digest of the exact witness bytes.
     """
 
     candidate_id: str
@@ -361,6 +464,7 @@ class InstallProof:
     binaries: BinaryDigests
     delegate_version: str
     default_state: tuple[str, str, str]
+    bootstrap: BootstrapObservation
     witness_sha256: str
 
     def __post_init__(self) -> None:
@@ -378,6 +482,7 @@ class InstallProof:
                 or not isinstance(self.binaries, BinaryDigests)
                 or self.default_state != EXPECTED_DEFAULT_STATE):
             raise VerificationError("install_proof_invalid", PROOF_STAGE)
+        require_bootstrap(self.bootstrap, self.binaries)
 
     @property
     def platform(self) -> tuple[str, str]:
@@ -411,7 +516,8 @@ def encode_install_proof(proof: InstallProof) -> bytes:
         "installer": _installer_record(proof.installer),
         "harness": {"commit": proof.harness.commit, "sha256": proof.harness.sha256},
         "binaries": proof.binaries.as_mapping(), "delegate_version": proof.delegate_version,
-        "default_state": list(proof.default_state), "witness_sha256": proof.witness_sha256,
+        "default_state": list(proof.default_state), "bootstrap": proof.bootstrap.to_record(),
+        "witness_sha256": proof.witness_sha256,
     }, PROOF_STAGE)
 
 
@@ -422,7 +528,7 @@ def encode_install_witness(facts: CandidateInstallFacts) -> bytes:
 
 _PROOF_FIELDS = frozenset({
     "schema_version", "kind", "candidate_id", "os", "arch", "channel", "consumed", "installer",
-    "harness", "binaries", "delegate_version", "default_state", "witness_sha256",
+    "harness", "binaries", "delegate_version", "default_state", "bootstrap", "witness_sha256",
 })
 
 
@@ -462,6 +568,21 @@ def _parse_default_state(value: object) -> tuple[str, str, str]:
     return (value[0], value[1], value[2])
 
 
+_BOOTSTRAP_FIELDS = frozenset({
+    "root_id", "task_id", "binaries", "outcome", "worker_result", "termination_cause", "scope_empty",
+    "shutdown",
+})
+
+
+def _parse_bootstrap(value: object) -> BootstrapObservation:
+    fields = exact_fields(value, _BOOTSTRAP_FIELDS, PROOF_STAGE)
+    return BootstrapObservation(
+        root_id=fields["root_id"], task_id=fields["task_id"],
+        binaries=parse_binary_digests(fields["binaries"], PROOF_STAGE), outcome=fields["outcome"],
+        worker_result=fields["worker_result"], termination_cause=fields["termination_cause"],
+        scope_empty=fields["scope_empty"], shutdown=fields["shutdown"])
+
+
 def parse_install_proof(data: bytes) -> InstallProof:
     """Read the exact proof shape; this grants no authority (see ``read_install_proof``)."""
     value = load_record(data, max_bytes=MAX_INSTALL_PROOF_BYTES, stage=PROOF_STAGE)
@@ -479,6 +600,7 @@ def parse_install_proof(data: bytes) -> InstallProof:
         binaries=parse_binary_digests(fields["binaries"], PROOF_STAGE),
         delegate_version=fields["delegate_version"],
         default_state=_parse_default_state(fields["default_state"]),
+        bootstrap=_parse_bootstrap(fields["bootstrap"]),
         witness_sha256=fields["witness_sha256"],
     )
 
@@ -511,7 +633,7 @@ _WITNESS_FIELDS = frozenset({"tag", "platform", "candidate_files", "installs"})
 
 _OBSERVATION_FIELDS = frozenset({
     "channel", "installer_sha256", "requests", "binaries", "skill_files", "delegate_version",
-    "default_state",
+    "default_state", "bootstrap",
 })
 
 
@@ -536,7 +658,7 @@ def _require_witness(proof: InstallProof, witness: bytes, *, tag: str, repositor
     expected = {
         "channel": proof.channel.value, "installer_sha256": proof.installer.sha256,
         "binaries": proof.binaries.as_mapping(), "delegate_version": proof.delegate_version,
-        "default_state": list(proof.default_state),
+        "default_state": list(proof.default_state), "bootstrap": proof.bootstrap.to_record(),
     }
     urls = release_url_pair(repository, tag, proof.consumed_ref(ArtifactKind.ARCHIVE).path).expected()
     requests = ([{"outcome": REQUEST_SERVED, "url": url} for url in urls]

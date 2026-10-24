@@ -23,6 +23,7 @@ API_VERSION = "2026-03-10"
 RELEASE_PAGE_SIZE = 30
 MAX_RELEASE_PAGES = 100
 MAX_RELEASE_PAGE_BYTES = 1 << 20
+RELEASES_STAGE = "github-release"
 ASSET_PAGE_SIZE = 100
 MAX_ASSET_PAGES = 100
 ASSETS_STAGE = "github-release-assets"
@@ -237,23 +238,34 @@ class GitHubClient:
         Complete the bounded listing before accepting an unambiguous match.
         """
         found: dict[str, object] | None = None
-        for page in range(1, MAX_RELEASE_PAGES + 1):
-            rows = self.json(f"repos/{repo}/releases?per_page={RELEASE_PAGE_SIZE}&page={page}",
-                             limit=MAX_RELEASE_PAGE_BYTES)
-            if not isinstance(rows, list) or len(rows) > RELEASE_PAGE_SIZE:
-                raise VerificationError("github_releases_invalid", "github-release")
-            for value in rows:
-                row = object_value(value, "github-release")
-                if row.get("tag_name") == tag:
-                    positive_id(row.get("id"), "github-release")
-                    if found is not None:
-                        raise VerificationError("github_release_ambiguous", "github-release")
-                    found = row
-            if len(rows) < RELEASE_PAGE_SIZE:
-                if found is None:
-                    raise VerificationError("github_release_not_found", "github-release")
-                return found
-        raise VerificationError("github_releases_pagination_incomplete", "github-release")
+        for value in iter_releases(self, repo):
+            row = object_value(value, RELEASES_STAGE)
+            if row.get("tag_name") == tag:
+                positive_id(row.get("id"), RELEASES_STAGE)
+                if found is not None:
+                    raise VerificationError("github_release_ambiguous", RELEASES_STAGE)
+                found = row
+        if found is None:
+            raise VerificationError("github_release_not_found", RELEASES_STAGE)
+        return found
+
+
+def iter_releases(client: GitHubClient, repo: str) -> Iterator[object]:
+    """Yield every listed release row, drafts included, one validated page at a time.
+
+    This owns only page shape and exhaustion: a short page ends the listing, and a
+    full final page leaves it incomplete. Callers own row policy and must consume
+    the whole iterator before acting on what it lists.
+    """
+    for page in range(1, MAX_RELEASE_PAGES + 1):
+        rows = client.json(f"repos/{repo}/releases?per_page={RELEASE_PAGE_SIZE}&page={page}",
+                           limit=MAX_RELEASE_PAGE_BYTES)
+        if not isinstance(rows, list) or len(rows) > RELEASE_PAGE_SIZE:
+            raise VerificationError("github_releases_invalid", RELEASES_STAGE)
+        yield from rows
+        if len(rows) < RELEASE_PAGE_SIZE:
+            return
+    raise VerificationError("github_releases_pagination_incomplete", RELEASES_STAGE)
 
 
 def iter_release_assets(client: GitHubClient, repo: str, release_id: int) -> Iterator[object]:

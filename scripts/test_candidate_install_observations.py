@@ -66,7 +66,7 @@ def expected_proof(candidate: BoundCandidate, request: CandidateInstallRequest, 
         installer=installer, harness=fx.INSTALL_HARNESS,
         binaries=parse_binary_digests(request.binary_hashes(), "expected-binaries"),
         delegate_version=candidate.manifest.version, default_state=EXPECTED_DEFAULT_STATE,
-        witness_sha256=support.sha256(encode_install_witness(facts)))
+        bootstrap=facts.installs[0].bootstrap, witness_sha256=support.sha256(encode_install_witness(facts)))
 
 
 def read(candidate: BoundCandidate, proof: InstallProof, facts: CandidateInstallFacts,

@@ -10,6 +10,7 @@ from scripts.delegate_acceptance.private_cli.capture import reap_captured_proces
 from scripts.delegate_acceptance.private_cli.root_cleanup import remove_private_acceptance_root
 from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_ALREADY_CLOSED
 from scripts.delegate_acceptance.private_cli.supervisor import PREDECESSOR_SHUT_DOWN
+from scripts.delegate_acceptance.private_cli.supervisor import shutdown_pending_private_supervisor
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_predecessor_supervisor
 from scripts.delegate_acceptance.private_cli.supervisor import shutdown_private_supervisor
 
@@ -138,17 +139,11 @@ def shutdown_supplemental_supervisors(cleanup_errors, lifetime):
             root = pending["predecessor"].state
             handed_off = shutdown_captured_predecessor(cleanup_errors, lifetime, pending)
             clean_handoffs[root] = clean_handoffs.get(root, True) and handed_off
-        elif pending["config"].is_file():
+        else:
             try:
-                shutdown_private_supervisor(
-                    pending["client"],
-                    pending["config"],
-                    pending["env"],
-                    state=pending["state"],
-                    task_ids=tuple(pending.get("task_ids", ())),
-                    capture_root=lifetime.base_token,
+                shutdown_pending_private_supervisor(
+                    pending, lifetime.supervisor_cleanups, capture_root=lifetime.base_token
                 )
-                lifetime.supervisor_cleanups.remove(pending)
             except BaseException as cleanup_error:
                 cleanup_errors.append(
                     RuntimeError("packaged default supervisor shutdown remained unverified: " + str(cleanup_error))

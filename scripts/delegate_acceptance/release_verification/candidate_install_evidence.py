@@ -92,7 +92,7 @@ def install_evidence(facts: CandidateInstallFacts, manifest: CandidateManifest, 
         installer=_installer(rule, manifest, consumed, observation), harness=harness,
         binaries=binaries,
         delegate_version=observation.delegate_version, default_state=observation.default_state,
-        witness_sha256=sha(witness)))
+        bootstrap=observation.bootstrap, witness_sha256=sha(witness)))
     value = read_install_proof(proof, witness, manifest=manifest, installer_source=installer_source,
                                repository=locator.repository)
     return value, proof, witness

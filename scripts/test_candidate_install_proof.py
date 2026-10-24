@@ -26,6 +26,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scripts.acceptance_tests import candidate_fixtures as fx
+from scripts import prove_candidate_install as cli
 from scripts.acceptance_tests.release_fixture import FixtureTree
 from scripts.delegate_acceptance.evidence.digests import sha
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandError, CommandFailure
@@ -44,7 +45,7 @@ from scripts.delegate_acceptance.release_verification.published_ports import Con
 from scripts.test_candidate_artifact_support import (
     DOWNLOAD, ENDPOINTS, REPOSITORY, VERSION, CandidateArtifactCase, manifest_bytes, payload_files,
 )
-from scripts.test_candidate_install_support import fake_binary, observed_children
+from scripts.test_candidate_install_support import RecordingProbe, fake_binary, observed_children
 from scripts.test_candidate_source_support import ChildFault, SourceRepository, settle_retained
 
 
@@ -194,6 +195,52 @@ class OutputDirectoryTests(ProofCase):
                            self.request(output=output, locator=output / "locator.json"))
 
 
+class BootstrapParentTests(ProofCase):
+    """The bootstrap root's parent is resolved once at the application boundary; HOME stays the default."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = self.tree.root / "home"
+        self.home.mkdir()
+        environment = mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def parse(self, *extra: str) -> app.ProofRequest:
+        """The request the real contributor CLI builds, captured before any proof step runs."""
+        requests: list[app.ProofRequest] = []
+        with mock.patch.object(cli, "prove_candidate_install", lambda request: requests.append(request) or 0):
+            self.assertEqual(cli.main(["--locator", "locator.json", "--channel", "shell",
+                                       "--output-dir", str(self.tree.root / "output"), *extra]), 0)
+        (request,) = requests
+        return request
+
+    def test_the_cli_passes_only_an_explicit_parent_and_the_default_resolves_home(self) -> None:
+        self.assertIsNone(self.parse().bootstrap_parent)
+        self.assertEqual(app.require_bootstrap_parent(self.request()), self.home.resolve())
+        short = self.tree.root / "short"
+        short.mkdir()
+        (self.tree.root / "link").symlink_to(short)
+        request = self.parse("--bootstrap-parent", str(self.tree.root / "link"))
+        self.assertEqual(request.bootstrap_parent, self.tree.root / "link")
+        self.assertEqual(app.require_bootstrap_parent(request), short.resolve())
+
+    def test_an_invalid_parent_refuses_before_the_output_or_the_probe_exists(self) -> None:
+        a_file = self.tree.root / "a-file"
+        a_file.write_text("not a directory\n")
+        cases = {"relative": Path("short"), "dotdot": self.home / ".." / "home",
+                 "missing": self.tree.root / "missing", "file": a_file}
+        probe = mock.Mock()
+        with mock.patch.object(app, "InstalledBootstrapProbe", probe):
+            for name, parent in cases.items():
+                with self.subTest(case=name):
+                    request = self.parse("--bootstrap-parent", str(parent))
+                    self.assertRefused("candidate_install_bootstrap_parent_invalid",
+                                       app.prove_candidate_install, request)
+                    self.assertFalse(request.output_dir.exists())
+        probe.assert_not_called()
+
+
 class ExportTests(ProofCase):
     def test_export_reads_back_the_exact_new_bytes(self) -> None:
         path = self.tree.root / "proof.json"
@@ -326,6 +373,11 @@ class FullFlowTests(CandidateArtifactCase):
         self.locator_path = self.root / "locator.json"
         self.locator_path.write_bytes(encode_locator(self.served.locator))
         self.output = self.root / "output"
+        # The operator HOME below which the bootstrap probe creates its short private root.
+        self.home = self.root / "home"
+        self.home.mkdir()
+        # Unit isolation: the version-only fake binaries cannot run the installed fixture turn.
+        self.probe: Callable[..., object] | None = lambda **_owners: RecordingProbe()
         self.events: list[str] = []
         self.at_cleanup: dict[str, bool] = {}
         self.after: Callable[[str], None] | None = None
@@ -349,7 +401,7 @@ class FullFlowTests(CandidateArtifactCase):
             return real(*args, **kwargs)
         return mock.patch.object(owner, name, side_effect=recorded)
 
-    def prove(self) -> int:
+    def prove(self, *, bootstrap_parent: Path | None = None) -> int:
         real_prepare = cleanup.prepare_directory_cleanup
 
         def prepare(*args, **kwargs):
@@ -360,11 +412,13 @@ class FullFlowTests(CandidateArtifactCase):
 
         environment = {"PATH": os.pathsep.join([str(self.root / "bin"), os.environ["PATH"]]),
                        "FIXTURE_LOG": str(self.log_path), "FIXTURE_ROUTES": str(self.routes_path),
-                       "GH_TOKEN": "private-canary"}
+                       "GH_TOKEN": "private-canary", "HOME": str(self.home)}
         request = app.ProofRequest(locator=self.locator_path, channel=InstallChannel.SHELL, output_dir=self.output,
-                                   checkout=self.repository.path)
+                                   checkout=self.repository.path, bootstrap_parent=bootstrap_parent)
         ports = ConsumerPorts(run=self.run_child, which=shutil.which)
-        with mock.patch.dict(os.environ, environment), observed_children(self.tree), \
+        probe = (contextlib.nullcontext() if self.probe is None
+                 else mock.patch.object(app, "InstalledBootstrapProbe", self.probe))
+        with mock.patch.dict(os.environ, environment), observed_children(self.tree), probe, \
                 self.spy(app, "executing_harness", "harness"), self.spy(app, "export_file", "export"), \
                 self.spy(app, "read_install_proof", "readback"), \
                 mock.patch.object(cleanup, "prepare_directory_cleanup", side_effect=prepare), \
@@ -398,6 +452,37 @@ class FullFlowTests(CandidateArtifactCase):
         self.assertEqual(receipt["candidate_install"]["witness"]["sha256"], sha(witness))
         self.assertEqual(self.requested(), [*ENDPOINTS.values(), DOWNLOAD])
         self.assertNotIn("private-canary", json.dumps(receipt))
+
+    def test_the_real_probe_refuses_the_version_only_install_and_retains_its_root(self) -> None:
+        self.probe = None
+        self.assertEqual(self.prove(), 1)
+        self.assertRetained("candidate_bootstrap_unresolved")
+        receipt = self.receipt()
+        bootstrap = receipt["candidate_install"]["bootstrap"]
+        root = Path(bootstrap["root"])
+        self.assertEqual(root.parent, self.home.resolve())
+        self.assertIn(str(root), receipt["cleanup"]["retained_paths"])
+        self.assertEqual((bootstrap["status"], bootstrap["failure"]["type"]), ("failed", "RuntimeError"))
+        self.assertEqual(len(bootstrap["unresolved_ownership"]), 1)
+        self.assertFalse((self.output / app.PROOF_NAME).exists())
+        self.assertNotIn("private-canary", json.dumps(receipt))
+        # The test's own proof before the tree removes the root: the stand-in exited 8 and left no state.
+        dispatch = json.loads((root / "r" / "packaged-dispatch.json").read_text(encoding="utf-8"))
+        self.assertEqual(dispatch["exit_code"], 8)
+        self.assertEqual(list((root / "h").iterdir()), [])
+
+    def test_a_selected_parent_holds_the_real_probe_root_and_the_operator_home_stays_untouched(self) -> None:
+        selected = self.root / "s"
+        selected.mkdir()
+        self.probe = None
+        self.assertEqual(self.prove(bootstrap_parent=selected), 1)
+        self.assertRetained("candidate_bootstrap_unresolved")
+        receipt = self.receipt()
+        root = Path(receipt["candidate_install"]["bootstrap"]["root"])
+        self.assertEqual((root.parent, receipt["candidate_install"]["bootstrap_parent"]),
+                         (selected.resolve(), str(selected.resolve())))
+        self.assertIn(str(root), receipt["cleanup"]["retained_paths"])
+        self.assertEqual(list(self.home.iterdir()), [])
 
     def assertRetained(self, code: str) -> None:
         receipt = self.receipt()

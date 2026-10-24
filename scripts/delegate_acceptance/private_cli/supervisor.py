@@ -295,12 +295,38 @@ def await_managed_lifetime_closure(state, task_ids=(), timeout=30):
 
 
 def shutdown_private_supervisor(client, config, env, timeout=30, *, state, task_ids=(), capture_root):
-    """Authorize lifetime closure, then observe PID and endpoint disappearance."""
-    authorize_managed_lifetime_closure(state, task_ids)
+    """Authorize lifetime closure, then observe PID and endpoint disappearance.
+
+    Returns the closure that authorized this shutdown, after the daemon exited
+    and its endpoint closed.
+    """
+    closure = authorize_managed_lifetime_closure(state, task_ids)
     deadline = time.monotonic() + timeout
     shutdown_observed_supervisor(
         client, config, env, private_shutdown_evidence(config), deadline, capture_root=capture_root
     )
+    return closure
+
+
+def shutdown_pending_private_supervisor(pending, supervisor_cleanups, *, capture_root):
+    """Shut down one ordinary supervisor ledger entry, then drop it from the ledger.
+
+    Returns the authorizing closure, or None while the entry's config does not
+    exist: the entry stays pending because absence alone proves no daemon closure.
+    A failed shutdown raises and keeps the entry.
+    """
+    if not pending["config"].is_file():
+        return None
+    closure = shutdown_private_supervisor(
+        pending["client"],
+        pending["config"],
+        pending["env"],
+        state=pending["state"],
+        task_ids=tuple(pending.get("task_ids", ())),
+        capture_root=capture_root,
+    )
+    supervisor_cleanups.remove(pending)
+    return closure
 
 
 PREDECESSOR_SHUT_DOWN = "shut_down"

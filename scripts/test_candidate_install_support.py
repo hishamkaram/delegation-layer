@@ -19,13 +19,14 @@ from unittest import mock
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.acceptance_tests import candidate_fixtures as fx
 from scripts.acceptance_tests.release_fixture import FixtureTree
 from scripts.delegate_acceptance.processes.contracts import BoundedCommandResult
 from scripts.delegate_acceptance.release_verification import candidate_install as install
 from scripts.delegate_acceptance.release_verification import commands, github
 from scripts.delegate_acceptance.release_verification.assets import platform_identity
 from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
-    CandidateFiles, CandidateInstallFacts, CandidateInstallRequest,
+    BootstrapObservation, BootstrapTarget, CandidateFiles, CandidateInstallFacts, CandidateInstallRequest,
 )
 from scripts.delegate_acceptance.release_verification.commands import command
 from scripts.delegate_acceptance.release_verification.contract import BINARIES, new_receipt
@@ -158,6 +159,27 @@ class RecordingPorts:
             inherited={"GH_TOKEN": SECRET, "NPM_TOKEN": SECRET, "SSL_CERT_FILE": "/etc/ssl/cert.pem"})
 
 
+def accepted_bootstrap(target: BootstrapTarget) -> BootstrapObservation:
+    """The accepted turn of exactly the target's expected binaries."""
+    return fx.bootstrap(target.binaries)
+
+
+class RecordingProbe:
+    """A unit-isolation BootstrapProbe: records each target, then returns ``observe(target)``.
+
+    It stands in only for the installed fixture turn that InstalledBootstrapProbe runs;
+    the version-only fake binaries cannot run that turn.
+    """
+
+    def __init__(self, observe: Callable[[BootstrapTarget], BootstrapObservation] = accepted_bootstrap):
+        self.targets: list[BootstrapTarget] = []
+        self.observe = observe
+
+    def __call__(self, target: BootstrapTarget) -> BootstrapObservation:
+        self.targets.append(target)
+        return self.observe(target)
+
+
 def pack_checkout(destination: Path, scratch: Path) -> Path:
     """npm pack of this checkout through the shared bounded runner, outside the repo tree."""
     npm = shutil.which("npm")
@@ -196,6 +218,7 @@ class CandidateCase(unittest.TestCase):
         self.tree = FixtureTree.open(parent, prefix=TREE_PREFIX, label=TREE_LABEL)
         self.addCleanup(self.tree.dispose)
         self.recording = RecordingPorts(self.tree, dependencies=self.dependencies)
+        self.probe = RecordingProbe()
         self.root = self.tree.root
         self.candidate = self.root / "candidate"
         self.parent = self.root / "runner"
@@ -234,7 +257,7 @@ class CandidateCase(unittest.TestCase):
         self.layout = layout
         with observed_children(self.tree, dependencies=self.dependencies):
             return install.verify_candidate_install(
-                request, ports=self.recording.ports(), receipt=self.receipt, layout=layout,
+                request, ports=self.recording.ports(), probe=self.probe, receipt=self.receipt, layout=layout,
                 info=platform_identity() if info is None else info, channels=channels)
 
 

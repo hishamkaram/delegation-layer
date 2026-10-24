@@ -382,7 +382,10 @@ the model options described under [Provider models](#provider-models). Use
 `resume --receipt PATH` to recover an interrupted attempt; it never reruns
 provider cases. `prove_candidate_install.py` proves exactly one channel
 (`shell`, `npm` or `homebrew`) on the host that runs it. Run Homebrew proof only
-on a fresh, disposable Homebrew host: that installation is retained.
+on a fresh, disposable Homebrew host: that installation is retained. Each proof
+runs one local fixture task under a short private directory below `HOME`; if your
+home path is too long for the private supervisor socket, pass an existing short
+directory with `--bootstrap-parent`.
 
 Before opening or updating the pull request, run the readiness check from a
 clean checkout of the reviewed head:
@@ -440,8 +443,10 @@ python3 scripts/release_native.py publish-candidate \
 The command prints its receipt path. It runs the shared preflight, records the
 dispatch intent, dispatches [`release.yml`](../.github/workflows/release.yml)
 once and observes that exact run. The trusted-main job alone writes
-destinations, in order: draft release and assets, the exact npm TGZ, the tag
-and public GitHub release, then the exact tap formula. The job uses the
+destinations, in order: draft release and assets, the tag and public GitHub
+release, the exact npm TGZ, then the exact tap formula. The npm package
+installs that version's archives from the public release, so npm never names a
+version before its release is public. The job uses the
 repository secrets `NPM_TOKEN` and `HOMEBREW_TAP_TOKEN`; the tap token needs
 write access to `hishamkaram/homebrew-tap`. The workflow's
 `release-promotion` concurrency group queues runs (`queue: max`) and never
@@ -472,6 +477,12 @@ dispatched, recovery reports `BLOCKED`; start a new `publish-candidate`.
 If npm and the GitHub release already match the candidate but the tap did not
 finish, start a new `publish-candidate` with `--resume-published true`. It
 mutates neither npm nor GitHub; it verifies them and may finish the tap.
+
+If the GitHub release is already published but npm did not finish, start a new
+`publish-candidate` with `--resume-published false`. It verifies the matching
+published release, which must still be GitHub's latest, and skips it; it then
+may publish the exact npm TGZ once and finish the tap. Nothing retries or rolls
+back a partial publication automatically.
 
 After publication, checks cover delivery, integrity and provenance only. The
 validated delivery report records the original pull request head and tree and

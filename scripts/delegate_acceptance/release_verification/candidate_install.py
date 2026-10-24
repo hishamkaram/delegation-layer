@@ -1,9 +1,12 @@
 """Install the exact unpublished candidate through the original shell and npm installers.
 
 The caller owns candidate validation, the receipt and the workspace lifetime; this module
-only observes installations. Every child runs through ConsumerPorts.run in a scrubbed
-environment whose PATH starts with a curl shim, so install.sh (directly or as the packaged
-install-cli child) can fetch only the two intended release URLs, served from local files.
+only observes installations. Every installer and default-path child runs through
+ConsumerPorts.run in a scrubbed environment whose PATH starts with a curl shim, so
+install.sh (directly or as the packaged install-cli child) can fetch only the two intended
+release URLs, served from local files. After the installed hashes and the fresh default
+state match, the caller's required BootstrapProbe runs one fixture task through the
+installed delegate; that probe, not this module, owns its children and resources.
 Any failure leaves the workspace to the caller's retain-for-investigation path.
 """
 
@@ -17,14 +20,14 @@ from ..directories.operations import DirectoryOwner
 from ..evidence.digests import sha
 from .assets import exercise_default_path, inspect_binaries, platform_identity, remember_directory
 from .candidate_install_contract import (
-    CHANNEL_BREW, CHANNEL_NPM, CHANNEL_SHELL, WITNESS_ROLE_KINDS, CandidateInstallFacts, CandidateInstallRequest,
-    InstallObservation, ReleaseUrls, package_command_args, reject_denied, release_urls,
-    require_requests, url_served_files, validate_request,
+    CHANNEL_BREW, CHANNEL_NPM, CHANNEL_SHELL, WITNESS_ROLE_KINDS, BootstrapProbe, BootstrapTarget,
+    CandidateInstallFacts, CandidateInstallRequest, InstallObservation, ReleaseUrls, package_command_args,
+    reject_denied, release_urls, require_bootstrap, require_requests, url_served_files, validate_request,
 )
 from .candidate_install_brew import observe_brew_install, require_brew_host
 from .candidate_install_shim import CurlShim, prepare_shim
 from .candidate_manifest import entry_limit
-from .contract import MAX_SOURCE_FILE, VerificationError
+from .contract import MAX_SOURCE_FILE, VerificationError, parse_binary_digests
 from .filesystem import bounded_digest
 from .published_contract import (
     NPM_PACKAGE, UNRESOLVED_OWNERSHIP_CODES, compare_hashes, installed_binary_hashes,
@@ -53,6 +56,7 @@ class _Channel:
 
     name: str
     ports: ConsumerPorts
+    probe: BootstrapProbe
     receipt: dict
     request: CandidateInstallRequest
     urls: ReleaseUrls
@@ -137,13 +141,13 @@ def _installer_digests(request: CandidateInstallRequest, channels: tuple[str, ..
 
 
 def _open_channel(
-        name: str, *, ports: ConsumerPorts, receipt: dict, request: CandidateInstallRequest,
+        name: str, *, ports: ConsumerPorts, probe: BootstrapProbe, receipt: dict, request: CandidateInstallRequest,
         urls: ReleaseUrls, info: dict[str, str], layout: ConsumerLayout, installer_sha256: str) -> _Channel:
     base = layout.root / name
     base.mkdir(mode=0o700)
     shim = prepare_shim(base, url_served_files(request, urls))
     return _Channel(
-        name=name, ports=ports, receipt=receipt, request=request, urls=urls, info=info,
+        name=name, ports=ports, probe=probe, receipt=receipt, request=request, urls=urls, info=info,
         layout=layout, base=base, shim=shim, installer_sha256=installer_sha256)
 
 
@@ -192,7 +196,7 @@ def _install_npm(channel: _Channel) -> None:
 
 
 def _observe(channel: _Channel) -> InstallObservation:
-    """Bind served requests, installed binaries and skill files, then run the default-path checks."""
+    """Bind served requests, installed binaries and skill files, then the default-path checks and turn."""
     requests = channel.shim.requests()
     require_requests(requests, channel.urls)
     require_exact_binaries(channel.bin_dir)
@@ -211,19 +215,26 @@ def _observe(channel: _Channel) -> InstallObservation:
         paths, channel.bin_dir, scratch, channel.request.package_version(), channel.info, home,
         cwd=channel.layout.cwd)
     state = scratch["default_path_observation"]
+    # The archive layout ships the supervisor pair beside delegate, in the one PATH directory.
+    expected = parse_binary_digests(channel.request.binary_hashes(), "verify-binaries")
+    bootstrap = require_bootstrap(channel.probe(BootstrapTarget(
+        command_directory=channel.bin_dir, delegate=paths["delegate"],
+        supervisor_directory=channel.bin_dir, binaries=expected)), expected)
     return InstallObservation(
         channel=channel.name, requests=requests, binaries=tuple(sorted(installed.items())),
         skill_files=skill_files, delegate_version=scratch["delegate_build_identity"]["version"],
         default_state=(state["state_before"], state["observed_state"], state["state_after"]),
-        installer_sha256=channel.installer_sha256)
+        bootstrap=bootstrap, installer_sha256=channel.installer_sha256)
 
 
 def verify_candidate_install(
-        request: CandidateInstallRequest, *, ports: ConsumerPorts, receipt: dict,
+        request: CandidateInstallRequest, *, ports: ConsumerPorts, probe: BootstrapProbe, receipt: dict,
         layout: ConsumerLayout, info: dict[str, str],
         channels: tuple[str, ...] = CHANNELS) -> CandidateInstallFacts:
     """Install the candidate per channel and prove binaries, skill and default-path behavior.
 
+    ``probe`` runs each channel's installed default fixture turn only after that
+    channel's hashes and fresh default state matched; it is never skipped.
     ``info`` is the caller's expected platform; the facts record the observed host
     platform, and a mismatch is refused before any child. Raises VerificationError with
     the failing code; the caller must retain the workspace on every failure (a timed-out
@@ -245,11 +256,12 @@ def verify_candidate_install(
     for name in channels:
         if name == CHANNEL_BREW:
             receipt["stage"] = "candidate-install-brew"
-            observed.append(observe_brew_install(request, ports=ports, receipt=receipt, layout=layout, info=actual))
+            observed.append(observe_brew_install(
+                request, ports=ports, probe=probe, receipt=receipt, layout=layout, info=actual))
             continue
         channel = _open_channel(
-            name, ports=ports, receipt=receipt, request=request, urls=urls, info=actual, layout=layout,
-            installer_sha256=installers[name])
+            name, ports=ports, probe=probe, receipt=receipt, request=request, urls=urls, info=actual,
+            layout=layout, installer_sha256=installers[name])
         receipt["stage"] = f"candidate-install-{name}"
         (_install_shell if name == CHANNEL_SHELL else _install_npm)(channel)
         observed.append(_observe(channel))

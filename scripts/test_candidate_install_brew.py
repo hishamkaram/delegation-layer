@@ -29,7 +29,7 @@ from scripts.delegate_acceptance.release_verification import published_homebrew
 from scripts.delegate_acceptance.release_verification.assets import exercise_default_path, inspect_binaries
 from scripts.delegate_acceptance.release_verification.candidate_install_brew import observe_brew_install
 from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
-    ArtifactRef, CandidateFiles, CandidateInstallFacts, CandidateInstallRequest, HarnessIdentity, InstallChannel,
+    ArtifactRef, BootstrapTarget, CandidateFiles, CandidateInstallFacts, CandidateInstallRequest, HarnessIdentity, InstallChannel,
     InstallProof, ManifestArtifactBinding, RequestRecord, SourceFileBinding, encode_install_proof, encode_install_witness,
     read_install_proof,
 )
@@ -44,8 +44,9 @@ from scripts.delegate_acceptance.release_verification.contract import (
 )
 from scripts.delegate_acceptance.release_verification.published_contract import homebrew_prefixes
 from scripts.delegate_acceptance.release_verification.published_ports import ConsumerPorts
+from scripts.acceptance_tests import candidate_fixtures as fx
 from scripts.test_candidate_install_support import (
-    REPO, REPO_ROOT, SECRET, fake_binary, observed_children, write_archive,
+    REPO, REPO_ROOT, SECRET, RecordingProbe, fake_binary, observed_children, write_archive,
 )
 from scripts.test_candidate_source_support import ChildFault, settle_retained
 
@@ -114,6 +115,7 @@ class BrewCase(unittest.TestCase):
         self.receipt = new_receipt("candidate-install", TAG, "a" * 40)
         self.layout = install.open_workspace(owner=self.tree.owner, parent=root / "runner", receipt=self.receipt)
         self.recording = BrewPorts(self)
+        self.probe = RecordingProbe()
         # Only the prefix value moves into the tree; which OS has a prefix stays the real policy.
         patch = mock.patch.object(published_homebrew, "homebrew_prefixes",
                                   lambda os_name: (str(self.prefix),) if homebrew_prefixes(os_name) else ())
@@ -128,8 +130,8 @@ class BrewCase(unittest.TestCase):
             binaries=tuple(sorted((name, sha(data)) for name, data in expected.items())), skill=())
 
     def observe(self, request: CandidateInstallRequest | None = None):
-        return observe_brew_install(request or self.request(), ports=self.recording.ports(), receipt=self.receipt,
-                                    layout=self.layout, info=DARWIN)
+        return observe_brew_install(request or self.request(), ports=self.recording.ports(), probe=self.probe,
+                                    receipt=self.receipt, layout=self.layout, info=DARWIN)
 
     def assertCode(self, code: str, request: CandidateInstallRequest | None = None) -> None:
         with self.assertRaises(VerificationError) as caught:
@@ -227,6 +229,42 @@ class ObservationTest(BrewCase):
         self.observe()
         self.assertEqual(self.receipt["binaries"]["pueue"]["version"], "4.0.4")
         self.assertEqual(self.receipt["binaries"]["pueued"]["version"], "4.0.4")
+
+    def test_the_probe_targets_the_linked_bin_and_the_keg_libexec_pair_before_brew_test(self):
+        seen = []
+
+        def observe(target):
+            seen.append(self.recording.names())
+            return fx.bootstrap(target.binaries)
+
+        self.probe = RecordingProbe(observe)
+        observation = self.observe()
+        keg = self.keg.resolve()
+        expected = parse_binary_digests({name: sha(data) for name, data in self.binaries.items()}, "test")
+        self.assertEqual(self.probe.targets, [BootstrapTarget(
+            command_directory=self.prefix / "bin", delegate=keg / "bin" / "delegate",
+            supervisor_directory=keg / "libexec", binaries=expected)])
+        self.assertEqual(seen[0][-1], "delegate-default-supervisor-status")
+        self.assertEqual(self.recording.names()[-1], "candidate-brew-test")
+        self.assertEqual(observation.bootstrap, fx.bootstrap(expected))
+
+    def test_a_turn_through_a_path_pair_instead_of_the_keg_pair_is_refused_before_brew_test(self):
+        standalone = {}
+        for name in ("pueue", "pueued"):
+            other = self.prefix / "bin" / name
+            standalone[name] = f"#!/bin/sh\nprintf '{name} 4.0.4\\n'\n# standalone\n".encode()
+            other.write_bytes(standalone[name])
+            other.chmod(0o755)
+        self.probe = RecordingProbe(lambda target: fx.bootstrap(replace(
+            target.binaries, pueue=sha(standalone["pueue"]), pueued=sha(standalone["pueued"]))))
+        self.assertCode("install_bootstrap_mismatch")
+        self.assertEqual(len(self.probe.targets), 1)
+        self.assertNotIn("candidate-brew-test", self.recording.names())
+
+    def test_a_keg_hash_mismatch_refuses_before_the_probe(self):
+        changed = {**self.binaries, "pueued": b"#!/bin/sh\nprintf 'pueued 4.0.4\\n'\n# changed\n"}
+        self.assertCode("installed_binary_hash_mismatch", self.request(binaries=changed))
+        self.assertEqual(self.probe.targets, [])
 
     def test_linked_delegate_must_resolve_to_the_verified_keg(self):
         def install_elsewhere(argv, env):
@@ -385,8 +423,8 @@ class RefusalTest(BrewCase):
         self.assertCode("candidate_formula_missing", request)
         for info in (UNSUPPORTED, {"kernel": "6", "arch": "amd64"}):
             with self.subTest(info=info), self.assertRaises(VerificationError) as caught:
-                observe_brew_install(self.request(), ports=self.recording.ports(), receipt=self.receipt,
-                                     layout=self.layout, info=info)
+                observe_brew_install(self.request(), ports=self.recording.ports(), probe=self.probe,
+                                     receipt=self.receipt, layout=self.layout, info=info)
             self.assertEqual((caught.exception.code, caught.exception.stage),
                              ("homebrew_host_unsupported", "homebrew-observe"))
         self.assertEqual(self.recording.calls, [])
@@ -400,8 +438,8 @@ class RefusalTest(BrewCase):
                     f"{reported}\n".encode())
                 with mock.patch.object(published_homebrew, "homebrew_prefixes", homebrew_prefixes):
                     with self.assertRaises(VerificationError) as caught:
-                        observe_brew_install(self.request(), ports=self.recording.ports(), receipt=self.receipt,
-                                             layout=self.layout, info=info)
+                        observe_brew_install(self.request(), ports=self.recording.ports(), probe=self.probe,
+                                             receipt=self.receipt, layout=self.layout, info=info)
                 self.assertEqual(caught.exception.code, "homebrew_prefix_unsupported")
                 self.assertEqual(self.recording.names(), ["homebrew-prefix"])
                 self.assertFalse(self.tap_dir.exists())
@@ -414,8 +452,8 @@ class ComposerTest(BrewCase):
 
     def compose(self, info: dict[str, str]) -> CandidateInstallFacts:
         return install.verify_candidate_install(
-            self.request(), ports=self.recording.ports(), receipt=self.receipt, layout=self.layout,
-            info=info, channels=("brew",))
+            self.request(), ports=self.recording.ports(), probe=self.probe, receipt=self.receipt,
+            layout=self.layout, info=info, channels=("brew",))
 
     def test_brew_composes_on_the_supported_host_os_with_exact_formula_archive_binaries_and_test(self):
         actual = install.platform_identity()
@@ -570,7 +608,7 @@ class ProofRoundTripTest(BrewCase):
             "harness": HarnessIdentity("e" * 40, "4" * 64),
             "binaries": parse_binary_digests(dict(observation.binaries), "test"),
             "delegate_version": observation.delegate_version, "default_state": observation.default_state,
-            "witness_sha256": sha(witness), **changes}
+            "bootstrap": observation.bootstrap, "witness_sha256": sha(witness), **changes}
         return manifest, InstallProof(**fields), witness, facts
 
     def read(self, manifest, proof, witness):

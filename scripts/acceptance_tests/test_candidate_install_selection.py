@@ -54,7 +54,9 @@ class InstallDigestTests(unittest.TestCase):
                 source_commit=fx.COMMIT, repo_path=INSTALLER_REPO_PATH, sha256=sha(b"#!/bin/sh\nexit 0\n"))),
             "artifact": replace(self.shell, consumed=tuple(other_archive if ref == archive else ref
                                                            for ref in self.shell.consumed)),
-            "binary": replace(self.shell, binaries=OTHER_BINARIES),
+            "binary": replace(self.shell, binaries=OTHER_BINARIES, bootstrap=fx.bootstrap(OTHER_BINARIES)),
+            "bootstrap_task": replace(self.shell, bootstrap=replace(self.shell.bootstrap, task_id="3" * 32)),
+            "bootstrap_root": replace(self.shell, bootstrap=replace(self.shell.bootstrap, root_id="3" * 32)),
         }
         digests = {name: proof.sha256 for name, proof in mutations.items()}
         for name, proof in mutations.items():

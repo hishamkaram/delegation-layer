@@ -5,6 +5,7 @@
     "layer": "test",
     "imports": [
       "py:__future__",
+      "py:acceptance_tests.candidate_fixtures",
       "py:acceptance_tests.release_fixture",
       "py:collections.abc",
       "py:contextlib",
@@ -35,9 +36,14 @@
     "layer": "test",
     "imports": [
       "py:__future__",
+      "py:acceptance_tests.candidate_fixtures",
+      "py:contextlib",
+      "py:dataclasses",
+      "py:delegate_acceptance.release_verification.candidate_install_bootstrap",
       "py:delegate_acceptance.release_verification.candidate_install_contract",
       "py:delegate_acceptance.release_verification.contract",
       "py:delegate_acceptance.release_verification.published_contract",
+      "py:io",
       "py:json",
       "py:pathlib",
       "py:shutil",
@@ -45,6 +51,31 @@
       "py:test_candidate_install_support",
       "py:unittest",
       "py:unittest.mock"
+    ]
+  },
+  {
+    "name": "py:test_candidate_install_bootstrap",
+    "owner": "py:test_candidate_install_bootstrap",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:acceptance_tests.candidate_fixtures",
+      "py:acceptance_tests.release_fixture",
+      "py:delegate_acceptance.directories.operations",
+      "py:delegate_acceptance.private_cli.capture",
+      "py:delegate_acceptance.private_cli.finalization",
+      "py:delegate_acceptance.private_cli.packaged_defaults",
+      "py:delegate_acceptance.private_cli.supervisor",
+      "py:delegate_acceptance.release_verification.candidate_install_bootstrap",
+      "py:delegate_acceptance.release_verification.candidate_install_contract",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:errno",
+      "py:os",
+      "py:pathlib",
+      "py:sys",
+      "py:tempfile",
+      "py:types",
+      "py:unittest"
     ]
   },
   {
@@ -150,6 +181,7 @@
     "layer": "test",
     "imports": [
       "py:__future__",
+      "py:acceptance_tests.candidate_fixtures",
       "py:acceptance_tests.release_fixture",
       "py:contextlib",
       "py:dataclasses",
@@ -223,6 +255,7 @@
       "py:json",
       "py:os",
       "py:pathlib",
+      "py:prove_candidate_install",
       "py:shutil",
       "py:sys",
       "py:tarfile",

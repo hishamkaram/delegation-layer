@@ -33,6 +33,7 @@ TAG_REFS = f"GET repos/{REPOSITORY}/git/matching-refs/tags/{TAG}"
 CREATE_REF = f"POST repos/{REPOSITORY}/git/refs"
 UPLOAD = f"UPLOAD {TAG}"
 LIST = f"GET repos/{REPOSITORY}/releases?per_page=30&page=1"
+LATEST = f"GET repos/{REPOSITORY}/releases/latest"
 # The fixture's first created release.
 CREATED = 501
 
@@ -73,13 +74,15 @@ class PreparationTests(DeliveryCase):
         self.assertEqual(len(prepared.observed.assets), len(NAMES))
 
     def test_complete_published_release_skips_without_writes(self):
-        self.seed_release(draft=False, names=NAMES, target="main", tag_commit=MERGED)
+        self.seed_release(draft=False, names=NAMES, target="main", tag_commit=MERGED, latest=True)
         for resume in (False, True):
             with self.subTest(resume_published=resume):
                 prepared = self.prepare(resume_published=resume)
                 self.assertEqual(self.publish(prepared, resume_published=resume), prepared)
                 self.assertEqual(prepared.observed.target_commit, MERGED)
         self.assertEqual(self.mutations(), [])
+        # Each edge read GitHub's own latest release once per invocation.
+        self.assertEqual([entry["key"] for entry in self.log()].count(LATEST), 4)
         self.assertEqual(list(self.bodies.iterdir()), [])
 
     def test_existing_wrong_tag_refuses_before_any_mutation(self):
@@ -383,6 +386,177 @@ class PublicationTests(DeliveryCase):
         self.assertEqual(self.mutations(), [])
 
 
+class LatestGuardTests(DeliveryCase):
+    """Before any write, and again before the tag and publication, GitHub's own latest release is read."""
+
+    def setUp(self):
+        super().setUp()
+        self.pristine = self.state()
+        self.patch_key = f"PATCH repos/{REPOSITORY}/releases/{CREATED}"
+        self.since = 0
+
+    def fresh(self) -> None:
+        """Restore the empty remote, free the body paths and observe only later requests."""
+        self.save(self.pristine)
+        for body in self.bodies.iterdir():
+            body.unlink()
+        self.since = len(self.log())
+
+    def keys(self) -> list[str]:
+        return [entry["key"] for entry in self.log()[self.since:]]
+
+    def writes(self) -> list[str]:
+        return [key for key in self.keys() if key.startswith(("POST", "PATCH", "PUT", "DELETE", "UPLOAD"))]
+
+    def latest_reads(self) -> int:
+        return self.keys().count(LATEST)
+
+    def assertDelivered(self, *, latest_reads: int) -> None:
+        self.publish(self.prepare())
+        self.assertEqual(self.writes(), [CREATE, *([UPLOAD] * len(NAMES)), CREATE_REF, self.patch_key])
+        self.assertEqual((self.state()["latest"], self.latest_reads()), (CREATED, latest_reads))
+
+    def test_without_a_published_release_the_complete_listing_is_absence(self):
+        arrangements = {
+            "empty": lambda: None,
+            "draft and prerelease only": lambda: (self.seed_other("v0.1.40", draft=True),
+                                                  self.seed_other("v0.1.41", release_id=41, prerelease=True)),
+        }
+        for name, arrange in arrangements.items():
+            with self.subTest(name=name):
+                self.fresh()
+                arrange()
+                self.assertDelivered(latest_reads=0)
+
+    def test_an_older_latest_is_read_by_each_edge_and_never_inferred_from_the_listing(self):
+        # A higher listed version is not latest; ``0.1.9`` sorts after ``0.1.37`` only as text.
+        arrangements = {
+            "older latest": lambda: (self.seed_other("v0.1.50", release_id=41),
+                                     self.seed_other("v0.1.36", latest=True)),
+            "numeric order": lambda: self.seed_other("v0.1.9", latest=True),
+        }
+        for name, arrange in arrangements.items():
+            with self.subTest(name=name):
+                self.fresh()
+                arrange()
+                self.assertDelivered(latest_reads=2)
+
+    def test_a_partial_draft_under_an_older_latest_uploads_only_missing_files(self):
+        self.seed_other("v0.1.36", latest=True)
+        self.seed_release(draft=True, names=NAMES[:3])
+        self.publish(self.prepare())
+        self.assertEqual(self.writes(), [*([UPLOAD] * (len(NAMES) - 3)),
+                                            CREATE_REF, f"PATCH repos/{REPOSITORY}/releases/51"])
+        self.assertEqual(self.state()["latest"], 51)
+
+    def test_a_newer_or_equal_latest_refuses_before_any_write(self):
+        equal = json.dumps({"id": 40, "tag_name": TAG, "draft": False, "prerelease": False})
+        for name, partial, fault in (("newer", False, None), ("newer with partial draft", True, None),
+                                     ("equal", False, Fault(LATEST, output=equal, exit=0))):
+            with self.subTest(name=name):
+                self.fresh()
+                self.seed_other("v0.1.40", latest=True)
+                if partial:
+                    self.seed_release(draft=True, names=NAMES[:2])
+                if fault is not None:
+                    self.fault(fault)
+                error = self.refused("candidate_version_not_newer", self.prepare)
+                self.assertEqual(error.stage, "decide-candidate-delivery")
+                self.assertEqual((self.writes(), self.uploads), ([], []))
+
+    def test_a_latest_published_after_preparation_refuses_before_the_tag_or_publication(self):
+        prepared = self.prepare()
+        writes = self.writes()
+        self.seed_other("v0.1.40", latest=True)
+        self.refused("candidate_version_not_newer", self.publish, prepared)
+        self.assertEqual(self.writes(), writes)
+        self.assertEqual(self.state()["refs"], {})
+        self.assertTrue(self.state()["releases"][0]["draft"])
+
+    def test_a_complete_release_is_accepted_only_while_it_is_latest(self):
+        self.seed_release(draft=False, names=NAMES, target="main", tag_commit=MERGED, latest=True)
+        original = self.state()
+        for other in ("v0.1.40", "v0.1.36"):
+            for resume in (False, True):
+                with self.subTest(other=other, resume_published=resume):
+                    self.save(original)
+                    prepared = self.prepare(resume_published=resume)
+                    self.seed_other(other, latest=True)
+                    self.refused("candidate_version_resume_not_latest", self.publish, prepared,
+                                 resume_published=resume)
+                    self.refused("candidate_version_resume_not_latest", self.prepare, resume_published=resume)
+        self.assertEqual(self.writes(), [])
+
+    def test_a_lost_publication_acknowledgement_resumes_without_writes(self):
+        prepared = self.prepare()
+        self.fault(Fault(self.patch_key, apply=True))
+        self.refused("github_request_failed", self.publish, prepared)
+        writes = self.writes()
+        self.assertEqual(writes[-2:], [CREATE_REF, self.patch_key])
+        for resume in (False, True):
+            with self.subTest(resume_published=resume):
+                again = self.prepare(resume_published=resume)
+                self.assertFalse(again.observed.draft)
+                self.assertEqual(self.publish(again, resume_published=resume), again)
+        self.assertEqual((self.writes(), self.state()["latest"]), (writes, CREATED))
+
+    def test_a_failed_or_malformed_latest_read_is_never_absence(self):
+        not_found = '{"message":"Not Found","status":"404"}'
+
+        def row(**changes) -> str:
+            value = {"id": 40, "tag_name": "v0.1.36", "draft": False, "prerelease": False, **changes}
+            return json.dumps({key: item for key, item in value.items() if item is not ...})
+
+        cases = (
+            ("github_request_failed", None),
+            ("github_request_failed", Fault(LATEST)),
+            ("github_request_failed", Fault(LATEST, output=not_found)),
+            ("github_response_invalid", Fault(LATEST, output="not json", exit=0)),
+            ("github_object_invalid", Fault(LATEST, output="[]", exit=0)),
+            *(("candidate_github_latest_invalid", Fault(LATEST, output=row(**change), exit=0)) for change in (
+                {"tag_name": ...}, {"tag_name": 7}, {"tag_name": "0.1.36"}, {"draft": True}, {"draft": 0},
+                {"draft": None}, {"draft": ...}, {"prerelease": True}, {"prerelease": "false"},
+                {"prerelease": ...})),
+            ("candidate_field_invalid", Fault(LATEST, output=row(tag_name="vfoo"), exit=0)),
+            ("candidate_field_invalid", Fault(LATEST, output=row(tag_name="v0.1"), exit=0)),
+        )
+        for code, fault in cases:
+            with self.subTest(code=code, output=None if fault is None else fault.output):
+                self.fresh()
+                # Unset, the fixture answers ``releases/latest`` as not found although a release is published.
+                self.seed_other("v0.1.36", latest=fault is not None)
+                if fault is not None:
+                    self.fault(fault)
+                self.refused(code, self.prepare)
+                self.assertEqual((self.writes(), self.latest_reads()), ([], 1))
+
+    def test_a_failed_malformed_or_late_invalid_inventory_stops_before_latest(self):
+        page_two = f"GET repos/{REPOSITORY}/releases?per_page=30&page=2"
+        stable = json.dumps([{"id": 900 + n, "tag_name": f"v0.0.{n}", "draft": False, "prerelease": False}
+                             for n in range(30)])
+        empty = Fault(LIST, output="[]", exit=0)
+        cases = (
+            ("candidate_github_latest_invalid", {"draft": "false"}, []),
+            ("candidate_github_latest_invalid", {"prerelease": None}, []),
+            ("github_request_failed", None, [empty, Fault(LIST)]),
+            ("github_releases_invalid", None, [empty, Fault(LIST, output='{"rows": []}', exit=0)]),
+            # Discovery reads both pages; the guard's positive first page cannot end its listing early.
+            ("github_releases_invalid", None, [
+                Fault(LIST, output=stable, exit=0), Fault(page_two, output="[]", exit=0),
+                Fault(LIST, output=stable, exit=0), Fault(page_two, output='{"late": true}', exit=0)]),
+        )
+        for code, flags, faults in cases:
+            with self.subTest(code=code, flags=flags, faults=len(faults)):
+                self.fresh()
+                if flags is not None:
+                    self.seed_other("v0.1.36", latest=True, **flags)
+                for fault in faults:
+                    self.fault(fault)
+                self.refused(code, self.prepare)
+                self.assertEqual((self.writes(), self.latest_reads()), ([], 0))
+                self.assertEqual(self.state()["faults"], [])
+
+
 class KnownReleaseTests(DeliveryCase):
     """Once the draft exists, every read names its ID; the listing may omit it but never name another."""
 
@@ -400,7 +574,9 @@ class KnownReleaseTests(DeliveryCase):
         self.edit(lambda state: state["unlisted"].append(CREATED))
         prepared = self.prepare()
         observe = [TAG_REFS, LIST, by_id(CREATED), f"{by_id(CREATED)}/assets?per_page=100&page=1"]
-        self.assertEqual(self.keys(), [TAG_REFS, LIST, CREATE, *observe, *([UPLOAD] * len(NAMES)), *observe])
+        # The second listing is the latest guard's own complete inventory, which holds no published release.
+        self.assertEqual(self.keys(), [TAG_REFS, LIST, LIST, CREATE, *observe, *([UPLOAD] * len(NAMES)),
+                                       *observe])
         self.assertEqual(prepared.release_id, CREATED)
         self.assertEqual({asset.name: asset.sha256 for asset in prepared.observed.assets},
                          {name: self.expected_digest(name) for name in NAMES})
@@ -421,8 +597,10 @@ class KnownReleaseTests(DeliveryCase):
         original = self.state()
         listed = json.dumps([{key: value for key, value in row.items() if key != "assets"}
                              for row in original["releases"]])
-        # Hidden for the whole publication, then only after the publication write.
-        for faults in ([], [Fault(LIST, output=listed, exit=0), Fault(LIST, output="[]", exit=0)]):
+        # Hidden for the whole publication, then only after the publication write; the
+        # second listing is the latest guard's own inventory before the write.
+        for faults in ([], [Fault(LIST, output=listed, exit=0), Fault(LIST, output=listed, exit=0),
+                            Fault(LIST, output="[]", exit=0)]):
             with self.subTest(faults=len(faults)):
                 calls = self.reset(original, unlisted=[] if faults else [CREATED])
                 for fault in faults:
@@ -471,7 +649,8 @@ class KnownReleaseTests(DeliveryCase):
                 self.fault(fault)
                 self.refused("github_request_failed", self.prepare)
                 keys = self.keys(calls)
-                self.assertEqual((keys[-1], keys.count(LIST)), (by_id(CREATED), 2))
+                # Discovery, the latest guard's inventory and the confirmation each list once.
+                self.assertEqual((keys[-1], keys.count(LIST)), (by_id(CREATED), 3))
                 self.assertEqual([key for key in keys if key.startswith(("POST", "UPLOAD"))], [CREATE])
 
     def test_failed_read_by_id_stops_publication_before_any_write(self):
@@ -498,8 +677,8 @@ class KnownReleaseTests(DeliveryCase):
         for code, faults, state in cases:
             with self.subTest(code=code):
                 calls = self.reset(original, **state)
-                # The initial discovery reads the real, empty listing first.
-                for fault in ([Fault(LIST, exit=0, output="[]")] if faults else []) + faults:
+                # The initial discovery and the latest guard read the real, empty listing first.
+                for fault in ([Fault(LIST, exit=0, output="[]")] * 2 if faults else []) + faults:
                     self.fault(fault)
                 self.refused(code, self.prepare)
                 keys = self.keys(calls)

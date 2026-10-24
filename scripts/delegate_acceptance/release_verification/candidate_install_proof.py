@@ -4,7 +4,8 @@ The application composes existing owners only. The locator owner binds the
 hosted candidate, ``load_candidate_artifact`` verifies its payload, the archive
 owner extracts and hashes the host binaries, ``read_regular_blobs`` reads the
 shell installer from the manifest source commit, ``verify_candidate_install``
-observes the one installation, ``install_evidence`` assembles the proof, and
+observes the one installation with this application's ``InstalledBootstrapProbe``
+as its required bootstrap port, ``install_evidence`` assembles the proof, and
 ``read_install_proof`` reads the exported bytes back. ``observe_harness`` binds
 the executing checkout before and after. The invocation receipt, its cleanup
 layout and ``finish_gate`` own every created resource; the proof grants no
@@ -12,12 +13,16 @@ readiness, store or publication authority.
 
 Output directory layout, created new for one invocation: ``receipt.json`` (and
 the cleanup owner's lock and journal beside it), ``install-proof.json``,
-``install-witness.json`` and the ``workspace`` directory that cleanup removes.
+``install-witness.json`` and the ``workspace`` directory that cleanup removes. The
+bootstrap probe's short private root lies below the request's existing bootstrap parent
+(the operator's HOME unless one is selected), because the deep workspace cannot hold a
+private supervisor endpoint; the probe removes it after a verified turn and otherwise
+retains it as a location the gate reports.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 
@@ -29,6 +34,7 @@ from .assets import extract_archive, gh_environment, inspect_binaries, platform_
 from .candidate_artifact import load_candidate_artifact
 from .candidate_build_source import child_environment
 from .candidate_install import open_workspace, verify_candidate_install
+from .candidate_install_bootstrap import InstalledBootstrapProbe
 from .candidate_install_contract import (
     CHANNEL_RULES, INSTALLER_REPO_PATH, WITNESS_ROLE_KINDS, CandidateFiles, CandidateInstallRequest,
     HarnessIdentity, InstallChannel, read_install_proof,
@@ -87,13 +93,18 @@ _LIMITS = {
 
 @dataclass(frozen=True)
 class ProofRequest:
-    """One invocation: the locator file, one channel, a new output directory and the executing checkout."""
+    """One invocation: the locator file, one channel, a new output directory and the executing checkout.
+
+    ``bootstrap_parent`` is an existing directory short enough to hold the bootstrap probe's
+    isolated HOME and its private supervisor endpoint; None selects the operator's HOME.
+    """
 
     locator: Path
     channel: InstallChannel
     output_dir: Path
     checkout: Path
     github_auth: str = "environment"
+    bootstrap_parent: Path | None = None
 
 
 def require_output_dir(request: ProofRequest) -> None:
@@ -110,9 +121,27 @@ def require_output_dir(request: ProofRequest) -> None:
         raise VerificationError("candidate_install_output_overlap", STAGE)
 
 
+def require_bootstrap_parent(request: ProofRequest) -> Path:
+    """Resolve, once and before anything is created, the existing parent of the bootstrap root.
+
+    The directory owner that creates the root below it repeats its own identity checks.
+    """
+    selected = Path.home() if request.bootstrap_parent is None else request.bootstrap_parent
+    if not selected.is_absolute() or ".." in selected.parts:
+        raise VerificationError("candidate_install_bootstrap_parent_invalid", STAGE)
+    try:
+        parent = selected.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise VerificationError("candidate_install_bootstrap_parent_invalid", STAGE) from None
+    if not parent.is_dir():
+        raise VerificationError("candidate_install_bootstrap_parent_invalid", STAGE)
+    return parent
+
+
 def prove_candidate_install(request: ProofRequest, *, ports: ConsumerPorts | None = None) -> int:
     """Prove one channel; returns the process exit code (0 only on a proven, cleaned-up pass)."""
     require_output_dir(request)
+    request = replace(request, bootstrap_parent=require_bootstrap_parent(request))
     try:
         request.output_dir.mkdir(mode=0o700)
     except OSError:
@@ -131,8 +160,9 @@ def _new_proof_receipt(request: ProofRequest, gate: str) -> dict:
     receipt.update({"claim": CLAIM, "tag": None, "source_revision": None, "harness_revision": None})
     receipt["candidate_install"] = {"channel": request.channel.value, "status": "partial"}
     receipt["unresolved_limits"] = [
-        "No authenticated provider acceptance or task execution; CLI checks cover versions, "
-        "providers, capabilities and default-path state only.",
+        "No authenticated provider acceptance; the one executed task is a local shell fixture "
+        "turn through the installed delegate, runner and supervisor pair.",
+        "Binary digests cannot distinguish byte-identical copies from the installed files.",
         "Descendant process closure of installer children is not proven; any failure retains "
         "the workspace for investigation.",
         "The proof records an observation only; it grants no readiness, store or publication authority.",
@@ -245,8 +275,10 @@ def _prove(request: ProofRequest, ports: ConsumerPorts, receipt: dict, owner: Di
         tag=manifest.build_tag, repo=locator.repository, installer=installer, files=files,
         binaries=tuple(sorted(binaries.as_mapping().items())), skill=skill)
     layout = open_workspace(owner=owner, parent=workspace, receipt=receipt)
-    facts = verify_candidate_install(install_request, ports=ports, receipt=receipt, layout=layout, info=info,
-                                     channels=(request.channel.value,))
+    receipt["candidate_install"]["bootstrap_parent"] = str(request.bootstrap_parent)
+    probe = InstalledBootstrapProbe(receipt=receipt, locations=locations, parent=request.bootstrap_parent)
+    facts = verify_candidate_install(install_request, ports=ports, probe=probe, receipt=receipt, layout=layout,
+                                     info=info, channels=(request.channel.value,))
     if tuple(observation.channel for observation in facts.installs) != (request.channel.value,):
         raise VerificationError("candidate_install_channel_mismatch", STAGE)
     # The harness is matched again before the pair exists, so no consumable proof names a changed harness.

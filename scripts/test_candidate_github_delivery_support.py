@@ -10,7 +10,10 @@ A set ``rewrite_body`` makes the next release write store that body while still
 acknowledging the requested one, to model a body lost after the write. Release
 IDs in ``unlisted`` stay readable by ID but are left out of the release listing,
 to model a listing that lags behind a created draft; a set ``release_fill``
-fills every listing page with other tags once any release exists.
+fills every listing page with other tags once any release exists. GitHub's
+latest release is the explicit ``latest`` ID, never derived from the listing or
+from versions: ``releases/latest`` answers that row, or not found when unset, and
+only a release write with ``make_latest`` ``"true"`` moves it.
 Nothing touches the network or a provider.
 """
 
@@ -104,6 +107,9 @@ def get(endpoint):
     path, _, query = endpoint.partition("?")
     params = dict(item.split("=") for item in query.split("&")) if query else {}
     base = "repos/" + repo + "/"
+    if path == base + "releases/latest":
+        row = next((row for row in state["releases"] if row["id"] == state["latest"]), None)
+        return None if row is None else {key: value for key, value in row.items() if key != "assets"}
     if path == base + "releases":
         page = int(params["page"])
         if state["release_fill"] and state["releases"]:
@@ -144,6 +150,8 @@ def write(method, endpoint, body):
     if method == "PATCH" and endpoint.startswith(base + "releases/"):
         row = next(row for row in state["releases"] if row["id"] == int(endpoint.rsplit("/", 1)[1]))
         row.update(body)
+        if body.get("make_latest") == "true":
+            state["latest"] = row["id"]
         return rewritten(row)
     return None
 
@@ -268,7 +276,7 @@ class DeliveryCase(unittest.TestCase):
         self.receipt: dict = {"commands": []}
         self.save({"repo": REPOSITORY, "releases": [], "refs": {}, "tag_objects": {}, "next_id": 500,
                    "faults": [], "asset_pages": {}, "asset_fill": False, "extra_tag_refs": [],
-                   "rewrite_body": None, "unlisted": [], "release_fill": False})
+                   "rewrite_body": None, "unlisted": [], "release_fill": False, "latest": None})
 
     def state(self) -> dict:
         return json.loads(self.state_path.read_text())
@@ -351,8 +359,12 @@ class DeliveryCase(unittest.TestCase):
                 if entry["key"].startswith(("POST", "PATCH", "PUT", "DELETE", "UPLOAD"))]
 
     def seed_release(self, *, draft: bool, names: tuple[str, ...] = (), target: str = MERGED,
-                     tag_commit: str | None = None, digests: dict[str, str] | None = None) -> int:
-        """Store one release with the named assets and the exact body; ``tag_commit`` also creates its tag."""
+                     tag_commit: str | None = None, digests: dict[str, str] | None = None,
+                     latest: bool = False) -> int:
+        """Store one release with the named assets and the exact body; ``tag_commit`` also creates its tag.
+
+        ``latest`` makes it GitHub's latest release explicitly.
+        """
         payload = {**self.files, MANIFEST_PATH: self.manifest}
         assets = [{"id": 600 + index, "name": name, "size": len(payload[name]), "state": "uploaded",
                    "digest": "sha256:" + (digests or {}).get(name, sha(payload[name]))}
@@ -364,6 +376,20 @@ class DeliveryCase(unittest.TestCase):
                                       "body": release_body(self.promotion)})
             if tag_commit is not None:
                 state["refs"][f"refs/tags/{TAG}"] = {"type": "commit", "sha": tag_commit}
+            if latest:
+                state["latest"] = 51
 
         self.edit(change)
         return 51
+
+    def seed_other(self, tag: str, *, release_id: int = 40, draft: object = False, prerelease: object = False,
+                   latest: bool = False) -> int:
+        """Store another version's release row; ``latest`` makes it GitHub's latest release explicitly."""
+        def change(state: dict) -> None:
+            state["releases"].append({"id": release_id, "tag_name": tag, "target_commitish": OTHER,
+                                      "draft": draft, "prerelease": prerelease, "assets": [], "body": ""})
+            if latest:
+                state["latest"] = release_id
+
+        self.edit(change)
+        return release_id

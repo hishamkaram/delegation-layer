@@ -10,8 +10,8 @@ the registry owns the published package and its ``latest`` tag. This module
 performs only the npm reads and the single publish those decisions call for,
 through the canonical command owner, and stores nothing. Its one ordering
 guard is npm's own: before publishing it reads npm's current ``latest`` and
-refuses unless the target is strictly newer, so a destination the caller's
-GitHub-side check cannot see is never moved backwards.
+refuses unless the target is strictly newer, so a destination the GitHub
+release edge's own latest guard cannot see is never moved backwards.
 
 Only a successful, complete version listing without the target means absence;
 every failed, timed-out, oversized or malformed read stops. npm owns

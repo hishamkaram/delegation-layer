@@ -24,11 +24,13 @@ from scripts.delegate_acceptance.release_verification import actions_artifacts
 from scripts.delegate_acceptance.release_verification.contract import VerificationError
 from scripts.delegate_acceptance.release_verification.github import GitHubClient
 from .contract import MAX_RECEIPT, ReleaseError, integer, object_value, text_value
-from .publication_contract import PUBLICATION_RUN_PATHS, PUBLICATION_WORKFLOW, PublicationDispatch
+from .publication_contract import (
+    PUBLICATION_RUN_ATTEMPT, PUBLICATION_RUN_PATHS, PUBLICATION_WORKFLOW, PublicationDispatch,
+)
 from .submission import bind_dispatched_run
 
 
-OBSERVED_ATTEMPT = 1
+OBSERVED_ATTEMPT = PUBLICATION_RUN_ATTEMPT
 RUN_PAGE_SIZE = 100
 MAX_RUN_PAGES = 10
 # One page of 100 run rows stays well below this; it bounds the reply only.

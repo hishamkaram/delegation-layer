@@ -17,8 +17,9 @@ from scripts.delegate_acceptance.release_verification.candidate_history import (
     TriageRecord, encode_triage,
 )
 from scripts.delegate_acceptance.release_verification.candidate_install_contract import (
-    CHANNEL_RULES, EXPECTED_DEFAULT_STATE, INSTALLER_REPO_PATH, REQUEST_SERVED, WITNESS_ROLE_KINDS,
-    ArtifactRef, CandidateInstallFacts, HarnessIdentity, InstallChannel, InstallerBinding,
+    BOOTSTRAP_OUTCOME, BOOTSTRAP_SHUTDOWN, BOOTSTRAP_TERMINATION_CAUSE, BOOTSTRAP_WORKER_RESULT, CHANNEL_RULES,
+    EXPECTED_DEFAULT_STATE, INSTALLER_REPO_PATH, REQUEST_SERVED, WITNESS_ROLE_KINDS, ArtifactRef,
+    BootstrapObservation, CandidateInstallFacts, HarnessIdentity, InstallChannel, InstallerBinding,
     InstallObservation, InstallProof, ManifestArtifactBinding, RequestRecord, SourceFileBinding,
     encode_install_witness, release_url_pair,
 )
@@ -50,6 +51,8 @@ FACT = "8" * 64
 CCR_IMPORTS_CLAUDE = (ProviderImport(importer="ccr", imported="claude"),)
 REPOSITORY = "hishamkaram/delegation-layer"
 NATIVE_BINARIES = BinaryDigests(delegate="4" * 64, delegate_run="5" * 64, pueue="6" * 64, pueued="7" * 64)
+BOOTSTRAP_ROOT_ID = "1" * 32
+BOOTSTRAP_TASK_ID = "2" * 32
 INSTALL_SH = b"#!/bin/sh\necho candidate install fixture\n"
 INSTALL_HARNESS = HarnessIdentity(commit="9" * 40, sha256="9" * 64)
 NATIVE_HARNESS_REVISION = "6" * 40
@@ -176,6 +179,14 @@ def installer(refs: tuple[ArtifactRef, ...], channel: InstallChannel) -> Install
     return ManifestArtifactBinding(artifact=next(ref for ref in refs if ref.kind is kind))
 
 
+def bootstrap(binaries: BinaryDigests = NATIVE_BINARIES) -> BootstrapObservation:
+    """The closed installed fixture turn an accepted install of ``binaries`` records."""
+    return BootstrapObservation(
+        root_id=BOOTSTRAP_ROOT_ID, task_id=BOOTSTRAP_TASK_ID, binaries=binaries, outcome=BOOTSTRAP_OUTCOME,
+        worker_result=BOOTSTRAP_WORKER_RESULT, termination_cause=BOOTSTRAP_TERMINATION_CAUSE, scope_empty=True,
+        shutdown=BOOTSTRAP_SHUTDOWN)
+
+
 def witness(candidate: BoundCandidate, *, platform: tuple[str, str], channel: InstallChannel,
             binaries: BinaryDigests = NATIVE_BINARIES) -> CandidateInstallFacts:
     """Build the single-channel witness an install run on ``platform`` would record."""
@@ -189,7 +200,7 @@ def witness(candidate: BoundCandidate, *, platform: tuple[str, str], channel: In
         binaries=tuple(sorted(binaries.as_mapping().items())),
         skill_files=3 if channel is InstallChannel.NPM else 0,
         delegate_version=candidate.manifest.version, default_state=EXPECTED_DEFAULT_STATE,
-        installer_sha256=installer(refs, channel).sha256)
+        bootstrap=bootstrap(binaries), installer_sha256=installer(refs, channel).sha256)
     return CandidateInstallFacts(tag=tag, candidate_files=tuple(sorted((roles[ref.kind], ref.sha256) for ref in refs)),
                                  installs=(observation,), platform=platform)
 
@@ -204,7 +215,7 @@ def install(candidate: BoundCandidate, *, platform: tuple[str, str], channel: In
         candidate_id=candidate.candidate_id, os=os_name, arch=arch, channel=channel, consumed=refs,
         installer=installer(refs, channel), harness=INSTALL_HARNESS, binaries=binaries,
         delegate_version=candidate.manifest.version, default_state=EXPECTED_DEFAULT_STATE,
-        witness_sha256=sha(evidence))
+        bootstrap=bootstrap(binaries), witness_sha256=sha(evidence))
 
 
 def installs_for(candidate: BoundCandidate,

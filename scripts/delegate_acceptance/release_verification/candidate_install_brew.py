@@ -1,12 +1,13 @@
 """Observe one fresh Homebrew installation of the exact unpublished candidate formula.
 
 The caller owns the validated request, the receipt, the workspace and its lifetime; this
-module only observes and returns facts or raises the original failure. Every child runs
-through ConsumerPorts.run in a credential-free environment whose HOMEBREW_CACHE and
+module only observes and returns facts or raises the original failure. Every Homebrew and
+default-path child runs through ConsumerPorts.run in a credential-free environment whose HOMEBREW_CACHE and
 HOMEBREW_LOGS lie inside the caller's workspace. The formula keeps its original release
 URL; Homebrew finds the archive only at the source cache path it reports, preseeded with the
 exact candidate bytes, so a cache miss fails. Homebrew owns the new tap, the formula file
 in it and the keg on the disposable host; nothing here adopts, uninstalls or removes them.
+The caller's BootstrapProbe owns the children and resources of the installed fixture turn.
 """
 
 from __future__ import annotations
@@ -18,9 +19,12 @@ import secrets
 import shutil
 import stat
 from .assets import exercise_binary_identity, isolated_default_environment, observe_default_state
-from .candidate_install_contract import CHANNEL_BREW, CandidateInstallRequest, InstallObservation
+from .candidate_install_contract import (
+    CHANNEL_BREW, BootstrapObservation, BootstrapProbe, BootstrapTarget, CandidateInstallRequest, InstallObservation,
+    require_bootstrap,
+)
 from .candidate_manifest import ArtifactKind, entry_limit
-from .contract import MAX_BINARY, VerificationError
+from .contract import MAX_BINARY, VerificationError, parse_binary_digests
 from .filesystem import _reject_parent_components, _reject_symlink_components, bounded_digest, create_new_file
 from .published_contract import (
     HOMEBREW_FORMULA, compare_hashes, homebrew_environment, homebrew_prefixes, parse_single_line,
@@ -166,9 +170,9 @@ def _install(brew: _Brew, *, host_os: str, formula: Path, formula_sha256: str, a
     return prefix, tapped, cache
 
 
-def _observe(brew: _Brew, request: CandidateInstallRequest, info: dict[str, str],
-             prefix: str) -> tuple[dict[str, str], str, tuple[str, str, str]]:
-    """Layout, keg hashes, linked by-name delegate, exact libexec supervisors, default state."""
+def _observe(brew: _Brew, request: CandidateInstallRequest, info: dict[str, str], prefix: str,
+             probe: BootstrapProbe) -> tuple[dict[str, str], str, tuple[str, str, str], BootstrapObservation]:
+    """Layout, keg hashes, linked by-name delegate, exact libexec supervisors, default state, bootstrap."""
     version = request.package_version()
     try:
         document = json.loads(brew.run("candidate-brew-info", [brew.brew, "info", "--json=v2", "--formula", brew.spec],
@@ -194,18 +198,25 @@ def _observe(brew: _Brew, request: CandidateInstallRequest, info: dict[str, str]
         run=run, executables={"delegate": "delegate", "pueue": str(paths["pueue"]), "pueued": str(paths["pueued"])},
         package_version=version, receipt=brew.receipt)
     default_state = observe_default_state(run=run, state_root=state_root, home=home, receipt=brew.receipt)
+    # The linked bin is the only PATH directory; the keg's libexec pair is selected, never searched.
+    expected = parse_binary_digests(request.binary_hashes(), "verify-binaries")
+    bootstrap = require_bootstrap(probe(BootstrapTarget(
+        command_directory=Path(prefix) / "bin", delegate=paths["delegate"],
+        supervisor_directory=paths["pueue"].parent, binaries=expected)), expected)
     brew.run("candidate-brew-test", [brew.brew, "test", brew.spec], timeout=_TEST_TIMEOUT)
-    return observed, actual, default_state
+    return observed, actual, default_state, bootstrap
 
 
-def observe_brew_install(request: CandidateInstallRequest, *, ports: ConsumerPorts, receipt: dict,
-                         layout: ConsumerLayout, info: dict[str, str]) -> InstallObservation:
+def observe_brew_install(request: CandidateInstallRequest, *, ports: ConsumerPorts, probe: BootstrapProbe,
+                         receipt: dict, layout: ConsumerLayout, info: dict[str, str]) -> InstallObservation:
     """Install the candidate formula on a fresh supported Homebrew and return its observation.
 
     ``info`` is the caller's observed host platform; only an OS with a supported Homebrew
     prefix (macOS or Linux) is accepted, before any child. The default-state tuple proves only the
     default root and that status created nothing; a fresh status returns before any supervisor
-    backend is selected, so it is no evidence of libexec selection or daemon startup.
+    backend is selected. The bootstrap, run by ``probe`` after the keg hashes and that status,
+    is the evidence of the linked delegate's runner and libexec pair selection, daemon startup
+    and verified shutdown.
     """
     host_os = info.get("os", "")
     require_brew_host(host_os)
@@ -217,7 +228,7 @@ def observe_brew_install(request: CandidateInstallRequest, *, ports: ConsumerPor
     brew = _Brew(ports, receipt, layout)
     prefix, tapped, cache = _install(brew, host_os=host_os, formula=formula, formula_sha256=formula_sha256,
                                      archive=archive, archive_sha256=archive_sha256)
-    binaries, version, default_state = _observe(brew, request, info, prefix)
+    binaries, version, default_state, bootstrap = _observe(brew, request, info, prefix, probe)
     for path, kind, digest in ((formula, ArtifactKind.HOMEBREW_FORMULA, formula_sha256),
                                (tapped, ArtifactKind.HOMEBREW_FORMULA, formula_sha256),
                                (archive, ArtifactKind.ARCHIVE, archive_sha256),
@@ -226,4 +237,5 @@ def observe_brew_install(request: CandidateInstallRequest, *, ports: ConsumerPor
             raise VerificationError("candidate_file_changed", "verify-candidate")
     return InstallObservation(
         channel=CHANNEL_BREW, requests=(), binaries=tuple(sorted(binaries.items())), skill_files=0,
-        delegate_version=version, default_state=default_state, installer_sha256=formula_sha256)
+        delegate_version=version, default_state=default_state, bootstrap=bootstrap,
+        installer_sha256=formula_sha256)

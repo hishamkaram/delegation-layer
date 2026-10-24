@@ -17,6 +17,16 @@ the invocation: nothing is retried and no success is inferred from a later
 read. A later explicit invocation observes again from the start. The release
 body is the canonical ``release_body`` text; it is written only when the draft
 is created, and a release holding any other body is refused, never rewritten.
+
+This edge owns GitHub's latest-release observation; ``require_latest_delivery``
+owns the version order. Right after each ``decide_release`` before the first
+write, and again before the tag and the publication, it reads the complete
+release listing. Only when that successful listing holds no published,
+non-prerelease release is there no latest; otherwise only GitHub's own
+``releases/latest`` answer names it, never the listing order or the highest
+version. A draft target must then be strictly newer, and a complete published
+target must already be latest. Each read is a point-in-time observation, not
+an atomic guard against a concurrent publication.
 """
 
 from __future__ import annotations
@@ -32,10 +42,13 @@ from .candidate_artifact import CandidateArtifact
 from .candidate_manifest import MANIFEST_PATH, PAYLOAD_MEMBER_COUNT, encode_manifest
 from .candidate_publication_contract import (
     Absent, CandidatePromotion, ObservedRelease, ReleaseAsset, decide_release, release_body,
+    require_latest_delivery,
 )
 from .contract import HEX_SHA256, VerificationError
 from .filesystem import bounded_fingerprint
-from .github import MAX_RELEASE_PAGE_BYTES, GitHubClient, iter_release_assets, object_value, positive_id
+from .github import (
+    MAX_RELEASE_PAGE_BYTES, GitHubClient, iter_release_assets, iter_releases, object_value, positive_id,
+)
 from .published_ports import ConsumerPorts
 
 
@@ -74,6 +87,7 @@ class _Target:
     """Where and what one promotion delivers; ``files`` maps each payload name to (size, sha256)."""
 
     repo: str
+    version: str
     tag: str
     merged_commit: str
     files: Mapping[str, tuple[int, str]]
@@ -97,6 +111,7 @@ def prepare_release_assets(promotion: CandidatePromotion, artifact: CandidateArt
     _require_artifact(promotion, artifact, target, work_directory)
     remote = _observe(client, target)
     plan = decide_release(promotion=promotion, observed=remote.release, resume_published=resume_published)
+    _require_latest(client, target, published=plan.complete)
     if plan.complete:
         return _prepared(remote)
     if plan.create_draft:
@@ -127,6 +142,8 @@ def publish_prepared_release(promotion: CandidatePromotion, prepared: PreparedRe
     _canonical_directory(work_directory)
     remote = _observe_known(client, target, prepared.release_id, conflict="candidate_release_not_prepared")
     plan = decide_release(promotion=promotion, observed=remote.release, resume_published=resume_published)
+    # A fresh read right before the tag and publication: a release published meanwhile is never overtaken.
+    _require_latest(client, target, published=plan.complete)
     if plan.complete:
         return _prepared(remote)
     if plan.create_draft or plan.upload:
@@ -152,8 +169,9 @@ def _target(promotion: CandidatePromotion) -> _Target:
     candidate = promotion.candidate
     files = {entry.path: (entry.size, entry.sha256) for entry in candidate.manifest.artifacts}
     files[MANIFEST_PATH] = (len(encode_manifest(candidate.manifest)), candidate.locator.manifest_sha256)
-    return _Target(repo=candidate.locator.repository, tag=candidate.manifest.build_tag,
-                   merged_commit=promotion.source.merged_commit, files=files, body=release_body(promotion))
+    return _Target(repo=candidate.locator.repository, version=candidate.manifest.version,
+                   tag=candidate.manifest.build_tag, merged_commit=promotion.source.merged_commit, files=files,
+                   body=release_body(promotion))
 
 
 def _canonical_directory(path: Path) -> None:
@@ -234,6 +252,31 @@ def _observe_known(client: GitHubClient, target: _Target, release_id: int, *, co
     if positive_id(row.get("id"), STAGE) != release_id:
         raise VerificationError("candidate_release_identity_conflict", STAGE)
     return _observed(client, target, row, tag_commit)
+
+
+def _require_latest(client: GitHubClient, target: _Target, *, published: bool) -> None:
+    """Refuse unless the target advances GitHub's latest release, or, ``published``, already is it.
+
+    ``published`` is ``decide_release``'s complete matching published release. The
+    whole listing is read before any decision, so a late page fault still refuses.
+    """
+    stable = False
+    for value in iter_releases(client, target.repo):
+        row = object_value(value, STAGE)
+        draft, prerelease = row.get("draft"), row.get("prerelease")
+        if type(draft) is not bool or type(prerelease) is not bool:
+            raise VerificationError("candidate_github_latest_invalid", STAGE)
+        stable = stable or not (draft or prerelease)
+    latest: str | Absent = Absent.ABSENT
+    if stable:
+        row = object_value(client.json(f"repos/{target.repo}/releases/latest", limit=MAX_RELEASE_PAGE_BYTES),
+                           STAGE)
+        tag = row.get("tag_name")
+        if (row.get("draft") is not False or row.get("prerelease") is not False or type(tag) is not str
+                or not tag.startswith("v")):
+            raise VerificationError("candidate_github_latest_invalid", STAGE)
+        latest = tag[1:]
+    require_latest_delivery(version=target.version, latest_version=latest, resume_published=published)
 
 
 def _release_not_found(error: VerificationError) -> bool:

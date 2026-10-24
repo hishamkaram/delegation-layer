@@ -45,6 +45,8 @@ _INPUT_PATTERNS: dict[str, re.Pattern[str]] = {
     "invocation_id": INVOCATION_ID_RE, "request_sha256": HEX_SHA256, "harness": GIT_OBJECT_RE,
 }
 INPUT_NAMES = tuple(_INPUT_PATTERNS)
+# The one publication run attempt Root observes; a rerun replaces it, so the hosted job publishes only from it.
+PUBLICATION_RUN_ATTEMPT = 1
 
 
 def _matches(pattern: re.Pattern[str], value: object) -> bool:

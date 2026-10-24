@@ -28,6 +28,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True,
                         help="absolute path of a new directory this invocation creates and owns")
     parser.add_argument("--github-auth", choices=GITHUB_AUTH_MODES, default="environment")
+    parser.add_argument("--bootstrap-parent", type=Path,
+                        help="existing short directory for the bootstrap probe's private root (default: HOME)")
     return parser
 
 
@@ -35,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     request = ProofRequest(
         locator=arguments.locator, channel=CHANNELS[arguments.channel], output_dir=arguments.output_dir,
-        checkout=CHECKOUT, github_auth=arguments.github_auth)
+        checkout=CHECKOUT, github_auth=arguments.github_auth, bootstrap_parent=arguments.bootstrap_parent)
     try:
         return prove_candidate_install(request)
     except VerificationError as error:

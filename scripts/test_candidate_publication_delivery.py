@@ -43,7 +43,7 @@ from scripts.test_candidate_publication_contract import (
 )
 from scripts.test_native_publication_contract import NPM
 from scripts.test_candidate_artifact_support import COMMIT, REPOSITORY
-from scripts.test_candidate_github_delivery_support import MERGED, TAG, DeliveryCase, artifact
+from scripts.test_candidate_github_delivery_support import MERGED, TAG, DeliveryCase, Fault, artifact
 from scripts.test_candidate_npm_delivery import _FAKE_NPM
 from scripts.test_candidate_source_support import ChildFault, settle_retained
 from scripts.test_release_github_transport import ObservedGitHubClient
@@ -55,7 +55,7 @@ HARNESS = "9" * 40
 SECRETS = {"GH_TOKEN": "main-token-secret", "HOMEBREW_TAP_TOKEN": "tap-token-secret",
            "NPM_TOKEN": "npm-token-secret"}
 EDGES = ("observe_harness", "preflight", "observe_publication_source", "observe_required_checks",
-         "load_candidate_artifact", "prepare_release_assets", "deliver_npm", "publish_prepared_release",
+         "load_candidate_artifact", "prepare_release_assets", "publish_prepared_release", "deliver_npm",
          "deliver_tap")
 WRITERS = ("prepare_release_assets", "deliver_npm", "publish_prepared_release", "deliver_tap")
 
@@ -331,8 +331,9 @@ class RunBindingTests(unittest.TestCase):
         for name, wrong in (("GITHUB_SHA", "8" * 40), ("GITHUB_REF", "refs/heads/other"),
                             ("GITHUB_EVENT_NAME", "push"), ("GITHUB_REPOSITORY", "fork/delegation-layer"),
                             ("GITHUB_WORKFLOW_REF", "x/y/.github/workflows/release.yml@refs/heads/other"),
-                            ("GITHUB_RUN_ID", "0"), ("GITHUB_RUN_ATTEMPT", "01")):
-            with self.subTest(name=name):
+                            ("GITHUB_RUN_ID", "0"), ("GITHUB_RUN_ATTEMPT", "01"), ("GITHUB_RUN_ATTEMPT", "0"),
+                            ("GITHUB_RUN_ATTEMPT", "2")):
+            with self.subTest(name=name, wrong=wrong):
                 with self.assertRaises(VerificationError) as caught:
                     delivery.hosted_run(run_environment(value, **{name: wrong}), value)
                 self.assertEqual(caught.exception.code, f"publication_run_mismatch:{name.lower()}")
@@ -383,6 +384,25 @@ class CliTests(unittest.TestCase):
         self.assertEqual((request.dispatch, request.run.run_id, request.checkout), (value, 7001, cli.CHECKOUT))
         self.assertEqual(REPORT_FIELD, "publication")
 
+    def test_only_the_first_run_attempt_reaches_the_publisher(self):
+        # The selected readiness attempt is 2; only this run's own attempt is restricted.
+        value = dispatch()
+        inputs = {name.upper(): text for name, text in value.inputs().items()}
+        for attempt, expected_code, expected_stderr in (
+                ("1", 0, ""),
+                ("2", 1, "candidate publication refused: publication_run_mismatch:github_run_attempt "
+                         "(deliver-candidate-publication)\n")):
+            with self.subTest(attempt=attempt):
+                stderr = io.StringIO()
+                environment = {**inputs, **run_environment(value, GITHUB_RUN_ATTEMPT=attempt), **SECRETS}
+                with (mock.patch.dict(cli.os.environ, environment, clear=True),
+                      mock.patch.object(cli, "default_ports") as ports,
+                      mock.patch.object(cli, "publish_candidate", return_value=0) as publish,
+                      contextlib.redirect_stderr(stderr)):
+                    self.assertEqual(cli.main(["--output-dir", "/nonexistent/out"]), expected_code)
+                self.assertEqual(stderr.getvalue(), expected_stderr)
+                self.assertEqual((ports.call_count, publish.call_count), (1 - expected_code, 1 - expected_code))
+
 
 class CredentialModeTests(unittest.TestCase):
     def test_normal_needs_every_credential_and_resume_needs_only_main_and_tap(self):
@@ -431,13 +451,15 @@ class ResumeEdgeTests(DeliveryCase):
         self.npm_environments: list[dict[str, str]] = []
         self.npm_user_configs: list[bytes] = []
         self.tap_calls: list[dict[str, str]] = []
+        # The candidate release as the public sees it whenever an npm child starts.
+        self.github_at_npm: list[tuple[object, bool, bool]] = []
         self.value = self.dispatch_for_fixture()
         self.output = self.tree.root / "publication"
         self.patch_edges()
 
-    def dispatch_for_fixture(self) -> PublicationDispatch:
+    def dispatch_for_fixture(self, *, resume: bool = True) -> PublicationDispatch:
         request = PublicationRequest(store=PRODUCTION_STORE, reference=self.promotion.reference,
-                                     readiness_run_id=901, readiness_run_attempt=2, resume_published=True)
+                                     readiness_run_id=901, readiness_run_attempt=2, resume_published=resume)
         return PublicationDispatch(request=request, invocation_id=INVOCATION, harness=HARNESS)
 
     def patch_edges(self) -> None:
@@ -478,6 +500,7 @@ class ResumeEdgeTests(DeliveryCase):
             if argv[0] != str(self.npm):
                 return github_ports.run(receipt, name, argv, env, **options)
             self.npm_environments.append(dict(env))
+            self.github_at_npm.append(self.public_release())
             self.npm_user_configs.append(Path(env["NPM_CONFIG_USERCONFIG"]).read_bytes())
             routed = {**env, "FIXTURE_STATE": str(self.npm_state), "FIXTURE_LOG": str(self.npm_log)}
             return self.tree.observe_operation(lambda: command(receipt, name, argv, routed, **options))
@@ -509,8 +532,129 @@ class ResumeEdgeTests(DeliveryCase):
             return []
         return [json.loads(line).get("key") for line in self.npm_log.read_text().splitlines()]
 
-    def published(self) -> None:
-        self.seed_release(draft=False, names=payload_paths(VERSION), target="main", tag_commit=MERGED)
+    def published(self, *, latest: bool = True) -> None:
+        self.seed_release(draft=False, names=payload_paths(VERSION), target="main", tag_commit=MERGED,
+                          latest=latest)
+
+    def public_release(self) -> tuple[object, bool, bool]:
+        """The candidate release's draft flag, whether its tag exists and whether it is GitHub's latest."""
+        state = self.state()
+        row = next((row for row in state["releases"] if row["tag_name"] == TAG), None)
+        return (None if row is None else row["draft"], f"refs/tags/{TAG}" in state["refs"],
+                row is not None and state["latest"] == row["id"])
+
+    def public_release_id(self) -> int:
+        return next(row["id"] for row in self.state()["releases"] if row["tag_name"] == TAG)
+
+    def normal_over_older_latest(self, *npm_faults: dict[str, object]) -> None:
+        """A normal dispatch whose npm and GitHub latest are both the older version."""
+        identity = json.loads(self.npm_state.read_text())["packages"][VERSION]
+        self.npm_registry(versions=["0.1.36"], packages={}, latest="0.1.36", publish_override=identity,
+                          faults=list(npm_faults))
+        self.seed_other("v0.1.36", latest=True)
+        self.value = self.dispatch_for_fixture(resume=False)
+
+    def npm_registry(self, **changes: object) -> None:
+        state = json.loads(self.npm_state.read_text())
+        state.update(changes)
+        self.npm_state.write_text(json.dumps(state))
+
+    def assertRefusedBeforeAnyWrite(self, code: str) -> None:
+        binding = ReportBinding.of(self.value, run_id=7001, run_attempt=1)
+        failure = require_failed(self.receipt_value(), binding=binding, promotion=self.promotion)
+        self.assertEqual((failure.code, failure.stage), (code, "decide-candidate-delivery"))
+        self.assertFalse(failure.first_mutation_started)
+        self.assertFalse(failure.delivery_confirmed)
+        self.assertEqual((self.mutations(), self.uploads, self.npm_keys(), self.tap_calls), ([], [], [], []))
+
+    def test_a_newer_github_latest_refuses_a_normal_publication_before_any_write(self):
+        # npm alone would permit the delivery: its latest is older, or already the candidate.
+        older = {"versions": ["0.1.36"], "packages": {}, "latest": "0.1.36"}
+        for name, registry in (("npm older", older), ("npm current", {})):
+            with self.subTest(npm=name):
+                self.doCleanups()
+                self.setUp()
+                self.value = self.dispatch_for_fixture(resume=False)
+                self.npm_registry(**registry)
+                self.seed_other("v0.1.40", latest=True)
+                self.assertEqual(self.run_resume(NPM_TOKEN=SECRETS["NPM_TOKEN"]), 1)
+                self.assertRefusedBeforeAnyWrite("candidate_version_not_newer")
+
+    def test_a_normal_publication_over_an_older_github_latest_moves_it_to_the_candidate(self):
+        self.normal_over_older_latest()
+        self.assertEqual(self.run_resume(NPM_TOKEN=SECRETS["NPM_TOKEN"]), 0)
+        binding = ReportBinding.of(self.value, run_id=7001, run_attempt=1)
+        report = require_published(self.receipt_value(), binding=binding, promotion=self.promotion)
+        self.assertTrue(report["first_mutation_started"])
+        released = next(row for row in self.state()["releases"] if row["tag_name"] == TAG)
+        self.assertEqual((self.state()["latest"], released["draft"]), (released["id"], False))
+        self.assertIn("publish", self.npm_keys())
+        self.assertEqual(len(self.tap_calls), 1)
+        # The npm package installs the exact version from the public release, so npm never starts before it.
+        self.assertTrue(self.github_at_npm)
+        self.assertEqual(set(self.github_at_npm), {(False, True, True)})
+
+    def test_a_failed_or_unknown_github_publication_stops_before_npm_or_tap(self):
+        patch_key = f"PATCH repos/{REPOSITORY}/releases/"
+        for code, fault in (("github_request_failed", Fault(patch_key)),
+                            ("candidate_release_ack_invalid", Fault(patch_key, output='{"draft": false}', exit=0,
+                                                                    apply=True))):
+            with self.subTest(code=code):
+                self.doCleanups()
+                self.setUp()
+                self.normal_over_older_latest()
+                self.fault(fault)
+                self.assertEqual(self.run_resume(NPM_TOKEN=SECRETS["NPM_TOKEN"]), 1)
+                binding = ReportBinding.of(self.value, run_id=7001, run_attempt=1)
+                failure = require_failed(self.receipt_value(), binding=binding, promotion=self.promotion)
+                self.assertEqual(failure.code, code)
+                # The draft, its uploads and the publication request were all attempted.
+                self.assertTrue(failure.first_mutation_started)
+                self.assertFalse(failure.delivery_confirmed)
+                self.assertEqual(self.mutations()[-1], f"{patch_key}{self.public_release_id()}")
+                self.assertEqual((self.npm_keys(), self.tap_calls), ([], []))
+
+    def test_an_npm_failure_after_publication_keeps_the_release_and_a_new_invocation_finishes(self):
+        # An npm publish that fails before, or after, the registry applied it.
+        for applied in (False, True):
+            with self.subTest(applied=applied):
+                self.doCleanups()
+                self.setUp()
+                self.normal_over_older_latest({"key": "publish", "output": None, "exit": 1, "apply": applied,
+                                               "after": 0})
+                self.assertEqual(self.run_resume(NPM_TOKEN=SECRETS["NPM_TOKEN"]), 1)
+                receipt = self.receipt_value()
+                binding = ReportBinding.of(self.value, run_id=7001, run_attempt=1)
+                failure = require_failed(receipt, binding=binding, promotion=self.promotion)
+                self.assertEqual((failure.code, failure.stage), ("command_failed", "candidate-npm-publish"))
+                self.assertTrue(failure.first_mutation_started)
+                self.assertFalse(failure.delivery_confirmed)
+                # The published release stays public and recorded; nothing is retried, retagged or rolled back.
+                released = self.public_release_id()
+                self.assertEqual(self.public_release(), (False, True, True))
+                self.assertEqual(receipt["candidate_publication"].get("published_release_id"), released)
+                self.assertNotIn("npm", receipt["candidate_publication"])
+                self.assertTrue((self.output / delivery.WORKSPACE_NAME).is_dir())
+                self.assertEqual((self.npm_keys().count("publish"), self.tap_calls), (1, []))
+                # A new explicit normal invocation skips the published release and finishes the rest once.
+                writes = self.mutations()
+                self.output = self.tree.root / "publication-again"
+                self.assertEqual(self.run_resume(NPM_TOKEN=SECRETS["NPM_TOKEN"]), 0)
+                require_published(self.receipt_value(), binding=binding, promotion=self.promotion)
+                self.assertEqual(self.mutations(), writes)
+                self.assertEqual(self.npm_keys().count("publish"), 1 if applied else 2)
+                self.assertEqual(len(self.tap_calls), 1)
+                self.assertEqual(self.public_release(), (False, True, True))
+
+    def test_a_stale_complete_resume_refuses_before_npm_or_tap(self):
+        for other in ("v0.1.40", "v0.1.36"):
+            with self.subTest(latest=other):
+                self.doCleanups()
+                self.setUp()
+                self.published(latest=False)
+                self.seed_other(other, latest=True)
+                self.assertEqual(self.run_resume(), 1)
+                self.assertRefusedBeforeAnyWrite("candidate_version_resume_not_latest")
 
     def test_resume_without_an_npm_token_finishes_through_the_canonical_edges(self):
         self.published()
@@ -577,9 +721,10 @@ class ResumeEdgeTests(DeliveryCase):
                     self.assertNotIn("NPM_TOKEN", env)
 
     def test_an_unproven_tag_resolver_child_retains_the_tree_and_is_never_followed(self):
-        # The resume resolves the published tag once while preparing and once while confirming publication.
+        # The resume resolves the published tag once while preparing and once while confirming publication,
+        # both before npm is read.
         endpoint = f"repos/{REPOSITORY}/git/ref/tags/{TAG}"
-        for occurrence, npm_read in ((1, False), (2, True)):
+        for occurrence in (1, 2):
             with self.subTest(occurrence=occurrence):
                 self.doCleanups()
                 self.setUp()
@@ -610,7 +755,7 @@ class ResumeEdgeTests(DeliveryCase):
                 self.assertEqual(self.mutations(), [])
                 self.assertEqual(self.uploads, [])
                 self.assertNotIn("publish", self.npm_keys())
-                self.assertEqual("latest" in self.npm_keys(), npm_read)
+                self.assertEqual(self.npm_keys(), [])
                 self.assertEqual(self.tap_calls, [])
                 with contextlib.redirect_stderr(io.StringIO()):
                     self.doCleanups()

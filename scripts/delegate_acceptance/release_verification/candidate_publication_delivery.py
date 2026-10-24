@@ -20,11 +20,16 @@ in order and stopping at the first refusal:
 4. observes the merge of the readiness pull request and every required check,
    and builds the canonical ``CandidatePromotion``;
 5. loads the immutable candidate artifact by its locator and verifies its
-   payload, then ``prepare_release_assets`` -> ``deliver_npm`` ->
-   ``publish_prepared_release`` (which creates the tag) -> ``deliver_tap``.
+   payload, then ``prepare_release_assets`` -> ``publish_prepared_release``
+   (which creates the tag) -> ``deliver_npm`` -> ``deliver_tap``.
 
-Each delivery edge owns its decision, its single attempt and its positive
-postcondition; nothing here retries, rebuilds, repacks or installs. The
+The npm package installs the exact version's archives from the public GitHub
+release, so that release is published before npm can expose the version. Each
+delivery edge owns its decision, its single attempt and its positive
+postcondition; nothing here retries, rebuilds, repacks, installs or rolls back.
+A failure after the publication leaves the published release, which the
+receipt records, and the later destinations missing; a new explicit invocation
+observes that release, skips it and may finish the rest. The
 receipt's one ``publication`` report binds the dispatch and this run attempt.
 It records delivery facts only after every postcondition held, and its
 ``first_mutation_started`` is derived from the receipt's own command records.
@@ -43,8 +48,8 @@ import re
 
 from scripts.delegate_acceptance.native_release.contract import PRODUCTION_STORE, ReleaseError
 from scripts.delegate_acceptance.native_release.publication_contract import (
-    PUBLICATION_WORKFLOW, REPORT_FIELD, PublicationDispatch, PublishedDelivery, ReportBinding,
-    publication_report, require_public_repository,
+    PUBLICATION_RUN_ATTEMPT, PUBLICATION_WORKFLOW, REPORT_FIELD, PublicationDispatch, PublishedDelivery,
+    ReportBinding, publication_report, require_public_repository,
 )
 from ..directories.journal import release_exclusive_file_lock
 from ..directories.operations import DirectoryOwner
@@ -129,7 +134,7 @@ def hosted_run(environment: Mapping[str, str], dispatch: PublicationDispatch) ->
     """Bind the executing run to the dispatch before any I/O; a refusal names only fixed variables.
 
     H must be ``GITHUB_SHA``; the run must be this workflow's ``workflow_dispatch``
-    on main of the production repository.
+    on main of the production repository, in the attempt Root observes.
     """
     if not isinstance(dispatch, PublicationDispatch):
         raise VerificationError("publication_dispatch_invalid", STAGE)
@@ -143,6 +148,9 @@ def hosted_run(environment: Mapping[str, str], dispatch: PublicationDispatch) ->
     mismatched = [name for name, value in expected.items() if values[name] != value]
     mismatched += [name for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")
                    if not isinstance(values[name], str) or _DECIMAL_RE.fullmatch(values[name]) is None]
+    # Root observes only the first attempt, so a rerun never reaches a destination it cannot reconcile.
+    if "GITHUB_RUN_ATTEMPT" not in mismatched and int(values["GITHUB_RUN_ATTEMPT"]) != PUBLICATION_RUN_ATTEMPT:
+        mismatched.append("GITHUB_RUN_ATTEMPT")
     if mismatched:
         raise VerificationError("publication_run_mismatch:" + ",".join(name.lower() for name in mismatched), STAGE)
     return HostedRun(repository=repository, run_id=int(values["GITHUB_RUN_ID"]),
@@ -332,14 +340,14 @@ def _publish(request: HostedPublication, *, output: Path, environment: Mapping[s
     prepared = prepare_release_assets(promotion, artifact, client=client, ports=ports, work_directory=requests,
                                       resume_published=resume)
     record["prepared_release_id"] = prepared.release_id
-    receipt["stage"] = "deliver-npm"
-    npm = deliver_npm(artifact, ports=ports, receipt=receipt, environment=environments.npm,
-                      resume_published=resume)
-    record["npm"] = {"version": npm.version, "integrity": npm.integrity}
     receipt["stage"] = "publish-release"
     published = publish_prepared_release(promotion, prepared, client=client, work_directory=requests,
                                          resume_published=resume)
     record["published_release_id"] = published.release_id
+    receipt["stage"] = "deliver-npm"
+    npm = deliver_npm(artifact, ports=ports, receipt=receipt, environment=environments.npm,
+                      resume_published=resume)
+    record["npm"] = {"version": npm.version, "integrity": npm.integrity}
     receipt["stage"] = "deliver-tap"
     tap_blob = deliver_tap(artifact, client=GitHubClient(receipt, environments.tap), work_directory=requests)
     record["tap_blob_sha"] = tap_blob

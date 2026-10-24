@@ -16,7 +16,7 @@ from scripts.delegate_acceptance.release_verification.candidate_install_contract
     CHANNEL_NPM, CHANNEL_SHELL, EXPECTED_DEFAULT_STATE, REQUEST_DENIED, REQUEST_SERVED, ArtifactRef,
     CandidateInstallFacts, InstallChannel, InstallObservation, ManifestArtifactBinding, RequestRecord,
     SourceFileBinding, encode_install_proof, encode_install_witness, parse_install_proof,
-    read_install_proof,
+    read_install_proof, require_bootstrap,
 )
 from scripts.delegate_acceptance.release_verification.candidate_manifest import PLATFORMS, ArtifactKind
 from scripts.delegate_acceptance.release_verification.candidate_readiness import (
@@ -172,7 +172,9 @@ class ReaderTests(InstallCase):
         self.assertCode("install_proof_invalid", replace, proof, default_state=("absent", "initialized", "absent"))
         self.assertCode("install_proof_invalid", replace, proof, default_state=list(EXPECTED_DEFAULT_STATE))
         other = BinaryDigests(*("8" * 64 for _ in range(4)))
-        self.assertCode("install_witness_mismatch", self.read, replace(proof, binaries=other), witness)
+        self.assertCode("install_bootstrap_mismatch", replace, proof, binaries=other)
+        self.assertCode("install_witness_mismatch", self.read,
+                        replace(proof, binaries=other, bootstrap=fx.bootstrap(other)), witness)
         self.assertCode("binary_digests_invalid", replace, fx.NATIVE_BINARIES, pueue="A" * 64)
         raw = record(encode_install_proof(proof))
         del raw["binaries"]["pueued"]
@@ -347,10 +349,83 @@ class SharedContractTests(InstallCase):
         self.assertIs(EXPECTED_DEFAULT_STATE, release_contract.EXPECTED_DEFAULT_STATE)
 
 
+class BootstrapBindingTests(InstallCase):
+    """Only a committed, closed and shut-down turn of exactly the proof's binaries is install evidence."""
+
+    def test_each_binary_digest_of_the_turn_must_be_the_installed_one(self):
+        proof, _ = self.evidence(SHELL)
+        for field in ("delegate", "delegate_run", "pueue", "pueued"):
+            with self.subTest(binary=field):
+                turned = replace(fx.NATIVE_BINARIES, **{field: "8" * 64})
+                self.assertCode("install_bootstrap_mismatch", replace, proof, bootstrap=fx.bootstrap(turned))
+                self.assertCode("install_bootstrap_mismatch", require_bootstrap, fx.bootstrap(turned),
+                                fx.NATIVE_BINARIES)
+
+    def test_an_unfinished_or_unclosed_turn_is_refused(self):
+        proof, _ = self.evidence(BREW)
+        accepted = fx.bootstrap()
+        for field, value in (("outcome", "rejected"), ("worker_result", "exit-error"),
+                             ("worker_result", "not-started"), ("termination_cause", "requested"),
+                             ("termination_cause", "previous-boot"), ("scope_empty", False),
+                             ("shutdown", "endpoint-open")):
+            with self.subTest(field=field, value=value):
+                self.assertCode("install_bootstrap_mismatch", replace, proof,
+                                bootstrap=replace(accepted, **{field: value}))
+        self.assertCode("install_bootstrap_mismatch", replace, proof, bootstrap=None)
+        self.assertCode("install_bootstrap_invalid", replace, accepted, scope_empty=1)
+        self.assertCode("install_bootstrap_invalid", replace, accepted, binaries=fx.NATIVE_BINARIES.as_mapping())
+        for identity in ("", "A" * 32, "1" * 31, "1" * 33):
+            with self.subTest(identity=identity):
+                self.assertCode("candidate_field_invalid", replace, accepted, root_id=identity)
+                self.assertCode("candidate_field_invalid", replace, accepted, task_id=identity)
+
+    def test_the_witness_must_record_the_same_root_task_and_facts(self):
+        proof, _ = self.evidence(SHELL)
+        facts = fx.witness(self.candidate, platform=DARWIN_ARM, channel=SHELL)
+        observation = facts.installs[0]
+        for name, changed in (("task", replace(observation.bootstrap, task_id="3" * 32)),
+                              ("root", replace(observation.bootstrap, root_id="3" * 32))):
+            with self.subTest(witness=name):
+                self.assertCode("install_witness_mismatch", self.read, *self.rebound(
+                    proof, replace(facts, installs=(replace(observation, bootstrap=changed),))))
+        for name, changed in (("task", replace(proof.bootstrap, task_id="3" * 32)),
+                              ("root", replace(proof.bootstrap, root_id="3" * 32))):
+            with self.subTest(proof=name):
+                self.assertCode("install_witness_mismatch", self.read, *self.rebound(
+                    replace(proof, bootstrap=changed), facts))
+
+    def test_a_record_without_the_turn_or_of_schema_one_is_refused(self):
+        proof, witness = self.evidence(NPM)
+        self.assertEqual(self.read(proof, witness), proof)
+        raw = record(encode_install_proof(proof))
+        self.assertEqual(raw["schema_version"], 2)
+        del raw["bootstrap"]
+        self.assertCode("candidate_record_fields_invalid", parse_install_proof, canonical_json(raw))
+        legacy = record(encode_install_proof(proof))
+        legacy["schema_version"] = 1
+        del legacy["bootstrap"]
+        self.assertCode("install_proof_kind_invalid", parse_install_proof, canonical_json(legacy))
+        legacy["schema_version"] = 1
+        legacy["bootstrap"] = record(encode_install_proof(proof))["bootstrap"]
+        self.assertCode("install_proof_kind_invalid", parse_install_proof, canonical_json(legacy))
+        raw = record(encode_install_proof(proof))
+        raw["bootstrap"]["scope_empty"] = "true"
+        self.assertCode("install_bootstrap_invalid", parse_install_proof, canonical_json(raw))
+        raw = record(encode_install_proof(proof))
+        raw["bootstrap"]["process_absent"] = True
+        self.assertCode("candidate_record_fields_invalid", parse_install_proof, canonical_json(raw))
+        unturned = record(witness)
+        del unturned["installs"][0]["bootstrap"]
+        self.assertCode("install_witness_digest_mismatch", self.read, proof, canonical_json(unturned))
+        self.assertCode("candidate_record_fields_invalid", self.read,
+                        replace(proof, witness_sha256=sha(canonical_json(unturned))), canonical_json(unturned))
+
+
 class WitnessCompatibilityTests(unittest.TestCase):
     def test_legacy_witness_records_absent_facts_explicitly(self):
         observation = InstallObservation(channel=CHANNEL_SHELL, requests=(), binaries=(), skill_files=0,
-                                         delegate_version="0.1.37", default_state=EXPECTED_DEFAULT_STATE)
+                                         delegate_version="0.1.37", default_state=EXPECTED_DEFAULT_STATE,
+                                         bootstrap=fx.bootstrap())
         facts = CandidateInstallFacts(tag="v0.1.37", candidate_files=(), installs=(observation,))
         value = facts.to_record()
         self.assertIsNone(value["platform"])

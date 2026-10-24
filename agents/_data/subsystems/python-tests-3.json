@@ -236,6 +236,8 @@
     "layer": "test",
     "imports": [
       "py:acceptance_private_cli",
+      "py:delegate_acceptance.private_cli.packaged_defaults",
+      "py:json",
       "py:pathlib",
       "py:tempfile",
       "py:unittest",

@@ -342,6 +342,53 @@ class GitHubReleaseLookupTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs["max_output"], 1 << 20)
 
 
+class GitHubReleaseListingTests(unittest.TestCase):
+    """The shared release listing owns page shape and exhaustion; a consumer sees each row in order."""
+
+    def setUp(self):
+        self.client = GitHubClient({"commands": []}, {})
+
+    def rows(self, page: int, count: int = 30) -> list[dict]:
+        return [{"id": 1000 * page + n, "tag_name": f"v0.{page}.{n}"} for n in range(count)]
+
+    def consume(self, pages: list[object]) -> tuple[list[object], VerificationError | None, int]:
+        """Every row the iterator yielded before it ended or refused, the refusal and the request count."""
+        seen: list[object] = []
+        with patch.object(self.client, "json", side_effect=pages) as request:
+            try:
+                for row in github.iter_releases(self.client, "owner/repo"):
+                    seen.append(row)
+            except VerificationError as error:
+                return seen, error, request.call_count
+        return seen, None, request.call_count
+
+    def test_every_row_is_yielded_in_listing_order_until_a_short_page(self):
+        pages = [self.rows(1), self.rows(2, 3)]
+        seen, error, requests = self.consume(pages)
+        self.assertEqual((seen, error, requests), (pages[0] + pages[1], None, 2))
+        seen, error, requests = self.consume([[]])
+        self.assertEqual((seen, error, requests), ([], None, 1))
+
+    def test_a_late_malformed_page_refuses_after_the_earlier_rows(self):
+        for late in ({"releases": []}, self.rows(2, 31), "rows"):
+            with self.subTest(late=type(late).__name__):
+                seen, error, requests = self.consume([self.rows(1), late])
+                self.assertEqual(seen, self.rows(1))
+                self.assertEqual((error.code, error.stage, requests),
+                                 ("github_releases_invalid", "github-release", 2))
+
+    def test_a_full_final_page_leaves_the_listing_incomplete(self):
+        seen, error, requests = self.consume([self.rows(page) for page in range(1, 101)])
+        self.assertEqual(len(seen), 3000)
+        self.assertEqual((error.code, error.stage, requests),
+                         ("github_releases_pagination_incomplete", "github-release", 100))
+
+    def test_a_failed_page_read_is_never_the_end_of_the_listing(self):
+        failure = VerificationError("github_request_failed", "github-api")
+        seen, error, requests = self.consume([self.rows(1), failure])
+        self.assertEqual((seen, error, requests), (self.rows(1), failure, 2))
+
+
 class GitHubJsonBodyTests(FakeGhCase):
     ENDPOINT = "repos/owner/repo/git/trees"
 
