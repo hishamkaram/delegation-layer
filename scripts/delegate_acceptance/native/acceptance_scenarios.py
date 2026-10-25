@@ -10,7 +10,9 @@ from scripts.delegate_acceptance.native.fixtures import require_replay_unchanged
 from scripts.delegate_acceptance.native.provider_policy import model_discovery_exit_code
 from scripts.delegate_acceptance.native.workspace import has_git_ancestor, task_digest_snapshot, workspace_snapshot
 from scripts.delegate_acceptance.supervisor.queue_policy import done_result
-from scripts.delegate_acceptance.native.constants import CANONICAL_TASK_BUDGET, CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET, MAX_RAW_BYTES, TASK_BUDGET, TIMEOUT_RESUME_SOURCE_BUDGET, TIMEOUT_SOURCE_RUNNER_RESULTS
+from scripts.delegate_acceptance.native.constants import CANONICAL_TASK_BUDGET, CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET, MAX_RAW_BYTES, PI_SESSION_MISS_GATE, PI_SESSION_MISS_SCENARIO, TASK_BUDGET, TIMEOUT_RESUME_SOURCE_BUDGET, TIMEOUT_SOURCE_RUNNER_RESULTS
+from scripts.delegate_acceptance.native.continuation_scope import (
+    admit_successor, require_session_directory, require_session_miss)
 
 
 def run_interactive(owner) -> int:
@@ -99,7 +101,7 @@ def run_timeout_resume(owner) -> int:
     acceptance._timeout_workspace_snapshot(resumed=False)
     source_snapshot = task_digest_snapshot(source_directory)
 
-    successor = acceptance.continue_timed_out_task(
+    successor = acceptance.continue_public(
         "timeout-resume", acceptance.timeout_brief("timeout-resume", resume=True), source)
     acceptance.wait_done("timeout-resume", successor)
     acceptance.collect("timeout-resume-collect", successor)
@@ -154,6 +156,8 @@ def run(owner) -> int:
         return acceptance.run_timeout_resume()
     if acceptance.scenario == "interactive":
         return acceptance.run_interactive()
+    if acceptance.scenario == PI_SESSION_MISS_SCENARIO:
+        return acceptance.run_pi_session_miss()
     if acceptance.provider == "codex:review":
         return acceptance._run_review()
     return acceptance._run_resumable()
@@ -219,7 +223,8 @@ def _run_review(owner) -> int:
 def _run_resumable(owner) -> int:
     acceptance = owner
     before = workspace_snapshot(acceptance.workspace)
-    first = acceptance.dispatch("fresh", acceptance.brief("fresh"))
+    first = acceptance.dispatch("fresh", acceptance.brief("fresh"),
+                                environment=acceptance.launch_environment("predecessor"))
     acceptance.wait_done("fresh", first)
     acceptance.collect("fresh-collect", first)
     acceptance.task_binding(first)
@@ -235,12 +240,15 @@ def _run_resumable(owner) -> int:
         verify_write_artifacts(acceptance.nonce, acceptance.target_file, acceptance.check_file)
         acceptance._workspace_write_snapshot(continuation=False)
         first_check = acceptance.check_file.read_bytes()
-    second = acceptance.continue_task("resume", acceptance.brief("resume", continuation=True), first)
+    second = admit_successor(acceptance, "resume", acceptance.brief("resume", continuation=True), first,
+                             acceptance.launch_environment("successor"))
     acceptance.wait_done("resume", second)
     acceptance.collect("resume-collect", second)
     acceptance.task_binding(second, first, first_session)
     second_session = acceptance.session_ref(second)
     require_same_session(first_session, second_session)
+    # Recorded before replay, which runs as the observer and must change no record.
+    scope = acceptance.require_continuation_scope(first, second)
     if acceptance.scenario == "non-git":
         require(not has_git_ancestor(acceptance.workspace),
                 "continuation created a Git repository")
@@ -276,6 +284,73 @@ def _run_resumable(owner) -> int:
             {"fresh": acceptance.tasks["fresh"], "resume": acceptance.tasks["resume"]}),
         "provider_sessions": {"fresh": first_session, "resume": second_session},
         "scenario": acceptance.scenario, "provider_launches": 2, "replay_launches": 0,
+        "continuation_command": acceptance.continuation_command,
+        "continuation_scope": scope,
+        "credentials_in_receipt": False,
+        **acceptance.lifecycle_receipt(),
+    }
+    if acceptance.continuation_command == "continue":
+        # Canonical dispatch receipts stay unchanged; supplemental validation binds this.
+        acceptance.success_receipt["harness"] = acceptance.harness_observation
+        acceptance.success_receipt["canonical_aggregate_sha256"] = acceptance.canonical_aggregate_sha256
+    return 0
+
+
+def _pi_turn(acceptance, name: str, task_id: str, predecessor: str | None = None,
+             predecessor_session: str | None = None) -> str:
+    """Prove one committed Pi turn and return its provider session."""
+    acceptance.wait_done(name, task_id)
+    acceptance.collect(name + "-collect", task_id)
+    acceptance.task_binding(task_id, predecessor, predecessor_session)
+    return acceptance.session_ref(task_id)
+
+
+def run_pi_session_miss(owner) -> int:
+    """Pi resumes under its control session directory, then misses under an empty one."""
+    acceptance = owner
+    control, empty = acceptance.launch_scopes.pi_sessions
+    before = workspace_snapshot(acceptance.workspace)
+    first = acceptance.dispatch("fresh", acceptance.brief("fresh"), environment=acceptance.launch_environment(
+        "predecessor", pi_session=control))
+    first_session = _pi_turn(acceptance, "fresh", first)
+    first_record = task_digest_snapshot(acceptance.records["fresh-collect"]["directory"])
+    second = acceptance.continue_public(
+        "resume", acceptance.brief("resume", continuation=True), first,
+        environment=acceptance.launch_environment("successor", pi_session=control))
+    second_session = _pi_turn(acceptance, "resume", second, first, first_session)
+    require_same_session(first_session, second_session)
+    require_session_directory(acceptance, first, control)
+    require_session_directory(acceptance, second, control)
+    second_record = task_digest_snapshot(acceptance.records["resume-collect"]["directory"])
+    missed = acceptance.continue_public(
+        "session-miss", acceptance.brief("session-miss", continuation=True), second,
+        environment=acceptance.launch_environment("successor", pi_session=empty))
+    miss = require_session_miss(acceptance, missed, second, second_session, empty)
+    require_replay_unchanged(first_record, task_digest_snapshot(acceptance.records["fresh-collect"]["directory"]))
+    require_replay_unchanged(second_record, task_digest_snapshot(acceptance.records["resume-collect"]["directory"]))
+    require(workspace_snapshot(acceptance.workspace) == before, "Pi session-miss control changed the workspace")
+    acceptance.replay()
+    acceptance.shutdown()
+    closure = acceptance.lifetime_closure
+    launches = closure["ordinary"]["tasks"][missed]["launch_count"] if isinstance(closure, dict) else None
+    require(launches == 1, "Pi session miss was not exactly one provider launch")
+    tasks = {"fresh": first, "resume": second, "session_miss": missed}
+    acceptance.success_receipt = {
+        "gate": PI_SESSION_MISS_GATE, "status": "passed", "provider": acceptance.provider,
+        "mode": acceptance.mode, "scenario": acceptance.scenario,
+        "task_budget": TASK_BUDGET, "canonical_task_budget": CANONICAL_TASK_BUDGET,
+        "requested_model": getattr(acceptance.args, "model", None),
+        "requested_effort": getattr(acceptance.args, "effort", None),
+        "native_mode": acceptance.native_mode_receipt(),
+        **acceptance.provider_runtime_receipt(),
+        "tasks": tasks,
+        "provider_sessions": {"fresh": first_session, "resume": second_session},
+        "continuation_command": acceptance.continuation_command,
+        "session_miss": miss,
+        "session_directories": {"fresh": "control", "resume": "control", "session_miss": "empty"},
+        "harness": acceptance.harness_observation,
+        "canonical_aggregate_sha256": acceptance.canonical_aggregate_sha256,
+        "provider_launches": 3, "replay_launches": 0,
         "credentials_in_receipt": False,
         **acceptance.lifecycle_receipt(),
     }

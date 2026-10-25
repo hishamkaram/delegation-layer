@@ -41,10 +41,16 @@ func PrepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, env
 	if err != nil {
 		return candidate, err
 	}
-	if meta.Predicate != (task.PredicateRef{}) {
-		candidate = withPredicate(candidate, meta.Predicate)
+	return withRecordedPredicate(candidate, meta.Predicate), nil
+}
+
+// withRecordedPredicate retains a predicate the record selected and leaves the
+// current one for a record that stored none.
+func withRecordedPredicate(candidate commonprovider.ProfileCandidate, recorded task.PredicateRef) commonprovider.ProfileCandidate {
+	if recorded == (task.PredicateRef{}) {
+		return candidate
 	}
-	return candidate, nil
+	return withPredicate(candidate, recorded)
 }
 
 func withPredicate(candidate commonprovider.ProfileCandidate, reference task.PredicateRef) commonprovider.ProfileCandidate {
@@ -73,19 +79,41 @@ func prepareExistingCandidate(request task.TaskRecord, meta task.MetaRecord, cal
 	if !commonprovider.HasNativeProfile(meta) {
 		return prepareCandidate(request, callerEnvironment, false, false)
 	}
-	approval := meta.EffectiveConfig.Approval
-	if request.Mode == ModeReadOnly {
-		if approval != "plan" {
-			return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: unknown recorded native read-only approval", ErrUnsupportedProfile)
-		}
-	} else if approval != "accept-edits" && approval != unattendedApproval {
-		return commonprovider.ProfileCandidate{}, fmt.Errorf("%w: unknown recorded native approval", ErrUnsupportedProfile)
+	approval, err := recordedNativeApproval(request.Mode, meta)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
 	}
 	var recordedRoots []string
 	if meta.EffectiveConfig.Policy != nil {
 		recordedRoots = meta.EffectiveConfig.Policy.WritableRoots
 	}
 	return prepareCandidateWithEnvironment(request, callerEnvironment, true, approval, meta.Environment, recordedRoots, meta.RuntimePreflightSHA256 != "")
+}
+
+// prepareSuccessorProfile keeps the native approval its predecessor was
+// admitted under and its static-admission policy, and launches under the
+// caller's current environment: the filtered values, derived roots, executable,
+// and capability proof are those a new task admitted there would get.
+func prepareSuccessorProfile(request task.TaskRecord, predecessor task.MetaRecord, callerEnvironment []string) (commonprovider.ProfileCandidate, error) {
+	approval, err := recordedNativeApproval(request.Mode, predecessor)
+	if err != nil {
+		return commonprovider.ProfileCandidate{}, err
+	}
+	return prepareCandidateWithEnvironment(request, callerEnvironment, true, approval, nil, nil, predecessor.RuntimePreflightSHA256 != "")
+}
+
+// recordedNativeApproval returns the approval a native record was admitted
+// under, and refuses one the mode never granted.
+func recordedNativeApproval(mode string, meta task.MetaRecord) (string, error) {
+	approval := meta.EffectiveConfig.Approval
+	if mode == ModeReadOnly {
+		if approval != "plan" {
+			return "", fmt.Errorf("%w: unknown recorded native read-only approval", ErrUnsupportedProfile)
+		}
+	} else if approval != "accept-edits" && approval != unattendedApproval {
+		return "", fmt.Errorf("%w: unknown recorded native approval", ErrUnsupportedProfile)
+	}
+	return approval, nil
 }
 
 func prepareCandidate(request task.TaskRecord, callerEnvironment []string, native, allowStaticAdmit bool) (commonprovider.ProfileCandidate, error) {

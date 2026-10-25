@@ -55,7 +55,7 @@ func TestSuccessorOfRunPredecessorContinuesThroughACP(t *testing.T) {
 				t.Run(fmt.Sprintf("%d/%s/v%s", dialect, mode, source.Version), func(t *testing.T) {
 					predecessor := fixture.run
 					predecessor.Predicate = source
-					requireACPSuccessor(t, fixture.request, predecessor)
+					requireACPSuccessor(t, fixture.request, predecessor, os.Environ())
 					reconstructed, err := PrepareExistingCandidate(fixture.request, predecessor, os.Environ())
 					if err != nil {
 						t.Fatal(err)
@@ -70,11 +70,12 @@ func TestSuccessorOfRunPredecessorContinuesThroughACP(t *testing.T) {
 }
 
 // requireACPSuccessor requires the successor of a run record to be a fresh ACP
-// admission that keeps the recorded environment and writable roots, and
-// whose protocol resumes exactly the recorded session.
-func requireACPSuccessor(t *testing.T, request task.TaskRecord, predecessor task.MetaRecord) {
+// admission whose environment and writable roots come from current, never
+// from the predecessor record, and whose protocol resumes exactly the
+// recorded session.
+func requireACPSuccessor(t *testing.T, request task.TaskRecord, predecessor task.MetaRecord, current []string) {
 	t.Helper()
-	candidate, err := PrepareSuccessorCandidate(request, predecessor, os.Environ())
+	candidate, err := PrepareSuccessorCandidate(request, predecessor, current)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,9 +84,7 @@ func requireACPSuccessor(t *testing.T, request task.TaskRecord, predecessor task
 		successor.Effective.Policy.ProfileRevision != acpProfileRevision || successor.Identity != nil || successor.Protocol == nil {
 		t.Fatalf("successor is not an ACP admission: argv=%q predicate=%+v revision=%q", successor.Plan.Arguments, successor.Plan.Predicate, successor.Effective.Policy.ProfileRevision)
 	}
-	if !slices.Equal(successor.Plan.Environment, predecessor.Environment) || !slices.Equal(successor.WritableRoots, predecessor.EffectiveConfig.Policy.WritableRoots) {
-		t.Fatalf("successor environment (%s) or writable roots differ from the recorded predecessor", summarizeValues(successor.Plan.Environment))
-	}
+	requireCurrentLaunchEnvironment(t, request, predecessor, successor, current)
 	protocol, err := successor.Protocol(task.SessionExpectation{Required: true, ID: testSession}, func(task.SessionIdentity) error { return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -99,6 +98,26 @@ func requireACPSuccessor(t *testing.T, request task.TaskRecord, predecessor task
 	}
 	if _, err = successor.Protocol(task.SessionExpectation{}, func(task.SessionIdentity) error { return nil }); err == nil {
 		t.Fatal("successor protocol accepted a fresh-session expectation")
+	}
+}
+
+// requireCurrentLaunchEnvironment requires successor to launch with the
+// environment and writable roots a fresh admission under current selects, and
+// with no entry that only the predecessor record carried.
+func requireCurrentLaunchEnvironment(t *testing.T, request task.TaskRecord, predecessor task.MetaRecord, successor commonprovider.PreparedProfile, current []string) {
+	t.Helper()
+	fresh, err := PrepareCandidate(request, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := requireStaticAdmission(t, fresh)
+	if !slices.Equal(successor.Plan.Environment, want.Plan.Environment) || !slices.Equal(successor.WritableRoots, want.WritableRoots) {
+		t.Fatalf("successor environment (%s) or writable roots differ from the current environment's (%s)", summarizeValues(successor.Plan.Environment), summarizeValues(want.Plan.Environment))
+	}
+	for _, entry := range predecessor.Environment {
+		if !slices.Contains(want.Plan.Environment, entry) && slices.Contains(successor.Plan.Environment, entry) {
+			t.Fatal("successor kept a launch entry that only the predecessor record carried")
+		}
 	}
 }
 
@@ -127,9 +146,10 @@ func TestSuccessorCandidateDoesNotModifyThePredecessorRecord(t *testing.T) {
 	}
 }
 
-// TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed pairs each ACP,
-// pure-mode, and unknown record with the reconstruction of the same record:
-// the successor must behave identically, error included.
+// TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed pairs each ACP
+// and unknown record with the reconstruction of the same record under the same
+// caller environment: the successor must behave identically, error included.
+// A pure-mode record is covered by TestSuccessorOfPureRecordUsesCurrentEnvironment.
 func TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed(t *testing.T) {
 	for _, mode := range []string{ModeReadOnly, ModeWorkspaceWrite} {
 		fixture := newSuccessorFixture(t, mode, dialectNativeV2)
@@ -140,7 +160,6 @@ func TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed(t *testing.T) {
 			"acp altered predicate":    withPredicate(fixture.acp, altered),
 			"acp run predicate":        withPredicate(fixture.acp, runReferenceForMode(mode)),
 			"acp other mode predicate": withPredicate(fixture.acp, ReferenceForMode(otherMode(mode))),
-			"legacy profile":           withRevision(withPredicate(fixture.run, historicalCurrentV4ReferenceForMode(mode)), ProfileRevision),
 			"unknown revision":         withRevision(fixture.run, "opencode-future-v9"),
 		}
 		for name, meta := range cases {
@@ -219,7 +238,7 @@ func TestACPV1RecordReconstructsV1AndItsSuccessorUsesV2(t *testing.T) {
 				before.Environment = slices.Clone(predecessor.Environment)
 				policy := *predecessor.EffectiveConfig.Policy
 				before.EffectiveConfig.Policy = &policy
-				requireACPSuccessor(t, fixture.request, predecessor)
+				requireACPSuccessor(t, fixture.request, predecessor, os.Environ())
 				reconstructed, err := PrepareExistingCandidate(fixture.request, predecessor, os.Environ())
 				if err != nil {
 					t.Fatal(err)

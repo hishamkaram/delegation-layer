@@ -68,7 +68,7 @@ func TestPrepareDoesNotResolveExecutableFromAmbientPath(t *testing.T) {
 	}
 }
 
-func TestExistingAndSuccessorFallBackToProvidedOnlyWithoutRecordedEnvironment(t *testing.T) {
+func TestExistingAndSuccessorUseProvidedEnvironmentWhenNoneIsRecorded(t *testing.T) {
 	fixture := newSuccessorFixture(t, ModeWorkspaceWrite)
 	ambientHome := os.Getenv("HOME")
 	environment, home, cliPath := selectedAgyEnvironment(t, fixture.request.CanonicalCwd)
@@ -99,30 +99,49 @@ func TestPortableExistingCandidateFallsBackToProvidedEnvironment(t *testing.T) {
 
 // The provided scope owns executable lookup, as the ambient process scope did
 // before environments were explicit; the record owns only the launch
-// environment. An ordinary --resume-task successor runs under the caller's
-// scope while its predecessor recorded another one.
+// environment of an admitted task's reconstruction.
 func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing.T) {
 	fixture := newSuccessorFixture(t, ModeWorkspaceWrite)
 	provided, providedHome, providedCLI := selectedAgyEnvironment(t, fixture.request.CanonicalCwd)
 	withoutPath := fixture.meta
 	withoutPath.Environment = slices.DeleteFunc(slices.Clone(fixture.meta.Environment), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
 	for recordedName, recorded := range map[string]task.MetaRecord{"recorded": fixture.meta, "recorded without PATH": withoutPath} {
-		for name, prepare := range map[string]commonprovider.PrepareExistingCandidate{
-			"existing":  PrepareExistingCandidate,
-			"successor": PrepareSuccessorCandidate,
-		} {
-			candidate, err := prepare(fixture.request, recorded, provided)
-			if err != nil {
-				t.Fatalf("%s %s: %v", recordedName, name, err)
-			}
-			requireRecordedLaunchWithProvidedExecutable(t, recordedName+" "+name, candidate, recorded.Environment, providedCLI, providedHome)
+		candidate, err := PrepareExistingCandidate(fixture.request, recorded, provided)
+		if err != nil {
+			t.Fatalf("%s: %v", recordedName, err)
+		}
+		requireRecordedLaunchWithProvidedExecutable(t, recordedName+" existing", candidate, recorded.Environment, providedCLI, providedHome)
+		if !slices.Equal(candidate.WritableRoots, recorded.EffectiveConfig.Policy.WritableRoots) {
+			t.Errorf("%s existing writable roots %q, want the recorded roots", recordedName, candidate.WritableRoots)
 		}
 	}
 	invalid := fixture.meta
 	invalid.Environment = []string{}
 	providedWithoutPath := slices.DeleteFunc(slices.Clone(provided), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
-	if _, err := PrepareSuccessorCandidate(fixture.request, invalid, providedWithoutPath); err == nil || strings.Contains(err.Error(), "provider executable") {
+	if _, err := PrepareExistingCandidate(fixture.request, invalid, providedWithoutPath); err == nil || strings.Contains(err.Error(), "provider executable") {
 		t.Fatalf("invalid recorded environment error=%v want its validation error before executable lookup", err)
+	}
+}
+
+// A continuation is a new launch: the provided scope owns its values, roots,
+// and executable, while the predecessor's recorded environment is only a
+// compatibility input and is never launched.
+func TestSuccessorLaunchesUnderProvidedScopeNotRecordedEnvironment(t *testing.T) {
+	fixture := newSuccessorFixture(t, ModeWorkspaceWrite)
+	provided, providedHome, providedCLI := selectedAgyEnvironment(t, fixture.request.CanonicalCwd)
+	withoutPath := fixture.meta
+	withoutPath.Environment = slices.DeleteFunc(slices.Clone(fixture.meta.Environment), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
+	invalid := fixture.meta
+	invalid.Environment = []string{}
+	for name, recorded := range map[string]task.MetaRecord{"recorded": fixture.meta, "recorded without PATH": withoutPath, "recorded empty": invalid} {
+		candidate, err := PrepareSuccessorCandidate(fixture.request, recorded, provided)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if candidate.Inspection == nil || !slices.Contains(candidate.Inspection.Environment, "HOME="+providedHome) ||
+			candidate.Inspection.Executable != providedCLI || candidate.Inspection.ExecutableSHA256 != fixtureSHA256(t, providedCLI) {
+			t.Errorf("%s successor did not launch under the provided scope", name)
+		}
 	}
 }
 
@@ -142,13 +161,8 @@ func TestRecordedEmptyEnvironmentDoesNotFallBackToProvided(t *testing.T) {
 	provided, _, _ := selectedAgyEnvironment(t, fixture.request.CanonicalCwd)
 	recorded := fixture.meta
 	recorded.Environment = []string{}
-	for name, prepare := range map[string]commonprovider.PrepareExistingCandidate{
-		"existing":  PrepareExistingCandidate,
-		"successor": PrepareSuccessorCandidate,
-	} {
-		if _, err := prepare(fixture.request, recorded, provided); err == nil {
-			t.Fatalf("%s with a recorded empty environment fell back to the provided one", name)
-		}
+	if _, err := PrepareExistingCandidate(fixture.request, recorded, provided); err == nil {
+		t.Fatal("existing with a recorded empty environment fell back to the provided one")
 	}
 }
 

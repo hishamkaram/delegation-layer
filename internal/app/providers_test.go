@@ -6,9 +6,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/hishamkaram/delegation-layer/internal/config"
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
@@ -169,6 +171,36 @@ func TestProductionCatalogDoesNotExposeHistoricalFixtureLaunch(t *testing.T) {
 	}
 	if _, err := catalog.Prepare(taskRecordForProviderTest("fixture:test", "read-only"), os.Environ()); !errors.Is(err, commonprovider.ErrProfileUnavailable) {
 		t.Fatalf("fixture acquired production launch authority: %v", err)
+	}
+}
+
+// TestProductionContinuationRegistrationsDeclareSuccessorPreparation guards
+// the new-successor contract of every discoverable production registration
+// that can launch and continue: its own PrepareSuccessor decides which
+// predecessor facts carry forward, so none may silently fall back to
+// reconstructing the predecessor's recorded launch. The generic catalog
+// fallback remains available to other compositions.
+func TestProductionContinuationRegistrationsDeclareSuccessorPreparation(t *testing.T) {
+	catalog := NativeCatalog()
+	var checked []string
+	for _, description := range catalog.Descriptions() {
+		registration, err := catalog.Lookup(description.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if registration.Prepare == nil || registration.Description.Continuation == commonprovider.ContinuationUnsupported {
+			continue
+		}
+		checked = append(checked, description.ID)
+		if registration.PrepareSuccessor == nil {
+			t.Errorf("%s continues without its own successor preparation", description.ID)
+		}
+	}
+	if len(checked) == 0 {
+		t.Fatal("production catalog exposes no launchable continuation registration")
+	}
+	if slices.Contains(checked, "codex:review") || slices.Contains(checked, config.ProviderFixture) {
+		t.Fatalf("guard checked a registration without continuation launch: %v", checked)
 	}
 }
 

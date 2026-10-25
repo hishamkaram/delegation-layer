@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	commonprovider "github.com/hishamkaram/delegation-layer/internal/provider"
-	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
 // selectedPiEnvironment is a complete caller-selected environment: its own
@@ -67,7 +66,7 @@ func TestPrepareDoesNotResolveExecutableFromAmbientPath(t *testing.T) {
 	}
 }
 
-func TestExistingAndSuccessorFallBackToProvidedOnlyWithoutRecordedEnvironment(t *testing.T) {
+func TestExistingAndSuccessorUseProvidedEnvironmentWhenNoneIsRecorded(t *testing.T) {
 	fixture := newPiSuccessorFixture(t, ModeReadOnly)
 	ambientHome := os.Getenv("HOME")
 	environment, home, cliPath := selectedPiEnvironment(t)
@@ -88,8 +87,8 @@ func TestExistingAndSuccessorFallBackToProvidedOnlyWithoutRecordedEnvironment(t 
 
 // The provided scope owns executable lookup, as the ambient process scope did
 // before environments were explicit; the record owns only the launch
-// environment. An ordinary --resume-task successor runs under the caller's
-// scope while its predecessor recorded another one.
+// environment of the task it admitted. Reconstruction of that task runs under
+// the caller's scope while the record saved another one.
 func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing.T) {
 	fixture := newPiSuccessorFixture(t, ModeReadOnly)
 	provided, providedHome, providedCLI := selectedPiEnvironment(t)
@@ -98,18 +97,13 @@ func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing
 	for recordedName, environment := range map[string][]string{"recorded": recorded, "recorded without PATH": withoutPath} {
 		meta := fixture.meta(priorReferenceForMode(fixture.request.Mode))
 		meta.Environment, meta.EnvironmentRecorded = environment, true
-		for name, prepare := range map[string]func(task.TaskRecord, task.MetaRecord, []string) (commonprovider.ProfileCandidate, error){
-			"existing":  fixture.catalog.ExistingCandidate,
-			"successor": fixture.catalog.SuccessorCandidate,
-		} {
-			candidate, err := prepare(fixture.request, meta, provided)
-			if err != nil {
-				t.Fatalf("%s %s: %v", recordedName, name, err)
-			}
-			requireSelectedPi(t, recordedName+" "+name+" candidate", candidate, recordedHome, providedCLI, providedHome)
-			if candidate.Inspection.ExecutableSHA256 != fixtureSHA256(t, providedCLI) {
-				t.Fatalf("%s %s executable fingerprint is not the provided scope's", recordedName, name)
-			}
+		candidate, err := fixture.catalog.ExistingCandidate(fixture.request, meta, provided)
+		if err != nil {
+			t.Fatalf("%s existing: %v", recordedName, err)
+		}
+		requireSelectedPi(t, recordedName+" existing candidate", candidate, recordedHome, providedCLI, providedHome)
+		if candidate.Inspection.ExecutableSHA256 != fixtureSHA256(t, providedCLI) {
+			t.Fatalf("%s existing executable fingerprint is not the provided scope's", recordedName)
 		}
 	}
 	meta := fixture.meta(priorReferenceForMode(fixture.request.Mode))
@@ -117,6 +111,29 @@ func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing
 	providedWithoutPath := slices.DeleteFunc(slices.Clone(provided), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
 	if _, err := PrepareExistingCandidate(fixture.request, meta, providedWithoutPath); err == nil || strings.Contains(err.Error(), "provider executable") {
 		t.Fatalf("invalid recorded environment error=%v want its validation error before executable lookup", err)
+	}
+}
+
+// A new successor runs entirely under the caller's scope, whatever the
+// predecessor recorded: its launch environment, roots, and executable are the
+// caller's, so an ordinary --resume-task successor does not inherit the
+// predecessor's HOME.
+func TestSuccessorLaunchesUnderProvidedScopeDespiteRecordedEnvironment(t *testing.T) {
+	fixture := newPiSuccessorFixture(t, ModeReadOnly)
+	provided, providedHome, providedCLI := selectedPiEnvironment(t)
+	recorded, recordedHome, _ := selectedPiEnvironment(t)
+	withoutPath := slices.DeleteFunc(slices.Clone(recorded), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
+	for recordedName, environment := range map[string][]string{"recorded": recorded, "recorded without PATH": withoutPath} {
+		meta := fixture.meta(priorReferenceForMode(fixture.request.Mode))
+		meta.Environment, meta.EnvironmentRecorded = environment, true
+		candidate, err := fixture.catalog.SuccessorCandidate(fixture.request, meta, provided)
+		if err != nil {
+			t.Fatalf("%s successor: %v", recordedName, err)
+		}
+		requireSelectedPi(t, recordedName+" successor candidate", candidate, providedHome, providedCLI, recordedHome)
+		if candidate.Inspection.ExecutableSHA256 != fixtureSHA256(t, providedCLI) {
+			t.Fatalf("%s successor executable fingerprint is not the provided scope's", recordedName)
+		}
 	}
 }
 

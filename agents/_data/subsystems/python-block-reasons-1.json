@@ -62,6 +62,8 @@
     "imports": [
       "py:contextlib",
       "py:delegate_acceptance.native_evidence.cli",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.validation",
       "py:delegate_acceptance.release_verification.contract",
       "py:delegate_acceptance.release_verification.verification",
       "py:io",

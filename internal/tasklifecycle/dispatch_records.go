@@ -39,7 +39,6 @@ const (
 	DispatchProviderSelection
 	DispatchPredecessor
 	DispatchOpenTask
-	DispatchEnvironment
 )
 
 // DispatchResult preserves primary observations and later closure faults in

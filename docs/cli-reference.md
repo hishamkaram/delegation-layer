@@ -244,8 +244,9 @@ transaction or extend its saved deadline. Once Delegate proves a preparation
 ended without a registered checkout or provider launch, the workspace reports
 `preparation_failed` with `stop_and_report`; it does not remain `provisioning`.
 
-`continue --task ID` inherits the predecessor's managed workspace, cwd, session,
-and environment while creating a new task ID. A native review can attach a
+`continue --task ID` inherits the predecessor's managed workspace, cwd, and
+session while creating a new task ID; the new turn runs in the calling
+environment. A native review can attach a
 retained workspace with `--workspace ID`; its explicit target remains its scope.
 Codex's `uncommitted` target covers current staged, unstaged, and untracked
 changes. It excludes worker commits. For a complete base-to-capture review,
@@ -355,17 +356,31 @@ task reference, an unreadable, malformed, or mismatched record, or missing
 required metadata refuses; there is no ancestor search and the original task is
 not rerun.
 
-Fresh dispatches compile the current provider mapping. Ordinary exact-session
-continuations reconstruct the predecessor's recorded preparation contract;
-this preserves historical Pi and CCR mappings while creating a new turn around
-the recorded session. A historical native OpenCode `run` predecessor is the
-exception: its successor resumes the exact recorded session through the current
-ACP profile; see [OpenCode](providers.md#opencode). Provider-specific continuation validation
+Fresh dispatches compile the current provider mapping. `continue` and
+`dispatch --resume-task` create a new task in the calling process's environment,
+for ordinary and supported interactive continuations alike. That environment
+supplies the filtered provider launch values, the derived writable roots, and
+fresh applicable capability proof; nothing is copied from the predecessor's saved
+environment, configuration, profile, or authentication. The predecessor's
+immutable records decide only compatibility and eligibility, so an ordinary
+continuation keeps its recorded permission mode, historical Pi and CCR
+mappings, and output predicate rules while creating a new turn around the
+recorded session. Permission mode and session stay those of the predecessor.
+`continue` also inherits its working directory; `dispatch --resume-task` keeps
+its requested workspace and the provider-specific validation rules. Model and
+effort validation and the budget rules are unchanged. The exact recorded
+session must be available in the calling environment. If it is not, the command
+fails; it does not start a fresh session, search ancestors, or choose another
+provider. A historical native OpenCode `run` predecessor is the exception to the
+preserved launch shape: its successor resumes the exact recorded session
+through the current ACP profile; see
+[OpenCode](providers.md#opencode). Provider-specific continuation validation
 still applies, such as Pi's same-workspace rule and CCR's route-preserving model
-rule. Interactive continuation is the current exception: Codex and Claude use
-the current interactive profile, retain the exact recorded session, and use
-the recorded predecessor environment needed for session discovery instead of reusing a
-noninteractive predecessor contract.
+rule. Interactive continuation of Codex and Claude uses the current interactive
+profile in the same calling environment and retains the exact recorded session
+instead of reusing a noninteractive predecessor contract. A scope
+`DELEGATE_PUEUE_CONFIG` never retargets a private predecessor's supervisor; an
+explicit `--pueue-config` keeps its precedence.
 
 The
 resolved `delegate-run` executable is saved with each new task, so generated
@@ -568,8 +583,8 @@ Codex turn. It cannot change the task's model, permission, workspace, or budget.
 For a new user turn, wait for completion and use `continue --task TASK_ID`.
 Continuation inherits interactive mode; `--interactive` can also enable it on a
 continuation of an ordinary task. Such an interactive successor uses the
-current interactive provider profile while retaining the predecessor's exact
-session and recorded session-discovery environment.
+current interactive provider profile in the calling environment while retaining
+the predecessor's exact session.
 
 Delivery states are `queued`, `unknown`, `sent`, `acknowledged`, and `rejected`.
 `unknown` means delivery was reserved but may or may not have reached the provider;

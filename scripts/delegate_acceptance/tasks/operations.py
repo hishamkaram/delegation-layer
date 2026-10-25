@@ -49,7 +49,10 @@ from scripts.delegate_acceptance.supervisor.queue_policy import (
     done_result,
     validate_queue_row,
 )
-from scripts.delegate_acceptance.tasks.admission import durable_ordinary_admission
+from scripts.delegate_acceptance.tasks.admission import (
+    durable_ordinary_admission,
+    static_refusal_state_is_clean,
+)
 from scripts.delegate_acceptance.tasks.publication import snapshot, verify_collected_outcome
 from scripts.delegate_acceptance.tasks import request_intent as intents
 from scripts.delegate_acceptance.tasks.refusal_policy import (
@@ -61,6 +64,7 @@ from scripts.delegate_acceptance.workspaces.admission_evidence import (
     _validate_historical_workspace_attempt,
 )
 from pathlib import Path
+from typing import Mapping
 
 
 class NativeTaskOps:
@@ -223,14 +227,15 @@ class NativeTaskOps:
                            expected, timeout)
 
     def dispatch(self, name: str, task: str, argv: list[object], *,
-                 request: intents.TaskRequest | None = None) -> dict[str, object]:
-        """Admit one exact delegate task and bind its supervisor identity."""
+                 request: intents.TaskRequest | None = None,
+                 environment: Mapping[str, str] | None = None) -> dict[str, object]:
+        """Admit one exact delegate task; an explicit ``environment`` replaces the process owner's snapshot."""
         require(not self.closed, "acceptance supervisor is closed")
         require(task not in self.dispatch_attempts, "duplicate dispatch attempt")
         self._declare_request(intents.DISPATCH, task, request)
         self.dispatch_attempts.add(task)
         process = self.processes.run(name, argv, self.state_parent,
-                                     expected=None, timeout=45)
+                                     expected=None, timeout=45, environment=environment)
         try:
             response = parse_json_output(process, name)
         except BaseException:
@@ -311,12 +316,13 @@ class NativeTaskOps:
         self.continuation_successors[ordinal] = task
 
     def continue_task(self, name: str, argv: list[object], *,
-                      request: intents.TaskRequest | None = None) -> tuple[str, dict[str, object]]:
+                      request: intents.TaskRequest | None = None,
+                      environment: Mapping[str, str] | None = None) -> tuple[str, dict[str, object]]:
         """Admit one public continuation after Delegate assigns its successor ID."""
         require(not self.closed, "acceptance supervisor is closed")
         ordinal = self._declare_request(intents.CONTINUE, None, request)
         process = self.processes.run(name, argv, self.state_parent,
-                                     expected=None, timeout=45)
+                                     expected=None, timeout=45, environment=environment)
         response = parse_json_output(process, name)
         task = response.get("task_id")
         require(isinstance(task, str) and _task_identity(task),
@@ -570,33 +576,12 @@ class NativeTaskOps:
         # supervisor config; it must not impose private-supervisor policy.
         return empty_private_queue(status)
 
-    def _static_refusal_state_is_clean(self, initialized: bool = True) -> bool:
-        """Reject every durable task, inspection, and group authorization record."""
-        try:
-            if not self.state.is_dir() or self.state.is_symlink():
-                return False
-            entries = list(self.state.iterdir())
-        except OSError:
-            return False
-        names = {entry.name for entry in entries}
-        if initialized and not {"root.json", ".maintenance.lock"} <= names:
-            return False
-        if not names <= {"root.json", ".maintenance.lock", ".probe"}:
-            return False
-        for entry in entries:
-            if entry.name in {"root.json", ".maintenance.lock"}:
-                if not entry.is_file() or entry.is_symlink():
-                    return False
-            elif entry.is_symlink() or not entry.is_dir():
-                return False
-        return True
-
     def _unattempted_queue_finished(self, status: dict[str, object]) -> bool:
         """Allow setup cleanup only with no attempted or durable task work."""
         if (self.tasks or self.labels or self.numbers or self.dispatch_attempts or
                 self.dispatch_observations or self.inspection_attempts or self.inspection_bindings):
             return False
-        if not self._empty_private_queue(status) or not self._static_refusal_state_is_clean(False):
+        if not self._empty_private_queue(status) or not static_refusal_state_is_clean(self.state, initialized=False):
             return False
         try:
             if (self.state / "root.json").exists():
@@ -631,7 +616,7 @@ class NativeTaskOps:
             root = self._known_root_id()
         except (AcceptanceFailure, OSError, TypeError, ValueError, RecursionError):
             return False
-        if not self._static_refusal_state_is_clean():
+        if not static_refusal_state_is_clean(self.state, initialized=True):
             return False
         return all(self._is_static_refusal_observation(observation, root, task)
                    for observation, task in zip(self.dispatch_observations, tasks))

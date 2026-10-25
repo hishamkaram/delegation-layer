@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -50,11 +51,11 @@ func newSuccessorFixture(t *testing.T, mode string) successorFixture {
 	}}
 }
 
-func (f successorFixture) admit(t *testing.T, prepare commonprovider.PrepareExistingCandidate, reference task.PredicateRef) commonprovider.PreparedProfile {
+func (f successorFixture) admit(t *testing.T, prepare commonprovider.PrepareExistingCandidate, reference task.PredicateRef, environment []string) commonprovider.PreparedProfile {
 	t.Helper()
 	meta := f.meta
 	meta.Predicate = reference
-	candidate, err := prepare(f.request, meta, os.Environ())
+	candidate, err := prepare(f.request, meta, environment)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,27 +69,30 @@ func eligibleSuccessorSources(mode string) []task.PredicateRef {
 	return []task.PredicateRef{preAttributionReferenceForMode(mode), unscopedReference(mode), scopedReference(mode)}
 }
 
-func TestSuccessorCandidateSelectsCurrentPredicateAndKeepsPreparation(t *testing.T) {
+// TestSuccessorCandidateSelectsCurrentPredicateUnderCallerPreparation pairs
+// each correctable stored predicate with the reconstruction of the same
+// record: reconstruction keeps the source predicate and the record's own
+// launch, while the successor is exactly the current admission under its
+// caller.
+func TestSuccessorCandidateSelectsCurrentPredicateUnderCallerPreparation(t *testing.T) {
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
 		fixture := newSuccessorFixture(t, mode)
+		caller := newSuccessorCaller(t, "successor")
+		fresh := freshCallerAdmission(t, fixture.request, caller)
 		for _, source := range eligibleSuccessorSources(mode) {
 			t.Run(mode+"/"+source.Version+"/"+source.SHA256[:8], func(t *testing.T) {
-				successor := fixture.admit(t, PrepareSuccessorCandidate, source)
-				reconstructed := fixture.admit(t, PrepareExistingCandidate, source)
+				successor := fixture.admit(t, PrepareSuccessorCandidate, source, caller.values)
+				reconstructed := fixture.admit(t, PrepareExistingCandidate, source, os.Environ())
 				if !successor.Plan.Predicate.Equal(ReferenceForMode(mode)) {
 					t.Errorf("successor predicate %+v, want %+v", successor.Plan.Predicate, ReferenceForMode(mode))
 				}
 				if !reconstructed.Plan.Predicate.Equal(source) {
 					t.Errorf("reconstruction predicate %+v, want its source %+v", reconstructed.Plan.Predicate, source)
 				}
-				successor.Plan.Predicate, reconstructed.Plan.Predicate = task.PredicateRef{}, task.PredicateRef{}
-				planEqual := reflect.DeepEqual(successor.Plan, reconstructed.Plan)
-				effectiveEqual := reflect.DeepEqual(successor.Effective, reconstructed.Effective)
-				rootsEqual := slices.Equal(successor.WritableRoots, reconstructed.WritableRoots)
-				preflightEqual := successor.RuntimePreflightSHA256 == reconstructed.RuntimePreflightSHA256
-				if !planEqual || !effectiveEqual || !rootsEqual || !preflightEqual {
-					t.Errorf("successor preparation differs beyond the predicate: plan equal=%t effective config equal=%t writable roots equal=%t runtime preflight equal=%t",
-						planEqual, effectiveEqual, rootsEqual, preflightEqual)
+				requireSameAdmission(t, "successor", successor, fresh)
+				if !slices.Equal(reconstructed.Plan.Environment, fixture.meta.Environment) || !slices.Equal(reconstructed.WritableRoots, fixture.meta.EffectiveConfig.Policy.WritableRoots) ||
+					!task.CompareEffectiveConfigs(reconstructed.Effective, fixture.meta.EffectiveConfig) {
+					t.Error("reconstruction did not keep the record's own launch environment, roots, and policy")
 				}
 			})
 		}
@@ -100,20 +104,23 @@ func TestSuccessorCandidateDoesNotModifyThePredecessorRecord(t *testing.T) {
 	fixture.meta.Predicate = preAttributionReferenceForMode(WorkspaceWriteMode)
 	before := fixture.meta
 	before.Environment = slices.Clone(fixture.meta.Environment)
-	if _, err := PrepareSuccessorCandidate(fixture.request, fixture.meta, os.Environ()); err != nil {
+	encoded := canonicalRecord(t, fixture.meta)
+	if _, err := PrepareSuccessorCandidate(fixture.request, fixture.meta, newSuccessorCaller(t, "successor").values); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(before, fixture.meta) {
+	if !reflect.DeepEqual(before, fixture.meta) || !bytes.Equal(encoded, canonicalRecord(t, fixture.meta)) {
 		t.Error("predecessor record changed")
 	}
 }
 
 // TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed pairs each
 // refused or unrelated stored predicate with the reconstruction of the same
-// record: the successor must behave identically, error included.
+// record: the successor must reach the same eligibility and predicate, error
+// included, while launching from its caller.
 func TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed(t *testing.T) {
 	for _, mode := range []string{Mode, WorkspaceWriteMode} {
 		fixture := newSuccessorFixture(t, mode)
+		caller := newSuccessorCaller(t, "successor")
 		altered := preAttributionReferenceForMode(mode)
 		altered.SHA256 = strings.Repeat("0", 64)
 		alteredCurrent := ReferenceForMode(mode)
@@ -137,7 +144,7 @@ func TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed(t *testing.T) {
 			t.Run(mode+"/"+name, func(t *testing.T) {
 				meta := fixture.meta
 				meta.Predicate = source
-				requireSameCandidateOutcome(t, fixture.request, meta)
+				requireSameCandidateOutcome(t, fixture.request, meta, caller)
 			})
 		}
 		t.Run(mode+"/non-native profile", func(t *testing.T) {
@@ -146,31 +153,39 @@ func TestSuccessorCandidateLeavesEveryOtherRecordAsReconstructed(t *testing.T) {
 			policy.ProfileRevision = ProfileRevision
 			meta.EffectiveConfig.Policy = &policy
 			meta.Predicate = preAttributionReferenceForMode(mode)
-			requireSameCandidateOutcome(t, fixture.request, meta)
+			requireSameCandidateOutcome(t, fixture.request, meta, caller)
 		})
 		t.Run(mode+"/interactive request", func(t *testing.T) {
 			request := fixture.request
 			request.RequestedConfig.Interactive = true
 			meta := fixture.meta
 			meta.Predicate = preAttributionReferenceForMode(mode)
-			requireSameCandidateOutcome(t, request, meta)
+			requireSameCandidateOutcome(t, request, meta, caller)
 		})
 	}
 }
 
-func requireSameCandidateOutcome(t *testing.T, request task.TaskRecord, meta task.MetaRecord) {
+// requireSameCandidateOutcome requires the successor of meta under caller to
+// reach the outcome and predicate of reconstructing meta under the same
+// hermetic caller, and to prepare exactly what reconstructing the same record
+// admitted under caller would.
+func requireSameCandidateOutcome(t *testing.T, request task.TaskRecord, meta task.MetaRecord, caller successorCaller) {
 	t.Helper()
-	reconstructed, existingErr := PrepareExistingCandidate(request, meta, os.Environ())
-	successor, successorErr := PrepareSuccessorCandidate(request, meta, os.Environ())
+	reconstructed, existingErr := PrepareExistingCandidate(request, meta, caller.values)
+	successor, successorErr := PrepareSuccessorCandidate(request, meta, caller.values)
 	if (existingErr == nil) != (successorErr == nil) || (existingErr != nil && existingErr.Error() != successorErr.Error()) {
 		t.Fatalf("successor error=%v, reconstruction error=%v", successorErr, existingErr)
 	}
 	if existingErr != nil {
 		return
 	}
-	if !reflect.DeepEqual(reconstructed.Inspection, successor.Inspection) || !slices.Equal(reconstructed.WritableRoots, successor.WritableRoots) ||
+	callerRecord, err := PrepareExistingCandidate(request, recordAdmittedUnder(t, meta, caller), caller.values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(callerRecord.Inspection, successor.Inspection) || !slices.Equal(callerRecord.WritableRoots, successor.WritableRoots) ||
 		(reconstructed.Admit == nil) != (successor.Admit == nil) {
-		t.Fatal("successor candidate differs from the reconstructed candidate")
+		t.Fatal("successor candidate differs from the same record admitted under its caller")
 	}
 	if reconstructed.Admit == nil {
 		return
@@ -180,4 +195,22 @@ func requireSameCandidateOutcome(t *testing.T, request task.TaskRecord, meta tas
 	if wantErr != nil || gotErr != nil || !got.Plan.Predicate.Equal(want.Plan.Predicate) {
 		t.Fatalf("successor admission predicate %+v err=%v, reconstructed %+v err=%v", got.Plan.Predicate, gotErr, want.Plan.Predicate, wantErr)
 	}
+}
+
+// recordAdmittedUnder is meta as its own admission under caller would have
+// saved it: the caller's filtered launch environment and writable roots.
+func recordAdmittedUnder(t *testing.T, meta task.MetaRecord, caller successorCaller) task.MetaRecord {
+	t.Helper()
+	environment, err := prepareNativeEnvironment(caller.values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := meta
+	record.Environment, record.EnvironmentRecorded = environment.Values, true
+	if meta.EffectiveConfig.Policy != nil {
+		policy := *meta.EffectiveConfig.Policy
+		policy.WritableRoots = environment.WritableRoots
+		record.EffectiveConfig.Policy = &policy
+	}
+	return record
 }

@@ -3,6 +3,7 @@ package ccr
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -68,9 +69,9 @@ func TestPrepareDoesNotResolveExecutableFromAmbientPath(t *testing.T) {
 }
 
 // The provided scope owns executable lookup, as the ambient process scope did
-// before environments were explicit; the record owns only the launch
-// environment. An ordinary --resume-task successor runs under the caller's
-// scope while its predecessor recorded another one.
+// before environments were explicit; the record owns only the reconstructed
+// launch environment. An ordinary --resume-task successor runs under the
+// caller's scope and launch environment while its predecessor recorded another.
 func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing.T) {
 	request := successorRequest(t, config.ModeReadOnly)
 	provided, providedHome, providedCLI := selectedCCREnvironment(t)
@@ -78,15 +79,18 @@ func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing
 	withoutPath := recorded
 	withoutPath.Environment = slices.DeleteFunc(slices.Clone(recorded.Environment), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
 	for recordedName, meta := range map[string]task.MetaRecord{"recorded": recorded, "recorded without PATH": withoutPath} {
-		for name, prepare := range map[string]commonprovider.PrepareExistingCandidate{
-			"existing":  PrepareExistingCandidate,
-			"successor": PrepareSuccessorCandidate,
+		for name, launch := range map[string]struct {
+			prepare         commonprovider.PrepareExistingCandidate
+			home, otherHome string
+		}{
+			"existing":  {PrepareExistingCandidate, request.CanonicalCwd, providedHome},
+			"successor": {PrepareSuccessorCandidate, providedHome, request.CanonicalCwd},
 		} {
-			candidate, err := prepare(request, meta, provided)
+			candidate, err := launch.prepare(request, meta, provided)
 			if err != nil {
 				t.Fatalf("%s %s: %v", recordedName, name, err)
 			}
-			requireSelectedCCR(t, recordedName+" "+name+" candidate", candidate, request.CanonicalCwd, providedCLI, providedHome)
+			requireSelectedCCR(t, recordedName+" "+name+" candidate", candidate, launch.home, providedCLI, launch.otherHome)
 			if candidate.Inspection.ExecutableSHA256 != fixtureSHA256(t, providedCLI) {
 				t.Fatalf("%s %s executable fingerprint is not the provided scope's", recordedName, name)
 			}
@@ -95,8 +99,13 @@ func TestRecordedLaunchEnvironmentResolvesExecutableFromProvidedScope(t *testing
 	invalid := recorded
 	invalid.Environment = []string{}
 	providedWithoutPath := slices.DeleteFunc(slices.Clone(provided), func(entry string) bool { return strings.HasPrefix(entry, "PATH=") })
-	if _, err := PrepareSuccessorCandidate(request, invalid, providedWithoutPath); err == nil || strings.Contains(err.Error(), "provider executable") {
+	if _, err := PrepareExistingCandidate(request, invalid, providedWithoutPath); err == nil || strings.Contains(err.Error(), "provider executable") {
 		t.Fatalf("invalid recorded environment error=%v want its validation error before executable lookup", err)
+	}
+	// A successor ignores the recorded environment and looks ccr up only in the
+	// provided scope, which here has no PATH.
+	if _, err := PrepareSuccessorCandidate(request, invalid, providedWithoutPath); !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("provided environment without PATH error=%v want %v", err, exec.ErrNotFound)
 	}
 }
 

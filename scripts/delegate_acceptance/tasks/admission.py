@@ -1,4 +1,4 @@
-"""Read durable ordinary admission without creating another task ledger."""
+"""Read durable ordinary admission and static-refusal state without creating another task ledger."""
 
 from __future__ import annotations
 
@@ -134,3 +134,25 @@ def _read_ordinary_supervisor_receipt(
     require(receipt_binding == binding,
             f"ordinary supervisor receipt binding changed for {task}")
     return expected_label, numeric, meta_digest
+
+
+def static_refusal_state_is_clean(state: Path, *, initialized: bool) -> bool:
+    """Reject every durable task, inspection, and group authorization record."""
+    try:
+        if not state.is_dir() or state.is_symlink():
+            return False
+        entries = list(state.iterdir())
+    except OSError:
+        return False
+    names = {entry.name for entry in entries}
+    if initialized and not {"root.json", ".maintenance.lock"} <= names:
+        return False
+    if not names <= {"root.json", ".maintenance.lock", ".probe"}:
+        return False
+    for entry in entries:
+        if entry.name in {"root.json", ".maintenance.lock"}:
+            if not entry.is_file() or entry.is_symlink():
+                return False
+        elif entry.is_symlink() or not entry.is_dir():
+            return False
+    return True

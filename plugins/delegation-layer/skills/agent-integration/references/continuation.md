@@ -40,9 +40,16 @@ but it does not authorize a fresh dispatch. Apply the remaining `task_record`
 error rules in [result handling](result-handling.md) before retrying or
 observing.
 
+Run `continue` with the same state root as the predecessor. The new turn uses
+the environment of the process that calls `continue`, not an environment saved
+by the predecessor, so the exact recorded session must be available there. If
+`continue` fails because it is not, report the failure and stop. Do not copy
+credentials or settings from another environment, choose a fresh session or
+another provider, or dispatch again to repair the failure.
+
 When the predecessor is bound to a managed workspace, `continue --task` carries
-the recorded workspace, working directory, provider session, and environment
-to the new task ID. It does not mutate the predecessor's immutable request or
+the recorded workspace, working directory, and provider session to the new task
+ID. The new turn runs in the calling environment. It does not mutate the predecessor's immutable request or
 reservation. A changed provider request is a new turn and must pass the normal
 workspace-use reservation. Read [managed workspace guidance](workspaces.md)
 before attaching another provider, review, or verification operation.

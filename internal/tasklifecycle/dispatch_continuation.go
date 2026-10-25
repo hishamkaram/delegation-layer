@@ -68,21 +68,19 @@ func ContinuationOptionsForTask(store *taskdir.Store, options DispatchOptions, i
 	return result, meta, nil
 }
 
-// interactiveContinuationCreation selects the predecessor's saved launch scope
-// for an interactive successor's creation only. An ordinary --resume-task
-// successor keeps the caller's scope. The selection replaces the former
-// process-level swap at the same point and with the same failure stage.
-func interactiveContinuationCreation(options CreationOptions, selection supervisorcore.AdmissionSelection, root string, meta *task.MetaRecord, interactive bool) (CreationOptions, supervisorcore.AdmissionSelection, error) {
-	if meta == nil || !interactive {
-		return options, selection, nil
+// newSuccessorCreation binds a new continuation task's creation to the
+// caller's captured launch scope, which Profiles already owns: that scope
+// selects the provider profile, supervisor control, and detached maintenance.
+// The predecessor's record only suppresses a scope DELEGATE_PUEUE_CONFIG that
+// would retarget its private supervisor; an explicit --pueue-config and the
+// saved supervisor binding are kept. A dispatch without a predecessor is
+// returned unchanged.
+func newSuccessorCreation(options CreationOptions, selection supervisorcore.AdmissionSelection, root string, meta *task.MetaRecord) (CreationOptions, supervisorcore.AdmissionSelection) {
+	if meta == nil {
+		return options, selection
 	}
-	profiles, err := options.Admission.Profiles.ForRecord(meta.Environment, meta.EnvironmentRecorded)
-	if err != nil {
-		return options, selection, err
-	}
-	selected := profiles.Environment()
-	options.Admission.Profiles = profiles
-	options.Admission.Supervisor = supervisorcore.AdmissionOptionsForScope(options.Admission.Supervisor, selected, selected)
-	selection.EnvironmentConfigPath = supervisorcore.ContinuationConfigEnvironment(root, *meta, selected)
-	return options, selection, nil
+	scope := options.Admission.Profiles.Environment()
+	options.Admission.Supervisor = supervisorcore.AdmissionOptionsForScope(options.Admission.Supervisor, scope, scope)
+	selection.EnvironmentConfigPath = supervisorcore.ContinuationConfigEnvironment(root, *meta, scope)
+	return options, selection
 }

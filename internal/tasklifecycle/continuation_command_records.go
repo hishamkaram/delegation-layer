@@ -24,7 +24,6 @@ const (
 	ContinueSession
 	ContinueGenerateID
 	ContinueSupervisor
-	ContinueEnvironment
 )
 
 type ContinuationResult struct {

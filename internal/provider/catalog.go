@@ -455,11 +455,15 @@ func (c Catalog) ExistingCandidate(request task.TaskRecord, meta task.MetaRecord
 	})
 }
 
-// SuccessorCandidate prepares a new exact-session continuation task from its
-// predecessor's immutable record. A provider may use PrepareSuccessor to select
-// the current compatible output interpreter for the new task; without that
-// hook the predecessor's recorded contract is reconstructed as by
-// ExistingCandidate. The predecessor record is never modified.
+// SuccessorCandidate prepares a new exact-session continuation task. The
+// predecessor's immutable record decides only compatibility and eligibility;
+// the environment argument is the successor's own launch scope, from which a
+// production PrepareSuccessor hook takes the filtered launch values, writable
+// roots, and capability inspection. The hook may also select the current
+// compatible output interpreter for the new task. A registration without the
+// hook, such as a custom or historical one, is prepared as by ExistingCandidate
+// and keeps that path's recorded environment rules. The predecessor record is
+// never modified.
 func (c Catalog) SuccessorCandidate(request task.TaskRecord, predecessorMeta task.MetaRecord, environment []string) (ProfileCandidate, error) {
 	return c.candidate(request, environment, func(registration Registration, environment []string) (ProfileCandidate, error) {
 		if registration.PrepareSuccessor != nil {

@@ -18,9 +18,9 @@ from scripts.delegate_acceptance.evidence.files import digest, read_json, write_
 from scripts.delegate_acceptance.processes.contracts import (
     BoundedCommandError, BoundedCommandResult, CommandFailure, OutputCapture, OutputSink,
 )
-from scripts.delegate_acceptance.processes.observation import inherited_environment
+from scripts.delegate_acceptance.processes.observation import inherited_environment, selected_environment
 from pathlib import Path
-from typing import IO, Callable, NoReturn
+from typing import IO, Callable, Mapping, NoReturn
 
 
 class Process:
@@ -285,9 +285,10 @@ class Processes:
         # sequence number, and is read only as detached observation records.
         self._uncertain_starts = []
 
-    def start(self, name, argv, cwd, stdin=None, on_spawned=None):
+    def start(self, name, argv, cwd, stdin=None, on_spawned=None, *, environment: Mapping[str, str] | None = None):
         if callable(stdin) and on_spawned is None:
             on_spawned, stdin = stdin, None
+        launch_environment = self.environment if environment is None else selected_environment(environment, self.failure_type)
         sequence = len(self.entries) + len(self._uncertain_starts) + 1
         directory = self.directory / ("%03d-%s" % (sequence, name))
         capture = self.stdout_capture_factory([str(arg) for arg in argv]) \
@@ -303,7 +304,7 @@ class Processes:
 
         def register_uncertain(process):
             self._uncertain_starts.append((tuple(process.argv), str(process.directory)))
-        process = Process(directory, argv, cwd, self.environment, self.capture_root,
+        process = Process(directory, argv, cwd, launch_environment, self.capture_root,
                           stdin=stdin, stdout_capture=capture,
                           environment_keys_only=self.environment_keys_only,
                           return_result=self.return_result,
@@ -314,8 +315,8 @@ class Processes:
             "pid": process.pid, "started_ns": time.time_ns()})
         return process
 
-    def run(self, name, argv, cwd, expected=0, timeout=15, stdin=None):
-        process = self.start(name, argv, cwd, stdin=stdin)
+    def run(self, name, argv, cwd, expected=0, timeout=15, stdin=None, *, environment: Mapping[str, str] | None = None):
+        process = self.start(name, argv, cwd, stdin=stdin, environment=environment)
         process.wait(timeout, expected)
         return process
 

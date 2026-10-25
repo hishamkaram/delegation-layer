@@ -15,7 +15,10 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/task"
 )
 
-func TestInteractiveContinuationUsesFreshCatalogCandidate(t *testing.T) {
+// TestAdmittedContinuationsReconstructFromExistingRecord proves that an
+// already admitted continuation, interactive or headless, reconstructs from
+// the catalog's recorded contract and never prepares a fresh current profile.
+func TestAdmittedContinuationsReconstructFromExistingRecord(t *testing.T) {
 	workspace := testsupport.CanonicalTempDir(t)
 	root := testsupport.CanonicalTempDir(t)
 	interpreter, err := predicate.Default().Resolve(task.FixturePredicateRef())
@@ -69,14 +72,14 @@ func TestInteractiveContinuationUsesFreshCatalogCandidate(t *testing.T) {
 	if _, _, err := admissionProfiles(deps).ExistingContext(context.Background(), root, interactive, task.MetaRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	if freshCalls != 1 || existingCalls != 0 {
-		t.Fatalf("interactive continuation candidate calls: fresh=%d existing=%d", freshCalls, existingCalls)
+	if freshCalls != 0 || existingCalls != 1 {
+		t.Fatalf("admitted interactive continuation candidate calls: fresh=%d existing=%d", freshCalls, existingCalls)
 	}
 
 	if _, _, err := admissionProfiles(deps).ExistingContext(context.Background(), root, base, task.MetaRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	if freshCalls != 1 || existingCalls != 1 {
-		t.Fatalf("headless continuation candidate calls: fresh=%d existing=%d", freshCalls, existingCalls)
+	if freshCalls != 0 || existingCalls != 2 {
+		t.Fatalf("admitted headless continuation candidate calls: fresh=%d existing=%d", freshCalls, existingCalls)
 	}
 }

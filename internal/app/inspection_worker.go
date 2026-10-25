@@ -168,7 +168,7 @@ func runLoadedInspectionWorkerOperation(canonicalRoot, taskID string, supervised
 		return completeInspectionFailureContext(observeContext, operation, "consume-start")
 	}
 
-	facts, workErr, stopErr := runSupervisedInspection(operation, supervisor, identity, lifetimeChild.Lifetime(), deps, canonicalRoot, record, meta)
+	facts, workErr, stopErr := runSupervisedInspection(operation, supervisor, identity, lifetimeChild.Lifetime(), deps, store, record, meta)
 	maintenanceErr = errors.Join(workErr, stopErr)
 	if workErr != nil || stopErr != nil {
 		stage := inspectionWorkerFailureStage(workErr, "run-inspection")
@@ -322,25 +322,25 @@ func waitInspectionSupervisorReceipt(ctx context.Context, operation *inspection.
 	}
 }
 
-func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, lifetime execution.Lifetime, deps Dependencies, root string, record inspection.RequestRecord, meta *task.MetaRecord) (json.RawMessage, error, error) {
+func runSupervisedInspection(operation *inspection.Operation, supervisor *pueue.Client, identity pueue.InspectionIdentity, lifetime execution.Lifetime, deps Dependencies, store *taskdir.Store, record inspection.RequestRecord, meta *task.MetaRecord) (json.RawMessage, error, error) {
 	stopper := &inspectionBudgetStopper{operation: operation, client: supervisor, identity: identity, lifetime: lifetime}
 	var facts json.RawMessage
 	workErr, stopErr := execution.RunSupervised(operation.Deadline(), execution.SupervisedOptions{Stopper: stopper, Lifetime: lifetime}, func(scope execution.PreflightScope) error {
-		return runInspectionCallback(scope, operation, deps, root, record, meta, &facts)
+		return runInspectionCallback(scope, operation, deps, store, record, meta, &facts)
 	})
 	return facts, workErr, stopErr
 }
 
-func runInspectionCallback(scope execution.PreflightScope, operation *inspection.Operation, deps Dependencies, root string, record inspection.RequestRecord, meta *task.MetaRecord, facts *json.RawMessage) error {
+func runInspectionCallback(scope execution.PreflightScope, operation *inspection.Operation, deps Dependencies, store *taskdir.Store, record inspection.RequestRecord, meta *task.MetaRecord, facts *json.RawMessage) error {
 	// Candidate preparation may perform the compiled attributes-only native
 	// lookup. Keep it inside the armed lifetime so expiry owns its stop
 	// boundary before any such work can block the worker.
 	var candidate commonprovider.ProfileCandidate
 	var err error
 	if record.Binding.DefinitionRevision == commonprovider.ModelsRevision {
-		candidate, err = prepareModelsCandidate(deps, root, record.Task)
+		candidate, err = prepareModelsCandidate(deps, store.Root, record.Task)
 	} else {
-		candidate, err = prepareInspectionWorkerCandidate(deps, root, record.Task, meta)
+		candidate, err = prepareInspectionTaskCandidate(deps, store, record.Task, meta)
 	}
 	if err != nil {
 		return inspectionWorkerFailure("prepare-candidate")

@@ -45,6 +45,10 @@ TIMEOUT_RESUME_SOURCE_BUDGET = "3m"
 CANONICAL_TIMEOUT_RESUME_SOURCE_BUDGET = "3m0s"
 TIMEOUT_RESUME_SOURCE_BUDGET_NANOS = 180_000_000_000
 TIMEOUT_SOURCE_RUNNER_RESULTS = frozenset({"Success", "Failed"})
+# The Pi control proves a continuation under an empty session directory is
+# refused. Its receipt names a gate outside the positive "acceptance-native" matrix.
+PI_SESSION_MISS_SCENARIO = "pi-session-miss"
+PI_SESSION_MISS_GATE = "acceptance-native-pi-session-miss"
 # Codex's Linux workspace-write sandbox temporarily materializes these missing
 # protected metadata paths. Own them in the isolated timeout fixture so a
 # forced provider stop cannot turn interrupted sandbox cleanup into test data.

@@ -36,61 +36,70 @@ func interactiveScopeFixture(t *testing.T) (CreationOptions, string) {
 	}}, root
 }
 
-func TestInteractiveContinuationCreationKeepsCallerScopeOutsideInteractiveResume(t *testing.T) {
+func TestNewSuccessorCreationKeepsFreshDispatchUnchanged(t *testing.T) {
 	options, root := interactiveScopeFixture(t)
-	external := &task.MetaRecord{Environment: interactiveScopeRecorded, EnvironmentRecorded: true, SupervisorConfig: task.SupervisorRef{ConfigPath: "/external/pueue.yml"}}
+	kept, keptSelection := newSuccessorCreation(options, interactiveScopeConfig, root, nil)
+	if !slices.Equal(kept.Admission.Profiles.Environment(), interactiveScopeCaller) || keptSelection != interactiveScopeConfig || kept.Admission.Supervisor.Environment != nil {
+		t.Fatalf("fresh dispatch scope changed: %q/%+v", kept.Admission.Profiles.Environment(), keptSelection)
+	}
+}
+
+// TestNewSuccessorCreationSelectsCallerScope covers every new successor:
+// ordinary and interactive continuations share one selection, so the request
+// mode is not an input. The predecessor's saved scope, even an invalid one, is
+// compatibility evidence only and never selects the new task's environment.
+func TestNewSuccessorCreationSelectsCallerScope(t *testing.T) {
+	ambient := os.Environ()
+	saved := task.SupervisorRef{ConfigPath: "/saved/pueue.yml", Endpoint: "unix:/saved/pueue.sock"}
+	selectionInput := interactiveScopeConfig
+	selectionInput.SavedSupervisor = &saved
 	for _, test := range []struct {
-		name        string
-		meta        *task.MetaRecord
-		interactive bool
+		name string
+		meta *task.MetaRecord
 	}{
-		{name: "ordinary resume", meta: external, interactive: false},
-		{name: "fresh dispatch", meta: nil, interactive: true},
+		{name: "external predecessor", meta: &task.MetaRecord{Environment: interactiveScopeRecorded, EnvironmentRecorded: true, SupervisorConfig: task.SupervisorRef{ConfigPath: "/external/pueue.yml"}}},
+		{name: "invalid saved predecessor scope", meta: &task.MetaRecord{Environment: []string{"PATH=/a", "PATH=/b"}, EnvironmentRecorded: true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			kept, keptSelection, err := interactiveContinuationCreation(options, interactiveScopeConfig, root, test.meta, test.interactive)
-			if err != nil || !slices.Equal(kept.Admission.Profiles.Environment(), interactiveScopeCaller) || keptSelection != interactiveScopeConfig || kept.Admission.Supervisor.Environment != nil {
-				t.Fatalf("caller scope changed: %q/%+v/%v", kept.Admission.Profiles.Environment(), keptSelection, err)
+			options, root := interactiveScopeFixture(t)
+			selected, selection := newSuccessorCreation(options, selectionInput, root, test.meta)
+			if !slices.Equal(selected.Admission.Profiles.Environment(), interactiveScopeCaller) || !slices.Equal(selected.Admission.Supervisor.Environment, interactiveScopeCaller) {
+				t.Fatalf("successor scope = %q / %q, want caller", selected.Admission.Profiles.Environment(), selected.Admission.Supervisor.Environment)
+			}
+			control := selected.Admission.Supervisor.Control
+			if want := []string{"HOME=/caller-home", "PATH=/caller-bin"}; !slices.Equal(control.Environment, want) || !slices.Equal(control.PrivateMaintenanceEnvironment, want) {
+				t.Fatalf("successor control/maintenance = %q / %q", control.Environment, control.PrivateMaintenanceEnvironment)
+			}
+			if selection.ConfigPath != "/explicit/pueue.yml" || selection.EnvironmentConfigPath != "/caller/pueue.yml" || selection.SavedSupervisor == nil || *selection.SavedSupervisor != saved {
+				t.Fatalf("successor config selection = %+v", selection)
+			}
+			if !slices.Equal(options.Admission.Profiles.Environment(), interactiveScopeCaller) || options.Admission.Supervisor.Environment != nil {
+				t.Fatal("successor selection changed the caller's options")
+			}
+			if !slices.Equal(os.Environ(), ambient) {
+				t.Fatal("successor selection changed the process environment")
 			}
 		})
 	}
 }
 
-func TestInteractiveContinuationCreationSelectsPredecessorScope(t *testing.T) {
-	ambient := os.Environ()
+func TestNewSuccessorCreationSuppressesPrivatePredecessorConfig(t *testing.T) {
 	options, root := interactiveScopeFixture(t)
-	external := &task.MetaRecord{Environment: interactiveScopeRecorded, EnvironmentRecorded: true, SupervisorConfig: task.SupervisorRef{ConfigPath: "/external/pueue.yml"}}
-	selected, selection, err := interactiveContinuationCreation(options, interactiveScopeConfig, root, external, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(selected.Admission.Profiles.Environment(), interactiveScopeRecorded) || !slices.Equal(selected.Admission.Supervisor.Environment, interactiveScopeRecorded) {
-		t.Fatalf("interactive scope = %q / %q, want recorded", selected.Admission.Profiles.Environment(), selected.Admission.Supervisor.Environment)
-	}
-	control := selected.Admission.Supervisor.Control
-	if want := []string{"HOME=/recorded-home", "PATH=/recorded-bin"}; !slices.Equal(control.Environment, want) || !slices.Equal(control.PrivateMaintenanceEnvironment, want) {
-		t.Fatalf("interactive control/maintenance = %q / %q", control.Environment, control.PrivateMaintenanceEnvironment)
-	}
-	if selection.ConfigPath != "/explicit/pueue.yml" || selection.EnvironmentConfigPath != "/recorded/pueue.yml" {
-		t.Fatalf("interactive config selection = %+v", selection)
-	}
-	if !slices.Equal(options.Admission.Profiles.Environment(), interactiveScopeCaller) || options.Admission.Supervisor.Environment != nil {
-		t.Fatal("interactive selection changed the caller's options")
-	}
-	if !slices.Equal(os.Environ(), ambient) {
-		t.Fatal("interactive selection changed the process environment")
+	private := &task.MetaRecord{Environment: interactiveScopeRecorded, EnvironmentRecorded: true, SupervisorConfig: task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath(root)}}
+	_, selection := newSuccessorCreation(options, interactiveScopeConfig, root, private)
+	if selection.EnvironmentConfigPath != "" || selection.ConfigPath != "/explicit/pueue.yml" {
+		t.Fatalf("private predecessor kept the caller scope config: %+v", selection)
 	}
 }
 
-func TestInteractiveContinuationCreationPrivateAndInvalidScopes(t *testing.T) {
+func TestNewSuccessorCreationKeepsExplicitControlEnvironment(t *testing.T) {
 	options, root := interactiveScopeFixture(t)
-	private := &task.MetaRecord{Environment: interactiveScopeRecorded, EnvironmentRecorded: true, SupervisorConfig: task.SupervisorRef{ConfigPath: pueue.PrivateConfigPath(root)}}
-	_, selection, err := interactiveContinuationCreation(options, interactiveScopeConfig, root, private, true)
-	if err != nil || selection.EnvironmentConfigPath != "" || selection.ConfigPath != "/explicit/pueue.yml" {
-		t.Fatalf("private predecessor kept scope config: %+v/%v", selection, err)
-	}
-	invalid := &task.MetaRecord{Environment: []string{"PATH=/a", "PATH=/b"}, EnvironmentRecorded: true}
-	if _, _, err = interactiveContinuationCreation(options, interactiveScopeConfig, root, invalid, true); err == nil {
-		t.Fatal("interactive creation accepted an invalid saved scope")
+	explicit := []string{"HOME=/control-home"}
+	options.Admission.Supervisor.Control = pueue.Options{Environment: explicit}
+	external := &task.MetaRecord{Environment: interactiveScopeRecorded, EnvironmentRecorded: true, SupervisorConfig: task.SupervisorRef{ConfigPath: "/external/pueue.yml"}}
+	selected, _ := newSuccessorCreation(options, interactiveScopeConfig, root, external)
+	control := selected.Admission.Supervisor.Control
+	if !slices.Equal(control.Environment, explicit) || !slices.Equal(control.PrivateMaintenanceEnvironment, []string{"HOME=/caller-home", "PATH=/caller-bin"}) {
+		t.Fatalf("explicit control/maintenance = %q / %q", control.Environment, control.PrivateMaintenanceEnvironment)
 	}
 }

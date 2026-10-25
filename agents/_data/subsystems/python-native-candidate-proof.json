@@ -163,5 +163,103 @@
       "py:unittest",
       "py:unittest.mock"
     ]
+  },
+  {
+    "name": "py:delegate_acceptance.native_evidence.supplemental",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "application",
+    "imports": [
+      "py:__future__",
+      "py:dataclasses",
+      "py:delegate_acceptance.evidence.files",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native_evidence.aggregate",
+      "py:delegate_acceptance.native_evidence.cases",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.filesystem",
+      "py:delegate_acceptance.native_evidence.lifetime_closure",
+      "py:delegate_acceptance.native_evidence.proof",
+      "py:delegate_acceptance.native_evidence.validation",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.source",
+      "py:pathlib",
+      "py:platform",
+      "py:re",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:acceptance_tests.native_evidence.test_supplemental",
+    "owner": "py:delegate_acceptance.native_evidence",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:acceptance_tests.native.support",
+      "py:delegate_acceptance.native.constants",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.public_contract",
+      "py:delegate_acceptance.native_evidence.supplemental",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:delegate_acceptance.release_verification.source",
+      "py:hashlib",
+      "py:json",
+      "py:native_acceptance_evidence",
+      "py:os",
+      "py:pathlib",
+      "py:tempfile",
+      "py:test_native_acceptance_evidence",
+      "py:unittest"
+    ]
+  },
+  {
+    "name": "py:verify_native_continuation",
+    "owner": "py:verify_native_continuation",
+    "layer": "tool",
+    "imports": [
+      "py:__future__",
+      "py:argparse",
+      "py:delegate_acceptance.evidence.bounded_files",
+      "py:delegate_acceptance.native_evidence.candidate_proof",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.public_contract",
+      "py:delegate_acceptance.native_evidence.public_stage",
+      "py:delegate_acceptance.native_evidence.supplemental",
+      "py:delegate_acceptance.native_release.candidate",
+      "py:delegate_acceptance.native_release.contract",
+      "py:delegate_acceptance.native_release.projection",
+      "py:delegate_acceptance.native_release.receipt",
+      "py:delegate_acceptance.release_verification.candidate_attempts",
+      "py:delegate_acceptance.release_verification.contract",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:sys",
+      "py:typing"
+    ]
+  },
+  {
+    "name": "py:test_verify_native_continuation",
+    "owner": "py:test_verify_native_continuation",
+    "layer": "test",
+    "imports": [
+      "py:__future__",
+      "py:contextlib",
+      "py:delegate_acceptance.native_evidence.contract",
+      "py:delegate_acceptance.native_evidence.public_stage",
+      "py:delegate_acceptance.native_release.contract",
+      "py:delegate_acceptance.native_release.receipt",
+      "py:hashlib",
+      "py:io",
+      "py:json",
+      "py:os",
+      "py:pathlib",
+      "py:platform",
+      "py:shutil",
+      "py:sys",
+      "py:test_native_candidate_support",
+      "py:unittest",
+      "py:unittest.mock",
+      "py:verify_native_continuation"
+    ]
   }
 ]
