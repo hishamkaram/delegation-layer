@@ -13,7 +13,7 @@ import (
 	"github.com/hishamkaram/delegation-layer/internal/workspaces"
 )
 
-func fillManagedTaskWorkspace(store *taskdir.Store, td *taskdir.TaskDir, result *commandResult) {
+func fillManagedTaskWorkspace(store *taskdir.Store, td *taskdir.TaskDir, environment []string, result *commandResult) {
 	request, _, err := td.PreparedRecords()
 	if err != nil || request.Workspace == nil {
 		return
@@ -21,7 +21,7 @@ func fillManagedTaskWorkspace(store *taskdir.Store, td *taskdir.TaskDir, result 
 	response := WorkspaceResponse{ID: request.Workspace.ID, Isolation: "git-worktree", State: "unreadable", ReasonCode: "workspace_observation_failed", NextAction: "stop_and_report", EvidenceState: "unknown"}
 	result.response.Workspace = &response
 	wakeContext, finishWake := context.WithTimeout(context.Background(), time.Second)
-	wakeErr := wakeManagedTaskWorkspace(wakeContext, store, td)
+	wakeErr := wakeManagedTaskWorkspace(wakeContext, store, td, environment)
 	finishWake()
 	if wakeErr != nil && !workspaces.PendingError(wakeErr) && !workspaceViewRetryable(wakeErr) {
 		result.response.Workspace.ReasonCode = workspaceObservationReason("wake", wakeErr)

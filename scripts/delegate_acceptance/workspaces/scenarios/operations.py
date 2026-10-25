@@ -20,9 +20,8 @@ from .model import (
     ADMISSION_COMMAND_TIMEOUT_SECONDS, FIXTURE_SESSION, TASK_ID_RE, WAIT_SECONDS,
 )
 from .policy import (
-    _validate_hex, classify_control_response,
+    _FACT_TOKEN_RE, _fact, _validate_hex, classify_control_response,
 )
-
 
 
 def _control(
@@ -326,6 +325,59 @@ def _capture_is_for(capture: dict[str, object], subject_id: str) -> bool:
     return isinstance(subject, dict) and subject.get("id") == subject_id
 
 
+def _capture_operation(
+    context: WorkspaceContext, task: dict[str, object], *,
+    workspace: dict[str, object], operation_id: str,
+) -> tuple[dict[str, object] | None, str]:
+    """Return the public result of exactly one operation, or why it is unknown.
+
+    The observed workspace is used when it already carries that operation; otherwise
+    one finite public status query selects it. A lookup failure yields only its type.
+    """
+    result = workspace.get("operation")
+    if not (isinstance(result, dict) and result.get("operation_id") == operation_id):
+        arguments = ["--root", str(context.state), "workspace", "status", str(task["workspace_id"]),
+                     "--operation", operation_id, "--json"]
+        task_id = str(task["task_id"])
+        try:
+            _code, response = _control(
+                context, arguments, label="workspace-capture-operation", task_id=task_id,
+                expected=(0, 3), timeout=ADMISSION_COMMAND_TIMEOUT_SECONDS,
+                phase="workspace-observation",
+            )
+            result = _workspace_from(response).get("operation")
+        # An optional diagnostic lookup must not replace the already known primary failure;
+        # only the exception type is reported, never its message.
+        except Exception as error:
+            return None, "operation_lookup_failed:" + type(error).__name__
+    if isinstance(result, dict) and result.get("operation_id") == operation_id:
+        return result, ""
+    return None, "operation_absent"
+
+
+def _unavailable_capture_error(
+    context: WorkspaceContext, task: dict[str, object], *,
+    workspace: dict[str, object], capture: dict[str, object], subject_id: str,
+) -> RuntimeError:
+    """Keep the unavailable-capture failure and add the typed cause the public API holds."""
+    operation_id = _fact(capture.get("operation_id"), TASK_ID_RE)
+    facts = [
+        "workspace " + _fact(task["workspace_id"], TASK_ID_RE),
+        "subject " + _fact(subject_id, TASK_ID_RE),
+        "capture_operation " + operation_id,
+        "capture_reason " + _fact(capture.get("reason_code"), _FACT_TOKEN_RE),
+    ]
+    if TASK_ID_RE.fullmatch(operation_id):
+        result, missing = _capture_operation(
+            context, task, workspace=workspace, operation_id=operation_id)
+        if result is None:
+            facts.append(missing)
+        else:
+            facts.append("operation_status " + _fact(result.get("status"), _FACT_TOKEN_RE))
+            facts.append("operation_reason " + _fact(result.get("reason_code"), _FACT_TOKEN_RE))
+    return RuntimeError("workspace capture became unavailable: " + ", ".join(facts))
+
+
 def _wait_capture(
     context: WorkspaceContext, task: dict[str, object], *, subject_id: str | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
@@ -351,7 +403,8 @@ def _wait_capture(
             if capture.get("status") == "captured":
                 return response, capture
             if capture.get("status") == "unavailable":
-                raise RuntimeError("workspace capture became unavailable")
+                raise _unavailable_capture_error(
+                    context, task, workspace=workspace, capture=capture, subject_id=subject_id)
         time.sleep(0.1)
 
 

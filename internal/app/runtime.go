@@ -119,13 +119,15 @@ func (d Dependencies) withCapturedEnvironment() Dependencies {
 
 // storeDependencies is the narrow composition passed to read-only task-store
 // commands. Profile selection, runner resolution, and supervisor mutation
-// options remain outside this boundary.
+// options remain outside this boundary. environment is a read-only copy of the
+// command's captured launch scope, with the same nil and empty meaning.
 type storeDependencies struct {
 	predicateRegistry func() predicate.Registry
 	catalog           commonprovider.Catalog
 	supervisorOptions pueue.Options
 	supervisorLookup  supervisorcore.ExecutableLookup
 	runnerExecutable  string
+	environment       []string
 	observeSupervisor bool
 }
 
@@ -140,6 +142,7 @@ func (d Dependencies) storeDependencies() storeDependencies {
 		supervisorOptions: d.supervisorControlScope(),
 		supervisorLookup:  d.supervisorLookup(),
 		runnerExecutable:  d.RunnerExecutable,
+		environment:       slices.Clone(d.Environment),
 		observeSupervisor: true,
 	}
 }

@@ -27,7 +27,7 @@ func status(a Arguments, deps Dependencies) (result commandResult) {
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
-	defer func() { fillManagedTaskWorkspace(store, td, &result) }()
+	defer func() { fillManagedTaskWorkspace(store, td, deps.Environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	observed, err := tasklifecycle.Status(store, td, observationSupervisorOptions(deps.supervisorControlScope(), deps.supervisorLookup()), deps.RunnerExecutable, deps.storeDependencies().providerCatalog())
 	reportTaskMaintenanceDeferral(observed.MaintenanceError)
@@ -57,7 +57,7 @@ func collect(a Arguments, deps storeDependencies) (result commandResult) {
 		return failed(response, err, 1)
 	}
 	defer func() { mergeCommandClose(&result, td.Close) }()
-	defer func() { fillManagedTaskWorkspace(store, td, &result) }()
+	defer func() { fillManagedTaskWorkspace(store, td, deps.environment, &result) }()
 	response.RootID, response.TaskID = store.RootID, a.TaskID
 	observed, err := tasklifecycle.Collect(root, td, deps.collectionOptions(a.Watch))
 	applyTaskObservation(&response, observed.Observation, root)

@@ -490,10 +490,13 @@ class SharedHelperTests(unittest.TestCase):
                 controlled.assert_not_called()
             self.assertEqual(context.attempted_task_ids, [])
 
-    def _wait_capture_with(self, captures, **options):
-        responses = [{"workspace": {"id": PARENT_ID, "state": "retained", "capture": capture}}
-                     for capture in captures]
+    def _wait_capture_with(self, captures, operation=None, **options):
+        workspace = {"id": PARENT_ID, "state": "retained"}
+        if operation is not None:
+            workspace["operation"] = operation
+        responses = [{"workspace": {**workspace, "capture": capture}} for capture in captures]
         context = mock.Mock(spec=WorkspaceContext)
+        context.state = Path("/state")
         with (
             mock.patch.object(scenario_operations, "_wait_workspace", side_effect=responses),
             mock.patch.object(scenario_operations.time, "sleep"),
@@ -502,8 +505,23 @@ class SharedHelperTests(unittest.TestCase):
                 context, {"workspace_id": PARENT_ID, "task_id": CHILD_ID}, **options)
 
     @staticmethod
-    def _capture(subject_id, status="captured"):
-        return {"status": status, "subject": {"kind": "task", "id": subject_id}}
+    def _capture(subject_id, status="captured", **fields):
+        return {"status": status, "subject": {"kind": "task", "id": subject_id}, **fields}
+
+    def _unavailable_failure(self, control, operation=None, **fields):
+        """Run one unavailable capture of the task's own subject; return the error and the control mock."""
+        capture = self._capture(CHILD_ID, status="unavailable", **{
+            "workspace_id": PARENT_ID, "operation_id": FIRST_OPERATION,
+            "reason_code": "capture_failed", **fields})
+        with mock.patch.object(scenario_operations, "_control", control):
+            with self.assertRaises(RuntimeError) as raised:
+                self._wait_capture_with([capture], operation=operation)
+        return str(raised.exception), control
+
+    @staticmethod
+    def _operation_response(operation_id, status="failed", reason="git_executable_unavailable"):
+        return (0, {"workspace": {"id": PARENT_ID, "state": "retained", "operation": {
+            "operation_id": operation_id, "status": status, "reason_code": reason}}})
 
     def test_omitted_subject_means_the_task_not_the_latest_capture_of_a_reused_workspace(self):
         previous, own = self._capture(PARENT_ID), self._capture(CHILD_ID)
@@ -517,6 +535,79 @@ class SharedHelperTests(unittest.TestCase):
         self.assertIs(capture, own)
         with self.assertRaisesRegex(RuntimeError, "became unavailable"):
             self._wait_capture_with([self._capture(CHILD_ID, status="unavailable")])
+
+    def test_unavailable_capture_reports_the_operations_public_reason_with_one_status_query(self):
+        control = mock.Mock(return_value=self._operation_response(FIRST_OPERATION))
+        message, control = self._unavailable_failure(control)
+        for fact in ("workspace " + PARENT_ID, "subject " + CHILD_ID,
+                     "capture_operation " + FIRST_OPERATION, "capture_reason capture_failed",
+                     "operation_status failed", "operation_reason git_executable_unavailable"):
+            self.assertIn(fact, message)
+        self.assertTrue(message.startswith("workspace capture became unavailable"))
+        control.assert_called_once()
+        arguments = control.call_args.args[1]
+        self.assertEqual(arguments[arguments.index("--operation") + 1], FIRST_OPERATION)
+        self.assertEqual(arguments[arguments.index("status") + 1], PARENT_ID)
+        self.assertNotIn("--watch", arguments)
+
+    def test_unavailable_capture_uses_the_observed_operation_without_another_query(self):
+        operation = {"operation_id": FIRST_OPERATION, "status": "failed",
+                     "reason_code": "git_executable_unavailable"}
+        message, control = self._unavailable_failure(mock.Mock(), operation=operation)
+        self.assertIn("operation_reason git_executable_unavailable", message)
+        control.assert_not_called()
+
+    def test_unavailable_capture_does_not_attribute_another_operations_reason(self):
+        control = mock.Mock(return_value=self._operation_response(SECOND_OPERATION))
+        message, _control = self._unavailable_failure(control)
+        self.assertIn("operation_absent", message)
+        self.assertNotIn("git_executable_unavailable", message)
+        observed = {"operation_id": SECOND_OPERATION, "status": "failed",
+                    "reason_code": "git_executable_unavailable"}
+        message, control = self._unavailable_failure(
+            mock.Mock(return_value=self._operation_response(SECOND_OPERATION)), operation=observed)
+        self.assertNotIn("git_executable_unavailable", message)
+        control.assert_called_once()
+
+    def test_unavailable_capture_survives_any_failed_operation_lookup_without_raw_output(self):
+        secret = "SECRET-TOKEN /private/path"
+        for kind in (RuntimeError, TypeError, Exception):
+            with self.subTest(kind.__name__):
+                control = mock.Mock(side_effect=kind("delegate command failed: stdout=" + secret))
+                message, _control = self._unavailable_failure(control)
+                self.assertTrue(message.startswith("workspace capture became unavailable"))
+                self.assertIn("capture_reason capture_failed", message)
+                self.assertIn("operation_lookup_failed:" + kind.__name__, message)
+                self.assertNotIn("SECRET-TOKEN", message)
+                self.assertNotIn("/private/path", message)
+
+    def test_operation_lookup_does_not_swallow_an_interrupt(self):
+        capture = self._capture(CHILD_ID, status="unavailable", operation_id=FIRST_OPERATION)
+        with mock.patch.object(scenario_operations, "_control", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self._wait_capture_with([capture])
+
+    def test_unavailable_capture_renders_only_bounded_identifiers(self):
+        control = mock.Mock(return_value=self._operation_response(
+            FIRST_OPERATION, reason="/home/x/secret path"))
+        message, _control = self._unavailable_failure(control, reason_code="Bad Reason\n" + "x" * 99)
+        self.assertIn("capture_reason invalid", message)
+        self.assertIn("operation_reason invalid", message)
+        self.assertNotIn("/home/x", message)
+        for malformed in ("not-hex", None):
+            with self.subTest(malformed):
+                message, control = self._unavailable_failure(mock.Mock(), operation_id=malformed)
+                self.assertIn("capture_operation " + ("none" if malformed is None else "invalid"), message)
+                control.assert_not_called()
+
+    def test_another_subjects_unavailable_capture_does_not_query_the_operation(self):
+        sibling = self._capture(PARENT_ID, status="unavailable", operation_id=SECOND_OPERATION,
+                                reason_code="capture_failed")
+        control = mock.Mock()
+        with mock.patch.object(scenario_operations, "_control", control):
+            _response, capture = self._wait_capture_with([sibling, self._capture(CHILD_ID)])
+        self.assertEqual(capture["status"], "captured")
+        control.assert_not_called()
 
     def test_explicit_operation_subject_selects_a_verification_capture(self):
         task_capture, exec_capture = self._capture(CHILD_ID), self._capture(FIRST_OPERATION)
