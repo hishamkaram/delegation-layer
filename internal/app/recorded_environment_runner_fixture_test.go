@@ -49,11 +49,7 @@ type recordedRunnerResult struct {
 // selects it for successors only; the predecessor's records are unchanged.
 func (f *recordedEnvironmentFixture) installRunner(t *testing.T) {
 	t.Helper()
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	installed, err := supervisor.InstallStateRunner(f.root, executable)
+	installed, err := supervisor.InstallStateRunner(f.root, canonicalAppTestExecutable(t))
 	if err != nil {
 		t.Fatal(err)
 	}
